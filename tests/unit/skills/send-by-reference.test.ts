@@ -19,6 +19,7 @@ import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
 import { EmailSendHandler } from '../../../skills/email/tools/email-send/handler.js';
+import { EmailReplyHandler } from '../../../skills/email/tools/email-reply/handler.js';
 import { SignalSendHandler } from '../../../skills/signal-send/handler.js';
 import { SmsSendHandler } from '../../../skills/sms-send/handler.js';
 import { SlackSendHandler } from '../../../skills/slack-send/handler.js';
@@ -41,6 +42,8 @@ interface Harness {
   principalId: string;
   spouseId: string;
   nylasSend: ReturnType<typeof vi.fn>;
+  nylasGetMessage: ReturnType<typeof vi.fn>;
+  principalIdentities: ChannelIdentity[];
   signalSend: ReturnType<typeof vi.fn>;
   smsSend: ReturnType<typeof vi.fn>;
   slackPost: ReturnType<typeof vi.fn>;
@@ -73,6 +76,17 @@ async function harness(extra?: Partial<ConstructorParameters<typeof OutboundGate
     .filter((id) => id.verified && id.status === 'active');
 
   const nylasSend = vi.fn().mockResolvedValue({ id: 'msg-1' });
+  // The thread email-reply answers: a vendor wrote to Curia alone.
+  const nylasGetMessage = vi.fn().mockResolvedValue({
+    id: 'thread-msg-1',
+    from: [{ email: 'vendor@thread.example', name: 'Val Vendor' }],
+    to: [{ email: 'curia@curia.example' }],
+    cc: [],
+    subject: 'Venue',
+    body: 'Is the 14th still on?',
+    date: 0,
+    headers: [],
+  });
   const signalSend = vi.fn().mockResolvedValue('1700000000000');
   const smsSend = vi.fn().mockResolvedValue({ messageId: 'sms-1' });
   const slackPost = vi.fn().mockResolvedValue({ ok: true, ts: '1.1' });
@@ -80,7 +94,7 @@ async function harness(extra?: Partial<ConstructorParameters<typeof OutboundGate
   const busPublish = vi.fn().mockResolvedValue(undefined);
 
   const gateway = new OutboundGateway({
-    nylasClients: new Map([['curia', { sendMessage: nylasSend } as unknown as NylasClient]]),
+    nylasClients: new Map([['curia', { sendMessage: nylasSend, getMessage: nylasGetMessage } as unknown as NylasClient]]),
     signalClient: { send: signalSend, isConnected: () => true } as unknown as SignalRpcClient,
     signalPhoneNumber: '+15195550000',
     smsClient: { sendSms: smsSend } as unknown as SmsClient,
@@ -93,7 +107,7 @@ async function harness(extra?: Partial<ConstructorParameters<typeof OutboundGate
     ...extra,
   });
 
-  return { contacts, gateway, principalId: principal.id, spouseId: spouse.id, nylasSend, signalSend, smsSend, slackPost, filterCheck, busPublish };
+  return { contacts, gateway, principalId: principal.id, spouseId: spouse.id, nylasSend, nylasGetMessage, principalIdentities, signalSend, smsSend, slackPost, filterCheck, busPublish };
 }
 
 function ctx(h: Harness, input: Record<string, unknown>): ToolContext {
@@ -578,6 +592,176 @@ describe('label hint (#2047)', () => {
     expect(request.mock.calls[0]![0]).toMatchObject({
       sendResolution: [{ ref: reference, identityId: personalId, identityName: 'personal' }],
     });
+  });
+});
+
+describe('email-reply cc by reference (#2131)', () => {
+  const replyHandler = new EmailReplyHandler();
+  const replyManifest: ToolManifest = {
+    name: 'email-reply',
+    description: 'email-reply description',
+    version: '1.0.0',
+    sensitivity: 'normal',
+    action_risk: 'medium',
+    inputs: {},
+    outputs: {},
+    permissions: [],
+    secrets: [],
+    timeout: 5000,
+
+    capabilities: ['outboundGateway'],
+  };
+  // The vendor who wrote the thread asked for this reply.
+  const origin = {
+    senderId: 'vendor@thread.example',
+    taskMetadata: {
+      originator: {
+        contactId: 'contact-vendor',
+        systemRole: null,
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'known' as const,
+      },
+    },
+  };
+
+  /** The real email-reply handler behind the real ExecutionLayer, at an autonomy score. */
+  function layer(h: Harness, score: number, extra?: Record<string, unknown>) {
+    const registry = new ToolRegistry();
+    registry.register(replyManifest, replyHandler);
+    return new ExecutionLayer(registry, logger, {
+      autonomyService: { getConfig: vi.fn().mockResolvedValue({ score }) } as never,
+      bus: { publish: vi.fn().mockResolvedValue(undefined), subscribe: vi.fn() } as never,
+      contactService: h.contacts,
+      outboundGateway: h.gateway,
+      principalIdentities: h.principalIdentities,
+      selfEmails: ['curia@curia.example'],
+      ...extra,
+    });
+  }
+
+  it('cc: "principal" copies the principal\'s primary address', async () => {
+    const h = await harness();
+    const result = await replyHandler.execute(ctx(h, { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: 'principal' }));
+    expect(result.success).toBe(true);
+    expect(delivered(h)).toEqual(['vendor@thread.example', 'pat@home.example']);
+  });
+
+  it('a contact ID resolves to that contact\'s verified address, beside a literal thread participant', async () => {
+    const h = await harness();
+    const result = await replyHandler.execute(ctx(h, {
+      reply_to_message_id: 'thread-msg-1',
+      body: 'Yes.',
+      cc: `ops@thread.example, ${h.spouseId}`,
+    }));
+    expect(result.success).toBe(true);
+    expect(delivered(h)).toEqual(['vendor@thread.example', 'ops@thread.example', 'sam@home.example']);
+  });
+
+  it('an entry that is neither an address nor a reference is refused before the gates, and nothing is sent', async () => {
+    const h = await harness();
+    const result = await layer(h, 100).invoke(
+      'email-reply',
+      { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: 'the principal' },
+      undefined,
+      origin,
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('"principal"');
+    expect(h.nylasGetMessage).not.toHaveBeenCalled();
+    expect(h.nylasSend).not.toHaveBeenCalled();
+  });
+
+  it('an explicit cc with no entries is refused before the gates, not read as sender-only', async () => {
+    const h = await harness();
+    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'r-0', notificationSent: true });
+    const result = await layer(h, 65, { approvalTrigger: { request } as never }).invoke(
+      'email-reply',
+      { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: ',' },
+      undefined,
+      origin,
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/cc has no entries/);
+    expect(request).not.toHaveBeenCalled();
+    expect(h.nylasGetMessage).not.toHaveBeenCalled();
+    expect(h.nylasSend).not.toHaveBeenCalled();
+  });
+
+  it('literal thread participants do not count toward the reference cap', async () => {
+    const h = await harness();
+    const many = Array.from({ length: 30 }, (_, i) => `p${i}@thread.example`);
+    const result = await layer(h, 100).invoke(
+      'email-reply',
+      { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: [...many, 'principal'].join(', ') },
+      undefined,
+      { taskEventId: 'task-many' },
+    );
+    expect(result.success).toBe(true);
+    expect(delivered(h)).toEqual(['vendor@thread.example', ...many, 'pat@home.example']);
+  });
+
+  it('Gate C compares the resolved address: a sender cc\'d by contact ID is still a reply to the sender', async () => {
+    const h = await harness();
+    const vendor = await h.contacts.createContact({ displayName: 'Val Vendor', source: 'ceo_stated', tier: 'known' });
+    await h.contacts.linkIdentity({
+      contactId: vendor.id, channel: 'email', channelIdentifier: 'vendor@thread.example', source: 'ceo_stated',
+    });
+    const bus = { publish: vi.fn().mockResolvedValue(undefined), subscribe: vi.fn() };
+    const fromVendor = {
+      ...origin,
+      taskMetadata: { originator: { ...origin.taskMetadata.originator, contactId: vendor.id } },
+    };
+
+    // Unresolved, the UUID would read as a second recipient and a known sender's reply would be held.
+    const result = await layer(h, 100, { bus }).invoke(
+      'email-reply',
+      { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: vendor.id },
+      undefined,
+      fromVendor,
+    );
+    expect(result.success).toBe(true);
+    expect(delivered(h)).toEqual(['vendor@thread.example', 'vendor@thread.example']);
+    const decision = bus.publish.mock.calls
+      .map(([, event]) => event as { type: string; payload: { gate?: string; decision?: string } })
+      .find((event) => event.type === 'authorization.decision' && event.payload.gate === 'gate_c');
+    expect(decision?.payload.decision).toBe('allow');
+  });
+
+  it('Gate C holds a known sender\'s reply that copies the principal, as for any third party', async () => {
+    const h = await harness();
+    const result = await layer(h, 100).invoke(
+      'email-reply',
+      { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: 'principal' },
+      undefined,
+      origin,
+    );
+    expect(result.success).toBe(false);
+    expect(h.nylasSend).not.toHaveBeenCalled();
+  });
+
+  it('an approval shows the resolved address, stores the alias, and re-resolves it on approve', async () => {
+    const h = await harness();
+    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'r-1', notificationSent: true });
+    const input = { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: 'principal, ops@thread.example' };
+
+    const held = await layer(h, 65, { approvalTrigger: { request } as never })
+      .invoke('email-reply', input, undefined, { ...origin, taskEventId: 'task-reply-1' });
+    expect(held.success).toBe(false);
+    expect(h.nylasSend).not.toHaveBeenCalled();
+    const filed = request.mock.calls[0]![0] as { input: { cc: string }; displayInput: { cc: string } };
+    expect(filed.input.cc).toBe('principal, ops@thread.example');
+    expect(filed.displayInput.cc).toBe('pat@home.example (contact "Pat Principal"), ops@thread.example');
+
+    // The principal's primary changes before they approve: the replay resolves again.
+    await h.contacts.updateContactFields(h.principalId, { primaryEmail: 'pat@work.example' });
+    const approved = await layer(h, 65).invoke('email-reply', filed.input, undefined, {
+      ...origin,
+      taskEventId: 'task-reply-1',
+      humanApproved: true,
+    });
+    expect(approved.success).toBe(true);
+    expect(delivered(h)).toEqual(['vendor@thread.example', 'pat@work.example', 'ops@thread.example']);
   });
 });
 

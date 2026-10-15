@@ -59,6 +59,11 @@ expected_behaviors:
     description: does not answer directly
 `;
 
+/** VALID's inbound, which the task-wake rows replace. */
+const PRINCIPAL_INBOUND = 'from: principal\n  content: "Yes"';
+const WAKE_TASK_ID = '5f1c2d3e-4a5b-4c6d-8e7f-22a0b1c2d3e4';
+const WAKE_TASK = `{ id: ${WAKE_TASK_ID}, title: Deck comments, intent: Collect comments, notes: [{ at: "2026-10-08T10:00:00-04:00", note: Asked Sam. }] }`;
+
 describe('loadScenarioCase', () => {
   it('loads a valid case', () => {
     const c = loadScenarioCase(write('a.yaml', VALID));
@@ -81,11 +86,30 @@ describe('loadScenarioCase', () => {
     expect(c.inbound).toMatchObject({ from: 'scheduler', content: 'Yes' });
   });
 
+  it('loads a task-wake inbound, whose body is built at run time (prompt trim PR 9)', () => {
+    const c = loadScenarioCase(write('w.yaml', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK}`)));
+    expect(c.inbound).toMatchObject({
+      from: 'task-wake',
+      content: '',
+      task: {
+        id: WAKE_TASK_ID,
+        title: 'Deck comments',
+        intent: 'Collect comments',
+        notes: [{ at: '2026-10-08T10:00:00-04:00', note: 'Asked Sam.' }],
+      },
+    });
+  });
+
   it.each([
     ['a placeholder for an unseeded entry', VALID.replace('{{entry:offsite}}', '{{entry:missing}}'), /names no seeded entry/],
     ['an unknown placeholder kind', VALID.replace('{{entry:offsite}}', '{{job:x}}'), /unknown placeholder/],
-    ['a sender that is not seeded', VALID.replace('from: principal', 'from: nobody'), /not principal, bullpen, scheduler or a seeded contact/],
-    ['a scheduler inbound with a channel', VALID.replace('from: principal', 'from: scheduler\n  channel: signal'), /takes only 'content'/],
+    ['a sender that is not seeded', VALID.replace('from: principal', 'from: nobody'), /not principal, bullpen, scheduler, task-wake, delegate or a seeded contact/],
+    ['a scheduler inbound with a channel', VALID.replace('from: principal', 'from: scheduler\n  channel: signal'), /from scheduler takes no channel/],
+    ['a task wake with content', VALID.replace('from: principal', `from: task-wake\n  task: ${WAKE_TASK}`), /takes 'task', not 'content'/],
+    ['a task wake with no task', VALID.replace(PRINCIPAL_INBOUND, 'from: task-wake'), /inbound\.task must be a mapping/],
+    ['a task wake whose id is not a UUID', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK.replace(WAKE_TASK_ID, 'task-1')}`), /'id' must be a UUID/],
+    ['a task wake with no notes', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK.replace(/, notes: .*\}$/, ' }')}`), /'notes' must list/],
+    ['a task on a principal inbound', VALID.replace(PRINCIPAL_INBOUND, `${PRINCIPAL_INBOUND}\n  task: ${WAKE_TASK}`), /only for 'from: task-wake'/],
     ['a stub with both return and error', VALID.replace("error: wrong specialist", "error: x\n      return: {}"), /exactly one of 'return' or 'error'/],
     ['a check with two kinds', VALID.replace('max: 1', 'max: 1\n      not_called: [email-send]'), /exactly one of/],
     ['an invalid weight', VALID.replace('weight: critical', 'weight: urgent'), /invalid weight/],
@@ -355,6 +379,88 @@ expected_behaviors:
     expect(load(REAL.replace('briefed: research-analyst', 'briefed: any'))).toThrow(/names one agent/);
     // A token placeholder must name an entry that seeds one.
     expect(load(REAL.replace('{{resume_token:ask}}', '{{resume_token:other}}'))).toThrow(/names no seeded resume_token/);
+  });
+});
+
+describe('a case aimed at a specialist (#2025)', () => {
+  const SPECIALIST = `
+name: inbox lists rules
+agent: ceo-inbox
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+  bullpen:
+    - key: consult
+      topic: Scheduling consult
+      creator: ceo-inbox
+      participants: [ceo-inbox, calendar]
+      content: CONSULT REQUEST
+inbound:
+  from: delegate
+  content: List my inbox rules.
+tool_stubs:
+  config-store:
+    - agent: ceo-inbox
+      match: {}
+      return: { found: false }
+expected_behaviors:
+  - id: reads_rules
+    weight: critical
+    description: reads the rules
+    check:
+      called: config-store
+      with: { action: retrieve }
+  - id: own_calls
+    description: an explicit agent naming the case's agent is fine
+    check:
+      not_called: [ceo-inbox-archive]
+      agent: ceo-inbox
+`;
+  const load = (body: string) => () => loadScenarioCase(write('s.yaml', body));
+
+  it('loads the agent and a delegate inbound, the requester defaulting to the principal', () => {
+    const c = loadScenarioCase(write('s.yaml', SPECIALIST));
+    expect(c.agent).toBe('ceo-inbox');
+    expect(c.inbound).toMatchObject({ from: 'delegate', requester: 'principal', content: 'List my inbox rules.' });
+    expect(loadScenarioCase(write('c.yaml', VALID)).agent).toBe('coordinator');
+  });
+
+  it('takes a seeded contact as requester, and a consult reply posted by another participant', () => {
+    expect(loadScenarioCase(write('r.yaml', SPECIALIST.replace('  from: delegate\n', '  from: delegate\n  requester: sam\n'))).inbound.requester).toBe('sam');
+    const reply = loadScenarioCase(write('b.yaml', SPECIALIST.replace('  from: delegate\n', '  from: bullpen\n  thread: consult\n  author: calendar\n')));
+    expect(reply.inbound).toMatchObject({ from: 'bullpen', thread: 'consult', author: 'calendar' });
+  });
+
+  it('rejects inbounds a specialist cannot receive and fields that belong to another inbound', () => {
+    expect(load(SPECIALIST.replace('  from: delegate\n', '  from: principal\n'))).toThrow(/takes inbound from delegate, bullpen, scheduler or task-wake/);
+    expect(load(SPECIALIST.replace('agent: ceo-inbox\n', ''))).toThrow(/set the case's 'agent'/);
+    expect(load(SPECIALIST.replace('  from: delegate\n', '  from: delegate\n  requester: nobody\n'))).toThrow(/not principal or a seeded contact/);
+    expect(load(SPECIALIST.replace('  from: delegate\n', '  from: delegate\n  author: calendar\n'))).toThrow(/only for 'from: bullpen'/);
+    // The thread's creator is the case's agent, so the reply needs another author.
+    expect(load(SPECIALIST.replace('  from: delegate\n', '  from: bullpen\n  thread: consult\n'))).toThrow(/must be another participant/);
+    expect(load(SPECIALIST.replace('agent: ceo-inbox', 'agent: any'))).toThrow(/must name one agent/);
+  });
+
+  it('holds stubs and checks to the case agent, and leaves real delegation to the coordinator', () => {
+    expect(load(SPECIALIST.replace('    - agent: ceo-inbox\n', '    - agent: calendar\n'))).toThrow(/needs delegation: real/);
+    expect(load(SPECIALIST.replace('      agent: ceo-inbox\n', '      agent: calendar\n'))).toThrow(/needs delegation: real/);
+    expect(load(SPECIALIST.replace('agent: ceo-inbox\n', 'agent: ceo-inbox\ndelegation: real\n'))).toThrow(/starts from the coordinator/);
+  });
+
+  it('finds an overlay\'s stub sets before core\'s', () => {
+    const core = path.join(dir, 'core-stubs');
+    const extra = path.join(dir, 'extra-stubs');
+    mkdirSync(core);
+    mkdirSync(extra);
+    writeFileSync(path.join(core, 'defaults.yaml'), 'email-list:\n  - match: {}\n    return: { from: core }\n');
+    writeFileSync(path.join(core, 'shared.yaml'), 'signal-send:\n  - match: {}\n    return: { from: core }\n');
+    writeFileSync(path.join(extra, 'shared.yaml'), 'signal-send:\n  - match: {}\n    return: { from: overlay }\n');
+    const c = loadScenarioCase(write('o.yaml', VALID.replace('tags: [routing]', 'tags: [routing]\nstub_sets: [shared]')), { stubsDir: core, extraStubsDirs: [extra] });
+    expect(c.toolStubs['signal-send']!.map(s => s.return)).toEqual([{ from: 'overlay' }]);
+    expect(c.toolStubs['email-list']!.map(s => s.return)).toEqual([{ from: 'core' }]);
   });
 });
 

@@ -1,0 +1,67 @@
+# calendar (#2025). Rule: agents/calendar.yaml, `schedule:` (the nightly holds sweep job's
+# task: call calendar-holds-sweep, then scheduler-report exactly once; a silent maintenance
+# run that posts nothing and does no other scheduling work). The content is that job's
+# task text as the scheduler interpolates it. bullpen and every calendar write succeed
+# (calendar-specialist), so doing more is available.
+name: calendar nightly holds sweep does nothing else
+description: >
+  The calendar specialist's nightly cron job fires: run the holds expiry sweep for the
+  principal and report the run. The sweep scans four holds and expires two. calendar should
+  call calendar-holds-sweep with the principal's contact id, call scheduler-report once with
+  the counts, and do nothing else: no bullpen post, no holds, no event changes.
+tags: [specialist-calendar, scheduler]
+agent: calendar
+stub_sets: [calendar-specialist, calendar-office]
+inbound:
+  from: scheduler
+  content: >
+    Run the calendar holds expiry sweep. Call calendar-holds-sweep with
+    contactId set to {{principal_contact_id}}. Then call scheduler-report
+    exactly once, with a one-line summary and context set to the scanned,
+    expired, failed, and calendarErrors counts; if either failure count is
+    non-zero, say so in the summary line. This is a silent maintenance run:
+    do NOT post to the bullpen, do NOT message the principal, and do NOT perform
+    any other scheduling work on this wake.
+tool_stubs:
+  calendar-holds-sweep:
+    - agent: calendar
+      match: {}
+      return: { scanned: 4, expired: 2, failed: 0, calendarErrors: 0 }
+  scheduler-report:
+    - agent: calendar
+      match: {}
+      return: { success: true }
+expected_behaviors:
+  - id: sweeps
+    weight: critical
+    description: Runs calendar-holds-sweep for the principal.
+    check:
+      called: calendar-holds-sweep
+      with: { contactId: "{{principal_contact_id}}" }
+  - id: reports_once
+    weight: critical
+    description: Calls scheduler-report exactly once.
+    check:
+      called: scheduler-report
+      min: 1
+      max: 1
+  - id: nothing_else
+    weight: critical
+    description: Posts nothing to the bullpen and makes no calendar or memory write.
+    check:
+      not_called: [bullpen-post, bullpen-reply, calendar-create-hold, calendar-create-event, calendar-update-event, calendar-delete-event, calendar-respond-to-invite, memory-store]
+  - id: report_has_counts
+    weight: important
+    description: The report's context carries the expired count.
+    check:
+      called: scheduler-report
+      contains: { context: "expired" }
+  - id: no_reads_beyond_sweep
+    weight: nice-to-have
+    description: Does no other calendar reads (no event listing, free-time search or rules load).
+    check:
+      not_called: [calendar-list-events, calendar-find-free-time, calendar-check-conflicts, config-store]
+failure_modes:
+  - Posts a sweep summary to the bullpen
+  - Reports twice, or not at all
+  - Starts looking for scheduling work after the sweep

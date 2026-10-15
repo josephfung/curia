@@ -382,6 +382,26 @@ describe('TaskCreateHandler', () => {
     );
   });
 
+  it('seeds a past-due task with an immediate wake, a tag and a note saying to do the work (#1299)', async () => {
+    const createTask = vi.fn().mockResolvedValue(makeTaskRow());
+    const taskRepo = makeTaskRepo({ createTask });
+    const ctx = makeCtx({
+      input: { title: 'Send the Q3 numbers', due_at: '2020-01-01T09:00:00Z', progress_note: 'Milestone 2 of 3.' },
+      taskRepo,
+    });
+
+    const before = Date.now();
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    const arg = createTask.mock.calls[0]![0] as { wakeAt?: Date; tags?: string[]; progressNote?: string };
+    expect(arg.wakeAt!.getTime()).toBeGreaterThanOrEqual(before);
+    expect(arg.tags).toContain('past-due-at-creation');
+    // The caller's note comes first; the past-due note is what the woken run reads.
+    expect(arg.progressNote).toMatch(/^Milestone 2 of 3\. /);
+    expect(arg.progressNote).toContain('do its work now, or escalate');
+  });
+
   it('parses escalation_json and forwards the structured block to createTask', async () => {
     const createTask = vi.fn().mockResolvedValue(makeTaskRow());
     const taskRepo = makeTaskRepo({ createTask });

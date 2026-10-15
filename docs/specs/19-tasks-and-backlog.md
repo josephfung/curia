@@ -237,8 +237,11 @@ a bespoke need (e.g. read-only `task-list`) — that agent is not heartbeat-elig
 gets no injected block. If a task's `source_agent_id` points at a non-eligible or null
 agent, the heartbeat routes the wake to the coordinator.
 
-Instruction prose lives only in the SKILL.md files — there is no parallel TypeScript
-constant.
+The SKILL.md bodies hold what applies on every turn. Text only a task wake needs rides on
+the wake instead (prompt trim PR 9): how to resume and how to end the run are in
+`WAKE_DISPOSITION_INSTRUCTION` (`src/scheduler/wake-disposition.ts`), which every ordinary
+task-wake body carries, and the projects catalog, placement policy and workspace manifest
+are appended to the wake's task message by the runtime (§ placement, spec 20).
 
 ---
 

@@ -152,6 +152,11 @@ tool_stubs:
         action: created
         version: 1
         displayTimezone: America/Toronto
+  # Noting the CRM decision's vendor candidates as a project fact is a reasonable side
+  # step too (1 run in 10); it was refused without a stub.
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 7e1a3c5b-2d4f-4a6b-9c8d-0e1f2a3b4c5d, sensitivity: internal }
 expected_behaviors:
   - id: activates_google_workspace
     weight: critical
@@ -167,6 +172,8 @@ expected_behaviors:
       with: { file_id: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic, add_parents: 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd }
   - id: principal_can_edit
     weight: critical
+    # The MCP handler raises a principal grant to writer anyway, but stubs answer
+    # before it runs, so this scores the model's own role (drive-files.md).
     description: Grants edit (writer) access on the Doc.
     check:
       any_of:

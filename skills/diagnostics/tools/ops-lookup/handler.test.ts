@@ -81,7 +81,7 @@ describe('OpsLookupHandler', () => {
   });
 
   it('surfaces last_run_context.failedSkills for a healthy job (#1830)', async () => {
-    const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+    const failedSkills = [{ name: 'bullpen-post', error: 'Thread not found' }];
     const getScheduledJobs = vi.fn().mockResolvedValue([
       job('job-d3f8', '2026-09-20T06:00:00.000Z', {
         agentId: 'calendar',

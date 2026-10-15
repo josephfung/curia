@@ -489,7 +489,8 @@ Skills that currently use the capability:
 - `email-send` — auto-registers on every successful send; honors explicit `context_bridge` JSON input.
 - `email-reply` — same pattern; the registered entry covers the *reply we just sent*, not the original message.
 - `signal-send` — same pattern.
-- `context-bridge-release` — **coordinator-only** skill (enforced via `allowed_callers`, see [spec 03](03-tools-and-execution.md)). Lets the coordinator explicitly close a thread when the LLM detects the conversation has concluded, freeing the slot before TTL expiry.
+- `context-bridge-release` — closes a thread when the LLM detects the conversation has concluded, freeing the slot before TTL expiry. Open to any agent since #1972 (no `allowed_callers`): an agent may release an entry with no delegation hint or one it owns, and the tool refuses an entry whose hint names another agent. To route a reply to that agent, the caller passes the entry id to `delegate` as `outbound_entry_id`; the platform releases the entry when the specialist returns.
+- `context-bridge-keep-open` — called by the specialist handling a routed reply to hold the entry open when the exchange still needs another answer from the principal on it (#1972).
 
 A shared helper module `src/dispatch/context-bridge-parse.ts` (not a skill — it's used internally by send-skill handlers) normalizes the optional `context_bridge` JSON string input into the structured `OutboundContextEntry` shape consumed by `register()`.
 
@@ -527,7 +528,7 @@ On every **dispatcher-routed principal** inbound (`liveTurn: true`), the dispatc
 
 Non-principal dispatcher inbounds (resolved third parties, unresolved/`tier: unknown` senders) skip the query entirely — the block is principal-audience content (#1848). Voice inbounds never reach this path; `VoiceRuntime` applies the same `liveTurn` gate on its own injection path (#1598). `stampOriginator()` runs once per dispatcher inbound and supplies that signal.
 
-The coordinator reads this block, decides whether the inbound is a continuation of an outbound thread, and (if so) delegates to the originating agent — or invokes `context-bridge-release` if the LLM concludes the thread is done.
+The coordinator reads this block, decides whether the inbound is a continuation of an outbound thread, and (if so) delegates to the originating agent (passing the entry as `outbound_entry_id`) — or invokes `context-bridge-release` if the LLM concludes the thread is done and the entry is not another agent's.
 
 ### Coordinator Delegation Guidance
 
@@ -539,7 +540,7 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 
 ### Cross-References
 
-- [Spec 03 — Skills and Execution](03-tools-and-execution.md): the `outboundContext` capability surface and the coordinator-only `allowed_callers` restriction on `context-bridge-release`.
+- [Spec 03 — Skills and Execution](03-tools-and-execution.md): the `outboundContext` capability surface.
 - [Spec 04 — Channels](04-channels.md): how `email-send` / `email-reply` / `signal-send` register entries on successful send.
 - [Spec 15 — Outbound Safety](15-outbound-safety.md): how outbound-safety gates interact with auto-registration — registration happens on success only, after the safety pipeline has cleared the message.
 - [Spec 17 — Meeting Debrief](17-meeting-debrief.md): the debrief agent uses the outbound context bridge with a 48-hour TTL to claim replies to its proactive prompts.

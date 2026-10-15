@@ -36,11 +36,11 @@ describe('buildRows', () => {
   it('nests member tools under their bundle and leaves standalone tools flat', () => {
     const rows = buildRows(
       [bundle('ceo-inbox', ['ceo-inbox-list'], [], 'enabled')],
-      [entry('ceo-inbox-list'), entry('bullpen')],
+      [entry('ceo-inbox-list'), entry('delegate')],
       [],
     );
 
-    expect(rows.map(r => r.entry.name)).toEqual(['ceo-inbox', 'bullpen']);
+    expect(rows.map(r => r.entry.name)).toEqual(['ceo-inbox', 'delegate']);
     expect(rows[0]!.rowKind).toBe('bundle');
     expect(rows[0]!.members.map(m => m.name)).toEqual(['ceo-inbox-list']);
     expect(rows[1]!.rowKind).toBe('tool');
@@ -145,7 +145,7 @@ describe('uninstallBlockedReason', () => {
   });
 
   it('never blocks a plain tool or an agent, even when enabled', () => {
-    expect(uninstallBlockedReason(entry('bullpen', { state: 'enabled' }))).toBeNull();
+    expect(uninstallBlockedReason(entry('delegate', { state: 'enabled' }))).toBeNull();
     expect(
       uninstallBlockedReason(entry('coordinator', { kind: 'agent', state: 'enabled' })),
     ).toBeNull();

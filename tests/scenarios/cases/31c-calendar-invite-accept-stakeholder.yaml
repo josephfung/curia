@@ -1,0 +1,107 @@
+# calendar (#2025). Rules: agents/calendar.yaml, "Formal Calendar Invites" (RSVP policy:
+# accept a known stakeholder's conflict-free invite; RSVP with calendar-respond-to-invite and
+# the concrete ids; never update a participants array to RSVP) and the formal-invite path of
+# "Answering a scheduling consult" (check conflicts ignoring this conversation's holds, then
+# reply `Result: invite_responded`). Every calendar write succeeds (calendar-specialist), so
+# recording the RSVP with calendar-update-event is an available wrong path.
+name: calendar invite consult accepts a stakeholder invite
+description: >
+  ceo-inbox received a formal calendar invitation from Dana Whitfield, a board member and
+  known stakeholder, for a Q4 board prep session next week, and opened a consult with
+  calendar. The consult gives the concrete calendar and event ids. The slot is clear.
+  calendar should check for conflicts, accept the invite with calendar-respond-to-invite
+  using those ids (passing the hold criteria), and reply on the thread with a CONSULT REPLY
+  whose Result is invite_responded.
+tags: [specialist-calendar, consult, rsvp]
+agent: calendar
+# On demand until #2126: about a quarter of runs, on main as on the branch, repeat a bullpen
+# reply with no `content` until the turn budget runs out, which errors the run.
+release_gate: false
+stub_sets: [calendar-specialist, calendar-office]
+seed:
+  contacts:
+    - key: dana
+      display_name: Dana Whitfield
+      role: Board member
+      channel: email
+      identifier: dana.whitfield@example.test
+  bullpen:
+    - key: invite
+      topic: "Invite RSVP: Q4 board prep from Dana Whitfield"
+      creator: ceo-inbox
+      participants: [ceo-inbox, calendar]
+      content: Opening an RSVP consult for Dana Whitfield's calendar invitation (Q4 board prep).
+      mentions: []
+inbound:
+  from: bullpen
+  thread: invite
+  content: &consult |
+    CONSULT REQUEST
+    Need: RSVP for formal calendar invite
+    Invite: method=REQUEST; calendar_id=cal-principal-work; event_id=evt-q4-board-prep; ics_uid=q4-board-prep-7731@example.test; start={{time:next-monday+2 15:00}}; end={{time:next-monday+2 16:00}}; subject="Q4 board prep"; organizer_domain=example.test
+    Standing: none; relationship=known stakeholder; sender_kind=person
+    Context: source_message_id=msg-dana-invite-003; thread_ref=thr-dana-q4; contact_timezone=unknown; contact_id={{contact:dana}}; contact_domain=example.test; hold_search_start={{time:next-monday 00:00}}; hold_search_end={{time:next-monday+5 00:00}}
+tool_stubs:
+  calendar-respond-to-invite:
+    - agent: calendar
+      match: {}
+      return:
+        responded: true
+        response: accept
+        participantStatus: "yes"
+        event:
+          id: evt-q4-board-prep
+          title: Q4 board prep
+          calendarId: cal-principal-work
+        rsvp: { status: "yes" }
+        releasedHolds: []
+        releaseWarnings: []
+        warnings: []
+  bullpen-read:
+    - agent: calendar
+      match: {}
+      return:
+        thread:
+          id: "{{thread:invite}}"
+          topic: "Invite RSVP: Q4 board prep from Dana Whitfield"
+          status: open
+          participants: [ceo-inbox, calendar]
+        messages:
+          - sender: ceo-inbox
+            content: Opening an RSVP consult for Dana Whitfield's calendar invitation (Q4 board prep).
+          - sender: ceo-inbox
+            content: *consult
+expected_behaviors:
+  - id: checks_conflicts
+    weight: important
+    description: Checks the invite's slot for conflicts before responding.
+    check:
+      order: [calendar-check-conflicts, calendar-respond-to-invite]
+  - id: accepts_with_ids
+    weight: critical
+    description: Accepts the invite with calendar-respond-to-invite on the consult's calendar and event ids.
+    check:
+      called: calendar-respond-to-invite
+      with: { calendarId: cal-principal-work, eventId: evt-q4-board-prep, response: accept }
+  - id: no_attendee_rsvp
+    weight: critical
+    description: Does not record the RSVP by editing or creating an event (no calendar-update-event or calendar-create-event).
+    check:
+      not_called: [calendar-update-event, calendar-create-event]
+  - id: replies_invite_responded
+    weight: critical
+    description: Replies on the consult thread with a CONSULT REPLY whose Result is invite_responded.
+    check:
+      called: bullpen-reply
+      success: true
+      contains: { content: "invite_responded" }
+  - id: passes_hold_criteria
+    weight: nice-to-have
+    description: Passes hold-release criteria for this conversation (holdMatchCriteria naming the source message) on the accept.
+    check:
+      called: calendar-respond-to-invite
+      contains: { holdMatchCriteria: "msg-dana-invite-003" }
+failure_modes:
+  - Returns only a recommendation although the invite is from a known stakeholder and the slot is clear
+  - Records the acceptance by rewriting the event's attendee list with calendar-update-event
+  - Declines or hedges because the requester of the consult is an agent, not a person

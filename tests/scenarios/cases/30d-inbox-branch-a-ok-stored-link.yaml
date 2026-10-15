@@ -1,0 +1,183 @@
+# ceo-inbox resume mode, Branch A, `Result: ok` (#2025). Ported from smoke
+# tests/smoke/cases/ceo-inbox-branch-a-stored-preference.yaml (#1977). Rule:
+# agents/ceo-inbox.yaml, "Branch A — Calendar consult reply", steps 0 (load the thread),
+# 1 (reload the email), 5a-c (voice profile, memory-query anchored on sender and subject,
+# date-resolve) and 6 (draft with the slot strings verbatim as a counter-proposal, no
+# "pending your calendar" qualifier, ✍️ Drafted folder, archive).
+#
+# ceo-inbox parked Alice's email behind a consult; calendar's CONSULT REPLY on that thread
+# wakes it. Memory holds the principal's Calendly link for external contacts.
+name: inbox branch A ok drafts held slots with stored link
+description: >
+  ceo-inbox parked Alice Chen's scheduling email ("Let's find a time to connect") and
+  asked the calendar specialist for slots. Calendar has replied on the thread with two
+  held slots. Memory holds the principal's Calendly link, which they offer external
+  contacts as an alternative. ceo-inbox recalls it, then drafts the reply with both slot
+  strings exactly as calendar wrote them plus the link, moves the email from
+  ⏳ In Progress to ✍️ Drafted and archives it.
+tags: [specialist-ceo-inbox, ceo-inbox, resume-mode, scheduling, memory-recall]
+agent: ceo-inbox
+# On demand until #2126: some runs, on main as on the branch, repeat a bullpen reply with no
+# `content` until the turn budget runs out, which errors the run.
+release_gate: false
+timeout_seconds: 300
+stub_sets: [ceo-inbox-mailroom]
+seed:
+  bullpen:
+    - key: consult
+      topic: Scheduling consult — Alice Chen
+      creator: ceo-inbox
+      participants: [ceo-inbox, calendar]
+      content: |
+        CONSULT REQUEST
+        Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
+        For:  reply to Alice Chen re "Let's find a time to connect"
+        By:   slots within the next two weeks
+        Context: source_message_id=18f3c2a9e1d7b450; contact_timezone=America/Los_Angeles
+      mentions: [calendar]
+inbound:
+  from: bullpen
+  thread: consult
+  author: calendar
+  content: |
+    CONSULT REPLY
+    Result: ok
+    Slots:
+      1. {{day:next-tuesday}} at 2:00 PM ET (11:00 AM PT their time) - hold placed
+      2. {{day:next-thursday}} at 1:00 PM ET (10:00 AM PT their time) - hold placed
+    Rules: loaded 0 active (0 total); applied: none
+tool_stubs:
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
+      error: "Missing required field: 'topic'"
+    - match: { participants: null }
+      error: "Missing required field: 'participants' (non-empty string array)"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: "{{thread:consult}}", message_id: 7a1b2c3d-30d0-4e5f-8a9b-000000000003 }
+  bullpen-reply:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: "{{thread:consult}}", message_id: 7a1b2c3d-30d0-4e5f-8a9b-000000000003 }
+  bullpen-read:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: {}
+      return:
+        thread:
+          id: "{{thread:consult}}"
+          topic: Scheduling consult — Alice Chen
+          status: open
+          participants: [ceo-inbox, calendar]
+        messages:
+          - sender: ceo-inbox
+            content: |
+              CONSULT REQUEST
+              Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
+              For:  reply to Alice Chen re "Let's find a time to connect"
+              By:   slots within the next two weeks
+              Context: source_message_id=18f3c2a9e1d7b450; contact_timezone=America/Los_Angeles
+          - sender: calendar
+            content: |
+              CONSULT REPLY
+              Result: ok
+              Slots:
+                1. {{day:next-tuesday}} at 2:00 PM ET (11:00 AM PT their time) - hold placed
+                2. {{day:next-thursday}} at 1:00 PM ET (10:00 AM PT their time) - hold placed
+              Rules: loaded 0 active (0 total); applied: none
+  bullpen-close:
+    - match: {}
+      return: { thread_id: "{{thread:consult}}", status: closed }
+  ceo-inbox-read:
+    - match: { message_id: 18f3c2a9e1d7b450 }
+      return:
+        id: 18f3c2a9e1d7b450
+        threadId: 18f3c2a9e1d7b450
+        from: [{ name: Alice Chen, email: alice.chen@acmecorp.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: Let's find a time to connect
+        body_plain: "Hi,\n\nIt was great meeting you at the summit. Could we find 30 minutes in the next couple of weeks to talk about a pilot?\n\nAlice Chen\nHead of Operations, Acme Corp"
+        date: 1791878700
+        labels: [INBOX, "⏳ In Progress"]
+        attachments: []
+    - match: {}
+      error: "Failed to read principal inbox message: not found"
+  # A re-check of the draft it just wrote finds that draft; the inbox is otherwise quiet.
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 1, drafts: [{ id: draft-30d-1, threadId: 18f3c2a9e1d7b450, subject: "Re: (scenario)", to: [], cc: [], snippet: "(the draft just written)", date: 1791879000 }] }
+    - match: {}
+      return: { count: 0, has_more: false, messages: [] }
+  memory-query:
+    - match: {}
+      return:
+        results:
+          - { id: 6b0e4f2a-3c1d-4e5f-8a9b-0c1d2e3f4a51, type: fact, label: Principal scheduling link, properties: { attribute: scheduling_link, value: "https://calendly.com/curiatech-principal/30min (offered to external contacts as an alternative to proposed times)" }, confidence: 0.9, decay_class: slow_decay, sensitivity: internal, last_confirmed_at: "{{at:now-48h}}", score: 0.81 }
+        count: 1
+  ceo-inbox-draft-reply:
+    - match: { reply_to_message_id: 18f3c2a9e1d7b450 }
+      return: { draft_id: draft-30d-1, subject: "Re: Let's find a time to connect", to: [{ name: Alice Chen, email: alice.chen@acmecorp.example.test }], cc: [], already_exists: false }
+expected_behaviors:
+  - id: recalls_before_drafting
+    weight: critical
+    description: Calls memory-query before it drafts the reply.
+    check:
+      order: [memory-query, ceo-inbox-draft-reply]
+  - id: first_slot_verbatim
+    weight: critical
+    description: The draft carries the first slot string as calendar wrote it.
+    check:
+      called: ceo-inbox-draft-reply
+      with: { reply_to_message_id: 18f3c2a9e1d7b450 }
+      contains: { body: "{{day:next-tuesday}} at 2:00 PM ET (11:00 AM PT their time)" }
+  - id: second_slot_verbatim
+    weight: critical
+    description: The draft carries the second slot string as calendar wrote it.
+    check:
+      called: ceo-inbox-draft-reply
+      contains: { body: "{{day:next-thursday}} at 1:00 PM ET (10:00 AM PT their time)" }
+  - id: includes_stored_link
+    weight: critical
+    description: The draft offers the stored Calendly link.
+    check:
+      called: ceo-inbox-draft-reply
+      contains: { body: calendly.com/curiatech-principal/30min }
+  - id: no_pending_qualifier
+    weight: important
+    description: The draft does not say the times are pending the principal's calendar (holds are placed).
+    check:
+      not_called: [ceo-inbox-draft-reply]
+      contains: { body: pending your calendar }
+  - id: marked_drafted
+    weight: important
+    description: Moves the email to ✍️ Drafted with ceo-inbox-update-folders.
+    check:
+      called: ceo-inbox-update-folders
+      contains: { add_folders: Drafted }
+  - id: archived
+    weight: important
+    description: Archives the email once the draft exists.
+    check:
+      called: ceo-inbox-archive
+      with: { message_id: 18f3c2a9e1d7b450 }
+  - id: no_second_consult
+    weight: important
+    description: Does not open another consult thread.
+    check:
+      not_called: [bullpen-post]
+failure_modes:
+  - Drafts without calling memory-query, or calls it after drafting
+  - Paraphrases or reformats the slot strings, or converts the time zones itself
+  - Leaves out the Calendly link
+  - Says the times are pending the principal's calendar, although holds are placed

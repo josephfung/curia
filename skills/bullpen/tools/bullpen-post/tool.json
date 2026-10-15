@@ -1,0 +1,27 @@
+{
+  "name": "bullpen-post",
+  "description": "Open a Bullpen thread: a discussion with other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "topic": "string",
+    "participants": "string[] (agent IDs)",
+    "content": "string (the opening message)",
+    "mentioned_agent_ids": "string[]? (agents expected to answer; default all participants)",
+    "source_message_id": "string? (dedup key: returns the thread already opened with it)"
+  },
+  "outputs": {
+    "thread_id": "string: the thread ID",
+    "message_id": "string: the persisted message ID",
+    "deduplicated": "boolean: true when source_message_id matched an existing thread and no new thread was opened"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": [
+    "bus",
+    "bullpenService",
+    "agentRegistry"
+  ]
+}

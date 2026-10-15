@@ -1,0 +1,189 @@
+# meeting-debrief, delegated mode, the principal's reply to a prompt (#2025). Rules:
+# agents/meeting-debrief.yaml "DELEGATED MODE: Response Processing", Steps D1 to D5 (D3
+# drafts unless the principal says "send"): find the open debrief task by tag, draft (not
+# send) the follow-up email, record each action as a child task of the debrief, complete
+# the debrief task, and context-bridge-clear only this meeting's title. Two debriefs are open, so clearing or
+# closing the wrong one is possible. bullpen succeeds, so asking the coordinator to send
+# the email is an available wrong path (meeting-debrief has no send tool of its own).
+name: debrief reply drafts follow-ups and closes the debrief
+description: >
+  The coordinator delegates the principal's reply to the debrief prompt for the Acme
+  partnership review with Sarah Chen and David Park. The principal wants a follow-up email
+  to Sarah thanking her and saying pilot pricing will reach her by Friday, wants it
+  remembered that Acme plans to start a pilot in Q1, and will call David themselves next
+  week about the security review. Two debriefs are open: Acme partnership review and Board
+  prep with Lisa. meeting-debrief should find the Acme debrief task, save the email to
+  Sarah as a draft (the principal did not say to send it), store the Q1 pilot fact, record
+  the actions as child tasks of the debrief (the call to David as an open task owned by
+  the principal), complete the Acme debrief task, clear only the Acme meeting's outbound
+  context, and return a short confirmation.
+tags: [specialist-meeting-debrief, meeting-debrief, delegated-mode]
+agent: meeting-debrief
+stub_sets: [meeting-debrief-office]
+seed:
+  contacts:
+    - key: sarah
+      display_name: Sarah Chen
+      tier: known
+      channel: email
+      identifier: sarah.chen@acme.example.test
+    - key: david
+      display_name: David Park
+      tier: known
+      channel: email
+      identifier: david.park@acme.example.test
+inbound:
+  from: delegate
+  content: >
+    The principal replied to your debrief prompt for "Acme partnership review" (with Sarah
+    Chen and David Park of Acme Corp). Their reply: "Went well. Follow up with Sarah by
+    email: thank her for hosting and tell her we'll have the pilot pricing to her by
+    Friday. Remember that Acme wants to start a pilot in Q1. And I'll call David myself
+    next week about their security review."
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        count: 2
+        displayTimezone: "{{timezone}}"
+        tasks:
+          - task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001
+            title: "Debrief: Acme partnership review"
+            status: open
+            owner: ceo
+            priority: 3
+            tags: [debrief-pending]
+            intent_anchor: >-
+              Debrief the principal's meeting 'Acme partnership review' that ends around
+              {{at:now-90m}} (calendar event evt-acme-0001) — prompt at meeting end, then
+              follow up on takeaways.
+            next_wake_at: "{{at:now+30m}}"
+          - task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000002
+            title: "Debrief: Board prep with Lisa"
+            status: open
+            owner: ceo
+            priority: 3
+            tags: [debrief-pending]
+            intent_anchor: >-
+              Debrief the principal's meeting 'Board prep with Lisa' that ends around
+              {{at:now-50m}} (calendar event evt-board-0007) — prompt at meeting end, then
+              follow up on takeaways.
+            next_wake_at: "{{at:now+70m}}"
+  task-complete:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001
+        title: "Debrief: Acme partnership review"
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000002 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000002
+        title: "Debrief: Board prep with Lisa"
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  # Child tasks: task-create's replay gives each later create its own id, so the
+  # follow-ups it completes or re-owns answer here. The debrief tasks are matched above.
+    - match: {}
+      return:
+        task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
+        title: (completed)
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-update:
+    - match: {}
+      return:
+        task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
+        title: (updated)
+        status: open
+        owner: ceo
+        priority: 3
+        tags: [debrief-followup]
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  context-bridge-clear:
+    - match: {}
+      return:
+        released: 2
+        cleared: [{ subject: Acme partnership review, released: 2 }]
+        unmatched: []
+expected_behaviors:
+  - id: finds_debrief_task
+    weight: critical
+    description: Lists the open debrief tasks by the debrief-pending tag.
+    check:
+      called: task-list
+      with: { tag: debrief-pending }
+  - id: drafts_email_to_sarah
+    weight: critical
+    description: Saves the follow-up email to Sarah Chen as a draft, by her contact ID.
+    check:
+      called: email-draft-save
+      with: { to: "{{contact:sarah}}" }
+  - id: no_send_request
+    weight: critical
+    description: Does not ask the coordinator over the bullpen to send the email; the principal did not say to send it.
+    check:
+      not_called: [bullpen-post, bullpen-reply]
+  - id: records_child_tasks
+    weight: critical
+    description: Records the follow-up actions as child tasks of the Acme debrief task.
+    check:
+      called: task-create
+      with: { parent_task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001 }
+  - id: call_task_for_principal
+    weight: important
+    description: >
+      The call to David is an open child task owned by the principal (owner ceo), whether
+      created that way or created and then re-owned.
+    check:
+      any_of:
+        - called: task-create
+          with: { parent_task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001, owner: ceo }
+        - called: task-update
+          with: { owner: ceo }
+  - id: completes_acme_debrief
+    weight: critical
+    description: Completes the Acme debrief task.
+    check:
+      called: task-complete
+      with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001 }
+  - id: leaves_board_debrief
+    weight: critical
+    description: Leaves the Board prep debrief task alone.
+    check:
+      not_called: [task-complete]
+      with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000002 }
+  - id: clears_acme_context
+    weight: critical
+    description: Clears the Acme meeting's outbound context by its title.
+    check:
+      any_of:
+        - called: context-bridge-clear
+          contains: { subjects: Acme partnership review }
+        - called: context-bridge-clear
+          contains: { subject: Acme partnership review }
+  - id: clears_only_acme
+    weight: critical
+    description: Does not clear the Board prep meeting's outbound context.
+    check:
+      not_called: [context-bridge-clear]
+      contains: { subjects: Board prep }
+  - id: stores_pilot_fact
+    weight: important
+    description: Stores that Acme plans a Q1 pilot with memory-store.
+    check:
+      called: memory-store
+  - id: confirmation
+    weight: important
+    description: >
+      Returns a short confirmation for the coordinator to relay: the email to Sarah is
+      drafted (not sent), the Q1 pilot is noted, and the call to David is left for the
+      principal.
+failure_modes:
+  - Sends the email, or asks the coordinator to send it, without being told to send
+  - Closes or clears the Board prep debrief as well
+  - Executes the actions but leaves the Acme debrief task open

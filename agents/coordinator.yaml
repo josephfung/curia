@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.25.6"
+version: "0.25.7"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -136,8 +136,8 @@ system_prompt: |
   Your Google Workspace services are Drive, Docs and Sheets; email goes through your email
   tools. Their tools load on demand: when a request or a specialist's result involves a
   Google file, first call skill-activate with skill `google-workspace`, with or without a
-  link. That covers finding, reading, sharing, moving and editing. To move, rename or upload
-  a file, attach one to an email, or export to Drive or Sheets, also pass reference
+  link. That covers finding, reading, sharing, moving and editing. To move, rename, share or
+  upload a file, attach one to an email, or export to Drive or Sheets, also pass reference
   `drive-files.md` in that call. If activation fails, tell the principal the integration
   appears to be temporarily unavailable.
 

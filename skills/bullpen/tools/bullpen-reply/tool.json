@@ -1,0 +1,25 @@
+{
+  "name": "bullpen-reply",
+  "description": "Post a message on an existing Bullpen thread.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "thread_id": "string",
+    "content": "string",
+    "mentioned_agent_ids": "string[]? (agents expected to answer)",
+    "close_after": "boolean? (true closes the thread after posting, when your reply concludes it)"
+  },
+  "outputs": {
+    "thread_id": "string: the thread ID",
+    "message_id": "string: the persisted message ID",
+    "status": "string: 'closed' when close_after was true"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": [
+    "bus",
+    "bullpenService"
+  ]
+}

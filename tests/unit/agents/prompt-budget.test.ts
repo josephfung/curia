@@ -5,14 +5,10 @@
 // This test is the push-back: it fails when an agent's fixed per-call payload grows
 // past its budget, and the failure names the placement rule a fix should follow.
 //
-// Two numbers per agent, both measured from the same assembly production uses
-// (assembleAgent, src/startup/agent-assembly.ts) over the real agents/ and skills/:
-//   - always-on prompt: the YAML system_prompt plus the pinned SKILL.md bodies,
-//     estimated at 4 chars/token. Runtime blocks (identity, security, roster,
-//     autonomy, time, contact details, turn budget) are code-owned and not counted.
-//   - local tool-definition bytes: the JSON of every local tool definition the agent
-//     is sent, including the discovery tools. MCP tools (google-workspace) are not
-//     loaded here, so they are excluded; their list comes from the upstream server.
+// Two numbers per agent, measured over the real agents/, skills/ and config/ by
+// src/agents/prompt-budget.ts (which says what each counts): the always-on prompt (YAML
+// system_prompt plus pinned SKILL.md bodies) and the local tool-definition bytes. A
+// deployment measures its own agents with the same function (curia-deploy#276).
 //
 // To opt another agent in, add a row to AGENT_BUDGETS. Set each budget from the
 // agent's measured numbers with small headroom, and raise one only in a PR that says
@@ -20,36 +16,15 @@
 
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
-import { discoverAgentManifests, loadAgentConfig, type AgentYamlConfig } from '../../../src/agents/loader.js';
-import { AgentRegistry } from '../../../src/agents/agent-registry.js';
-import type { LLMProvider } from '../../../src/agents/llm/provider.js';
-import { ModelRegistry } from '../../../src/agents/llm/model-registry.js';
-import { ModelRouter } from '../../../src/agents/llm/model-router.js';
-import { EventBus } from '../../../src/bus/bus.js';
-import { createLogger } from '../../../src/logger.js';
-import type { ExecutionLayer } from '../../../src/skills/execution.js';
-import { discoverToolManifests } from '../../../src/skills/loader.js';
-import { loadSkillsConfig } from '../../../src/skills/mcp-loader.js';
-import { ToolRegistry } from '../../../src/skills/registry.js';
-import { SkillRegistry } from '../../../src/skills/skill-registry.js';
-import {
-  discoverSkillManifests,
-  loadSkillsFromDiscovery,
-  registerSyntheticSingletonSkills,
-} from '../../../src/skills/skill-loader.js';
-import { assembleAgent, registerAgentRoster } from '../../../src/startup/agent-assembly.js';
+import { CHARS_PER_TOKEN, mcpServerNames, measureAgentContext } from '../../../src/agents/prompt-budget.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
-const AGENTS_DIR = resolve(REPO_ROOT, 'agents');
-const SKILLS_DIR = resolve(REPO_ROOT, 'skills');
-const CONFIG_DIR = resolve(REPO_ROOT, 'config');
+const SOURCES = {
+  agentsDir: resolve(REPO_ROOT, 'agents'),
+  skillsDir: resolve(REPO_ROOT, 'skills'),
+  configDir: resolve(REPO_ROOT, 'config'),
+};
 const ADR = 'docs/adr/046-agent-behavior-fix-placement.md';
-
-/** Same ratio the epic (#1954) uses for its ≤ 4k-token target. */
-const CHARS_PER_TOKEN = 4;
-
-/** A UUID-length stand-in, so ${principal_contact_id} renders at production length. */
-const PRINCIPAL_CONTACT_ID = '00000000-0000-4000-8000-000000000000';
 
 interface AgentBudget {
   agent: string;
@@ -74,7 +49,7 @@ interface AgentBudget {
 // Coordinator, measured 2026-10-06 after #1958, #1959 and #1960: ~6,777 tokens
 // (YAML 20,951 chars + SKILL.md 6,157) and 74,856 bytes over 66 local tools. After
 // #2024 (google-workspace unpinned, its prompt section rewritten): YAML 20,532 chars.
-// Prompt trim PR 1 (docs/wip/2026-10-06-coordinator-prompt-trim.md): YAML 18,561 chars,
+// Prompt trim PR 1 (#1954): YAML 18,561 chars,
 // ~6,180 tokens with SKILL.md 6,157; 74,651 bytes over 65 local tools.
 // Prompt trim PR 2 (one section each for voice and contact resolution): YAML 15,709
 // chars (~3,927 tokens, under #1954's 4k target), ~5,467 tokens with SKILL.md.
@@ -94,113 +69,28 @@ interface AgentBudget {
 // Prompt trim PR 8 (delegate_when roster lines for diagnostics, meeting-debrief and
 // setup-wizard; the calendar and inbox routing stayed in the YAML, which is unchanged): the
 // roster went from 2,719 chars of descriptions to 1,883 (~471 tokens).
+// Prompt trim PR 9 (wake-only text out of the tasks and documents SKILL.md: resuming rides
+// on the wake instruction, the rest was already in code or tool descriptions): SKILL.md
+// 6,157 → 3,715 chars, ~3,092 tokens always-on.
+// Bullpen split (#2126): the polymorphic bullpen tool became bullpen-post, -reply, -read
+// and -close; 76,983 bytes over 69 local tools.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 500 },
+  // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
+  // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
+  { agent: 'calendar', alwaysOnPromptTokens: 6_200, localToolDefinitionBytes: 25_000, allowMcpPins: false },
+  // ceo-inbox: YAML 60,090 → 49,037 chars (~16,416 → ~13,653 tokens always-on with its SKILL.md bodies),
+  // its task-wake steps now riding on the wake; 43,469 bytes over 41 local tools.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 44_800, allowMcpPins: false },
+  // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
+  // 35,311 bytes over its local tools.
+  { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_400, allowMcpPins: false },
+  // meeting-debrief: YAML 18,627 → 14,682 chars (~4,670 → ~3,681 tokens always-on); 22,685 bytes over 17 local tools.
+  { agent: 'meeting-debrief', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 23_200, allowMcpPins: false },
 ];
 
-const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };
-
-/** The on-disk tool and skill catalog, every entry enabled. No handlers are imported. */
-function loadCatalog(): { toolRegistry: ToolRegistry; skillRegistry: SkillRegistry } {
-  const logger = createLogger('silent');
-  // Production renders timestamp input descriptions in the configured zone; the
-  // length differs by a few bytes per zone, so pin one.
-  const toolRegistry = new ToolRegistry('America/Toronto');
-  for (const disc of discoverToolManifests(SKILLS_DIR, logger)) {
-    if (!disc.manifest) throw new Error(`tool '${disc.name}' has an invalid manifest: ${disc.error ?? 'unknown'}`);
-    toolRegistry.register(disc.manifest, noopHandler);
-  }
-  const skillRegistry = new SkillRegistry();
-  const skillDiscovery = discoverSkillManifests(SKILLS_DIR, logger);
-  loadSkillsFromDiscovery(skillDiscovery, skillRegistry, logger, new Set(skillDiscovery.map(d => d.name)));
-  registerSyntheticSingletonSkills(toolRegistry, skillRegistry, logger);
-  return { toolRegistry, skillRegistry };
-}
-
-/** Every agent YAML on disk, so the specialist roster matches production. */
-function loadAgentConfigs(): AgentYamlConfig[] {
-  return discoverAgentManifests(AGENTS_DIR).flatMap(d => (d.config ? [d.config] : []));
-}
-
-/** MCP server names from config/skills.yaml. Their pins cannot resolve here. */
-function mcpServerNames(): Set<string> {
-  return new Set((loadSkillsConfig(CONFIG_DIR).servers ?? []).map(s => s.name));
-}
-
-interface Measurement {
-  yamlChars: number;
-  skillMdChars: number;
-  alwaysOnPromptTokens: number;
-  localToolDefinitionBytes: number;
-  localToolCount: number;
-  unresolvedPins: string[];
-  allowDiscovery: boolean;
-  localToolNames: string[];
-  rosterChars: number;
-}
-
-function measure(agentName: string): Measurement {
-  const logger = createLogger('silent');
-  const { toolRegistry, skillRegistry } = loadCatalog();
-  const configs = loadAgentConfigs();
-  const agentConfig = loadAgentConfig(resolve(AGENTS_DIR, `${agentName}.yaml`));
-  const agentRegistry = new AgentRegistry();
-  registerAgentRoster(agentRegistry, configs);
-
-  // Model binding is required by assembleAgent but irrelevant to size: any tier
-  // resolves to a model the stub provider serves.
-  const modelRegistry = new ModelRegistry(logger);
-  const modelRouter = new ModelRouter(
-    {
-      tiers: {
-        fast: { model: 'claude-haiku-4-5' },
-        standard: { model: 'claude-sonnet-4-6' },
-        powerful: { model: 'claude-opus-4-6' },
-      },
-      default_tier: 'standard',
-    },
-    modelRegistry,
-    logger,
-  );
-  const provider = { id: 'anthropic', chat: async () => { throw new Error('not called'); } } as unknown as LLMProvider;
-
-  const assembled = assembleAgent(agentConfig, {
-    logger,
-    bus: new EventBus(logger),
-    toolRegistry,
-    skillRegistry,
-    agentRegistry,
-    models: { modelRouter, modelRegistry, providerRegistry: new Map([['anthropic', provider]]) },
-    executionLayer: {} as ExecutionLayer,
-    timezone: 'America/Toronto',
-    channelAccounts: {},
-    selfEmails: [],
-    principalIdentities: [],
-    principalPrimaryEmail: { current: null },
-    principalContactId: PRINCIPAL_CONTACT_ID,
-    lateDelivery: { ttlMinutes: 60, sweepIntervalMinutes: 5 },
-  });
-
-  const yamlChars = agentConfig.system_prompt.length;
-  const alwaysOnChars = assembled.systemPrompt.length;
-  return {
-    yamlChars,
-    skillMdChars: alwaysOnChars - yamlChars,
-    alwaysOnPromptTokens: Math.ceil(alwaysOnChars / CHARS_PER_TOKEN),
-    localToolDefinitionBytes: assembled.toolDefs.reduce(
-      (sum, def) => sum + Buffer.byteLength(JSON.stringify(def), 'utf8'),
-      0,
-    ),
-    localToolCount: assembled.toolDefs.length,
-    unresolvedPins: assembled.pinResolution.unresolvedPins.map(p => p.pin),
-    allowDiscovery: agentConfig.allow_discovery === true,
-    localToolNames: assembled.toolDefs.map(d => d.name),
-    rosterChars: assembled.runtimeConfig.availableSpecialists?.length ?? 0,
-  };
-}
-
 describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
-  const m = measure(budget.agent);
+  const m = measureAgentContext(budget.agent, SOURCES);
   const { yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount, rosterChars } = m;
   const detail = JSON.stringify({ yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount, rosterChars });
 
@@ -208,7 +98,7 @@ describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
     // A pin that silently failed to load would shrink both numbers and pass the
     // budget for the wrong reason. Only MCP servers may be absent here, and only for
     // an agent allowed to pin them.
-    const mcp = budget.allowMcpPins === false ? new Set<string>() : mcpServerNames();
+    const mcp = budget.allowMcpPins === false ? new Set<string>() : mcpServerNames(SOURCES.configDir);
     expect(m.unresolvedPins.filter(p => !mcp.has(p))).toEqual([]);
     expect(m.localToolCount).toBeGreaterThan(0);
     // Discovery tools are not pins, so a missing one is only logged by assembleAgent.

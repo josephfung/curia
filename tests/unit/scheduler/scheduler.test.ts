@@ -847,7 +847,7 @@ describe('Scheduler', () => {
             last_run_summary: 'sweep ok',
             last_run_context: {
               cursor: '2026-09-19',
-              failedSkills: [{ name: 'bullpen.post', error: 'Thread not found' }],
+              failedSkills: [{ name: 'bullpen-post', error: 'Thread not found' }],
               failedSkillsOmitted: 2,
             },
           }],
@@ -864,7 +864,7 @@ describe('Scheduler', () => {
       const content: string = (taskEvent as { payload: { content: string } }).payload.content;
       expect(content).toContain('"cursor": "2026-09-19"');
       expect(content).not.toContain('failedSkills');
-      expect(content).not.toContain('bullpen.post');
+      expect(content).not.toContain('bullpen-post');
       expect(content).not.toContain('Thread not found');
     });
 
@@ -1524,7 +1524,7 @@ describe('Scheduler', () => {
       scheduler.start();
 
       const failedSkills = [
-        { name: 'bullpen.post', error: 'Thread not found' },
+        { name: 'bullpen-post', error: 'Thread not found' },
       ];
       const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
       await responseHandler({
@@ -1651,7 +1651,7 @@ describe('Scheduler', () => {
       const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
       const errorHandler = bus.subscribe.mock.calls[1]?.[2] as (event: unknown) => Promise<void>;
 
-      const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+      const failedSkills = [{ name: 'bullpen-post', error: 'Thread not found' }];
       await errorHandler({
         id: 'err-fs',
         type: 'agent.error',

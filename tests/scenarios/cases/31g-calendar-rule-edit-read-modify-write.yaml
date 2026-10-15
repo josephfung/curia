@@ -1,0 +1,75 @@
+# calendar (#2025). Rules: agents/calendar.yaml, "Scheduling Rules Management" ("Edit a
+# rule": read the array, change only the requested field, write the whole array back; do not
+# run a scheduling consult or propose slots for a rules request). Free time and holds are
+# available (calendar-office, calendar-specialist), so drifting into scheduling is too.
+name: calendar rule edit rewrites the whole array
+description: >
+  The coordinator hands calendar the principal's request to change the 45-minute meeting rule
+  to 30 minutes. Three rules are stored: a 45-minute default, no meetings on Fridays, and a
+  paused morning preference for external calls. calendar should read the rules, change only
+  the 45-minute rule to 30 minutes, store the full array back with the other two rules
+  unchanged (the paused one still paused), and confirm the change. It should not schedule
+  anything.
+tags: [specialist-calendar, rules]
+agent: calendar
+stub_sets: [calendar-specialist, calendar-office]
+inbound:
+  from: delegate
+  content: >
+    The principal asked: "Change my 45-minute meeting rule to 30 minutes."
+tool_stubs:
+  config-store:
+    - agent: calendar
+      match: { action: retrieve, namespace: calendar }
+      return:
+        found: true
+        namespace: calendar
+        key: rules
+        value: '[{"applies_to":"all meetings","instruction":"default duration 45 minutes","active":true},{"applies_to":"all meetings","instruction":"no meetings on Fridays","active":true},{"applies_to":"external calls","instruction":"prefer slots between 9 AM and 12 PM","active":false}]'
+    - agent: calendar
+      match: { action: store }
+      return: { stored: true, namespace: calendar, key: rules }
+expected_behaviors:
+  - id: reads_rules
+    weight: critical
+    description: Reads the stored rules before writing.
+    check:
+      called: config-store
+      with: { action: retrieve, namespace: calendar }
+  - id: stores_edit
+    weight: critical
+    description: Stores the rules array with the duration rule changed to 30 minutes.
+    check:
+      called: config-store
+      with: { action: store, namespace: calendar, key: rules }
+      contains: { value: "30" }
+  - id: keeps_friday_rule
+    weight: critical
+    description: The stored array still holds the Friday rule.
+    check:
+      called: config-store
+      with: { action: store, namespace: calendar, key: rules }
+      contains: { value: "no meetings on Fridays" }
+  - id: keeps_paused_rule
+    weight: important
+    description: The stored array still holds the external-calls morning rule.
+    check:
+      called: config-store
+      with: { action: store, namespace: calendar, key: rules }
+      contains: { value: "prefer slots between 9 AM and 12 PM" }
+  - id: edit_is_exact
+    weight: important
+    description: >
+      In the stored value, the duration rule now says 30 minutes and no rule still says 45
+      minutes; the external-calls rule is still inactive (active false) and the other two are
+      active. Confirms the before and after of the change.
+  - id: no_scheduling
+    weight: critical
+    description: Does not search for free time, place holds, or open a bullpen thread.
+    check:
+      not_called: [calendar-find-free-time, calendar-create-hold, bullpen-post, bullpen-reply]
+failure_modes:
+  - Stores only the edited rule, dropping the other two
+  - Reactivates the paused rule while rewriting the array
+  - Adds a new 30-minute rule beside the 45-minute one instead of editing it
+  - Proposes meeting slots

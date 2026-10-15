@@ -295,9 +295,9 @@ describe('BullpenDispatcher', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.payload.agentId).toBe('ceo-inbox');
     expect(tasks[0]!.payload.content).toContain('thread is now closed');
-    expect(tasks[0]!.payload.content).toContain('get_thread');
+    expect(tasks[0]!.payload.content).toContain('bullpen-read');
     expect(tasks[0]!.payload.content).toContain('do not reply in-thread');
-    expect(tasks[0]!.payload.content).not.toContain('reply using the bullpen skill');
+    expect(tasks[0]!.payload.content).not.toContain('reply with bullpen-reply');
     expect(tasks[0]!.payload.metadata?.threadClosed).toBe(true);
   });
 

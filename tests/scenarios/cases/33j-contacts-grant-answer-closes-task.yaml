@@ -1,0 +1,113 @@
+# contacts specialist (#2129). Rules: agents/contacts.yaml, "Tier & Permission Grants" (on
+# the principal's answer to a grant recommendation task: approve or decline it, then
+# task-complete the task), and the approve/decline tool descriptions (the recommendation id
+# is the part of the task's grant-rec:<uuid> tag after the colon; complete the task once the
+# call succeeds).
+name: contacts grant answer approves and closes the task
+description: >
+  The coordinator relays the principal's answer to a grant recommendation task: yes, give
+  Dana Whitfield scheduling access. The brief carries the task id but not the
+  recommendation id. The specialist should find the recommendation id on the task (its
+  grant-rec: tag, via task-list tag grant-recommendation), approve that recommendation, and
+  complete the task. It must not approve the other pending recommendation, grant the
+  permission directly instead, or decline anything.
+tags: [specialist-contacts, contacts, grants]
+agent: contacts
+inbound:
+  from: delegate
+  content: >-
+    The principal answered the grant recommendation task 7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f:
+    yes, give Dana Whitfield scheduling access.
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        count: 2
+        displayTimezone: America/Toronto
+        tasks:
+          - task_id: 7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+            title: "Grant Dana Whitfield scheduling access?"
+            status: open
+            owner: ceo
+            priority: 50
+            tags: [grant-recommendation, contacts, "grant-rec:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"]
+            age: 1 day
+            last_progress_note: "Should Dana Whitfield get formal scheduling access? Dana confirms most of the principal's board meetings and coordinates the calendar weekly. Waiting on the principal to approve or decline; their answer goes to the contacts specialist with this task's ID."
+            next_wake_at: null
+            source_agent_id: contacts
+            blocked_by_task_id: null
+            parent_task_id: null
+          - task_id: 8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a
+            title: "Grant Omar Haddad scheduling access?"
+            status: open
+            owner: ceo
+            priority: 50
+            tags: [grant-recommendation, contacts, "grant-rec:6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e"]
+            age: 1 day
+            last_progress_note: "Should Omar Haddad get formal scheduling access? Omar books the principal's monthly partner reviews. Waiting on the principal to approve or decline; their answer goes to the contacts specialist with this task's ID."
+            next_wake_at: null
+            source_agent_id: contacts
+            blocked_by_task_id: null
+            parent_task_id: null
+  approve-grant-recommendation:
+    - match: { recommendation_id: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d }
+      return: { recommendation_id: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d, contact_id: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d, permission: schedule_meetings, status: approved }
+    # The wrong path, available: Omar's recommendation.
+    - match: {}
+      return: { recommendation_id: 6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e, contact_id: 1b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e, permission: schedule_meetings, status: approved }
+  task-complete:
+    - match: { task_id: 7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f }
+      return:
+        task_id: 7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+        title: "Grant Dana Whitfield scheduling access?"
+        status: done
+        completed_at: "2026-10-15T09:05:00-04:00"
+        displayTimezone: America/Toronto
+    - match: {}
+      return: { task_id: 8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a, title: "Grant Omar Haddad scheduling access?", status: done, completed_at: "2026-10-15T09:05:00-04:00", displayTimezone: America/Toronto }
+  # The wrong paths, available: granting directly, or declining.
+  contact-grant-permission:
+    - match: {}
+      return: { contact_id: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d, permission: schedule_meetings, granted: true }
+  decline-grant-recommendation:
+    - match: {}
+      return: { recommendation_id: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d, contact_id: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d, permission: schedule_meetings, status: declined }
+expected_behaviors:
+  - id: approves_dana
+    weight: critical
+    description: Approves Dana Whitfield's recommendation by its id.
+    check:
+      called: approve-grant-recommendation
+      with: { recommendation_id: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d }
+  - id: leaves_omar
+    weight: critical
+    description: Does not approve Omar Haddad's recommendation.
+    check:
+      not_called: [approve-grant-recommendation]
+      with: { recommendation_id: 6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e }
+  - id: no_decline_or_direct_grant
+    weight: critical
+    description: Declines nothing and grants no permission outside the recommendation.
+    check:
+      not_called: [decline-grant-recommendation, contact-grant-permission]
+  - id: completes_task
+    weight: critical
+    description: Completes Dana's recommendation task.
+    check:
+      called: task-complete
+      with: { task_id: 7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f }
+  - id: leaves_other_task
+    weight: critical
+    description: Leaves Omar's recommendation task open.
+    check:
+      not_called: [task-complete]
+      with: { task_id: 8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a }
+  - id: reports_outcome
+    weight: important
+    description: >
+      The reply confirms Dana Whitfield now has scheduling access and that the
+      recommendation is closed, without asking anything further.
+failure_modes:
+  - Asks for the recommendation id instead of reading it off the task
+  - Grants the permission directly instead of approving the recommendation
+  - Approves without closing the task, so the principal keeps being asked

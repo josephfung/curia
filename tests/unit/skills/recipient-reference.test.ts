@@ -6,6 +6,7 @@ import { ContactService } from '../../../src/contacts/contact-service.js';
 import {
   PRINCIPAL_RECIPIENT_ALIAS,
   RECIPIENT_REFERENCE_SKILLS,
+  addressOrReferenceError,
   findRetiredRecipientField,
   formatResolvedRecipient,
   parseRecipientReference,
@@ -563,7 +564,30 @@ describe('retired raw-address inputs (#2041)', () => {
     expect(message).toMatch(/Nothing was sent\.$/);
   });
 
-  it('covers the send skills and email-draft-save', () => {
-    expect(Object.keys(RECIPIENT_REFERENCE_SKILLS).sort()).toEqual(['email-draft-save', 'email-send', 'signal-send', 'slack-send', 'sms-send']);
+  it('covers the send skills, email-draft-save and email-reply', () => {
+    expect(Object.keys(RECIPIENT_REFERENCE_SKILLS).sort()).toEqual(['email-draft-save', 'email-reply', 'email-send', 'signal-send', 'slack-send', 'sms-send']);
+  });
+});
+
+describe('addressOrReferenceError (#2131)', () => {
+  it('accepts an address or a reference', () => {
+    expect(addressOrReferenceError('bob@vendor.example', 'email', 'cc')).toBeNull();
+    expect(addressOrReferenceError('principal', 'email', 'cc')).toBeNull();
+    expect(addressOrReferenceError('principal#personal', 'email', 'cc')).toBeNull();
+    expect(addressOrReferenceError('4fdfd02a-1466-46ca-b37b-13bb564fe3f0', 'email', 'cc')).toBeNull();
+    // A local part may contain `#`: still an address, not a hinted reference.
+    expect(addressOrReferenceError('principal#ops@vendor.example', 'email', 'cc')).toBeNull();
+  });
+
+  it('refuses anything else, naming "principal" and saying nothing was sent', () => {
+    for (const value of ['Pat Principal', 'the principal', 'pat@', '+15195550100']) {
+      const error = addressOrReferenceError(value, 'email', 'cc');
+      expect(error).toContain('"principal"');
+      expect(error).toMatch(/Nothing was sent/);
+    }
+  });
+
+  it('names a template token as one', () => {
+    expect(addressOrReferenceError('${principal_email}', 'email', 'cc')).toMatch(/Unresolved template placeholder in "cc"/);
   });
 });

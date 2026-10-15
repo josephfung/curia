@@ -1,0 +1,129 @@
+# Case 22 (prompt trim PR 9): a woken task picks up where its progress note leaves off.
+# Rule: WAKE_DISPOSITION_INSTRUCTION in src/scheduler/wake-disposition.ts, which every
+# ordinary task wake carries; the tasks SKILL.md no longer says how to resume. The task's
+# notes say Priya has answered and Marcus has not, so the next step is one nudge to
+# Marcus. Emailing Priya again repeats finished work; completing the task skips the rest.
+name: task wake resumes from progress
+description: >
+  The coordinator is woken for a task it parked earlier: collect Priya Shah's and Marcus
+  Lee's comments on the Q4 board deck, then send the principal a summary of both. Its
+  progress notes say it emailed both of them, Priya has replied, Marcus has not, and the
+  next step is to nudge Marcus once. The coordinator nudges Marcus, leaves Priya alone, and
+  parks the task again until Marcus answers.
+tags: [task-wake, tasks, email]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Shah
+      tier: known
+      channel: email
+      identifier: priya.shah@northwind.example.test
+    - key: marcus
+      display_name: Marcus Lee
+      tier: known
+      channel: email
+      identifier: marcus.lee@northwind.example.test
+inbound:
+  from: task-wake
+  task:
+    id: 5f1c2d3e-4a5b-4c6d-8e7f-22a0b1c2d3e4
+    title: Collect comments on the Q4 board deck
+    intent: >
+      Collect Priya Shah's and Marcus Lee's comments on the Q4 board deck, then send the
+      principal a summary of both.
+    notes:
+      - at: "{{time:today-4 10:05}}"
+        note: >
+          Emailed Priya Shah and Marcus Lee from my account, asking for their comments on
+          the Q4 board deck within three days.
+      - at: "{{time:today-1 16:40}}"
+        note: >
+          Priya replied: the pricing slide needs the October numbers. Marcus has not
+          replied. Next: nudge Marcus once by email. When his comments are in, send the
+          principal a summary of both.
+tool_stubs:
+  # The contacts specialist's briefing format (agents/contacts.yaml). One briefing names
+  # both people, so a brief about either resolves them.
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: |
+          Marcus Lee and Priya Shah are both known contacts at Northwind.
+          Marcus's verified email is marcus.lee@northwind.example.test; Priya's is
+          priya.shah@northwind.example.test. No recent meetings or notes on file.
+
+          <resolved_entities>
+            <contact name="Marcus Lee" id="{{contact:marcus}}"/>
+            <contact name="Priya Shah" id="{{contact:priya}}"/>
+          </resolved_entities>
+  # The task has no bullpen thread. A run that looks one up (seen as thread_id "recent")
+  # gets the handler's miss, as production would (skills/_shared/bullpen.ts).
+  bullpen-read:
+    - match: {}
+      error: No bullpen thread with that ID exists
+  task-update:
+    - match: { task_id: 5f1c2d3e-4a5b-4c6d-8e7f-22a0b1c2d3e4 }
+      return:
+        task_id: 5f1c2d3e-4a5b-4c6d-8e7f-22a0b1c2d3e4
+        title: Collect comments on the Q4 board deck
+        status: waiting
+        owner: curia
+        priority: 3
+        tags: []
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  # Completing the task is the wrong path: Marcus has not answered. Stubbed so the case
+  # tests the choice, not a refusal.
+  task-complete:
+    - match: { task_id: 5f1c2d3e-4a5b-4c6d-8e7f-22a0b1c2d3e4 }
+      return:
+        task_id: 5f1c2d3e-4a5b-4c6d-8e7f-22a0b1c2d3e4
+        title: Collect comments on the Q4 board deck
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: nudges_marcus
+    weight: critical
+    description: Emails Marcus Lee, by his contact ID, asking again for his comments.
+    check:
+      called: email-send
+      with: { to: "{{contact:marcus}}" }
+      success: true
+  - id: leaves_priya_alone
+    weight: critical
+    description: Does not email Priya Shah again; she has already replied.
+    check:
+      not_called: [email-send]
+      with: { to: "{{contact:priya}}" }
+  - id: does_not_complete
+    weight: critical
+    description: Does not complete the task, whose goal still needs Marcus's comments and the summary.
+    check:
+      not_called: [task-complete]
+  - id: updates_the_task
+    weight: critical
+    description: Records the wake's outcome on the task with task-update.
+    check:
+      called: task-update
+      with: { task_id: 5f1c2d3e-4a5b-4c6d-8e7f-22a0b1c2d3e4 }
+      success: true
+  - id: parks_waiting_on_marcus
+    weight: important
+    description: >
+      Parks the task as waiting (or blocked) on Marcus's reply, with a progress note saying
+      the nudge went out, and either a wake_at or Marcus named as the contact it waits on.
+  - id: nudge_reads_right
+    weight: important
+    description: >
+      The email to Marcus asks for his comments on the Q4 board deck, briefly and politely,
+      and does not repeat Priya's comments to him.
+failure_modes:
+  - Emails Priya and Marcus again, as if starting the task over
+  - Completes the task before Marcus has answered
+  - Ends the wake without updating the task

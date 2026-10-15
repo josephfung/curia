@@ -1,10 +1,11 @@
 // tests/unit/agent.meeting-debrief-idempotency.test.ts
 //
 // Guards against regression of #724 (5 duplicate Bullpen prompts for the same
-// meeting on 2026-05-26). Verifies that the meeting-debrief system prompt
-// contains the config-store idempotency check in Step 6: check before posting,
-// skip if already sent, write the key after a successful post, and handle write
-// failures gracefully.
+// meeting on 2026-05-26). Verifies that the meeting-debrief system prompt reads
+// the prompted:<eventId> guard before Step 6 posts (the wake's phase derivation,
+// #839, which replaced Step 6's own re-check in #2025), writes the key after a
+// successful post, and handles write failures gracefully. The behavior is covered
+// by scenario cases 32b and 32h.
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as fs from 'node:fs';
@@ -12,6 +13,7 @@ import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 
 let step6: string;
+let wakeDerivation: string;
 
 beforeAll(() => {
   const agentPath = path.resolve(import.meta.dirname, '../../agents/meeting-debrief.yaml');
@@ -36,33 +38,30 @@ beforeAll(() => {
     throw new Error('Step 6 or Step 7 heading not found in system_prompt — was a heading renamed?');
   }
   step6 = prompt.slice(start, end);
+  const wakeStart = prompt.indexOf('# TASK WAKE-UP MODE');
+  if (wakeStart === -1 || wakeStart > start) {
+    throw new Error('TASK WAKE-UP MODE heading not found before Step 6 — was a heading renamed?');
+  }
+  wakeDerivation = prompt.slice(wakeStart, start);
   if (step6.length < 50) {
     throw new Error(`Step 6 section is suspiciously short (${step6.length} chars) — may have been truncated`);
   }
 });
 
 describe('meeting-debrief idempotency guard (issue #724)', () => {
-  it('checks config-store for prompted:<eventId> key before opening a Bullpen thread', () => {
-    // The idempotency key must be referenced before the bullpen "post" action in Step 6.
-    // If this fails, the agent can post duplicate threads on the same calendar event.
-    expect(step6).toMatch(/prompted:/);
-    const idxKey = step6.indexOf('prompted:');
-    const idxPost = step6.search(/"post"/);
-    expect(idxPost).toBeGreaterThan(-1);
-    expect(idxKey).toBeLessThan(idxPost);
-  });
-
-  it('instructs the agent to skip posting when the idempotency key is already present', () => {
-    // Skipping must be explicitly tied to the found: true condition, not just any
-    // use of the word "skip". Matches "If `found: true`" / "if found" constructs only.
-    expect(step6).toMatch(/found.*true|if.*found|already.*prompted/i);
+  it('derives the phase from prompted:<eventId> before Step 6 opens a Bullpen thread', () => {
+    // A wake reaches Step 6 (the post) only when prompted:<eventId> is absent; when it
+    // is present the wake goes to Step 7 instead. If this fails, a resent wake can post
+    // a duplicate prompt for the same calendar event.
+    expect(wakeDerivation).toMatch(/`prompted:<eventId>` absent → \*\*Step 6\*\*/);
+    expect(wakeDerivation).toMatch(/`prompted:` present[^\n]*→ \*\*Step 7\*\*/);
   });
 
   it('instructs the agent to write the idempotency key to config-store after the post, not before', () => {
     // The store must come AFTER the bullpen post — writing before would create a phantom
     // key that blocks all future posts if the bullpen call then fails.
     expect(step6).toMatch(/action.*['"']store['"']|store.*prompted:|prompted:.*store/i);
-    const idxPost = step6.search(/"post"/);
+    const idxPost = step6.indexOf('`bullpen-post` with');
     const idxStore = step6.search(/action.*['"']store['"']/);
     expect(idxPost).toBeGreaterThan(-1);
     expect(idxStore).toBeGreaterThan(idxPost);

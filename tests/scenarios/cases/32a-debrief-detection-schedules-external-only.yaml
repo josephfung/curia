@@ -1,0 +1,231 @@
+# meeting-debrief, scheduled mode (#2025). Rules: agents/meeting-debrief.yaml "SCHEDULED
+# MODE: Detection & Scheduling", Steps 2, 4 and 5, and the schedule's task text: filter out
+# seen, all-day and solo events; judge external meetings YES and internal routine ones NO;
+# a YES gets task-create (tag debrief-pending, the event id in the intent anchor) plus the
+# seen: guard; a NO gets the guard only and no task; scheduler-report exactly once; no
+# bullpen post, no prompt. bullpen and email-draft-save succeed, so prompting now is an
+# available wrong path.
+name: debrief detection schedules external meetings only
+description: >
+  meeting-debrief's 7am/12pm/4pm detection job fires. The rest of today holds five events:
+  an external meeting with two people from Acme Corp; a 30-minute weekly engineering sync
+  with two colleagues from the principal's own company (Testwell Labs); a focus block whose
+  only other attendee is the principal's own synced personal calendar; an all-day
+  building-maintenance closure; and an external intro with Halcyon Capital that an earlier
+  run already judged (its seen: guard is set). meeting-debrief should schedule exactly one
+  debrief task, for the Acme meeting, set the seen: guard for the Acme meeting and the
+  engineering sync, create no task for the sync, call scheduler-report once, and prompt no
+  one.
+tags: [specialist-meeting-debrief, meeting-debrief, scheduled-mode]
+agent: meeting-debrief
+stub_sets: [meeting-debrief-office]
+inbound:
+  from: scheduler
+  content: >
+    Run the meeting debrief detection & scheduling pipeline. Scan the principal's
+    calendar for the rest of today's meetings, judge which warrant a debrief,
+    and schedule a per-meeting debrief task (with a meeting-end wake-up) for
+    each one. Whether or not any debriefs were scheduled, always call
+    scheduler-report exactly once before exiting, with a one-line summary and
+    context set to the scanned, scheduled, and skipped counts (use zeros when
+    a step yielded no candidates). This is a silent maintenance run: do NOT
+    post to the bullpen, do NOT prompt or message the principal, and do NOT run the
+    debrief lifecycle on this wake.
+tool_stubs:
+  config-store:
+    - match: { action: retrieve, key: "seen:evt-halcyon-0005" }
+      return: { found: true, namespace: debrief, key: "seen:evt-halcyon-0005", value: "{{at:now-300m}}" }
+    # Reading the whole namespace (no key) lists the guards set so far.
+    - match: { action: retrieve, key: null }
+      return:
+        namespace: debrief
+        entries:
+          - { key: "seen:evt-halcyon-0005", value: "{{at:now-300m}}" }
+  # task-create's replay gives each later create its own id; whatever task the run
+  # created, it may update or close it.
+  task-update:
+    - match: {}
+      return:
+        task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
+        title: (updated)
+        status: open
+        owner: curia
+        priority: 3
+        tags: [debrief-pending]
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-complete:
+    - match: {}
+      return:
+        task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
+        title: (completed)
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  calendar-list-events:
+    - match: {}
+      return:
+        count: 5
+        displayTimezone: "{{timezone}}"
+        events:
+          - id: evt-holiday-0004
+            title: Office closed (building maintenance)
+            description: ""
+            location: ""
+            startTime: null
+            endTime: null
+            startDate: "{{date:today}}"
+            endDate: "{{date:today+1}}"
+            participants: []
+            conferencing: null
+            status: confirmed
+            calendarId: cal-principal-work
+            busy: false
+            metadata: null
+          - id: evt-eng-0002
+            title: Weekly engineering sync
+            description: Standing weekly sync.
+            location: ""
+            startTime: "{{at:now+20m}}"
+            endTime: "{{at:now+50m}}"
+            startDate: null
+            endDate: null
+            participants:
+              - { email: avery@testwell-labs.example.test, name: Avery Testwell, status: yes }
+              - { email: jordan.kim@testwell-labs.example.test, name: Jordan Kim, status: yes }
+              - { email: priya.nair@testwell-labs.example.test, name: Priya Nair, status: yes }
+            conferencing: null
+            status: confirmed
+            calendarId: cal-principal-work
+            busy: true
+            metadata: null
+          - id: evt-acme-0001
+            title: Acme partnership review
+            description: Pilot scope and pricing for the Acme partnership.
+            location: Acme offices, 200 King St W
+            startTime: "{{at:now+30m}}"
+            endTime: "{{at:now+90m}}"
+            startDate: null
+            endDate: null
+            participants:
+              - { email: avery@testwell-labs.example.test, name: Avery Testwell, status: yes }
+              - { email: sarah.chen@acme.example.test, name: Sarah Chen, status: yes }
+              - { email: david.park@acme.example.test, name: David Park, status: yes }
+            conferencing: null
+            status: confirmed
+            calendarId: cal-principal-work
+            busy: true
+            metadata: null
+          - id: evt-focus-0003
+            title: "Focus: Q4 plan draft"
+            description: ""
+            location: ""
+            startTime: "{{at:now+60m}}"
+            endTime: "{{at:now+120m}}"
+            startDate: null
+            endDate: null
+            participants:
+              - { email: avery@testwell-labs.example.test, name: Avery Testwell, status: yes }
+              - { email: avery.personal@example.test, name: Avery Testwell, status: yes }
+            conferencing: null
+            status: confirmed
+            calendarId: cal-principal-work
+            busy: true
+            metadata: null
+          - id: evt-halcyon-0005
+            title: Halcyon Capital intro
+            description: Intro call with Halcyon's partner team.
+            location: ""
+            startTime: "{{at:now+100m}}"
+            endTime: "{{at:now+130m}}"
+            startDate: null
+            endDate: null
+            participants:
+              - { email: avery@testwell-labs.example.test, name: Avery Testwell, status: yes }
+              - { email: maya.okafor@halcyon.example.test, name: Maya Okafor, status: yes }
+            conferencing: null
+            status: confirmed
+            calendarId: cal-principal-work
+            busy: true
+            metadata: null
+expected_behaviors:
+  - id: schedules_acme
+    weight: critical
+    description: Creates a debrief task for the Acme meeting, tagged debrief-pending.
+    check:
+      called: task-create
+      contains: { title: Acme partnership review, tags: debrief-pending }
+  - id: no_task_for_no
+    weight: critical
+    description: Creates no task for the internal engineering sync, which it should judge NO.
+    check:
+      not_called: [task-create]
+      contains: { title: engineering }
+  - id: no_task_for_solo
+    weight: critical
+    description: Creates no task for the solo focus block.
+    check:
+      not_called: [task-create]
+      contains: { title: Focus }
+  - id: no_task_for_all_day
+    weight: critical
+    description: Creates no task for the all-day closure.
+    check:
+      not_called: [task-create]
+      contains: { title: Office closed }
+  - id: skips_seen
+    weight: critical
+    description: Creates no task for the Halcyon intro, whose seen guard is already set.
+    check:
+      not_called: [task-create]
+      contains: { title: Halcyon }
+  - id: one_task_only
+    weight: important
+    description: >
+      Creates exactly one task in the run (no cancel-and-recreate of the Acme task).
+    check:
+      called: task-create
+      min: 1
+      max: 1
+  - id: anchor_names_event
+    weight: important
+    description: The Acme task's intent anchor carries its calendar event id, which the wake parses.
+    check:
+      called: task-create
+      contains: { intent_anchor: evt-acme-0001 }
+  - id: guards_yes
+    weight: critical
+    description: Sets the seen guard for the Acme meeting.
+    check:
+      called: config-store
+      with: { action: store }
+      contains: { key: "seen:evt-acme-0001" }
+  - id: guards_no
+    weight: critical
+    description: Sets the seen guard for the engineering sync it judged NO.
+    check:
+      called: config-store
+      with: { action: store }
+      contains: { key: "seen:evt-eng-0002" }
+  - id: reports_once
+    weight: critical
+    description: Calls scheduler-report exactly once.
+    check:
+      called: scheduler-report
+      min: 1
+      max: 1
+  - id: silent_run
+    weight: critical
+    description: Posts nothing to the bullpen and drafts nothing; a detection run prompts no one.
+    check:
+      not_called: [bullpen-post, bullpen-reply, email-draft-save]
+  - id: report_counts
+    weight: nice-to-have
+    description: >
+      The scheduler-report call carries a one-line summary and a context with scanned,
+      scheduled and skipped counts, with one scheduled.
+failure_modes:
+  - Creates a task for the internal engineering sync, the focus block or the all-day closure
+  - Re-judges or schedules the Halcyon intro whose seen guard is already set
+  - Posts a debrief prompt to the bullpen during the detection run
+  - Skips scheduler-report or calls it more than once

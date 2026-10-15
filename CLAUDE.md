@@ -116,7 +116,7 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 - `src/bus/events.ts` — event type registry (discriminated union), source of truth
 - `src/bus/permissions.ts` — layer-to-event authorization map (security boundary)
 - `agents/*.yaml` — agent configuration files
-- `skills/*/tool.json` — skill manifests
+- `skills/<bundle>/tools/<tool>/tool.json` — tool manifests in a bundle (most tools); `skills/<tool>/tool.json` for standalone tools
 - `config/default.yaml` — base configuration
 
 ## Adding Things
@@ -131,7 +131,7 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 7. Write tests (include never-principal fields in `extractRecipients` tests)
 
 ### New Tool
-1. Create `skills/<name>/tool.json` (manifest) + `handler.ts`
+1. Create `tool.json` (manifest) + `handler.ts` — inside a bundle at `skills/<bundle>/tools/<name>/` and listed in that bundle's `SKILL.md`, or standalone at `skills/<name>/`. A tool listed in an enabled bundle's `SKILL.md` is enrolled in the registry on the next boot; a standalone tool starts disabled unless `config/registry-defaults.yaml` `tools:` lists it (#1974)
 2. Declare permissions and secrets in the manifest
 3. Write `handler.test.ts`
 4. **Pin it to at least one agent.** Prefer pinning a **skill bundle** (`pinned_skills: [calendar]`) so the agent gets the whole toolset + any SKILL.md instructions. For singleton tools still living at `skills/<tool>/`, pin the tool name (auto-wrapped as a singleton skill). A tool that isn't reachable via any pinned skill is invisible unless discovery surfaces it. Exception: pure infrastructure tools invoked by the system (e.g. `extract-facts`, `extract-relationships`, `scheduler-report`) intentionally have no agent owner.
@@ -172,7 +172,7 @@ When adding a new agent, ensure it receives the autonomy block via the runtime i
 
 ### Fixing agent behavior
 
-Don't append a paragraph to `system_prompt`. Put the rule on the highest rung that works: code enforcement → injection with its trigger → tool description → lazy playbook → always-on prompt. See [ADR-046](docs/adr/046-agent-behavior-fix-placement.md). `tests/unit/agents/prompt-budget.test.ts` fails CI when the coordinator's always-on prompt or local tool definitions grow past budget. Prefer a behavioral test (scenario, smoke, or a unit test of the code) over one that pins prompt text.
+Don't append a paragraph to `system_prompt`. Put the rule on the highest rung that works: code enforcement → injection with its trigger → tool description → lazy playbook → always-on prompt. See [ADR-046](docs/adr/046-agent-behavior-fix-placement.md). `tests/unit/agents/prompt-budget.test.ts` fails CI when a budgeted agent's always-on prompt or local tool definitions grow past budget — the coordinator plus calendar, ceo-inbox, contacts and meeting-debrief (#2025). Prefer a behavioral test (scenario, smoke, or a unit test of the code) over one that pins prompt text.
 
 ### Setup wizard — keep the catalog current
 
@@ -205,8 +205,8 @@ phone, etc.) loaded from `contact_channel_identities` at startup. They are
 authoritative and labelled as such in the block.
 
 To **send** to the principal, agents pass the reserved alias `principal` as the
-recipient of `email-send`, `signal-send`, `sms-send` or `slack-send`; the skill looks
-the address up from those verified identities (#2033,
+recipient of `email-send`, `signal-send`, `sms-send` or `slack-send`, or in `email-reply`'s
+`cc`; the skill looks the address up from those verified identities (#2033, #2131,
 [ADR-047](docs/adr/047-send-skills-address-recipients-by-reference.md)). A model with
 the right address in context still mistypes it, so no prompt or task payload should
 ask an agent to copy the principal's address into a send skill. The block's values are
@@ -404,7 +404,7 @@ pnpm smoke --model <standard-tier model>        # terminal 1; docs/dev/smoke-tes
 pnpm scenarios --model <standard-tier model>    # terminal 2, once smoke prints "Database: throwaway copy"; tests/scenarios/README.md
 ```
 
-Run them side by side, smoke first: smoke copies the dev database, and Postgres copies a database only while nothing else is connected to it, so scenarios must start after the copy. Each suite runs 4 cases at a time (`--concurrency`). Measured on 2026-10-05 (#1980): **both suites together took 12 min and OpenRouter billed $2.10**. Each summary prints the run's own spend by agent and judge. On that run the estimate priced cached input as uncached and ran about 2× the bill (estimated $4.39: smoke $2.84, scenarios $1.55, the judge about 10%); #1962 has since fixed the cache accounting; see `docs/dev/smoke-tests.md`. Since #2027 the scenario gate also runs three cases with real delegation (about $0.25 and two minutes more); the other real-delegation cases run on demand (`pnpm scenarios --on-demand`, see `tests/scenarios/README.md`).
+Run them side by side, smoke first: smoke copies the dev database, and Postgres copies a database only while nothing else is connected to it, so scenarios must start after the copy. Each suite runs 4 cases at a time (`--concurrency`). Measured on 2026-10-05 (#1980): **both suites together took 12 min and OpenRouter billed $2.10**. Each summary prints the run's own spend by agent and judge. On that run the estimate priced cached input as uncached and ran about 2× the bill (estimated $4.39: smoke $2.84, scenarios $1.55, the judge about 10%); #1962 has since fixed the cache accounting; see `docs/dev/smoke-tests.md`. Since #2027 the scenario gate also runs three cases with real delegation (about $0.25 and two minutes more); the other real-delegation cases run on demand (`pnpm scenarios --on-demand`, see `tests/scenarios/README.md`). Since #2025 the scenario gate also runs the specialists' cases: 77 cases, measured on 2026-10-14 at about 38 minutes and $2.87 estimated (the judge about half). Smoke still starts first and finishes well before it.
 
 - **Block the release** if either command exits non-zero: any smoke case fails its gate, or any critical scenario behavior is below threshold. Judge errors and errored runs also fail the gate; re-run those rather than waving them through. A case marked `known_failure` (smoke shows it as `KNOWN`; scenarios list it under known failures) is reported but not gated: confirm each one's issue is still open, because a marker on a closed issue would wave a regression through.
 - **Record the results with the gate SHA.** Each suite prints the `Commit:` it ran on, and it must equal `<gate-sha>` exactly — a `-dirty` suffix means uncommitted changes were tested, so the run does not count. Note both suites' outcomes next to the security gate's (smoke: cases passed, any `PASS*` retries and `KNOWN` known failures; scenarios: gate passed, plus any known failures).

@@ -3,7 +3,7 @@ name: tasks
 description: >
   Defer, track, and resume multi-step work with task-create/list/update/complete,
   plus plan and checkpoint primitives. Pin this skill to make an agent heartbeat-eligible.
-version: "0.2.2"
+version: "0.2.3"
 heartbeat: true
 tools:
   - task-create
@@ -32,32 +32,18 @@ the first wave of subtasks (`parent_task_id`, and `blocked_by_task_id` for order
 Plan the first wave only; add subtasks as you learn more.
 
 **Make every subtask self-contained.** A woken subtask starts fresh with no memory of this
-conversation — it has only its id, title, intent, and progress note (see Resuming below).
-So its `intent_anchor` and progress must fully re-establish the work: the goal, the resource
+conversation — it has only its id, title, intent, and progress note. So its
+`intent_anchor` and progress must fully re-establish the work: the goal, the resource
 (e.g. a URL), and precise progress ("answered Q1-12 of 60"). A bare title like "Answer
-Q13-36" strands the wake.
-
-If a subtask works through the **web-browser** skill, do not assume its live browser session
-survives a wake: record the URL, the exact `session_id`, and whether the session was
-`incognito`. On wake, reuse that `session_id`; if the tool reports it is gone, re-open in the
-same mode (an incognito flow must not fall back into the principal's persistent profile) and
-resume from the URL and recorded progress.
+Q13-36" strands the wake. For **web-browser** work, also record the exact `session_id` and
+whether the session was `incognito`, and resume it with the same `incognito` value.
 
 **Advance until blocked.** When you act on a task, do every step you can right now.
 Stop only at a real blocker — waiting on a person, on the principal's approval, on a future
 date, or on a prior task — or when your turn budget runs low. Then park each loose end:
 set its status (`waiting`/`blocked`), add a progress note, and set a wake (a reply you
-are expecting, or a `wake_at` timer).
-
-**Finishing.** When a task's goal is achieved, call `task-complete` with a note.
-When you are woken for a task, end that run in a deliberate state: `task-complete`,
-`task-update` status `cancelled`, or park it (`waiting`/`blocked`, a progress note,
-and `wake_at`). `scheduler-report` records the job run and does not close the task.
-Ending a woken run while the task is still open, with no new note and no wake, is a bug.
-
-**Past-due milestones.** Never `task-complete` a subtask whose milestone `due_at` was
-already in the past when you created it — run its work immediately (the platform will
-wake it now) or escalate. Do not mark it done with a "past due, auto-completed" note.
+are expecting, or a `wake_at` timer). When a task's goal is achieved, call `task-complete`
+with a note.
 
 **Never promise without a task.** Before you send anything that commits to a future
 action ("I'll follow up with X", "we'll send that over"), make sure a task backs that
@@ -65,7 +51,3 @@ promise. Prefer to resolve the dependency first and send a complete message. Onl
 an interim "I'll follow up" when the recipient needs an acknowledgment now — and when
 you do, create the follow-up task (yours if you can chase it; the principal's if only they
 can, and tell them).
-
-**Resuming.** When you are woken to advance a task, you receive its id, title, intent,
-and progress. Pick up where you left off. You may pull your other ready tasks
-(`task-list`) and advance them too, in dependency order, until blocked or budget-bound.

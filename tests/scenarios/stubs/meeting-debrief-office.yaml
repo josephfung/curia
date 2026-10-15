@@ -1,0 +1,128 @@
+# meeting-debrief's world (#2025): the writes and reads every one of its cases touches.
+# A case's own stubs come first and say what the day holds (the calendar, the guards that
+# are already set, the task being woken). Scoped to meeting-debrief.
+#
+# The principal works at Testwell Labs. Their work calendar is on testwell-labs.example.test
+# and a personal calendar is synced to it, so an event whose only other attendee is
+# avery.personal@example.test is a solo event (Step 2's alternate-identity filter).
+entity-context:
+  - agent: meeting-debrief
+    match: { contactIds: ["{{principal_contact_id}}"] }
+    return:
+      entities:
+        - entityId: 7a1b2c3d-0000-4000-8000-0000000000a1
+          entityType: person
+          label: Avery Testwell
+          contact:
+            contactId: "{{principal_contact_id}}"
+            displayName: Avery Testwell
+            role: CEO
+            preferredName: Avery
+            title: CEO
+            organization: Testwell Labs
+            primaryEmail: avery@testwell-labs.example.test
+            primaryPhone: null
+            timezone: "{{timezone}}"
+            locale: null
+            location: null
+            pronouns: null
+            linkedinUrl: null
+            bio: null
+            birthday: null
+          facts: []
+          connectedAccounts:
+            - type: calendar
+              label: Work calendar
+              serviceId: avery@testwell-labs.example.test
+              isPrimary: true
+              readOnly: false
+              metadata: { timezone: "{{timezone}}" }
+            - type: calendar
+              label: Personal calendar (synced)
+              serviceId: avery.personal@example.test
+              isPrimary: false
+              readOnly: true
+              metadata: { timezone: "{{timezone}}" }
+            - type: email
+              label: Work email
+              serviceId: avery@testwell-labs.example.test
+              isPrimary: true
+              readOnly: false
+              metadata: {}
+          relationships:
+            - type: works_at
+              direction: outbound
+              relatedEntityId: 7a1b2c3d-0000-4000-8000-0000000000b1
+              relatedEntityLabel: Testwell Labs
+              relatedEntityType: organization
+      unresolved: []
+  # Anyone else: nothing on file (the fictional attendees have no profile).
+  - agent: meeting-debrief
+    match: {}
+    return: { entities: [], unresolved: [] }
+config-store:
+  - agent: meeting-debrief
+    match: { action: store }
+    return: { stored: true, namespace: debrief }
+# The real tools' input checks, in their order (skills/bullpen/tools/bullpen-post and
+# bullpen-reply): a post needs a topic, participants and content; a reply needs content.
+bullpen-post:
+  - agent: meeting-debrief
+    match: { topic: null }
+    error: "Missing required field: 'topic'"
+  - agent: meeting-debrief
+    match: { participants: null }
+    error: "Missing required field: 'participants' (non-empty string array)"
+  - agent: meeting-debrief
+    match: { content: null }
+    error: "Missing required field: 'content'"
+  - agent: meeting-debrief
+    match: {}
+    return: { thread_id: 3c9d0e1f-0000-4000-8000-00000000d0b1, message_id: 3c9d0e1f-0000-4000-8000-00000000d0b2 }
+bullpen-reply:
+  - agent: meeting-debrief
+    match: { content: null }
+    error: "Missing required field: 'content'"
+  - agent: meeting-debrief
+    match: {}
+    return: { thread_id: 3c9d0e1f-0000-4000-8000-00000000d0b1, message_id: 3c9d0e1f-0000-4000-8000-00000000d0b3 }
+# The prompt thread the guard in 32d and 32e names: the request to the coordinator, and
+# no answer from the principal yet.
+bullpen-read:
+  - agent: meeting-debrief
+    match: { thread_id: 3c9d0e1f-0000-4000-8000-00000000d0a1 }
+    return:
+      thread_id: 3c9d0e1f-0000-4000-8000-00000000d0a1
+      thread: { id: 3c9d0e1f-0000-4000-8000-00000000d0a1, topic: "Debrief prompt: Acme partnership review", status: open, participants: [meeting-debrief, coordinator] }
+      messages:
+        - sender: meeting-debrief
+          content: "@coordinator Please send the principal a debrief prompt for Acme partnership review."
+scheduler-report:
+  - agent: meeting-debrief
+    match: {}
+    return: { success: true }
+memory-store:
+  - agent: meeting-debrief
+    match: {}
+    return: { action: created, stored: true }
+# A quiet calendar for a case that does not say what the day holds. A case's own
+# calendar-list-events stub comes first.
+calendar-list-events:
+  - agent: meeting-debrief
+    match: {}
+    return: { events: [], count: 0, displayTimezone: "{{timezone}}" }
+calendar-check-conflicts:
+  - agent: meeting-debrief
+    match: {}
+    return: { conflicts: [], clear: true, displayTimezone: "{{timezone}}" }
+# Saving a draft succeeds. meeting-debrief has no send tool, so asking the coordinator over
+# the bullpen is its only way to send; bullpen post succeeds above.
+email-draft-save:
+  - agent: meeting-debrief
+    match: {}
+    return: { draft_id: scenario-draft-1 }
+# Releasing a meeting's outbound-context entries by subject succeeds (nothing matched).
+context-bridge-clear:
+  - agent: meeting-debrief
+    match: {}
+    return: { released: 0, cleared: [], unmatched: [] }

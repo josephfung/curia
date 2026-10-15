@@ -1,0 +1,119 @@
+# ceo-inbox, an inbox-drain task wake with more unread mail behind this batch (#2025, P2).
+# Rule: the `inbox-drain` tag steps (agents/ceo-inbox.yaml "Scheduled-wake resume" on main;
+# src/agents/prompts/ceo-inbox-wake-guidance.ts after P2) and "Step 6: Continue draining, or
+# stop": triage the next batch, then re-arm THE existing drain task with task-update and a
+# wake_at; never create a second drain task, and do not complete it while mail remains.
+#
+# task-create and task-complete succeed, so a duplicate drain task or an early close is
+# available.
+name: inbox drain wake triages and re-arms the drain task
+description: >
+  ceo-inbox's inbox-drain task wakes. The next batch holds one unread newsletter, and more
+  unread mail remains behind it (has_more true). ceo-inbox archives the newsletter, then
+  re-arms the same drain task with task-update and a new wake_at. It creates no second
+  drain task and does not complete this one.
+tags: [specialist-ceo-inbox, ceo-inbox, task-wake, triage, inbox-drain]
+agent: ceo-inbox
+timeout_seconds: 300
+stub_sets: [ceo-inbox-mailroom, deferred-work]
+inbound:
+  from: task-wake
+  task:
+    id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303
+    title: Drain principal inbox backlog
+    intent: Continue batch-triaging the principal inbox until empty.
+    tags: [inbox-drain]
+    notes:
+      - at: "{{at:now-2m}}"
+        note: batch done, more queued
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        tasks:
+          - task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303
+            title: Drain principal inbox backlog
+            description: Continue batch-triaging the principal inbox until empty.
+            status: in_progress
+            owner: curia
+            tags: [inbox-drain]
+        count: 1
+        displayTimezone: "{{timezone}}"
+  task-update:
+    - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303 }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303, title: Drain principal inbox backlog, status: in_progress, owner: curia, priority: 3, tags: [inbox-drain], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  task-complete:
+    - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303 }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303, title: Drain principal inbox backlog, status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  ceo-inbox-list:
+    - match: {}
+      return:
+        count: 1
+        has_more: true
+        messages:
+          - id: msg-30o-news
+            threadId: thr-30o-news
+            subject: "Product Weekly #213: onboarding flows"
+            from: [{ name: Product Weekly, email: newsletter@productweekly.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791879000
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: This week — onboarding flows that stick. Unsubscribe anytime.
+  ceo-inbox-read:
+    - match: { message_id: msg-30o-news }
+      return:
+        id: msg-30o-news
+        threadId: thr-30o-news
+        from: [{ name: Product Weekly, email: newsletter@productweekly.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: "Product Weekly #213: onboarding flows"
+        body_plain: "This week: onboarding flows that stick.\n\nRead online | Unsubscribe | Manage preferences"
+        date: 1791879000
+        labels: [INBOX, UNREAD]
+        attachments: []
+    - match: {}
+      error: "Failed to read principal inbox message: not found"
+  contact-register:
+    - match: {}
+      return: { contact_id: 6c1d2e3f-4a5b-4c6d-8e7f-30f000000001, display_name: Product Weekly, contact_confidence: 0.5, created: true, verified: true }
+  bullpen-post:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000002, deduplicated: false }
+  bullpen-reply:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000002, deduplicated: false }
+  bullpen-close:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000001, status: closed }
+expected_behaviors:
+  - id: triages_batch
+    weight: critical
+    description: Archives the newsletter in this batch.
+    check:
+      called: ceo-inbox-archive
+      with: { message_id: msg-30o-news }
+  - id: rearms_drain_task
+    weight: critical
+    description: Re-arms the existing drain task with task-update.
+    check:
+      called: task-update
+      with: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303 }
+  - id: no_second_drain_task
+    weight: critical
+    description: Creates no new drain task.
+    check:
+      not_called: [task-create]
+  - id: drain_not_completed
+    weight: critical
+    description: Does not complete the drain task while unread mail remains.
+    check:
+      not_called: [task-complete]
+      with: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303 }
+failure_modes:
+  - Creates a second "Drain principal inbox backlog" task
+  - Completes the drain task although has_more was true
+  - Ends the run without re-arming, so the drain waits for the 15-minute cron

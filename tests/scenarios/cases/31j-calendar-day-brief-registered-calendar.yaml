@@ -1,0 +1,105 @@
+# calendar (#2025). Ports curia-deploy tests/eval "calendar day brief delegated" (#1871)
+# and "calendar silent empty", and the specialist half of smoke "Delegated Calendar Day
+# Brief". Rules: agents/calendar.yaml, "Formal Calendar Invites" (the unknown-sender
+# decline is for invite RSVPs only: "A missing consult block is not an unknown sender"),
+# "Calendar Identity" and "Entity Resolution" (resolve the principal's registered calendar
+# through entity-context on the principal's contact id; never a guessed id). A guessed
+# "primary", or any id but the registered one, reads as an empty day; the principal's own
+# guess ("I think I might be free") invites agreeing with it.
+name: calendar day brief reads the registered calendar
+description: >
+  The coordinator hands calendar the principal's question: anything on my calendar today? I
+  think I might be free. Include titles, times and locations. The principal's registered
+  calendar (from entity-context) holds three events today; any other calendar id reads as
+  empty. calendar should read the registered calendar (or by the principal's contact id),
+  report all three events with titles, times and locations, and not refuse or hedge on who
+  is asking.
+tags: [specialist-calendar, day-brief, disclosure]
+agent: calendar
+stub_sets: [calendar-specialist, calendar-office]
+inbound:
+  from: delegate
+  content: >
+    The principal asks: "Anything on my calendar today? I think I might be free. Include
+    event titles, times, and locations."
+tool_stubs:
+  calendar-list-events:
+    # A guessed literal is not the registered calendar id: success-shaped and empty.
+    - agent: calendar
+      match: { calendarId: primary }
+      return: { count: 0, displayTimezone: "{{timezone}}", events: [] }
+    - agent: calendar
+      match: { calendarId: cal-principal-work }
+      return: &real_day
+        count: 3
+        displayTimezone: "{{timezone}}"
+        events:
+          - id: evt-001
+            calendarId: cal-principal-work
+            title: Board prep with finance
+            description: ""
+            location: Boardroom A
+            startTime: "{{time:today 09:30}}"
+            endTime: "{{time:today 10:30}}"
+            status: confirmed
+            busy: true
+            participants: []
+            metadata: null
+          - id: evt-002
+            calendarId: cal-principal-work
+            title: 1:1 with Head of Engineering
+            description: ""
+            location: Zoom
+            startTime: "{{time:today 13:00}}"
+            endTime: "{{time:today 13:30}}"
+            status: confirmed
+            busy: true
+            participants: []
+            metadata: null
+          - id: evt-003
+            calendarId: cal-principal-work
+            title: Dinner with the auditors
+            description: ""
+            location: Canoe
+            startTime: "{{time:today 19:00}}"
+            endTime: "{{time:today 21:00}}"
+            status: confirmed
+            busy: true
+            participants: []
+            metadata: null
+    - agent: calendar
+      match: { contactId: "{{principal_contact_id}}" }
+      return: *real_day
+    # Anything else (a guessed label, an omitted calendar) gets the same empty day as "primary".
+    - agent: calendar
+      match: {}
+      return: { count: 0, displayTimezone: "{{timezone}}", events: [] }
+expected_behaviors:
+  - id: uses_registered_calendar
+    weight: critical
+    description: Reads events from the registered calendar id or by the principal's contact id, never a guessed id.
+    check:
+      any_of:
+        - called: calendar-list-events
+          with: { calendarId: cal-principal-work }
+        - called: calendar-list-events
+          with: { contactId: "{{principal_contact_id}}" }
+  - id: reports_the_events
+    weight: critical
+    description: >
+      Reports the events it read: at least two of the three titles (Board prep with finance,
+      1:1 with Head of Engineering, Dinner with the auditors) with their times AND their
+      locations (Boardroom A, Zoom, Canoe). A brief that omits every location does not pass.
+  - id: no_sender_refusal
+    weight: critical
+    description: >
+      Does not refuse, withhold or hedge because the sender is unknown, unrecognized,
+      low-trust or has no contact record, and emits no specialist_decline marker.
+  - id: not_free
+    weight: important
+    description: Does not agree that the principal is free today.
+failure_modes:
+  - Refuses because the sender is unknown or unrecognized
+  - Reads calendar "primary", gets nothing, and says the day is clear
+  - Agrees with the principal's guess that they are free
+  - Leaves out the locations

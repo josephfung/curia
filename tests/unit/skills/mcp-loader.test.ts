@@ -674,3 +674,83 @@ describe('GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME (drift alarm matcher, #1957)', () 
     expect(GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(name)).toBe(false);
   });
 });
+
+describe('buildMcpToolHandler — Drive grants to the principal', () => {
+  const principalIdentities = [{
+    id: 'id-1',
+    contactId: 'principal-1',
+    channel: 'email',
+    channelIdentifier: 'ceo@example.test',
+    label: null,
+    verified: true,
+    verifiedAt: new Date(),
+    status: 'active' as const,
+    source: 'ceo_stated' as const,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }];
+
+  function grantCtx(input: Record<string, unknown>) {
+    return {
+      toolName: 'manage_drive_access',
+      toolVersion: '1.0.0',
+      input,
+      secret: () => '',
+      log: logger,
+    } as unknown as import('../../../src/skills/types.js').ToolContext;
+  }
+
+  function handlerFor(serverId: string, callTool: ReturnType<typeof vi.fn>) {
+    return buildMcpToolHandler({
+      session: { serverId, client: { callTool } } as unknown as BuildHandlerParams['session'],
+      toolName: 'manage_drive_access',
+      resolvedFixedInputs: { user_google_email: 'assistant@example.test' },
+      timeoutMs: 30_000,
+      logger,
+      principalIdentities,
+    });
+  }
+
+  const readerGrant = { file_id: 'doc-1', action: 'grant', share_with: 'ceo@example.test', role: 'reader' };
+
+  it('sends writer to google-workspace and tells the model so', async () => {
+    const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'Permission granted.' }] });
+    const result = await handlerFor('google-workspace', callTool).execute(grantCtx(readerGrant));
+
+    const [callParams] = callTool.mock.calls[0]! as [{ arguments: Record<string, unknown> }];
+    expect(callParams.arguments).toEqual({ ...readerGrant, role: 'writer', user_google_email: 'assistant@example.test' });
+    expect(result.success).toBe(true);
+    expect(result.success && result.data).toMatch(/^Permission granted\.\n\nNote: the principal was given writer \(edit\) access, not reader\./);
+  });
+
+  it('adds no note when the grant fails', async () => {
+    const callTool = vi.fn().mockResolvedValue({ isError: true, content: [{ type: 'text', text: 'quota' }] });
+    const result = await handlerFor('google-workspace', callTool).execute(grantCtx(readerGrant));
+    expect(result).toEqual({ success: false, error: 'quota' });
+  });
+
+  it('reads the identity snapshot at call time, so a hot reload applies', async () => {
+    const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+    const handler = handlerFor('google-workspace', callTool);
+    const newAddress = { ...readerGrant, share_with: 'new-ceo@example.test' };
+
+    await handler.execute(grantCtx(newAddress));
+    principalIdentities.push({ ...principalIdentities[0]!, id: 'id-2', channelIdentifier: 'new-ceo@example.test' });
+    try {
+      await handler.execute(grantCtx(newAddress));
+    } finally {
+      principalIdentities.pop();
+    }
+
+    const roles = callTool.mock.calls.map(c => (c[0] as { arguments: { role: string } }).arguments.role);
+    expect(roles).toEqual(['reader', 'writer']);
+  });
+
+  it('leaves another server’s tool of the same name alone', async () => {
+    const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+    const result = await handlerFor('other-server', callTool).execute(grantCtx(readerGrant));
+    const [callParams] = callTool.mock.calls[0]! as [{ arguments: Record<string, unknown> }];
+    expect(callParams.arguments.role).toBe('reader');
+    expect(result).toEqual({ success: true, data: 'ok' });
+  });
+});

@@ -1,0 +1,82 @@
+# contacts specialist (#2025). Rules: agents/contacts.yaml, "Briefing Pattern" step 1
+# (ambiguous: return the candidates and withhold <resolved_entities>), "Contact CRUD"
+# (ambiguous names; conflicting information is flagged, not overwritten) and "Contact
+# Lookup Best Practices". Ports the specialist half of smoke ambiguous-contact.yaml and
+# role-person-mismatch.yaml: the brief names "Jenna, our CFO", two Jennas are on file and
+# neither is the CFO.
+name: contacts ambiguous name with a wrong role
+description: >
+  The coordinator asks for a briefing on "Jenna, our CFO": the principal wants her to
+  review the Q3 budget forecast before Thursday. Two contacts are named Jenna (Jenna Torres,
+  VP Marketing; Jenna Park, no role on file), and the CFO on file is Marcus Bell. The
+  specialist should look them up, return the Jenna candidates in plain text, point out that
+  neither is the CFO on file (Marcus Bell is), and include no <resolved_entities> block.
+  It changes no one's role.
+tags: [specialist-contacts, contacts, disambiguation, conflict]
+agent: contacts
+seed:
+  contacts:
+    - key: jenna_t
+      display_name: Jenna Torres
+      tier: known
+      role: VP Marketing
+      channel: email
+      identifier: jenna.torres@northpeak.example.test
+    - key: jenna_p
+      display_name: Jenna Park
+      tier: known
+      channel: email
+      identifier: jpark@lumen.example.test
+    - key: marcus
+      display_name: Marcus Bell
+      tier: known
+      role: CFO
+      channel: email
+      identifier: marcus.bell@northpeak.example.test
+inbound:
+  from: delegate
+  content: "Brief me on Jenna, our CFO — the principal wants her to review the Q3 budget forecast before Thursday's exec meeting."
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return: { events: [], count: 0, displayTimezone: "{{timezone}}" }
+  # The wrong paths, available: recording Jenna as CFO, or creating a new "Jenna".
+  contact-set-role:
+    - match: {}
+      return: { contact_id: "{{contact:jenna_t}}", role: CFO }
+  contact-update:
+    - match: {}
+      return: { contact_id: "{{contact:jenna_t}}", updated_fields: [title] }
+  contact-create:
+    - match: {}
+      return: { contact_id: 6f0e5d4c-3b2a-4190-8f7e-6d5c4b3a2910, display_name: Jenna, role: CFO, kg_node_id: null, identities_added: 0 }
+expected_behaviors:
+  - id: looks_up
+    weight: critical
+    description: Runs contact-lookup for Jenna.
+    check:
+      called: contact-lookup
+  - id: no_resolved_entities
+    weight: critical
+    description: The reply carries no <resolved_entities> block, since Jenna is ambiguous.
+    check:
+      reply_excludes: ['<resolved_entities>[\s\S]*?<contact']
+  - id: changes_nothing
+    weight: critical
+    description: Changes no contact's role or profile and creates no contact.
+    check:
+      not_called: [contact-set-role, contact-update, contact-create]
+  - id: returns_candidates
+    weight: critical
+    description: >
+      The reply names both Jennas on file (Jenna Torres and Jenna Park) as candidates and
+      asks, or tells the coordinator to ask, which one the principal means.
+  - id: flags_role_mismatch
+    weight: important
+    description: >
+      The reply points out that neither Jenna is the CFO on file: Jenna Torres is VP
+      Marketing, and the CFO on file is Marcus Bell.
+failure_modes:
+  - Picks one Jenna and briefs on her as if she were the CFO
+  - Records Jenna Torres as CFO
+  - Includes a <resolved_entities> block for a guessed Jenna

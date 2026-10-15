@@ -88,7 +88,7 @@ export class BullpenDispatcher {
     // Create one agent.task per participant, excluding the sender.
     // Mentioned agents get a reply-expected (open) or act-on-conclusion (closed) prompt;
     // others get FYI. close_after replies with no explicit mentions auto-mention the
-    // thread opener in the bullpen handler so consult hand-offs wake the originator.
+    // thread opener in bullpen-reply so consult hand-offs wake the originator.
     const otherParticipants = participants.filter((id) => id !== senderAgentId);
     const owners = await this.originTurnsStillOpen(threadId, senderAgentId, otherParticipants);
 
@@ -111,10 +111,10 @@ export class BullpenDispatcher {
       const owner = owners.get(agentId);
       const content = (threadClosed
         ? shouldAct
-          ? `Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId} — the thread is now closed. Call bullpen get_thread to read the full history, act on the conclusion (do not reply in-thread).`
-          : `FYI: Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. Call bullpen get_thread to read the full history if needed, but do not reply in-thread.`
+          ? `Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId} — the thread is now closed. Call bullpen-read to read the full history, act on the conclusion (do not reply in-thread).`
+          : `FYI: Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. Call bullpen-read to read the full history if needed, but do not reply in-thread.`
         : shouldAct
-          ? `You've been mentioned in Bullpen thread "${topic}" (thread_id: ${threadId}) by ${senderAgentId}. Review the injected thread context and reply using the bullpen skill.`
+          ? `You've been mentioned in Bullpen thread "${topic}" (thread_id: ${threadId}) by ${senderAgentId}. Review the injected thread context and reply with bullpen-reply.`
           : `FYI: New activity in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. No response required, but reply if you have something to add.`)
         + (owner
           ? ' The turn that delegated this work is still open and will answer the principal. Do not send them a confirmation.'

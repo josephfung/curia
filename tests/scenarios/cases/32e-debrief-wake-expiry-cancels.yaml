@@ -1,0 +1,116 @@
+# meeting-debrief, task wake-up mode, expiry phase (#2025). Rules: agents/meeting-debrief.yaml
+# phase derivation and Step 7 "Expiry phase": prompted: and reminded: both set → cancel the
+# task with task-update status cancelled and prompt no more; also "One reminder per
+# debrief". bullpen succeeds, so a second reminder is an available wrong path.
+name: debrief wake at expiry cancels without nagging
+description: >
+  A debrief task for the Acme partnership review (calendar event evt-acme-0001) wakes for
+  the last time. The principal was prompted two days ago and reminded once; both the
+  prompted and reminded guards are set, and no takeaways ever came. meeting-debrief should
+  cancel the debrief task as expired (implicitly declined) and send nothing more: no
+  further reminder through the bullpen.
+tags: [specialist-meeting-debrief, meeting-debrief, task-wake]
+agent: meeting-debrief
+stub_sets: [meeting-debrief-office]
+inbound:
+  from: task-wake
+  task:
+    id: 6a2b3c4d-5e6f-4a7b-8c9d-32e000000001
+    title: "Debrief: Acme partnership review"
+    tags: [debrief-pending]
+    intent: >-
+      Debrief the principal's meeting 'Acme partnership review' that ends around
+      {{time:today-2 15:00}} (calendar event evt-acme-0001) — prompt at meeting end, then
+      follow up on takeaways.
+    notes:
+      - at: "{{time:today-2 15:01}}"
+        note: Prompt delivered; awaiting the principal's takeaways.
+      - at: "{{time:today-2 17:01}}"
+        note: Reminder sent; still awaiting takeaways.
+tool_stubs:
+  config-store:
+    - match: { action: retrieve, key: "prompted:evt-acme-0001" }
+      return:
+        found: true
+        namespace: debrief
+        key: "prompted:evt-acme-0001"
+        value: '{"thread_id":"3c9d0e1f-0000-4000-8000-00000000d0a1","promptedAt":"{{time:today-2 15:01}}","title":"Acme partnership review"}'
+    - match: { action: retrieve, key: "reminded:evt-acme-0001" }
+      return: { found: true, namespace: debrief, key: "reminded:evt-acme-0001", value: "{{time:today-2 17:01}}" }
+    # Reading the whole namespace (no key) lists the guards set so far.
+    - match: { action: retrieve, key: null }
+      return:
+        namespace: debrief
+        entries:
+          - { key: "seen:evt-acme-0001", value: "{{time:today-2 07:00}}" }
+          - { key: "prompted:evt-acme-0001", value: '{"thread_id":"3c9d0e1f-0000-4000-8000-00000000d0a1","promptedAt":"{{time:today-2 15:01}}","title":"Acme partnership review"}' }
+          - { key: "reminded:evt-acme-0001", value: "{{time:today-2 17:01}}" }
+  calendar-list-events:
+    - match: {}
+      return:
+        count: 1
+        displayTimezone: "{{timezone}}"
+        events:
+          - id: evt-acme-0001
+            title: Acme partnership review
+            description: Pilot scope and pricing for the Acme partnership.
+            location: Acme offices, 200 King St W
+            startTime: "{{time:today-2 14:00}}"
+            endTime: "{{time:today-2 15:00}}"
+            startDate: null
+            endDate: null
+            participants:
+              - { email: avery@testwell-labs.example.test, name: Avery Testwell, status: yes }
+              - { email: sarah.chen@acme.example.test, name: Sarah Chen, status: yes }
+              - { email: david.park@acme.example.test, name: David Park, status: yes }
+            conferencing: null
+            status: confirmed
+            calendarId: cal-principal-work
+            busy: true
+            metadata: null
+  task-update:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32e000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32e000000001
+        title: "Debrief: Acme partnership review"
+        status: cancelled
+        owner: ceo
+        priority: 3
+        tags: [debrief-pending]
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-complete:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32e000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32e000000001
+        title: "Debrief: Acme partnership review"
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+expected_behaviors:
+  - id: cancels_task
+    weight: critical
+    description: Cancels the debrief task with task-update status cancelled.
+    check:
+      called: task-update
+      with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32e000000001, status: cancelled }
+  - id: no_more_reminders
+    weight: critical
+    description: Posts nothing to the bullpen.
+    check:
+      not_called: [bullpen-post, bullpen-reply]
+  - id: no_new_wake
+    weight: important
+    description: Schedules no further wake-up for the task.
+    check:
+      not_called: [task-update]
+      contains: { wake_at: ":" }
+  - id: not_completed
+    weight: important
+    description: Does not mark the task done; an expired debrief is cancelled, not completed.
+    check:
+      not_called: [task-complete]
+failure_modes:
+  - Sends a second reminder
+  - Re-prompts the principal as if the debrief had just started
+  - Leaves the task open with another wake-up

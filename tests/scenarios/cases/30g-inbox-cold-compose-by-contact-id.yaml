@@ -1,0 +1,87 @@
+# ceo-inbox, delegated cold compose (#2025). Rule: agents/ceo-inbox.yaml, "Composing a new
+# email (cold outreach)": a new email is ceo-inbox-draft-compose; a recipient the brief
+# gives a contact ID for goes in `to` by that ID, not by address; executive-profile-get
+# first; return the draft. Delegated mode: no triage.
+#
+# The brief also carries the address, and an older thread with the recipient exists, so
+# addressing her raw or replying on the old thread is available (both succeed).
+name: inbox cold compose addresses the contact by id
+description: >
+  The coordinator relays the principal's request: draft a new email to Priya Raman
+  (contact ID and address both given) proposing to push the Lumen partnership review to
+  the first week of next month. ceo-inbox loads the voice profile and drafts a new email
+  with ceo-inbox-draft-compose, addressed to Priya by her contact ID, and reports the
+  draft as saved for the principal to review, not sent.
+tags: [specialist-ceo-inbox, ceo-inbox, delegated-mode, compose, recipient]
+agent: ceo-inbox
+stub_sets: [ceo-inbox-mailroom]
+seed:
+  contacts:
+    - key: priya_g
+      display_name: Priya Raman-Lee
+      channel: email
+      identifier: priya.ramanlee@lumen-partners.example.test
+inbound:
+  from: delegate
+  content: >
+    The principal asked: draft a new email to Priya Raman-Lee (contact ID
+    {{contact:priya_g}}, priya.ramanlee@lumen-partners.example.test) proposing we push
+    the Lumen partnership review to the first week of next month. Keep it short and
+    friendly. Save it as a draft; don't send.
+tool_stubs:
+  ceo-inbox-search:
+    - match: {}
+      return:
+        count: 1
+        messages:
+          - id: msg-30g-old
+            threadId: thr-30g-old
+            subject: "Intro: Lumen Partners"
+            from: [{ name: Priya Raman-Lee, email: priya.ramanlee@lumen-partners.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1783000000
+            unread: false
+            folders: [INBOX]
+            attachments: []
+            snippet: Great to be connected — looking forward to working together.
+  ceo-inbox-draft-compose:
+    - match: {}
+      return: { draft_id: draft-30g-1, subject: Lumen partnership review, to: [{ name: Priya Raman-Lee, email: priya.ramanlee@lumen-partners.example.test }], cc: [] }
+expected_behaviors:
+  - id: composes_by_contact_id
+    weight: critical
+    description: Drafts a new email with ceo-inbox-draft-compose, with Priya's contact ID in `to`.
+    check:
+      called: ceo-inbox-draft-compose
+      contains: { to: "{{contact:priya_g}}" }
+  - id: not_a_thread_reply
+    weight: critical
+    description: Does not reply on the old intro thread; this is a new email.
+    check:
+      not_called: [ceo-inbox-draft-reply]
+  - id: not_by_raw_address
+    weight: important
+    description: Does not put Priya's address in to_addresses (she has a contact ID).
+    check:
+      not_called: [ceo-inbox-draft-compose]
+      contains: { to_addresses: priya }
+  - id: voice_first
+    weight: important
+    description: Loads the voice profile before composing.
+    check:
+      order: [executive-profile-get, ceo-inbox-draft-compose]
+  - id: no_triage
+    weight: important
+    description: Runs no triage of the inbox.
+    check:
+      not_called: [ceo-inbox-archive, ceo-inbox-label, ceo-inbox-mark-read, ceo-inbox-update-folders]
+  - id: reports_draft_not_sent
+    weight: important
+    description: >
+      The reply says the email is saved as a draft for the principal to review, and does
+      not claim it was sent.
+failure_modes:
+  - Addresses the draft by Priya's email address instead of her contact ID
+  - Replies on the old intro thread instead of composing a new email
+  - Says the email was sent

@@ -1,0 +1,73 @@
+# calendar (#2025). Rule: agents/calendar.yaml, "Unregistered Calendar Handling": when
+# calendar-list-calendars surfaces an unregistered calendar, flag it for the coordinator
+# with its name and id and do not register it. calendar-register succeeds
+# (calendar-specialist), so registering it to the principal on a guess is available.
+#
+# The flag is judged in plain text. The execution layer strips every tag from the delegate
+# result (src/skills/sanitize.ts), so a <needs_input .../> element, attributes and all,
+# never reaches the coordinator; only what the reply says outside a tag does.
+name: calendar flags an unregistered calendar
+description: >
+  The coordinator hands calendar the principal's question: which calendars can you see on my
+  account? calendar-list-calendars returns the principal's registered Work calendar and a
+  shared "Family" calendar that is not registered to anyone. calendar should list both, say
+  in plain text that the Family calendar is not registered, giving its name and id, and
+  leave it to the principal to say whose it is, without registering it.
+tags: [specialist-calendar, registration]
+agent: calendar
+stub_sets: [calendar-specialist, calendar-office]
+inbound:
+  from: delegate
+  content: >
+    The principal asked: "Which calendars can you see on my account? List them."
+tool_stubs:
+  calendar-list-calendars:
+    - agent: calendar
+      match: {}
+      return:
+        calendars:
+          - id: cal-principal-work
+            name: Work
+            description: ""
+            timezone: "{{timezone}}"
+            isPrimary: true
+            readOnly: false
+            isOwnedByUser: true
+            registered: true
+            contactId: "{{principal_contact_id}}"
+            registryLabel: primary
+          - id: cal-family-shared-81c
+            name: Family
+            description: Shared family calendar
+            timezone: "{{timezone}}"
+            isPrimary: false
+            readOnly: false
+            isOwnedByUser: false
+            registered: false
+            contactId: null
+            registryLabel: null
+expected_behaviors:
+  - id: lists_calendars
+    weight: important
+    description: Calls calendar-list-calendars.
+    check:
+      called: calendar-list-calendars
+  - id: no_register
+    weight: critical
+    description: Does not register the Family calendar (no calendar-register call).
+    check:
+      not_called: [calendar-register]
+  - id: flags_unregistered
+    weight: critical
+    description: >
+      Outside any XML-style tag (a tag is stripped before the coordinator sees it), the reply
+      says the Family calendar is not registered, gives its id cal-family-shared-81c, and
+      asks, or says the principal needs to confirm, whose calendar it is before it is
+      registered. Text that appears only inside a tag's attributes does not count.
+  - id: lists_both
+    weight: important
+    description: Names both calendars (Work and Family) in the reply.
+failure_modes:
+  - Registers the Family calendar to the principal without asking
+  - Gives the Family calendar's id only inside a needs_input tag, which the coordinator never sees
+  - Lists only the registered Work calendar

@@ -213,7 +213,10 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     const memoryStep = consultSection.slice(memoryStepStart, proposedStepStart);
     expect(memoryStep).toContain('memory-query');
     expect(memoryStep).toContain('per-contact');
-    expect(memoryStep).toContain('Do not use `memory-query` for standing principal-wide rules');
+    // The per-contact-only scope is stated once, where the rules load is (#2025).
+    const loadSection = extractCalendarRulesLoadSection(prompt);
+    expect(loadSection).toContain('`memory-query` for **per-contact**');
+    expect(loadSection).toContain('not for standing principal-wide rules');
   });
 
   it('honours loaded rules when finding free time and picking slots', () => {
@@ -267,7 +270,7 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     const hierarchySection = prompt.slice(hierarchyStart, conflictStart);
     expect(hierarchySection).toContain('Capturing new preferences');
     expect(hierarchySection).toContain('config-store');
-    expect(hierarchySection).toContain('Do not store standing principal-wide prefs via `memory-store`');
+    expect(hierarchySection).toContain('Standing principal-wide preferences belong in config-store');
   });
 
   it('bumps calendar agent version for scheduling-rules capability', async () => {
@@ -278,7 +281,9 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     // 0.9.0 = answers a generic PEER REQUEST, a new capability, so minor.
     // 0.9.1 = principal vocabulary in the prompt (#1950).
     // 0.9.2 = composed email is always a draft block, never reported as sent (#2055).
-    expect(config.version).toBe('0.9.2');
+    // 0.10.0 = the bullpen tool is split into bullpen-post/-reply/-read/-close (#2126).
+    // 0.10.1 = ADR-046 trim (#2025): restated code rules and duplicates cut.
+    expect(config.version).toBe('0.10.1');
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {
@@ -288,7 +293,7 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     expect(rsvpStart).toBeGreaterThan(-1);
     expect(rsvpEnd).toBeGreaterThan(rsvpStart);
     const rsvpSection = prompt.slice(rsvpStart, rsvpEnd);
-    expect(rsvpSection).toContain('Never update a participants array to RSVP');
+    expect(rsvpSection).toContain("Record the principal's RSVP only with `calendar-respond-to-invite`");
     expect(rsvpSection).toContain('calendar-update-event');
     expect(rsvpSection).toContain('calendar-respond-to-invite');
     expect(rsvpSection).not.toMatch(/Nylas rejects organizer-set/i);

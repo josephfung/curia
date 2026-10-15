@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Scheduler } from '../../../src/scheduler/scheduler.js';
 import { RESUMABLE_CONTINUATION_CREATED_BY } from '../../../src/agents/resumable-continuation.js';
 import {
+  formatTaskWakeContent,
   isUndisposedWake,
   progressNotesSnapshot,
   WAKE_DISPOSITION_INSTRUCTION,
@@ -227,6 +228,14 @@ describe('Scheduler task-wake disposition (#1951)', () => {
     expect(content.instruction).toBe(WAKE_DISPOSITION_INSTRUCTION);
     expect(content.instruction).toContain('task-complete');
     expect(content.instruction).toContain('does not close the task');
+  });
+
+  it('sends the body formatTaskWakeContent builds, which the scenario harness reuses', async () => {
+    const task = await fire();
+    expect(task.payload.content).toBe(formatTaskWakeContent(
+      { taskId: 'task-abc', title: 'Preply lesson', progress: { notes: [] } },
+      { type: 'task-wake', task_id: 'task-abc', standing: { derived: false } },
+    ));
   });
 
   it('omits the instruction on a task-bound job that is not a task wake', async () => {

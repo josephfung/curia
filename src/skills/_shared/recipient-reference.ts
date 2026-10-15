@@ -170,19 +170,27 @@ export interface RecipientReferenceSkill {
   channel: string;
   /** Inputs that take a reference. On email each is a comma-separated list. */
   references: readonly string[];
+  /**
+   * Reference inputs that also take a literal address (#2131). email-reply's cc
+   * names thread participants who are often not contacts, so an address there
+   * passes through. An entry that is neither is refused.
+   */
+  addresses?: readonly string[];
   /** Raw-address inputs retired in #2041, each mapped to the reference input that replaced it. */
   retired: Readonly<Record<string, string>>;
 }
 
 /**
- * Skills that address a recipient by reference (the four send skills and
- * email-draft-save). The execution layer resolves these inputs before any gate and
- * shows the resolved address in an approval. Code that reads one of these skills'
- * recipient inputs uses this map, not hard-coded names.
+ * Skills that address a recipient by reference (the four send skills,
+ * email-draft-save, and email-reply's cc). The execution layer resolves these
+ * inputs before any gate and shows the resolved address in an approval. Code that
+ * reads one of these skills' recipient inputs uses this map, not hard-coded names.
  */
 export const RECIPIENT_REFERENCE_SKILLS: Readonly<Record<string, RecipientReferenceSkill>> = {
   'email-send': { channel: 'email', references: ['to', 'cc'], retired: { to_address: 'to', cc_addresses: 'cc' } },
   'email-draft-save': { channel: 'email', references: ['to'], retired: {} },
+  // To is the original sender, read from the thread; only cc is the agent's.
+  'email-reply': { channel: 'email', references: ['cc'], addresses: ['cc'], retired: {} },
   'signal-send': { channel: 'signal', references: ['recipient'], retired: { recipient_number: 'recipient' } },
   'sms-send': { channel: 'sms', references: ['recipient'], retired: { recipient_number: 'recipient' } },
   'slack-send': { channel: 'slack', references: ['recipient'], retired: { recipient_user_id: 'recipient' } },
@@ -245,6 +253,42 @@ const SENDABLE: Readonly<Record<string, RegExp>> = {
   sms: /^\+[1-9]\d{6,14}$/,
   slack: /^U[A-Z0-9]+$/,
 };
+
+/** True when `value` is an identifier the channel's transport can address. */
+export function isSendableIdentifier(channel: string, value: string): boolean {
+  const sendable = SENDABLE[channel];
+  return sendable !== undefined && sendable.test(value.trim());
+}
+
+/**
+ * Check one entry of an input that takes an address or a reference (#2131).
+ * Returns null for a reference (resolve it) or an address on the channel (send
+ * as written), otherwise an agent-facing refusal that names the alias. A model
+ * that wrote `cc: "principal"` was told to; one that wrote a name or a template
+ * token needs to hear what the field takes.
+ */
+export function addressOrReferenceError(value: string, channel: string, field: string): string | null {
+  if (parseRecipientReference(value) !== null || isSendableIdentifier(channel, value)) return null;
+  const head = isUnresolvedPlaceholder(value)
+    ? unresolvedPlaceholderError(field, value)
+    : `${field} entry "${safeName(value)}" is not an ${channel} address or a contact reference.`;
+  return (
+    `${head} ${field} takes ${channel} addresses, contact IDs, or "${PRINCIPAL_RECIPIENT_ALIAS}" ` +
+    `(add a label hint, as in ${PRINCIPAL_RECIPIENT_ALIAS}#personal, to pick a labelled address); ` +
+    `a contact's address is looked up for you. Nothing was sent.`
+  );
+}
+
+/**
+ * Refusal for an explicit list with no entries (`cc: ","`). It is not read as
+ * `cc: ""`: on email-reply that means sender-only, which the agent did not ask for.
+ */
+export function emptyRecipientListError(field: string): string {
+  return (
+    `${field} has no entries. Pass addresses, contact IDs or "${PRINCIPAL_RECIPIENT_ALIAS}", ` +
+    `or "" for no ${field}. Nothing was sent.`
+  );
+}
 
 /** The contact's designated primary for the channel, if it has one. */
 function primaryFor(contact: Contact, channel: string): string | null {

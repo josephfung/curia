@@ -59,7 +59,7 @@ describeIf('Scheduler failedSkills last_run_context (#1830)', () => {
       true,
       undefined,
       'sweep ok',
-      [{ name: 'bullpen.post', error: 'Thread not found' }],
+      [{ name: 'bullpen-post', error: 'Thread not found' }],
     );
 
     expect(result).toEqual({ suspended: false });
@@ -78,7 +78,7 @@ describeIf('Scheduler failedSkills last_run_context (#1830)', () => {
     expect(row.last_run_outcome).toBe('completed');
     expect(row.consecutive_failures).toBe(0);
     expect(row.last_run_context.failedSkills).toEqual([
-      { name: 'bullpen.post', error: 'Thread not found' },
+      { name: 'bullpen-post', error: 'Thread not found' },
     ]);
   });
 

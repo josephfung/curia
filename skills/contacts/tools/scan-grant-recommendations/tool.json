@@ -1,9 +1,9 @@
 {
   "name": "scan-grant-recommendations",
-  "description": "Scan contacts and proactively suggest capability grants for contacts who have earned them through demonstrated trust patterns. Runs the LLM-judge recommendation engine. Returns a summary of new recommendations created. Invoke on a schedule — not in response to user requests.",
-  "version": "0.1.1",
+  "description": "Scan contacts and proactively suggest capability grants for contacts who have earned them through demonstrated trust patterns. Runs the LLM-judge recommendation engine. Files each pending recommendation as a task the principal owns (the coordinator raises it and routes the answer back), and returns a summary. Invoke on a schedule — not in response to user requests.",
+  "version": "0.2.0",
   "sensitivity": "normal",
-  "action_risk": "none",
+  "action_risk": "low",
   "inputs": {
     "confidence_threshold": "number? (minimum contact_confidence to consider; default 0.65)",
     "max_candidates": "number? (max contacts to evaluate per run; default 20)",
@@ -15,10 +15,12 @@
     "skipped_existing": "number (candidates skipped because a recommendation already exists)",
     "skipped_judge": "number (candidates where the judge explicitly declined to recommend)",
     "skipped_errors": "number (candidates skipped due to transport/parse failures — not judge decisions)",
-    "recommendations_created": "array of { id, contact_id, contact_name, permission, reasoning } for each newly created recommendation"
+    "recommendations_created": "array of { id, contact_id, contact_name, permission, reasoning } for each newly created recommendation",
+    "tasks_filed": "number (principal-owned tasks filed this run, for new recommendations and any pending one still without a task)",
+    "task_failures": "number (pending recommendations whose task could not be filed — retried next run)"
   },
   "permissions": [],
   "secrets": [],
   "timeout": 60000,
-  "capabilities": ["infraLlm"]
+  "capabilities": ["infraLlm", "taskRepo"]
 }

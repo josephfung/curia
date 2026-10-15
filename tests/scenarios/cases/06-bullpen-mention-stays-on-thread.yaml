@@ -1,5 +1,5 @@
 # Case 6 (#1956): a bullpen mention is other agents talking — the reply goes on the
-# thread with the bullpen tool, never to a human channel. This is the plain mention path,
+# thread with bullpen-reply, never to a human channel. This is the plain mention path,
 # outside the scheduler (#1609) and open-delegation (#1917) special cases. Rule:
 # BULLPEN_REPLY_RULE (src/agents/prompts/bullpen-reply-rule.ts), on the mention wake and
 # the [Bullpen] block (#1959).
@@ -28,8 +28,8 @@ inbound:
     @coordinator the Q3 competitor brief is finished and saved in the documents workspace
     as "Q3 competitor brief". Can you acknowledge you've got it?
 tool_stubs:
-  bullpen:
-    - match: { action: get_thread }
+  bullpen-read:
+    - match: {}
       return:
         thread:
           id: "{{thread:brief}}"
@@ -43,20 +43,25 @@ tool_stubs:
             content: >
               @coordinator the Q3 competitor brief is finished and saved in the documents
               workspace as "Q3 competitor brief". Can you acknowledge you've got it?
+  bullpen-reply:
     # A reply missing a required field gets the handler's error, in the handler's order, so
     # a malformed call can be corrected. Answering it "posted" made runs retry until the turn
     # budget ran out (#2098). `null` matches an absent argument; the handler also rejects an
     # empty string. A non-string value can't be matched here and still falls through.
-    - match: { action: reply, thread_id: null }
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    - match: { action: reply, thread_id: "" }
+    - match: { thread_id: "" }
       error: "Missing required field: 'thread_id'"
-    - match: { action: reply, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: reply, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
     - match: {}
       return: { posted: true, thread_id: "{{thread:brief}}" }
+  # The coordinator may close the thread it acknowledged instead of passing close_after.
+  bullpen-close:
+    - match: {}
+      return: { thread_id: "{{thread:brief}}", status: closed }
   # The brief is already saved, but a run sometimes places it anyway. Test mode has no
   # workspace, so the call was refused (#2058). This is the extend branch: the brief is
   # already in the folder, so the result does not recommend a new one.
@@ -124,13 +129,13 @@ expected_behaviors:
   - id: replies_on_thread
     weight: critical
     description: >
-      Replies on that thread with the bullpen tool (a reply with close_after counts).
-      Reading the thread with get_thread is not a reply.
+      Replies on that thread with bullpen-reply (a reply with close_after counts).
+      Reading the thread with bullpen-read is not a reply.
     # A reply the stub refused (missing content, #2098) did not post, so it does not count.
     check:
-      called: bullpen
+      called: bullpen-reply
       success: true
-      with: { action: reply, thread_id: "{{thread:brief}}" }
+      with: { thread_id: "{{thread:brief}}" }
   - id: no_human_channel
     weight: critical
     description: Sends nothing on Signal, SMS, Slack or email.
