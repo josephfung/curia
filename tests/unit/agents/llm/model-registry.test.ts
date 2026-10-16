@@ -187,6 +187,50 @@ describe('ModelRegistry', () => {
     });
   });
 
+  // AWS Bedrock inference-profile ids (ADR-041). The bedrock-runtime endpoint rejects a
+  // bare model id for these models, so the geo/global profile id is the registry key.
+  describe('AWS Bedrock Claude models', () => {
+    const bedrockIds = ['global', 'us', 'eu'].flatMap((prefix) => [
+      `${prefix}.anthropic.claude-sonnet-4-6`,
+      `${prefix}.anthropic.claude-haiku-4-5-20251001-v1:0`,
+    ]);
+
+    it.each(bedrockIds)('%s resolves to provider bedrock with tools and pricing', (id) => {
+      const meta = registry.getModel(id);
+      expect(meta).toBeDefined();
+      expect(meta!.provider).toBe('bedrock');
+      expect(meta!.capabilities).toContain('tools');
+      // 200K-window models carry large_context so capability-based model selection can find them.
+      expect(meta!.capabilities).toContain('large_context');
+      expect(meta!.pricing.inputPerMToken).toBeGreaterThan(0);
+      expect(meta!.pricing.outputPerMToken).toBeGreaterThan(0);
+      expect(meta!.pricing.cacheReadPerMToken).toBeGreaterThan(0);
+      expect(registry.getProvider(id)).toBe('bedrock');
+    });
+
+    // bedrock.ts has no stream(); advertising it would let the voice channel route a
+    // tier to a provider that cannot serve it (#1553).
+    it.each(bedrockIds)('%s does not advertise streaming', (id) => {
+      expect(registry.getModel(id)!.capabilities).not.toContain('streaming');
+    });
+
+    it('prices a Bedrock profile the same as the direct-API model it serves', () => {
+      expect(registry.getPricing('global.anthropic.claude-sonnet-4-6'))
+        .toEqual(registry.getPricing('claude-sonnet-4-6'));
+      expect(registry.getPricing('global.anthropic.claude-haiku-4-5-20251001-v1:0'))
+        .toEqual(registry.getPricing('claude-haiku-4-5'));
+    });
+
+    it('does not capture the direct Anthropic ids, which still route to anthropic', () => {
+      expect(registry.getProvider('claude-sonnet-4-6')).toBe('anthropic');
+      expect(registry.getProvider('claude-haiku-4-5-20251001')).toBe('anthropic');
+    });
+
+    it('does not resolve an unregistered bare Bedrock model id by accident', () => {
+      expect(registry.getModel('anthropic.claude-sonnet-4-6')).toBeUndefined();
+    });
+  });
+
   describe('Embedding models', () => {
     it('text-embedding-3-small is registered with provider openai', () => {
       const meta = registry.getModel('text-embedding-3-small');

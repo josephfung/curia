@@ -448,7 +448,7 @@ in `.env`, because they are needed to reach and unlock the vault itself:
   the vault.
 - `SECRET_ENCRYPTION_KEY` — decrypts the vault.
 
-Every other secret (Anthropic, OpenAI, OpenRouter, API token, web-app bootstrap secret,
+Every other secret (Anthropic, OpenAI, OpenRouter, AWS Bedrock, API token, web-app bootstrap secret,
 Nylas trio, Signal number, Tavily) lives only in the vault.
 
 **Seeding:**
@@ -461,13 +461,47 @@ Nylas trio, Signal number, Tavily) lives only in the vault.
   holds. It upserts present values; absent ones are skipped, never cleared.
 
 **Missing secrets:** a missing *required* secret fails closed. Most fail at their consumer
-(e.g. `anthropic_api_key`). `api_token` is special-cased with an explicit boot guard that
+(e.g. a provider key, which fails the boot with the tier, model and provider named). `api_token` is special-cased with an explicit boot guard that
 refuses to start, because its HTTP-auth consumer fails *open* (no token configured = auth
 disabled) — an absent token would otherwise silently expose the API. `setup.sh` also runs
-`seed-vault` with `SEED_VAULT_VERIFY=1`, which confirms the required rows (`anthropic_api_key`,
-`api_token`, `web_app_bootstrap_secret`) landed and aborts the install if any are missing.
-A missing *optional* secret (OpenAI, OpenRouter, Signal) disables its feature via the
+`seed-vault` with `SEED_VAULT_VERIFY=1`, which confirms the required rows (`api_token`,
+`web_app_bootstrap_secret`) landed and aborts the install if any are missing.
+A missing *optional* secret (OpenAI, OpenRouter, AWS Bedrock, Signal) disables its feature via the
 existing `if (config.x)` guards rather than failing the boot.
+
+### Running tiers on AWS Bedrock
+
+Bedrock is an additive provider (ADR-041). Nothing changes for a deployment without AWS
+credentials. To use it, seed the two vault secrets, set `AWS_REGION` in `.env`, and map a
+tier in **`config/local.yaml`** — not `default.yaml`, which would change the default for
+every deployment:
+
+```yaml
+# config/local.yaml
+model_routing:
+  tiers:
+    standard:
+      model: global.anthropic.claude-sonnet-4-6
+```
+
+Model ids are Bedrock **inference-profile** ids: the `bedrock-runtime` endpoint rejects a
+bare model id for these models. `global.` may route outside your region; `us.` / `eu.` keep
+requests inside that geography (data residency). Registered today: Claude Sonnet 4.6
+(`<prefix>.anthropic.claude-sonnet-4-6`) and Claude Haiku 4.5
+(`<prefix>.anthropic.claude-haiku-4-5-20251001-v1:0`) for `global`, `us` and `eu`. A tier
+mapped to a Bedrock model with no Bedrock credentials fails the boot validation.
+
+Before routing the coordinator's tiers to a Bedrock model, run
+`pnpm run smoke:bedrock-tools -- --model <profile id>`. It sends a production-shaped load
+(10K+ token prompt, 40+ tools) several times and fails unless every run makes a real tool
+call, because some models narrate the call as text under that load and nothing else notices.
+It needs the AWS vault secrets and a reachable database.
+
+Limits: the Bedrock provider has no `stream()`, so the model behind the voice channel
+(`channels.voice.model`, or the `fast` tier when unset) must not be a Bedrock model. It emits no
+prompt-cache checkpoints. The IAM user needs `bedrock:InvokeModel` on the chosen profile, and
+Anthropic models are billed through AWS Marketplace, which can need an extra subscription
+permission on first use.
 
 ---
 
@@ -491,11 +525,14 @@ from `.env`.
 | `DATABASE_URL` | Yes | `.env` | Postgres connection string (also reads the vault that hosts the secrets) |
 | `DB_USER` / `DB_PASSWORD` | Yes | `.env` | Postgres credentials |
 | `TIMEZONE` | Yes | `.env` | IANA timezone (e.g. `America/Toronto`) |
-| `ANTHROPIC_API_KEY` | Yes | vault | Powers all agents |
+| `ANTHROPIC_API_KEY` | Yes¹ | vault | Powers the agents on the default tiers. ¹ No provider is mandatory: boot requires a credential only for each provider a tier is actually mapped to, and fails naming the tier, model and provider if one is missing. |
 | `API_TOKEN` | Yes | vault | Authenticates HTTP API requests |
 | `WEB_APP_BOOTSTRAP_SECRET` | Yes | vault | Web app login secret |
 | `OPENAI_API_KEY` | Tier 2 | vault | Enables entity memory and semantic search |
 | `OPENROUTER_API_KEY` | Optional | vault | Enables multi-model routing via OpenRouter (Gemini Flash, DeepSeek V3, GPT-4o). When set, tiers can map to OpenRouter-hosted models. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional | vault | Vault keys `aws_access_key_id` / `aws_secret_access_key`. With `AWS_REGION`, registers the Bedrock provider so tiers can map to Bedrock-hosted Claude models. A partial set logs a warning and leaves Bedrock off. |
+| `AWS_REGION` | Optional | `.env` | Bedrock region (e.g. `ca-central-1`). Required for Bedrock to register. |
+| `AWS_BEDROCK_TIMEOUT` | Optional | `.env` | Per-call Bedrock timeout in seconds (default `120`). |
 | `NYLAS_API_KEY` | Tier 2 | vault | Shared Nylas app key for the email channel. Per-account grants are managed in the console (Settings → Channels → Email) and stored in the vault at `channel.email.<name>.nylas_grant_id`. |
 | `SIGNAL_PHONE_NUMBER` | Tier 3 | vault | Enables Signal channel |
 | `TAVILY_API_KEY` | Tier 3 | vault | Gates `web-search` (`install.requires_secrets`). Provision `tavily_api_key` via the console (Settings → Skills → web-search); the env var is a fallback only and should be unset in production. |

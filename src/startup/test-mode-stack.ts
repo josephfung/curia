@@ -65,6 +65,7 @@ import { AgentRegistry } from '../agents/agent-registry.js';
 import { discoverAgentManifests, type AgentYamlConfig } from '../agents/loader.js';
 import { AnthropicProvider } from '../agents/llm/anthropic.js';
 import { OpenRouterProvider } from '../agents/llm/openrouter.js';
+import { BedrockProvider } from '../agents/llm/bedrock.js';
 import { ModelRegistry } from '../agents/llm/model-registry.js';
 import { ModelRouter, type ModelRoutingConfig } from '../agents/llm/model-router.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
@@ -507,6 +508,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
   const config: Config = { ...(options.config ?? loadConfig()) };
   let anthropicApiKey = config.anthropicApiKey;
   let openrouterApiKey = config.openrouterApiKey;
+  let awsAccessKeyId = config.awsAccessKeyId;
+  let awsSecretAccessKey = config.awsSecretAccessKey;
   let openaiApiKey = config.openaiApiKey;
   let signalPhoneNumber = config.signalPhoneNumber;
   const llmMode = options.llm ?? 'live';
@@ -571,6 +574,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       await applyChannelVaultSecrets(resolved, vault, process.env, logger);
       anthropicApiKey = resolved.anthropicApiKey;
       openrouterApiKey = resolved.openrouterApiKey;
+      awsAccessKeyId = resolved.awsAccessKeyId;
+      awsSecretAccessKey = resolved.awsSecretAccessKey;
       openaiApiKey = resolved.openaiApiKey;
       signalPhoneNumber = resolved.signalPhoneNumber;
       if (resolved.nylasApiKey) {
@@ -597,6 +602,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     if (llmMode === 'offline') {
       providerRegistry.set('anthropic', offlineProvider('anthropic'));
       providerRegistry.set('openrouter', offlineProvider('openrouter'));
+      providerRegistry.set('bedrock', offlineProvider('bedrock'));
     } else {
       const wrapProvider = options.wrapLlmProvider ?? ((p: LLMProvider) => p);
       if (anthropicApiKey) {
@@ -604,6 +610,11 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       }
       if (openrouterApiKey) {
         providerRegistry.set('openrouter', wrapProvider(new OpenRouterProvider(openrouterApiKey, logger, modelRegistry)));
+      }
+      if (awsAccessKeyId && awsSecretAccessKey && config.awsRegion) {
+        providerRegistry.set('bedrock', wrapProvider(new BedrockProvider(
+          awsAccessKeyId, awsSecretAccessKey, config.awsRegion, config.awsBedrockTimeoutMs, logger, modelRegistry,
+        )));
       }
     }
 

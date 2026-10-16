@@ -25,6 +25,8 @@ export const SEED_SECRET_NAMES = [
   'anthropic_api_key',
   'openai_api_key',
   'openrouter_api_key',
+  'aws_access_key_id',
+  'aws_secret_access_key',
   'api_token',
   'web_app_bootstrap_secret',
   'nylas_api_key',
@@ -46,14 +48,18 @@ export const SEED_SECRET_NAMES = [
 ] as const;
 
 // The subset of secrets that MUST exist in the vault for a working install. Their
-// absence is not "feature off" — it's a broken deploy: anthropic_api_key powers all
-// agents, api_token gates HTTP auth (a missing token disables auth entirely, see
-// src/channels/http/auth.ts and the boot guard in src/index.ts), and
-// web_app_bootstrap_secret gates web login. setup.sh runs verifyRequiredSecrets() after
-// seeding so a partial/failed seed fails loudly instead of producing a half-configured
-// (and possibly auth-disabled) install (#911).
+// absence is not "feature off" — it's a broken deploy: api_token gates HTTP auth (a
+// missing token disables auth entirely, see src/channels/http/auth.ts and the boot guard
+// in src/index.ts), and web_app_bootstrap_secret gates web login. setup.sh runs
+// verifyRequiredSecrets() after seeding so a partial/failed seed fails loudly instead of
+// producing a half-configured (and possibly auth-disabled) install (#911).
+//
+// LLM provider keys (anthropic_api_key, openrouter_api_key, aws_access_key_id /
+// aws_secret_access_key) are deliberately NOT here: no single provider is mandatory. Which
+// ones an install needs depends on how model_routing.tiers is configured, which this
+// script cannot see. src/index.ts enforces it at boot — every tier-mapped model's provider
+// must be registered — and names the tier, model and provider when one is not (#1766).
 export const REQUIRED_SECRET_NAMES = [
-  'anthropic_api_key',
   'api_token',
   'web_app_bootstrap_secret',
 ] as const;

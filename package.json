@@ -25,6 +25,7 @@
     "lint": "eslint src/ tests/ apps/",
     "migrate": "tsx --env-file=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql",
     "smoke": "tsx --env-file=.env tests/smoke/cli.ts",
+    "smoke:bedrock-tools": "tsx --env-file=.env scripts/smoke-bedrock-tool-use.ts",
     "scenarios": "tsx --env-file=.env tests/scenarios/cli.ts",
     "e2e:setup-wizard": "node --env-file-if-exists=.env --import tsx tests/setup-wizard/cli.ts",
     "rejudge": "tsx --env-file=.env tests/shared/rejudge-cli.ts",
@@ -48,6 +49,7 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1152.0",
     "@curia/shared-types": "workspace:*",
     "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^11.3.0",
@@ -87,6 +89,7 @@
     "sanitize-html": "^2.18.0"
   },
   "devDependencies": {
+    "@smithy/types": "^4.19.0",
     "@types/chokidar": "^2.1.7",
     "@types/js-yaml": "^4.0.9",
     "@types/luxon": "^3.7.6",

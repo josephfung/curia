@@ -14,6 +14,10 @@ function baseConfig(): Config {
     anthropicApiKey: undefined,
     openaiApiKey: undefined,
     openrouterApiKey: undefined,
+    awsAccessKeyId: undefined,
+    awsSecretAccessKey: undefined,
+    awsRegion: undefined,
+    awsBedrockTimeoutMs: 120000,
     logLevel: 'info',
     httpPort: 3000,
     apiToken: undefined,
@@ -78,6 +82,26 @@ describe('applyVaultSecrets', () => {
 
     expect(config.anthropicApiKey).toBeUndefined();
     delete process.env.ANTHROPIC_API_KEY;
+  });
+
+  it('resolves AWS Bedrock credentials from the vault and trims them', async () => {
+    const config = baseConfig();
+    const secrets = fakeSecrets({
+      aws_access_key_id: '  AKIAEXAMPLE\n',
+      aws_secret_access_key: 'secret-vault',
+    });
+
+    await applyVaultSecrets(config, secrets, logger);
+
+    expect(config.awsAccessKeyId).toBe('AKIAEXAMPLE');
+    expect(config.awsSecretAccessKey).toBe('secret-vault');
+  });
+
+  it('treats blank AWS secrets as absent', async () => {
+    const config = baseConfig();
+    await applyVaultSecrets(config, fakeSecrets({ aws_access_key_id: '   ', aws_secret_access_key: '' }), logger);
+    expect(config.awsAccessKeyId).toBeUndefined();
+    expect(config.awsSecretAccessKey).toBeUndefined();
   });
 
   it('defaults nylasSelfEmail to empty string when absent (type is string, not undefined)', async () => {

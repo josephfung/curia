@@ -19,6 +19,8 @@ export async function applyVaultSecrets(
     anthropicApiKey,
     openaiApiKey,
     openrouterApiKey,
+    awsAccessKeyId,
+    awsSecretAccessKey,
     apiToken,
     webAppBootstrapSecret,
     nylasApiKey,
@@ -28,6 +30,8 @@ export async function applyVaultSecrets(
     secrets.get('anthropic_api_key'),
     secrets.get('openai_api_key'),
     secrets.get('openrouter_api_key'),
+    secrets.get('aws_access_key_id'),
+    secrets.get('aws_secret_access_key'),
     secrets.get('api_token'),
     secrets.get('web_app_bootstrap_secret'),
     secrets.get('nylas_api_key'),
@@ -50,6 +54,8 @@ export async function applyVaultSecrets(
   config.anthropicApiKey = clean(anthropicApiKey);
   config.openaiApiKey = clean(openaiApiKey);
   config.openrouterApiKey = clean(openrouterApiKey);
+  config.awsAccessKeyId = clean(awsAccessKeyId);
+  config.awsSecretAccessKey = clean(awsSecretAccessKey);
   config.apiToken = clean(apiToken);
   config.webAppBootstrapSecret = clean(webAppBootstrapSecret);
   config.nylasApiKey = clean(nylasApiKey);
@@ -66,6 +72,8 @@ export async function applyVaultSecrets(
     anthropic_api_key: clean(anthropicApiKey) !== undefined,
     openai_api_key: clean(openaiApiKey) !== undefined,
     openrouter_api_key: clean(openrouterApiKey) !== undefined,
+    aws_access_key_id: clean(awsAccessKeyId) !== undefined,
+    aws_secret_access_key: clean(awsSecretAccessKey) !== undefined,
     api_token: clean(apiToken) !== undefined,
     web_app_bootstrap_secret: clean(webAppBootstrapSecret) !== undefined,
     nylas_api_key: clean(nylasApiKey) !== undefined,

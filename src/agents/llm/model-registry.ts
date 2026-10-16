@@ -46,6 +46,47 @@ export interface ModelMetadata {
   cacheReadPricingUnavailable?: string;
 }
 
+// AWS Bedrock — Claude models reached through the Converse API (bedrock.ts, ADR-041).
+//
+// The bedrock-runtime endpoint takes an inference-profile id, not a bare model id:
+// `global.` routes anywhere AWS has capacity, `us.` / `eu.` stay inside that
+// geography (data residency). Each prefix is its own registry key so the id an
+// operator puts in `model_routing` resolves exactly, and the provider is 'bedrock'
+// rather than 'anthropic' — it needs AWS credentials, not an Anthropic key.
+//
+// Ids and context/output limits checked against the AWS model cards on 2026-10-16:
+//   claude-sonnet-4-6  → {prefix}.anthropic.claude-sonnet-4-6
+//   claude-haiku-4-5   → {prefix}.anthropic.claude-haiku-4-5-20251001-v1:0
+// Opus and the Claude 5 family are not registered: add them with their own card's id
+// once there is a tier that needs one.
+//
+// Pricing mirrors the direct-API entries above. Bedrock bills these through AWS
+// Marketplace and may price geo profiles differently from `global.` — reconfirm
+// against the Bedrock pricing page if a cost estimate stops matching an invoice.
+// Cache rates are mirrored too: bedrock.ts emits no cache checkpoints, but Bedrock
+// reports cache tokens when a model caches implicitly, and an unrecorded rate would
+// price those tokens at zero.
+const BEDROCK_PROFILE_PREFIXES = ['global', 'us', 'eu'] as const;
+
+function bedrockClaudeEntries(): Record<string, ModelMetadata> {
+  const entries: Record<string, ModelMetadata> = {};
+  for (const prefix of BEDROCK_PROFILE_PREFIXES) {
+    entries[`${prefix}.anthropic.claude-sonnet-4-6`] = {
+      provider: 'bedrock',
+      contextWindow: 200_000,
+      pricing: { inputPerMToken: 3.00, outputPerMToken: 15.00, cacheCreationPerMToken: 3.75, cacheReadPerMToken: 0.30 },
+      capabilities: ['vision', 'reasoning', 'coding', 'large_context', 'tools'],
+    };
+    entries[`${prefix}.anthropic.claude-haiku-4-5-20251001-v1:0`] = {
+      provider: 'bedrock',
+      contextWindow: 200_000,
+      pricing: { inputPerMToken: 0.80, outputPerMToken: 4.00, cacheCreationPerMToken: 1.00, cacheReadPerMToken: 0.08 },
+      capabilities: ['vision', 'coding', 'large_context', 'tools'],
+    };
+  }
+  return entries;
+}
+
 // Keyed by model name prefix. OpenRouter models added by #379.
 //
 // Each entry and its nested pricing/capabilities objects are frozen at module
@@ -214,6 +255,8 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
     capabilities: ['vision', 'coding', 'reasoning', 'streaming', 'tools'],
     maxOutputTokens: 16_384,
   },
+
+  ...bedrockClaudeEntries(),
 
   // OpenAI embedding model — used by EmbeddingService for semantic search and entity resolution.
   // inputPerMToken matches current OpenAI pricing for text-embedding-3-small.

@@ -208,7 +208,7 @@ run_infra() {
     # Seed the encrypted vault with the prompted/generated secrets (#911). Must run
     # after migrations (the `secrets` table exists) and before the app boots, because
     # the app resolves these vault-only with no env fallback. SEED_VAULT_VERIFY=1 makes
-    # seed-vault confirm the required rows (anthropic_api_key, api_token,
+    # seed-vault confirm the required rows (api_token,
     # web_app_bootstrap_secret) actually landed in the vault and exit non-zero if not —
     # so a run that never persisted them fails loudly here rather than booting an instance
     # with HTTP auth disabled (#911).
