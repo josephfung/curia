@@ -61,7 +61,7 @@ import {
 import { deliverApprovalToChatChannels } from '../autonomy/approval-channel-notify.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
-import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText } from '../channels/email/signature.js';
+import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText, stripModelSignOff } from '../channels/email/signature.js';
 import type { AgentPersona } from './types.js';
 import { scrubPii } from '../pii/scrubber.js';
 import type { ExportControlService } from '../security/export-controls.js';
@@ -1394,9 +1394,7 @@ export class OutboundGateway {
       const toSend: EmailSendRequest = { ...request, body: redactedBody, subject: redactedSubject };
       delete toSend.recipientSource;
       delete toSend.recipientDisplayName;
-      delete toSend.signature;
-      const signature = this.emailSignatureFor(toSend, options?.isSystemNotification === true);
-      if (signature) toSend.signature = signature;
+      this.signEmail(toSend, options?.isSystemNotification === true);
       if (options?.recipientSource === 'email_participant') {
         toSend.recipientSource = 'email_participant';
         const fromName = options.recipientDisplayName?.trim();
@@ -1414,7 +1412,8 @@ export class OutboundGateway {
           channel: 'email',
           recipientId,
           recipientContactId,
-          content: redactedBody,
+          // Without the model's sign-off when signEmail dropped it: what was sent.
+          content: toSend.body,
           conversationId: options?.conversationId,
           taskEventId: options?.taskEventId,
           messageId: result.messageId,
@@ -2474,24 +2473,27 @@ export class OutboundGateway {
     }
 
     const toDraft: EmailSendRequest = { ...request };
-    delete toDraft.signature;
-    const signature = this.emailSignatureFor(toDraft, false);
-    if (signature) toDraft.signature = signature;
+    this.signEmail(toDraft, false);
     return this.dispatchEmailDraft(toDraft);
   }
 
   /**
-   * The signature for an email the gateway is about to send or draft, or undefined.
-   * Not on system notifications (alerts and principal notes, which the assistant does
-   * not write as a letter), not from the principal's own mailbox (it would sign as the
-   * assistant in the principal's name), and not twice when the body already ends with it.
+   * Signs an email the gateway is about to send or draft: sets its signature and drops
+   * the sign-off the model wrote at the end of the body, so the configured signature is
+   * the only one (#2138). Not on system notifications (alerts and principal notes, which
+   * the assistant does not write as a letter), not from the principal's own mailbox (it
+   * would sign as the assistant in the principal's name), and not twice when the body is
+   * nothing but the signature.
    */
-  private emailSignatureFor(request: EmailSendRequest, isSystemNotification: boolean): string | undefined {
-    if (isSystemNotification) return undefined;
-    if (this.isPrincipalMailbox(request.accountId)) return undefined;
+  private signEmail(request: EmailSendRequest, isSystemNotification: boolean): void {
+    delete request.signature;
+    if (isSystemNotification) return;
+    if (this.isPrincipalMailbox(request.accountId)) return;
     const signature = emailSignatureText(this.agentPersona);
-    if (!signature || bodyEndsWithSignature(request.body, signature)) return undefined;
-    return signature;
+    if (!signature || !this.agentPersona) return;
+    request.body = stripModelSignOff(request.body, this.agentPersona, signature);
+    if (bodyEndsWithSignature(request.body, signature)) return;
+    request.signature = signature;
   }
 
   /**

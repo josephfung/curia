@@ -63,7 +63,7 @@ below.
 |-------|------|---------|
 | `assistant.name` | string | External-facing name used in all outbound communication |
 | `assistant.title` | string | Role title used in email signatures and introductions |
-| `assistant.email_signature` | multiline string | Full email sign-off block. The outbound gateway adds it below every email it sends or drafts, except system notifications and mail from the principal's own mailbox; empty means name and title (prompt trim PR 6) |
+| `assistant.email_signature` | multiline string | Full email sign-off block. The outbound gateway adds it below every email it sends or drafts, except system notifications and mail from the principal's own mailbox; empty means name and title (prompt trim PR 6). A sign-off the model wrote at the end of the body (lines naming only the assistant's name, title or signature lines) is dropped first, so the signature appears once (#2138) |
 | `tone.baseline` | string[] (1–3 items) | Tone descriptors chosen from the predefined set; compiled to "Your tone is X, Y, and Z." Stored as a string array, validated at the application layer — not a DB enum, so the set can be extended without a migration |
 | `tone.verbosity` | integer 0–100 | 0 = tersest, 100 = most thorough; `compileSystemPromptBlock()` translates to prose guidance |
 | `tone.directness` | integer 0–100 | 0 = most hedged, 100 = most direct; compiled to prose guidance |

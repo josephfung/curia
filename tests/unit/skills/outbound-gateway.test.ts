@@ -3463,17 +3463,52 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
     expect(draftHtml()).toContain('Alex Curia<br>\nDigital EA');
   });
 
-  it('does not sign twice when the body already ends with the signature', async () => {
-    const { gateway, sentHtml } = makeGateway({ persona: PERSONA });
-    await gateway.send(email({ body: 'Tuesday at 10 works.\n\nAlex Curia\n**Digital EA**' }));
-    expect(sentHtml()).not.toContain('<p>--');
-    expect(sentHtml().match(/Alex Curia/g)).toHaveLength(1);
+  // #2138: the model's sign-off gives way to the configured signature, whatever its form.
+  const SIGNATURE_HTML = '--<br>\nAlex Curia<br>\nDigital EA';
+  it.each([
+    ['exactly the signature', 'Alex Curia\n**Digital EA**'],
+    ['first name over a signature line', 'Alex\nDigital EA'],
+    ['name over a title the signature lacks', 'Alex Curia\nOffice of the CEO'],
+    ['a bare first name', 'Alex'],
+  ])('signs once when the body ends with %s', async (_label, signOff) => {
+    const persona = { ...PERSONA, title: 'Office of the CEO' };
+    const { gateway, mocks, sentHtml } = makeGateway({ persona });
+    await gateway.send(email({ body: `Tuesday at 10 works.\n\n${signOff}` }));
+    const html = sentHtml();
+    expect(html).toContain(SIGNATURE_HTML);
+    expect(html.match(/Alex/g)).toHaveLength(1);
+    const delivered = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => call[1] as { type: string; payload: { content?: string } })
+      .find(event => event.type === 'outbound.delivered');
+    expect(delivered?.payload.content).toBe('Tuesday at 10 works.');
   });
 
-  it('still signs below a short sign-off', async () => {
+  it('keeps a valediction above the signature', async () => {
     const { gateway, sentHtml } = makeGateway({ persona: PERSONA });
     await gateway.send(email({ body: 'Tuesday at 10 works.\n\nBest,\nAlex' }));
-    expect(sentHtml()).toContain('--<br>\nAlex Curia<br>\nDigital EA');
+    expect(sentHtml()).toContain('Best,');
+    expect(sentHtml()).toContain(SIGNATURE_HTML);
+    expect(sentHtml().match(/Alex/g)).toHaveLength(1);
+  });
+
+  it('signs below a last line that mentions the name in a sentence', async () => {
+    const { gateway, sentHtml } = makeGateway({ persona: PERSONA });
+    await gateway.send(email({ body: 'Tuesday at 10 works.\n\nAlex will follow up Monday.' }));
+    expect(sentHtml()).toContain('Alex will follow up Monday.');
+    expect(sentHtml()).toContain(SIGNATURE_HTML);
+  });
+
+  it('drops the model\'s sign-off from a draft', async () => {
+    const { gateway, draftHtml } = makeGateway({ persona: PERSONA });
+    await gateway.createEmailDraft(email({ accountId: 'curia', body: 'Tuesday at 10 works.\n\nAlex\nDigital EA' }));
+    expect(draftHtml()).toContain(SIGNATURE_HTML);
+    expect(draftHtml().match(/Alex/g)).toHaveLength(1);
+  });
+
+  it('keeps the model\'s sign-off where the gateway does not sign', async () => {
+    const { gateway, draftHtml } = makeGateway({ persona: PERSONA });
+    await gateway.createEmailDraft(email({ accountId: 'joseph', body: 'Tuesday at 10 works.\n\nAlex Curia' }));
+    expect(draftHtml()).toContain('Alex Curia');
   });
 
   it('does not sign system notifications', async () => {

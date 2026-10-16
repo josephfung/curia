@@ -39,6 +39,63 @@ export function bodyEndsWithSignature(body: string, signature: string): boolean 
   return sig !== '' && signatureWords(body).endsWith(sig);
 }
 
+/** A sign-off line, lowercased, without emphasis, a leading dash or trailing punctuation. */
+function signOffText(line: string): string {
+  return line
+    .replace(/[*_]/g, '')
+    .trim()
+    .replace(/^[-–—~]+\s*/, '')
+    .replace(/[.,!;:]+$/, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+/**
+ * True when the line names only the assistant: its name or a part of it, its title, or
+ * a line of the signature, alone or joined by commas, bars or dashes ("Alex Curia, Digital
+ * EA"). A sentence that mentions the name ("Alex will follow up Monday.") is not.
+ */
+function isSignOffLine(line: string, phrases: ReadonlySet<string>): boolean {
+  const segments = signOffText(line).split(/\s*[,|·]\s*|\s+[-–—]\s+/);
+  return segments.every(segment => phrases.has(segment));
+}
+
+/**
+ * The body without the sign-off block the model wrote at its end, so the gateway's
+ * signature is the only one (#2138). The model still signs sometimes, in forms that
+ * differ from the configured signature ("Alex" over the signature's second line, or name
+ * and persona title), and each near miss went out signed twice. The block is the trailing
+ * lines that name only the assistant (see isSignOffLine), with any blank or `--` lines
+ * among them. A bare first name is part of it: "Alex" over "Alex Curia" reads as signing
+ * twice. A valediction ("Best,") is not, and stays above the signature. Unchanged when
+ * there is no such block, or when it is the whole body.
+ */
+export function stripModelSignOff(body: string, persona: AgentPersona, signature: string): string {
+  const phrases = new Set<string>();
+  const nameParts = persona.displayName.split(/\s+/);
+  for (const phrase of [persona.displayName, persona.title, ...nameParts, ...signature.split('\n')]) {
+    const text = signOffText(phrase);
+    if (text !== '' && !/^-+$/.test(text)) phrases.add(text);
+  }
+
+  const lines = body.split(/\r?\n/);
+  let end = lines.length;
+  let signOffLines = 0;
+  while (end > 0) {
+    const line = lines[end - 1]!.trim();
+    if (line === '' || /^-{2,}$/.test(line)) {
+      end--;
+    } else if (isSignOffLine(line, phrases)) {
+      end--;
+      signOffLines++;
+    } else {
+      break;
+    }
+  }
+  if (signOffLines === 0 || end === 0) return body;
+  return lines.slice(0, end).join('\n').trimEnd();
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')

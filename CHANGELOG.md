@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Email signature** — the model's own sign-off is replaced by the configured signature, so emails sign once. (#2138)
+
 ## [0.44.0] — 2026-10-16 — "WALL-E"
 
 > **WALL-E** *(WALL-E, 2008, Andrew Stanton / Pixar)* — a Waste Allocation Load Lifter left alone on Earth for seven centuries, still compacting the mess one neat cube at a time and keeping the one thing that matters safe. This release is that kind of work: a coordinator prompt pressed from 58 KB to 24 KB, finished plans cleared away, messages that reach only the person Curia can trace, and a behavior gate that checks it all before every release.
