@@ -19,6 +19,8 @@ import {
   detectBrowserTimezone,
   validateProfileEmail,
   buildProfilePayload,
+  WIZARD_TOTAL_STEPS,
+  clampWizardStep,
   type WizardState,
   type LocalIdentity,
 } from './wizard-utils.js';
@@ -335,5 +337,33 @@ describe('detectBrowserTimezone', () => {
     const tz = detectBrowserTimezone();
     expect(tz.length).toBeGreaterThan(0);
     expect(() => Intl.DateTimeFormat(undefined, { timeZone: tz })).not.toThrow();
+  });
+});
+
+// ── clampWizardStep ───────────────────────────────────────────────────────────
+
+describe('clampWizardStep', () => {
+  it('accepts every real step, including the final review step (#2146)', () => {
+    for (let step = 1; step <= WIZARD_TOTAL_STEPS; step++) {
+      expect(clampWizardStep(step)).toBe(step);
+    }
+    expect(clampWizardStep(6)).toBe(6);
+  });
+
+  it('clamps out-of-range steps to the nearest real step', () => {
+    expect(clampWizardStep(0)).toBe(1);
+    expect(clampWizardStep(-3)).toBe(1);
+    expect(clampWizardStep(WIZARD_TOTAL_STEPS + 1)).toBe(WIZARD_TOTAL_STEPS);
+  });
+
+  it('rounds fractional steps', () => {
+    expect(clampWizardStep(2.6)).toBe(3);
+  });
+
+  it('falls back to step 1 for non-numeric values', () => {
+    expect(clampWizardStep(undefined)).toBe(1);
+    expect(clampWizardStep('3')).toBe(1);
+    expect(clampWizardStep(Number.NaN)).toBe(1);
+    expect(clampWizardStep(Number.POSITIVE_INFINITY)).toBe(1);
   });
 });

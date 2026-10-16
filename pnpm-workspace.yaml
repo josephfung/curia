@@ -161,7 +161,11 @@ overrides:
   # 6.15.3, so googleapis-common stayed on the vulnerable version:
   #   - CVE-2026-82417 / GHSA-4mjr-xmp4-gh2g: stringify() DoS via attacker-controlled isBuffer
   #   - CVE-2026-82562 / GHSA-x5fp-wj9c-mxmx: array-limit bypass via bracket-key comma parsing
-  qs: '>=6.16.0'
+  # Raised off >=6.16.0, which admitted 6.16.0 itself (the resolved version). Published
+  # upstream only:
+  #   - GHSA-6pq8-jhm2-2vcw (MED, >=6.7.0 <=6.16.0): stringify() with arrayFormat 'comma'
+  #     throws on an element with a non-callable own toString (DoS)
+  qs: '>=6.16.1'
   # Two MED SSRF / trust-boundary advisories, both fixed in 10.5.1. The prior >=10.1.1
   # floor was satisfied by 10.5.0, so @fastify/rate-limit and express-rate-limit (the
   # MCP SDK's) kept resolving a vulnerable version even though socks already had 10.7.2:
@@ -189,7 +193,16 @@ overrides:
   # tree resolved 8.10.2. Published upstream only:
   #   - GHSA-qq8j-7v2v-3rwp / CVE-2026-109855 (HIGH, >=8.11.0 <8.11.2): WebSocket
   #     client DoS via a failed HTTP/2 handshake
-  undici: '>=8.11.2'
+  # Raised off >=8.11.2, which admitted 8.11.2 (the resolved version) through 8.12.1.
+  # Published upstream only, 2026-10-15, all fixed in 8.12.2:
+  #   - GHSA-2m5v-pch6-74hx (HIGH): Agent drops function-valued `tls` options, so a custom
+  #     checkServerIdentity is skipped (nothing here passes one)
+  #   - GHSA-4w7w-5xrc-9h26 (HIGH): cache poisoning via cross-origin redirects
+  #   - GHSA-qrxm-fqhp-jwvm (HIGH): DoS via TLS 1.2 certificate-changing renegotiation
+  #   - GHSA-xjj6-f33q-929c (HIGH): DoS via unhandled error on excessive content-encodings
+  #   - GHSA-4qv8-2p9j-2685, GHSA-55wc-3pg8-jfw6, GHSA-9fm3-97px-rjf6,
+  #     GHSA-f72v-6w45-q472 (MED): EventSource, decompress, PONG-buffer DoS; SRI bypass
+  undici: '>=8.12.2'
   # Scorecard vulnerability pins (GHSA alerts flagged in code-scanning #155):
   '@opentelemetry/core': '>=2.8.0'          # GHSA-8988-4f7v-96qf (unbounded baggage header memory allocation)
   # Targeted to onnxruntime-web only, so the 7.x line is what this constrains. >=7.6.3

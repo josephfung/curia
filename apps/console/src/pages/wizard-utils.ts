@@ -87,6 +87,19 @@ export const DEFAULT_WIZARD_STATE: WizardState = {
   workingHours: null,
 };
 
+// Number of wizard steps: About you → Your details → Identity → Tone →
+// Posture → Review. The /setup route and WizardPage both clamp ?step= against
+// this, so a step added here is reachable everywhere at once (#2146).
+export const WIZARD_TOTAL_STEPS = 6;
+
+// Normalizes a raw ?step= search value to a valid step number. Non-numbers
+// (missing, strings, NaN) fall back to step 1; out-of-range values are clamped
+// so a stale link renders the nearest real step instead of breaking the route.
+export function clampWizardStep(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 1;
+  return Math.max(1, Math.min(WIZARD_TOTAL_STEPS, Math.round(raw)));
+}
+
 // Backend's POST /api/setup/principal accepts up to 200 characters; enforce the
 // same ceiling client-side so the user sees the error before a round-trip.
 export const PRINCIPAL_NAME_MAX_LENGTH = 200;
