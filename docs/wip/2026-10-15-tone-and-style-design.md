@@ -22,21 +22,22 @@ three sentences, for example:
 
 ```
 **Communication style:**
-Your tone is matter-of-fact and witty and dry.
+Your tone is candid and warm and direct.
 Keep responses as brief as possible; omit context unless asked.
 State positions plainly; avoid softening language.
 ```
 
 The causes, roughly in order of weight:
 
-1. **Adjectives are the weakest style signal.** "Witty and dry" gives the model nothing to
+1. **Adjectives are the weakest style signal.** A list of tone words gives the model nothing to
    imitate, so it falls back to its default register. The nickname rule works because it is
    a concrete, checkable substitution. "Be concise" is a judgment the model makes against
    everything else in the prompt.
 2. **Position.** The block opens a long system string. Everything else comes after it:
    security, contact details, the coordinator YAML, skill bodies, roster, autonomy, date
    guardrail, time and turn budget. The per-turn guidance at the head of the user message
-   is far closer to generation, and it says nothing about length or tone.
+   is far closer to generation, and it has no length guidance. Its only tone cue is the
+   hard-coded "warm" in item 3.
 3. **The prompt demonstrates a different voice.** The only concrete sentences in the
    prompt are neutral-polite. Examples are coordinator.yaml "I've split this into a few
    parts; I'll report back in about 15 minutes", the non-principal turn guidance's "short,
@@ -111,14 +112,35 @@ cleanly).
 For a legacy config (one with no `tone.style`), it does the following:
 - **`style`** is built from the old values. The capitalized tone words are joined
   naturally, followed by the directness sentence. For example:
-  `"Matter-of-fact, witty and dry. State positions plainly; avoid softening language."`
+  `"Candid, warm and direct. State positions plainly; avoid softening language."`
 - **`baseline`, `directness` and `decisionStyle`** are dropped.
 
-Nothing is written back. The normalized shape is persisted on the operator's next save.
-Writing a migration version was rejected because of `changed_by`. `isIdentityConfigured`
-counts only `wizard` and `api` versions as operator-configured. A version written by the
-system would make a configured deployment look unconfigured and send it back to the setup
-wizard.
+Edge cases:
+- **Legacy keys are always stripped.** That holds even when `style` is already present,
+  so a half-migrated row never reaches a writer with keys the new validation rejects.
+- **No usable tone words** (`baseline: []` passes today's validation) means the default
+  style is used.
+- **A missing `directness`** contributes no sentence, never a stray fragment.
+- **The output must pass `validateIdentity()`.** This matters because
+  `behavioral-preferences-update` does `get()`, edit, then `update()`. A normalized config
+  that fails validation would break that tool on every call.
+- **A unit test** runs edge rows through `normalizeIdentity` and then `validateIdentity`:
+  empty baseline, missing directness, missing decisionStyle, and style plus legacy keys.
+
+Nothing is written back at boot. The normalized shape is persisted on the next write:
+an operator save, or a `behavioral-preferences-update` call (`changed_by='tool'`, which
+spreads the normalized `get()`).
+
+Writing a migration version at boot was rejected for two reasons:
+- **Rollback safety.** If PR 2 is reverted, the old code reads `tone.baseline` and the
+  other legacy fields. A boot-written new-shape row would break the old renderer on every
+  deployment. Lazy normalization leaves legacy rows untouched until someone actually edits
+  the identity.
+- **History noise.** Every deployment would get an unrequested version in its audit trail.
+
+It is not about `isIdentityConfigured`, which checks for *any* `wizard`/`api` version and
+so is unaffected by later rows. A migration row must still never use `wizard` or `api`
+as its `changed_by`, because that would mark a never-configured deployment as configured.
 
 `DEFAULT_OFFICE_IDENTITY` moves to the new shape. It gets a neutral `style` matching the
 old `warm, direct` default, ending with an example line like the templates.
@@ -157,6 +179,16 @@ Whatever your tone, say plainly when you are unsure or don't know something.
 **Decision posture** is gone. The "match the register" line is fixed text. It stops the
 model from reusing a template's example sentence word for word.
 
+**Bad tone data never becomes prompt text.**
+- **The renderer checks the tone fields.** If `tone.style` is not a non-empty string, or
+  `verbosity` is out of range, it logs at error and omits the **How you sound** and
+  **Length** sections. Interpolation would otherwise write "undefined" into every agent's
+  block without a log.
+- **Constraints always render.** Hard constraints, **Who you are** and standing
+  preferences render regardless. Throwing would trip the existing omit-the-whole-block
+  path in `buildBaseSystemPrompt()`, which would also drop the hard constraints, and after
+  PR 4 for every opted-in agent.
+
 The honesty line is fixed, code-owned text, so no style description can talk the model
 out of calibrated uncertainty. It replaces what the low end of the directness slider did.
 
@@ -172,6 +204,10 @@ The numbers are starting points: PR 3 calibrates them against the scenarios.
 | 51–75 | Short paragraphs, as the situation needs. | Under ~250 words. | 2–3 sentences. |
 | > 75 | Thorough; context included. | Thorough; context included. | A few sentences, then offer more. |
 
+The channel-to-row lookup is an explicit map with a unit test. A reply channel with no row
+(`http` console chat, `cli`, `calendar`) gets no length reminder. It is never given a
+guessed limit, and the lookup never renders an empty or undefined value.
+
 Every band ends with the same exception: "Go longer only when the principal asks for detail
 or the content itself needs the space (six meetings are six lines)." Without it, brevity
 drops required content, such as recap items.
@@ -183,14 +219,16 @@ the highest rung that applies is injection with its trigger. Turn guidance gains
 naming the current reply channel's limit, e.g. "This reply
 goes out on Signal: 1–2 sentences." Turn guidance is the most salient position available,
 and it sits in the user message, so it does not split the cached system prefix (#1959).
-`renderTurnGuidance()` only takes static keys today. The line needs the band, so it is
-rendered by the caller (dispatcher for inbound turns, runtime for scheduler turns) and
-passed in the same way as the backlog line. Add its text variants to
-`TRIGGER_GUIDANCE_MARKER_SOURCES`.
+`renderTurnGuidance()` only takes static keys today. The line needs the band and the
+channel, both of which the coordinator's runtime already has: the task's `channelId` and
+the identity service. So the runtime renders it, with nothing new on the bus. That follows
+the backlog line's split, where the bus carries data and the runtime renders the text
+(`runtime.ts`). Add its text variants to `TRIGGER_GUIDANCE_MARKER_SOURCES`.
 
-This covers the reply channel only. Proactive sends through `signal-send` or `email-send`
-rely on the identity block's channel table. PR 3's A/B decides whether the reminder pays for
-its tokens.
+The reminder applies only to turns whose final response is delivered on a channel.
+Scheduler turns get none: their response goes nowhere (`SCHEDULER_DELIVERY`). Proactive
+sends through `signal-send` or `email-send`, from any turn, rely on the identity block's
+channel table. PR 3's A/B decides whether the reminder pays for its tokens.
 
 ### Principal-facing specialists
 
@@ -201,8 +239,32 @@ office_identity: true
 ```
 
 `agent-assembly.ts` passes `officeIdentityService` to the coordinator and to any agent with
-the flag. For specialists, the block renders in **writes-as** mode, because the agent's own
-YAML already says who it is ("You are the Meeting Debrief Specialist"):
+the flag.
+
+**Flag validation.** `loadAgentConfig()` does no unknown-key or type checking today.
+`office_identity: yes` would load as the string "yes" under YAML 1.2, and a misspelled key
+would be ignored. Either way the agent silently gets no block. The loader rejects an
+`office_identity` that is present but not a boolean, the same way it checks
+`delegate_when`. The ADR notes that unknown top-level keys are still unchecked.
+
+For specialists, the block renders in **writes-as** mode, because the agent's own YAML
+already says who it is ("You are the Meeting Debrief Specialist"). It is a separate method
+(`compileWritesAsBlock()`), not an optional parameter on `compileSystemPromptBlock()`.
+With a separate method, any harness that stubs the service fails to compile until it
+supports the new mode. An optional parameter would let a stub quietly serve specialists
+the coordinator's "You are…" block.
+
+**How the mode is chosen.** `buildBaseSystemPrompt()` knows only `agentId`. It calls
+`compileSystemPromptBlock()` for the coordinator (the same `agentId === 'coordinator'`
+test the date guardrail uses) and `compileWritesAsBlock()` for every other agent that has
+the service. The voice runtime's `identityBlock` provider stays on the coordinator method.
+
+**External renderers.** `SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS` (`agent-assembly.ts`) exists
+for renderers outside core, such as a deployment's eval harness that stubs the service
+from a snapshot. Those stubs must add the new method, and the snapshot gains a writes-as
+field. The new method's compile break is how that coupled change gets noticed.
+
+The block reads:
 
 ```
 **Who you write as:**
@@ -231,20 +293,31 @@ principle is that the office has one voice, and every agent that writes outward 
 The flag is an agent YAML schema addition, which is a public API surface. Both the
 schema addition and the reversed principle go in an ADR that lands with PR 4.
 
-`tests/unit/agents/prompt-budget.test.ts` budgets ceo-inbox and meeting-debrief. Check
-whether it counts injected preamble blocks. If it does, raise those two budgets by the
-block's measured size in PR 4 and say so in the PR, rather than trimming the block to fit.
+The prompt budget (`src/agents/prompt-budget.ts`) counts only the YAML prompt and SKILL.md
+bodies, not code-owned runtime blocks. PR 4 therefore needs no budget change. The block's
+size for each opted-in specialist is unbudgeted, so the PR reports it.
 
 ### Prompt-exfiltration markers
 
 `extractPromptExfiltrationMarkers()` already turns constraints and preferences into Stage 1
 markers. **Do not add `style`.** It holds example lines Curia is meant to imitate, so
 markers built from it would block good output. A tone description is also a low-value
-exfiltration target.
+exfiltration target. Tone was never a marker source, so this removes no existing coverage.
 
-The markers are built once at boot from the identity (`src/index.ts`). Check whether an
-identity hot-reload refreshes them. If it does not, file it separately, since that gap
-predates this work.
+**The block's own fixed text does become markers.** The new block adds fixed,
+instruction-like sentences:
+- the honesty line
+- "Match the register…"
+- the "Go longer only when…" exception
+- the band texts
+- the writes-as sentence
+
+Export them as constants and add them to `TRIGGER_GUIDANCE_MARKER_SOURCES`, so injected
+guidance stays scanned (#1959).
+
+**Existing gap, file separately.** Markers are built once from the boot-time identity
+(`src/index.ts`). The `config.change` handler refreshes only `agentPersona`, so
+constraints and preferences edited after boot are not scanned until a restart.
 
 ## Console
 
@@ -255,8 +328,12 @@ predates this work.
   *Crisp & direct* and *Formal*. Clicking one inserts a short description ending in one
   example line, and asks before replacing existing text. These replace the tone-word
   picker. The hint under the field says one example line does more than any adjective.
-- The **Detail** slider stays. Its preview shows the concrete per-channel limits for the
-  current band, replacing `verbosityBand()`.
+- The **Detail** slider stays. In PR 3, its preview starts showing the concrete
+  per-channel limits for the current band, replacing `verbosityBand()`.
+  - **One source for the limits.** The console reads them from the identity API (a
+    `lengthLimits` field on `GET /api/identity`, computed from the same table the renderer
+    uses), not from a mirrored copy. PR 3's calibration then changes one place.
+  - **PR 2** leaves the existing preview in place.
 - The **directness** slider is removed, along with `directnessBand()` and
   `directnessReviewDesc()`.
 
@@ -279,11 +356,20 @@ predates this work.
     `bandForScore()`, so a picked band never unlocks a higher `action_risk` tier than its
     name suggests.
   - **Pre-selection.** On a re-run, the current band is pre-selected from
-    `GET /api/autonomy`.
-  - **Submit.** The wizard sends `PUT /api/identity`, then `PUT /api/autonomy` with the
-    note "Set via onboarding wizard" (skipped when the band is unchanged). If one of the
-    two calls fails, the error names it, and the other call's result stands. The calls are
-    not rolled back together.
+    `GET /api/autonomy`. That GET is a **required** load, like `/api/identity` and
+    `/api/setup/status`. If it fails, the wizard shows a load error. It never falls back
+    to a default band, because submitting a guessed default could quietly lower a real
+    score.
+  - **Submit order: autonomy first.** The wizard sends `PUT /api/autonomy` (with `reason:
+    "Set via onboarding wizard"`, the field the route reads; skipped when the band is
+    unchanged) **before**
+    `PUT /api/identity`. As soon as a `wizard` identity version exists,
+    `isIdentityConfigured()` returns true and the wizard never shows again. If identity
+    were saved first and autonomy then failed, the operator could not get back to fix it.
+    With autonomy first, a failure leaves the deployment unconfigured and the wizard
+    re-runs.
+  - **On any failure,** stop before reload, restart and navigation. Stay on the review
+    step and show the error naming the failed call.
 - The review rows change to match: Tone & style, Detail, Autonomy and Preference, with no
   Directness or Posture rows.
 
@@ -305,8 +391,25 @@ Cases:
 2. An email reply from Curia's own account to a third party.
 3. A scheduled recap sent with `signal-send` (proactive path, no turn reminder).
 4. A specialist-originated message (meeting-debrief prompt) once PR 4 lands.
-5. **A guard case:** a ceo-inbox draft still follows the executive voice profile, not the
-   office style.
+5. **A guard case:** a ceo-inbox draft is produced (not refused or escalated) and follows
+   the executive voice profile, not the office style. Hard constraints render first in the
+   block, so a constraint like "never impersonate the principal" could start blocking
+   drafts in the principal's voice.
+
+**Eval snapshots.** Harnesses that render agent prompts from a snapshot of the live
+identity block (#261) need a writes-as block field, and must be re-fetched after the PR 2
+and PR 4 deploys. Otherwise they score the old block text.
+
+**Setting the identity for a run.** The scenario stack gives agents a read-only view of one
+shared `OfficeIdentityService`, and cases run 4 at a time. A per-case identity would leak
+into concurrently running cases. PR 1 therefore adds a run-level identity fixture:
+- **Run-level, not per-case.** Style cases run as their own group (`pnpm scenarios
+  --group style`, or the equivalent), and the fixture is seeded once through the real
+  service before any case starts.
+- **The fixture is a brief Detail band** plus a dry style, written in **both** shapes: the
+  legacy tone words + directness for main, and the `style` text for the branch. The PR 2
+  A/B then compares like with like.
+- **Other cases** keep the default identity.
 
 PR 1 lands these and records a baseline on main. Each later PR is an A/B against main on
 the same cases.
@@ -316,14 +419,17 @@ the same cases.
 | PR | Delivers | A/B |
 |---|---|---|
 | 0 | This design | none |
-| 1 | Style scenarios and judge rubric; baseline on main | baseline only |
-| 2 | Data model, `normalizeIdentity`, validation, new identity block (style, honesty line, no decision posture), starter templates, console Personality / Posture changes, wizard autonomy picker, spec 13 update | main vs branch |
-| 3 | Per-channel length table in the block; per-turn length reminder; calibrate band numbers | with vs without the reminder |
-| 4 | ADR for the office-voice principle and the manifest flag; `office_identity: true` flag, writes-as rendering, core opt-ins, ceo-inbox scoping sentence; deployments then opt in their own custom agents | main vs branch, including the ceo-inbox guard case |
+| 1 | Style scenarios, judge rubric and run-level identity fixture; baseline on main | baseline only |
+| 2 | Data model, `normalizeIdentity`, validation, new identity block (style, honesty line, no decision posture), starter templates, console Personality / Posture changes, wizard autonomy picker. Docs: spec 13 fields, spec 18 (onboarding: tone and posture steps, `BASELINE_TONE_OPTIONS`), `docs/dev/setup.md` (sliders) | main vs branch |
+| 3 | Per-channel length table in the block (explicit channel map); per-turn length reminder; block's fixed lines added to marker sources; calibrate band numbers | with vs without the reminder |
+| 4 | ADR-049 (next free number; add a row to `docs/adr/README.md`) for the office-voice principle and the manifest flag; spec 13's "specialists have no personality" principle revised; `docs/dev/adding-an-agent.md` documents the flag and drops its directness mention; `office_identity: true` flag (loader type-checks it), `compileWritesAsBlock()`, core opt-ins, ceo-inbox scoping sentence; deployments then opt in their own custom agents | main vs branch, including the ceo-inbox guard case |
 | 5 | Remove tone directives from prompts: "warm" in turn guidance and meeting-debrief, and the neutral example sentences in coordinator.yaml. Leave information policy, phrased as policy. | main vs branch |
 
-Each PR updates `CHANGELOG.md`. PR 2 is the user-visible change: settings move and the
-identity API shape changes, so it calls that out.
+PRs 1–5 each update `CHANGELOG.md`. PR 0 is docs/wip only and needs no entry.
+- **PR 2** is the user-visible change: settings move and the identity API shape changes, so
+  its entry calls that out.
+- **PR 4** adds an agent YAML field, which is a listed public API surface, so its entry
+  calls that out too.
 
 ## Out of scope
 
