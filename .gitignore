@@ -39,6 +39,7 @@ pgdata/
 tests/smoke/results/*.json
 tests/smoke/reports/*.html
 tests/scenarios/results/
+tests/setup-wizard/results/
 
 # Claude Code local skills (managed by trimkit, not committed)
 .claude/skills/

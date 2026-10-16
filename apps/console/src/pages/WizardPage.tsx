@@ -21,9 +21,9 @@ import {
   type WizardState,
   type WizardWorkingHours,
   type LocalIdentity,
+  WIZARD_TOTAL_STEPS,
+  clampWizardStep,
 } from './wizard-utils.js';
-
-const TOTAL_STEPS = 6;
 
 // localStorage key consumed by useChatSession to fire the auto-kickoff message
 // on the first chat mount after the wizard completes. Must match the constant
@@ -113,7 +113,7 @@ export default function WizardPage() {
   const navigate = useNavigate();
   // Read step from URL search params. strict:false avoids circular import with router.tsx.
   const search = useSearch({ strict: false }) as { step?: number };
-  const currentStep = Math.max(1, Math.min(TOTAL_STEPS, search.step ?? 1));
+  const currentStep = clampWizardStep(search.step);
 
   const [state, setState] = useState<WizardState>(DEFAULT_WIZARD_STATE);
   const [existingIdentity, setExistingIdentity] = useState<LocalIdentity | null>(null);
@@ -412,7 +412,7 @@ export default function WizardPage() {
       }
       setAssistantNameError('');
     }
-    if (currentStep < TOTAL_STEPS) void goTo(currentStep + 1);
+    if (currentStep < WIZARD_TOTAL_STEPS) void goTo(currentStep + 1);
   }
 
   function handleBack() {
@@ -484,7 +484,7 @@ export default function WizardPage() {
 
   // ── Progress dots ───────────────────────────────────────────────────────────
 
-  const progressDots = Array.from({ length: TOTAL_STEPS }, (_, i) => (
+  const progressDots = Array.from({ length: WIZARD_TOTAL_STEPS }, (_, i) => (
     <div
       key={i}
       className={`wizard-dot${i < currentStep ? ' done' : ''}`}
@@ -512,7 +512,7 @@ export default function WizardPage() {
         <path d="M2548.08 582.644L2698.02 128.932L2862.72 128.932L3017.64 582.644L2912.44 582.644L2786.74 199.475L2818.9 212.527L2739.04 212.527L2772.13 199.475L2650.01 582.644L2548.08 582.644ZM2661.5 469.993L2692.73 385.465L2870.8 385.465L2902.03 469.993L2661.5 469.993Z" fillRule="nonzero" />
       </svg>
       <div className="wizard-progress">{progressDots}</div>
-      <span className="wizard-step-label">Step {currentStep} of {TOTAL_STEPS}</span>
+      <span className="wizard-step-label">Step {currentStep} of {WIZARD_TOTAL_STEPS}</span>
     </div>
   );
 

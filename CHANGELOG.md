@@ -27,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Context budgeting** — CI fails when the coordinator's always-on prompt or tool definitions exceed budget; tool definitions are now charged in `context.budget`, and `report-agent-context` shows an agent's per-call context. (#1955, #1961, #2025)
 - **Standard-tier model candidates** — four OpenRouter models registered, with cache-read pricing recorded wherever the provider publishes it. (#1804)
 - **`pnpm audit:override-floors`** — CI checks that no dependency override floor admits a release with a known advisory. (#1934)
+- **`pnpm e2e:setup-wizard`** — browser walkthrough of a fresh install through `/setup`; now part of release pre-flight. (#2146)
 - **ADRs** — ADR-045 (specialists don't re-adjudicate requester identity), ADR-046 (where agent behavior fixes go; the always-on prompt is last), ADR-047 (recipients by contact reference, identifiers verified by provenance), ADR-048 (reasoning passback and one effort setting per tier). (#1859, #1961, #2033, #2044)
 
 ### Changed
@@ -66,6 +67,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Setup wizard** — Continue on step 5 reaches the Review step again; the route capped `?step` at 5. (#2146)
 - **Delegation** — overlapping calls start one specialist run and queue the rest; a specialist's refusal is final rather than reworded and re-sent; requester identity is set by the harness, not inferred from the sender; a relayed send's reply routes back to the specialist that asked. (#1858, #1871, #1893, #1972)
 - **Reply-lock** — Signal, SMS and Slack sends count, and a send locks only its own task. (#1860)
 - **Bullpen** — unread threads stay visible for seven days, ignored @mentions resurface once, and timestamps show the principal's local time. (#1899, #1901, #1917)

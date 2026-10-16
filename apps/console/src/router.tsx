@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-router';
 import LoginPage from './pages/LoginPage';
 import { getSessionInfo } from './api';
+import { clampWizardStep } from './pages/wizard-utils';
 
 // Route components are lazy-loaded so Vite produces separate chunks per route.
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
@@ -78,12 +79,7 @@ const setupRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/setup',
   validateSearch: (search: Record<string, unknown>) => ({
-    // Wizard now has 5 steps after the "About you" principal step was added at
-    // step 1 (issue #771). Clamp incoming ?step= values so a stale link from
-    // before the renumbering doesn't blow up route rendering.
-    step: typeof search['step'] === 'number'
-      ? Math.max(1, Math.min(5, Math.round(search['step'] as number)))
-      : 1,
+    step: clampWizardStep(search['step']),
   }),
   component: WizardPage,
 });
