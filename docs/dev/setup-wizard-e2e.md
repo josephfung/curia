@@ -17,7 +17,7 @@
 4. Clicks **Confirm & save**. `/api/setup/restart` exits the process, and in production Docker's restart policy starts it again. Here the script acts as that supervisor and restarts Curia once. It then waits for the wizard to land on `/chat`.
 5. Reads the saved state back over the API. Every value entered in steps 1–5 must have been saved, Curia must have left setup mode, and exactly one restart must have happened.
 
-It exits `1` on any failure. It prints the step it could not reach, saves a full-page screenshot to `tests/setup-wizard/results/` (gitignored), and prints the server log path. The database is dropped afterwards, including on Ctrl-C.
+It exits `1` on any failure. It prints the step it could not reach, saves a full-page screenshot to `tests/setup-wizard/results/` (gitignored), and prints the server log path. The database is dropped afterwards, including on Ctrl-C. If a run is killed outright, the next run drops the database it left behind.
 
 Because the Anthropic key is a placeholder, the wizard's name suggestion and the first `/chat` kickoff message fail, and the server log shows those errors. That is expected. The wizard has to work without the suggestion, and the walkthrough only checks that `/chat` is reached, not what the agent says there. The run costs nothing in model calls.
 

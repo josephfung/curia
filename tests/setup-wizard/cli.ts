@@ -19,7 +19,12 @@
 //      1–5 reached the backend, and that Curia left setup mode.
 //
 // Exits 1 on any failure, leaving a screenshot and the server log path in the output.
-// The database is dropped afterwards (Ctrl-C included) unless --keep-db.
+// The database is dropped afterwards (Ctrl-C included) unless --keep-db; one left by a
+// run that was killed outright is swept by the next run.
+//
+// The npm script launches this with `node --import tsx`, not the `tsx` CLI: the CLI's
+// parent process relays Ctrl-C and SIGKILLs a child that is still cleaning up ~30ms
+// later, which would leave the database behind.
 //
 // The placeholder Anthropic key means the wizard's name suggestion and the /chat
 // kickoff message fail. Both are expected: the wizard must cope with the first, and the
@@ -39,7 +44,7 @@ import { runner } from 'node-pg-migrate';
 import { chromium, type Browser, type Page } from 'playwright';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
 import { seedVault, verifyRequiredSecrets } from '../../scripts/seed-vault.js';
-import { databaseName, isLocalDatabase } from '../smoke/clone-db.js';
+import { databaseName, isLocalDatabase, likePrefix } from '../smoke/clone-db.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const RESULTS_DIR = path.resolve(import.meta.dirname, 'results');
@@ -131,9 +136,46 @@ async function withAdmin<T>(databaseUrl: string, fn: (client: pg.Client) => Prom
   }
 }
 
+const WIZARD_INFIX = '_wizard_';
+
+/** Whether a process with this pid is running on this machine. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM: it exists but belongs to someone else — still alive, so leave its database.
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Drops databases left by runs that died without cleaning up (SIGKILL, a crash, a closed
+ * terminal). Each is named after its run's pid; a live pid is a parallel run, so it stays.
+ * Returns the names dropped.
+ */
+async function sweepStaleDatabases(sourceUrl: string): Promise<string[]> {
+  const prefix = `${databaseName(sourceUrl)}${WIZARD_INFIX}`;
+  return withAdmin(sourceUrl, async client => {
+    const { rows } = await client.query<{ datname: string }>(
+      'SELECT datname FROM pg_database WHERE datname LIKE $1',
+      [likePrefix(prefix)],
+    );
+    const dropped: string[] = [];
+    for (const { datname } of rows) {
+      const pid = datname.slice(prefix.length);
+      // Exactly `<prefix><digits>`, so a database someone named by hand is never touched.
+      if (!/^\d+$/.test(pid) || isAlive(Number(pid))) continue;
+      await client.query(`DROP DATABASE IF EXISTS "${datname}" WITH (FORCE)`);
+      dropped.push(datname);
+    }
+    return dropped;
+  });
+}
+
 /** Creates an empty database; the name is validated by databaseName() and the pid, so quoting is safe. */
 async function createEmptyDatabase(sourceUrl: string): Promise<{ url: string; name: string; drop: () => Promise<void> }> {
-  const name = `${databaseName(sourceUrl)}_wizard_${process.pid}`;
+  const name = `${databaseName(sourceUrl)}${WIZARD_INFIX}${process.pid}`;
   if (name.length > 63) throw new Error(`database name '${name}' exceeds Postgres's 63-character limit`);
   await withAdmin(sourceUrl, async client => {
     await client.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
@@ -399,17 +441,37 @@ async function main(): Promise<number> {
   let browser: Browser | null = null;
   let page: Page | null = null;
 
-  const cleanup = async (): Promise<void> => {
-    await browser?.close().catch(() => undefined);
-    await curia?.stop();
-    if (db && !args.keepDb) await db.drop();
+  // One cleanup, shared: a signal closes the browser, which rejects the walkthrough's
+  // pending await and sends main() into its own finally. Both must wait on the same
+  // run, or main() exits while the signal path is still dropping the database.
+  let cleaning: Promise<void> | null = null;
+  const cleanup = (): Promise<void> => {
+    cleaning ??= (async () => {
+      // stop() first: it marks Curia as stopping synchronously, so a Curia that exits
+      // on the terminal's Ctrl-C (it shares our process group) isn't "restarted".
+      const stopped = curia?.stop();
+      await browser?.close().catch(() => undefined);
+      await stopped;
+      if (db && !args.keepDb) await db.drop();
+    })();
+    return cleaning;
   };
+  let interrupted = false;
+  // Stays registered for the whole run (not once): tsx exits the moment a signal
+  // finds no listener, so a second Ctrl-C would otherwise cut the cleanup short.
   const onSignal = (): void => {
+    if (interrupted) {
+      err('setup-wizard e2e: still cleaning up');
+      return;
+    }
+    interrupted = true;
     err('\nsetup-wizard e2e: interrupted — cleaning up');
-    void cleanup().finally(() => process.exit(130));
+    void cleanup()
+      .catch((e: unknown) => err(`setup-wizard e2e: cleanup failed: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => process.exit(130));
   };
-  process.once('SIGINT', onSignal);
-  process.once('SIGTERM', onSignal);
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
 
   try {
     if (!args.skipBuild) {
@@ -417,6 +479,8 @@ async function main(): Promise<number> {
       execFileSync('pnpm', ['build:console'], { cwd: REPO_ROOT, stdio: 'ignore' });
     }
 
+    const swept = await sweepStaleDatabases(sourceUrl);
+    if (swept.length > 0) out(`Dropped ${swept.length} database(s) left by earlier runs: ${swept.join(', ')}`);
     db = await createEmptyDatabase(sourceUrl);
     out(`Database: ${db.name} (empty${args.keepDb ? ', kept afterwards' : ', dropped afterwards'})`);
     await prepareDatabase(db.url, secrets);
@@ -435,7 +499,15 @@ async function main(): Promise<number> {
     out(`Booting Curia on ${baseUrl} (log: ${logPath})`);
     await waitForSetupApi(baseUrl, secrets.bootstrapSecret, curia);
 
-    browser = await chromium.launch({ headless: !args.headed, executablePath: args.chromium });
+    browser = await chromium.launch({
+      headless: !args.headed,
+      executablePath: args.chromium,
+      // Playwright's own handlers kill the browser and exit(130) on a signal, cutting
+      // our cleanup short; the shared cleanup closes the browser itself.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
+    });
     page = await browser.newPage();
     out('Walking through the wizard:');
     await walkThroughWizard(page, baseUrl, secrets.bootstrapSecret, curia);
@@ -451,6 +523,8 @@ async function main(): Promise<number> {
     out('\nSetup wizard walkthrough passed');
     return 0;
   } catch (e) {
+    // The error is the interrupt tearing the browser down, not a wizard failure.
+    if (interrupted) return 130;
     err(`\nSetup wizard walkthrough FAILED: ${e instanceof Error ? e.message : String(e)}`);
     if (page) {
       mkdirSync(RESULTS_DIR, { recursive: true });
@@ -462,8 +536,6 @@ async function main(): Promise<number> {
     err(`Server log: ${logPath}`);
     return 1;
   } finally {
-    process.off('SIGINT', onSignal);
-    process.off('SIGTERM', onSignal);
     await cleanup();
   }
 }
