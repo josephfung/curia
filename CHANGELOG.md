@@ -13,9 +13,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+## [0.44.0] — 2026-10-16 — "WALL-E"
+
+> **WALL-E** *(WALL-E, 2008, Andrew Stanton / Pixar)* — a Waste Allocation Load Lifter left alone on Earth for seven centuries, still compacting the mess one neat cube at a time and keeping the one thing that matters safe. This release is that kind of work: a coordinator prompt pressed from 58 KB to 24 KB, finished plans cleared away, messages that reach only the person Curia can trace, and a behavior gate that checks it all before every release.
+
 ### Added
 
-- **Behavior release gate** — release pre-flight now runs two behavior suites on the production standard-tier model: `pnpm smoke` (end-to-end turns against a stubbed fixture office on a throwaway database copy) and the new `pnpm scenarios` (coordinator and specialist decisions, including real coordinator → specialist round trips). Both exit non-zero on a failed gate, run four cases at a time, stub web search by default, and print the model spend per case. `known_failure` reports a tracked bug without blocking; `pnpm rejudge` compares a candidate judge against saved transcripts; `--overlay` runs a deployment's own agents and cases over core. (#1956, #1966, #1977, #1980, #2024, #2025, #2027, #2106, #2129)
+- **Behavior release gate** — release pre-flight now runs two behavior suites on the production standard-tier model: `pnpm smoke` (end-to-end turns against a stubbed fixture office on a throwaway database copy) and the new `pnpm scenarios` (coordinator and specialist decisions, including real coordinator → specialist round trips). Both exit non-zero on a failed gate, run four cases at a time, stub web search by default, and print the model spend per case. `known_failure` reports a tracked bug without blocking; `pnpm rejudge` compares a candidate judge against saved transcripts; `--overlay` runs a deployment's own agents and cases over core. `pnpm e2e:setup-wizard` also walks a fresh install through `/setup` in a real browser. (#1956, #1966, #1977, #1980, #2024, #2025, #2027, #2106, #2129, #2146)
 - **Backlog line** — every principal turn carries counts of pending approvals, decay warnings and principal-owned tasks, and the coordinator raises the oldest waiting item once the request is handled. Spec 02. (#1954)
 - **Notes for the principal** — a note tagged in a reply to someone else is cut out and emailed to the principal, never shown to the recipient. (#1954, #1990)
 - **Email signature** — the configured signature is added to every email Curia sends or drafts. Spec 13. (#1954)
@@ -27,7 +31,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Context budgeting** — CI fails when the coordinator's always-on prompt or tool definitions exceed budget; tool definitions are now charged in `context.budget`, and `report-agent-context` shows an agent's per-call context. (#1955, #1961, #2025)
 - **Standard-tier model candidates** — four OpenRouter models registered, with cache-read pricing recorded wherever the provider publishes it. (#1804)
 - **`pnpm audit:override-floors`** — CI checks that no dependency override floor admits a release with a known advisory. (#1934)
-- **`pnpm e2e:setup-wizard`** — browser walkthrough of a fresh install through `/setup`; now part of release pre-flight. (#2146)
 - **ADRs** — ADR-045 (specialists don't re-adjudicate requester identity), ADR-046 (where agent behavior fixes go; the always-on prompt is last), ADR-047 (recipients by contact reference, identifiers verified by provenance), ADR-048 (reasoning passback and one effort setting per tier). (#1859, #1961, #2033, #2044)
 
 ### Changed
@@ -55,19 +58,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **`undici`, `qs`** — floors raised to 8.12.2 and 6.16.1, clearing four HIGH and five MED upstream advisories.
 - **Outbound disclosure gate (Stage 2.5)** — now runs in production; principal-directed sends and trusted recipients skip it. (#1870)
 - **Recipient spoofing** — a mistyped recipient fails closed instead of reaching whoever owns the address, and an agent-entered address is verified only when it appears in a real message or page. (#2033, #2061)
 - **Sender verification** — a sender-written `Authentication-Results` header no longer counts as a pass. (#2071)
 - **Principal's addresses** — contact skills refuse to change them; only the principal can. (#2041)
 - **Outbound identity gate** — blocks an unconfirmed-name hedge, attendance cue or honorific; `filter.identityGate` selects enforce, shadow or off. (#1818)
 - **Calendar identity guard** — a read against the wrong identity fails closed as `IDENTITY_MISMATCH` instead of returning an empty success. (#1853, #1854)
-- **Dependency floors** — override floors raised for `undici`, `ip-address`, `vite`, `sharp`, `source-map-js`, `fast-copy`, `fast-uri`, `hono`, `@hono/node-server`, `shell-quote`, `smol-toml`, `js-yaml` and `brace-expansion`, clearing a HIGH WebSocket DoS (`undici`), a HIGH DoS (`source-map-js`) and a set of upstream-only advisories. (#1933, #1934, #1949, #2032, #2125)
-- **Dev toolchain** — promptfoo 0.124.1, a `basic-ftp` floor and skipping `jks-js` clear eight dev-only advisories, two critical. (#2140)
+- **Dependency floors** — override floors raised for `undici` (8.12.2), `qs`, `ip-address`, `vite`, `sharp`, `source-map-js`, `fast-copy`, `fast-uri`, `hono`, `@hono/node-server`, `shell-quote`, `smol-toml`, `js-yaml`, `brace-expansion` and `basic-ftp`, clearing HIGH advisories in `undici` (TLS option bypass, cache poisoning, three DoS) and `source-map-js`, plus a set of upstream-only advisories. In the dev toolchain, promptfoo 0.124.1 and skipping the optional `jks-js` clear the remaining Dependabot alerts, two of them critical. (#1933, #1934, #1949, #2032, #2125, #2140, #2141)
 
 ### Fixed
 
-- **Setup wizard** — Continue on step 5 reaches the Review step again; the route capped `?step` at 5. (#2146)
+- **Setup wizard** — a fresh install can finish setup again: since v0.37, Continue on step 5 never reached the Review step. (#2146)
 - **Delegation** — overlapping calls start one specialist run and queue the rest; a specialist's refusal is final rather than reworded and re-sent; requester identity is set by the harness, not inferred from the sender; a relayed send's reply routes back to the specialist that asked. (#1858, #1871, #1893, #1972)
 - **Reply-lock** — Signal, SMS and Slack sends count, and a send locks only its own task. (#1860)
 - **Bullpen** — unread threads stay visible for seven days, ignored @mentions resurface once, and timestamps show the principal's local time. (#1899, #1901, #1917)
