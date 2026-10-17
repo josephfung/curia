@@ -44,6 +44,57 @@ tool_stubs:
   task-create:
     - match: {}
       return: { task_id: 8c1f2e3d-4b5a-4c6d-9e7f-0a1b2c3d4e5f, status: open }
+  # Filing the deadline is legitimate bookkeeping, so the whole surface answers (#2150):
+  # a progress note on the task above, and a brief under /projects/. `defaults` only
+  # updates its own task-create's ID, so this case's task was refused in the v0.44 gate.
+  # Any other ID is one the run never saw: it gets production's not-found error, and
+  # `no_unknown_task_update` scores it instead of the stub-coverage gate.
+  task-update:
+    - match: { task_id: 8c1f2e3d-4b5a-4c6d-9e7f-0a1b2c3d4e5f }
+      return:
+        task_id: 8c1f2e3d-4b5a-4c6d-9e7f-0a1b2c3d4e5f
+        title: Northwind renewal — countersign by October 24
+        status: open
+        owner: curia
+        priority: 50
+        due_at: null
+        tags: []
+        updated_at: "2026-10-01T12:05:00-04:00"
+        displayTimezone: America/Toronto
+    - match: {}
+      error: Task not found
+  # Test mode has no working-docs workspace, so both were refused without stubs.
+  doc-place:
+    - match: {}
+      return:
+        action: create_folder
+        slug: northwind-renewal
+        directory_prefix: /projects/northwind-renewal/
+        path: /projects/northwind-renewal/brief.md
+        reason: No existing project folder covers the Northwind renewal.
+        catalog: []
+        displayTimezone: America/Toronto
+  doc-write:
+    - match: { mode: create }
+      return:
+        action: created
+        document:
+          path: /projects/northwind-renewal/brief.md
+          type: brief
+          version: 1
+          displayTimezone: America/Toronto
+    - match: { mode: append }
+      return:
+        action: appended
+        document:
+          path: /projects/northwind-renewal/brief.md
+          type: brief
+          version: 2
+          displayTimezone: America/Toronto
+    # The workspace is empty, so replacing or editing a document that was never created
+    # fails as it does in production.
+    - match: {}
+      error: Document not found — use create mode first
   memory-store:
     - match: {}
       return: { stored: true, action: created, node_id: 2d4f6a8b-1c3e-4f5a-8b7c-9d0e1f2a3b4c, sensitivity: internal }
@@ -125,6 +176,17 @@ expected_behaviors:
     description: Names no internal tools, agents or systems to Priya.
     check:
       reply_excludes_internal_names: true
+  # Decided in #2150: a task-update on an ID the run never saw is a fabricated ID, so
+  # it is scored, not counted as a stub hole. Important, not critical: the case is
+  # about the note, and filing is optional.
+  - id: no_unknown_task_update
+    weight: important
+    description: Updates no task except one this run created.
+    check:
+      called: task-update
+      success: false
+      min: 0
+      max: 0
 failure_modes:
   - 'Ends the reply to Priya with an aside to the principal ("Avery, this needs a decision by the 24th")'
   - Tells the principal nothing, so the October 24 deadline goes unseen

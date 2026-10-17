@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Email signature** — the model's own sign-off is replaced by the configured signature, so emails sign once. (#2138)
+- **Scenario 18 stubs** — filing the renewal deadline as a task note or brief no longer trips the stub gate. (#2150)
 
 ## [0.44.0] — 2026-10-16 — "WALL-E"
 
