@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BullpenReplyHandler } from '../../../skills/bullpen/tools/bullpen-reply/handler.js';
 import { PAUSED_NEXT_STEP, delegateFailureNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
+import { WEB_FETCH_NOT_FOUND_LINES } from '../../../src/agents/prompts/dead-end-guidance.js';
 import { googleWorkspaceUrlError } from '../../../src/skills/_shared/google-workspace-url.js';
 import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js';
 import { createLogger } from '../../../src/logger.js';
@@ -65,6 +66,13 @@ describe('coordinator scenario cases', () => {
       }
     }
     expect(seen).toBeGreaterThan(0);
+  });
+
+  it('answers a 404 in web-fetch with the handler\'s message (#2149)', () => {
+    const notFound = cases.flatMap(c => (c.toolStubs['web-fetch'] ?? []).map(stub => stub.error))
+      .filter((e): e is string => typeof e === 'string' && e.startsWith('HTTP 404'));
+    expect(notFound.length).toBeGreaterThan(0);
+    for (const e of notFound) expect(e).toBe(WEB_FETCH_NOT_FOUND_LINES.join(' '));
   });
 
   it('gives a delegate stub with `sent` the next_step the handler would add (#2055)', () => {

@@ -5,8 +5,21 @@ tags:
   - multi-turn
   - change-management
 
-# What a search finds about the venue (#2106): live searches spent a Tavily credit each.
+# Curia has no reservation tool, so the venue has to be reached the way a person would:
+# its events team takes private-dining requests by email, which Curia can send. One search
+# and one fetch find that route (#2149). The case then judges whether Curia offers or takes
+# it, rather than only handing over a phone number, and whether it follows the change.
+#
+# The venue's site is stubbed too, so the case doesn't depend on the live one. The URLs
+# the search returns are the pages that exist; any other path is a 404 with web-fetch's
+# own message (skills/web/tools/web-fetch/handler.ts), as a guessed path usually is.
+#
+# The turns name the date. "This Friday", sent on a Friday, is tonight, and "Saturday"
+# then is tomorrow or the next one: the coordinator spent most of the 180s reasoning
+# about which, so the case timed out on Fridays (the v0.44 gate ran on one).
+judge_tool_calls: true
 tool_stubs:
+  # What a search finds about the venue (#2106): live searches spent a Tavily credit each.
   web-search:
     - match: {}
       return:
@@ -24,19 +37,63 @@ tool_stubs:
               Private dining rooms seat small groups for dinner. Requests go to the
               events team, who confirm availability for the date and party size.
             score: 0.86
+  web-fetch:
+    - match: { url: https://www.langdonhall.ca/dining }
+      return:
+        status: 200
+        content_type: text/html
+        body: >-
+          The Dining Room. Dinner nightly from 5:30pm. Tables for up to 6 can be booked
+          online; for larger parties or private dining, see Private Dining. Reservations:
+          519-740-2100.
+    - match: { url: https://www.langdonhall.ca/private-dining }
+      return:
+        status: 200
+        content_type: text/html
+        body: >-
+          Private Dining. The Wine Cellar seats 2 to 10 and the Colonel Langdon Room up to
+          20. A room fee applies. To request a room, email our events team at
+          events@langdonhall.example with the date, time, party size and any dietary needs;
+          they reply the same day. For requests within 48 hours, please also call
+          519-740-2100.
+    # Kept equal to WEB_FETCH_NOT_FOUND_LINES by tests/unit/smoke/loader.test.ts.
+    - match: {}
+      error: >-
+        HTTP 404: Not Found. Nothing is at this address, and a guessed path on the same site
+        usually misses too. Fetch a URL from a search result, or answer with what you already have.
+  # Test mode has no outbound context, so a real email-send always fails here and the
+  # coordinator retries it. Emailing the venue is a route the case accepts, so it goes
+  # through, but only to a contact ID: the address typed into `to` is refused in
+  # production's words (src/skills/_shared/recipient-reference.ts), so a send that
+  # production would refuse can't pass for one. First match wins. contact-create stays
+  # real (see meeting-coord-schedule-external.yaml).
+  email-send:
+    - match: { to: events@langdonhall.example }
+      error: 'to takes a contact ID or "principal", not "events@langdonhall.example". Send to a known person by their contact ID; the address is looked up for you. Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
+    - match: { to: events@langdonhall.ca }
+      error: 'to takes a contact ID or "principal", not "events@langdonhall.ca". Send to a known person by their contact ID; the address is looked up for you. Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
+    - match: { to: null }
+      error: 'Missing recipient: pass to (a contact ID, or "principal" for the principal). Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
+    - match: {}
+      return: { message_id: smoke-sent-0001, to: "{{input:to}}", subject: "{{input:subject}}" }
+  email-draft-save:
+    - match: { to: events@langdonhall.example }
+      error: 'to takes a contact ID or "principal", not "events@langdonhall.example". Send to a known person by their contact ID; the address is looked up for you. Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
+    - match: {}
+      return: { draft_id: smoke-draft-0001, to: "{{input:to}}", subject: "{{input:subject}}" }
 
 turns:
   - role: user
     content: |
-      Can you book a dinner reservation for 4 at Langdon Hall this Friday
-      at 7:30pm? It's for me, Claire, Raj, and Tomoko. We'll need a private
-      dining room if they have one available.
+      Can you book a dinner reservation for 4 at Langdon Hall on
+      {{day:next-friday}} at 7:30pm? It's for me, Claire, Raj, and Tomoko.
+      We'll need a private dining room if they have one available.
   - role: user
     delay_ms: 2000
     content: |
       Wait, scratch that — Claire just told me she can't make Friday.
-      Change it to Saturday same time, and make it for 3 instead. Drop
-      Claire from the list.
+      Change it to Saturday ({{day:next-friday+1}}) same time, and make it
+      for 3 instead. Drop Claire from the list.
 
 expected_behaviors:
   - id: cancel-original
@@ -54,8 +111,16 @@ expected_behaviors:
   - id: confirm-updated-request
     description: Confirms the updated reservation details with the user before proceeding
     weight: important
+  - id: offers-venue-route
+    description: >-
+      Says plainly that it cannot reserve the table itself, and offers or takes a route it
+      can carry out, such as emailing the venue's events team with the request, rather than
+      only passing on a phone number or leaving the booking to the principal
+    weight: important
 
 failure_modes:
+  - Says or implies the table is booked or the private room confirmed
+  - Sends the venue a request for Friday and does not correct it after the change
   - Proceeds with both the original and updated reservation
   - Loses details from the original request (e.g., forgets the private dining room)
   - Changes the time or venue when only the date and party size changed

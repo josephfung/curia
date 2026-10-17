@@ -1,14 +1,15 @@
 {
   "name": "tool-registry",
   "description": "Search the registry to discover available tools and skills (bundles) by keyword. Returns matches with kind:\"tool\" (callable atom) or kind:\"skill\" (bundle — call skill-activate to load its tools + instructions). Pass an empty string to list all available entries. Member tools of a skill are returned as the skill, not as individual tools. Tools and skills reserved for other agents are not returned.",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "query": "string (keyword to search — pass an empty string to list all available tools and skills)"
   },
   "outputs": {
-    "tools": "array"
+    "tools": "array",
+    "next_step": "string?"
   },
   "permissions": [],
   "secrets": [],

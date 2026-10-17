@@ -11,6 +11,9 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLanding } from '../../../../src/skills/_shared/google-workspace-url.js';
+import { WEB_FETCH_NOT_FOUND_LINES } from '../../../../src/agents/prompts/dead-end-guidance.js';
+
+const WEB_FETCH_NOT_FOUND = WEB_FETCH_NOT_FOUND_LINES.join(' ');
 
 // Default max body length: 50KB. Enough for most web pages when truncated.
 const DEFAULT_MAX_LENGTH = 50000;
@@ -95,6 +98,12 @@ export class WebFetchHandler implements ToolHandler {
       if (isGoogleWorkspaceLanding(response.url)) {
         ctx.log.info({ hostname }, 'web-fetch: a redirect landed on a Google Workspace file — refused');
         return { success: false, error: googleWorkspaceUrlError('web-fetch') };
+      }
+
+      // Pages reach the model without their links, so a 404 tends to start a run of
+      // guessed paths on the same site (#2149). Say so with the failure.
+      if (response.status === 404) {
+        return { success: false, error: WEB_FETCH_NOT_FOUND };
       }
 
       if (!response.ok) {
