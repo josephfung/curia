@@ -47,7 +47,7 @@ export function buildEscalationJudge(deps: {
 
   const config: EscalationJudgeConfig = {
     enabled: true,
-    model: yaml?.model ?? 'claude-haiku-4-5',
+    model: yaml?.model ?? 'claude-haiku-5-5',
     timeoutMs: yaml?.timeout_ms ?? 5000,
     reviewTimeoutMs: yaml?.review_timeout_ms ?? 15000,
   };

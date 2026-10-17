@@ -5,7 +5,7 @@
 model_routing:
   tiers:
     fast:
-      model: claude-haiku-4-5
+      model: claude-haiku-5-5
     standard:
       model: claude-sonnet-4-6
     powerful:
@@ -293,7 +293,7 @@ filter:
     enabled: true
     # Recommended: use a different vendor/family than the agent tiers for model diversity
     # (an attack tuned for the coordinator should not also fool the reviewer).
-    model: claude-haiku-4-5
+    model: claude-haiku-5-5
     timeout_ms: 5000
     failMode: split   # split (default) | open | closed — see src/config.ts
   # Identity gate (#1818). A non-principal send is checked for an unconfirmed-name
@@ -311,7 +311,7 @@ filter:
 escalation:
   judge:
     enabled: true
-    model: claude-haiku-4-5
+    model: claude-haiku-5-5
     timeout_ms: 5000
     # The band brief (#2159) reads the drafting turn's evidence; it needs longer than a one-word classification.
     review_timeout_ms: 15000

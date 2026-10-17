@@ -50,7 +50,7 @@ redteam:
   # Use Anthropic for test case generation (same API key as the target model).
   # Haiku is used here because it's cheaper for the generation phase.
   # The actual red team probes run against the Sonnet target above.
-  provider: "anthropic:messages:claude-haiku-4-5-20251001"
+  provider: "anthropic:messages:claude-haiku-5-5"
 
   # 25 tests per plugin gives good coverage for regular pre-release runs.
   # Increase to 50 for deep pre-major-release runs.

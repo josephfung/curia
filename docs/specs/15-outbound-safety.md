@@ -192,7 +192,7 @@ value — so the secret does not re-leak into the `outbound.blocked` audit event
   the SOLE recipient (a private channel). The judge model therefore only ever sees messages
   with at least one non-principal recipient, and the prompt does not reason about the
   principal-sole case. Principal + third parties → judge runs.
-- **Model.** Configurable via `filter.llmJudge.model` (default `claude-haiku-4-5`).
+- **Model.** Configurable via `filter.llmJudge.model` (default `claude-haiku-5-5`).
   Operators are strongly encouraged to use a different vendor/family than the agent tiers
   so an attack crafted for the coordinator cannot also fool the reviewer.
 - **Failure handling** (`filter.llmJudge.failMode`, default `split`): a judge that is

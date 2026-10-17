@@ -526,7 +526,7 @@ export interface YamlConfig {
       /**
        * Model the judge runs on. A dedicated model string (NOT a tier reference)
        * so the judge can use a different vendor independently of the agent tiers.
-       * Validated against the model registry at startup. Default: 'claude-haiku-4-5'.
+       * Validated against the model registry at startup. Default: 'claude-haiku-5-5'.
        */
       model?: string;
       /** Hard timeout for the judge call in ms. Default: 5000. */
@@ -580,7 +580,7 @@ export interface YamlConfig {
       /**
        * Model for the judge. A dedicated string (NOT a tier reference) so it can
        * differ from the coordinator model. Validated against the registry at startup.
-       * Default: 'claude-haiku-4-5'.
+       * Default: 'claude-haiku-5-5'.
        */
       model?: string;
       /** Hard timeout per call in ms. Default: 5000. */

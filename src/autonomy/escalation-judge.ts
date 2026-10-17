@@ -22,6 +22,7 @@ import type { Logger } from '../logger.js';
 import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
+import { sentTemperature } from '../agents/llm/sampling-options.js';
 import type { ContactTier } from '../contacts/types.js';
 import {
   applyDisclosurePolicy,
@@ -281,7 +282,9 @@ export class EscalationJudge {
     // for disclosure — give it more room so verbose reason strings don't truncate.
     // The brief can quote several sentences back (#2159), so it gets the most room.
     // Truncated JSON → parseVerdict returns null → escalate (safe failure mode).
-    const maxTokens = kind === 'review' ? REVIEW_MAX_TOKENS : kind === 'action' ? 200 : 120;
+    // Haiku 5.5 verdicts measured up to 91 (action) and 66 (disclosure) tokens,
+    // about 1.6x Haiku 4.5, so both caps were raised to keep ~3x headroom (#2077).
+    const maxTokens = kind === 'review' ? REVIEW_MAX_TOKENS : kind === 'action' ? 300 : 200;
 
     try {
       const chatPromise = this.provider.chat({
@@ -360,7 +363,12 @@ export class EscalationJudge {
         providerRequestId: result.provenance.providerRequestId,
         promptHash: createHash('sha256').update(userPrompt).digest('hex'),
         responseHash: createHash('sha256').update(result.content).digest('hex'),
-        temperature: JUDGE_TEMPERATURE,
+        // What the request carried, not the constant: a model that rejects
+        // sampling parameters is sent no temperature at all (#2077).
+        temperature: sentTemperature(
+          { temperature: JUDGE_TEMPERATURE },
+          this.modelRegistry.rejectsSamplingParams(result.provenance.requestedModel),
+        ),
         parentEventId: 'system',
         archive: {
           prompt: {

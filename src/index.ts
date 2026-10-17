@@ -1422,7 +1422,7 @@ async function main(): Promise<void> {
     if (judgeEnabled) {
       const judgeConfig: JudgeConfig = {
         enabled: true,
-        model: judgeYaml?.model ?? 'claude-haiku-4-5',
+        model: judgeYaml?.model ?? 'claude-haiku-5-5',
         timeoutMs: judgeYaml?.timeout_ms ?? 5000,
         failMode: judgeYaml?.failMode ?? 'split',
       };
