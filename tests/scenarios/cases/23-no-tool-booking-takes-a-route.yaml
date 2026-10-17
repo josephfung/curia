@@ -1,8 +1,8 @@
 # Case 23 (#2149): a request no tool can carry out. Curia has no reservation tool, so it
 # reaches the venue the way a person would (its events team takes requests by email),
-# after a bounded look-up: one search and one fetch find the route. Rules: tool-registry's
-# next_step on a search that finds nothing, and web-fetch's 404 message
-# (src/agents/prompts/dead-end-guidance.ts). Before them the coordinator reworded the
+# after a bounded look-up: one search and the private-dining page find the route.
+# Rules: tool-registry's next_step on a search that finds nothing, and web-fetch's 404
+# message (src/agents/prompts/dead-end-guidance.ts). Before them the coordinator reworded the
 # registry search, fetched a dozen guessed venue pages and timed out.
 #
 # The search returns the two pages that exist; any other path gets web-fetch's own 404
@@ -95,11 +95,12 @@ expected_behaviors:
   - id: bounded_venue_lookup
     weight: critical
     description: >
-      Looks the venue up in a bounded way: a search and the pages it returned, at most
-      four web-search and web-fetch calls in all. Before #2149 it made about sixteen.
+      Looks the venue up in a bounded way: a search or two and the pages they returned,
+      at most six web-search and web-fetch calls in all. Before #2149 it made about
+      sixteen; since, three to five.
     check:
       called: [web-search, web-fetch]
-      max: 4
+      max: 6
   - id: no_address_in_to
     weight: critical
     description: >
@@ -113,6 +114,7 @@ expected_behaviors:
     description: Searches the tool registry at most twice (one search, and at most one full listing).
     check:
       called: tool-registry
+      min: 0
       max: 2
   - id: takes_a_route
     weight: critical

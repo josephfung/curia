@@ -363,9 +363,9 @@
     },
     "no tool booking takes a route": {
       "unstubbed": 0,
-      "runs": 3,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-17T02:05:50.056Z"
+      "recordedAt": "2026-10-17T02:15:48.877Z"
     },
     "no-reply automated notification": {
       "unstubbed": 0,
