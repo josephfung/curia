@@ -16,6 +16,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Email signature** — the model's own sign-off is replaced by the configured signature, so emails sign once. (#2138)
+- **Requests no tool can do** — an empty `tool-registry` search says to reach whoever can, not research around it. (#2149)
+- **`web-fetch`** — a 404 warns that guessed paths miss too, ending runs of guessed venue pages. (#2149)
 
 ## [0.44.0] — 2026-10-16 — "WALL-E"
 

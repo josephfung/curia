@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTestCases, loadTestCase, targetProblems } from '../../smoke/loader.js';
+import { WEB_FETCH_NOT_FOUND_LINES } from '../../../src/agents/prompts/dead-end-guidance.js';
 
 // Track temp dirs created in this suite for cleanup
 const tempDirs: string[] = [];
@@ -44,6 +45,16 @@ describe('Smoke test loader', () => {
       expect(tc.turns.length).toBeGreaterThan(0);
       expect(tc.expectedBehaviors.length).toBeGreaterThan(0);
     }
+  });
+
+  it('answers a 404 in web-fetch with the handler\'s message (#2149)', () => {
+    // A stale copy would test guidance production no longer sends.
+    const notFound = loadTestCases('tests/smoke/cases')
+      .flatMap(tc => [tc.toolStubs, ...tc.turns.map(t => t.toolStubs ?? {})])
+      .flatMap(stubs => (stubs['web-fetch'] ?? []).map(stub => stub.error))
+      .filter((e): e is string => typeof e === 'string' && e.startsWith('HTTP 404'));
+    expect(notFound.length).toBeGreaterThan(0);
+    for (const e of notFound) expect(e).toBe(WEB_FETCH_NOT_FOUND_LINES.join(' '));
   });
 
   it('validates required fields', () => {

@@ -43,6 +43,22 @@ describe('web-fetch', () => {
     if (!result.success) expect(result.error).toMatch(/skill-activate with skill "google-workspace"/);
   });
 
+  it('tells the model not to guess other paths after a 404 (#2149)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not found', { status: 404, statusText: 'Not Found' })));
+    const result = await new WebFetchHandler().execute(ctxFor('https://example.com/private-dining'));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/^HTTP 404: Not Found\./);
+      expect(result.error).toMatch(/Fetch a URL from a search result/);
+    }
+  });
+
+  it('reports other HTTP failures by status alone', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503, statusText: 'Service Unavailable' })));
+    const result = await new WebFetchHandler().execute(ctxFor('https://example.com/'));
+    expect(result).toEqual({ success: false, error: 'HTTP 503: Service Unavailable' });
+  });
+
   it('still refuses private addresses first', async () => {
     const result = await new WebFetchHandler().execute(ctxFor('http://127.0.0.1/'));
     expect(result.success).toBe(false);
