@@ -477,6 +477,25 @@ function selectIdentity(
 }
 
 /**
+ * The refusal for a value that is not a recipient reference (an address typed in, a
+ * name, a template token), or null when it is one. Shape only, no lookup: the test
+ * stub layers call it too, so a stubbed send refuses what production refuses (#2149).
+ */
+export function recipientReferenceShapeError(value: string, fields: RecipientReferenceFields): string | null {
+  if (isUnresolvedPlaceholder(value)) {
+    return `${unresolvedPlaceholderError(fields.field, value)} To send to the principal, pass ${fields.field}: "${PRINCIPAL_RECIPIENT_ALIAS}".`;
+  }
+  if (parseRecipientReference(value) === null) {
+    return (
+      `${fields.field} takes a contact ID or "${PRINCIPAL_RECIPIENT_ALIAS}", not "${safeName(value)}". ` +
+      `Send to a known person by their contact ID; the address is looked up for you. ` +
+      `Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.`
+    );
+  }
+  return null;
+}
+
+/**
  * Resolve a recipient reference to the address a send skill should deliver to.
  * Every failure is closed (nothing is sent) and names what is missing.
  */
@@ -486,23 +505,10 @@ export async function resolveRecipientReference(
   fields: RecipientReferenceFields,
   deps: RecipientResolverDeps,
 ): Promise<RecipientResolution> {
-  if (isUnresolvedPlaceholder(value)) {
-    return {
-      ok: false,
-      error: `${unresolvedPlaceholderError(fields.field, value)} To send to the principal, pass ${fields.field}: "${PRINCIPAL_RECIPIENT_ALIAS}".`,
-    };
-  }
+  const shapeError = recipientReferenceShapeError(value, fields);
+  if (shapeError !== null) return { ok: false, error: shapeError };
 
-  const ref = parseRecipientReference(value);
-  if (ref === null) {
-    return {
-      ok: false,
-      error:
-        `${fields.field} takes a contact ID or "${PRINCIPAL_RECIPIENT_ALIAS}", not "${safeName(value)}". ` +
-        `Send to a known person by their contact ID; the address is looked up for you. ` +
-        `Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.`,
-    };
-  }
+  const ref = parseRecipientReference(value)!; // shapeError is null only for a reference
 
   const isPrincipal = ref.kind === 'principal';
   const contactId = isPrincipal ? deps.principalContactId : ref.contactId;

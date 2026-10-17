@@ -105,7 +105,7 @@ expected_behaviors:
     weight: critical
     description: >
       Any email to the venue goes to its contact ID: the address is not typed into `to`,
-      which production refuses (human-channels' stub would accept it).
+      which production refuses (and so does the stub layer, tests/shared/recipient-guard.ts).
     check:
       not_called: [email-send, email-draft-save]
       contains: { to: "@" }

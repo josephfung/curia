@@ -173,9 +173,26 @@ describe('scenario stub layer', () => {
   it('answers a stubbed send itself and never reaches the real tool', async () => {
     const { layer, controller, executed } = setup();
     controller.beginRun({ 'email-send': [{ match: {}, return: { sent: true } }] }, 'scenario-1');
-    const result = await layer.invoke('email-send', { to: 'x@example.com' }, undefined, coordinatorCall);
+    const result = await layer.invoke('email-send', { to: '6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b' }, undefined, coordinatorCall);
     expect(result).toEqual({ success: true, data: { sent: true } });
     expect(executed).toEqual([]);
+  });
+
+  it('refuses a typed address on a success send stub with production\'s error (#2149)', async () => {
+    const { layer, controller, executed } = setup();
+    controller.beginRun({
+      'email-send': [{ match: {}, return: { sent: true } }],
+      'signal-send': [{ match: {}, return: { sent: true } }],
+    }, 'scenario-1');
+    const email = await layer.invoke('email-send', { to: 'x@example.com' }, undefined, coordinatorCall);
+    const signal = await layer.invoke('signal-send', { recipient: '+15195550123' }, undefined, coordinatorCall);
+    expect(email.success).toBe(false);
+    if (!email.success) expect(email.error).toMatch(/^<skill_error>to takes a contact ID or "principal", not "x@example.com"/);
+    expect(signal.success).toBe(false);
+    if (!signal.success) expect(signal.error).toMatch(/recipient takes a contact ID/);
+    expect(executed).toEqual([]);
+    // Recorded as stubbed, like the attachment refusal: the model can recover.
+    expect(controller.endRun('scenario-1').map(c => c.disposition)).toEqual(['stubbed', 'stubbed']);
   });
 
   it('refuses an email attachment outside the temp store with production\'s error (#2059)', async () => {

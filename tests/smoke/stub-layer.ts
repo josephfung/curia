@@ -23,6 +23,7 @@ import { matchToolStub } from '../scenarios/stub-matcher.js';
 import { recordedDraftRead, CaseToolState } from '../shared/tool-state.js';
 import { LIVE_SEARCH_TOOL, newLiveSearchTally, recordLiveCall, type LiveSearchTally } from '../shared/live-search.js';
 import { shapeStubResult } from './stub-filters.js';
+import { recipientReferenceRefusal } from '../shared/recipient-guard.js';
 import type { ToolStub } from '../scenarios/types.js';
 
 /**
@@ -188,6 +189,13 @@ export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStu
       record.disposition = 'stubbed';
       record.success = stub.error === undefined;
       if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
+      // A success stub stands in for the send, not for the recipient check the skill
+      // runs first: a typed address is refused in production's words (#2149).
+      const recipientError = recipientReferenceRefusal(toolName, input);
+      if (recipientError) {
+        record.success = false;
+        return { success: false, error: skillError(recipientError) };
+      }
       // Clone so a handler-side mutation cannot change the fixture for a later call, then
       // answer the question asked (time range, search query, echoed inputs, earlier writes).
       return { success: true, data: shapeStubResult(toolName, structuredClone(stub.return ?? null), input, state.tools) };

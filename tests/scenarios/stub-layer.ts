@@ -36,6 +36,7 @@ import type { ToolResult } from '../../src/skills/types.js';
 import { newLiveSearchTally, recordLiveCall, type LiveSearchTally } from '../shared/live-search.js';
 import { applyCaseWrites, recordedDraftRead, CaseToolState } from '../shared/tool-state.js';
 import { emailAttachmentRefusal } from './attachment-guard.js';
+import { recipientReferenceRefusal } from '../shared/recipient-guard.js';
 import { matchToolStub } from './stub-matcher.js';
 import type { ToolStub } from './types.js';
 
@@ -245,6 +246,10 @@ export function createStubController(
       // the miss is not a hole in the stub table (#2059).
       const attachmentError = emailAttachmentRefusal(toolName, input);
       if (attachmentError) return { success: false, error: skillError(attachmentError) };
+      // Likewise the recipient check: a typed address in a reference field is refused
+      // in production's words (#2149).
+      const recipientError = recipientReferenceRefusal(toolName, input);
+      if (recipientError) return { success: false, error: skillError(recipientError) };
       // Clone so a handler-side mutation in one run cannot leak into the next.
       const data = structuredClone(stub.return ?? null);
       if (run && data !== null && typeof data === 'object' && !Array.isArray(data)) {

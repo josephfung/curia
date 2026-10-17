@@ -63,22 +63,15 @@ tool_stubs:
         usually misses too. Fetch a URL from a search result, or answer with what you already have.
   # Test mode has no outbound context, so a real email-send always fails here and the
   # coordinator retries it. Emailing the venue is a route the case accepts, so it goes
-  # through, but only to a contact ID: the address typed into `to` is refused in
-  # production's words (src/skills/_shared/recipient-reference.ts), so a send that
-  # production would refuse can't pass for one. First match wins. contact-create stays
-  # real (see meeting-coord-schedule-external.yaml).
+  # through. The stub layer still refuses a typed address in `to`, in production's words
+  # (tests/shared/recipient-guard.ts), so only a send by contact ID succeeds. First match
+  # wins. contact-create stays real (see meeting-coord-schedule-external.yaml).
   email-send:
-    - match: { to: events@langdonhall.example }
-      error: 'to takes a contact ID or "principal", not "events@langdonhall.example". Send to a known person by their contact ID; the address is looked up for you. Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
-    - match: { to: events@langdonhall.ca }
-      error: 'to takes a contact ID or "principal", not "events@langdonhall.ca". Send to a known person by their contact ID; the address is looked up for you. Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
     - match: { to: null }
       error: 'Missing recipient: pass to (a contact ID, or "principal" for the principal). Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
     - match: {}
       return: { message_id: smoke-sent-0001, to: "{{input:to}}", subject: "{{input:subject}}" }
   email-draft-save:
-    - match: { to: events@langdonhall.example }
-      error: 'to takes a contact ID or "principal", not "events@langdonhall.example". Send to a known person by their contact ID; the address is looked up for you. Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
     - match: {}
       return: { draft_id: smoke-draft-0001, to: "{{input:to}}", subject: "{{input:subject}}" }
 

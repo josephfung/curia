@@ -69,6 +69,20 @@ describe('createSmokeStubs', () => {
       .toEqual({ success: false, error: '<skill_error>down</skill_error>' });
   });
 
+  it('refuses a typed address on a success send stub, as production does (#2149)', async () => {
+    const { layer, invoke } = realLayer();
+    const stubs = createSmokeStubs();
+    const wrapped = stubs.wrap(layer);
+    stubs.set({ 'email-send': [{ match: {}, return: { message_id: 'smoke-sent-0001' } }] });
+
+    const typed = await wrapped.invoke('email-send', { to: 'events@langdonhall.example' }, undefined as never, opts('coordinator') as never);
+    expect(typed.success).toBe(false);
+    if (!typed.success) expect(typed.error).toMatch(/^<skill_error>to takes a contact ID or "principal"/);
+    const byId = await wrapped.invoke('email-send', { to: '7a2e3f4b-5c6d-4e7f-8091-a2b3c4d5e6f7' }, undefined as never, opts('coordinator') as never);
+    expect(byId).toEqual({ success: true, data: { message_id: 'smoke-sent-0001' } });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('runs an unstubbed call for real', async () => {
     const { layer, invoke } = realLayer();
     const stubs = createSmokeStubs();
