@@ -167,6 +167,22 @@ describe('ActionLogRepo', () => {
     });
   });
 
+  describe('findAllScored', () => {
+    // Coordinator-resolved rows are scored with every flag null (#2159). They must be
+    // filtered before the LIMIT, or a run of them pushes real evidence out of the window.
+    it('selects only evidence-bearing rows, before the limit applies', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.findAllScored(500);
+      const sql = queries[0]!.sql;
+      expect(sql).toMatch(/competence_flag IS NOT NULL/);
+      expect(sql).toMatch(/commitment_flag IS NOT NULL/);
+      expect(sql).toMatch(/compatibility IS NOT NULL/);
+      expect(sql.indexOf('competence_flag IS NOT NULL')).toBeLessThan(sql.indexOf('LIMIT'));
+      expect(queries[0]!.params).toEqual([500]);
+    });
+  });
+
   describe('getRecentCompetenceErrorRate', () => {
     it('returns the error rate from the last N scored rows', async () => {
       const { pool } = makePool([{ total: '30', errors: '8' }]);

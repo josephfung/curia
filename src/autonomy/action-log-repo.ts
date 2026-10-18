@@ -166,11 +166,18 @@ export class ActionLogRepo {
    * Load the most recent scored rows for the adjustment formula.
    * Bounded to 500 rows — rows older than ~5 half-lives (150 days at default 30d)
    * contribute less than 3% weight and are safely excluded.
+   *
+   * Same evidence filter as countScored, applied before the LIMIT: coordinator-resolved
+   * rows and dead-letters are scored with every flag null (#2159), and a run of them
+   * must not push real evidence out of the window.
    */
   async findAllScored(limit = 500): Promise<ActionLogRow[]> {
     const result = await this.pool.query(
       `SELECT * FROM autonomy_action_log
        WHERE scored_by IS NOT NULL
+         AND (competence_flag IS NOT NULL
+           OR commitment_flag IS NOT NULL
+           OR compatibility IS NOT NULL)
        ORDER BY created_at DESC
        LIMIT $1`,
       [limit],
