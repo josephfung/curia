@@ -1,0 +1,119 @@
+# Style case 40g (#2143): a scheduled morning brief emailed to the principal, under a
+# brief, dry identity. Built from a production brief (2026-10-18): about 200 words, a good
+# share of them about what was not there ("Light day, nothing to juggle", "No conflicts,
+# nothing before 8 AM or after 7 PM, no travel", "No pending approvals", "That is the whole
+# of it."). Here the calendar answer volunteers those absences and the default stubs report
+# no approvals, so reporting them is available. Rules: the office identity block's tone and
+# Detail settings; see docs/wip/2026-10-15-tone-and-style-design.md.
+name: style morning brief email
+description: >
+  The morning brief job fires: email the principal today's schedule and open items. The
+  calendar holds one event: 3:00 to 4:30 PM, Bevy Pack at Breithaupt Park (350 Margaret
+  Ave, Kitchener), pumpkin carving, dress for cool weather. Three of the principal's tasks
+  are overdue: updated budget calculations for the BMO clients, the OMG client document
+  checklist, and turning the Built to Flex keynote into an essay. Nothing is pending
+  approval. The coordinator sends one email covering the event and the three overdue tasks,
+  and says nothing about what is absent.
+tags: [style, scheduler, email]
+identity: style-brief-dry
+release_gate: false
+stub_sets: [human-channels]
+inbound:
+  from: scheduler
+  content: >
+    Morning brief. Email the principal today's schedule and their open items: anything
+    overdue or waiting on them.
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: calendar
+        response: >
+          Today is a light day with just one event: 3:00 to 4:30 PM, Bevy Pack at Breithaupt
+          Park (350 Margaret Ave, Kitchener) with Xiaopu. It's the Otter & Timber Wolf
+          meeting, with pumpkin carving and decorating, so dress for cool weather. There are
+          no conflicts, nothing before 8 AM or after 7 PM, and no travel.
+  task-list:
+    - match: {}
+      return:
+        count: 3
+        displayTimezone: "{{timezone}}"
+        tasks:
+          - task_id: 0b1c2d3e-0000-4000-8000-40a000000001
+            title: Updated budget calculations for Joel Widmeyer and Jesse Dugard (BMO)
+            status: open
+            owner: ceo
+            priority: 50
+            due_at: "{{time:today-89 17:00}}"
+            tags: []
+            age: 95 days
+            last_progress_note: null
+            next_wake_at: null
+            source_agent_id: coordinator
+            blocked_by_task_id: null
+            parent_task_id: null
+          - task_id: 0b1c2d3e-0000-4000-8000-40a000000002
+            title: OMG client document checklist
+            status: open
+            owner: ceo
+            priority: 50
+            due_at: "{{time:today-78 17:00}}"
+            tags: []
+            age: 80 days
+            last_progress_note: null
+            next_wake_at: null
+            source_agent_id: coordinator
+            blocked_by_task_id: null
+            parent_task_id: null
+          - task_id: 0b1c2d3e-0000-4000-8000-40a000000003
+            title: Turn Built to Flex keynote into an essay
+            status: open
+            owner: ceo
+            priority: 50
+            due_at: "{{time:today-29 17:00}}"
+            tags: []
+            age: 40 days
+            last_progress_note: null
+            next_wake_at: null
+            source_agent_id: coordinator
+            blocked_by_task_id: null
+            parent_task_id: null
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: emails_principal
+    weight: critical
+    description: Sends the principal one email, addressed by the `principal` alias.
+    check:
+      called: email-send
+      with: { to: principal }
+      success: true
+      min: 1
+      max: 1
+  - id: content_kept
+    weight: critical
+    description: >
+      The email gives the Bevy Pack event with its time (3:00 to 4:30 PM) and place
+      (Breithaupt Park), and names all three overdue tasks.
+  - id: within_length
+    weight: important
+    description: The email body is at most 90 words.
+    check:
+      text: { tool: email-send, arg: body }
+      max_words: 90
+  - id: no_absences
+    weight: important
+    description: >
+      Says nothing about what is not there: no conflicts, no travel, nothing early or late,
+      no pending approvals, a light day, or that this is everything.
+    check:
+      text: { tool: email-send, arg: body }
+      excludes: ['!', '\bno conflicts\b', '\bno travel\b', "\\bnothing (to juggle|before|after|else|in the|pending)\\b", '\bno (pending )?approvals\b', '\blight day\b', '\bwhole of it\b', "\\bthat(’|')?s (it|all|everything)\\b"]
+  - id: register
+    weight: important
+    description: The email reads in the office's configured style (dry, candid, plain), not a generic upbeat assistant register.
+failure_modes:
+  - Lists what is absent (no conflicts, no travel, no approvals) alongside what is there
+  - Closes by saying that is everything
+  - Drops an overdue task to keep the brief short

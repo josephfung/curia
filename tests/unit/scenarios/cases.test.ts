@@ -233,7 +233,7 @@ describe('coordinator scenario cases', () => {
   it('style cases share one identity fixture and score in code what code can score (#2143)', () => {
     const style = cases.filter(c => c.tags.includes('style'));
     expect(style.map(c => path.basename(c.sourceFile).slice(0, 3)))
-      .toEqual(['40a', '40b', '40c', '40d', '40e']);
+      .toEqual(['40a', '40b', '40c', '40d', '40e', '40f', '40g']);
     // `--tags style` is one run, and a run has one identity.
     expect(new Set(style.map(c => c.identity?.name))).toEqual(new Set(['style-brief-dry']));
     for (const c of style) expect(c.releaseGate).toBe(false);

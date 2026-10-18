@@ -1,0 +1,81 @@
+# Style case 40f (#2143): a scheduled email asking the principal for something, under a
+# brief, dry identity. Built from a production email (2026-10-01, curia-deploy's expense
+# tracker): about 100 words that restated the occasion ("It's the 1st, so it's time
+# for…"), explained the steps to come ("Once I have them, I'll match each transaction…")
+# and read the job's own instruction back ("I won't process anything until I hear back").
+# The job text below is that cron task's, run here by the coordinator: core has no expense
+# agent, and the email is the same kind of turn. Rules: the office identity block's tone and
+# Detail settings; see docs/wip/2026-10-15-tone-and-style-design.md.
+name: style scheduled request email
+description: >
+  The monthly reconciliation job fires: email the principal asking them to upload last
+  month's credit card statements to the Statements folder and reply with the file links,
+  with the expense sheet linked for reference, and process nothing until they answer. The
+  coordinator sends the principal one short email that asks for exactly that and gives both
+  links, without explaining its later steps, restating why it is writing, or repeating its
+  instruction to wait.
+tags: [style, scheduler, email]
+identity: style-brief-dry
+release_gate: false
+stub_sets: [human-channels]
+inbound:
+  from: scheduler
+  content: >
+    Monthly reconciliation prompt. Email the principal asking them to upload their credit
+    card statement(s) for the prior month to the Statements folder
+    (https://drive.example.test/folders/statements) and reply with the file link(s). Use a
+    friendly, concise tone. Include the expense sheet URL
+    (https://sheets.example.test/expense-ledger) for reference. Do not process anything
+    until the principal responds.
+tool_stubs:
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: emails_principal
+    weight: critical
+    description: Sends the principal one email, addressed by the `principal` alias.
+    check:
+      called: email-send
+      with: { to: principal }
+      success: true
+      min: 1
+      max: 1
+  - id: links_kept
+    weight: critical
+    description: The email gives the Statements folder link.
+    check:
+      called: email-send
+      contains: { body: drive.example.test/folders/statements }
+  - id: sheet_link_kept
+    weight: critical
+    description: The email gives the expense sheet link.
+    check:
+      called: email-send
+      contains: { body: sheets.example.test/expense-ledger }
+  - id: content_kept
+    weight: critical
+    description: >
+      The email asks the principal to upload last month's credit card statements to the
+      Statements folder and reply with the file links.
+  - id: within_length
+    weight: important
+    description: The email body is at most 60 words, links and sign-off included.
+    check:
+      text: { tool: email-send, arg: body }
+      max_words: 60
+  - id: no_process_narration
+    weight: important
+    description: >
+      No exclamation marks, no account of what the office will do once the files arrive,
+      no restating why it is writing, and no repeating its instruction to wait.
+    check:
+      text: { tool: email-send, arg: body }
+      excludes: ['!', "\\bonce I (have|get|receive)\\b", "\\bI(’|')?ll (match|reconcile|go through|compare)\\b", "\\b(won(’|')?t|will not) (process|start|do anything)\\b", "\\bit(’|')?s (the 1st|that time)\\b", '\btime for the monthly\b', '\bwould you mind\b']
+  - id: register
+    weight: important
+    description: The email reads in the office's configured style (dry, candid, plain), not a generic upbeat assistant register.
+failure_modes:
+  - Explains the reconciliation steps that will follow
+  - Tells the principal it will not process anything until they reply
+  - Drops a link to keep the email short
