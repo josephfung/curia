@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from '@tanstack/react-router';
 import { apiFetch } from '../api';
 import { SettingsLayout } from './SettingsPage';
-import { PostureCardGrid } from '../components/settings/PostureFields';
 import { StringListEditor } from '../components/settings/StringListEditor';
 import {
   ChangeNoteField,
@@ -10,8 +8,11 @@ import {
   errorMessage,
   type ConfigHistoryEntry,
 } from '../components/settings/ConfigHistory';
-import type { DecisionPosture, LocalIdentity } from './wizard-utils';
+import type { LocalIdentity } from './wizard-utils';
 
+// Standing preferences: rules the assistant always follows. The route stays
+// /settings/posture so existing links work; the decision-posture cards it used to hold
+// are gone (#2143) — the autonomy level owns act-vs-ask.
 function PostureSection() {
   const [identity, setIdentity] = useState<LocalIdentity | null>(null);
   const [saved, setSaved] = useState<LocalIdentity | null>(null);
@@ -62,7 +63,7 @@ function PostureSection() {
         setIdentity(data.identity);
         setSaved(data.identity);
       } catch (err) {
-        setLoadError(err instanceof Error ? err.message : 'Failed to load posture settings');
+        setLoadError(err instanceof Error ? err.message : 'Failed to load standing preferences');
       }
     }
     void load();
@@ -74,27 +75,15 @@ function PostureSection() {
     setSaving(true);
     setSaveStatus('Saving…');
     try {
-      // Re-fetch before write so concurrent Assistant persona edits are not clobbered.
+      // Re-fetch before write so concurrent Personality edits are not clobbered.
       const freshRes = await apiFetch('/api/identity');
       if (!freshRes.ok) throw new Error(await errorMessage(freshRes));
       const freshData = await freshRes.json() as { identity: LocalIdentity };
-      // Only overwrite the fields the operator actually changed on this page;
-      // keep the freshly-fetched values for the rest. Without this, saving a
-      // posture edit would also clobber behavioralPreferences that a background
-      // skill (e.g. preference-update) appended after this page loaded.
+      // Only overwrite the preferences when the operator changed them on this page;
+      // keep the freshly-fetched values otherwise, so a background skill's append
+      // (e.g. preference-update) after this page loaded is not clobbered.
       const payload: LocalIdentity = {
         ...freshData.identity,
-        decisionStyle: {
-          ...freshData.identity.decisionStyle,
-          externalActions:
-            identity.decisionStyle.externalActions !== saved.decisionStyle.externalActions
-              ? identity.decisionStyle.externalActions
-              : freshData.identity.decisionStyle.externalActions,
-          internalAnalysis:
-            identity.decisionStyle.internalAnalysis !== saved.decisionStyle.internalAnalysis
-              ? identity.decisionStyle.internalAnalysis
-              : freshData.identity.decisionStyle.internalAnalysis,
-        },
         behavioralPreferences:
           JSON.stringify(identity.behavioralPreferences) !== JSON.stringify(saved.behavioralPreferences)
             ? identity.behavioralPreferences
@@ -140,17 +129,15 @@ function PostureSection() {
     );
   }
 
-  const isDirty =
-    identity.decisionStyle.externalActions !== saved.decisionStyle.externalActions
-    || identity.decisionStyle.internalAnalysis !== saved.decisionStyle.internalAnalysis
-    || JSON.stringify(identity.behavioralPreferences) !== JSON.stringify(saved.behavioralPreferences);
+  const isDirty = JSON.stringify(identity.behavioralPreferences) !== JSON.stringify(saved.behavioralPreferences);
 
   return (
     <>
       <div className="settings-page-header">
-        <h2 className="settings-page-title">Posture</h2>
+        <h2 className="settings-page-title">Standing preferences</h2>
         <p className="settings-page-sub">
-          Default decision style and standing preferences for your assistant.
+          Rules your assistant always follows. How it sounds goes in Personality → Tone &amp; style;
+          how independently it acts is the Autonomy setting.
         </p>
         {meta && (
           <p className="settings-version-meta">
@@ -159,40 +146,9 @@ function PostureSection() {
         )}
       </div>
 
-      <div className="settings-callout">
-        <p>
-          <strong>Posture vs autonomy.</strong> Decision posture is the assistant&apos;s
-          default bias when judging external actions (verify first vs act when confident).
-          The{' '}
-          <Link to="/settings/autonomy">Autonomy score</Link>
-          {' '}is a separate knob: how far Curia may proceed before stopping for your
-          confirmation. Adjust both independently.
-        </p>
-      </div>
-
       <section className="settings-section">
         <div className="settings-section-body">
-          <PostureCardGrid
-            value={identity.decisionStyle.externalActions}
-            onChange={(externalActions: DecisionPosture) => setIdentity({
-              ...identity,
-              decisionStyle: { ...identity.decisionStyle, externalActions },
-            })}
-            scopeHint="(for external actions)"
-          />
-
-          <div style={{ marginTop: 20 }}>
-            <PostureCardGrid
-              value={identity.decisionStyle.internalAnalysis}
-              onChange={(internalAnalysis: DecisionPosture) => setIdentity({
-                ...identity,
-                decisionStyle: { ...identity.decisionStyle, internalAnalysis },
-              })}
-              scopeHint="(for internal analysis)"
-            />
-          </div>
-
-          <div style={{ marginTop: 24 }}>
+          <div>
             <StringListEditor
               id="standing-prefs"
               label="Standing preferences"
@@ -211,7 +167,7 @@ function PostureSection() {
           </div>
 
           <div className="autonomy-control">
-            <ChangeNoteField id="posture-note" value={note} onChange={setNote} />
+            <ChangeNoteField id="preferences-note" value={note} onChange={setNote} />
             <div className="autonomy-save-row">
               <button
                 type="button"

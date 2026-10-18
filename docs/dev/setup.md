@@ -154,8 +154,10 @@ a six-step React form wizard:
    selection. Aligning the system clock to match the principal's contact
    timezone is tracked as a follow-up.
 3. **Identity:** assistant name, title, optional email signature.
-4. **Tone:** 1-3 baseline tone words, verbosity and directness sliders.
-5. **Posture:** decision-making posture and initial behavioral preferences.
+4. **Tone & style:** a few lines on how the assistant sounds, started from a template,
+   and the Detail slider.
+5. **Autonomy & preferences:** how independently Curia acts (an autonomy band), and any
+   initial standing preferences.
 6. **Review:** confirm and save.
 
 When you submit step 6, the wizard saves the identity, hot reloads it, and

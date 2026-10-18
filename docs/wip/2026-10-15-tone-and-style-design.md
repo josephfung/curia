@@ -336,7 +336,9 @@ constraints and preferences edited after boot are not scanned until a restart.
   a few lines on how Curia sounds, and what it never does.
 - **Starter templates** above it, as chips: *Dry & understated*, *Warm & personable*,
   *Crisp & direct* and *Formal*. Clicking one inserts a short description ending in one
-  example line, and asks before replacing existing text. These replace the tone-word
+  example line. It asks before replacing text the operator wrote; empty text or another
+  template's text is replaced without asking. The seeded default style is the *Warm &
+  personable* template, so a fresh install switches freely. These replace the tone-word
   picker. The hint under the field says one example line does more than any adjective.
 - The **Detail** slider stays. In PR 3, its preview starts showing the concrete
   per-channel limits for the current band, replacing `verbosityBand()`.

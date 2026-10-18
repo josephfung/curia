@@ -1,7 +1,7 @@
 {
   "name": "setup-status",
   "description": "Return the setup catalog with each task's live-derived status (done / pending / deferred / always_available). Call this at the start of every setup session and after any credential is captured. Never guess at setup state — always call this.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {},

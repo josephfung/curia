@@ -23,6 +23,18 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Principal notices** — notes, block notices and expired approvals go to the digest, not email. (#2159)
 
+### Changed
+
+- **Tone & style** — a written style with starter templates replaces tone words and directness. (#2143)
+- **Identity API (breaking)** — `tone.style` replaces `tone.baseline` and `tone.directness`; legacy fields are rejected. (#2143)
+- **Stored identities** — old tone settings become a written style on read; nothing is rewritten. (#2143)
+- **Setup wizard** — step 5 asks for an autonomy level instead of a decision posture. (#2143)
+- **Proactive analysis** — no longer implied by default; add "volunteer observations" to your style to keep it. (#2143)
+
+### Removed
+
+- **Decision posture** — gone from identity, wizard and console; the autonomy level decides act-vs-ask. (#2143)
+
 ### Fixed
 
 - **Email signature** — the model's own sign-off is replaced by the configured signature, so emails sign once. (#2138)

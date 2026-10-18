@@ -11,7 +11,7 @@ instance in one path with no detours. The onboarding flow spans three layers:
 1. **Host bootstrap** — a single `pnpm run setup` command brings up Postgres,
    applies migrations, and starts the stack.
 2. **Form wizard** (`/setup`) — captures the principal's identity and operational
-   profile, plus the assistant's identity, voice, and decision posture.
+   profile, plus the assistant's identity, tone & style, and autonomy level.
 3. **In-chat specialist** (`setup-wizard` agent) — an outcome-backward concierge
    that runs on first chat and whenever the principal asks for help setting up
    integrations; catalog-aware and deferral-aware.
@@ -114,30 +114,41 @@ configurable parts of the office identity, over six steps.
 | 1 — About you | `principalName` (the CEO's name) — written through `POST /api/setup/principal` (idempotent) before advancing. Pre-populates the current name on re-entry so it can be corrected; no longer auto-skips when a principal already exists. | non-empty |
 | 2 — Your details | Principal operational profile: `timezone` (required, IANA string), `preferredName`, `title`, `primaryEmail`, `workingHours` (all optional). Written through `POST /api/setup/principal/profile`; email is stored as a verified `contact_channel_identity` that comes online after the wizard's restart. | timezone required |
 | 3 — Identity | `name`, `title`, `signature` (optional). The assistant name and email signature are prefilled via `POST /api/setup/suggest-name` (LLM-suggested first name, silent static fallback on failure). | `name` required |
-| 4 — Tone | `toneBaseline` (1–3 pills from `TONE_OPTIONS`), `verbosity` slider 0–100, `directness` slider 0–100 | 1 ≤ pills ≤ 3 |
-| 5 — Posture | `posture` (Conservative / Balanced / Proactive), `preferences` textarea (appended to existing `behavioralPreferences`, not replaced) | none |
+| 4 — Tone & style | `toneStyle` (a textarea, ≤800 chars, started from one of four starter templates that each end in an example line), `verbosity` (the Detail slider, 0–100) | style non-empty, ≤800 chars |
+| 5 — Autonomy & preferences | `autonomyBand` (one card per autonomy band, pre-selected from the current score), `preferences` textarea (appended to existing `behavioralPreferences`, not replaced) | none |
 | 6 — Review | Summary card, Confirm & save button | none |
 
-**Posture / standing preferences storage (confirmed, #1376):** both live on
-`OfficeIdentity` — `decisionStyle.externalActions` (wizard posture) and
-`behavioralPreferences` (standing prefs). They are versioned with the rest of
-office identity via `PUT /api/identity` and are **not** part of
-`ExecutiveProfile`. Post-setup editing is on `/settings/posture` (replaces the
-list; the wizard still appends). Decision posture is distinct from the
-autonomy score on `/settings/autonomy`.
+**Standing preferences storage (#1376):** they live on `OfficeIdentity`
+(`behavioralPreferences`), versioned with the rest of office identity via
+`PUT /api/identity`, and are **not** part of `ExecutiveProfile`. Post-setup editing is
+on Settings → Standing preferences (`/settings/posture`; it replaces the list, the
+wizard still appends).
 
-**Tone options.** The 1–3 baseline pills come from `TONE_OPTIONS` in
+**Autonomy, not posture (#2143).** Step 5 used to ask for a decision posture
+(Conservative / Balanced / Proactive) stored as `decisionStyle`, which no gate read and
+which could contradict the autonomy score. It now asks for the autonomy band, the setting
+that actually decides act-vs-ask (spec 14):
+- **Bands and copy** come from `apps/console/src/autonomy-bands.ts`, shared with
+  Settings → Autonomy. A picked band saves as its lower bound (`scoreForBand`), so it never
+  unlocks an `action_risk` tier above what its name says.
+- **`GET /api/autonomy` is a required load,** like `/api/identity` and `/api/setup/status`.
+  If it fails, or returns no config, the wizard shows a load error rather than guessing
+  a band: submitting a guessed default could quietly lower a real score.
+
+**Tone & style templates.** The four starters (*Dry & understated*, *Warm & personable*,
+*Crisp & direct*, *Formal*) are `STYLE_TEMPLATES` in
 [apps/console/src/pages/wizard-utils.ts](../../apps/console/src/pages/wizard-utils.ts).
-The server-side counterpart is `BASELINE_TONE_OPTIONS` in
-`src/identity/types.ts`. Reconciling these two sources into one is tracked
-as a follow-up.
+Choosing one replaces the text without asking only when the text is empty or still a
+template; otherwise the operator confirms first. The seeded default style is the *Warm &
+personable* template, so a fresh install switches freely.
 
 ### API integration
 
 - **On mount:** `GET /api/identity` populates the form with current values
   (the defaults seeded from `src/identity/defaults.ts` on first boot, or the
   last saved values on re-entry); `GET /api/setup/status` resolves
-  `principalExists` to pre-populate step 1.
+  `principalExists` to pre-populate step 1; `GET /api/autonomy` pre-selects step 5's
+  band. All three are required.
 - **On step 1 advance:** `POST /api/setup/principal` with `{ name }` writes
   the principal contact before the user moves to step 2.
 - **On step 2 advance:** `POST /api/setup/principal/profile` with the
@@ -147,15 +158,21 @@ as a follow-up.
   assistant name and signature (silent fallback on failure — also serves as
   an early Anthropic key smoke test).
 - **On submit (step 6):**
-  1. `PUT /api/identity` with the compiled identity payload and
+  1. `PUT /api/autonomy` with the picked band's score and
+     `reason: 'Set via onboarding wizard'`, skipped when the band is unchanged. It goes
+     **first**: as soon as a `wizard` identity version exists, `isIdentityConfigured()`
+     is true and the wizard never shows again, so an autonomy failure after the identity
+     save could not be fixed here. With autonomy first, a failure leaves the deployment
+     unconfigured and the wizard runs again.
+  2. `PUT /api/identity` with the compiled identity payload and
      `note: 'Saved via onboarding wizard'`.
-  2. `POST /api/identity/reload` to refresh the in-memory cache.
-  3. `GET /api/setup/status` to read `externalAdaptersPending`.
-  4. If `externalAdaptersPending === false` (email/Signal already running,
+  3. `POST /api/identity/reload` to refresh the in-memory cache.
+  4. `GET /api/setup/status` to read `externalAdaptersPending`.
+  5. If `externalAdaptersPending === false` (email/Signal already running,
      or never gated): set
      `localStorage['curia:onboarding:welcome-banner-pending']` and
      `navigate({ to: '/chat' })`.
-  5. Otherwise: `POST /api/setup/restart` to ask the supervisor to bring
+  6. Otherwise: `POST /api/setup/restart` to ask the supervisor to bring
      the process back up in normal mode (email/Signal channels online). The
      wizard then renders a full-screen "Setting up channels…" wait state and
      polls `GET /api/setup/status` for the new `bootStartedAt`. When it
@@ -165,8 +182,9 @@ as a follow-up.
 
 ### Submit failure
 
-Inline error message under the Confirm button. The wizard stays on step 6
-with the button re-enabled. The PUT itself is a single atomic write to
+Inline error message under the Confirm button, naming the call that failed ("Saving the
+autonomy level failed: …"). The wizard stays on step 6 with the button re-enabled, and
+does not reload, restart or navigate. The PUT itself is a single atomic write to
 `office_identity_versions`, so a failure mid-pipeline (e.g. between the
 reload and the restart) is recoverable by re-submitting. The restart-wait
 state has its own 60-second timeout; on timeout it falls into a
@@ -176,7 +194,6 @@ state has its own 60-second timeout; on timeout it falls into a
 
 - A Settings link to re-run the wizard (deferred until the settings page
   is migrated to the console).
-- Backend-driven `BASELINE_TONE_OPTIONS` (still hard-coded; `@TODO`).
 - Aligning the system timezone (cron scheduler, `TIMEZONE` env var) to the
   wizard-captured principal timezone — tracked as a follow-up.
 
@@ -281,9 +298,10 @@ auth guard sees configured === false
   step 1 (About you) → POST /api/setup/principal
   step 2 (Your details) → POST /api/setup/principal/profile
   step 3 (Identity) — LLM suggest-name prefill, local state
-  steps 4–5 (Tone, Posture) — local state only
+  steps 4–5 (Tone & style, Autonomy & preferences) — local state only
   step 6 (Review) submit:
-       PUT /api/identity  →  POST /api/identity/reload
+       PUT /api/autonomy (if the band changed)
+                          →  PUT /api/identity  →  POST /api/identity/reload
                           →  GET /api/setup/status
        if externalAdaptersPending: POST /api/setup/restart,
          render "Setting up channels…" wait state until back up

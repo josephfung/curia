@@ -70,11 +70,13 @@ const INPUT = {
   principalTitle: 'Chief Testing Officer',
   assistantName: 'Robin Curia',
   assistantTitle: 'Walkthrough EA',
-  // The wizard starts on ['warm', 'direct']: drop warm, add calm and witty.
-  toneRemove: 'warm',
-  toneAdd: ['calm', 'witty'],
-  expectedTone: ['direct', 'calm', 'witty'],
-  posture: { title: 'Proactive', value: 'proactive' },
+  // The wizard starts on the seeded "Warm & personable" style; switch templates. The seed
+  // is itself a template, so the switch must not ask before replacing (#2143).
+  styleTemplate: 'Dry & understated',
+  expectedStyleStart: 'Dry and understated.',
+  // A fresh install's autonomy score is 75 (Approval Required); a picked band saves as its
+  // lower bound.
+  autonomy: { title: 'Spot-check', score: 80 },
 } as const;
 
 const out = (line: string): void => { process.stdout.write(`${line}\n`); };
@@ -324,20 +326,20 @@ async function walkThroughWizard(page: Page, baseUrl: string, secret: string, cu
   await page.locator('#w-title').fill(INPUT.assistantTitle);
   await page.locator('.btn-wizard-next').click();
 
-  await expectStep(page, 4, 'How should your assistant communicate?');
-  await page.locator('.tone-pill', { hasText: new RegExp(`^${INPUT.toneRemove}$`) }).click();
-  for (const word of INPUT.toneAdd) {
-    await page.locator('.tone-pill', { hasText: new RegExp(`^${word}$`) }).click();
+  await expectStep(page, 4, 'How should your assistant sound?');
+  await page.locator('.tone-pill', { hasText: INPUT.styleTemplate }).click();
+  if (!(await page.locator('#w-tone-text').inputValue()).startsWith(INPUT.expectedStyleStart)) {
+    throw new Error(`Choosing '${INPUT.styleTemplate}' did not fill the Tone & style text (a confirm prompt, or a stale seed?)`);
   }
   await page.locator('.btn-wizard-next').click();
 
-  await expectStep(page, 5, 'How should your assistant decide?');
-  await page.getByRole('radio', { name: new RegExp(INPUT.posture.title) }).click();
+  await expectStep(page, 5, 'How independent should your assistant be?');
+  await page.getByRole('radio', { name: new RegExp(INPUT.autonomy.title) }).click();
   await page.locator('.btn-wizard-next').click();
 
   await expectStep(page, 6, 'Does everything look right?');
   const review = await page.locator('.review-card').innerText();
-  for (const expected of [INPUT.assistantName, INPUT.assistantTitle, ...INPUT.expectedTone]) {
+  for (const expected of [INPUT.assistantName, INPUT.assistantTitle, INPUT.expectedStyleStart, INPUT.autonomy.title]) {
     if (!review.includes(expected)) throw new Error(`Review step is missing '${expected}':\n${review}`);
   }
   await page.getByRole('button', { name: 'Confirm & save' }).click();
@@ -362,10 +364,10 @@ interface IdentityResponse {
   configured: boolean;
   identity: {
     assistant: { name: string; title: string };
-    tone: { baseline: string[] };
-    decisionStyle: { externalActions: string };
+    tone: { style: string };
   };
 }
+interface AutonomyResponse { autonomy: { score: number } | null }
 interface StatusResponse { principalExists: boolean; identityConfigured: boolean; externalAdaptersPending: boolean }
 interface PrincipalResponse {
   exists: boolean;
@@ -383,10 +385,11 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
     if (!res.ok) throw new Error(`GET ${route} returned ${res.status}`);
     return await res.json() as T;
   };
-  const [identity, status, principal] = await Promise.all([
+  const [identity, status, principal, autonomy] = await Promise.all([
     get<IdentityResponse>('/api/identity'),
     get<StatusResponse>('/api/setup/status'),
     get<PrincipalResponse>('/api/setup/principal'),
+    get<AutonomyResponse>('/api/autonomy'),
   ]);
   const problems: string[] = [];
   const expect = (label: string, actual: unknown, expected: unknown): void => {
@@ -403,8 +406,8 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
   expect('identity configured', identity.configured, true);
   expect('assistant name', identity.identity.assistant.name, INPUT.assistantName);
   expect('assistant title', identity.identity.assistant.title, INPUT.assistantTitle);
-  expect('tone', [...identity.identity.tone.baseline].sort(), [...INPUT.expectedTone].sort());
-  expect('posture', identity.identity.decisionStyle.externalActions, INPUT.posture.value);
+  expect('tone & style', identity.identity.tone.style.startsWith(INPUT.expectedStyleStart), true);
+  expect('autonomy score', autonomy.autonomy?.score, INPUT.autonomy.score);
   expect('status: principal exists', status.principalExists, true);
   expect('status: identity configured', status.identityConfigured, true);
   expect('status: left setup mode', status.externalAdaptersPending, false);

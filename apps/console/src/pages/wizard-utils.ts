@@ -1,5 +1,7 @@
 // Pure helper functions for the wizard — no React, no DOM, fully testable.
 
+import { bandForScore, scoreForBand, type AutonomyBand } from '../autonomy-bands.js';
+
 export interface WizardWorkingHours {
   start: string; // "HH:MM"
   end: string;   // "HH:MM"
@@ -11,14 +13,14 @@ export interface WizardState {
   // and POSTed to /api/setup/principal so the principal contact exists before
   // the rest of the form is saved. Pre-populated on a re-run; never auto-skipped.
   principalName: string;
-  // Steps 3–6 — assistant identity, tone, posture, review.
+  // Steps 3–6 — assistant identity, tone & style, autonomy & preferences, review.
   name: string;
   title: string;
   signature: string;
-  toneBaseline: string[];
+  toneStyle: string;
   verbosity: number;   // 0–100
-  directness: number;  // 0–100
-  posture: DecisionPosture;
+  // Null until GET /api/autonomy resolves; the wizard never guesses a band.
+  autonomyBand: AutonomyBand | null;
   preferences: string;
   // Step 2 — Your details (principal operational profile, #392).
   timezone: string;
@@ -32,12 +34,8 @@ export interface WizardState {
 // Kept in-app to avoid importing from src/ (different package).
 export interface LocalIdentity {
   assistant: { name: string; title: string; emailSignature: string };
-  tone: { baseline: string[]; verbosity: number; directness: number };
+  tone: { style: string; verbosity: number };
   behavioralPreferences: string[];
-  decisionStyle: {
-    externalActions: 'conservative' | 'balanced' | 'proactive';
-    internalAnalysis: 'conservative' | 'balanced' | 'proactive';
-  };
   constraints: string[];
 }
 
@@ -75,10 +73,9 @@ export const DEFAULT_WIZARD_STATE: WizardState = {
   name: assistantFullName(DEFAULT_ASSISTANT_FIRST_NAME),
   title: 'Executive Assistant to the CEO',
   signature: defaultSignature(DEFAULT_ASSISTANT_FIRST_NAME),
-  toneBaseline: ['warm', 'direct'],
+  toneStyle: '',
   verbosity: 50,
-  directness: 75,
-  posture: 'conservative',
+  autonomyBand: null,
   preferences: '',
   timezone: '',
   email: '',
@@ -87,8 +84,8 @@ export const DEFAULT_WIZARD_STATE: WizardState = {
   workingHours: null,
 };
 
-// Number of wizard steps: About you → Your details → Identity → Tone →
-// Posture → Review. The /setup route and WizardPage both clamp ?step= against
+// Number of wizard steps: About you → Your details → Identity → Tone & style →
+// Autonomy & preferences → Review. The /setup route and WizardPage both clamp ?step= against
 // this, so a step added here is reachable everywhere at once (#2146).
 export const WIZARD_TOTAL_STEPS = 6;
 
@@ -104,25 +101,50 @@ export function clampWizardStep(raw: unknown): number {
 // same ceiling client-side so the user sees the error before a round-trip.
 export const PRINCIPAL_NAME_MAX_LENGTH = 200;
 
-// All valid tone words — mirrors BASELINE_TONE_OPTIONS in src/identity/types.ts.
-// @TODO: consider exposing this via the API so both sides stay in sync automatically.
-export const TONE_OPTIONS: readonly string[] = [
-  'warm', 'friendly', 'approachable', 'personable', 'empathetic', 'encouraging', 'gracious', 'caring',
-  'direct', 'blunt', 'candid', 'frank', 'matter-of-fact', 'no-nonsense',
-  'energetic', 'calm', 'composed', 'enthusiastic', 'steady', 'measured',
-  'playful', 'witty', 'dry', 'charming', 'diplomatic', 'tactful', 'thoughtful', 'curious',
-  'confident', 'assured', 'polished', 'authoritative', 'professional',
+// The longest tone & style text the identity accepts (TONE_STYLE_MAX_LENGTH in
+// src/identity/types.ts).
+export const TONE_STYLE_MAX_LENGTH = 800;
+
+// Starter templates for Tone & style. Each ends with one example line: an example does
+// more than any adjective, and operators get one without having to write it.
+//
+// NOTE: the "warm" text must match DEFAULT_OFFICE_IDENTITY.tone.style in
+// src/identity/defaults.ts, the seed a fresh install's wizard loads, so the seed reads as
+// an untouched template.
+export const STYLE_TEMPLATES: ReadonlyArray<{ id: string; label: string; text: string }> = [
+  {
+    id: 'dry',
+    label: 'Dry & understated',
+    text: 'Dry and understated. Plain statements; no exclamation marks, no enthusiasm, no pleasantries. Says what happened and stops.\n'
+      + 'Sounds like: "Done. Thursday\'s call is now at 3."',
+  },
+  {
+    id: 'warm',
+    label: 'Warm & personable',
+    text: 'Warm and personable, but brief. Friendly in a few words, never gushing; the point comes first.\n'
+      + 'Sounds like: "All set: Thursday\'s call is now at 3. Enjoy the long weekend."',
+  },
+  {
+    id: 'crisp',
+    label: 'Crisp & direct',
+    text: 'Crisp and direct. Leads with the answer or the decision needed; short sentences, no hedging, no filler.\n'
+      + 'Sounds like: "Moved Thursday\'s call to 3. Need your OK on the Lumen invoice."',
+  },
+  {
+    id: 'formal',
+    label: 'Formal',
+    text: 'Formal and polished. Complete sentences, courteous, no slang or contractions; precise rather than wordy.\n'
+      + 'Sounds like: "Thursday\'s call has been moved to 3:00 p.m."',
+  },
 ];
 
-// Toggles a tone word in the selection. Enforces min=1 (can't remove last) and max=3.
-export function toggleToneSelection(current: string[], word: string): string[] {
-  const idx = current.indexOf(word);
-  if (idx !== -1) {
-    if (current.length <= 1) return current; // min 1 — no-op
-    return current.filter(w => w !== word);
+// Returns null when the tone & style text is usable, or an error for inline display.
+export function validateToneStyle(text: string): string | null {
+  if (text.trim().length === 0) return 'Describe how your assistant should sound, or start from a template.';
+  if (text.length > TONE_STYLE_MAX_LENGTH) {
+    return `Keep it to ${TONE_STYLE_MAX_LENGTH} characters or fewer (now ${text.length}).`;
   }
-  if (current.length >= 3) return current; // max 3 — no-op
-  return [...current, word];
+  return null;
 }
 
 // Live preview sentence shown under the verbosity slider.
@@ -133,25 +155,10 @@ export function verbosityBand(v: number): string {
   return '"Let me walk you through this thoroughly."';
 }
 
-// Live preview sentence shown under the directness slider.
-export function directnessBand(v: number): string {
-  if (v <= 25) return '"There are a few things worth considering here — it\'s hard to say definitively."';
-  if (v <= 50) return '"I\'d lean toward option A, though it depends on your priorities."';
-  if (v <= 75) return '"Thursday works. I\'ll send the invite."';
-  return '"Do it. The risk is low and the upside is clear."';
-}
-
-// Prose sentence shown in the tone pill preview area.
-export function tonePreviewText(words: string[]): string {
-  if (words.length === 0) return '';
-  const phrase =
-    words.length === 1
-      ? words[0]!
-      : words.length === 2
-        ? `${words[0]} and ${words[1]}`
-        : `${words[0]}, ${words[1]} and ${words[2]}`;
-  const suffix = words.length >= 3 ? ' (Pick up to 3)' : '';
-  return `Your tone is ${phrase}.${suffix}`;
+// The review card's one-line summary of a tone & style text: its first line, cut short.
+export function styleReviewDesc(text: string): string {
+  const first = text.trim().split('\n')[0] ?? '';
+  return first.length > 120 ? `${first.slice(0, 117).trimEnd()}…` : first;
 }
 
 // Short descriptions used in the review card (step 4).
@@ -162,32 +169,16 @@ export function verbosityReviewDesc(v: number): string {
   return 'Thorough by default — full context included.';
 }
 
-export function directnessReviewDesc(d: number): string {
-  if (d <= 25) return 'Measured — acknowledges uncertainty carefully.';
-  if (d <= 50) return 'Leans direct but hedges where uncertain.';
-  if (d <= 75) return 'Direct — minimal unnecessary hedging.';
-  return 'States positions plainly; no softening.';
-}
-
-export type DecisionPosture = 'conservative' | 'balanced' | 'proactive';
-
-export const POSTURE_OPTIONS: ReadonlyArray<{
-  value: DecisionPosture;
-  title: string;
-  desc: string;
-}> = [
-  { value: 'conservative', title: 'Conservative', desc: 'Verify before acting; flag ambiguity' },
-  { value: 'balanced',     title: 'Balanced',     desc: 'Act when confident, flag when uncertain' },
-  { value: 'proactive',    title: 'Proactive',    desc: 'Bias toward action; less checking in' },
-];
-
-export function postureReviewDesc(posture: DecisionPosture): string {
-  const map: Record<DecisionPosture, string> = {
-    conservative: 'Verifies before acting on external requests.',
-    balanced:     'Acts when confident; flags when uncertain.',
-    proactive:    'Biases toward action with less checking in.',
-  };
-  return map[posture];
+/**
+ * The PUT /api/autonomy body for the band picked in the wizard, or null when the picked
+ * band is the current one (the score stays exactly as it is).
+ */
+export function autonomyChange(
+  currentScore: number,
+  band: AutonomyBand,
+): { score: number; reason: string } | null {
+  if (bandForScore(currentScore) === band) return null;
+  return { score: scoreForBand(band), reason: 'Set via onboarding wizard' };
 }
 
 /** Live preview sentence under the executive writing-voice formality slider. */
@@ -219,8 +210,8 @@ export function validatePrincipalName(name: string): string | null {
 }
 
 // Maps WizardState onto an existing LocalIdentity, appending preferences.
-// The internalAnalysis and constraints fields are always preserved from the
-// existing identity since the wizard does not expose them.
+// Constraints are always preserved from the existing identity since the wizard does
+// not expose them.
 export function buildIdentityPayload(
   state: WizardState,
   existing: LocalIdentity,
@@ -236,15 +227,10 @@ export function buildIdentityPayload(
       emailSignature: state.signature.trim(),
     },
     tone: {
-      baseline: state.toneBaseline,
+      style: state.toneStyle.trim(),
       verbosity: state.verbosity,
-      directness: state.directness,
     },
     behavioralPreferences: prefs,
-    decisionStyle: {
-      externalActions: state.posture,
-      internalAnalysis: existing.decisionStyle.internalAnalysis,
-    },
     constraints: existing.constraints,
   };
 

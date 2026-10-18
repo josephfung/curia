@@ -1,49 +1,86 @@
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import {
-  TONE_OPTIONS,
-  toggleToneSelection,
-  tonePreviewText,
+  STYLE_TEMPLATES,
+  TONE_STYLE_MAX_LENGTH,
+  validateToneStyle,
   verbosityBand,
-  directnessBand,
   formalityBand,
 } from '../../pages/wizard-utils';
 
-interface TonePillGridProps {
-  selected: string[];
-  onChange: (next: string[]) => void;
+interface ToneStyleFieldProps {
+  value: string;
+  onChange: (next: string) => void;
   idPrefix?: string;
 }
 
-/** Shared 1–3 tone pill picker used by the wizard and Assistant settings. */
-export function TonePillGrid({ selected, onChange, idPrefix = 'tone' }: TonePillGridProps) {
-  const atMax = selected.length >= 3;
+/**
+ * Tone & style: a written description of how the assistant sounds, started from a
+ * template. Shared by the wizard and Settings → Personality. A template replaces the
+ * text only after the operator confirms, unless the text is empty or already a template.
+ */
+export function ToneStyleField({ value, onChange, idPrefix = 'tone-style' }: ToneStyleFieldProps) {
+  const [pending, setPending] = useState<(typeof STYLE_TEMPLATES)[number] | null>(null);
+  const textareaId = `${idPrefix}-text`;
+  const error = validateToneStyle(value);
+  const active = STYLE_TEMPLATES.find(t => t.text === value.trim());
+
+  function choose(template: (typeof STYLE_TEMPLATES)[number]) {
+    const untouched = value.trim() === '' || STYLE_TEMPLATES.some(t => t.text === value.trim());
+    if (untouched) {
+      onChange(template.text);
+      setPending(null);
+    } else {
+      setPending(template);
+    }
+  }
+
   return (
     <>
-      <div className="wizard-label" id={`${idPrefix}-label`}>
-        Tone{' '}
-        <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
-          (pick up to 3)
-        </span>
+      <div className="wizard-label" id={`${idPrefix}-templates-label`}>Start from a template</div>
+      <div className="tone-pill-grid" role="group" aria-labelledby={`${idPrefix}-templates-label`}>
+        {STYLE_TEMPLATES.map(t => (
+          <button
+            key={t.id}
+            type="button"
+            className={`tone-pill${active?.id === t.id ? ' selected' : ''}`}
+            aria-pressed={active?.id === t.id}
+            onClick={() => choose(t)}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
-      <div className="tone-pill-grid" role="group" aria-labelledby={`${idPrefix}-label`}>
-        {TONE_OPTIONS.map(word => {
-          const isSelected = selected.includes(word);
-          const disabled = atMax && !isSelected;
-          return (
+      {pending && (
+        <div className="settings-callout" role="alert">
+          <p>Replace your text with the {pending.label} template?</p>
+          <div className="autonomy-save-row">
             <button
-              key={word}
               type="button"
-              className={`tone-pill${isSelected ? ' selected' : ''}`}
-              disabled={disabled}
-              aria-pressed={isSelected}
-              onClick={() => onChange(toggleToneSelection(selected, word))}
+              className="btn btn-primary"
+              onClick={() => { onChange(pending.text); setPending(null); }}
             >
-              {word}
+              Replace
             </button>
-          );
-        })}
+            <button type="button" className="btn btn-secondary" onClick={() => setPending(null)}>Keep mine</button>
+          </div>
+        </div>
+      )}
+      <div className="wizard-field">
+        <label htmlFor={textareaId}>Tone &amp; style</label>
+        <textarea
+          id={textareaId}
+          value={value}
+          style={{ minHeight: 120 }}
+          placeholder="A few lines on how Curia sounds, and what it never does."
+          aria-invalid={error !== null}
+          aria-describedby={`${idPrefix}-hint`}
+          onChange={e => onChange(e.target.value)}
+        />
+        <div id={`${idPrefix}-hint`} className="settings-muted-hint">
+          {value.length} / {TONE_STYLE_MAX_LENGTH} · One example line (Sounds like: "…") does more than any adjective.
+        </div>
+        {error && value.length > 0 && <div className="wizard-step1-error">{error}</div>}
       </div>
-      <div className="wizard-preview">{tonePreviewText(selected)}</div>
     </>
   );
 }
@@ -77,43 +114,24 @@ function ScaleSlider({ id, label, value, onChange, leftLabel, rightLabel, sample
   );
 }
 
-interface AssistantToneSlidersProps {
+interface DetailSliderProps {
   verbosity: number;
-  directness: number;
-  onVerbosityChange: (v: number) => void;
-  onDirectnessChange: (v: number) => void;
+  onChange: (v: number) => void;
   idPrefix?: string;
 }
 
-/** Verbosity + directness sliders for assistant (office identity) tone. */
-export function AssistantToneSliders({
-  verbosity,
-  directness,
-  onVerbosityChange,
-  onDirectnessChange,
-  idPrefix = 'asst',
-}: AssistantToneSlidersProps) {
+/** The Detail slider: how much the assistant says, from Brief to Thorough. */
+export function DetailSlider({ verbosity, onChange, idPrefix = 'asst' }: DetailSliderProps) {
   return (
-    <>
-      <ScaleSlider
-        id={`${idPrefix}-verbosity`}
-        label="Detail level"
-        value={verbosity}
-        onChange={onVerbosityChange}
-        leftLabel="Brief"
-        rightLabel="Thorough"
-        sample={verbosityBand(verbosity)}
-      />
-      <ScaleSlider
-        id={`${idPrefix}-directness`}
-        label="Directness"
-        value={directness}
-        onChange={onDirectnessChange}
-        leftLabel="Measured"
-        rightLabel="Direct"
-        sample={directnessBand(directness)}
-      />
-    </>
+    <ScaleSlider
+      id={`${idPrefix}-verbosity`}
+      label="Detail level"
+      value={verbosity}
+      onChange={onChange}
+      leftLabel="Brief"
+      rightLabel="Thorough"
+      sample={verbosityBand(verbosity)}
+    />
   );
 }
 

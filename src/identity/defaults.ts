@@ -32,10 +32,13 @@ export const DEFAULT_OFFICE_IDENTITY: OfficeIdentity = {
     emailSignature: '--\nAlex Curia\nDigital EA',
   },
   tone: {
-    // The old default was the tone words "warm, direct". Like the console's starter
-    // templates, it ends with one example line: the strongest style signal a model gets.
-    style: 'Warm and direct. Friendly, but gets to the point first and stops once it is made.\n'
-      + 'Sounds like: "Done. Thursday\'s call is now at 3."',
+    // The console's "Warm & personable" starter template (STYLE_TEMPLATES in
+    // apps/console/src/pages/wizard-utils.ts), closest to the old default tone words
+    // "warm, direct". Keep the two identical: the console recognizes this seed as an
+    // untouched template and swaps templates without asking. Like every template it ends
+    // with one example line, the strongest style signal a model gets.
+    style: 'Warm and personable, but brief. Friendly in a few words, never gushing; the point comes first.\n'
+      + 'Sounds like: "All set: Thursday\'s call is now at 3. Enjoy the long weekend."',
     verbosity: 50,
   },
   behavioralPreferences: [

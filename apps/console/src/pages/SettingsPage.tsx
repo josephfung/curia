@@ -8,27 +8,9 @@ import { useTheme } from '../hooks/useTheme';
 // Shared with the operator config-settings pages — single source of truth for
 // the relative-time and HTTP-error-body helpers (they were duplicated here).
 import { errorMessage, timeAgo } from '../components/settings/ConfigHistory';
+import { BAND_META, bandForScore, type AutonomyBand } from '../autonomy-bands';
 
 // ── Band metadata ─────────────────────────────────────────────────────────────
-
-type AutonomyBand = 'full' | 'spot-check' | 'approval-required' | 'draft-only' | 'restricted';
-
-// Band colors match the legacy UI and the app's design token palette.
-const BAND_META: Record<AutonomyBand, { label: string; color: string; description: string }> = {
-  'full':              { label: 'Full',              color: '#5E9E6B', description: 'Curia acts independently with no confirmation required for any standard operation.' },
-  'spot-check':        { label: 'Spot-check',        color: '#6BAED6', description: 'Curia proceeds with most actions and flags a small random sample for your review.' },
-  'approval-required': { label: 'Approval Required', color: '#C9874A', description: 'Curia carries out your direct instructions, and asks before acting on its own initiative.' },
-  'draft-only':        { label: 'Draft Only',        color: '#7E6BA8', description: 'Curia prepares drafts and summaries but does not send, schedule, or commit anything.' },
-  'restricted':        { label: 'Restricted',        color: '#E86040', description: 'Curia operates in read-only mode. No writes, sends, or external actions.' },
-};
-
-function bandForScore(score: number): AutonomyBand {
-  if (score >= 90) return 'full';
-  if (score >= 80) return 'spot-check';
-  if (score >= 70) return 'approval-required';
-  if (score >= 60) return 'draft-only';
-  return 'restricted';
-}
 
 function BandBadge({ band }: { band: AutonomyBand }) {
   const meta = BAND_META[band] ?? { label: band, color: '#999' };
@@ -298,7 +280,7 @@ function AutonomySection() {
 const SETTINGS_SECTIONS = [
   { id: 'personality',  label: 'Personality',  href: '/settings/personality' },
   { id: 'ghostwriting', label: 'Ghostwriting', href: '/settings/ghostwriting' },
-  { id: 'posture',      label: 'Posture',      href: '/settings/posture' },
+  { id: 'posture',      label: 'Standing preferences', href: '/settings/posture' },
   { id: 'autonomy',     label: 'Autonomy',     href: '/settings/autonomy' },
   { id: 'memory',       label: 'Memory',       href: '/settings/memory' },
 ] as const;

@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef, type JSX, type CSSProperties } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { apiFetch } from '../api.js';
-import { TonePillGrid, AssistantToneSliders } from '../components/settings/ToneFields.js';
-import { PostureCardGrid } from '../components/settings/PostureFields.js';
+import { ToneStyleField, DetailSlider } from '../components/settings/ToneFields.js';
+import { AutonomyBandPicker } from '../components/settings/AutonomyBandPicker.js';
+import { BAND_META, bandForScore } from '../autonomy-bands.js';
 import {
   DEFAULT_WIZARD_STATE,
   PRINCIPAL_NAME_MAX_LENGTH,
   verbosityReviewDesc,
-  directnessReviewDesc,
-  postureReviewDesc,
+  styleReviewDesc,
+  validateToneStyle,
+  autonomyChange,
   validateNonEmptyName,
   validatePrincipalName,
   buildIdentityPayload,
@@ -53,6 +55,11 @@ const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'] as const;
 interface IdentityResponse {
   identity: LocalIdentity;
   configured: boolean;
+}
+
+// GET /api/autonomy. `autonomy` is null before the autonomy migration has run.
+interface AutonomyResponse {
+  autonomy: { score: number } | null;
 }
 
 interface SetupStatusResponse {
@@ -123,6 +130,10 @@ export default function WizardPage() {
   const [principalSubmitting, setPrincipalSubmitting] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [assistantNameError, setAssistantNameError] = useState('');
+  const [toneStyleError, setToneStyleError] = useState('');
+  // The saved autonomy score, from the required GET /api/autonomy. Step 5 pre-selects its
+  // band, and submit compares against it to skip an unchanged band.
+  const [autonomyScore, setAutonomyScore] = useState<number | null>(null);
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [restartState, setRestartState] = useState<RestartState>({ kind: 'idle' });
@@ -141,22 +152,28 @@ export default function WizardPage() {
   // it exists for.
   const [identityConfigured, setIdentityConfigured] = useState<boolean | null>(null);
 
-  // Pre-populate form from current identity, setup status, and existing principal
-  // profile on mount. Identity and status are required — errors bubble to the
-  // load-error render. The principal fetch is best-effort: a 404 or network
+  // Pre-populate form from current identity, setup status, autonomy, and existing
+  // principal profile on mount. Identity, status and autonomy are required — errors
+  // bubble to the load-error render. Autonomy never falls back to a default band:
+  // submitting a guessed band could quietly lower a real score. The principal fetch is best-effort: a 404 or network
   // blip falls back to browser-detected timezone and blank optionals (#392).
   // It runs separately so a flaky /api/setup/principal never breaks the wizard.
   useEffect(() => {
     async function load() {
       try {
-        const [identityRes, statusRes] = await Promise.all([
+        const [identityRes, statusRes, autonomyRes] = await Promise.all([
           apiFetch('/api/identity'),
           apiFetch('/api/setup/status'),
+          apiFetch('/api/autonomy'),
         ]);
         if (!identityRes.ok) throw new Error(await extractError(identityRes));
         if (!statusRes.ok) throw new Error(await extractError(statusRes));
+        if (!autonomyRes.ok) throw new Error(`Could not load the autonomy level: ${await extractError(autonomyRes)}`);
         const data = await identityRes.json() as IdentityResponse;
         const status = await statusRes.json() as SetupStatusResponse;
+        const autonomy = (await autonomyRes.json() as AutonomyResponse).autonomy;
+        if (!autonomy) throw new Error('Autonomy settings have not been initialized on this instance.');
+        setAutonomyScore(autonomy.score);
         const id = data.identity;
         setExistingIdentity(id);
         setPrincipalExists(status.principalExists);
@@ -171,13 +188,9 @@ export default function WizardPage() {
           // ships with a usable value (not just a placeholder). A wizard re-run
           // with a saved signature keeps it.
           signature: id.assistant.emailSignature || DEFAULT_WIZARD_STATE.signature,
-          toneBaseline:
-            id.tone.baseline.length > 0
-              ? id.tone.baseline
-              : DEFAULT_WIZARD_STATE.toneBaseline,
+          toneStyle: id.tone.style ?? DEFAULT_WIZARD_STATE.toneStyle,
           verbosity: id.tone.verbosity ?? DEFAULT_WIZARD_STATE.verbosity,
-          directness: id.tone.directness ?? DEFAULT_WIZARD_STATE.directness,
-          posture: id.decisionStyle.externalActions || DEFAULT_WIZARD_STATE.posture,
+          autonomyBand: bandForScore(autonomy.score),
           preferences: '', // always blank on entry — append mode
           // Step 2 profile fields — defaults until the principal fetch resolves below
           timezone: DEFAULT_WIZARD_STATE.timezone,
@@ -412,6 +425,15 @@ export default function WizardPage() {
       }
       setAssistantNameError('');
     }
+    // Step 4 is tone & style: the identity requires a non-empty style.
+    if (currentStep === 4) {
+      const error = validateToneStyle(state.toneStyle);
+      if (error) {
+        setToneStyleError(error);
+        return;
+      }
+      setToneStyleError('');
+    }
     if (currentStep < WIZARD_TOTAL_STEPS) void goTo(currentStep + 1);
   }
 
@@ -419,28 +441,60 @@ export default function WizardPage() {
     if (currentStep > 1) void goTo(currentStep - 1);
   }
 
+  // One save-flow call. Any failure, a network error or an error status, throws an
+  // error that names the call, so the review step says which step failed.
+  async function call(label: string, run: () => Promise<Response>): Promise<Response> {
+    let res: Response;
+    try {
+      res = await run();
+    } catch (err) {
+      throw new Error(`${label} failed: ${err instanceof Error ? err.message : 'network error'}`);
+    }
+    return res;
+  }
+  async function okOrThrow(label: string, res: Response): Promise<Response> {
+    if (!res.ok) throw new Error(`${label} failed: ${await extractError(res)}`);
+    return res;
+  }
+
   async function handleSubmit() {
-    if (!existingIdentity) return;
+    if (!existingIdentity || autonomyScore === null || !state.autonomyBand) return;
     setSubmitting(true);
     setSubmitError('');
     try {
+      // Autonomy first. Saving a 'wizard' identity marks the deployment configured, and
+      // the wizard never shows again; if identity went first and autonomy then failed,
+      // the operator could not get back here to fix it. A failure here leaves the
+      // deployment unconfigured, so the wizard runs again.
+      const change = autonomyChange(autonomyScore, state.autonomyBand);
+      if (change) {
+        const label = 'Saving the autonomy level';
+        await okOrThrow(label, await call(label, () => apiFetch('/api/autonomy', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(change),
+        })));
+        // A retry after a later failure must not save it again.
+        setAutonomyScore(change.score);
+      }
+
       const { identity, note } = buildIdentityPayload(state, existingIdentity);
-      const putRes = await apiFetch('/api/identity', {
+      const saveLabel = "Saving your assistant's identity";
+      await okOrThrow(saveLabel, await call(saveLabel, () => apiFetch('/api/identity', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identity, note }),
-      });
-      if (!putRes.ok) throw new Error(await extractError(putRes));
-      const reloadRes = await apiFetch('/api/identity/reload', { method: 'POST' });
-      if (!reloadRes.ok) throw new Error(await extractError(reloadRes));
+      })));
+      const reloadLabel = 'Reloading the identity';
+      await okOrThrow(reloadLabel, await call(reloadLabel, () => apiFetch('/api/identity/reload', { method: 'POST' })));
 
       // Decide whether we need a restart. After PUT /api/identity, the server
       // recomputes externalAdaptersPending; if true, the process booted in
       // setup-required mode and email/Signal are not running yet. If false,
       // either the deployment never needed a restart (CEO_PRIMARY_EMAIL set
       // a principal at boot) or we already restarted in a previous attempt.
-      const statusRes = await apiFetch('/api/setup/status');
-      if (!statusRes.ok) throw new Error(await extractError(statusRes));
+      const statusLabel = 'Checking setup status';
+      const statusRes = await okOrThrow(statusLabel, await call(statusLabel, () => apiFetch('/api/setup/status')));
       const status = await statusRes.json() as SetupStatusResponse;
 
       if (!status.externalAdaptersPending) {
@@ -453,7 +507,8 @@ export default function WizardPage() {
       // the supervisor bringing a new process up. Trigger the restart, then
       // switch the wizard's render into the wait state — the polling effect
       // below picks it up from there.
-      const restartRes = await apiFetch('/api/setup/restart', { method: 'POST' });
+      const restartLabel = 'Restarting Curia';
+      const restartRes = await call(restartLabel, () => apiFetch('/api/setup/restart', { method: 'POST' }));
       if (restartRes.status === 409) {
         // 409 means the backend refused: either the process is already in
         // normal mode (a concurrent tab / earlier wizard run already restarted
@@ -465,7 +520,7 @@ export default function WizardPage() {
         await navigate({ to: '/chat' });
         return;
       }
-      if (!restartRes.ok) throw new Error(await extractError(restartRes));
+      await okOrThrow(restartLabel, restartRes);
       // Drop the submitting flag before swapping render states so the wizard
       // doesn't leak a permanently-true `submitting` value into any future
       // step view (e.g. via the retry-on-timeout path that returns the user
@@ -477,6 +532,7 @@ export default function WizardPage() {
         startedAt: Date.now(),
       });
     } catch (err) {
+      // Stay on the review step: no reload, restart or navigation after a failure.
       setSubmitError(err instanceof Error ? err.message : 'Save failed');
       setSubmitting(false);
     }
@@ -888,22 +944,26 @@ export default function WizardPage() {
     </div>
   );
 
-  // ── Step 4: Tone ───────────────────────────────────────────────────────────
+  // ── Step 4: Tone & style ───────────────────────────────────────────────────
 
   const step4Tone = (
     <div className="wizard-content">
-      <div className="wizard-heading">How should your assistant communicate?</div>
-      <div className="wizard-subheading">Pick 1–3 words that describe the tone you want.</div>
-      <TonePillGrid
-        selected={state.toneBaseline}
-        onChange={toneBaseline => setState(s => ({ ...s, toneBaseline }))}
+      <div className="wizard-heading">How should your assistant sound?</div>
+      <div className="wizard-subheading">
+        Start from a template, then make it yours. A few lines on how it sounds and what it never does.
+      </div>
+      <ToneStyleField
+        value={state.toneStyle}
+        onChange={toneStyle => {
+          setState(s => ({ ...s, toneStyle }));
+          if (toneStyleError) setToneStyleError('');
+        }}
         idPrefix="w-tone"
       />
-      <AssistantToneSliders
+      {toneStyleError && state.toneStyle.length === 0 && <div className="wizard-step1-error">{toneStyleError}</div>}
+      <DetailSlider
         verbosity={state.verbosity}
-        directness={state.directness}
-        onVerbosityChange={verbosity => setState(s => ({ ...s, verbosity }))}
-        onDirectnessChange={directness => setState(s => ({ ...s, directness }))}
+        onChange={verbosity => setState(s => ({ ...s, verbosity }))}
         idPrefix="w"
       />
       <div className="wizard-nav">
@@ -917,20 +977,20 @@ export default function WizardPage() {
     </div>
   );
 
-  // ── Step 5: Posture & preferences ──────────────────────────────────────────
+  // ── Step 5: Autonomy & preferences ─────────────────────────────────────────
 
-  const step5Posture = (
+  const step5Autonomy = (
     <div className="wizard-content">
-      <div className="wizard-heading">How should your assistant decide?</div>
+      <div className="wizard-heading">How independent should your assistant be?</div>
       <div className="wizard-subheading">
-        Choose a default posture for external actions. You can refine this later under Settings → Posture
-        (separate from the Autonomy score).
+        Pick an autonomy level. You can fine-tune it later under Settings → Autonomy.
       </div>
-      <PostureCardGrid
-        value={state.posture}
-        onChange={posture => setState(s => ({ ...s, posture }))}
-        scopeHint="(for external actions)"
-      />
+      {state.autonomyBand && (
+        <AutonomyBandPicker
+          value={state.autonomyBand}
+          onChange={autonomyBand => setState(s => ({ ...s, autonomyBand }))}
+        />
+      )}
       <div className="wizard-label" style={{ marginTop: 4 }}>
         Anything else? <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(Optional)</span>
       </div>
@@ -956,23 +1016,17 @@ export default function WizardPage() {
 
   // ── Step 6: Review ─────────────────────────────────────────────────────────
 
-  const words = state.toneBaseline;
-  const tonePhrase =
-    words.length === 1
-      ? words[0]!
-      : words.length === 2
-        ? `${words[0]} and ${words[1]}`
-        : `${words[0]}, ${words[1]} and ${words[2]}`;
-
   const reviewRows: Array<{ label: string; value: string }> = [
     {
       label: 'Assistant',
       value: state.name.trim() + (state.title.trim() ? ` — ${state.title.trim()}` : ''),
     },
-    { label: 'Tone',       value: `Your tone is ${tonePhrase}.` },
-    { label: 'Detail',     value: verbosityReviewDesc(state.verbosity) },
-    { label: 'Directness', value: directnessReviewDesc(state.directness) },
-    { label: 'Posture',    value: postureReviewDesc(state.posture) },
+    { label: 'Tone & style', value: styleReviewDesc(state.toneStyle) },
+    { label: 'Detail',       value: verbosityReviewDesc(state.verbosity) },
+    {
+      label: 'Autonomy',
+      value: state.autonomyBand ? `${BAND_META[state.autonomyBand].label}. ${BAND_META[state.autonomyBand].description}` : '',
+    },
   ];
   if (state.preferences.trim()) {
     reviewRows.push({ label: 'Preference', value: `"${state.preferences.trim()}"` });
@@ -1014,7 +1068,7 @@ export default function WizardPage() {
     2: step2Profile,
     3: step3Identity,
     4: step4Tone,
-    5: step5Posture,
+    5: step5Autonomy,
     6: step6Review,
   };
 

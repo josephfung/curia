@@ -4,7 +4,7 @@
 tasks:
   - id: persona
     label: "Assistant persona & preferences"
-    value_prop: "Tune tone, working style, and behavioral guidelines — takes one conversation turn, no credentials."
+    value_prop: "Tune standing preferences and behavioral guidelines — takes one conversation turn, no credentials."
     tier: instant
     handoff: in-chat
     completion_check:

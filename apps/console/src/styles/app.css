@@ -1171,6 +1171,11 @@ input:focus, textarea:focus, select:focus {
   margin-bottom: 24px;
 }
 
+/* Five autonomy bands: as many columns as fit, rather than three. */
+.posture-grid-bands {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
 @media (max-width: 480px) {
   .posture-grid {
     grid-template-columns: 1fr;
