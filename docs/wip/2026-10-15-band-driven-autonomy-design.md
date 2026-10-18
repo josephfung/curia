@@ -1,6 +1,6 @@
 # Band-driven autonomy — design
 
-**Status:** design approved in conversation 2026-10-15; this spec awaits review.
+**Status:** approved 2026-10-18. Tracking issue: #2159.
 **Replaces:** the tier-based escalation policy from #948–#950 (Gate C's tier veto and the
 Stage 2.5 disclosure tier table). A new ADR records that decision and lands with Phase 2.
 
@@ -17,19 +17,18 @@ score:
   `recipientTier × disclosureClass` (`src/autonomy/escalation-policy.ts`). A `known`
   recipient may never receive `third-party` or `confidential` content.
 
-### Evidence: a time-sensitive insurance premium thread (Oct 6–15, 2026)
+### Evidence: a time-sensitive billing thread (October 2026)
 
-A premium was overdue with a grace period ending Oct 14. The principal's financial advisor
-(`known`), the principal's spouse (`trusted`) and the insurer's servicing desk were on the
-thread.
+A payment had a deadline a few days out. An outside advisor (`known`), a family member
+(`trusted`) and the billing company's service desk were on the thread.
 
 | What Curia tried | Outcome | Why |
 |---|---|---|
 | A scheduled follow-up email to the advisor | Sent | Gate C skips scheduler-originated turns |
-| A reply on the thread after the spouse wrote | Sent | The initiator was `trusted` |
+| A reply on the thread after the family member wrote | Sent | The initiator was `trusted` |
 | A reply on the same thread, same recipient, after the advisor wrote | Escalated for approval | The initiator was `known` |
 | The same reply after the principal **approved** it | Blocked two seconds later by Stage 2.5 | It named the advisor's own colleague, which counts as `third-party` |
-| A payment-confirmation request to the servicing desk, using an address taken from a forwarded notice | Blocked | The policy number and amount count as `confidential`, sent to the desk that issued them |
+| A payment-confirmation request to the service desk, using an address taken from a forwarded notice | Blocked | The account reference and amount count as `confidential`, sent to the desk that issued them |
 | A reply to the desk's representative | Escalated | The initiator was `unknown` |
 
 Other findings:
@@ -40,8 +39,8 @@ Other findings:
 - **A real defect the gates did catch.** One held draft had Curia tell the advisor "I'm out
   of office until the 13th". That was a false statement in the principal's voice: the advisor
   was the one away.
-- **Coaching read as withdrawal.** The principal replied "you can relax … we'll take care of
-  the pre-authorized debit over the coming weeks". The coordinator read "we'll" as "the
+- **Coaching read as withdrawal.** The principal told Curia, in effect, to relax because the
+  remaining setup would be handled over the coming weeks. The coordinator read "we'll" as "the
   principal, without Curia", called `deny-action` on the held reply and stood down. The row
   records `resolved_by = 'ceo'`, because `deny-action` hardcodes it.
 - **The score updater is starved and biased.** The score has never changed on its own.
@@ -85,13 +84,18 @@ Other findings:
 | Full | 90+ | Proceeds | Acts | Acts | Digest, notable items only |
 | Spot-check | 80–89 | Proceeds, reports | Acts | Acts, after the fact check | Digest, plus samples |
 | Approval | 70–79 | Proceeds, reports | Acts | **Asks first** | Digest, plus the asks |
-| Draft | 60–69 | **Principal confirms** (one tap) | Acts within confirmed work | Asks first | Digest, plus the asks |
+| Draft | 60–69 | **Principal confirms** (one tap) | Drafts; internal logistics within confirmed work | Drafts | Digest, plus the asks |
 | Restricted | <60 | Proposes only | Drafts only | Drafts only | Digest |
 
 At every band:
 - An outsider steering Curia means the action is held.
 - The integrity rules block.
 - The fact check runs whenever Curia speaks as the principal.
+
+Gates A and B (score vs. `action_risk`) are unchanged and still apply on top of this table.
+Outbound sends are `medium` risk and need 70, so below 70 every send is a draft. An action
+whose `action_risk` needs more than the current band (for example a `high`-risk calendar
+write, which needs 80, in the approval band) still asks first.
 
 The band comes from the score in code. Whether an action "speaks or commits as the
 principal" or is "steered by an outsider" is the judge's classification. The band
@@ -117,34 +121,49 @@ Phase 1 depends on nothing else and ships first.
   used in parallel.
 - A pending approval gets **one ping, and one mention in the next digest.** No other
   reminders.
+- **Safety net.** An approval with no recorded delivery after 15 minutes means the agent
+  never delivered it, or a post-turn wake failed. The expiry sweep then emails it once and
+  logs a warning. If every channel fails, the failure is logged at error level.
 
 **1b. Report queue.**
 - "Tell the principal" items become a new audit event, `principal.report`. It carries a
   summary, a link to the thread or task, and an urgency of `digest` or `now`. This is a bus
   event union change, so it is called out in the CHANGELOG as a public API change.
-- A new tool returns the items since a "last reported" marker held in the config store, and
-  advances the marker. Digest jobs call it. Existing user-created digest jobs need one added
-  line of instruction.
-- A daily system job checks whether unreported items are more than 7 days old. If so, it
-  sends the weekly fallback digest itself. Installs that already have a digest never trigger
-  it.
+- A new tool returns the items since a "last reported" marker held in the config store,
+  together with a cursor. A second call acknowledges that cursor once the digest has been
+  sent, and only then does the marker advance. A digest that fails to send therefore repeats
+  its items next time rather than losing them. Digest jobs call both. Existing
+  user-created digest jobs need one added line of instruction.
+- The marker is a `(timestamp, id)` keyset. Reads skip items younger than 30 seconds, so an
+  audit write that lands late is not passed over.
+- A daily system job checks the age of the oldest unreported item, not whether a digest job
+  exists, so a broken digest job cannot suppress the fallback. Past 7 days, it sends the
+  weekly fallback digest itself and advances the marker only if the send succeeded. A failed
+  send is logged at error level.
 - No new table.
 
 **1c. Automatic notices go to the queue.**
-- `principal-note-notification.ts` notes and filter block notices become `principal.report`
-  items instead of standalone emails.
+- `principal-note-notification.ts` notes, filter block notices and approval-expiry notices
+  (`approval-expiry-sweep.ts`) become `principal.report` items instead of standalone emails.
 - The agent already receives the block reason and decides whether to ping the principal.
 
 **1d. Honest attribution.**
-- `approve-action` and `deny-action` record `resolved_by = 'coordinator'`.
-- Reaction and console resolutions record `resolved_by = 'principal'`.
+- `approve-action`, `deny-action`, `dismiss-action` and the `send-draft` approval path record
+  `resolved_by = 'coordinator'`.
+- Reaction resolutions (`reaction-approval-mapper.ts`) record `resolved_by = 'principal'`.
+  There is no console resolution path today; one added later records `principal`.
 - The scoring pass treats only `principal` resolutions as the principal's feedback.
+  Coordinator-resolved rows score as no signal.
 
 ## Phase 2: band-aware gates and the judge's new brief
 
 **Gate C** (`execution.ts`):
 - **Spot-check and above:** a would-be escalation instead proceeds and emits a
-  `principal.report` item.
+  `principal.report` item. For consequential actions that never reach the outbound filter
+  (triage, calendar writes, KG writes), Gate C still asks the judge the *purpose* question
+  when the initiator is below `trusted`, and holds on `steered`. Sends defer that question
+  to the gateway.
+- The KG-write block for unknown or blocked senders (#1290) stays as an integrity rule.
 - **Approval band and below:** it escalates only when the judge's verdict is "speaks or
   commits as the principal" or "steered by an outsider".
 - Gates A and B are unchanged.
@@ -186,7 +205,8 @@ filter runs at send time.
   already consults the judge when a decision depends on its verdict). The outbound filter
   then asks only *grounding* and *necessity*.
 
-Either way, each message gets at most one judge call per point.
+So a message gets one judge call at spot-check and above, and at most two (one at Gate C,
+one at the gateway) at the approval band and below. No question is asked twice.
 
 **Relayed replies:** dispatcher-relayed final responses have no Gate C. They get all four
 questions at the gateway, as in the spot-check case, and an "ask first" verdict raises the
@@ -198,7 +218,8 @@ approval there (today's relay escalation site in `outbound-gateway.ts`).
   turn: … Verify them with your tools or remove them."
 - The drafter's lookups become evidence for the recheck.
 - One bounce only. If a claim is still unsupported:
-  - **spot-check and above:** cut the sentence and send
+  - **spot-check and above:** cut the sentence, recheck the trimmed message for grounding,
+    send it with a report item, and hold it if it still fails
   - **below that:** hold
 - A true but unverified claim costs one round trip. That is intended: an unverified claim in
   the principal's voice is a guess.
@@ -211,6 +232,10 @@ guest or dietary details nobody looked up.
 - **spot-check and above:** send without a verdict and emit a `principal.report` item
   ("sent without review"). This intentionally reverses fail-closed, for these bands only.
 - **below that:** hold and ask.
+- **Rate cap:** more than 5 fail-open sends in an hour switches to hold-and-ask until a judge
+  call succeeds, and pings the principal once.
+- If the "sent without review" report item fails to persist, that is logged at error level
+  and the principal is emailed directly, because the item is then the only record.
 
 **Rollback:** one setting, `autonomy.gating: band | tier` in `config/default.yaml`.
 - It ships as `tier` (current behavior), is flipped in prod, and its default changes to
@@ -225,7 +250,7 @@ guest or dietary details nobody looked up.
 - bringing people in
 - **triage decisions** such as archiving or clearing email
 
-There is no new table. The pool reuses the `principal.report` items from Phase 1.
+There is no new table. The pool is those action-log rows; verdicts are written back to them.
 
 **Selection:** when a digest is built, up to **3** unreviewed actions are drawn by weighted
 random selection.
@@ -239,15 +264,17 @@ random selection.
 
 ```
 Spot check (optional, reply with a number):
-1. Replied to the advisor confirming the monthly debit
-2. Archived "A notice about your policy is available" from the insurer
+1. Replied to the advisor confirming the payment schedule
+2. Archived "A new statement is available" from the billing company
 3. Added the advisor's backup to the thread
 ```
 
 - The principal replies `2 bad, that was a renewal notice` or `1 good 3 good`.
 - The number → action map is stored with that digest in the config store.
 - A reply on the digest's email thread resolves against that digest. A reply on a chat
-  channel resolves against the most recent digest.
+  channel resolves against the most recent digest, and only within 24 hours of it. When the
+  numbers don't exist in that digest, or the reply is ambiguous, Curia asks which item is
+  meant instead of guessing.
 - Silence records nothing.
 - Apply the same numbering to the learning digest's `confirm completion <taskId>` commands,
   and to approval references answered by email.
@@ -255,9 +282,8 @@ Spot check (optional, reply with a number):
 **Signals:**
 - A verdict sets `competence_flag` on the row, with `scored_by = 'principal'`.
 - `scoring-pass.ts` weights principal-scored rows above `llm-judge` rows.
-- Reasons given with "bad" are surfaced in the weekly learning checkup
-  (`docs/learning-checkup-runbook.md`). They are the evidence for whether the judge needs
-  more structure.
+- Reasons given with "bad" are surfaced in the weekly learning checkup. They are the evidence
+  for whether the judge needs more structure.
 - Existing signals that are kept: approvals and denials (`principal`-attributed only after
   1d) and ceo-inbox shadow-draft reconciliation.
 
@@ -289,7 +315,7 @@ made-up names and placeholder numbers; this repository is public.
 | Case | At 84 | At 74 |
 |---|---|---|
 | A known contact's reply names their colleague | Sent, report item | Sent |
-| A desk address from a forwarded notice; policy details shared | Sent | Sent |
+| A desk address from a forwarded notice; account details shared | Sent | Sent |
 | The draft claims the principal was out of office (it was the counterparty) | Bounced; fixed or removed | Same |
 | A stranger with no relation to any ongoing work asks for the principal's birthdate | Held | Held |
 | "Relax, we'll handle it over the coming weeks" | Keeps working | Same |
