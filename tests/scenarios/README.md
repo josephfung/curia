@@ -493,10 +493,12 @@ a `judge_brief` the judge sees as "The office's configured style". The stack lay
 fixture over the database's identity in memory: every agent's block still comes from the
 real renderer, and nothing is written to the identity history.
 
-One stack serves a whole run, so a run has one identity:
-- every selected case must name the same fixture, or none;
-- a case with a fixture is never in the release gate (the loader requires `release_gate:
-  false`), and an unfiltered run leaves it out even with `--on-demand`.
+One stack serves a whole run, so a run has one identity. A case with a fixture runs only
+in a selection of fixture cases alone, and all of them must name the same fixture:
+- it is never in the release gate (the loader requires `release_gate: false`), and an
+  unfiltered run leaves it out even with `--on-demand`;
+- a wider selection that also picks ordinary cases (`--tags ceo-inbox`,
+  `--tags specialist-ceo-inbox`) leaves it out and says so.
 
 Length and filler are scored in code (`text` checks), register and kept content by the
 judge. Only content is `critical`: brevity must never drop a fact. 40a needs a principal

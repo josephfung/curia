@@ -180,7 +180,9 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
         // it can call, and the argument one the tool takes, or the check can never pass.
         if (check.kind === 'text' && check.of !== 'reply') {
           const { tool, arg } = check.of;
-          const inputs = registry.get(tool)?.manifest.inputs;
+          // An MCP tool's inputs are its JSON Schema properties; its manifest `inputs` is empty.
+          const registered = registry.get(tool);
+          const inputs = registered?.mcpInputSchema ? registered.mcpInputSchema.properties ?? {} : registered?.manifest.inputs;
           if (inputs && !Object.hasOwn(inputs, arg)) {
             problems.push(`${where}: '${arg}' is not an input of ${tool} (inputs: ${Object.keys(inputs).join(', ')})`);
           }
@@ -304,19 +306,20 @@ async function main(): Promise<void> {
   const selected = args.caseFilter !== undefined || args.tags !== undefined;
   const onDemandSkipped = selected || args.onDemand ? [] : cases.filter(c => !c.releaseGate).map(c => c.name);
   cases = cases.filter(c => !onDemandSkipped.includes(c.name));
-  // A case with an identity fixture (#2143) needs the whole stack on that identity, so it
-  // never joins an unfiltered run, --on-demand included. --tags or --case selects it.
-  const identitySkipped = selected ? [] : cases.filter(c => c.identity).map(c => c.name);
+  // A case with an identity fixture (#2143) needs the whole stack on that identity, and a
+  // run has one stack. So it runs only in a selection of fixture cases alone (--tags style):
+  // never in an unfiltered run, --on-demand included, and not beside ordinary cases a wider
+  // selection (--tags ceo-inbox) also picks.
+  const identitySkipped = selected && cases.every(c => c.identity) ? [] : cases.filter(c => c.identity).map(c => c.name);
   cases = cases.filter(c => !identitySkipped.includes(c.name));
   if (cases.length === 0) {
     err('No scenario cases match the filters.');
     process.exit(1);
   }
-  // One stack per run, so one identity per run: the fixture every case names, or none.
-  const identityNames = new Set(cases.map(c => c.identity?.name ?? '(the database\'s own)'));
+  const identityNames = new Set(cases.map(c => c.identity?.name));
   if (identityNames.size > 1) {
-    err(`These cases need different office identities (${[...identityNames].join(', ')}), and a run has one.`);
-    err('Run each group on its own, e.g. --tags style.');
+    err(`These cases need different office identity fixtures (${[...identityNames].join(', ')}), and a run has one.`);
+    err('Select one fixture\'s cases at a time.');
     process.exit(1);
   }
   const identity = cases[0]!.identity;
@@ -330,7 +333,7 @@ async function main(): Promise<void> {
     out(`   On demand, not run: ${onDemandSkipped.length} case(s) marked release_gate: false (--on-demand runs them)`);
   }
   if (identitySkipped.length > 0) {
-    out(`   Not run: ${identitySkipped.length} case(s) with an identity fixture (select them with --tags or --case)`);
+    out(`   Not run: ${identitySkipped.length} case(s) with an identity fixture (select only them, e.g. --tags style)`);
   }
   if (identity) out(`   Office identity: fixture '${identity.name}' over the database's assistant (tests/scenarios/identities)`);
   out(`   Concurrency: ${args.concurrency} case(s) at a time (--concurrency)`);

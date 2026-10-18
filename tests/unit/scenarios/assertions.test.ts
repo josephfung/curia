@@ -279,6 +279,15 @@ describe('evaluateCheck: text (#2143)', () => {
     expect(evaluateCheck(check, run([call('email-send', { message: 'x' })]), ctx).justification).toBe('no signal-send call to check');
   });
 
+  it('misses a call whose argument is empty or absent', () => {
+    const check = { kind: 'text' as const, of: { tool: 'signal-send', arg: 'message' }, maxWords: 60, excludes: ['!'] };
+    for (const input of [{ recipient: 'principal' }, { recipient: 'principal', message: '  ' }]) {
+      const r = evaluateCheck(check, run([call('signal-send', input)]), ctx);
+      expect(r.rating).toBe('MISS');
+      expect(r.justification).toBe('signal-send.message is empty on a call');
+    }
+  });
+
   it('reads the case agent\'s calls unless it names another', () => {
     const theirs: CapturedToolCall = { ...call('bullpen-post', { content: 'Hope it went well!' }), agentId: 'meeting-debrief' };
     const check = { kind: 'text' as const, of: { tool: 'bullpen-post', arg: 'content' }, excludes: ['!'] };

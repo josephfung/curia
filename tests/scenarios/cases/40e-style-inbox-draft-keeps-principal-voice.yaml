@@ -16,7 +16,7 @@ description: >
   enthusiastic, opens with the first name and a dash, and signs off "Cheers, Avery". It
   drafts the email in that voice, not in the office's dry configured style, and saves it
   as a draft for the principal to review.
-tags: [style, ceo-inbox, compose]
+tags: [style, specialist-ceo-inbox, ceo-inbox, compose]
 agent: ceo-inbox
 identity: style-brief-dry
 release_gate: false

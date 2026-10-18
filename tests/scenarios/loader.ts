@@ -563,10 +563,16 @@ function loadIdentityFixture(name: string, file: string, dir: string): IdentityF
   if (missing.length > 0) {
     throw new CaseError(fixtureFile, `identity: missing ${missing.join(', ')} (a fixture sets everything but the assistant)`);
   }
+  // The identity service validates tone and decisionStyle, but renders these two as bullet
+  // lists unchecked: a string would come out one character per bullet.
+  strList(config, 'behavioralPreferences', fixtureFile, 'identity');
+  strList(config, 'constraints', fixtureFile, 'identity');
+  mapping(config, 'tone', fixtureFile, 'identity');
+  mapping(config, 'decisionStyle', fixtureFile, 'identity');
   return {
     name,
     judgeBrief: str(raw, 'judge_brief', fixtureFile, 'identity fixture'),
-    // The identity service validates the values when the stack boots.
+    // The identity service validates tone and decision style when the stack boots.
     config: config as unknown as IdentityFixture['config'],
   };
 }

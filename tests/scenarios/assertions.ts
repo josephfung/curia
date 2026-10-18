@@ -181,6 +181,7 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
       }
       const what = check.of === 'reply' ? 'the reply' : `${check.of.tool}.${check.of.arg}`;
       for (const text of texts) {
+        if (text.trim() === '') return miss(`${what} is empty on a call`);
         const words = wordCount(text);
         if (check.maxWords !== undefined && words > check.maxWords) {
           return miss(`${what} has ${words} words (max ${check.maxWords}): ${text.slice(0, 160)}`);

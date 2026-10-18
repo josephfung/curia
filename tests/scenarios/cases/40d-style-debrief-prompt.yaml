@@ -11,7 +11,7 @@ description: >
   one bullpen thread asking the coordinator to send the principal a debrief prompt. Scored
   here is the message to send inside that post: it names Sarah Chen and David Park, asks for
   takeaways or follow-ups, and reads in the office's configured style.
-tags: [style, meeting-debrief]
+tags: [style, specialist-meeting-debrief, meeting-debrief]
 agent: meeting-debrief
 identity: style-brief-dry
 # On demand twice over: an identity fixture, and #2126 (see 32b).

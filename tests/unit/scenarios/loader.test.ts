@@ -541,6 +541,8 @@ identity:
   it('rejects a fixture that leaves part of the identity to the database', () => {
     const partial = FIXTURE.replace(/  constraints:.*\n/, '');
     expect(() => loadScenarioCase(write('a.yaml', STYLE), { identitiesDir: identities(partial) })).toThrow(/missing constraints/);
+    const scalar = FIXTURE.replace('constraints: [Never impersonate the principal]', 'constraints: Never impersonate the principal');
+    expect(() => loadScenarioCase(write('a.yaml', STYLE), { identitiesDir: identities(scalar) })).toThrow(/'constraints' must be a list of strings/);
     const withAssistant = FIXTURE + '  assistant: { name: X, title: Y, emailSignature: Z }\n';
     expect(() => loadScenarioCase(write('a.yaml', STYLE), { identitiesDir: identities(withAssistant) })).toThrow(/unknown key\(s\) assistant/);
   });
