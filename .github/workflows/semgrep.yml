@@ -24,12 +24,13 @@ jobs:
     container:
       image: semgrep/semgrep
       # Authenticated pull (#2095): anonymous Docker Hub pulls are rate-limited per
-      # runner IP. Where the secrets are absent (fork PRs; Dependabot PRs unless the
-      # Dependabot secrets are set too), the runner skips the login and pulls
-      # anonymously, as before.
-      credentials:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # runner IP. Fork PRs get no secrets, and a literal `username:`/`password:`
+      # pair then fails template validation at job setup ("Unexpected value ''",
+      # #2153), so the whole block is one expression: the credentials when both
+      # secrets are set, else an empty map, which makes the runner skip the login
+      # and pull anonymously. toJSON escapes the values into the JSON. Kept in
+      # sync with ci.yml.
+      credentials: ${{ secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN && fromJSON(format('{{"username":{0},"password":{1}}}', toJSON(secrets.DOCKERHUB_USERNAME), toJSON(secrets.DOCKERHUB_TOKEN))) || fromJSON('{}') }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
