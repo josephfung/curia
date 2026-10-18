@@ -457,8 +457,8 @@ and just need to keep passing. Regressions elsewhere are the release gate's job.
 ### Baseline (PR 1)
 
 `deepseek/deepseek-v4.1-flash` (the production standard tier), 5 runs each, at
-`30579897`, on 2026-10-18, under `style-brief-dry`. About $0.29 and 3 minutes, judge
-included. PR 1 changes no prompt, agent or renderer, so this is main's behavior. Pass
+`30579897` (this branch before a rebase that brought in only CI changes), on 2026-10-18,
+under `style-brief-dry`. About $0.29 and 3 minutes, judge included. PR 1 changes no prompt, agent or renderer, so this is main's behavior. Pass
 rates are per behavior; words are each run's reply or message. The `principal` checks in
 40c, 40f and 40g were loosened after the run to accept a label hint (`principal#primary`,
 which one 40f run used). The saved runs were rescored in code with the new check.
