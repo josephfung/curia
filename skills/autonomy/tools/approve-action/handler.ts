@@ -10,6 +10,7 @@
 // only runs in a live principal turn. executionLayer capability is restricted to this skill.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { RESOLVED_BY } from '../../../../src/autonomy/action-log-types.js';
 import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipient-reference.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
@@ -61,7 +62,9 @@ export class ApproveActionHandler implements ToolHandler {
       // Step 1: Transition to approved — returns false if another actor resolved first.
       // We MUST check this before re-executing to prevent running a skill that was
       // concurrently denied or dismissed.
-      const transitioned = await ctx.actionLogRepo.resolveRow(row.id, 'approved', 'ceo');
+      // An agent called this tool on its own reading of the conversation, so the row does not
+      // record it as the principal's decision; only reactions do (#2159).
+      const transitioned = await ctx.actionLogRepo.resolveRow(row.id, 'approved', RESOLVED_BY.coordinator);
       if (!transitioned) {
         ctx.log.warn({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: row was already resolved concurrently — aborting re-execution');
         return { success: false, error: `Request '${row.shortRef}' was already resolved by another action — approval aborted` };

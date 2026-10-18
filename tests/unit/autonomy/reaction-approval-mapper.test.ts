@@ -124,7 +124,7 @@ describe('ReactionApprovalMapper', () => {
       'slack',
       '1710000000.000100',
     );
-    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'ceo');
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'principal');
     expect(executionLayer.invoke).toHaveBeenCalledWith(
       'calendar-create-event',
       { title: 'Board sync' },
@@ -151,7 +151,7 @@ describe('ReactionApprovalMapper', () => {
       targetMessageId: '1710000000.000100',
     }));
 
-    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'ceo');
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'principal');
   });
 
   it('refuses a hinted approval when the pinned identity no longer matches', async () => {
@@ -204,7 +204,7 @@ describe('ReactionApprovalMapper', () => {
       targetMessageId: '1699999999999',
     }));
 
-    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'ceo');
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'principal');
   });
 
   it('approves Signal 👍 via targetMessageId correlation (unicode emoji)', async () => {
@@ -223,7 +223,7 @@ describe('ReactionApprovalMapper', () => {
       'signal',
       '1699999999999',
     );
-    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'ceo');
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'principal');
   });
 
   it('denies on 👎', async () => {
@@ -237,7 +237,7 @@ describe('ReactionApprovalMapper', () => {
       targetMessageId: '1710000000.000100',
     }));
 
-    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'denied', 'ceo');
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'denied', 'principal');
     expect(executionLayer.invoke).not.toHaveBeenCalled();
     expect(bus.publish).toHaveBeenCalledWith(
       'dispatch',
@@ -264,7 +264,7 @@ describe('ReactionApprovalMapper', () => {
       targetMessageId: '1710000000.000100',
     }));
 
-    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'ceo');
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'principal');
     expect(actionLogRepo.insert).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: 'failure', parentActionId: 42 }),
     );
@@ -292,7 +292,7 @@ describe('ReactionApprovalMapper', () => {
     }));
 
     expect(executionLayer.invoke).not.toHaveBeenCalled();
-    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'denied', 'ceo');
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'denied', 'principal');
     expect(bus.publish).toHaveBeenCalledWith(
       'dispatch',
       expect.objectContaining({
@@ -350,7 +350,7 @@ describe('ReactionApprovalMapper', () => {
     }));
 
     expect(actionLogRepo.findPendingByDeliveryMessage).toHaveBeenCalledWith('slack', '111.222');
-    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'ceo');
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'principal');
   });
 
   it('no-ops isRemove reactions without binding lookup', async () => {

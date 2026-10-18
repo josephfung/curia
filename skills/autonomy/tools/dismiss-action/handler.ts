@@ -7,6 +7,7 @@
 // live-principal gate (#1126). No handler-level re-check.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { RESOLVED_BY } from '../../../../src/autonomy/action-log-types.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 
@@ -31,7 +32,9 @@ export class DismissActionHandler implements ToolHandler {
 
       const { row } = resolved;
 
-      const transitioned = await ctx.actionLogRepo.resolveRow(row.id, 'resolved_externally', 'ceo');
+      // An agent called this tool on its own reading of the conversation, so the row does not
+      // record it as the principal's decision; only reactions do (#2159).
+      const transitioned = await ctx.actionLogRepo.resolveRow(row.id, 'resolved_externally', RESOLVED_BY.coordinator);
       if (!transitioned) {
         ctx.log.warn({ rowId: row.id, shortRef: row.shortRef }, 'dismiss-action: row was already resolved concurrently');
         return { success: false, error: `Request '${row.shortRef}' was already resolved by another action` };

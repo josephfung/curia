@@ -117,6 +117,20 @@ export const DETERMINISTIC_SCORES: Record<string, ScoringFlags> = {
   rejected:            { competenceFlag: 0, commitmentFlag: 1, compatibility: null, scoredBy: 'deterministic' },
 };
 
+/**
+ * Who resolved a pending approval (autonomy_action_log.resolved_by). Only `principal`
+ * counts as the principal's own feedback in the scoring pass (#2159). Rows written
+ * before #2159 carry 'ceo' for every tool and reaction resolution.
+ */
+export const RESOLVED_BY = {
+  /** The principal acted directly, e.g. a 👍/👎 reaction on the approval message. */
+  principal: 'principal',
+  /** An agent called a resolve tool on its own reading of the conversation. */
+  coordinator: 'coordinator',
+  /** Expiry sweep or gate rejection. */
+  system: 'system',
+} as const;
+
 /** Result of resolving a short_ref to a pending_approval row. */
 export type ResolveResult =
   | { found: true; row: ActionLogRow }

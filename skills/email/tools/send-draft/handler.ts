@@ -11,6 +11,7 @@
 // See ADR-017 for the full reasoning behind this pattern.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { RESOLVED_BY } from '../../../../src/autonomy/action-log-types.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import { isPrincipalOriginated } from '../../../../src/contacts/principal.js';
@@ -156,7 +157,9 @@ export class SendDraftHandler implements ToolHandler {
       try {
         const row = await ctx.actionLogRepo.findPendingByPayloadField('draft_id', draftId);
         if (row) {
-          const updated = await ctx.actionLogRepo.resolveById(row.id, 'approved', 'ceo');
+          // The coordinator sent the draft on its reading of the conversation; recorded as
+          // its decision, not the principal's (#2159).
+          const updated = await ctx.actionLogRepo.resolveById(row.id, 'approved', RESOLVED_BY.coordinator);
           if (!updated) {
             // Row was present during find but couldn't be resolved — likely a concurrent
             // approval (e.g. two principal messages sent in quick succession). Log at warn so

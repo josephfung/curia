@@ -1,7 +1,7 @@
 {
   "name": "approve-action",
   "description": "Approve a pending approval request. Re-executes the originally blocked skill with principal authorization. Specify short_ref to target a specific request, or omit when only one is pending.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "sensitivity": "elevated",
   "action_risk": "none",
   "inputs": {

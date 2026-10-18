@@ -21,7 +21,7 @@ import type { ContactService } from '../contacts/contact-service.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import { isPrincipalIdentity } from '../contacts/principal-recipient.js';
 import type { ActionLogRepo } from './action-log-repo.js';
-import type { ActionLogRow } from './action-log-types.js';
+import { RESOLVED_BY, type ActionLogRow } from './action-log-types.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import {
   DEFAULT_REACTION_INTENTS,
@@ -245,7 +245,7 @@ export class ReactionApprovalMapper {
       }
     }
 
-    const transitioned = await this.actionLogRepo.resolveRow(row.id, 'approved', 'ceo');
+    const transitioned = await this.actionLogRepo.resolveRow(row.id, 'approved', RESOLVED_BY.principal);
     if (!transitioned) {
       this.log.warn(
         { rowId: row.id, shortRef: row.shortRef },
@@ -298,7 +298,7 @@ export class ReactionApprovalMapper {
     channelId: string,
     parentEventId: string,
   ): Promise<void> {
-    const transitioned = await this.actionLogRepo.resolveRow(row.id, 'denied', 'ceo');
+    const transitioned = await this.actionLogRepo.resolveRow(row.id, 'denied', RESOLVED_BY.principal);
     if (!transitioned) {
       this.log.warn(
         { rowId: row.id, shortRef: row.shortRef },

@@ -99,7 +99,7 @@ describe('ApproveActionHandler', () => {
     }));
 
     // Verify approval transition
-    expect(repo.resolveRow).toHaveBeenCalledWith(10, 'approved', 'ceo');
+    expect(repo.resolveRow).toHaveBeenCalledWith(10, 'approved', 'coordinator');
 
     // Verify re-execution
     expect(execLayer.invoke).toHaveBeenCalledOnce();

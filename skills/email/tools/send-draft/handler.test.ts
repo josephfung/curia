@@ -555,7 +555,7 @@ describe('SendDraftHandler', () => {
       // Assert: send succeeded and action_log was transitioned
       expect(result.success).toBe(true);
       expect(findPendingByPayloadField).toHaveBeenCalledWith('draft_id', 'draft-abc123');
-      expect(resolveById).toHaveBeenCalledWith(55, 'approved', 'ceo');
+      expect(resolveById).toHaveBeenCalledWith(55, 'approved', 'coordinator');
     });
 
     it('still succeeds when no action_log row exists (pre-existing draft)', async () => {

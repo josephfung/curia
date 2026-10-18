@@ -87,7 +87,7 @@ describe('DismissActionHandler', () => {
     const result = await handler.execute(makeCtx({ actionLogRepo: repo, bus }));
 
     expect(result.success).toBe(true);
-    expect(repo.resolveRow).toHaveBeenCalledWith(10, 'resolved_externally', 'ceo');
+    expect(repo.resolveRow).toHaveBeenCalledWith(10, 'resolved_externally', 'coordinator');
   });
 
   it('publishes human.decision with dismiss decision type', async () => {

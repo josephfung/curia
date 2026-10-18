@@ -87,7 +87,7 @@ describe('DenyActionHandler', () => {
     const result = await handler.execute(makeCtx({ actionLogRepo: repo, bus }));
 
     expect(result.success).toBe(true);
-    expect(repo.resolveRow).toHaveBeenCalledWith(10, 'denied', 'ceo');
+    expect(repo.resolveRow).toHaveBeenCalledWith(10, 'denied', 'coordinator');
     expect(bus.publish).toHaveBeenCalledOnce();
     const event = (bus.publish as ReturnType<typeof vi.fn>).mock.calls[0]![1];
     expect(event.type).toBe('human.decision');
