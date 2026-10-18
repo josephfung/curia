@@ -85,9 +85,10 @@ expected_behaviors:
   - id: emails_principal
     weight: critical
     description: Sends the principal one email, addressed by the `principal` alias.
+    # `principal#<label>` is the alias with a label hint (recipient-reference.ts).
     check:
       called: email-send
-      with: { to: principal }
+      contains: { to: principal }
       success: true
       min: 1
       max: 1

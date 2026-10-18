@@ -557,31 +557,43 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:21:16.726Z"
+      "recordedAt": "2026-10-18T14:56:38.044Z"
     },
     "style email reply third party": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:21:16.726Z"
+      "recordedAt": "2026-10-18T14:56:38.044Z"
     },
     "style inbox draft keeps principal voice": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:21:16.726Z"
+      "recordedAt": "2026-10-18T14:56:38.044Z"
+    },
+    "style morning brief email": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:56:38.044Z"
     },
     "style scheduled recap signal": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:21:16.726Z"
+      "recordedAt": "2026-10-18T14:56:38.044Z"
+    },
+    "style scheduled request email": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:56:38.044Z"
     },
     "style signal reply brief": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-18T14:21:16.726Z"
+      "recordedAt": "2026-10-18T14:56:38.044Z"
     },
     "sweep-on-close closing result": {
       "unstubbed": 0,

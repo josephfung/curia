@@ -47,7 +47,14 @@ The causes, roughly in order of weight:
 4. **The settings contradict each other.** `decisionStyle.internalAnalysis: proactive`
    (the default) renders as "surface insights without being asked". A brief Detail setting
    renders as "omit context unless asked".
-5. **Specialists never see the block.** `buildBaseSystemPrompt()` gives the identity block
+5. **Content nobody needs.** Two production emails to the principal (2026-10-01 and
+   2026-10-18) were long for a different reason than tone. One explained the steps to come
+   ("Once I have them, I'll match each transaction…") and read its own job instruction
+   back ("I won't process anything until I hear back"). The other listed what wasn't
+   there ("No conflicts, nothing before 8 AM or after 7 PM, no travel", "No pending
+   approvals", "That is the whole of it."). No setting addresses either habit, and a
+   length limit alone cuts facts as readily as filler.
+6. **Specialists never see the block.** `buildBaseSystemPrompt()` gives the identity block
    to the coordinator only (`agent-assembly.ts`: `officeIdentityService: isCoordinator ?
    … : undefined`). Some specialists message the principal or third parties directly with
    `signal-send` or `email-send`, typically a deployment's custom agents, such as a daily
@@ -170,6 +177,7 @@ You are <name>, <title>.
 Match the register of any example lines above, not their content.
 
 **Length:** <band rule>
+Say what is there, not what isn't, and don't explain your own next steps or repeat your instructions.
 Whatever your tone, say plainly when you are unsure or don't know something.
 
 **Standing preferences:**
@@ -188,6 +196,11 @@ model from reusing a template's example sentence word for word.
   preferences render regardless. Throwing would trip the existing omit-the-whole-block
   path in `buildBaseSystemPrompt()`, which would also drop the hard constraints, and after
   PR 4 for every agent.
+
+The content line is fixed, code-owned text in every band, from the two production emails
+above (Problem, cause 5). It removes words that carry nothing, so it shortens without
+dropping a fact. It is not an absolute ban: an empty calendar is worth saying when the
+principal asked about it. PR 3 adds it with the length table; 40f and 40g measure it.
 
 The honesty line is fixed, code-owned text, so no style description can talk the model
 out of calibrated uncertainty. It replaces what the low end of the directness slider did.
@@ -303,6 +316,7 @@ exfiltration target. Tone was never a marker source, so this removes no existing
 **The block's own fixed text does become markers.** The new block adds fixed,
 instruction-like sentences:
 - the honesty line
+- the content line ("Say what is there…")
 - "Match the register…"
 - the "Go longer only when…" exception
 - the band texts
@@ -380,7 +394,8 @@ fixture's `judge_brief`, which it sees as "The office's configured style":
 
 - **Length** (code): the reply or message stays under the case's word cap.
 - **No filler** (code): no exclamation marks, warm-up openers ("Great question", "Here's
-  what I found"), or closing offers ("let me know if…").
+  what I found"), or closing offers ("let me know if…"). 40f and 40g add process narration
+  and reports of absence.
 - **Register** (judge): reads in the configured style.
 - **Content kept** (judge, `critical`): a brief reply still carries every required fact.
   It is the only gated behavior in the style cases, so brevity can never be bought by
@@ -400,6 +415,14 @@ Cases:
   blocking drafts in the principal's voice. The voice profile is the office style's
   opposite (warm, exclamation marks, "Cheers, Avery"), so the voice the draft follows is
   plain to see.
+- **40f** A scheduled email asking the principal for statements, from the 2026-10-01
+  production email. It scores process narration and repeated instructions.
+- **40g** A scheduled morning brief by email, from the 2026-10-18 production brief. It
+  scores reports of what isn't there.
+
+40f and 40g run on the coordinator. In production, the first came from a deployment's
+expense-tracker agent and the second from a scheduled job. They are the same kind of
+turn: a scheduler task that ends in one `email-send` to the principal.
 
 **Eval snapshots.** Harnesses that render agent prompts from a snapshot of the live
 identity block (#261) need a writes-as block field, and must be re-fetched after the PR 2
@@ -434,44 +457,52 @@ and just need to keep passing. Regressions elsewhere are the release gate's job.
 ### Baseline (PR 1)
 
 `deepseek/deepseek-v4.1-flash` (the production standard tier), 5 runs each, at
-`063dba66`, on 2026-10-18, under `style-brief-dry`. About $0.25 and 4 minutes, judge
+`30579897`, on 2026-10-18, under `style-brief-dry`. About $0.29 and 3 minutes, judge
 included. PR 1 changes no prompt, agent or renderer, so this is main's behavior. Pass
-rates are per behavior; words are each run's reply or message.
+rates are per behavior; words are each run's reply or message. The `principal` checks in
+40c, 40f and 40g were loosened after the run to accept a label hint (`principal#primary`,
+which one 40f run used). The saved runs were rescored in code with the new check.
 
-| Case | Content kept | Length | No filler | Register | Words |
+| Case | Content kept | Length | Filler / content | Register | Words |
 |---|---|---|---|---|---|
-| 40a Signal reply (≤ 40) | 100% | **40%** | 100% | 80% | 56, 42, 29, 51, 29 |
-| 40b email, third party (≤ 80) | 80% | 100% | 100% | 100% | 37, 40, 32, 39, 52 |
-| 40c scheduled recap (≤ 60) | 100% | **60%** | 100% | 90% | 60, 63, 50, 60, 62 |
+| 40a Signal reply (≤ 40) | 100% | **40%** | 100% | 80% | 55, 34, 31, 47, 58 |
+| 40b email, third party (≤ 80) | 100% | 100% | 100% | 100% | 40, 34, 52, 33, 46 |
+| 40c scheduled recap (≤ 60) | 100% | 80% | 100% | **40%** | 66, 40, 55, 52, 51 |
 | 40d debrief prompt | 100% | 100% (judge) | 100% | 100% | — |
 | 40e guard: principal's voice | 100% | — | — | 100% | — |
+| 40f request email (≤ 60) | 100% | 100% | **0%** narration | **0%** | 44, 40, 52, 42, 48 |
+| 40g morning brief (≤ 90) | 100% | **0%** | **0%** absences | **0%** | 104, 121, 98, 114, 112 |
 
 What it shows:
-- **The gap is the principal's Signal messages.** 40a and 40c are the only cases over
-  their caps. Both relay a long specialist answer and keep its framing ("Two open items
-  from her reply:", time ranges, durations), then add a closing offer ("Want me to draft a
-  reply?"), which the judge marks down for register. That matches the production report
-  for Signal.
-- **Email to a third party is already short** under this identity, at 32 to 52 words. The
-  email half of the production report does not reproduce here, so 40b has little room
-  left and mostly catches a regression.
+- **The production emails reproduce.** Every 40f email opens "Time for the monthly
+  reconciliation" and closes on "I'll take it from there". Every 40g brief lists what
+  isn't there ("No conflicts, nothing before 8 AM or after 7 PM", "Nothing pending my
+  approval. That's everything open."). The judge rates the register of both 0%. These
+  are the cases with the most room, and the ones the content line targets.
+- **Signal messages to the principal run long.** 40a relays a long specialist answer and
+  keeps its framing ("Two open items from her reply:"), then adds a closing offer ("Want
+  me to draft a reply?"). 40c lists the meetings well but adds commentary, and the judge
+  marks it down for register.
+- **Email to a third party is already short** under this identity. 40b mostly catches a
+  regression.
 - **40d copies its example.** All five prompts are near-verbatim copies of
   meeting-debrief.yaml's sample sentence ("…just wrapped up. Any takeaways or follow-ups
   you'd like me to handle?"). The judge rates that dry enough, so 40d can only catch a
   regression. PR 5's removal of the example is what changes it.
 - **40e holds.** Every draft is in the principal's voice ("Marcus —", exclamation marks,
   "Cheers, Avery"), with no refusal. It is the guard PR 4 must keep green.
-- **Noise.** One 40b run never asked ceo-inbox, so it put a task and a "will follow up"
-  note into the email to Priya. That is a routing miss, which both arms of an A/B share.
+- **Routing noise.** In an earlier run of 40b, one run never asked ceo-inbox, so it put a
+  task and a "will follow up" note into the email to Priya. Both arms of an A/B share
+  that kind of miss.
 
 ## PR sequence
 
 | PR | Delivers | Measurement |
 |---|---|---|
 | 0 | This design | none |
-| 1 | Style cases 40a–40e, the `text` check, judge style brief and run-level identity fixture | baseline |
+| 1 | Style cases 40a–40g, the `text` check, judge style brief and run-level identity fixture | baseline |
 | 2 | Data model, `normalizeIdentity`, validation, new identity block (style, honesty line, no decision posture), starter templates, console Personality / Posture changes, wizard autonomy picker, identity fixture in the new shape. Docs: spec 13 fields, spec 18 (onboarding: tone and posture steps, `BASELINE_TONE_OPTIONS`), `docs/dev/setup.md` (sliders) | none |
-| 3 | Per-channel length table in the block (explicit channel map); per-turn length reminder; block's fixed lines added to marker sources; calibrate band numbers | A/B vs main, style group |
+| 3 | Per-channel length table and the content line in the block (explicit channel map); per-turn length reminder; block's fixed lines added to marker sources; calibrate band numbers | A/B vs main, style group |
 | 4 | Every agent gets the block: `compileWritesAsBlock()` with the two scoping sentences; spec 13's "specialists have no personality" principle revised; `docs/dev/adding-an-agent.md` drops its directness mention | none (40d, 40e keep passing) |
 | 5 | Remove tone directives from prompts: "warm" in turn guidance and meeting-debrief, and the neutral example sentences in coordinator.yaml. Leave information policy, phrased as policy. | none |
 

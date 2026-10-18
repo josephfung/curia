@@ -40,9 +40,10 @@ expected_behaviors:
   - id: sends_to_principal
     weight: critical
     description: Sends the principal one Signal message, addressed by the `principal` alias.
+    # `principal#<label>` is the alias with a label hint (recipient-reference.ts).
     check:
       called: signal-send
-      with: { recipient: principal }
+      contains: { recipient: principal }
       success: true
       min: 1
       max: 1

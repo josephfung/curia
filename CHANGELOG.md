@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Style scenarios** — five cases score reply length, filler and register under a fixed office identity. (#2143)
+- **Style scenarios** — seven cases score reply length, filler and register under a fixed office identity. (#2143)
 
 ### Fixed
 
