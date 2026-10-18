@@ -16,6 +16,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Style scenarios** — seven cases score reply length, filler and register under a fixed office identity. (#2143)
+- **Report queue** — new `principal.report` bus event and `reports` tools collect digest items. (#2159)
+- **Weekly fallback digest** — sent when queued items go a week unreported. (#2159)
+
+### Changed
+
+- **Principal notices** — notes, block notices and expired approvals go to the digest, not email. (#2159)
 
 ### Fixed
 

@@ -225,6 +225,30 @@ export function resolveApprovalExpiryConfig(yaml: YamlConfig['autonomy']): Appro
   };
 }
 
+// ---------------------------------------------------------------------------
+// Weekly fallback digest config (#2159)
+// ---------------------------------------------------------------------------
+
+export interface ReportFallbackConfig {
+  /** Send the fallback summary once the oldest unreported item is older than this. */
+  maxAgeDays: number;
+  checkIntervalHours: number;
+}
+
+const DEFAULT_REPORT_FALLBACK_CONFIG: ReportFallbackConfig = {
+  maxAgeDays: 7,
+  checkIntervalHours: 24,
+};
+
+/** Resolve the optional autonomy.report_fallback block to a fully-populated config. */
+export function resolveReportFallbackConfig(yaml: YamlConfig['autonomy']): ReportFallbackConfig {
+  return {
+    maxAgeDays: yaml?.report_fallback?.max_age_days ?? DEFAULT_REPORT_FALLBACK_CONFIG.maxAgeDays,
+    checkIntervalHours:
+      yaml?.report_fallback?.check_interval_hours ?? DEFAULT_REPORT_FALLBACK_CONFIG.checkIntervalHours,
+  };
+}
+
 /** Resolve the optional YAML tasks block to a fully-populated config with defaults. */
 export function resolveTasksConfig(yaml: YamlConfig['tasks']): TasksConfig {
   return {
@@ -767,6 +791,13 @@ export interface YamlConfig {
     approval_expiry?: {
       /** Sweep interval in minutes. Default 60. */
       sweep_interval_minutes?: number;
+    };
+    /** Weekly summary of unreported principal.report items for installs with no digest (#2159). */
+    report_fallback?: {
+      /** Send once the oldest unreported item is older than this many days. Default 7. */
+      max_age_days?: number;
+      /** How often to check, in hours. Default 24. */
+      check_interval_hours?: number;
     };
   };
 }
@@ -1382,6 +1413,23 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     }
     // Reaches setInterval as minutes × 60000; an overflowed delay would fire in a tight loop.
     assertFitsNodeTimer('autonomy.approval_expiry.sweep_interval_minutes', interval, 60_000, 'minutes');
+  }
+
+  // Validate autonomy.report_fallback if present (#2159). Same guard: a mis-shaped block
+  // must fail loudly rather than fall back to the defaults.
+  const reportFallback = config.autonomy?.report_fallback;
+  if (reportFallback !== undefined) {
+    if (typeof reportFallback !== 'object' || Array.isArray(reportFallback) || reportFallback === null) {
+      throw new Error(`autonomy.report_fallback must be a YAML mapping, got: ${typeof reportFallback}`);
+    }
+    for (const key of ['max_age_days', 'check_interval_hours'] as const) {
+      const value = reportFallback[key];
+      if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
+        throw new Error(`autonomy.report_fallback.${key} must be a positive integer, got: ${String(value)}`);
+      }
+    }
+    // Reaches setInterval as hours × 3,600,000; an overflowed delay would fire in a tight loop.
+    assertFitsNodeTimer('autonomy.report_fallback.check_interval_hours', reportFallback.check_interval_hours, 3_600_000, 'hours');
   }
 
   // Validate scheduler if present.

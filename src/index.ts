@@ -20,7 +20,7 @@
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveIdentityGateMode } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
@@ -186,6 +186,8 @@ import {
 } from './db/queries/pending-delegations.js';
 import { LateDelegationSweep } from './agents/late-delegation-sweep.js';
 import { ApprovalExpirySweep } from './autonomy/approval-expiry-sweep.js';
+import { ReportQueue } from './reports/report-queue.js';
+import { ReportFallbackDigest } from './reports/report-fallback-digest.js';
 import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
 import {
   DeliverableKgPromotionSubscriber,
@@ -2937,6 +2939,27 @@ async function main(): Promise<void> {
   });
   approvalExpirySweep.start();
 
+  // Weekly fallback digest (#2159) — report items wait for the principal's digest job. With
+  // no such job (or a broken one) they would wait forever, so once the oldest is a week old
+  // this sends a plain summary itself. Needs the KG-backed config store for its marker.
+  const reportFallbackConfig = resolveReportFallbackConfig(yamlConfig.autonomy);
+  const reportFallbackDigest = entityMemory
+    ? new ReportFallbackDigest({
+      queue: new ReportQueue({ auditLogRepo, configStore: new ConfigStore(entityMemory, logger), logger }),
+      outboundGateway,
+      ceoEmail: principalEmail,
+      logger,
+      maxAgeDays: reportFallbackConfig.maxAgeDays,
+      checkIntervalHours: reportFallbackConfig.checkIntervalHours,
+      timezone: config.timezone,
+    })
+    : undefined;
+  if (reportFallbackDigest) {
+    reportFallbackDigest.start();
+  } else {
+    logger.warn('ReportFallbackDigest not started — no entity memory for its marker');
+  }
+
   // Conversation checkpoint processor — System Layer subscriber that runs background
   // memory skills (extract-relationships, etc.) at end of each conversation.
   const checkpointProcessor = new ConversationCheckpointProcessor(
@@ -3124,6 +3147,7 @@ async function main(): Promise<void> {
     }
     try {
       approvalExpirySweep.stop();
+      reportFallbackDigest?.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping approval expiry sweep during shutdown');
     }

@@ -362,6 +362,7 @@ interface OutboundNoReplyPayload {
 //                           the scheduled digest that used to surface them (#1466)
 //   - 'database_unavailable': principal alert that Postgres has been unreachable for >5 minutes (#1381)
 //   - 'principal_note':     a note for the principal cut out of a reply to someone else (prompt trim PR 5)
+//   - 'report_digest':      weekly fallback summary for installs with no digest job (ReportFallbackDigest, #2159)
 export interface OutboundNotificationPayload {
   notificationType:
     | 'blocked_content'
@@ -372,7 +373,8 @@ export interface OutboundNotificationPayload {
     | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
     | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
     | 'database_unavailable'  // Postgres unreachable beyond escalation threshold (#1381)
-    | 'principal_note';       // note for the principal from a reply to someone else (prompt trim PR 5)
+    | 'principal_note'        // note for the principal from a reply to someone else (prompt trim PR 5)
+    | 'report_digest';        // weekly fallback summary of unreported principal.report items (#2159)
   /** Recipient email for this notification (always the principal email today). */
   ceoEmail: string;
   subject: string;

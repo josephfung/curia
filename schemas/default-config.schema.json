@@ -480,6 +480,15 @@
           "properties": {
             "sweep_interval_minutes": { "type": "integer", "minimum": 1 }
           }
+        },
+        "report_fallback": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Weekly summary of unreported digest items for installs with no digest job (#2159).",
+          "properties": {
+            "max_age_days": { "type": "integer", "minimum": 1 },
+            "check_interval_hours": { "type": "integer", "minimum": 1 }
+          }
         }
       }
     },
