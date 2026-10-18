@@ -1,0 +1,19 @@
+{
+  "name": "deliver-approval",
+  "description": "Send a pending approval to the principal on ONE channel. Choose the channel from the principal's standing preferences for urgent items. If delivery fails, the error lists the channels still available; try the next one. An approval is delivered once; it is mentioned again only in the next digest.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "short_ref": "string (the approval reference from the blocked action)",
+    "channel": "string (signal | sms | slack | email)"
+  },
+  "outputs": {
+    "result": "string (confirmation)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["approvalDelivery"],
+  "allowed_callers": ["coordinator"]
+}

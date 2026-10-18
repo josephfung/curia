@@ -274,6 +274,8 @@ export interface ToolContext {
    *  Provides read/write access to the autonomy_action_log table for approval lifecycle
    *  management. Used by approve-action, deny-action, dismiss-action, list-pending-actions. */
   actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+  /** Sends one pending approval on one chosen channel (#2159). Declared by deliver-approval. */
+  approvalDelivery?: import('../autonomy/approval-delivery.js').ApprovalDelivery;
   /** Audit log repo — available to skills declaring 'auditLogRepo' in capabilities. */
   auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
   /** Diagnostics read repo — available to skills declaring 'diagnosticsRepo' in capabilities.

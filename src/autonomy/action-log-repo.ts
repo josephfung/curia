@@ -250,6 +250,32 @@ export class ActionLogRepo {
   }
 
   /**
+   * Claim a pending approval's single delivery (#2159): sets notification_sent_at only when it
+   * is still null. Returns false when another caller already claimed it, so two deliverers
+   * (an agent and the expiry sweep's safety net) can never both ping the principal.
+   */
+  async claimNotification(id: number): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE autonomy_action_log
+       SET notification_sent_at = now()
+       WHERE id = $1
+         AND notification_sent_at IS NULL
+         AND outcome = 'pending_approval'
+       RETURNING id`,
+      [id],
+    );
+    return result.rows.length > 0;
+  }
+
+  /** Undo claimNotification() after a failed send, so the approval can be delivered again. */
+  async releaseNotification(id: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE autonomy_action_log SET notification_sent_at = NULL WHERE id = $1`,
+      [id],
+    );
+  }
+
+  /**
    * Return all non-expired pending_approval rows, oldest first.
    * Used by list-pending-actions and by resolvePending() when no short_ref is given.
    */

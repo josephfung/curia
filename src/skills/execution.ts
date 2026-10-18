@@ -281,6 +281,7 @@ export class ExecutionLayer {
   private approvalTrigger?: ApprovalTriggerService;
   private escalationJudge?: EscalationJudge;
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+  private approvalDelivery?: import('../autonomy/approval-delivery.js').ApprovalDelivery;
   private auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
   private diagnosticsRepo?: import('../diagnostics/diagnostics-repo.js').DiagnosticsRepo;
   private taskRepo?: import('../db/task-repo.js').TaskRepo;
@@ -347,6 +348,7 @@ export class ExecutionLayer {
      *  whether the action is third-party-facing (a runtime property the manifest can't encode). */
     escalationJudge?: EscalationJudge;
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+    approvalDelivery?: import('../autonomy/approval-delivery.js').ApprovalDelivery;
     auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
     diagnosticsRepo?: import('../diagnostics/diagnostics-repo.js').DiagnosticsRepo;
     taskRepo?: import('../db/task-repo.js').TaskRepo;
@@ -398,6 +400,7 @@ export class ExecutionLayer {
     this.approvalTrigger = options?.approvalTrigger;
     this.escalationJudge = options?.escalationJudge;
     this.actionLogRepo = options?.actionLogRepo;
+    this.approvalDelivery = options?.approvalDelivery;
     this.auditLogRepo = options?.auditLogRepo;
     this.diagnosticsRepo = options?.diagnosticsRepo;
     this.taskRepo = options?.taskRepo;
@@ -445,6 +448,7 @@ export class ExecutionLayer {
       executiveProfileService: this.executiveProfileService,
       officeIdentityService: this.officeIdentityService,
       actionLogRepo: this.actionLogRepo,
+      approvalDelivery: this.approvalDelivery,
       auditLogRepo: this.auditLogRepo,
       diagnosticsRepo: this.diagnosticsRepo,
       taskRepo: this.taskRepo,
