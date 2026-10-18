@@ -96,7 +96,7 @@ export class SlackSendHandler implements ToolHandler {
       // Overload: put U… in slackChannelId even though that field's type doc
       // describes D…/C…/G… conversation ids. chat.postMessage accepts a user
       // id as channel and opens/uses the IM (same precedent as
-      // approval-channel-notify.ts). Principal eligibility / blocked-contact
+      // src/autonomy/approval-delivery.ts). Principal eligibility / blocked-contact
       // resolve from slackUserId (also the U…), never from slackChannelId alone.
       const result = await ctx.outboundGateway.send(
         {

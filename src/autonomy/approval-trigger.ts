@@ -1,33 +1,40 @@
 // approval-trigger.ts — ApprovalTriggerService.
 //
-// Owns the approval request flow when the autonomy gate blocks a skill:
-// dedup check, row insertion, short_ref generation, description building,
-// and principal notification. See ADR-018 and issue #427.
+// Owns the approval request flow when an autonomy gate blocks a skill: dedup check, row
+// insertion, short_ref generation and description building. See ADR-018 and issue #427.
+//
+// It notifies no one (#2159). It used to email the principal and DM every chat identity
+// for each request. Now it records one principal.report item (the request's single digest
+// mention) and registers what the principal should be shown; the agent that owns the turn
+// delivers the approval on one channel with deliver-approval. Approvals no agent delivers
+// within 15 minutes are emailed by the expiry sweep's safety net.
 
 import { randomBytes } from 'node:crypto';
 import type { ActionLogRepo } from './action-log-repo.js';
-import type { OutboundGateway } from '../skills/outbound-gateway.js';
-import type { ContactService } from '../contacts/contact-service.js';
-import type { ChannelIdentity } from '../contacts/types.js';
+import type { ApprovalDelivery } from './approval-delivery.js';
+import type { EventBus } from '../bus/bus.js';
+import { createPrincipalReport } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
-import {
-  buildApprovalNotificationBody,
-  resolveNotificationRecipientTier,
-} from './approval-notification.js';
-import { deliverApprovalToChatChannels } from './approval-channel-notify.js';
-import {
-  resolvePrincipalEmail,
-  type PrincipalEmailRef,
-} from '../contacts/types.js';
 import type { SendRecipientPin } from '../skills/_shared/recipient-reference.js';
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
 export type ApprovalRequestResult =
-  | { created: true; shortRef: string; notificationSent: boolean }
+  | { created: true; shortRef: string }
   | { created: false; reason: 'duplicate'; existingShortRef: string };
+
+/**
+ * What the blocked agent is told about a new approval. One place, so every gate gives the
+ * same instruction: deliver it yourself, on one channel (#2159).
+ */
+export function approvalAdvisory(shortRef: string): string {
+  return (
+    `An approval request was created (ref: ${shortRef}). Deliver it to the principal now with ` +
+    `deliver-approval, on the channel their standing preferences name for urgent items.`
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Pure helpers — exported for testing
@@ -109,16 +116,11 @@ export function buildDescription(
 export class ApprovalTriggerService {
   constructor(
     private readonly actionLogRepo: ActionLogRepo,
-    // outboundGateway is optional — row creation does not depend on the outbound stack.
-    // If absent, notification is skipped (same as when ceoEmail is not configured).
-    private readonly outboundGateway: OutboundGateway | undefined,
     private readonly logger: Logger,
-    /** Plain string (tests) or live ref so post-boot email binds hot-reload (#1514). */
-    private readonly ceoEmail?: string | PrincipalEmailRef,
-    // Optional — used to resolve the notification recipient's tier for detail gating.
-    private readonly contactService?: ContactService,
-    /** Verified principal channel identities — used for Slack/Signal approval DMs (#1479). */
-    private readonly principalIdentities: readonly ChannelIdentity[] = [],
+    /** Publishes the request's digest mention. Absent in tests that only exercise rows. */
+    private readonly bus?: Pick<EventBus, 'publish'>,
+    /** Receives the principal-facing display for delivery. Absent without an outbound stack. */
+    private readonly approvalDelivery?: Pick<ApprovalDelivery, 'registerDisplay'>,
   ) {}
 
   /**
@@ -128,7 +130,7 @@ export class ApprovalTriggerService {
    *   1. Dedup — check for existing pending_approval row with same skill + payload in same task
    *   2. Generate short_ref and description
    *   3. Insert autonomy_action_log row
-   *   4. Notify principal (best-effort — failure does not prevent row creation)
+   *   4. Register the display for deliver-approval, and queue the digest mention
    *
    * Returns the result so the execution layer can enrich the advisory error message.
    */
@@ -266,77 +268,31 @@ export class ApprovalTriggerService {
       'approval-trigger: pending_approval row created',
     );
 
-    // Step 4: Notify principal (best-effort).
-    // sendNotification() catches publish errors internally and returns false rather than
-    // throwing, so we check the return value to know whether to stamp notification_sent_at.
-    let notificationSent = false;
-    const defaultBody =
+    // Step 4: what the principal will be shown when the agent delivers it. displayInput has
+    // contact references resolved to names (#2033); the stored payload keeps the references.
+    const preamble = opts.reason ??
       `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
       `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).`;
-    const preamble = opts.reason ?? defaultBody;
-    const ceoEmail = resolvePrincipalEmail(this.ceoEmail);
+    this.approvalDelivery?.registerDisplay(shortRef, { preamble, payload: shown });
 
-    if (ceoEmail && this.outboundGateway) {
-      const recipientTier = await resolveNotificationRecipientTier(
-        this.contactService,
-        ceoEmail,
-        this.logger,
-      );
-      const emailBody = buildApprovalNotificationBody({
-        preamble,
-        shortRef,
-        expiresAt,
-        toolName,
-        payload: shown,
-        recipientTier,
-        logger: this.logger,
-        ceoEmail,
-      });
-      const sent = await this.outboundGateway.sendNotification({
-        notificationType: 'approval_requested',
-        ceoEmail,
-        subject: `Approval needed — ${description}`,
-        body: emailBody,
-      });
-      if (sent) {
-        await this.actionLogRepo.setNotificationSentAt(rowId);
-        notificationSent = true;
-        this.logger.info({ rowId, shortRef }, 'approval-trigger: principal notification sent');
-      } else {
-        this.logger.warn(
-          { rowId, shortRef },
-          'approval-trigger: principal notification failed — row exists, principal will see it in digest',
-        );
+    // The request's one digest mention (#2159). Best-effort: the row exists either way, and
+    // the agent has been told to deliver it.
+    if (this.bus) {
+      try {
+        await this.bus.publish('dispatch', createPrincipalReport({
+          summary: `Waiting for your approval: ${description}`,
+          urgency: 'digest',
+          source: 'approval_pending',
+          ...(conversationId ? { conversationId } : {}),
+          actionShortRef: shortRef,
+          parentEventId: taskId,
+          sourceLayer: 'dispatch',
+        }));
+      } catch (err) {
+        this.logger.error({ err, rowId, shortRef }, 'approval-trigger: failed to queue the digest mention — the approval still exists');
       }
-    } else if (!ceoEmail) {
-      this.logger.warn(
-        { rowId, shortRef },
-        'approval-trigger: ceoEmail not configured — skipping email notification',
-      );
     }
 
-    // Slack/Signal DMs so a reaction can resolve the pending approval (#1479).
-    // Body always includes detail — delivery targets verified principal identities.
-    if (this.outboundGateway) {
-      const chatBody = buildApprovalNotificationBody({
-        preamble,
-        shortRef,
-        expiresAt,
-        toolName,
-        payload: shown,
-        recipientTier: 'principal',
-        callToAction: 'React 👍 to approve or 👎 to deny this request.',
-      });
-      await deliverApprovalToChatChannels({
-        outboundGateway: this.outboundGateway,
-        actionLogRepo: this.actionLogRepo,
-        actionLogId: rowId,
-        body: chatBody,
-        principalIdentities: this.principalIdentities,
-        logger: this.logger,
-      });
-    }
-
-    return { created: true, shortRef, notificationSent };
+    return { created: true, shortRef };
   }
 }

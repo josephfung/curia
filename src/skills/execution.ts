@@ -97,7 +97,7 @@ import { computeEffectiveTaskMetadata, DEFAULT_BYPASS_LADDER } from '../autonomy
 import type { BypassLadderConfig } from '../autonomy/effective-standing.js';
 import type { BrowserService } from '../browser/browser-service.js';
 import { formatAuthorizationSubjectSummary } from '../contacts/authorization.js';
-import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
+import { approvalAdvisory, type ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import { TempFileStore } from './temp-file-store.js';
 import type { InfraLlmService } from './infra-llm.js';
 import { OutboundContextService, ScopedOutboundContext } from '../dispatch/outbound-context.js';
@@ -638,14 +638,8 @@ export class ExecutionLayer {
             `is already pending (ref: ${result.existingShortRef}).`
           );
         }
-        if (result.notificationSent) {
-          return baseMsg + `An approval request has been sent to the principal (ref: ${result.shortRef}).`;
-        }
-        return (
-          baseMsg +
-          `An approval request was created (ref: ${result.shortRef}) but ` +
-          `notification could not be delivered — the principal will see it in the next digest.`
-        );
+        // The trigger notifies no one; the agent delivers it on one channel (#2159).
+        return baseMsg + approvalAdvisory(result.shortRef);
       } catch (err) {
         // Approval trigger failure should not change the gate behavior.
         // The skill is still blocked; we just can't create the approval row.
@@ -700,14 +694,8 @@ export class ExecutionLayer {
             `is already pending (ref: ${result.existingShortRef}).`
           );
         }
-        if (result.notificationSent) {
-          return baseMsg + `An approval request has been sent to the principal (ref: ${result.shortRef}).`;
-        }
-        return (
-          baseMsg +
-          `An approval request was created (ref: ${result.shortRef}) but ` +
-          `notification could not be delivered — the principal will see it in the next digest.`
-        );
+        // The trigger notifies no one; the agent delivers it on one channel (#2159).
+        return baseMsg + approvalAdvisory(result.shortRef);
       } catch (err) {
         skillLogger.warn(
           { err, toolName },
@@ -828,14 +816,8 @@ export class ExecutionLayer {
             `An approval request for this export is already pending (ref: ${result.existingShortRef}).`
           );
         }
-        if (result.notificationSent) {
-          return baseMsg + `An approval request has been sent to the principal (ref: ${result.shortRef}).`;
-        }
-        return (
-          baseMsg +
-          `An approval request was created (ref: ${result.shortRef}) but ` +
-          `notification could not be delivered — the principal will see it in the next digest.`
-        );
+        // The trigger notifies no one; the agent delivers it on one channel (#2159).
+        return baseMsg + approvalAdvisory(result.shortRef);
       } catch (err) {
         skillLogger.warn({ err, toolName }, 'export gate approval trigger failed');
       }

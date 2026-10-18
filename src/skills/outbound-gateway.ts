@@ -52,13 +52,9 @@ import type { ChannelReconnectEvent } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { markdownToMrkdwn } from '../format/markdown-to-mrkdwn.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
-import { generateShortRef } from '../autonomy/approval-trigger.js';
-import {
-  buildApprovalNotificationBody,
-  enrichGatewayApprovalPayload,
-  resolveNotificationRecipientTier,
-} from '../autonomy/approval-notification.js';
-import { deliverApprovalToChatChannels } from '../autonomy/approval-channel-notify.js';
+import { approvalAdvisory, generateShortRef } from '../autonomy/approval-trigger.js';
+import { enrichGatewayApprovalPayload } from '../autonomy/approval-notification.js';
+import type { ApprovalDelivery } from '../autonomy/approval-delivery.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText, stripModelSignOff } from '../channels/email/signature.js';
@@ -523,6 +519,8 @@ export class OutboundGateway {
   private readonly autonomyService?: AutonomyService;
   private readonly piiRedactor?: PiiRedactor;
   private readonly actionLogRepo?: ActionLogRepo;
+  /** Set after construction (setApprovalDelivery) — ApprovalDelivery sends through this gateway. */
+  private approvalDelivery?: Pick<ApprovalDelivery, 'registerDisplay'>;
   private readonly confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private readonly exportControlService?: ExportControlService;
   private readonly outboundQueue?: OutboundQueueRepo;
@@ -782,14 +780,12 @@ export class OutboundGateway {
             // actionRef remains undefined — send is still blocked below
           }
 
-          // Notify principal (best-effort) — mirrors ApprovalTriggerService.request() pattern.
-          // sendNotification() has its own try-catch and returns false on failure, so it
-          // never throws. Only stamp notification_sent_at if the publish succeeded.
-          // setNotificationSentAt is wrapped separately so a DB failure there does not
-          // discard the fact that the insert (and the notification delivery) succeeded.
-          const principalEmail = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
+          // Nobody is notified here (#2159): the agent that tried this send delivers the
+          // approval on one channel with deliver-approval. Register what the principal will
+          // be shown — the resolved recipients, not the stored contact references (#2033) —
+          // and queue the request's one digest mention.
           if (rowId !== undefined) {
-            const notificationPayload = enrichGatewayApprovalPayload(
+            const displayPayload = enrichGatewayApprovalPayload(
               withoutRecipientReferences(recipe.partialPayload ?? {}),
               request.channel === 'email'
                 ? { to: request.to, cc: request.cc?.join(', '), subject: request.subject, body: request.body }
@@ -798,74 +794,12 @@ export class OutboundGateway {
                   ? { slackChannelId: request.slackChannelId, recipient: request.slackUserId ?? request.slackChannelId, message: request.message }
                   : { recipient: request.recipient, message: request.message },
             );
-            const extraLines = [
-              `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
-            ];
-
-            if (principalEmail) {
-              const recipientTier = await resolveNotificationRecipientTier(
-                this.contactService,
-                principalEmail,
-                this.log,
-              );
-              const sent = await this.sendNotification({
-                notificationType: 'approval_requested',
-                ceoEmail: principalEmail,
-                subject: `Approval needed — ${recipe.description}`,
-                body: buildApprovalNotificationBody({
-                  preamble: recipe.description,
-                  shortRef: candidateRef,
-                  expiresAt,
-                  toolName: recipe.toolName,
-                  payload: notificationPayload,
-                  recipientTier,
-                  logger: this.log,
-                  ceoEmail: principalEmail,
-                  extraLines,
-                  callToAction:
-                    'Reply with the reference to approve, deny, or dismiss this request.',
-                }),
-              });
-              if (sent) {
-                try {
-                  await actionLogRepo.setNotificationSentAt(rowId);
-                } catch (err) {
-                  // Non-fatal: the pending_approval row exists and gating is correct.
-                  // Only notification_sent_at is missing — the principal still received the alert.
-                  this.log.warn(
-                    { err, rowId, taskEventId: options.taskEventId },
-                    'outbound-gateway: setNotificationSentAt failed after successful notification — notification_sent_at will be null',
-                  );
-                }
-              }
-            } else {
-              // Row was written but no principal email identity configured — email skipped.
-              // Slack/Signal DMs below may still deliver. Surface misconfig in alerting.
-              this.log.error(
-                { rowId, taskEventId: options.taskEventId },
-                'outbound-gateway: pending_approval row written but principal email notification skipped — no principal email identity configured',
-              );
-            }
-
-            // Slack/Signal DMs for reaction→approval correlation (#1479).
-            const chatBody = buildApprovalNotificationBody({
+            this.approvalDelivery?.registerDisplay(candidateRef, {
               preamble: recipe.description,
-              shortRef: candidateRef,
-              expiresAt,
-              toolName: recipe.toolName,
-              payload: notificationPayload,
-              recipientTier: 'principal',
-              extraLines,
-              callToAction: 'React 👍 to approve or 👎 to deny this request.',
+              payload: displayPayload,
+              extraLines: [`Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`],
             });
-            await deliverApprovalToChatChannels({
-              outboundGateway: this,
-              actionLogRepo,
-              actionLogId: rowId,
-              body: chatBody,
-              principalIdentities: this.principalIdentities,
-              logger: this.log,
-            });
+            await this.queueApprovalMention(candidateRef, recipe.description, options.taskEventId, options.conversationId ?? undefined);
           }
         }
 
@@ -874,7 +808,7 @@ export class OutboundGateway {
             success: false,
             gated: true,
             actionRef,
-            blockedReason: `Autonomy score ${autonomyConfig.score} is below send threshold ${sendThreshold}`,
+            blockedReason: `Autonomy score ${autonomyConfig.score} is below send threshold ${sendThreshold}. ${approvalAdvisory(actionRef)}`,
           };
         }
 
@@ -1089,57 +1023,27 @@ export class OutboundGateway {
               this.log.error({ err }, 'outbound-gateway: failed to write export-gate action_log row');
             }
           }
-          const principalEmail = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
-          if (principalEmail && options?.reExecRecipe) {
-            const recipe = options.reExecRecipe;
-            const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-            try {
-              const recipientTier = await resolveNotificationRecipientTier(
-                this.contactService,
-                principalEmail,
-                this.log,
-              );
-              await this.sendNotification({
-                notificationType: 'approval_requested',
-                ceoEmail: principalEmail,
-                subject: `Approval needed — ${recipe.description}`,
-                body: buildApprovalNotificationBody({
-                  preamble: outcome.message,
-                  shortRef: actionRef ?? 'pending',
-                  expiresAt,
-                  toolName: recipe.toolName,
-                  payload: {
-                    ...withoutRecipientReferences(recipe.partialPayload ?? {}),
-                    // The display shows the resolved addresses; the stored payload keeps the references.
-                    ...(request.channel === 'email'
-                      ? { to: request.to, ...(request.cc && request.cc.length > 0 ? { cc: request.cc.join(', ') } : {}) }
-                      : {}),
-                    export_items: items.map((i) => ({
-                      node_id: i.nodeId,
-                      label: i.label,
-                      sensitivity: i.sensitivity,
-                    })),
-                  },
-                  recipientTier,
-                  logger: this.log,
-                  ceoEmail: principalEmail,
-                  extraLines: [`Items:\n${itemSummary}`],
-                  callToAction:
-                    'Reply with the reference to approve, deny, or dismiss this request.',
-                }),
-              }, options?.parentEventId);
-            } catch (err) {
-              this.log.error(
-                { err, channel: request.channel, taskEventId: options?.taskEventId },
-                'outbound-gateway: export-gate approval notification failed — send still blocked',
-              );
-            }
+          // As at the score gate: no notification (#2159); the agent delivers it.
+          if (actionRef && options?.reExecRecipe) {
+            this.approvalDelivery?.registerDisplay(actionRef, {
+              preamble: outcome.message,
+              payload: {
+                ...withoutRecipientReferences(options.reExecRecipe.partialPayload ?? {}),
+                // The display shows the resolved addresses; the stored payload keeps the references.
+                ...(request.channel === 'email'
+                  ? { to: request.to, ...(request.cc && request.cc.length > 0 ? { cc: request.cc.join(', ') } : {}) }
+                  : {}),
+                export_items: items.map((i) => ({ node_id: i.nodeId, label: i.label, sensitivity: i.sensitivity })),
+              },
+              extraLines: [`Items:\n${itemSummary}`],
+            });
+            await this.queueApprovalMention(actionRef, options.reExecRecipe.description, options.taskEventId!, options.conversationId ?? undefined);
           }
           return {
             success: false,
             gated: true,
             actionRef,
-            blockedReason: `${outcome.message}\n\n${itemSummary}`,
+            blockedReason: `${outcome.message}\n\n${itemSummary}${actionRef ? `\n\n${approvalAdvisory(actionRef)}` : ''}`,
           };
         }
 
@@ -1660,6 +1564,32 @@ export class OutboundGateway {
         'outbound-gateway: failed to publish outbound.notification event',
       );
       return false;
+    }
+  }
+
+  /**
+   * Give the gateway the approval-delivery service (#2159). Set after construction because
+   * ApprovalDelivery sends through this gateway; without it the gate sites still write rows
+   * and the delivered approval renders the stored payload.
+   */
+  setApprovalDelivery(approvalDelivery: Pick<ApprovalDelivery, 'registerDisplay'>): void {
+    this.approvalDelivery = approvalDelivery;
+  }
+
+  /** Queue a gate-raised approval's one digest mention (#2159). Never throws. */
+  private async queueApprovalMention(shortRef: string, description: string, taskEventId: string, conversationId: string | undefined): Promise<void> {
+    try {
+      await this.bus.publish('dispatch', createPrincipalReport({
+        summary: `Waiting for your approval: ${description}`,
+        urgency: 'digest',
+        source: 'approval_pending',
+        ...(conversationId ? { conversationId } : {}),
+        actionShortRef: shortRef,
+        parentEventId: taskEventId,
+        sourceLayer: 'dispatch',
+      }));
+    } catch (err) {
+      this.log.error({ err, shortRef }, 'outbound-gateway: failed to queue the approval mention — the approval still exists');
     }
   }
 

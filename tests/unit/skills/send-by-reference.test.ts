@@ -414,6 +414,8 @@ describe('approvals show the resolved recipient (#2033)', () => {
       autonomyService: { getConfig: vi.fn().mockResolvedValue({ score: 50 }) } as never,
       actionLogRepo: { insert, setNotificationSentAt: vi.fn().mockResolvedValue(undefined) } as never,
     });
+    const registerDisplay = vi.fn();
+    h.gateway.setApprovalDelivery({ registerDisplay } as never);
 
     const result = await SKILLS.email.handler.execute({
       ...ctx(h, {
@@ -426,15 +428,14 @@ describe('approvals show the resolved recipient (#2033)', () => {
     } as ToolContext);
 
     expect(result.success).toBe(false);
-    // Nothing emailed. (The approval request itself is DM'd to the principal on Signal and Slack.)
+    // Nothing emailed: the agent delivers the approval itself, on one channel (#2159).
     expect(h.nylasSend).not.toHaveBeenCalled();
     // The stored re-exec payload keeps the reference; approval re-resolves it.
     expect(insert.mock.calls[0]![0].payload).toMatchObject({ to: h.spouseId });
-    const approval = h.busPublish.mock.calls
-      .map(([, event]) => event as { type: string; payload: { notificationType?: string; body?: string } })
-      .find((event) => event.type === 'outbound.notification' && event.payload.notificationType === 'approval_requested');
-    expect(approval?.payload.body).toContain('sam@home.example');
-    expect(approval?.payload.body).not.toContain(h.spouseId);
+    // What the principal will be shown names the address, not the contact ID.
+    const display = registerDisplay.mock.calls[0]![1] as { payload: Record<string, unknown> };
+    expect(JSON.stringify(display.payload)).toContain('sam@home.example');
+    expect(JSON.stringify(display.payload)).not.toContain(h.spouseId);
   });
 });
 
@@ -573,7 +574,7 @@ describe('label hint (#2047)', () => {
     expect(description).toContain(`Resolved recipients: ${JSON.stringify([PERSONAL.email])}`);
     expect(description).not.toContain(WORK.email);
 
-    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'e-1', notificationSent: true });
+    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'e-1' });
     const approvalRegistry = new ToolRegistry();
     approvalRegistry.register(manifest, { execute: vi.fn().mockResolvedValue({ success: true, data: {} }) });
     const approval = new ExecutionLayer(approvalRegistry, logger, {
@@ -674,7 +675,7 @@ describe('email-reply cc by reference (#2131)', () => {
 
   it('an explicit cc with no entries is refused before the gates, not read as sender-only', async () => {
     const h = await harness();
-    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'r-0', notificationSent: true });
+    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'r-0' });
     const result = await layer(h, 65, { approvalTrigger: { request } as never }).invoke(
       'email-reply',
       { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: ',' },
@@ -742,7 +743,7 @@ describe('email-reply cc by reference (#2131)', () => {
 
   it('an approval shows the resolved address, stores the alias, and re-resolves it on approve', async () => {
     const h = await harness();
-    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'r-1', notificationSent: true });
+    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'r-1' });
     const input = { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: 'principal, ops@thread.example' };
 
     const held = await layer(h, 65, { approvalTrigger: { request } as never })

@@ -2292,27 +2292,21 @@ async function main(): Promise<void> {
   });
   await healthService.start();
 
-  // Approval trigger — creates pending_approval rows and notifies principal
-  // when autonomy gates block a skill. See ADR-018 and issue #427.
-  // Constructed unconditionally — row creation does not depend on the outbound stack.
-  // outboundGateway and ceoEmail are optional: if absent, the row is created but
-  // notification is skipped (principal will see it in the next digest, #429).
   // Approval delivery (#2159) — one pending approval, one channel, chosen by the agent from
   // the principal's standing preferences via deliver-approval. Absent without an outbound
-  // stack (setup-required mode); the expiry sweep's safety net then has nothing to send with
-  // either, and approvals are still listed in the digest.
+  // stack (setup-required mode); approvals are then still listed in the digest.
   const approvalDelivery = outboundGateway
     ? new ApprovalDelivery({ actionLogRepo, outboundGateway, principalIdentities, principalEmail, logger })
     : undefined;
+  // The gateway's own gate sites register displays too; set after construction because
+  // ApprovalDelivery sends through the gateway.
+  if (outboundGateway && approvalDelivery) outboundGateway.setApprovalDelivery(approvalDelivery);
 
-  const approvalTrigger = new ApprovalTriggerService(
-    actionLogRepo,
-    outboundGateway,
-    logger,
-    principalEmail,
-    contactService,
-    principalIdentities,
-  );
+  // Approval trigger — creates pending_approval rows when autonomy gates block a skill
+  // (ADR-018, #427). It notifies no one (#2159): it queues the request's digest mention and
+  // registers the display; the agent delivers the approval with deliver-approval.
+  // Constructed unconditionally — row creation does not depend on the outbound stack.
+  const approvalTrigger = new ApprovalTriggerService(actionLogRepo, logger, bus, approvalDelivery);
 
   // Temp file store — secure tmpfs-backed storage for binary attachment handoff.
   // Skills declaring 'tempFileStore' capability get ctx.writeTempFile().

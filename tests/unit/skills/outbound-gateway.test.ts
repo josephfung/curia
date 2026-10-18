@@ -2807,72 +2807,10 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(actionLogRepo.insert).not.toHaveBeenCalled();
   });
 
-  it('notifies CEO when autonomy gate blocks a send and actionLogRepo + taskEventId are present', async () => {
-    // Bug fix: gateway-level gate blocks must notify the CEO — previously only the
-    // execution-layer ApprovalTriggerService sent notifications, leaving gateway blocks silent.
+  // #2159: the gate writes the row and notifies no one; the agent delivers it on one channel.
+  it('queues one digest mention, sends no notification, and tells the agent to deliver it', async () => {
     const mocks = createMocks();
     const actionLogRepo = makeActionLogRepo();
-
-    const gateway = new OutboundGateway({
-      nylasClients: new Map([['curia', mocks.nylasClient]]),
-      contactService: mocks.contactService,
-      contentFilter: mocks.contentFilter,
-      bus: mocks.bus,
-      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
-      logger: mocks.logger,
-      autonomyService: makeAutonomyService(65),
-      actionLogRepo,
-    });
-
-    await gateway.send(
-      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123', conversationId: 'conv-456', reExecRecipe: TEST_RECIPE },
-    );
-
-    const publishCalls = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls;
-    const notificationCalls = publishCalls.filter(
-      (call: unknown[]) => (call[1] as BusEvent).type === 'outbound.notification',
-    );
-    expect(notificationCalls).toHaveLength(1);
-    const notificationEvent = notificationCalls[0]![1] as BusEvent;
-    if (notificationEvent.type === 'outbound.notification') {
-      expect(notificationEvent.payload.notificationType).toBe('approval_requested');
-      expect(notificationEvent.payload.ceoEmail).toBe('ceo@example.com');
-    }
-  });
-
-  it('calls setNotificationSentAt with the row id after successful notification', async () => {
-    const mocks = createMocks();
-    const actionLogRepo = makeActionLogRepo();
-    // insert returns row id 42 so we can assert setNotificationSentAt is called with 42
-    (actionLogRepo.insert as ReturnType<typeof vi.fn>).mockResolvedValue(42);
-
-    const gateway = new OutboundGateway({
-      nylasClients: new Map([['curia', mocks.nylasClient]]),
-      contactService: mocks.contactService,
-      contentFilter: mocks.contentFilter,
-      bus: mocks.bus,
-      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
-      logger: mocks.logger,
-      autonomyService: makeAutonomyService(65),
-      actionLogRepo,
-    });
-
-    await gateway.send(
-      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
-    );
-
-    expect(actionLogRepo.setNotificationSentAt).toHaveBeenCalledOnce();
-    expect(actionLogRepo.setNotificationSentAt).toHaveBeenCalledWith(42);
-  });
-
-  it('does not throw and still returns gated result when sendNotification fails', async () => {
-    // sendNotification() has an internal try-catch, so a bus.publish failure must not
-    // surface as a gateway error — the send is still blocked and gated: true is returned.
-    const mocks = createMocks();
-    const actionLogRepo = makeActionLogRepo();
-    (mocks.bus.publish as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Bus error'));
 
     const gateway = new OutboundGateway({
       nylasClients: new Map([['curia', mocks.nylasClient]]),
@@ -2887,14 +2825,70 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     const result = await gateway.send(
       { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', conversationId: 'conv-456', reExecRecipe: TEST_RECIPE },
+    );
+
+    const events = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1] as BusEvent);
+    expect(events.map((e) => e.type)).not.toContain('outbound.notification');
+    const reports = events.filter((e) => e.type === 'principal.report');
+    expect(reports).toHaveLength(1);
+    if (reports[0]?.type === 'principal.report') {
+      expect(reports[0].payload).toMatchObject({ source: 'approval_pending', actionShortRef: result.actionRef, conversationId: 'conv-456' });
+    }
+    expect(result.blockedReason).toContain('deliver-approval');
+    expect(result.blockedReason).toContain(`ref: ${result.actionRef}`);
+    expect(actionLogRepo.setNotificationSentAt).not.toHaveBeenCalled();
+  });
+
+  it('registers what the principal is shown with approval delivery', async () => {
+    const mocks = createMocks();
+    const registerDisplay = vi.fn();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo: makeActionLogRepo(),
+    });
+    gateway.setApprovalDelivery({ registerDisplay } as never);
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
       { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
     );
 
-    // Gate must still fire correctly despite the notification failure
+    expect(registerDisplay).toHaveBeenCalledWith(result.actionRef, expect.objectContaining({
+      preamble: TEST_RECIPE.description,
+      payload: expect.objectContaining({ to: 'recipient@example.com', subject: 'Hello' }),
+    }));
+  });
+
+  it('still returns the gated result when the digest mention fails to queue', async () => {
+    const mocks = createMocks();
+    (mocks.bus.publish as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Bus error'));
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo: makeActionLogRepo(),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
+    );
+
     expect(result.success).toBe(false);
     expect(result.gated).toBe(true);
-    // Notification failed → setNotificationSentAt must NOT be called
-    expect(actionLogRepo.setNotificationSentAt).not.toHaveBeenCalled();
+    expect(result.actionRef).toMatch(/^[0-9a-f]{8}$/);
   });
 
   it('returns undefined actionRef when insert throws (no phantom reference)', async () => {
