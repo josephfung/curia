@@ -18,8 +18,9 @@ import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import { createConfigChange } from '../bus/events.js';
-import { type OfficeIdentity, type OfficeIdentityVersion, BASELINE_TONE_OPTIONS } from './types.js';
+import { type OfficeIdentity, type OfficeIdentityVersion, TONE_STYLE_MAX_LENGTH } from './types.js';
 import { DEFAULT_OFFICE_IDENTITY } from './defaults.js';
+import { LEGACY_TONE_KEYS, LEGACY_TOP_LEVEL_KEYS, normalizeIdentity } from './normalize.js';
 
 // Map verbosity score to prose guidance.
 // Bands are approximate — these are guidelines, not hard cutoffs.
@@ -30,30 +31,31 @@ function verbosityGuidance(score: number): string {
   return 'Default to thorough explanations; err toward more context.';
 }
 
-// Map directness score to prose guidance.
-function directnessGuidance(score: number): string {
-  if (score <= 25) return 'Be measured; acknowledge uncertainty with appropriate qualification.';
-  if (score <= 50) return 'Lean toward directness but hedge where genuinely uncertain.';
-  if (score <= 75) return 'Be direct; minimize unnecessary hedging and qualification.';
-  return 'State positions plainly; avoid softening language.';
-}
+/**
+ * Fixed, code-owned lines of the identity block. No style text can talk the model out of
+ * them. Exported so the prompt-exfiltration marker sources can include them (#2143).
+ */
+export const REGISTER_LINE = 'Match the register of any example lines above, not their content.';
+export const HONESTY_LINE = "Whatever your tone, say plainly when you are unsure or don't know something.";
 
-// Map decision_style enum to a human-readable prose phrase.
-function decisionStylePhrase(style: 'conservative' | 'balanced' | 'proactive', domain: 'external' | 'internal'): string {
-  if (domain === 'external') {
-    if (style === 'conservative') return 'For external actions, be conservative — verify before acting.';
-    if (style === 'balanced') return 'For external actions, use balanced judgment — act when confidence is high.';
-    return 'For external actions, be proactive — act on good information without waiting for confirmation.';
-  } else {
-    if (style === 'conservative') return 'For internal analysis, be conservative — surface only well-supported conclusions.';
-    if (style === 'balanced') return 'For internal analysis, use balanced judgment — share insights with appropriate confidence levels.';
-    return 'For internal analysis, be proactive — surface insights without being asked.';
-  }
+/**
+ * Whether a config's tone can be rendered: a non-empty style and an in-range verbosity.
+ * A stored row is not re-validated on read, so the renderer checks before interpolating
+ * rather than writing "undefined" into every agent's prompt.
+ */
+function renderableTone(tone: unknown): tone is OfficeIdentity['tone'] {
+  if (typeof tone !== 'object' || tone === null) return false;
+  const { style, verbosity } = tone as Record<string, unknown>;
+  return typeof style === 'string' && style.trim() !== ''
+    && typeof verbosity === 'number' && Number.isInteger(verbosity) && verbosity >= 0 && verbosity <= 100;
 }
 
 // Build a human-readable diff summary for the audit event.
-// Compares only the top-level shape to keep the summary concise and readable.
-function buildDiffSummary(prev: OfficeIdentity, next: OfficeIdentity): string {
+// Compares only the top-level shape to keep the summary concise and readable. Both sides
+// are normalized, so a legacy-to-new diff reads as a style change, not missing fields.
+function buildDiffSummary(prevRaw: OfficeIdentity, nextRaw: OfficeIdentity): string {
+  const prev = normalizeIdentity(prevRaw);
+  const next = normalizeIdentity(nextRaw);
   const changes: string[] = [];
 
   if (prev.assistant.name !== next.assistant.name) {
@@ -65,20 +67,12 @@ function buildDiffSummary(prev: OfficeIdentity, next: OfficeIdentity): string {
   if (prev.assistant.emailSignature !== next.assistant.emailSignature) {
     changes.push('email_signature updated');
   }
-  if (JSON.stringify(prev.tone.baseline) !== JSON.stringify(next.tone.baseline)) {
-    changes.push(`tone.baseline: [${prev.tone.baseline.join(', ')}] → [${next.tone.baseline.join(', ')}]`);
+  // The style is free text, possibly long: say it changed, not what it says.
+  if (prev.tone.style !== next.tone.style) {
+    changes.push('tone.style updated');
   }
   if (prev.tone.verbosity !== next.tone.verbosity) {
     changes.push(`tone.verbosity: ${prev.tone.verbosity} → ${next.tone.verbosity}`);
-  }
-  if (prev.tone.directness !== next.tone.directness) {
-    changes.push(`tone.directness: ${prev.tone.directness} → ${next.tone.directness}`);
-  }
-  if (prev.decisionStyle.externalActions !== next.decisionStyle.externalActions) {
-    changes.push(`decision_style.external_actions: ${prev.decisionStyle.externalActions} → ${next.decisionStyle.externalActions}`);
-  }
-  if (prev.decisionStyle.internalAnalysis !== next.decisionStyle.internalAnalysis) {
-    changes.push(`decision_style.internal_analysis: ${prev.decisionStyle.internalAnalysis} → ${next.decisionStyle.internalAnalysis}`);
   }
   if (JSON.stringify(prev.behavioralPreferences) !== JSON.stringify(next.behavioralPreferences)) {
     changes.push('behavioral_preferences updated');
@@ -271,7 +265,7 @@ export class OfficeIdentityService {
       return result.rows.map(row => ({
         id: row.id,
         version: row.version,
-        config: row.config as OfficeIdentity,
+        config: normalizeIdentity(row.config),
         changedBy: row.changed_by,
         note: row.note ?? undefined,
         createdAt: row.created_at,
@@ -288,9 +282,15 @@ export class OfficeIdentityService {
    * Output order (constraints-first, per spec):
    *   1. Hard constraints (labeled section, placed first)
    *   2. Identity header (name, title)
-   *   3. Tone guidance (baseline + verbosity + directness)
-   *   4. Decision style guidance
-   *   5. Behavioral preferences (ordered list)
+   *   3. How you sound: the operator's style text, then the fixed register line
+   *   4. Length: the Detail band's guidance
+   *   5. The fixed honesty line
+   *   6. Standing preferences (ordered list)
+   *
+   * Tone data that cannot be rendered (a stored row is not re-validated on read) is
+   * logged at error and its sections (3 and 4) are left out. Everything else still
+   * renders: throwing would make buildBaseSystemPrompt() drop the whole block, hard
+   * constraints included.
    */
   compileSystemPromptBlock(): string {
     const id = this.get();
@@ -311,25 +311,26 @@ export class OfficeIdentityService {
     lines.push(`You are ${id.assistant.name}, ${id.assistant.title}.`);
     lines.push('');
 
-    // 3. Tone guidance.
-    lines.push('**Communication style:**');
-    // Join baseline words with " and " — matches the spec example output.
-    const tonePhrase = id.tone.baseline.length > 0
-      ? id.tone.baseline.join(' and ')
-      : 'professional';
-    lines.push(`Your tone is ${tonePhrase}.`);
-    lines.push(verbosityGuidance(id.tone.verbosity));
-    lines.push(directnessGuidance(id.tone.directness));
+    // 3–4. Style and length, only when the tone can be rendered.
+    if (renderableTone(id.tone)) {
+      lines.push('**How you sound:**');
+      lines.push(id.tone.style.trim());
+      lines.push(REGISTER_LINE);
+      lines.push('');
+      lines.push(`**Length:** ${verbosityGuidance(id.tone.verbosity)}`);
+    } else {
+      this.logger.error(
+        { tone: id.tone },
+        'Office identity tone is not renderable (style must be non-empty, verbosity 0–100) — tone and length guidance omitted',
+      );
+    }
+
+    // 5. Honesty — code-owned, whatever the style says.
+    lines.push(HONESTY_LINE);
     lines.push('');
 
-    // 4. Decision style.
-    lines.push('**Decision posture:**');
-    lines.push(decisionStylePhrase(id.decisionStyle.externalActions, 'external'));
-    lines.push(decisionStylePhrase(id.decisionStyle.internalAnalysis, 'internal'));
-    lines.push('');
-
-    // 5. Behavioral preferences.
-    lines.push('**Behavioral preferences:**');
+    // 6. Standing preferences.
+    lines.push('**Standing preferences:**');
     for (const pref of id.behavioralPreferences) {
       lines.push(`- ${pref}`);
     }
@@ -358,7 +359,7 @@ export class OfficeIdentityService {
          JOIN office_identity_versions v ON v.id = c.version_id`,
       );
       if (result.rows.length === 0) return null;
-      return result.rows[0]!.config as OfficeIdentity;
+      return normalizeIdentity(result.rows[0]!.config);
     } catch (err) {
       // Table doesn't exist yet (pre-migration) — treat as no record.
       const pgCode = (err as { code?: string }).code;
@@ -378,35 +379,36 @@ export class OfficeIdentityService {
     if (!config.assistant?.name) {
       throw new Error('Office identity requires assistant.name');
     }
+    // Legacy fields mean a stale client: fail loudly rather than silently dropping them.
+    const legacyTop = LEGACY_TOP_LEVEL_KEYS.filter(k => Object.hasOwn(config, k));
+    const legacyTone = config.tone && typeof config.tone === 'object'
+      ? LEGACY_TONE_KEYS.filter(k => Object.hasOwn(config.tone, k)).map(k => `tone.${k}`)
+      : [];
+    const legacy = [...legacyTone, ...legacyTop];
+    if (legacy.length > 0) {
+      throw new Error(
+        `Office identity no longer accepts ${legacy.join(', ')}: tone words and directness are now ` +
+        'one written tone.style, and decision style is set by the autonomy level. Reload the console and try again.',
+      );
+    }
     // Guard nested fields before dereferencing — API payloads are not guaranteed
     // to match the TypeScript shape at runtime, and a null/missing tone would
     // throw a TypeError rather than a controlled validation error.
-    if (!config.tone || !Array.isArray(config.tone.baseline)) {
-      throw new Error('Office identity requires tone.baseline to be an array of 1–3 words');
+    if (!config.tone || typeof config.tone.style !== 'string' || config.tone.style.trim() === '') {
+      throw new Error('Office identity requires tone.style: a non-empty description of how the assistant sounds');
     }
-    if (config.tone.baseline.length > 3) {
-      throw new Error(`tone.baseline may contain at most 3 words; got ${config.tone.baseline.length}`);
-    }
-    for (const word of config.tone.baseline) {
-      if (!(BASELINE_TONE_OPTIONS as readonly string[]).includes(word)) {
-        throw new Error(
-          `tone.baseline word "${word}" is not in BASELINE_TONE_OPTIONS. ` +
-          `Valid options: ${BASELINE_TONE_OPTIONS.join(', ')}`,
-        );
-      }
+    if (config.tone.style.length > TONE_STYLE_MAX_LENGTH) {
+      throw new Error(`tone.style may be at most ${TONE_STYLE_MAX_LENGTH} characters; got ${config.tone.style.length}`);
     }
     if (!Number.isInteger(config.tone.verbosity) || config.tone.verbosity < 0 || config.tone.verbosity > 100) {
       throw new Error(`tone.verbosity must be an integer between 0 and 100; got ${config.tone.verbosity}`);
     }
-    if (!Number.isInteger(config.tone.directness) || config.tone.directness < 0 || config.tone.directness > 100) {
-      throw new Error(`tone.directness must be an integer between 0 and 100; got ${config.tone.directness}`);
-    }
-    const validDecisionStyles = ['conservative', 'balanced', 'proactive'];
-    if (!validDecisionStyles.includes(config.decisionStyle.externalActions)) {
-      throw new Error(`decision_style.external_actions must be conservative | balanced | proactive`);
-    }
-    if (!validDecisionStyles.includes(config.decisionStyle.internalAnalysis)) {
-      throw new Error(`decision_style.internal_analysis must be conservative | balanced | proactive`);
+    // Rendered as bullet lists: a string here would come out one character per bullet.
+    for (const key of ['behavioralPreferences', 'constraints'] as const) {
+      const list: unknown = config[key];
+      if (!Array.isArray(list) || list.some(item => typeof item !== 'string')) {
+        throw new Error(`Office identity requires ${key} to be a list of strings`);
+      }
     }
   }
 }

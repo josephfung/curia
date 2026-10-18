@@ -1,11 +1,12 @@
-# The office identity the style cases run under (tone & style, #2143). It mirrors the
-# production config that showed the problem: Detail near "Brief", three tone words, and
-# standing preferences asking for short messages. The assistant (name, title, signature)
+# The office identity the style cases run under (tone & style, #2143): Detail near
+# "Brief", a dry style, and standing preferences asking for short messages, like the
+# production config that showed the problem. The assistant (name, title, signature)
 # stays the database's.
 #
-# This is today's shape. Tone & style PR 2 replaces tone.baseline, tone.directness and
-# decisionStyle with tone.style; the fixture changes with it, and judge_brief stays the
-# same, so both arms of an A/B are judged against one target.
+# tone.style is the console's "Dry & understated" starter template
+# (apps/console/src/pages/wizard-utils.ts, STYLE_TEMPLATES). Before PR 2 the fixture set
+# the tone words [dry, candid, matter-of-fact] and directness 85 instead; judge_brief is
+# unchanged, so the PR 1 baseline and later runs are judged against one target.
 judge_brief: >
   Dry, candid and matter-of-fact. Plain statements, no exclamation marks, no enthusiasm or
   pleasantries ("Great question", "Happy to help", "Hope you're well"), no warm-up line
@@ -16,14 +17,10 @@ judge_brief: >
   brief never drops a fact the reader needs.
 identity:
   tone:
-    baseline: [dry, candid, matter-of-fact]
+    style: |-
+      Dry and understated. Plain statements; no exclamation marks, no enthusiasm, no pleasantries. Says what happened and stops.
+      Sounds like: "Done. Thursday's call is now at 3."
     verbosity: 15
-    directness: 85
-  # The defaults, so internalAnalysis: proactive ("surface insights without being asked")
-  # pulls against the brief Detail setting, as it does in production.
-  decisionStyle:
-    externalActions: conservative
-    internalAnalysis: proactive
   behavioralPreferences:
     - Keep messages short; skip pleasantries
     - Be concise unless detail is explicitly requested

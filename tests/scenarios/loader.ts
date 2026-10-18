@@ -93,7 +93,7 @@ const IDENTITY_FILE_KEYS = ['judge_brief', 'identity'] as const;
  * never inherits tone or preferences from whatever database it runs on. The values are
  * checked at boot by the identity service's own validation.
  */
-const IDENTITY_FIXTURE_KEYS = ['tone', 'behavioralPreferences', 'decisionStyle', 'constraints'] as const;
+const IDENTITY_FIXTURE_KEYS = ['tone', 'behavioralPreferences', 'constraints'] as const;
 
 function str(raw: Raw, key: string, file: string, where: string): string {
   const v = raw[key];
@@ -563,16 +563,15 @@ function loadIdentityFixture(name: string, file: string, dir: string): IdentityF
   if (missing.length > 0) {
     throw new CaseError(fixtureFile, `identity: missing ${missing.join(', ')} (a fixture sets everything but the assistant)`);
   }
-  // The identity service validates tone and decisionStyle, but renders these two as bullet
-  // lists unchecked: a string would come out one character per bullet.
+  // The identity service validates every field when the stack boots; these are checked
+  // here too, so a malformed fixture fails at load, before any paid run.
   strList(config, 'behavioralPreferences', fixtureFile, 'identity');
   strList(config, 'constraints', fixtureFile, 'identity');
   mapping(config, 'tone', fixtureFile, 'identity');
-  mapping(config, 'decisionStyle', fixtureFile, 'identity');
   return {
     name,
     judgeBrief: str(raw, 'judge_brief', fixtureFile, 'identity fixture'),
-    // The identity service validates tone and decision style when the stack boots.
+    // The identity service validates the values when the stack boots.
     config: config as unknown as IdentityFixture['config'],
   };
 }

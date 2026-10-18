@@ -15,9 +15,8 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
 
 const BASE_IDENTITY: OfficeIdentity = {
   assistant: { name: 'Curia', title: 'Chief of Staff', emailSignature: '' },
-  tone: { baseline: ['professional'], verbosity: 50, directness: 50 },
+  tone: { style: 'Professional.', verbosity: 50 },
   behavioralPreferences: ['Be concise', 'Prioritize signal over noise'],
-  decisionStyle: { externalActions: 'balanced', internalAnalysis: 'balanced' },
   constraints: [],
 };
 

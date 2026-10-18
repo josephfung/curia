@@ -507,8 +507,7 @@ expected_behaviors:
   const FIXTURE = `
 judge_brief: Dry and brief.
 identity:
-  tone: { baseline: [dry], verbosity: 15, directness: 85 }
-  decisionStyle: { externalActions: conservative, internalAnalysis: proactive }
+  tone: { style: Dry and brief., verbosity: 15 }
   behavioralPreferences: [Keep it short]
   constraints: [Never impersonate the principal]
 `;

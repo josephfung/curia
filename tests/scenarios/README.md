@@ -488,7 +488,7 @@ pnpm scenarios --tags style --model deepseek/deepseek-v4.1-flash
 ```
 
 A case's `identity: <name>` names a fixture in `identities/`: everything in the office
-identity but the assistant (tone, decision style, standing preferences, constraints), and
+identity but the assistant (tone, standing preferences, constraints), and
 a `judge_brief` the judge sees as "The office's configured style". The stack lays the
 fixture over the database's identity in memory: every agent's block still comes from the
 real renderer, and nothing is written to the identity history.

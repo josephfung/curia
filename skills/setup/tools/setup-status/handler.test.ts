@@ -88,8 +88,7 @@ function makeCtx(overrides: Partial<{
       get: () => ({
         behavioralPreferences: overrides.behavioralPreferences ?? [],
         assistant: { name: 'Curia', title: '', emailSignature: '' },
-        tone: { baseline: [], verbosity: 50, directness: 50 },
-        decisionStyle: { externalActions: 'balanced', internalActions: 'balanced' },
+        tone: { style: 'Professional.', verbosity: 50 },
         constraints: [],
       }),
     } as unknown as ToolContext['officeIdentityService'],

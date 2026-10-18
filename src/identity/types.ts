@@ -11,19 +11,19 @@ export interface OfficeIdentity {
     emailSignature: string;
   };
   tone: {
-    // 1–3 words from BASELINE_TONE_OPTIONS. Validated at the application layer.
-    // Not a DB enum — extend BASELINE_TONE_OPTIONS without a migration.
-    baseline: string[];
-    verbosity: number;    // 0–100; 0 = tersest, 100 = most thorough
-    directness: number;   // 0–100; 0 = most hedged, 100 = most direct
+    /**
+     * How the assistant sounds, in the operator's words, usually started from a console
+     * template ending in an example line. 1–TONE_STYLE_MAX_LENGTH chars. Rendered verbatim.
+     */
+    style: string;
+    verbosity: number;    // the Detail slider: 0–100; 0 = tersest, 100 = most thorough
   };
   behavioralPreferences: string[];
-  decisionStyle: {
-    externalActions: 'conservative' | 'balanced' | 'proactive';
-    internalAnalysis: 'conservative' | 'balanced' | 'proactive';
-  };
   constraints: string[];
 }
+
+/** The longest `tone.style` the identity accepts. */
+export const TONE_STYLE_MAX_LENGTH = 800;
 
 export interface OfficeIdentityVersion {
   id: number;
@@ -33,22 +33,3 @@ export interface OfficeIdentityVersion {
   note?: string;
   createdAt: Date;
 }
-
-// Predefined set for tone.baseline. Validated at the application layer.
-// To add a new word: extend this constant and bump the app — no migration needed.
-export const BASELINE_TONE_OPTIONS = [
-  // Warmth / Relationship
-  'warm', 'friendly', 'approachable', 'personable', 'empathetic',
-  'encouraging', 'gracious', 'caring',
-  // Efficiency / Edge
-  'direct', 'blunt', 'candid', 'frank', 'matter-of-fact', 'no-nonsense',
-  // Energy / Register
-  'energetic', 'calm', 'composed', 'enthusiastic', 'steady', 'measured',
-  // Personality / Color
-  'playful', 'witty', 'dry', 'charming', 'diplomatic', 'tactful',
-  'thoughtful', 'curious',
-  // Authority / Gravitas
-  'confident', 'assured', 'polished', 'authoritative', 'professional',
-] as const;
-
-export type BaselineToneOption = typeof BASELINE_TONE_OPTIONS[number];

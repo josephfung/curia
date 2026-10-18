@@ -9,9 +9,8 @@ import type { OfficeIdentity } from '../../../../src/identity/types.js';
 
 const MOCK_IDENTITY: OfficeIdentity = {
   assistant: { name: 'Alex Curia', title: 'Executive Assistant', emailSignature: 'Alex Curia\nOffice of the CEO' },
-  tone: { baseline: ['warm', 'direct'], verbosity: 50, directness: 75 },
+  tone: { style: 'Warm and direct.', verbosity: 50 },
   behavioralPreferences: ['Be concise'],
-  decisionStyle: { externalActions: 'conservative', internalAnalysis: 'proactive' },
   constraints: ['Never impersonate the CEO'],
 };
 

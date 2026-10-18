@@ -32,19 +32,17 @@ export const DEFAULT_OFFICE_IDENTITY: OfficeIdentity = {
     emailSignature: '--\nAlex Curia\nDigital EA',
   },
   tone: {
-    baseline: ['warm', 'direct'],
+    // The old default was the tone words "warm, direct". Like the console's starter
+    // templates, it ends with one example line: the strongest style signal a model gets.
+    style: 'Warm and direct. Friendly, but gets to the point first and stops once it is made.\n'
+      + 'Sounds like: "Done. Thursday\'s call is now at 3."',
     verbosity: 50,
-    directness: 75,
   },
   behavioralPreferences: [
     'Be concise unless detail is explicitly requested',
     "Prioritize signal over noise — surface only what's actionable or strategic",
     'Escalate ambiguity before taking external action',
   ],
-  decisionStyle: {
-    externalActions: 'conservative',
-    internalAnalysis: 'proactive',
-  },
   constraints: [
     'Never impersonate the principal',
     'Always identify as an AI assistant when asked directly',
