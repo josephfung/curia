@@ -279,6 +279,17 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     initiator_id: str(p, 'agentId', fail),
   }),
 
+  // An item for the principal's digest (#2159). Keyed by what produced it, so the console
+  // timeline can filter notes, block notices and approval items apart.
+  'principal.report': (p, fail) => ({
+    action: 'report',
+    outcome: 'success',
+    target_type: 'principal',
+    target_id: str(p, 'source', fail),
+    initiator_type: INITIATOR_TYPE_SYSTEM,
+    initiator_id: str(p, 'source', fail),
+  }),
+
   // Spec lists message.held; the event type is reserved but not yet emitted.
   // Keep the mapping ready so structured columns populate the day it ships.
   'message.held': (p, fail) => ({

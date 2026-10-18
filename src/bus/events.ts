@@ -1493,6 +1493,38 @@ export interface DelegationPrincipalNoteEvent extends BaseEvent {
   payload: DelegationPrincipalNotePayload;
 }
 
+// PrincipalReportPayload — an item for the principal's next digest (#2159): something Curia
+// did on the principal's behalf, a notice (a note cut from a reply, a blocked send), or an
+// approval waiting or expired. Recorded in audit_log only; ReportQueue reads it back for
+// the digest and the weekly fallback. Never delivered on its own — the digest carries it.
+export type PrincipalReportUrgency = 'digest' | 'now';
+/** What produced the item. Agents use 'agent'; system paths name themselves. */
+export type PrincipalReportSource =
+  | 'agent'
+  | 'principal_note'
+  | 'blocked_content'
+  | 'approval_pending'
+  | 'approval_expired';
+export interface PrincipalReportPayload {
+  /** One or two sentences, written for the principal. */
+  summary: string;
+  /** 'now' marks an item the principal was also pinged about directly. */
+  urgency: PrincipalReportUrgency;
+  source: PrincipalReportSource;
+  /** The thread or task this concerns, when there is one. */
+  conversationId?: string;
+  /** e.g. a console task URL. */
+  link?: string;
+  /** The approval's short_ref, for approval_* items. */
+  actionShortRef?: string;
+}
+
+export interface PrincipalReportEvent extends BaseEvent {
+  type: 'principal.report';
+  sourceLayer: 'dispatch' | 'system';
+  payload: PrincipalReportPayload;
+}
+
 // SecretCapturedEvent — published by the capture endpoint (trusted system infra) when a
 // one-time link is redeemed (#972). sourceLayer 'system' because the capture endpoint
 // self-authorizes via the token and writes to the vault, like the scheduler emitting its
@@ -1733,6 +1765,7 @@ export type BusEvent =
   | DelegationLateResolvedEvent // #1799: a late specialist response was delivered, recorded, or lost
   | DelegationRequesterContextEvent // #1859: identity evidence rendered into a delegated specialist prompt
   | DelegationPrincipalNoteEvent // #1990: a sender reply's note for the principal, kept out of the reply
+  | PrincipalReportEvent     // #2159: an item for the principal's digest (report queue)
   | AutonomyToolBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
@@ -2414,6 +2447,22 @@ export function createDelegationPrincipalNote(
     timestamp: new Date(),
     type: 'delegation.principal_note',
     sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createPrincipalReport(
+  // sourceLayer is the publishing layer: dispatch for the dispatcher, gateway and report
+  // tools; system for interval jobs such as the approval expiry sweep.
+  payload: PrincipalReportPayload & { parentEventId: string; sourceLayer: 'dispatch' | 'system' },
+): PrincipalReportEvent {
+  const { parentEventId, sourceLayer, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'principal.report',
+    sourceLayer,
     payload: rest,
     parentEventId,
   };
