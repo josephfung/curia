@@ -3,8 +3,8 @@
 Rework how the office identity describes the way Curia sounds. The operator writes a few
 lines describing it, usually starting from a template. The Detail slider stays and becomes
 concrete per-channel length limits. Decision posture and the directness slider go away,
-and the setup wizard asks for an autonomy level instead. Specialists that write to the
-principal or to third parties get the identity block too.
+and the setup wizard asks for an autonomy level instead. Every agent other than the
+coordinator gets the identity block too, in a "writes-as" form.
 
 Supersedes the tone and decision-style parts of [spec 13](../specs/13-office-identity.md).
 That spec is updated in PR 2.
@@ -187,7 +187,7 @@ model from reusing a template's example sentence word for word.
 - **Constraints always render.** Hard constraints, **Who you are** and standing
   preferences render regardless. Throwing would trip the existing omit-the-whole-block
   path in `buildBaseSystemPrompt()`, which would also drop the hard constraints, and after
-  PR 4 for every opted-in agent.
+  PR 4 for every agent.
 
 The honesty line is fixed, code-owned text, so no style description can talk the model
 out of calibrated uncertainty. It replaces what the low end of the directness slider did.
@@ -228,24 +228,15 @@ the backlog line's split, where the bus carries data and the runtime renders the
 The reminder applies only to turns whose final response is delivered on a channel.
 Scheduler turns get none: their response goes nowhere (`SCHEDULER_DELIVERY`). Proactive
 sends through `signal-send` or `email-send`, from any turn, rely on the identity block's
-channel table. PR 3's A/B decides whether the reminder pays for its tokens.
+channel table.
 
-### Principal-facing specialists
+### Specialists
 
-Agents opt in with a manifest flag:
-
-```yaml
-office_identity: true
-```
-
-`agent-assembly.ts` passes `officeIdentityService` to the coordinator and to any agent with
-the flag.
-
-**Flag validation.** `loadAgentConfig()` does no unknown-key or type checking today.
-`office_identity: yes` would load as the string "yes" under YAML 1.2, and a misspelled key
-would be ignored. Either way the agent silently gets no block. The loader rejects an
-`office_identity` that is present but not a boolean, the same way it checks
-`delegate_when`. The ADR notes that unknown top-level keys are still unchecked.
+Every agent gets the block. `agent-assembly.ts` passes `officeIdentityService` to all of
+them, not only the coordinator. There is no manifest flag (YAGNI): an agent that needs to
+opt out can get one when it exists. Core and deployment agents can't be told apart at
+runtime anyway, because a deployment's image copies its `custom/agents/` into the same
+`agents/` directory.
 
 For specialists, the block renders in **writes-as** mode, because the agent's own YAML
 already says who it is ("You are the Meeting Debrief Specialist"). It is a separate method
@@ -270,32 +261,37 @@ The block reads:
 **Who you write as:**
 Anything you write for the principal or for anyone outside the office goes out from
 <name>, <title>, and follows the contract below.
+Anything written in the principal's own name (drafts, posts, essays) follows the
+principal's voice, not this contract.
+Results you return to the coordinator or another agent are not covered; include
+everything they need.
 ```
 
 The rest (constraints, how you sound, length, standing preferences) is identical.
 Standing preferences are included on purpose, because a rule about what a daily recap
 contains binds whichever agent writes the recap.
 
-Opt-ins:
-- **core:** `meeting-debrief` and `ceo-inbox`.
-- **deployments:** any custom agent that sends to the principal or to third parties. That
-  includes agents that email outside parties, where the office style applies as it does to
-  the coordinator's third-party mail.
-
-**`ceo-inbox` is the exception that needs care.** Its drafts are written in the
-*principal's* voice from `executive-profile-get`, and that must not change. ceo-inbox.yaml
-gains one sentence scoping the block: drafts and replies in the principal's name use the
-executive voice profile, and the identity block covers only what ceo-inbox writes for
-Curia (escalations, summaries). A scenario pins this (see Measurement).
+The two scoping sentences carry what a per-agent flag would have. Both are fixed text in
+the block, so no agent's YAML needs to repeat them.
+- **Writing as the principal.** ceo-inbox drafts in the principal's voice from
+  `executive-profile-get`, and that must not change. Deployments have more agents like it:
+  an essay editor that edits against the principal's writing guide, and a social-media
+  agent that drafts replies in the principal's voice. The first scoping sentence keeps
+  all of them on the principal's voice. A scenario pins this for ceo-inbox (see
+  Measurement).
+- **Reporting to the coordinator.** calendar, contacts, research-analyst and diagnostics
+  mostly return results to the coordinator. A "1–2 sentences" length limit must not
+  shorten a six-meeting result before the coordinator sees it. The second scoping
+  sentence keeps agent-to-agent results out of the contract. The specialist cases already
+  in the release gate catch a regression.
 
 This revises spec 13's principle "Specialist agents do not have personalities." The new
 principle is that the office has one voice, and every agent that writes outward uses it.
-The flag is an agent YAML schema addition, which is a public API surface. Both the
-schema addition and the reversed principle go in an ADR that lands with PR 4.
+PR 4 updates spec 13. With no YAML schema change there is no public API change, so no ADR.
 
 The prompt budget (`src/agents/prompt-budget.ts`) counts only the YAML prompt and SKILL.md
 bodies, not code-owned runtime blocks. PR 4 therefore needs no budget change. The block's
-size for each opted-in specialist is unbudgeted, so the PR reports it.
+size for each specialist is unbudgeted, so the PR reports it.
 
 ### Prompt-exfiltration markers
 
@@ -310,7 +306,7 @@ instruction-like sentences:
 - "Match the register…"
 - the "Go longer only when…" exception
 - the band texts
-- the writes-as sentence
+- the writes-as sentences
 
 Export them as constants and add them to `TRIGGER_GUIDANCE_MARKER_SOURCES`, so injected
 guidance stays scanned (#1959).
@@ -377,24 +373,33 @@ The `setup-status` catalog copy ("Tune tone, working style…") gets checked for
 
 ## Measurement
 
-Add style cases to the scenarios suite, judged with the existing rejudge infrastructure. The
-judge sees the identity's `style` and scores the following:
+Style cases live in the scenarios suite (`tests/scenarios/cases/40*`, tag `style`). What
+code can score, code scores, with the suite's `text` check (a word cap and banned patterns,
+on the reply or on one argument of a send). The judge scores the rest against the
+fixture's `judge_brief`, which it sees as "The office's configured style":
 
-- **Length:** within the band's limit for the channel.
-- **Register:** matches the style text, e.g. no exclamation marks under a dry style.
-- **No filler:** no warm-up openers ("Great question", "Here's what I found"), restated
-  asks, or closing offers ("let me know if…").
-- **Content kept:** a brief reply still carries every required fact.
+- **Length** (code): the reply or message stays under the case's word cap.
+- **No filler** (code): no exclamation marks, warm-up openers ("Great question", "Here's
+  what I found"), or closing offers ("let me know if…").
+- **Register** (judge): reads in the configured style.
+- **Content kept** (judge, `critical`): a brief reply still carries every required fact.
+  It is the only gated behavior in the style cases, so brevity can never be bought by
+  dropping content. Length and register are `important`: scored and compared, not gated.
 
 Cases:
-1. A Signal reply to a principal question, at a brief band and a dry style.
-2. An email reply from Curia's own account to a third party.
-3. A scheduled recap sent with `signal-send` (proactive path, no turn reminder).
-4. A specialist-originated message (meeting-debrief prompt) once PR 4 lands.
-5. **A guard case:** a ceo-inbox draft is produced (not refused or escalated) and follows
-   the executive voice profile, not the office style. Hard constraints render first in the
-   block, so a constraint like "never impersonate the principal" could start blocking
-   drafts in the principal's voice.
+- **40a** A Signal reply to a principal question. The specialist's answer is long and
+  chatty; its three facts must survive the trim.
+- **40b** An email reply from Curia's own inbox to a third party.
+- **40c** A scheduled recap sent with `signal-send` (proactive path, no turn reminder).
+  Four meetings are four facts.
+- **40d** The debrief prompt meeting-debrief writes for the coordinator to relay. It has
+  no identity block until PR 4.
+- **40e** **A guard case:** a ceo-inbox draft is produced (not refused or escalated) and
+  follows the executive voice profile, not the office style. Hard constraints render first
+  in the block, so a constraint like "never impersonate the principal" could start
+  blocking drafts in the principal's voice. The voice profile is the office style's
+  opposite (warm, exclamation marks, "Cheers, Avery"), so the voice the draft follows is
+  plain to see.
 
 **Eval snapshots.** Harnesses that render agent prompts from a snapshot of the live
 identity block (#261) need a writes-as block field, and must be re-fetched after the PR 2
@@ -402,34 +407,48 @@ and PR 4 deploys. Otherwise they score the old block text.
 
 **Setting the identity for a run.** The scenario stack gives agents a read-only view of one
 shared `OfficeIdentityService`, and cases run 4 at a time. A per-case identity would leak
-into concurrently running cases. PR 1 therefore adds a run-level identity fixture:
-- **Run-level, not per-case.** Style cases run as their own group (`pnpm scenarios
-  --group style`, or the equivalent), and the fixture is seeded once through the real
-  service before any case starts.
-- **The fixture is a brief Detail band** plus a dry style, written in **both** shapes: the
-  legacy tone words + directness for main, and the `style` text for the branch. The PR 2
-  A/B then compares like with like.
-- **Other cases** keep the default identity.
+into concurrently running cases, so the identity is the run's:
+- **A case names a fixture** (`identity: style-brief-dry`, from
+  `tests/scenarios/identities/`). Every case in a run must name the same one (or none), and
+  a case with a fixture is never in the release gate. `pnpm scenarios --tags style` runs
+  the group.
+- **The fixture is laid over the database's identity in memory.** The stack's identity
+  service returns it from `get()`, so every block still comes from the real renderer, and
+  nothing is written to `office_identity_versions`. The assistant's name, title and
+  signature stay the database's.
+- **The fixture is a brief Detail band** (15) plus dry tone words and the default decision
+  style, in today's shape. PR 2 rewrites it as `tone.style`; `judge_brief` stays the same,
+  so the judge reads one target in both arms.
+- **40a needs a principal with a Signal identity** in the database the run uses.
 
-PR 1 lands these and records a baseline on main. Each later PR is an A/B against main on
-the same cases.
+**When to measure.** Two style-group runs in all:
+1. **PR 1** records a baseline. PR 1 changes no prompt, agent or renderer, so its branch
+   measures main's behavior.
+2. **PR 3** runs one A/B against main, once the style text and the length limits are both
+   live. That run answers whether the rework worked. If it shows no gain, we look into
+   PR 2 and PR 3 then.
+
+PRs 2, 4 and 5 run no A/B. PR 4's specialist and guard cases are already here (40d, 40e),
+and just need to keep passing. Regressions elsewhere are the release gate's job.
+
+### Baseline (PR 1)
+
+BASELINE_PLACEHOLDER
 
 ## PR sequence
 
-| PR | Delivers | A/B |
+| PR | Delivers | Measurement |
 |---|---|---|
 | 0 | This design | none |
-| 1 | Style scenarios, judge rubric and run-level identity fixture; baseline on main | baseline only |
-| 2 | Data model, `normalizeIdentity`, validation, new identity block (style, honesty line, no decision posture), starter templates, console Personality / Posture changes, wizard autonomy picker. Docs: spec 13 fields, spec 18 (onboarding: tone and posture steps, `BASELINE_TONE_OPTIONS`), `docs/dev/setup.md` (sliders) | main vs branch |
-| 3 | Per-channel length table in the block (explicit channel map); per-turn length reminder; block's fixed lines added to marker sources; calibrate band numbers | with vs without the reminder |
-| 4 | ADR-049 (next free number; add a row to `docs/adr/README.md`) for the office-voice principle and the manifest flag; spec 13's "specialists have no personality" principle revised; `docs/dev/adding-an-agent.md` documents the flag and drops its directness mention; `office_identity: true` flag (loader type-checks it), `compileWritesAsBlock()`, core opt-ins, ceo-inbox scoping sentence; deployments then opt in their own custom agents | main vs branch, including the ceo-inbox guard case |
-| 5 | Remove tone directives from prompts: "warm" in turn guidance and meeting-debrief, and the neutral example sentences in coordinator.yaml. Leave information policy, phrased as policy. | main vs branch |
+| 1 | Style cases 40a–40e, the `text` check, judge style brief and run-level identity fixture | baseline |
+| 2 | Data model, `normalizeIdentity`, validation, new identity block (style, honesty line, no decision posture), starter templates, console Personality / Posture changes, wizard autonomy picker, identity fixture in the new shape. Docs: spec 13 fields, spec 18 (onboarding: tone and posture steps, `BASELINE_TONE_OPTIONS`), `docs/dev/setup.md` (sliders) | none |
+| 3 | Per-channel length table in the block (explicit channel map); per-turn length reminder; block's fixed lines added to marker sources; calibrate band numbers | A/B vs main, style group |
+| 4 | Every agent gets the block: `compileWritesAsBlock()` with the two scoping sentences; spec 13's "specialists have no personality" principle revised; `docs/dev/adding-an-agent.md` drops its directness mention | none (40d, 40e keep passing) |
+| 5 | Remove tone directives from prompts: "warm" in turn guidance and meeting-debrief, and the neutral example sentences in coordinator.yaml. Leave information policy, phrased as policy. | none |
 
-PRs 1–5 each update `CHANGELOG.md`. PR 0 is docs/wip only and needs no entry.
-- **PR 2** is the user-visible change: settings move and the identity API shape changes, so
-  its entry calls that out.
-- **PR 4** adds an agent YAML field, which is a listed public API surface, so its entry
-  calls that out too.
+PRs 1–5 each update `CHANGELOG.md`. PR 0 is docs/wip only and needs no entry. **PR 2** is
+the user-visible change: settings move and the identity API shape changes, so its entry
+calls that out.
 
 ## Out of scope
 

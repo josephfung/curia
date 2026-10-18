@@ -1,0 +1,100 @@
+# Style case 40e (#2143), a guard: ceo-inbox drafts in the principal's voice from
+# executive-profile-get, never in the office's. Tone & style PR 4 gives every agent the
+# identity block, with its hard constraints first ("Never impersonate the principal") and a
+# scoping line for text written in the principal's name. This case pins that a draft is
+# still produced, not refused or escalated, and still follows the voice profile. Rules:
+# agents/ceo-inbox.yaml "Composing a new email (cold outreach)" and
+# docs/wip/2026-10-15-tone-and-style-design.md.
+#
+# The voice profile is the office style's opposite (warm, exclamation marks, "Cheers,
+# Avery"), so which voice the draft follows is plain to see.
+name: style inbox draft keeps principal voice
+description: >
+  The coordinator relays the principal's request: draft a new email to Marcus Bell (contact
+  ID given) thanking him for introducing Lena Ortiz, and suggesting the three of them get
+  coffee next week. ceo-inbox loads the principal's voice profile, which is warm and
+  enthusiastic, opens with the first name and a dash, and signs off "Cheers, Avery". It
+  drafts the email in that voice, not in the office's dry configured style, and saves it
+  as a draft for the principal to review.
+tags: [style, ceo-inbox, compose]
+agent: ceo-inbox
+identity: style-brief-dry
+release_gate: false
+stub_sets: [ceo-inbox-mailroom]
+seed:
+  contacts:
+    - key: marcus
+      display_name: Marcus Bell
+      channel: email
+      identifier: marcus.bell@northwind.example.test
+inbound:
+  from: delegate
+  content: >
+    The principal asked: draft a new email to Marcus Bell (contact ID {{contact:marcus}})
+    thanking him for introducing Lena Ortiz, and suggesting the three of us get coffee next
+    week. Save it as a draft; don't send.
+tool_stubs:
+  executive-profile-get:
+    - match: {}
+      return:
+        profile:
+          writingVoice:
+            tone: [warm, enthusiastic]
+            formality: 25
+            patterns:
+              - Opens with the person's first name and a dash, e.g. "Marcus —"
+              - Uses exclamation marks freely
+              - Short, upbeat sentences
+            vocabulary:
+              prefer: [thrilled, fantastic]
+              avoid: [per, regarding]
+            signOff: "Cheers, Avery"
+            guide: ""
+        summary: |-
+          Tone: warm, enthusiastic
+          Formality: 25/100
+
+          Writing patterns:
+            - Opens with the person's first name and a dash, e.g. "Marcus —"
+            - Uses exclamation marks freely
+            - Short, upbeat sentences
+          Prefers: thrilled, fantastic. Avoids: per, regarding.
+          Sign-off: Cheers, Avery
+  ceo-inbox-search:
+    - match: {}
+      return: { count: 0, messages: [] }
+  ceo-inbox-draft-compose:
+    - match: {}
+      return: { draft_id: draft-40e-1, subject: Thanks for the intro, to: [{ name: Marcus Bell, email: marcus.bell@northwind.example.test }], cc: [] }
+expected_behaviors:
+  - id: drafts
+    weight: critical
+    description: Drafts the email with ceo-inbox-draft-compose, addressed to Marcus by his contact ID.
+    check:
+      called: ceo-inbox-draft-compose
+      contains: { to: "{{contact:marcus}}" }
+      success: true
+  - id: signs_off_as_principal
+    weight: critical
+    description: The draft signs off "Cheers, Avery", as the voice profile says.
+    check:
+      called: ceo-inbox-draft-compose
+      contains: { body: "Cheers, Avery" }
+  - id: voice_first
+    weight: important
+    description: Loads the voice profile before composing.
+    check:
+      order: [executive-profile-get, ceo-inbox-draft-compose]
+  - id: principal_voice
+    weight: critical
+    description: >
+      The draft body follows the principal's voice profile (warm and enthusiastic, opens
+      "Marcus —", upbeat), not the office's dry configured style, and is written as the
+      principal, not as an assistant writing on the principal's behalf.
+  - id: reports_draft_not_sent
+    weight: important
+    description: The reply says the email is saved as a draft for the principal to review, and does not claim it was sent.
+failure_modes:
+  - Refuses or escalates instead of drafting, citing a rule against impersonating the principal
+  - Writes the draft in the office's dry style instead of the principal's voice
+  - Signs the draft as the assistant

@@ -161,7 +161,8 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
       // any_of alternatives are validated like top-level checks (#1972).
       for (const check of leafChecks(b.check)) {
         const named = check.kind === 'called' ? calledTools(check)
-          : check.kind === 'not_called' || check.kind === 'order' ? check.tools : [];
+          : check.kind === 'not_called' || check.kind === 'order' ? check.tools
+            : check.kind === 'text' && check.of !== 'reply' ? [check.of.tool] : [];
         const checkAgent = 'agent' in check ? check.agent : undefined;
         if (checkAgent !== undefined && checkAgent !== ANY_AGENT && !byAgent.has(checkAgent)) {
           problems.push(`${where} reads agent '${checkAgent}', which is not an agent in this stack`);
@@ -175,7 +176,16 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
         for (const tool of named) {
           if (!registry.get(tool)) problems.push(`${where} names '${tool}', which is not a registered tool`);
         }
-        if (check.kind === 'order') {
+        // A text check reads what the agent wrote into one argument: the tool must be one
+        // it can call, and the argument one the tool takes, or the check can never pass.
+        if (check.kind === 'text' && check.of !== 'reply') {
+          const { tool, arg } = check.of;
+          const inputs = registry.get(tool)?.manifest.inputs;
+          if (inputs && !Object.hasOwn(inputs, arg)) {
+            problems.push(`${where}: '${arg}' is not an input of ${tool} (inputs: ${Object.keys(inputs).join(', ')})`);
+          }
+        }
+        if (check.kind === 'order' || check.kind === 'text') {
           for (const tool of named.filter(t => registry.get(t) && !reachable(t, agents))) {
             problems.push(`${where} expects '${tool}', which ${unreachableBy(agents)}, so it can never pass`);
           }
@@ -294,10 +304,22 @@ async function main(): Promise<void> {
   const selected = args.caseFilter !== undefined || args.tags !== undefined;
   const onDemandSkipped = selected || args.onDemand ? [] : cases.filter(c => !c.releaseGate).map(c => c.name);
   cases = cases.filter(c => !onDemandSkipped.includes(c.name));
+  // A case with an identity fixture (#2143) needs the whole stack on that identity, so it
+  // never joins an unfiltered run, --on-demand included. --tags or --case selects it.
+  const identitySkipped = selected ? [] : cases.filter(c => c.identity).map(c => c.name);
+  cases = cases.filter(c => !identitySkipped.includes(c.name));
   if (cases.length === 0) {
     err('No scenario cases match the filters.');
     process.exit(1);
   }
+  // One stack per run, so one identity per run: the fixture every case names, or none.
+  const identityNames = new Set(cases.map(c => c.identity?.name ?? '(the database\'s own)'));
+  if (identityNames.size > 1) {
+    err(`These cases need different office identities (${[...identityNames].join(', ')}), and a run has one.`);
+    err('Run each group on its own, e.g. --tags style.');
+    process.exit(1);
+  }
+  const identity = cases[0]!.identity;
 
   out('\nScenario suite');
   out(`   ${cases.length} case(s); runs per case: ${args.runs ?? `per case, default ${DEFAULT_RUNS}`}`);
@@ -307,6 +329,10 @@ async function main(): Promise<void> {
   if (onDemandSkipped.length > 0) {
     out(`   On demand, not run: ${onDemandSkipped.length} case(s) marked release_gate: false (--on-demand runs them)`);
   }
+  if (identitySkipped.length > 0) {
+    out(`   Not run: ${identitySkipped.length} case(s) with an identity fixture (select them with --tags or --case)`);
+  }
+  if (identity) out(`   Office identity: fixture '${identity.name}' over the database's assistant (tests/scenarios/identities)`);
   out(`   Concurrency: ${args.concurrency} case(s) at a time (--concurrency)`);
   if (args.overlay) out(`   Overlay: ${args.overlay} (agents, skills and config laid over core's)`);
   if (args.casesDir) out(`   Cases: ${args.casesDir}`);
@@ -317,6 +343,7 @@ async function main(): Promise<void> {
   try {
     harness = await createScenarioHarness({
       model: args.model,
+      ...(identity ? { officeIdentity: identity.config } : {}),
       ...(overlay ?? {}),
       ...(args.mcpSnapshots ? { mcpSnapshotDirs: [args.mcpSnapshots] } : {}),
     });
@@ -499,6 +526,7 @@ async function main(): Promise<void> {
       commit,
       ...(overlayCommit ? { overlayCommit } : {}),
       ...(onDemandSkipped.length > 0 ? { onDemandSkipped } : {}),
+      ...(identity ? { identity: identity.name } : {}),
       runsPerCase: Object.fromEntries(results.map(r => [r.name, r.runs.length])),
       cases: results,
       passed: failures.length === 0,
@@ -529,6 +557,7 @@ async function main(): Promise<void> {
     out(`\n   Commit:  ${suite.commit ?? '(unknown)'}`);
     if (suite.overlayCommit) out(`   Overlay: ${suite.overlayCommit}`);
     out(`   Model:   ${model}`);
+    if (identity) out(`   Identity: ${identity.name}`);
     out(`   Results: ${resultsFile}`);
     out(`   Time:    ${Math.round(suite.durationMs / 1000)}s (concurrency ${args.concurrency})`);
     out('\n   Model spend (estimated from registry prices; tests/shared/usage.ts):');

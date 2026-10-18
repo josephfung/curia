@@ -1,0 +1,64 @@
+# Style case 40a (#2143): a Signal reply to the principal, under a brief, dry identity.
+# Rule: the office identity block's tone and Detail settings (src/identity/service.ts,
+# compileSystemPromptBlock); see docs/wip/2026-10-15-tone-and-style-design.md. Measures how
+# the reply reads, so length and filler are scored in code and register by the judge.
+#
+# The specialist's answer is long and chatty, so relaying it as written is available. Its
+# three facts must all survive the trim.
+name: style signal reply brief
+description: >
+  The principal asks on Signal whether Dana Whitfield confirmed Thursday. ceo-inbox reports
+  a long answer: Dana confirmed Thursday at 3pm, will send the revised deck by Wednesday
+  evening, and asked whether the boardroom has a screen she can plug into. The coordinator
+  answers the principal in one or two short sentences that keep all three facts, in the
+  office's configured style.
+tags: [style]
+identity: style-brief-dry
+release_gate: false
+stub_sets: [human-channels]
+inbound:
+  from: principal
+  channel: signal
+  content: Did Dana confirm Thursday?
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: ceo-inbox
+        response: >
+          Great news! I found Dana Whitfield's reply in your inbox, sent at 9:12 this
+          morning on the "Thursday planning session" thread. She confirmed that Thursday at
+          3pm works well for her. She also mentioned that she'll send over the revised deck
+          by Wednesday evening so you have time to review it beforehand. Finally, she asked
+          whether the boardroom has a screen she can plug her laptop into for the
+          presentation. Let me know if you'd like me to draft a reply to her or check on the
+          boardroom setup!
+expected_behaviors:
+  - id: replies
+    weight: critical
+    description: Answers the principal (not NO_REPLY).
+    check:
+      reply: not_no_reply
+  - id: content_kept
+    weight: critical
+    description: >
+      The reply says Dana confirmed Thursday at 3pm, that she will send the revised deck by
+      Wednesday, and that she asked whether the boardroom has a screen.
+  - id: within_length
+    weight: important
+    description: The reply is at most 40 words (about two sentences).
+    check:
+      text: reply
+      max_words: 40
+  - id: no_filler
+    weight: important
+    description: No exclamation marks, warm-up openers or closing offers.
+    check:
+      text: reply
+      excludes: ['!', '\bgreat (news|question)\b', '\bhappy to\b', '\blet me know\b', "\\bhere(’|')?s what\\b", '\bhope (this|that) helps\b', '\bwould you like me to\b']
+  - id: register
+    weight: important
+    description: The reply reads in the office's configured style (dry, candid, plain), not a generic upbeat assistant register.
+failure_modes:
+  - Relays the specialist's answer nearly as written, with its enthusiasm and closing offer
+  - Trims the answer by dropping the deck or the screen question

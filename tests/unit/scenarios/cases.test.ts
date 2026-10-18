@@ -225,8 +225,23 @@ describe('coordinator scenario cases', () => {
     // agent that a default registry leaves out of the roster (README, "Cases that need an
     // opt-in agent"); and the specialist cases that reply on a bullpen thread, which run on
     // demand until #2126 ends the content-less reply loop (README, "Cases for a specialist").
-    expect(cases.filter(c => c.delegation === 'stubbed' && !c.releaseGate).map(c => path.basename(c.sourceFile).slice(0, 3)))
+    // The style cases run under an identity fixture, which the loader keeps out of the gate.
+    expect(cases.filter(c => c.delegation === 'stubbed' && !c.releaseGate && !c.identity).map(c => path.basename(c.sourceFile).slice(0, 3)))
       .toEqual(['21c', '30d', '30e', '30f', '31a', '31b', '31c', '31d', '31h', '32b']);
+  });
+
+  it('style cases share one identity fixture and score in code what code can score (#2143)', () => {
+    const style = cases.filter(c => c.tags.includes('style'));
+    expect(style.map(c => path.basename(c.sourceFile).slice(0, 3)))
+      .toEqual(['40a', '40b', '40c', '40d', '40e']);
+    // `--tags style` is one run, and a run has one identity.
+    expect(new Set(style.map(c => c.identity?.name))).toEqual(new Set(['style-brief-dry']));
+    for (const c of style) expect(c.releaseGate).toBe(false);
+    // Every case that writes to someone keeps its facts, as a critical behavior: brevity
+    // must never be bought by dropping content.
+    for (const c of style) {
+      expect(c.expectedBehaviors.find(b => b.id === 'content_kept' || b.id === 'principal_voice')?.weight).toBe('critical');
+    }
   });
 
   it('have a well-formed stub-coverage record', () => {

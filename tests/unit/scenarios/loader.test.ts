@@ -482,3 +482,77 @@ describe('loadScenarioCase: principal_note checks (prompt trim PR 5)', () => {
     expect(() => loadScenarioCase(write('bad2.yaml', withCheck('      principal_note: absent\n      note_contains: [Sam]\n')))).toThrow(/needs principal_note: present/);
   });
 });
+
+describe('text checks and identity fixtures (#2143)', () => {
+  const STYLE = `
+name: style
+release_gate: false
+identity: brief
+inbound:
+  from: principal
+  content: Did Dana confirm?
+expected_behaviors:
+  - id: short
+    description: brief
+    check:
+      text: reply
+      max_words: 40
+      excludes: ['!']
+  - id: short_send
+    description: brief send
+    check:
+      text: { tool: signal-send, arg: message }
+      max_words: 60
+`;
+  const FIXTURE = `
+judge_brief: Dry and brief.
+identity:
+  tone: { baseline: [dry], verbosity: 15, directness: 85 }
+  decisionStyle: { externalActions: conservative, internalAnalysis: proactive }
+  behavioralPreferences: [Keep it short]
+  constraints: [Never impersonate the principal]
+`;
+  function identities(body = FIXTURE): string {
+    const ids = path.join(dir, 'identities');
+    mkdirSync(ids, { recursive: true });
+    writeFileSync(path.join(ids, 'brief.yaml'), body);
+    return ids;
+  }
+
+  it('parses a text check on the reply or on a tool argument', () => {
+    const c = loadScenarioCase(write('a.yaml', STYLE), { identitiesDir: identities() });
+    expect(c.expectedBehaviors[0]!.check).toEqual({ kind: 'text', of: 'reply', maxWords: 40, excludes: ['!'] });
+    expect(c.expectedBehaviors[1]!.check).toEqual({ kind: 'text', of: { tool: 'signal-send', arg: 'message' }, maxWords: 60 });
+  });
+
+  it('attaches the identity fixture, judge brief included', () => {
+    const c = loadScenarioCase(write('a.yaml', STYLE), { identitiesDir: identities() });
+    expect(c.identity?.name).toBe('brief');
+    expect(c.identity?.judgeBrief).toBe('Dry and brief.');
+    expect(c.identity?.config.tone.verbosity).toBe(15);
+  });
+
+  it('keeps a case with an identity fixture out of the release gate', () => {
+    const ids = identities();
+    expect(() => loadScenarioCase(write('a.yaml', STYLE.replace('release_gate: false\n', '')), { identitiesDir: ids }))
+      .toThrow(/set release_gate: false/);
+  });
+
+  it('rejects a fixture that leaves part of the identity to the database', () => {
+    const partial = FIXTURE.replace(/  constraints:.*\n/, '');
+    expect(() => loadScenarioCase(write('a.yaml', STYLE), { identitiesDir: identities(partial) })).toThrow(/missing constraints/);
+    const withAssistant = FIXTURE + '  assistant: { name: X, title: Y, emailSignature: Z }\n';
+    expect(() => loadScenarioCase(write('a.yaml', STYLE), { identitiesDir: identities(withAssistant) })).toThrow(/unknown key\(s\) assistant/);
+  });
+
+  it('rejects a missing fixture and malformed text checks', () => {
+    expect(() => loadScenarioCase(write('a.yaml', STYLE), { identitiesDir: path.join(dir, 'none') })).toThrow(/identity 'brief' could not be read/);
+    const ids = identities();
+    const bare = STYLE.replace("      max_words: 40\n      excludes: ['!']\n", '');
+    expect(() => loadScenarioCase(write('b.yaml', bare), { identitiesDir: ids })).toThrow(/needs max_words, excludes or both/);
+    const badPattern = STYLE.replace("excludes: ['!']", "excludes: ['(']");
+    expect(() => loadScenarioCase(write('c.yaml', badPattern), { identitiesDir: ids })).toThrow(/invalid pattern/);
+    const agentOnReply = STYLE.replace('      text: reply\n', '      text: reply\n      agent: calendar\n');
+    expect(() => loadScenarioCase(write('d.yaml', agentOnReply), { identitiesDir: ids })).toThrow(/the reply is the case agent's/);
+  });
+});

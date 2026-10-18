@@ -92,6 +92,7 @@ import { bootstrapAgentIdentity } from '../entity-context/bootstrap.js';
 import { EntityContextAssembler } from '../entity-context/assembler.js';
 import { ConversationEntityState } from '../entity-context/conversation-entities.js';
 import { OfficeIdentityService } from '../identity/service.js';
+import type { OfficeIdentity } from '../identity/types.js';
 import { BullpenService } from '../memory/bullpen.js';
 import { EmbeddingService } from '../memory/embedding.js';
 import { EntityMemory } from '../memory/entity-memory.js';
@@ -241,6 +242,37 @@ export interface TestModeStackOptions {
    * deployment's own servers, for the scenario suite's --overlay.
    */
   mcpSnapshotDirs?: string[];
+  /**
+   * Lay this over the database's office identity for the whole stack: the scenario
+   * suite's style cases (#2143) run under one fixed tone. Held in memory only; see
+   * FixtureOfficeIdentityService.
+   */
+  officeIdentity?: OfficeIdentityFixture;
+}
+
+/** Everything in an office identity but the assistant's name, title and signature. */
+export type OfficeIdentityFixture = Omit<OfficeIdentity, 'assistant'>;
+
+/**
+ * The office identity with a fixture laid over the database's. Only get() changes, so
+ * every agent's block still comes from the real compileSystemPromptBlock(), and nothing
+ * is written: the database's identity and its history stay as they were. The assistant
+ * stays the database's, so bootstrapAgentIdentity finds the same agent contact.
+ */
+class FixtureOfficeIdentityService extends OfficeIdentityService {
+  constructor(pool: DbPool, logger: Logger, bus: EventBus, private readonly fixture: OfficeIdentityFixture) {
+    super(pool, logger, bus);
+  }
+
+  override async initialize(): Promise<void> {
+    await super.initialize();
+    // At boot, not as a prompt that renders "undefined" in every case.
+    this.validateIdentity(this.get());
+  }
+
+  override get(): OfficeIdentity {
+    return { ...super.get(), ...this.fixture };
+  }
 }
 
 export interface TestModeStack {
@@ -585,7 +617,9 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     }
 
     const autonomyService = new AutonomyService(pool, logger);
-    officeIdentityService = new OfficeIdentityService(pool, logger, bus);
+    officeIdentityService = options.officeIdentity
+      ? new FixtureOfficeIdentityService(pool, logger, bus, options.officeIdentity)
+      : new OfficeIdentityService(pool, logger, bus);
     await officeIdentityService.initialize();
 
     // ── LLM providers ──────────────────────────────────────────────────────

@@ -370,8 +370,11 @@ export class OfficeIdentityService {
     }
   }
 
-  /** Validate that the identity config is well-formed before persisting. */
-  private validateIdentity(config: OfficeIdentity): void {
+  /**
+   * Validate that the identity config is well-formed before persisting. Protected so the
+   * test-mode stack's fixture identity (scenario style cases) is held to the same rules.
+   */
+  protected validateIdentity(config: OfficeIdentity): void {
     if (!config.assistant?.name) {
       throw new Error('Office identity requires assistant.name');
     }

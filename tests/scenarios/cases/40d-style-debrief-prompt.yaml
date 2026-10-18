@@ -1,0 +1,105 @@
+# Style case 40d (#2143): the debrief prompt meeting-debrief writes for the coordinator to
+# relay, under a brief, dry identity. Today meeting-debrief gets no identity block, and its
+# Step 6 asks for "a brief, warm debrief prompt" (agents/meeting-debrief.yaml). Tone &
+# style PR 4 gives every agent the block and PR 5 drops "warm"; this case measures both.
+# Same wake as 32b; see docs/wip/2026-10-15-tone-and-style-design.md.
+name: style debrief prompt
+description: >
+  A debrief task meeting-debrief scheduled this morning wakes at the end of the Acme
+  partnership review (calendar event evt-acme-0001), a meeting with Sarah Chen and David
+  Park of Acme Corp that just ended. meeting-debrief confirms the meeting happened and opens
+  one bullpen thread asking the coordinator to send the principal a debrief prompt. Scored
+  here is the message to send inside that post: it names Sarah Chen and David Park, asks for
+  takeaways or follow-ups, and reads in the office's configured style.
+tags: [style, meeting-debrief]
+agent: meeting-debrief
+identity: style-brief-dry
+# On demand twice over: an identity fixture, and #2126 (see 32b).
+release_gate: false
+stub_sets: [meeting-debrief-office]
+inbound:
+  from: task-wake
+  task:
+    id: 6a2b3c4d-5e6f-4a7b-8c9d-40d000000001
+    title: "Debrief: Acme partnership review"
+    tags: [debrief-pending]
+    intent: >-
+      Debrief the principal's meeting 'Acme partnership review' that ends around
+      {{at:now-3m}} (calendar event evt-acme-0001) — prompt at meeting end, then follow up
+      on takeaways.
+    notes:
+      - at: "{{time:today 12:01}}"
+        note: Scheduled by the detection run; prompt the principal at meeting end.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        count: 1
+        displayTimezone: "{{timezone}}"
+        events:
+          - id: evt-acme-0001
+            title: Acme partnership review
+            description: Pilot scope and pricing for the Acme partnership.
+            location: Acme offices, 200 King St W
+            startTime: "{{at:now-63m}}"
+            endTime: "{{at:now-3m}}"
+            startDate: null
+            endDate: null
+            participants:
+              - { email: avery@testwell-labs.example.test, name: Avery Testwell, status: yes }
+              - { email: sarah.chen@acme.example.test, name: Sarah Chen, status: yes }
+              - { email: david.park@acme.example.test, name: David Park, status: yes }
+            conferencing: null
+            status: confirmed
+            calendarId: cal-principal-work
+            busy: true
+            metadata: null
+  task-update:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-40d000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-40d000000001
+        title: "Debrief: Acme partnership review"
+        status: open
+        owner: ceo
+        priority: 3
+        tags: [debrief-pending]
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-complete:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-40d000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-40d000000001
+        title: "Debrief: Acme partnership review"
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+expected_behaviors:
+  - id: posts_once_to_coordinator
+    weight: critical
+    description: Opens exactly one bullpen thread, with the coordinator as a participant.
+    check:
+      called: bullpen-post
+      contains: { participants: coordinator }
+      success: true
+      min: 1
+      max: 1
+  - id: content_kept
+    weight: critical
+    description: The message to send names Sarah Chen and David Park and asks the principal for takeaways or follow-ups.
+  - id: no_filler
+    weight: important
+    description: The post has no exclamation marks or pleasantries.
+    check:
+      text: { tool: bullpen-post, arg: content }
+      excludes: ['!', '\bhope (it|that|the meeting) went\b', '\bhappy to\b']
+  - id: brief_message
+    weight: important
+    description: The message to send (not the request around it) is one or two short sentences.
+  - id: register
+    weight: important
+    description: >
+      The message to send reads in the office's configured style (dry, candid, plain), not
+      warm or upbeat. Judge only the message to send, not the request format around it.
+failure_modes:
+  - Writes a warm, chatty prompt ("Hope it went well!") regardless of the office's style
+  - Drops an attendee's name to keep the prompt short

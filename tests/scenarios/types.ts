@@ -4,6 +4,7 @@
 // (#2025), with seeded state and stubbed tools, run N times on the production prompt.
 // Behaviors are scored per run, either in code (`check`) or by the LLM judge (no `check`).
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
+import type { OfficeIdentityFixture } from '../../src/startup/test-mode-stack.js';
 import type { LiveSearchTally } from '../shared/live-search.js';
 import type { ObservedToolCall } from '../shared/turn-capture.js';
 import type { UsageBreakdown } from '../shared/usage.js';
@@ -83,11 +84,21 @@ export type BehaviorCheck =
    */
   | { kind: 'principal_note'; is: 'present' | 'absent'; contains?: string[] }
   /**
+   * Limits on text the agent wrote (#2143): its reply, or one argument of every call it
+   * made to a tool (the `message` of a `signal-send`). `maxWords` caps the word count;
+   * `excludes` are case-insensitive regexes none may match. Silence, or no call to read,
+   * is a miss: an empty message is not a short one.
+   */
+  | { kind: 'text'; of: TextSource; agent?: CheckAgent; maxWords?: number; excludes?: string[] }
+  /**
    * Passes when any alternative passes. For a behavior the platform accepts in more
    * than one shape — e.g. delegate links an entry from `outbound_entry_id` or from its
    * id quoted in the brief (#1972).
    */
   | { kind: 'any_of'; checks: BehaviorCheck[] };
+
+/** What a `text` check reads: the reply, or one argument of each call to a tool. */
+export type TextSource = 'reply' | { tool: string; arg: string };
 
 export interface ExpectedBehavior {
   id: string;
@@ -269,8 +280,25 @@ export interface ScenarioCase {
   liveSearch?: true;
   expectedBehaviors: ExpectedBehavior[];
   failureModes: string[];
+  /**
+   * The office identity fixture the case runs under (#2143), from
+   * tests/scenarios/identities/<name>.yaml. The stack is the run's, so every case in a
+   * run shares one identity; such a case is never in the release gate.
+   */
+  identity?: IdentityFixture;
   /** File the case came from, for messages. */
   sourceFile: string;
+}
+
+/** A run-level office identity (tests/scenarios/identities/). */
+export interface IdentityFixture {
+  name: string;
+  /**
+   * The style the fixture sets, in plain words, for the judge. Kept apart from `config` so
+   * the judge reads the same target whatever shape the identity takes.
+   */
+  judgeBrief: string;
+  config: OfficeIdentityFixture;
 }
 
 // ── Execution ─────────────────────────────────────────────────────────────
@@ -412,6 +440,8 @@ export interface SuiteResult {
   overlayCommit?: string;
   /** Cases marked release_gate: false that this run left out (#2027). */
   onDemandSkipped?: string[];
+  /** The office identity fixture every case ran under (#2143). Absent: the database's own. */
+  identity?: string;
   /** Runs each case actually got (a case's `runs` or --runs can differ from the default). */
   runsPerCase: Record<string, number>;
   cases: CaseResult[];

@@ -307,6 +307,7 @@ timeout_seconds: 300                      # optional
 known_failure: { issue: "#1234", reason: … }   # optional; reported, not gated
 stub_sets: [human-channels]               # optional; `defaults` always applies
 live_search: true                         # optional; web-search runs for real (Tavily credits)
+identity: style-brief-dry                 # optional; run-level office identity, see Style cases
 seed:
   contacts:                               # → {{contact:<key>}}
     - key: sam
@@ -371,6 +372,7 @@ expected_behaviors:
       max: 1                              #     | reply_excludes_internal_names: true
       success: true                       #     | briefed: <agent> + brief_contains: [..]
       returns: { outbound_entry: { status: released } }   # | any_of: [checks]
+                                          #     | text: reply | {tool, arg} + max_words / excludes
 failure_modes:
   - Replies "Done!" without delegating
 ```
@@ -388,6 +390,11 @@ can read another agent's (`agent: calendar`) or every agent's (`agent: any`). `b
 <agent>` passes when a real run of that specialist received a brief containing every string
 in `brief_contains`: the brief after the delegate handler's additions, such as the
 `Message ID:` and `Account:` lines (#1909) or a resume's rebuilt brief.
+
+`text` (#2143) limits what the agent wrote: `text: reply` reads its reply, `text: { tool:
+signal-send, arg: message }` reads that argument of every call it made to the tool, and
+each one must pass. `max_words` caps the word count; `excludes` lists case-insensitive
+regexes none may match. Silence, or no call to read, is a miss.
 
 `{{principal_contact_id}}` resolves too. A placeholder that names nothing the case seeds is
 a load error.
@@ -470,6 +477,32 @@ pnpm scenarios --tags specialist-calendar --runs 5 --coverage /tmp/ab.json --mod
 
 Pass a scratch `--coverage` for A/B runs, so only a clean run of the branch writes the
 committed record.
+
+## Style cases
+
+The 40 cases (#2143, tag `style`) measure how Curia writes: length, filler and register,
+under a brief, dry office identity. Run them as a group:
+
+```bash
+pnpm scenarios --tags style --model deepseek/deepseek-v4.1-flash
+```
+
+A case's `identity: <name>` names a fixture in `identities/`: everything in the office
+identity but the assistant (tone, decision style, standing preferences, constraints), and
+a `judge_brief` the judge sees as "The office's configured style". The stack lays the
+fixture over the database's identity in memory: every agent's block still comes from the
+real renderer, and nothing is written to the identity history.
+
+One stack serves a whole run, so a run has one identity:
+- every selected case must name the same fixture, or none;
+- a case with a fixture is never in the release gate (the loader requires `release_gate:
+  false`), and an unfiltered run leaves it out even with `--on-demand`.
+
+Length and filler are scored in code (`text` checks), register and kept content by the
+judge. Only content is `critical`: brevity must never drop a fact. 40a needs a principal
+with a Signal identity in the database the run uses. The design, and the baseline the
+later tone & style PRs compare against, are in
+[docs/wip/2026-10-15-tone-and-style-design.md](../../docs/wip/2026-10-15-tone-and-style-design.md#measurement).
 
 ## A deployment's own agents
 

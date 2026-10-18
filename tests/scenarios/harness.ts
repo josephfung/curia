@@ -43,7 +43,7 @@ import { loadConfig } from '../../src/config.js';
 import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { formatTaskWakeContent } from '../../src/scheduler/wake-disposition.js';
-import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import { createTestModeStack, type OfficeIdentityFixture, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import {
   closeAttempt,
   createCaseContext,
@@ -234,7 +234,13 @@ export interface StackSources {
   mcpSnapshotDirs?: string[];
 }
 
-export async function createScenarioHarness(options: { model?: string } & StackSources = {}): Promise<ScenarioHarness> {
+/**
+ * `officeIdentity`: the run's identity fixture (#2143). One stack serves every case in a
+ * run, so the identity is the run's, never a case's.
+ */
+export async function createScenarioHarness(
+  options: { model?: string; officeIdentity?: OfficeIdentityFixture } & StackSources = {},
+): Promise<ScenarioHarness> {
   const context = createCaseContext<ScenarioRunState>();
   const currentScope = (): SeedScope | undefined => context.current()?.scope;
   const config = loadConfig();
@@ -266,6 +272,7 @@ export async function createScenarioHarness(options: { model?: string } & StackS
     ...(options.skillsDir ? { skillsDir: options.skillsDir } : {}),
     ...(options.configDir ? { configDir: options.configDir } : {}),
     ...(options.mcpSnapshotDirs ? { mcpSnapshotDirs: options.mcpSnapshotDirs } : {}),
+    ...(options.officeIdentity ? { officeIdentity: options.officeIdentity } : {}),
     wrapExecutionLayer: (layer) => controller.wrap(layer),
     wrapBullpenService: (bullpen) => scopedBullpen(bullpen, currentScope),
     // Times each model call against its run, and refuses a cancelled run's calls.

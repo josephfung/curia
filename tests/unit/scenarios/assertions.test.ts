@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyBreakdown } from '../../shared/usage.js';
-import { evaluateCheck, internalNamesFor } from '../../scenarios/assertions.js';
+import { evaluateCheck, internalNamesFor, wordCount } from '../../scenarios/assertions.js';
 import type { CapturedToolCall, ScenarioRun } from '../../scenarios/types.js';
 
 function call(name: string, input: Record<string, unknown> = {}): CapturedToolCall {
@@ -243,5 +243,52 @@ describe('evaluateCheck: principal_note (prompt trim PR 5)', () => {
   it('checks for no note', () => {
     expect(evaluateCheck({ kind: 'principal_note', is: 'absent' }, run([]), ctx).rating).toBe('PASS');
     expect(evaluateCheck({ kind: 'principal_note', is: 'absent' }, withNote, ctx).rating).toBe('MISS');
+  });
+});
+
+describe('evaluateCheck: text (#2143)', () => {
+  it('caps the reply\'s word count', () => {
+    const r = run([], 'Yes. Thursday at 3pm; deck by Wednesday.');
+    expect(evaluateCheck({ kind: 'text', of: 'reply', maxWords: 7 }, r, ctx).rating).toBe('PASS');
+    const over = evaluateCheck({ kind: 'text', of: 'reply', maxWords: 6 }, r, ctx);
+    expect(over.rating).toBe('MISS');
+    expect(over.justification).toContain('7 words (max 6)');
+  });
+
+  it('rejects excluded patterns case-insensitively', () => {
+    const r = run([], 'Great news! She confirmed.');
+    expect(evaluateCheck({ kind: 'text', of: 'reply', excludes: ['!'] }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'text', of: 'reply', excludes: ['\\bGREAT NEWS\\b'] }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'text', of: 'reply', excludes: ['\\blet me know\\b'] }, r, ctx).rating).toBe('PASS');
+  });
+
+  it('misses on silence: an empty message is not a short one', () => {
+    for (const reply of [null, '', 'NO_REPLY']) {
+      expect(evaluateCheck({ kind: 'text', of: 'reply', maxWords: 40 }, run([], reply), ctx).rating).toBe('MISS');
+    }
+  });
+
+  it('reads one argument of every call to a tool, and every call must pass', () => {
+    const short = call('signal-send', { recipient: 'principal', message: '9:00 kickoff. 4:00 board prep.' });
+    const long = call('signal-send', { recipient: 'principal', message: 'one two three four five six seven' });
+    const check = { kind: 'text' as const, of: { tool: 'signal-send', arg: 'message' }, maxWords: 6 };
+    expect(evaluateCheck(check, run([short]), ctx).rating).toBe('PASS');
+    const both = evaluateCheck(check, run([short, long]), ctx);
+    expect(both.rating).toBe('MISS');
+    expect(both.justification).toContain('signal-send.message has 7 words');
+    expect(evaluateCheck(check, run([call('email-send', { message: 'x' })]), ctx).justification).toBe('no signal-send call to check');
+  });
+
+  it('reads the case agent\'s calls unless it names another', () => {
+    const theirs: CapturedToolCall = { ...call('bullpen-post', { content: 'Hope it went well!' }), agentId: 'meeting-debrief' };
+    const check = { kind: 'text' as const, of: { tool: 'bullpen-post', arg: 'content' }, excludes: ['!'] };
+    expect(evaluateCheck(check, run([theirs]), ctx).rating).toBe('MISS');
+    expect(evaluateCheck(check, run([theirs]), { ...ctx, caseAgent: 'meeting-debrief' }).rating).toBe('MISS');
+    expect(evaluateCheck(check, run([theirs]), ctx).justification).toBe('no bullpen-post call to check');
+  });
+
+  it('counts words the way a reader does', () => {
+    expect(wordCount('  Yes.\n\nThursday   at 3pm. ')).toBe(4);
+    expect(wordCount('')).toBe(0);
   });
 });

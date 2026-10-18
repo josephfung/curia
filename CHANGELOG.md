@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Style scenarios** — five cases score reply length, filler and register under a fixed office identity. (#2143)
+
 ### Fixed
 
 - **Email signature** — the model's own sign-off is replaced by the configured signature, so emails sign once. (#2138)

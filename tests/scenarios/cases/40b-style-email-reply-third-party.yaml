@@ -1,0 +1,89 @@
+# Style case 40b (#2143): an email reply from Curia's own inbox to someone outside the
+# office, under a brief, dry identity. Rule: the office identity block's tone and Detail
+# settings (src/identity/service.ts, compileSystemPromptBlock); see
+# docs/wip/2026-10-15-tone-and-style-design.md. The reply text is the email (case 07).
+#
+# The answer from ceo-inbox is long and chatty, so a padded email is available. Its four
+# facts must all reach Priya.
+name: style email reply third party
+description: >
+  Priya Raman, outside the office, emails the coordinator's own inbox asking for the dial-in
+  for Thursday's review and whether the principal wants the Q3 numbers walked through.
+  ceo-inbox supplies the answer: the review is at 2pm ET, the dial-in is
+  https://meet.example.test/lumen-review with passcode 4417, and the principal wants the Q3
+  numbers walked through in ten minutes at most. The coordinator replies to Priya with the
+  reply text, briefly and in the office's configured style.
+tags: [style, email]
+identity: style-brief-dry
+release_gate: false
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Raman
+      tier: known
+      channel: email
+      identifier: priya.raman@lumen-partners.example.test
+inbound:
+  from: priya
+  content: |
+    Subject: Thursday review
+
+    Hi there,
+
+    Hope your week is going well! Could you send me the dial-in for Thursday's review? And
+    should I plan to walk through the Q3 numbers, or will Avery just want the headlines?
+
+    Thanks so much,
+    Priya
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: ceo-inbox
+        response: >
+          I checked the calendar invite and the principal's notes. The Thursday review with
+          Lumen Partners is at 2pm ET. The dial-in link is https://meet.example.test/lumen-review
+          and the passcode is 4417. The principal does want the Q3 numbers walked through,
+          but would like that section kept to ten minutes at most so there is time for the
+          pilot discussion. Happy to help with anything else!
+  # Priya's email states no profile facts; an update is scored below, but available.
+  contact-update:
+    - match: {}
+      return:
+        contact_id: "{{contact:priya}}"
+        updated_fields: [organization]
+expected_behaviors:
+  - id: replies_with_text
+    weight: critical
+    description: Replies to Priya with the reply text (not NO_REPLY).
+    check:
+      reply: not_no_reply
+  - id: no_reply_tool
+    weight: critical
+    description: Does not send the answer through email-reply or email-send.
+    check:
+      not_called: [email-reply, email-send]
+  - id: content_kept
+    weight: critical
+    description: >
+      The reply gives Priya the 2pm ET time, the dial-in link, the passcode 4417, and says
+      the principal wants the Q3 numbers walked through in ten minutes at most.
+  - id: within_length
+    weight: important
+    description: The email is at most 80 words, sign-off included.
+    check:
+      text: reply
+      max_words: 80
+  - id: no_filler
+    weight: important
+    description: No exclamation marks, pleasantries or closing offers.
+    check:
+      text: reply
+      excludes: ['!', '\bhope (your|you|this|all)\b', '\bhappy to\b', '\blet me know\b', "\\b(don(’|')?t hesitate|feel free)\\b", '\bgreat question\b', '\bthanks for (reaching out|your email)\b']
+  - id: register
+    weight: important
+    description: The email reads in the office's configured style (dry, candid, plain), while staying courteous to an outside contact.
+failure_modes:
+  - Opens with a pleasantry ("Hope your week is going well too") and closes with an offer to help further
+  - Drops the passcode or the ten-minute limit to keep it short

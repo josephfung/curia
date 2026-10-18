@@ -118,6 +118,9 @@ export function formatJudgeInput(
     `## Scenario`,
     scenario.description.trim() || scenario.name,
     ``,
+    // The style the office is configured for (#2143), so "matches the office's style" is
+    // judged against the fixture's target, not the judge's own taste.
+    ...(scenario.identity ? [`## The office's configured style`, scenario.identity.judgeBrief.trim(), ``] : []),
     `## Sender`,
     sender,
     ``,

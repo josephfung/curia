@@ -17,6 +17,7 @@ import {
   type BehaviorWeight,
   type DelegationMode,
   type ExpectedBehavior,
+  type IdentityFixture,
   type ScenarioCase,
   type ScenarioInbound,
   type ScenarioWakeTask,
@@ -59,7 +60,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog'] as const;
 const BACKLOG_KEYS = ['decay_warnings', 'pending_approvals', 'principal_tasks'] as const;
 const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier'] as const;
@@ -82,8 +83,17 @@ const CHECK_KEYS: Record<string, readonly string[]> = {
   reply_excludes_internal_names: ['reply_excludes_internal_names'],
   briefed: ['briefed', 'brief_contains'],
   principal_note: ['principal_note', 'note_contains'],
+  text: ['text', 'agent', 'max_words', 'excludes'],
   any_of: ['any_of'],
 };
+const TEXT_TOOL_KEYS = ['tool', 'arg'] as const;
+const IDENTITY_FILE_KEYS = ['judge_brief', 'identity'] as const;
+/**
+ * An identity fixture sets every part of the office identity but the assistant, so a run
+ * never inherits tone or preferences from whatever database it runs on. The values are
+ * checked at boot by the identity service's own validation.
+ */
+const IDENTITY_FIXTURE_KEYS = ['tone', 'behavioralPreferences', 'decisionStyle', 'constraints'] as const;
 
 function str(raw: Raw, key: string, file: string, where: string): string {
   const v = raw[key];
@@ -138,10 +148,10 @@ function list(raw: Raw, key: string, file: string): Raw[] {
 
 function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
   if (!isObject(raw)) throw new CaseError(file, `${where}: check must be a mapping`);
-  const kinds = ['called', 'not_called', 'order', 'reply', 'reply_excludes', 'reply_excludes_internal_names', 'briefed', 'principal_note', 'any_of']
+  const kinds = ['called', 'not_called', 'order', 'reply', 'reply_excludes', 'reply_excludes_internal_names', 'briefed', 'principal_note', 'text', 'any_of']
     .filter(k => k in raw);
   if (kinds.length !== 1) {
-    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names, briefed, principal_note, any_of (got ${kinds.join(', ') || 'none'})`);
+    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names, briefed, principal_note, text, any_of (got ${kinds.join(', ') || 'none'})`);
   }
   onlyKeys(raw, CHECK_KEYS[kinds[0]!]!, file, where);
   const withArgs = raw['with'];
@@ -200,16 +210,35 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
       }
       return { kind: 'reply', is };
     }
-    case 'reply_excludes': {
-      const patterns = strList(raw, 'reply_excludes', file, where, true);
-      for (const p of patterns) {
-        try {
-          new RegExp(p, 'i');
-        } catch (err) {
-          throw new CaseError(file, `${where}: invalid pattern /${p}/: ${(err as Error).message}`);
-        }
+    case 'reply_excludes':
+      return { kind: 'reply_excludes', patterns: patternList(raw, 'reply_excludes', file, where, true) };
+    case 'text': {
+      const source = raw['text'];
+      let of: Extract<BehaviorCheck, { kind: 'text' }>['of'];
+      if (source === 'reply') {
+        if (agent !== undefined) throw new CaseError(file, `${where}: 'agent' is for a tool's text; the reply is the case agent's`);
+        of = 'reply';
+      } else if (isObject(source)) {
+        onlyKeys(source, TEXT_TOOL_KEYS, file, `${where}.text`);
+        of = { tool: str(source, 'tool', file, `${where}.text`), arg: str(source, 'arg', file, `${where}.text`) };
+      } else {
+        throw new CaseError(file, `${where}: 'text' must be reply or {tool, arg}`);
       }
-      return { kind: 'reply_excludes', patterns };
+      const maxWords = optNum(raw, 'max_words', file, where);
+      if (maxWords !== undefined && (!Number.isInteger(maxWords) || maxWords < 1)) {
+        throw new CaseError(file, `${where}: 'max_words' must be a positive whole number`);
+      }
+      const excludes = patternList(raw, 'excludes', file, where, false);
+      if (maxWords === undefined && excludes.length === 0) {
+        throw new CaseError(file, `${where}: a text check needs max_words, excludes or both`);
+      }
+      return {
+        kind: 'text',
+        of,
+        ...(agent !== undefined ? { agent } : {}),
+        ...(maxWords !== undefined ? { maxWords } : {}),
+        ...(excludes.length > 0 ? { excludes } : {}),
+      };
     }
     case 'any_of': {
       const alternatives = raw['any_of'];
@@ -227,6 +256,19 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
       }
       return { kind: 'reply_excludes_internal_names' };
   }
+}
+
+/** A list of case-insensitive regexes, each compiled now so a bad one fails at load. */
+function patternList(raw: Raw, key: string, file: string, where: string, required: boolean): string[] {
+  const patterns = strList(raw, key, file, where, required);
+  for (const p of patterns) {
+    try {
+      new RegExp(p, 'i');
+    } catch (err) {
+      throw new CaseError(file, `${where}: invalid pattern /${p}/: ${(err as Error).message}`);
+    }
+  }
+  return patterns;
 }
 
 /** Parse a `tool_stubs` mapping (also used by smoke's loader). */
@@ -500,6 +542,35 @@ export function resolveRunPlaceholders<T>(
 /** Where shared stub sets live: tests/scenarios/stubs/<name>.yaml. */
 export const DEFAULT_STUBS_DIR = path.join(import.meta.dirname, 'stubs');
 
+/** Where identity fixtures live: tests/scenarios/identities/<name>.yaml (#2143). */
+export const DEFAULT_IDENTITIES_DIR = path.join(import.meta.dirname, 'identities');
+
+/** The identity fixture a case names. Read once per case; a run checks they all agree. */
+function loadIdentityFixture(name: string, file: string, dir: string): IdentityFixture {
+  if (!/^[a-z0-9-]+$/.test(name)) throw new CaseError(file, `identity name '${name}' must be kebab-case`);
+  const fixtureFile = path.join(dir, `${name}.yaml`);
+  let raw: unknown;
+  try {
+    raw = yaml.load(readFileSync(fixtureFile, 'utf-8'));
+  } catch (err) {
+    throw new CaseError(file, `identity '${name}' could not be read: ${(err as Error).message}`);
+  }
+  if (!isObject(raw)) throw new CaseError(fixtureFile, 'not a YAML mapping');
+  onlyKeys(raw, IDENTITY_FILE_KEYS, fixtureFile, 'identity fixture');
+  const config = mapping(raw, 'identity', fixtureFile, 'identity fixture');
+  onlyKeys(config, IDENTITY_FIXTURE_KEYS, fixtureFile, 'identity');
+  const missing = IDENTITY_FIXTURE_KEYS.filter(k => !(k in config));
+  if (missing.length > 0) {
+    throw new CaseError(fixtureFile, `identity: missing ${missing.join(', ')} (a fixture sets everything but the assistant)`);
+  }
+  return {
+    name,
+    judgeBrief: str(raw, 'judge_brief', fixtureFile, 'identity fixture'),
+    // The identity service validates the values when the stack boots.
+    config: config as unknown as IdentityFixture['config'],
+  };
+}
+
 export interface LoadOptions {
   /** Override for tests. */
   stubsDir?: string;
@@ -508,6 +579,8 @@ export interface LoadOptions {
    * (`--overlay`), which may also replace a core set of the same name.
    */
   extraStubsDirs?: string[];
+  /** Override for tests. */
+  identitiesDir?: string;
 }
 
 /**
@@ -597,13 +670,22 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   const stubSets = mergeStubSets(raw, ownStubs, file, stubsDirs, liveSearch);
   const agent = optStr(raw, 'agent', file, 'case') ?? COORDINATOR;
   if (agent.trim() === '' || agent === ANY_AGENT) throw new CaseError(file, `'agent' must name one agent`);
+  const identityName = optStr(raw, 'identity', file, 'case');
+  const identity = identityName === undefined
+    ? undefined
+    : loadIdentityFixture(identityName, file, options.identitiesDir ?? DEFAULT_IDENTITIES_DIR);
+  const releaseGate = optBool(raw, 'release_gate', file, 'case') ?? true;
+  // The release gate is one unfiltered run on the database's identity.
+  if (identity && releaseGate) {
+    throw new CaseError(file, `a case with an 'identity' fixture runs on demand; set release_gate: false`);
+  }
   const scenario: ScenarioCase = {
     name: str(raw, 'name', file, 'case'),
     description: optStr(raw, 'description', file, 'case') ?? '',
     tags: strList(raw, 'tags', file, 'case'),
     agent,
     delegation,
-    releaseGate: optBool(raw, 'release_gate', file, 'case') ?? true,
+    releaseGate,
     ...(runs !== undefined ? { runs } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(knownFailure ? { knownFailure } : {}),
@@ -615,6 +697,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     ...(liveSearch ? { liveSearch: true as const } : {}),
     expectedBehaviors: parseBehaviors(raw, file),
     failureModes: strList(raw, 'failure_modes', file, 'case'),
+    ...(identity ? { identity } : {}),
     sourceFile: file,
   };
 

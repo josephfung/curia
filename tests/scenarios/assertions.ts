@@ -87,7 +87,7 @@ function returned(call: CapturedToolCall, returns: Record<string, unknown> | und
 
 export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: CheckContext): RunRating {
   const caseAgent = ctx.caseAgent ?? COORDINATOR;
-  const calls = check.kind === 'called' || check.kind === 'not_called' || check.kind === 'order'
+  const calls = check.kind === 'called' || check.kind === 'not_called' || check.kind === 'order' || check.kind === 'text'
     ? callsFor(run.toolCalls, check.agent, caseAgent)
     : run.toolCalls;
   switch (check.kind) {
@@ -169,6 +169,28 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
         ? pass('left a note for the principal')
         : miss(`the note for the principal lacks ${missing.join(', ')}: ${note.slice(0, 200)}`);
     }
+    case 'text': {
+      let texts: string[];
+      if (check.of === 'reply') {
+        if (isSilent(run)) return miss('no reply to check (silent or NO_REPLY)');
+        texts = [run.reply!];
+      } else {
+        const { tool, arg } = check.of;
+        texts = calls.filter(c => c.name === tool).map(c => stringify(c.input[arg]));
+        if (texts.length === 0) return miss(`no ${checkLabel(tool, check.agent, caseAgent)} call to check`);
+      }
+      const what = check.of === 'reply' ? 'the reply' : `${check.of.tool}.${check.of.arg}`;
+      for (const text of texts) {
+        const words = wordCount(text);
+        if (check.maxWords !== undefined && words > check.maxWords) {
+          return miss(`${what} has ${words} words (max ${check.maxWords}): ${text.slice(0, 160)}`);
+        }
+        const hit = check.excludes?.find(p => new RegExp(p, 'i').test(text));
+        if (hit !== undefined) return miss(`${what} matches /${hit}/i: ${text.slice(0, 160)}`);
+      }
+      const longest = Math.max(...texts.map(wordCount));
+      return pass(`${what} within limits (${texts.length > 1 ? `${texts.length} texts, longest ` : ''}${longest} words)`);
+    }
     case 'any_of': {
       const ratings = check.checks.map(alt => evaluateCheck(alt, run, ctx));
       const hit = ratings.find(r => r.rating === 'PASS');
@@ -180,6 +202,11 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
 /** A check and every alternative nested in it, for validation that inspects leaf checks. */
 export function leafChecks(check: BehaviorCheck): BehaviorCheck[] {
   return check.kind === 'any_of' ? check.checks.flatMap(leafChecks) : [check];
+}
+
+/** Whitespace-separated words, the way a reader counts them. */
+export function wordCount(text: string): number {
+  return text.split(/\s+/).filter(w => w !== '').length;
 }
 
 function isSilent(run: ScenarioRun): boolean {

@@ -1,0 +1,72 @@
+# Style case 40c (#2143): a scheduled recap sent to the principal with signal-send, under
+# a brief, dry identity. A scheduler turn's reply reaches no one, so the message is the
+# send's `message`, and no per-turn length reminder applies (tone & style PR 3): only the
+# identity block shapes it. Rule: the office identity block's tone and Detail settings
+# (src/identity/service.ts, compileSystemPromptBlock); see
+# docs/wip/2026-10-15-tone-and-style-design.md.
+#
+# Four meetings are four facts: brevity must not drop one (the design's "six meetings are
+# six lines"). The calendar answer is long and chatty, so relaying it is available.
+name: style scheduled recap signal
+description: >
+  A scheduled job fires: send the principal tomorrow's schedule on Signal. The calendar
+  specialist reports four meetings: 9:00 Lumen pilot kickoff, 11:30 one-on-one with Dana
+  Whitfield, 1:00 lunch with Marcus Bell at Canoe, and 4:00 board prep. The coordinator
+  sends the principal one Signal message listing all four with their times, briefly and in
+  the office's configured style.
+tags: [style, scheduler]
+identity: style-brief-dry
+release_gate: false
+stub_sets: [human-channels]
+inbound:
+  from: scheduler
+  content: Send the principal a recap of tomorrow's schedule on Signal.
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: calendar
+        response: >
+          Here's what tomorrow looks like! It's a fairly full day with four meetings. First
+          up at 9:00 AM is the Lumen pilot kickoff (60 minutes, video call). Then at 11:30
+          AM you have your regular one-on-one with Dana Whitfield (30 minutes). At 1:00 PM
+          you're having lunch with Marcus Bell at Canoe, so you may want to leave a bit
+          early. Finally, at 4:00 PM there's board prep (90 minutes). There are no
+          conflicts. Let me know if you'd like me to move anything around!
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: sends_to_principal
+    weight: critical
+    description: Sends the principal one Signal message, addressed by the `principal` alias.
+    check:
+      called: signal-send
+      with: { recipient: principal }
+      success: true
+      min: 1
+      max: 1
+  - id: content_kept
+    weight: critical
+    description: >
+      The Signal message lists all four meetings with their times: 9:00 Lumen pilot
+      kickoff, 11:30 Dana Whitfield, 1:00 lunch with Marcus Bell, 4:00 board prep.
+  - id: within_length
+    weight: important
+    description: The message is at most 60 words (a line per meeting, little else).
+    check:
+      text: { tool: signal-send, arg: message }
+      max_words: 60
+  - id: no_filler
+    weight: important
+    description: No exclamation marks, warm-up openers or closing offers.
+    check:
+      text: { tool: signal-send, arg: message }
+      excludes: ['!', "\\bhere(’|')?s (what|your)\\b", '\bhappy to\b', '\blet me know\b', '\bwould you like me to\b', '\b(fairly|pretty) (full|busy)\b']
+  - id: register
+    weight: important
+    description: The Signal message reads in the office's configured style (dry, candid, plain), not a generic upbeat assistant register.
+failure_modes:
+  - Relays the calendar specialist's answer nearly as written
+  - Drops a meeting to keep the message short
+  - Writes the recap as its final reply, which reaches no one, and sends nothing
