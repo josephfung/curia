@@ -74,8 +74,10 @@ interface AgentBudget {
 // 6,157 → 3,715 chars, ~3,092 tokens always-on.
 // Bullpen split (#2126): the polymorphic bullpen tool became bullpen-post, -reply, -read
 // and -close; 76,983 bytes over 69 local tools.
+// Report queue (#2159): report-to-principal pinned as a tool (the reports bundle stays
+// unpinned; digest jobs activate it): 77,637 bytes over 70 local tools.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 77_700, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   { agent: 'calendar', alwaysOnPromptTokens: 6_200, localToolDefinitionBytes: 25_000, allowMcpPins: false },

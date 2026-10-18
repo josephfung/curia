@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.25.7"
+version: "0.25.8"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -162,6 +162,9 @@ pinned_skills:
   - memory
   - scheduler
   - autonomy
+  # Digest queue (#2159): a tool pin, not the reports bundle. Filing an item is an every-turn
+  # need; list/ack run only in digest jobs, which skill-activate the bundle (tool budget).
+  - report-to-principal
   - tasks
   - documents
   # Learning review surface only (producers stay on ceo-inbox via tool pins)

@@ -1,0 +1,18 @@
+{
+  "name": "ack-principal-reports",
+  "description": "Mark the principal's digest items as reported, using the cursor from list-principal-reports. Call it only after the digest has been sent.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "cursor": "string (the cursor list-principal-reports returned)"
+  },
+  "outputs": {
+    "result": "string (confirmation)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["entityMemory"],
+  "allowed_callers": ["coordinator"]
+}

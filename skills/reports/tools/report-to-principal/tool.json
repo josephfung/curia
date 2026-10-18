@@ -1,0 +1,20 @@
+{
+  "name": "report-to-principal",
+  "description": "Record something the principal should hear about in their next digest: an action you took on their behalf, a decision you made, or how you read an ambiguous instruction. Use urgency 'now' only when you have also pinged them directly. Does not message the principal.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "summary": "string (one or two sentences for the principal, at most 500 characters)",
+    "urgency": "string? (digest | now; default digest)",
+    "link": "string? (a link to the thread or task, if there is one)"
+  },
+  "outputs": {
+    "result": "string (confirmation)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": ["bus"],
+  "allowed_callers": ["coordinator"]
+}
