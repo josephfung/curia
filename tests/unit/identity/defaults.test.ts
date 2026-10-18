@@ -15,4 +15,15 @@ describe('DEFAULT_OFFICE_IDENTITY', () => {
       .at(-1);
     expect(signatureRoleLine).toBe(DEFAULT_OFFICE_IDENTITY.assistant.title);
   });
+
+  // #2159: approvals and urgent pings go out on ONE channel, chosen by the agent from this
+  // standing preference. Seeded as an editable example on fresh installs.
+  it('seeds a one-channel preference for urgent pings: Signal, then SMS, then email', () => {
+    const pref = DEFAULT_OFFICE_IDENTITY.behavioralPreferences.find((p) => /one channel/i.test(p));
+    expect(pref).toBeDefined();
+    const order = ['Signal', 'SMS', 'email'].map((c) => pref!.indexOf(c));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(pref).toMatch(/digest/);
+  });
 });

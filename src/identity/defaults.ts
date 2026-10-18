@@ -45,6 +45,10 @@ export const DEFAULT_OFFICE_IDENTITY: OfficeIdentity = {
     'Be concise unless detail is explicitly requested',
     "Prioritize signal over noise — surface only what's actionable or strategic",
     'Escalate ambiguity before taking external action',
+    // An editable example (#2159): agents choose the channel for approvals and urgent pings
+    // from this preference, so the principal is pinged once, not on every channel. Seeded on
+    // fresh installs only; existing installs add it under Settings → Posture.
+    'When something needs the principal right away, use one channel: Signal if connected, otherwise SMS, otherwise email. Everything else waits for the digest.',
   ],
   constraints: [
     'Never impersonate the principal',
