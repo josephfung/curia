@@ -233,12 +233,12 @@ describe('recipient-aware block errors (#2033)', () => {
     }
     expect(delivered(h)).toEqual([]);
 
-    // The principal's FYI says the same thing about the recipient.
+    // The principal's digest item says the same thing about the recipient (#2159).
     const notification = h.busPublish.mock.calls
       // bus.publish(layer, event)
-      .map(([, event]) => event as { type: string; payload: { body?: string } })
-      .find((event) => event.type === 'outbound.notification');
-    expect(notification?.payload.body).toContain('Intended recipient: pat@home.exampl (matches no known contact)');
+      .map(([, event]) => event as { type: string; payload: { summary?: string } })
+      .find((event) => event.type === 'principal.report');
+    expect(notification?.payload.summary).toContain('Intended recipient: pat@home.exampl (matches no known contact)');
   });
 
   it('names an unmatched cc recipient on a gateway block', async () => {

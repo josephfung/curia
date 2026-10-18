@@ -47,7 +47,7 @@ import type { OutboundContentFilter, FilterRecipient } from '../dispatch/outboun
 import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
-import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
+import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createAutonomySendBlocked, createPrincipalReport } from '../bus/events.js';
 import type { ChannelReconnectEvent } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { markdownToMrkdwn } from '../format/markdown-to-mrkdwn.js';
@@ -1297,66 +1297,29 @@ export class OutboundGateway {
         );
       }
 
-      // Publish an outbound.notification event so the principal alert routes through the
-      // standard safety pipeline via EmailAdapter, rather than bypassing the content
-      // filter with a direct dispatchEmail() call (#206).
+      // Queue an FYI for the principal's digest (#2159). Block notices used to be emailed
+      // on their own; they are informational (#1051) — the agent already has the reason and
+      // may rewrite and retry — so they wait for the digest like other notices.
       //
-      // Recursion safety (two layers):
-      //   1. The notification body is a hardcoded template addressed to ceoEmail (in the
-      //      content filter allowlist), so the filter always passes under normal operation.
-      //   2. The EmailAdapter passes skipNotificationOnBlock: true when calling send() for
-      //      a notification delivery. If the filter is broken (crash → fail-closed), this
-      //      flag prevents send() from re-publishing outbound.notification, breaking the
-      //      cycle: send → block → sendNotification → EmailAdapter → send(skip) → block → stop.
-      const principalEmailForBlock = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
-      if (principalEmailForBlock && !options?.skipNotificationOnBlock) {
-        // sendNotification() catches errors internally — await is safe and ensures
-        // the bus.publish call completes before we return the blocked result.
-        await this.sendNotification(
-          {
-            notificationType: 'blocked_content',
-            ceoEmail: principalEmailForBlock,
-            // Softened from a call-to-action to informational (#1051): the agent now
-            // receives the block reason in the skill result and may self-correct and
-            // resend on its own. The audit log remains the ground truth; this alert is
-            // an FYI, not a task the principal must action.
-            subject: 'FYI — outbound message blocked',
-            body: [
-              'An outbound message was blocked by the content filter.',
-              'The agent received the reason and may rewrite the message and retry on its own.',
-              '',
-              `Reason: ${reasonSummary}`,
-              // blockedEvent.timestamp is the audit row's own clock. No principal
-              // timezone is plumbed into the gateway (it is infrastructure, not a
-              // skill with ctx.timezone), so we stamp UTC explicitly rather than
-              // emit an ambiguous bare timestamp.
-              `Time: ${blockedEvent.timestamp.toISOString()} (UTC)`,
-              `Channel: ${request.channel}`,
-              ...unmatchedRecipientNotificationLines(recipientId, unmatched),
-              '',
-              `Block ID: ${blockId}`,
-              `Audit event ID: ${blockedEvent.id}`,
-              '',
-              'Search the audit log by the audit event ID above for the full record.',
-            ].join('\n'),
-            blockId,
-            originalChannel: request.channel,
-            originalRecipientId: recipientId,
-          },
+      // skipNotificationOnBlock is still honoured: the EmailAdapter sets it when delivering a
+      // system notification, and a blocked notification must not report itself (#206).
+      if (!options?.skipNotificationOnBlock) {
+        await this.queueBlockReport(
+          [
+            `Outbound ${request.channel} message blocked by the content filter. The agent was told why and may rewrite it and retry.`,
+            `Reason: ${reasonSummary}`,
+            ...unmatchedRecipientNotificationLines(recipientId, unmatched),
+            `Block ${blockId}; audit event ${blockedEvent.id}.`,
+          ].join('\n'),
+          options?.conversationId,
           blockedEvent.id,
         );
-      } else if (options?.skipNotificationOnBlock) {
-        // This branch fires when a notification delivery itself gets blocked by the
-        // content filter (e.g. the filter is in a broken state). The recursion guard
-        // prevents an infinite loop. The principal will not receive this alert.
+      } else {
+        // A system notification's own delivery was blocked (e.g. the filter is in a broken
+        // state). The principal will not hear about this block; the audit log has it.
         this.log.error(
           { blockId, channel: request.channel },
           'outbound-gateway: notification delivery was blocked by content filter — recursion guard active, principal will NOT receive this alert',
-        );
-      } else if (!options?.skipNotificationOnBlock) {
-        this.log.error(
-          { blockId, channel: request.channel, recipientId: redactId(recipientId) },
-          'outbound-gateway: principal notification skipped — no principal email identity configured. Block recorded in audit log only.',
         );
       }
       // Surface the principal-safe reason summary and the rule name(s) to the
@@ -1697,6 +1660,29 @@ export class OutboundGateway {
         'outbound-gateway: failed to publish outbound.notification event',
       );
       return false;
+    }
+  }
+
+  /**
+   * Queue a content-filter block notice for the principal's digest (#2159). The summary must
+   * already obey buildBlockReasonSummary's per-rule contract: never a Stage-1 rule's matched
+   * fragment. Never throws — the block itself has already happened and is in the audit log.
+   */
+  private async queueBlockReport(summary: string, conversationId: string | undefined, blockedEventId: string): Promise<void> {
+    try {
+      await this.bus.publish('dispatch', createPrincipalReport({
+        summary,
+        urgency: 'digest',
+        source: 'blocked_content',
+        ...(conversationId ? { conversationId } : {}),
+        parentEventId: blockedEventId,
+        sourceLayer: 'dispatch',
+      }));
+    } catch (err) {
+      this.log.error(
+        { err, blockedEventId },
+        'outbound-gateway: failed to queue the block notice — the block is only in the audit log',
+      );
     }
   }
 
@@ -2707,43 +2693,17 @@ export class OutboundGateway {
         );
       }
 
-      const principalEmailForDraftBlock = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
-      if (principalEmailForDraftBlock) {
-        await this.sendNotification(
-          {
-            notificationType: 'blocked_content',
-            ceoEmail: principalEmailForDraftBlock,
-            // Softened from a call-to-action to informational (#1158, matching #1051):
-            // the agent now receives the block reason in the skill result and may
-            // self-correct and resend on its own. This alert is an FYI, not a task.
-            subject: 'FYI — outbound draft blocked',
-            body: [
-              'A draft send was blocked by the content filter.',
-              'The agent received the reason and may rewrite the draft and retry on its own.',
-              '',
-              `Reason: ${reasonSummary}`,
-              `Time: ${blockedEvent.timestamp.toISOString()} (UTC)`,
-              'Channel: email (draft)',
-              ...unmatchedRecipientNotificationLines(recipientEmail, unmatched),
-              '',
-              `Draft ID: ${draftId}`,
-              `Block ID: ${blockId}`,
-              `Audit event ID: ${blockedEvent.id}`,
-              '',
-              'Search the audit log by the audit event ID above for the full record.',
-            ].join('\n'),
-            blockId,
-            originalChannel: 'email',
-            originalRecipientId: recipientEmail,
-          },
-          blockedEvent.id,
-        );
-      } else {
-        this.log.error(
-          { blockId, draftId, recipientId: redactId(recipientEmail) },
-          'outbound-gateway: principal notification skipped for blocked draft — no principal email identity configured',
-        );
-      }
+      // Queued for the principal's digest, not emailed (#2159; informational since #1158).
+      await this.queueBlockReport(
+        [
+          'Email draft send blocked by the content filter. The agent was told why and may rewrite it and retry.',
+          `Reason: ${reasonSummary}`,
+          ...unmatchedRecipientNotificationLines(recipientEmail, unmatched),
+          `Draft ${draftId}; block ${blockId}; audit event ${blockedEvent.id}.`,
+        ].join('\n'),
+        options?.conversationId,
+        blockedEvent.id,
+      );
       // Surface the principal-safe reason summary and rule name(s) to the caller so
       // the agent's tool loop can address the root cause and retry (#1158). reasonSummary
       // obeys buildBlockReasonSummary's per-rule contract — only an LLM-judge finding's

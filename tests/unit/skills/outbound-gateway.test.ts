@@ -653,7 +653,7 @@ describe('OutboundGateway', () => {
 
       await gateway.send(baseRequest);
 
-      // Two bus.publish calls: outbound.blocked + outbound.notification (#206)
+      // Two bus.publish calls: outbound.blocked + the principal.report digest item (#2159)
       expect(mocks.bus.publish).toHaveBeenCalledTimes(2);
       // bus.publish(layer, event) — event is the second argument (index 1)
       const blockedEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[0][1] as BusEvent;
@@ -665,9 +665,9 @@ describe('OutboundGateway', () => {
       }
     });
 
-    it('publishes outbound.notification event for CEO alert when filter rejects', async () => {
-      // The CEO notification routes through the bus as an outbound.notification event
-      // so it goes through the same safety pipeline as regular outbound messages (#206).
+    it('queues a digest item, not an email, when the filter rejects', async () => {
+      // Block notices are FYIs (#1051): since #2159 they go to the principal's digest
+      // queue as principal.report items instead of a standalone email.
       (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
         passed: false,
         findings: [{ rule: 'secret-pattern', detail: 'API key detected' }],
@@ -685,14 +685,16 @@ describe('OutboundGateway', () => {
 
       await gateway.send(baseRequest);
 
-      // The second bus.publish call is the outbound.notification event
+      // The second bus.publish call is the principal.report item
       const notificationEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[1][1] as BusEvent;
-      expect(notificationEvent.type).toBe('outbound.notification');
-      if (notificationEvent.type === 'outbound.notification') {
-        expect(notificationEvent.payload.notificationType).toBe('blocked_content');
-        expect(notificationEvent.payload.ceoEmail).toBe('ceo@example.com');
-        expect(notificationEvent.payload.subject).toMatch(/blocked/i);
+      expect(notificationEvent.type).toBe('principal.report');
+      if (notificationEvent.type === 'principal.report') {
+        expect(notificationEvent.payload.source).toBe('blocked_content');
+        expect(notificationEvent.payload.urgency).toBe('digest');
+        expect(notificationEvent.payload.summary).toMatch(/blocked/i);
       }
+      const publishedTypes = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[1] as BusEvent).type);
+      expect(publishedTypes).not.toContain('outbound.notification');
       // nylasClient.sendMessage must NOT be called — the gateway no longer sends
       // the notification directly; the EmailAdapter handles delivery.
       expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
@@ -721,14 +723,14 @@ describe('OutboundGateway', () => {
       await gateway.send({ ...baseRequest, body: sensitiveBody });
 
       const notificationEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[1][1] as BusEvent;
-      expect(notificationEvent.type).toBe('outbound.notification');
-      if (notificationEvent.type === 'outbound.notification') {
+      expect(notificationEvent.type).toBe('principal.report');
+      if (notificationEvent.type === 'principal.report') {
         // Must NOT contain the blocked content
-        expect(notificationEvent.payload.body).not.toContain(sensitiveBody);
+        expect(notificationEvent.payload.summary).not.toContain(sensitiveBody);
         // Must NOT contain the detailed rule finding (could include key value)
-        expect(notificationEvent.payload.body).not.toContain('sk-ant-abcdefghijklmnopqrst1234567890AB');
-        // MUST contain a block ID so the CEO can cross-reference with logs
-        expect(notificationEvent.payload.blockId).toMatch(/^block_/);
+        expect(notificationEvent.payload.summary).not.toContain('sk-ant-abcdefghijklmnopqrst1234567890AB');
+        // MUST contain a block ID so the principal can cross-reference with logs
+        expect(notificationEvent.payload.summary).toMatch(/block_/);
       }
     });
 
@@ -760,14 +762,14 @@ describe('OutboundGateway', () => {
       const blockedEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[0][1] as BusEvent;
       const notificationEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[1][1] as BusEvent;
       expect(blockedEvent.type).toBe('outbound.blocked');
-      expect(notificationEvent.type).toBe('outbound.notification');
-      if (notificationEvent.type === 'outbound.notification' && blockedEvent.type === 'outbound.blocked') {
-        // The judge's abstract reason IS surfaced (gives the CEO something to act on).
-        expect(notificationEvent.payload.body).toContain(judgeReason);
-        // A timestamp is present, explicitly labelled UTC.
-        expect(notificationEvent.payload.body).toMatch(/Time: .+\(UTC\)/);
-        // The audit event ID ties the alert to the full audit record.
-        expect(notificationEvent.payload.body).toContain(blockedEvent.id);
+      expect(notificationEvent.type).toBe('principal.report');
+      if (notificationEvent.type === 'principal.report' && blockedEvent.type === 'outbound.blocked') {
+        // The judge's abstract reason IS surfaced (gives the principal something to act on).
+        expect(notificationEvent.payload.summary).toContain(judgeReason);
+        // The item's own audit row carries the time; it is threaded to the block event.
+        expect(notificationEvent.parentEventId).toBe(blockedEvent.id);
+        // The audit event ID ties the item to the full audit record.
+        expect(notificationEvent.payload.summary).toContain(blockedEvent.id);
       }
     });
 
@@ -794,16 +796,16 @@ describe('OutboundGateway', () => {
       await gateway.send(baseRequest);
 
       const notificationEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[1][1] as BusEvent;
-      expect(notificationEvent.type).toBe('outbound.notification');
-      if (notificationEvent.type === 'outbound.notification') {
-        // The matched secret must never reach the notification...
-        expect(notificationEvent.payload.body).not.toContain(secretFragment);
-        // ...but the rule name is fine and tells the CEO which class of rule fired.
-        expect(notificationEvent.payload.body).toContain('secret-pattern');
+      expect(notificationEvent.type).toBe('principal.report');
+      if (notificationEvent.type === 'principal.report') {
+        // The matched secret must never reach the digest item...
+        expect(notificationEvent.payload.summary).not.toContain(secretFragment);
+        // ...but the rule name is fine and tells the principal which class of rule fired.
+        expect(notificationEvent.payload.summary).toContain('secret-pattern');
       }
     });
 
-    it('fails closed when filter crashes — blocks send and publishes notification', async () => {
+    it('fails closed when filter crashes — blocks send and queues a digest item', async () => {
       // If the content filter itself throws, we must treat it as blocked (fail-closed).
       // A crashing filter is a security anomaly; we'd rather miss a send than let
       // potentially dangerous content through an unchecked pipeline.
@@ -824,10 +826,10 @@ describe('OutboundGateway', () => {
 
       // Filter crash must block the send
       expect(result.success).toBe(false);
-      // CEO notification is published to the bus as outbound.notification
+      // The block is queued for the principal's digest (#2159)
       const publishCalls = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls;
       const notificationCalls = publishCalls.filter(
-        (call: unknown[]) => (call[1] as BusEvent).type === 'outbound.notification',
+        (call: unknown[]) => (call[1] as BusEvent).type === 'principal.report',
       );
       expect(notificationCalls).toHaveLength(1);
     });
@@ -2303,6 +2305,43 @@ describe('OutboundGateway.sendEmailDraft', () => {
     expect(reasonBeforeRecipientNote(result.blockedReason)).toBe('secret-pattern');
     expect(result.blockedRules).toEqual(['secret-pattern']);
     expect(nylasClient.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('queues a blocked draft for the digest instead of emailing the principal (#2159)', async () => {
+    const { gateway, contentFilter, bus } = makeGateway();
+    (contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+      passed: false,
+      findings: [{ rule: 'secret-pattern', detail: 'Key detected: sk-ant-secretsecret' }],
+    });
+
+    await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    const events = (bus.publish as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1] as BusEvent);
+    expect(events.map((e) => e.type)).not.toContain('outbound.notification');
+    const report = events.find((e) => e.type === 'principal.report');
+    expect(report).toBeDefined();
+    if (report?.type === 'principal.report') {
+      expect(report.payload.source).toBe('blocked_content');
+      expect(report.payload.summary).toContain(DRAFT_ID);
+      expect(report.payload.summary).toContain('secret-pattern');
+      // A Stage-1 detail can embed the matched fragment; it never reaches the digest.
+      expect(report.payload.summary).not.toContain('sk-ant-secretsecret');
+    }
+  });
+
+  it('still blocks the draft when queueing the notice fails', async () => {
+    const { gateway, contentFilter, bus } = makeGateway();
+    (contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+      passed: false,
+      findings: [{ rule: 'secret-pattern', detail: 'Key detected' }],
+    });
+    (bus.publish as ReturnType<typeof vi.fn>).mockImplementation(async (_layer: string, event: BusEvent) => {
+      if (event.type === 'principal.report') throw new Error('bus down');
+    });
+
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    expect(result.success).toBe(false);
   });
 
   it('returns the judge\'s abstract reason and rule name on a draft LLM-judge block (#1158)', async () => {
