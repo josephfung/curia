@@ -15,6 +15,7 @@ import {
   createAgentResponse,
   createAuthorizationDecision,
   createInboundMessage,
+  type AgentTaskEvent,
   type AuthorizationDecisionEvent,
   type BusEvent,
   type OutboundMessageEvent,
@@ -432,6 +433,58 @@ describe('Dispatcher relay Gate C (#1733)', () => {
         conversationId: 'conv-approve',
       },
     });
+  });
+
+  // #2159: approvals no longer notify from code. A relay held after the turn ended has no
+  // agent to deliver it, so the dispatcher wakes the coordinator to do it on one channel.
+  it('wakes the coordinator to deliver a newly held relay approval', async () => {
+    const approvalTrigger = {
+      request: vi.fn().mockResolvedValue({ created: true, shortRef: 'abcd1234' }),
+    } as unknown as ApprovalTriggerService;
+    const { dispatcher, publishedEvents, subscribeHandlers } = makeStubs({ approvalTrigger });
+    dispatcher.register();
+    seedRouting(dispatcher, 'task-wake', {
+      conversationId: 'conv-wake',
+      senderId: 'dana@example.com',
+      originator: makeOriginator('unknown'),
+    });
+
+    await subscribeHandlers.get('agent.response')!(createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'conv-wake',
+      content: 'Hello stranger.',
+      parentEventId: 'task-wake',
+    }));
+
+    const wakes = publishedEvents.filter((e): e is AgentTaskEvent => e.type === 'agent.task');
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]!.payload).toMatchObject({
+      agentId: 'coordinator',
+      channelId: 'scheduler',
+      senderId: 'system',
+      conversationId: 'approval-delivery:abcd1234',
+    });
+    expect(wakes[0]!.payload.content).toContain('deliver-approval');
+    expect(wakes[0]!.payload.content).toContain('abcd1234');
+    expect(wakes[0]!.parentEventId).toBe('task-wake');
+  });
+
+  it('does not wake anyone when the relay joined an approval already pending', async () => {
+    const approvalTrigger = {
+      request: vi.fn().mockResolvedValue({ created: false, reason: 'duplicate', existingShortRef: 'abcd1234' }),
+    } as unknown as ApprovalTriggerService;
+    const { dispatcher, publishedEvents, subscribeHandlers } = makeStubs({ approvalTrigger });
+    dispatcher.register();
+    seedRouting(dispatcher, 'task-dup', { originator: makeOriginator('unknown') });
+
+    await subscribeHandlers.get('agent.response')!(createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      content: 'Hello again.',
+      parentEventId: 'task-dup',
+    }));
+
+    expect(publishedEvents.filter((e) => e.type === 'agent.task')).toHaveLength(0);
   });
 
   it('does not create an approval when relay body exceeds dispatcher-relay max length', async () => {

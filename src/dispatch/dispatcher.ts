@@ -1753,11 +1753,46 @@ export class Dispatcher {
           },
           'Dispatcher Gate C: relay escalate joined existing reply-class pending approval',
         );
+        return;
       }
+      await this.wakeCoordinatorToDeliver(result.shortRef, args);
     } catch (err) {
       this.logger.warn(
         { err, taskEventId: args.taskEventId },
         'Dispatcher Gate C: approval trigger failed — relay still withheld',
+      );
+    }
+  }
+
+  /**
+   * A relay is held after the agent's turn has ended, so no agent is there to deliver the
+   * approval (#2159: approvals no longer notify from code). Wake the coordinator to send it
+   * on the one channel the principal's standing preferences name. If this publish fails,
+   * the expiry sweep's safety net emails the approval after 15 minutes.
+   */
+  private async wakeCoordinatorToDeliver(
+    shortRef: string,
+    args: { taskEventId: string; channelId: string; senderId: string },
+  ): Promise<void> {
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: `approval-delivery:${shortRef}`,
+      channelId: 'scheduler',
+      senderId: 'system',
+      content: [
+        `A reply to ${args.senderId} on ${args.channelId} was held for the principal's approval (ref: ${shortRef}).`,
+        "Deliver it with deliver-approval, on the channel the principal's standing preferences name for urgent items.",
+        'Do not do anything else.',
+      ].join(' '),
+      parentEventId: args.taskEventId,
+    });
+    try {
+      await this.bus.publish('dispatch', task);
+      this.logger.info({ shortRef, taskEventId: args.taskEventId }, 'Dispatcher Gate C: woke the coordinator to deliver a held relay approval');
+    } catch (err) {
+      this.logger.error(
+        { err, shortRef, taskEventId: args.taskEventId },
+        'Dispatcher Gate C: could not wake the coordinator — the expiry sweep will email the approval',
       );
     }
   }
