@@ -39,9 +39,18 @@ const SECRETS = {
   password: '${{ secrets.DOCKERHUB_TOKEN }}',
 };
 
+// Container and service credentials are one expression, not a username/password
+// mapping (#2153). Fork PRs get no secrets, and a literal mapping then holds two
+// empty strings, which template validation rejects at job setup before the runner
+// can skip the login. This yields the credentials when both secrets are set and an
+// empty map otherwise; the runner skips the login for an empty map and pulls
+// anonymously. toJSON escapes the values into the JSON.
+const CREDENTIALS =
+  "${{ secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN && fromJSON(format('{{\"username\":{0},\"password\":{1}}}', toJSON(secrets.DOCKERHUB_USERNAME), toJSON(secrets.DOCKERHUB_TOKEN))) || fromJSON('{}') }}";
+
 interface ContainerSpec {
   image: string;
-  credentials?: Record<string, string>;
+  credentials?: string | Record<string, string>;
 }
 
 interface CheckJob {
@@ -87,8 +96,8 @@ describe('docker-publish Docker Hub login (#2095)', () => {
 
 // The PR checks pull from Docker Hub too, and failed on the same rate limit. They
 // authenticate where the secrets exist and pull anonymously where they do not
-// (fork and Dependabot PRs): the runner skips a container login whose credentials
-// are empty, and the postgres-image login step is skipped by its `if:`.
+// (fork PRs): container and service credentials go through CREDENTIALS above, and
+// the postgres-image login step is skipped by its `if:`.
 describe('PR-check Docker Hub pulls (#2095)', () => {
   const ci = load<CheckWorkflow>('ci.yml');
 
@@ -98,13 +107,13 @@ describe('PR-check Docker Hub pulls (#2095)', () => {
   ])('%s authenticates its %s job\'s %s service', (file, job, service) => {
     const spec = load<CheckWorkflow>(file).jobs[job]!.services![service]!;
     expect(spec.image).toMatch(/^pgvector\//);
-    expect(spec.credentials).toEqual(SECRETS);
+    expect(spec.credentials).toBe(CREDENTIALS);
   });
 
   it('semgrep authenticates its container', () => {
     const container = load<CheckWorkflow>('semgrep.yml').jobs.semgrep!.container!;
     expect(container.image).toBe('semgrep/semgrep');
-    expect(container.credentials).toEqual(SECRETS);
+    expect(container.credentials).toBe(CREDENTIALS);
   });
 
   it('ci postgres-image logs in before the build, only where the secret exists', () => {
