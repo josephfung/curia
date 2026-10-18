@@ -29,6 +29,16 @@ describe('case 18: the v0.44 gate calls answer', () => {
     expect(s?.return).toMatchObject({ action: 'created' });
   });
 
+  it('appends to the brief', () => {
+    const s = stub('doc-write', {
+      path: '/projects/northwind-renewal/brief.md', mode: 'append', content: 'Countersign by October 24.', expected_version: 1,
+    });
+    expect(s?.error).toBeUndefined();
+    expect(s?.return).toMatchObject({
+      action: 'appended', document: { path: '/projects/northwind-renewal/brief.md', version: 2 },
+    });
+  });
+
   it('places the brief before writing it', () => {
     expect(stub('doc-place', { intent: 'Northwind renewal brief' })?.return).toMatchObject({ action: 'create_folder' });
   });

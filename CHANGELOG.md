@@ -18,7 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Email signature** — the model's own sign-off is replaced by the configured signature, so emails sign once. (#2138)
 - **Requests no tool can do** — an empty `tool-registry` search says to reach whoever can, not research around it. (#2149)
 - **`web-fetch`** — a 404 warns that guessed paths miss too, ending runs of guessed venue pages. (#2149)
-- **Scenario 18 stubs** — filing the renewal deadline as a task note or brief no longer trips the stub gate. (#2150)
+- **Scenario 18 stubs** — a task note or brief on the renewal deadline no longer trips the stub gate. (#2150)
 
 ## [0.44.0] — 2026-10-16 — "WALL-E"
 
