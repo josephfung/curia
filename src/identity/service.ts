@@ -33,7 +33,8 @@ function verbosityGuidance(score: number): string {
 
 /**
  * Fixed, code-owned lines of the identity block. No style text can talk the model out of
- * them. Exported so the prompt-exfiltration marker sources can include them (#2143).
+ * them. Exported for tests now, and for the prompt-exfiltration marker sources in tone &
+ * style PR 3 (#2143).
  */
 export const REGISTER_LINE = 'Match the register of any example lines above, not their content.';
 export const HONESTY_LINE = "Whatever your tone, say plainly when you are unsure or don't know something.";

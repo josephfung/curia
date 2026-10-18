@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 // The seed a fresh install loads, imported so the warm template cannot drift from it.
 import { DEFAULT_OFFICE_IDENTITY } from '../../../../src/identity/defaults.js';
+import { TONE_STYLE_MAX_LENGTH as SERVER_TONE_STYLE_MAX_LENGTH } from '../../../../src/identity/types.js';
 import {
   verbosityBand,
   verbosityReviewDesc,
@@ -290,6 +291,7 @@ describe('validateToneStyle', () => {
     expect(validateToneStyle('   ')).toMatch(/Describe how/);
   });
   it('caps the length at the identity limit', () => {
+    expect(TONE_STYLE_MAX_LENGTH).toBe(SERVER_TONE_STYLE_MAX_LENGTH);
     expect(validateToneStyle('x'.repeat(TONE_STYLE_MAX_LENGTH))).toBeNull();
     expect(validateToneStyle('x'.repeat(TONE_STYLE_MAX_LENGTH + 1))).toMatch(/801/);
   });

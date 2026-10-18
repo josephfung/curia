@@ -20,6 +20,8 @@ interface ToneStyleFieldProps {
  */
 export function ToneStyleField({ value, onChange, idPrefix = 'tone-style' }: ToneStyleFieldProps) {
   const [pending, setPending] = useState<(typeof STYLE_TEMPLATES)[number] | null>(null);
+  // Once edited, an emptied field says why Save is unavailable rather than going quiet.
+  const [touched, setTouched] = useState(false);
   const textareaId = `${idPrefix}-text`;
   const error = validateToneStyle(value);
   const active = STYLE_TEMPLATES.find(t => t.text === value.trim());
@@ -74,12 +76,12 @@ export function ToneStyleField({ value, onChange, idPrefix = 'tone-style' }: Ton
           placeholder="A few lines on how Curia sounds, and what it never does."
           aria-invalid={error !== null}
           aria-describedby={`${idPrefix}-hint`}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => { setTouched(true); onChange(e.target.value); }}
         />
         <div id={`${idPrefix}-hint`} className="settings-muted-hint">
           {value.length} / {TONE_STYLE_MAX_LENGTH} · One example line (Sounds like: "…") does more than any adjective.
         </div>
-        {error && value.length > 0 && <div className="wizard-step1-error">{error}</div>}
+        {error && (touched || value.length > 0) && <div className="wizard-step1-error">{error}</div>}
       </div>
     </>
   );

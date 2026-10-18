@@ -130,7 +130,6 @@ export default function WizardPage() {
   const [principalSubmitting, setPrincipalSubmitting] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [assistantNameError, setAssistantNameError] = useState('');
-  const [toneStyleError, setToneStyleError] = useState('');
   // The saved autonomy score, from the required GET /api/autonomy. Step 5 pre-selects its
   // band, and submit compares against it to skip an unchanged band.
   const [autonomyScore, setAutonomyScore] = useState<number | null>(null);
@@ -425,15 +424,10 @@ export default function WizardPage() {
       }
       setAssistantNameError('');
     }
-    // Step 4 is tone & style: the identity requires a non-empty style.
-    if (currentStep === 4) {
-      const error = validateToneStyle(state.toneStyle);
-      if (error) {
-        setToneStyleError(error);
-        return;
-      }
-      setToneStyleError('');
-    }
+    // Step 4 is tone & style: the identity requires a non-empty style of at most 800
+    // characters. The field shows why (it is never empty untouched: the seed and every
+    // stored style are non-empty).
+    if (currentStep === 4 && validateToneStyle(state.toneStyle) !== null) return;
     if (currentStep < WIZARD_TOTAL_STEPS) void goTo(currentStep + 1);
   }
 
@@ -462,8 +456,8 @@ export default function WizardPage() {
     setSubmitting(true);
     setSubmitError('');
     try {
-      // Autonomy first. Saving a 'wizard' identity marks the deployment configured, and
-      // the wizard never shows again; if identity went first and autonomy then failed,
+      // Autonomy first. Saving the identity (recorded as an 'api' version) marks the
+      // deployment configured, and the wizard never shows again; if identity went first and autonomy then failed,
       // the operator could not get back here to fix it. A failure here leaves the
       // deployment unconfigured, so the wizard runs again.
       const change = autonomyChange(autonomyScore, state.autonomyBand);
@@ -954,13 +948,9 @@ export default function WizardPage() {
       </div>
       <ToneStyleField
         value={state.toneStyle}
-        onChange={toneStyle => {
-          setState(s => ({ ...s, toneStyle }));
-          if (toneStyleError) setToneStyleError('');
-        }}
+        onChange={toneStyle => setState(s => ({ ...s, toneStyle }))}
         idPrefix="w-tone"
       />
-      {toneStyleError && state.toneStyle.length === 0 && <div className="wizard-step1-error">{toneStyleError}</div>}
       <DetailSlider
         verbosity={state.verbosity}
         onChange={verbosity => setState(s => ({ ...s, verbosity }))}
