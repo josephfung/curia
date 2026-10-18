@@ -174,15 +174,33 @@ scheduler:
 
 ### `autonomy.approval_expiry`
 
-How often pending approvals past their `expires_at` are marked expired.
+How often the approval sweep runs.
 
 ```yaml
 autonomy:
   approval_expiry:
-    sweep_interval_minutes: 60
+    sweep_interval_minutes: 15
 ```
 
-The sweep is a system interval, not a scheduled agent job: no agent turn and no LLM call (#2013). Each tick expires stale `pending_approval` rows and sends the principal one batched email about any high or critical ones. With no principal email on file, or no outbound gateway, the rows still expire and the email is skipped with a warning. The first tick runs a minute after startup, then every interval, so frequent restarts never starve it. Validated at startup as a positive integer within the Node.js timer limit.
+The sweep is a system interval, not a scheduled agent job, so it uses no agent turn and no LLM call (#2013). Each tick does two things:
+
+1. It delivers, once, any pending approval no agent delivered within 15 minutes. It uses email, or the principal's first available channel when there is no email.
+2. It marks stale `pending_approval` rows expired and queues a digest item for each (#2159).
+
+The first tick runs a minute after startup and then every interval, so frequent restarts never starve it. The value is validated at startup as a positive integer within the Node.js timer limit.
+
+### `autonomy.report_fallback`
+
+The weekly summary for installs whose digest jobs don't report queued items.
+
+```yaml
+autonomy:
+  report_fallback:
+    max_age_days: 7
+    check_interval_hours: 24
+```
+
+Notes, block notices and approval mentions go to the principal's digest queue (`principal.report`, #2159). Digest jobs read the queue with `list-principal-reports` and acknowledge it with `ack-principal-reports`. Once the oldest unacknowledged item is older than `max_age_days`, this check emails a numbered summary itself. It acknowledges only after the send succeeds. Both values must be positive integers.
 
 ---
 

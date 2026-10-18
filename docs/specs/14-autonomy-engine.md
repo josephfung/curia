@@ -220,9 +220,48 @@ Implementation: the execution layer calls `isPrincipalOriginated()` before evalu
 
 Scope: principal bypass applies to Gates A and B only. It uses task **lineage** (`isPrincipalOriginated` on effective standing) — a woken principal-lineage task can inherit it via the ladder at high trust. This is deliberately a *different* notion of "principal" from the elevated-skill gate (`sensitivity: 'elevated'`), which requires a **live principal turn** and is never bypassed or inherited (#1126). Acting *within* CEO-authorized work (a `normal` skill) can reasonably be inherited at high trust; *exercising authority* (an `elevated` skill) needs the human now. See [03-tools-and-execution.md](03-tools-and-execution.md) and ADR-017.
 
-### Approval expiry
+### Approval delivery and expiry
 
-A gated action that files an approval (ADR-018) stays `pending_approval` until its `expires_at`. An hourly system interval (`autonomy.approval_expiry.sweep_interval_minutes`, default 60) marks stale rows expired with no agent turn and no LLM call, and sends the principal one batched email about any high- or critical-risk expirations (#2013). With no principal email or outbound gateway the rows still expire and the email is skipped with a warning. See [Configuration](../dev/configuration.md#autonomyapproval_expiry).
+A gated action that files an approval (ADR-018) stays `pending_approval` until its `expires_at`. Filing an approval notifies no one (#2159). The raise site:
+
+- creates the row;
+- registers what the principal should be shown, with contact references resolved to names (#2033);
+- queues one `principal.report` item, the approval's single digest mention.
+
+The blocked agent is told to deliver the approval itself with `deliver-approval`. That tool sends it on **one** channel the agent picks from the principal's standing preferences. Fresh installs seed a preference of Signal, then SMS, then email.
+
+- Delivery claims `notification_sent_at` atomically, so an approval is pinged once.
+- A failed send releases the claim, and the tool's error lists the channels still available.
+- Signal and Slack deliveries are bound, so a 👍/👎 reaction resolves the approval.
+- When a dispatcher-relayed reply is held after the turn has ended, the dispatcher wakes the coordinator to deliver it.
+
+A system interval (`autonomy.approval_expiry.sweep_interval_minutes`, default 15) runs with no agent turn and no LLM call, and does two things:
+
+1. **Safety net.** It delivers, by email or the first available channel, any approval no one delivered within 15 minutes, and logs a warning.
+2. **Expiry.** It marks stale rows expired and queues a digest item for each (#2013, #2159).
+
+See [Configuration](../dev/configuration.md#autonomyapproval_expiry).
+
+### Who resolved an approval
+
+`resolved_by` records who actually decided (#2159):
+
+- `principal`: a 👍/👎 reaction on the approval message.
+- `coordinator`: an agent called `approve-action`, `deny-action`, `dismiss-action` or `send-draft` on its own reading of the conversation.
+- `system`: expiry or gate rejection.
+
+The scoring pass treats only `principal` resolutions as the principal's feedback. Coordinator-resolved rows are scored with null flags, so they carry no signal. Rows written before #2159 say `ceo`.
+
+### The principal's digest queue
+
+Things the principal should hear about, but not right now, are `principal.report` bus events. That covers:
+
+- "act, then tell" items filed with `report-to-principal`;
+- notes cut out of replies to someone else;
+- content-filter block notices;
+- approval mentions and expiries.
+
+The audit log records them, and `ReportQueue` (`src/reports/report-queue.ts`) reads them back by `audit_log.seq`. Digest jobs call `list-principal-reports`, include the numbered items, and call `ack-principal-reports` with the returned cursor once the digest is sent. A daily check (`autonomy.report_fallback`) sends a plain weekly summary itself when the oldest unreported item is more than seven days old, which covers installs with no digest job.
 
 ### Effective standing — the bypass ladder (woken/derived tasks)
 
