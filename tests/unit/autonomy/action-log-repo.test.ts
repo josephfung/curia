@@ -175,11 +175,12 @@ describe('ActionLogRepo', () => {
       expect(rate).toBeCloseTo(8 / 30);
     });
 
-    it('returns 0 when no scored rows exist', async () => {
+    // #2159: an empty window is "no evidence", not "no errors" — the guard blocks increases on it.
+    it('returns null when no scored rows exist', async () => {
       const { pool } = makePool([{ total: '0', errors: '0' }]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
       const rate = await repo.getRecentCompetenceErrorRate(30);
-      expect(rate).toBe(0);
+      expect(rate).toBeNull();
     });
   });
 

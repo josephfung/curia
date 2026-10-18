@@ -405,6 +405,27 @@ describe('AutonomyScoringPass', () => {
       expect(changedBy).toBe('system');
     });
 
+    // #2159: coordinator-resolved approvals no longer carry competence, so the recent
+    // window can be empty. That is "no evidence", and must not read as a 0% error rate.
+    it('blocks score increase when there is no recent competence evidence', async () => {
+      const oldDate = new Date(Date.now() - 30 * 86_400_000);
+      const scoredRows = Array.from({ length: 35 }, (_, i) =>
+        makeRow({ id: i + 1, competenceFlag: null, commitmentFlag: 1, compatibility: 1, scoredBy: 'llm-judge', createdAt: new Date(Date.now() - i * 86_400_000) }),
+      );
+      const repo = makeRepo({
+        countScored: vi.fn().mockResolvedValue(35),
+        getRecentCompetenceErrorRate: vi.fn().mockResolvedValue(null),
+        findAllScored: vi.fn().mockResolvedValue(scoredRows),
+      });
+      const svc = makeAutonomyService(75, 'system', oldDate);
+      const pass = new AutonomyScoringPass(repo, svc, makeLlmProvider(), createSilentLogger(), defaultConfig);
+
+      const result = await pass.run();
+
+      expect(svc.setScore).not.toHaveBeenCalled();
+      expect(result.reason).toMatch(/no recent competence evidence/);
+    });
+
     it('blocks score increase when error rate exceeds threshold', async () => {
       const oldDate = new Date(Date.now() - 30 * 86_400_000);
       const scoredRows = [

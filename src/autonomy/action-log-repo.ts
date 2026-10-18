@@ -136,13 +136,14 @@ export class ActionLogRepo {
 
   /**
    * Compute the competence error rate among the most recent `window` scored rows.
-   * Returns 0 if no scored rows exist.
+   * Returns null when no row in the window carries a competence flag: that is "no
+   * evidence", not "no errors", and the scoring pass blocks increases on it (#2159).
    *
    * A row is counted as an "error" when competence_flag = 0 (Curia made a mistake).
    * Rows with competence_flag = 1 are successes; null rows are excluded from the window
    * by the WHERE clause (competence_flag IS NOT NULL).
    */
-  async getRecentCompetenceErrorRate(window: number): Promise<number> {
+  async getRecentCompetenceErrorRate(window: number): Promise<number | null> {
     const result = await this.pool.query<{ total: string; errors: string }>(
       `SELECT
          COUNT(*) AS total,
@@ -157,7 +158,7 @@ export class ActionLogRepo {
       [window],
     );
     const total = parseInt(result.rows[0]!.total, 10);
-    if (total === 0) return 0;
+    if (total === 0) return null;
     return parseInt(result.rows[0]!.errors, 10) / total;
   }
 

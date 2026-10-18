@@ -143,6 +143,14 @@ export class AutonomyScoringPass {
     // A high error rate means Curia has been making mistakes; don't increase autonomy yet.
     if (delta > 0) {
       const errorRate = await this.repo.getRecentCompetenceErrorRate(30);
+      // No recent competence evidence at all is not a clean record. Since #2159 coordinator-
+      // resolved approvals carry no flags, so the window can empty out; an increase then
+      // needs evidence from principal decisions or judged actions first.
+      if (errorRate === null) {
+        result.reason = 'no recent competence evidence — blocking increase';
+        this.logger.info('AutonomyScoringPass: ' + result.reason);
+        return result;
+      }
       if (errorRate > this.config.errorRateThreshold) {
         result.reason = `error rate guard: ${(errorRate * 100).toFixed(0)}% > ${(this.config.errorRateThreshold * 100).toFixed(0)}% — blocking increase`;
         this.logger.info({ errorRate, threshold: this.config.errorRateThreshold }, 'AutonomyScoringPass: ' + result.reason);
