@@ -433,7 +433,36 @@ and just need to keep passing. Regressions elsewhere are the release gate's job.
 
 ### Baseline (PR 1)
 
-BASELINE_PLACEHOLDER
+`deepseek/deepseek-v4.1-flash` (the production standard tier), 5 runs each, at
+`063dba66`, on 2026-10-18, under `style-brief-dry`. About $0.25 and 4 minutes, judge
+included. PR 1 changes no prompt, agent or renderer, so this is main's behavior. Pass
+rates are per behavior; words are each run's reply or message.
+
+| Case | Content kept | Length | No filler | Register | Words |
+|---|---|---|---|---|---|
+| 40a Signal reply (≤ 40) | 100% | **40%** | 100% | 80% | 56, 42, 29, 51, 29 |
+| 40b email, third party (≤ 80) | 80% | 100% | 100% | 100% | 37, 40, 32, 39, 52 |
+| 40c scheduled recap (≤ 60) | 100% | **60%** | 100% | 90% | 60, 63, 50, 60, 62 |
+| 40d debrief prompt | 100% | 100% (judge) | 100% | 100% | — |
+| 40e guard: principal's voice | 100% | — | — | 100% | — |
+
+What it shows:
+- **The gap is the principal's Signal messages.** 40a and 40c are the only cases over
+  their caps. Both relay a long specialist answer and keep its framing ("Two open items
+  from her reply:", time ranges, durations), then add a closing offer ("Want me to draft a
+  reply?"), which the judge marks down for register. That matches the production report
+  for Signal.
+- **Email to a third party is already short** under this identity, at 32 to 52 words. The
+  email half of the production report does not reproduce here, so 40b has little room
+  left and mostly catches a regression.
+- **40d copies its example.** All five prompts are near-verbatim copies of
+  meeting-debrief.yaml's sample sentence ("…just wrapped up. Any takeaways or follow-ups
+  you'd like me to handle?"). The judge rates that dry enough, so 40d can only catch a
+  regression. PR 5's removal of the example is what changes it.
+- **40e holds.** Every draft is in the principal's voice ("Marcus —", exclamation marks,
+  "Cheers, Avery"), with no refusal. It is the guard PR 4 must keep green.
+- **Noise.** One 40b run never asked ceo-inbox, so it put a task and a "will follow up"
+  note into the email to Priya. That is a routing miss, which both arms of an A/B share.
 
 ## PR sequence
 

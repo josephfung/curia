@@ -553,6 +553,36 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-08T17:20:23.923Z"
     },
+    "style debrief prompt": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:21:16.726Z"
+    },
+    "style email reply third party": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:21:16.726Z"
+    },
+    "style inbox draft keeps principal voice": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:21:16.726Z"
+    },
+    "style scheduled recap signal": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:21:16.726Z"
+    },
+    "style signal reply brief": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-18T14:21:16.726Z"
+    },
     "sweep-on-close closing result": {
       "unstubbed": 0,
       "runs": 5,
