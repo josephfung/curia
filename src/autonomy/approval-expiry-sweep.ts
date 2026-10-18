@@ -1,36 +1,32 @@
 // approval-expiry-sweep.ts — expires stale pending approvals on a system interval (#2013).
 //
 // Finds every pending_approval row whose expires_at has passed, batch-transitions them to
-// 'expired', and sends one batched email to the principal for any high/critical expirations.
+// 'expired', and queues one principal.report digest item per expired row (#2159). Expiry
+// used to send a batched email for high/critical rows; it is digest material, not an alert,
+// and every expiry — whatever its risk — is worth one line in the digest.
 //
 // This used to be the approval-expiry-sweep skill, fired by an hourly cron on the coordinator.
 // Nothing here needs a model, and each of those runs was a full coordinator turn: ~720 a month
 // at the coordinator's whole context, with human-channel send tools pinned (#1609 was one of
 // these runs posting an unrelated bullpen reply to the principal's Signal). As a system
-// interval it is a pair of queries and, rarely, one notification.
+// interval it is a pair of queries and a publish per expired row.
 //
 // Shaped like LateDelegationSweep and BacklogHeartbeat: an interval with an in-flight guard,
 // and a tick() that is safe to call directly from tests.
 //
-// Non-fatal on the notification path — expiry has already committed by then, so:
-//   - no principal email on file  → notification skipped, logged at warn
-//   - outboundGateway absent      → notification skipped, logged at warn
-//   - sendNotification() false    → logged at warn
-// A repository failure rejects tick(); the interval wrapper logs it at error and the next
-// interval runs as normal.
+// A failed publish is logged at error naming the row and does not stop the others: expiry has
+// already committed and the row will not come back. A repository failure rejects tick(); the
+// interval wrapper logs it at error and the next interval runs as normal.
 
 import type { Logger } from '../logger.js';
-import type { OutboundGateway } from '../skills/outbound-gateway.js';
-import { resolvePrincipalEmail, type PrincipalEmailRef } from '../contacts/types.js';
+import type { EventBus } from '../bus/bus.js';
+import { createPrincipalReport } from '../bus/events.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { ActionLogRow } from './action-log-types.js';
 
 export interface ApprovalExpirySweepOptions {
   actionLogRepo: Pick<ActionLogRepo, 'findExpired' | 'expireRows'>;
-  /** Absent in setup-required mode or with no outbound client — expiry still runs. */
-  outboundGateway?: Pick<OutboundGateway, 'sendNotification'>;
-  /** Plain string (tests) or the live ref, so a post-boot email bind takes effect (#1514). */
-  ceoEmail: string | PrincipalEmailRef;
+  bus: Pick<EventBus, 'publish'>;
   logger: Logger;
   intervalMinutes: number;
 }
@@ -38,14 +34,9 @@ export interface ApprovalExpirySweepOptions {
 export interface ApprovalExpirySweepResult {
   /** Rows actually transitioned to expired this tick. */
   expired: number;
-  /** High/critical rows included in a notification that was handed to the gateway. */
+  /** Expired rows queued for the principal's digest. */
   notified: number;
 }
-
-// Tiers that warrant a principal notification on expiry. 'none', 'low' and 'medium'
-// expirations are recorded in the log but not surfaced as alerts — they are low-stakes
-// actions the principal didn't need to weigh in on urgently.
-const NOTIFIABLE_TIERS = new Set(['high', 'critical']);
 
 // Delay before the first tick after start(). The cron this replaced fired on the wall clock, so
 // a restart never postponed it; a bare setInterval would push every sweep a full interval past
@@ -108,7 +99,7 @@ export class ApprovalExpirySweep {
       });
   }
 
-  /** One pass: expire stale approvals and notify about high/critical ones. */
+  /** One pass: expire stale approvals and queue a digest item for each. */
   async tick(): Promise<ApprovalExpirySweepResult> {
     const expired: ActionLogRow[] = await this.opts.actionLogRepo.findExpired();
     if (expired.length === 0) {
@@ -133,63 +124,35 @@ export class ApprovalExpirySweep {
       );
     }
 
-    const notifiable = actuallyExpired.filter((r) => NOTIFIABLE_TIERS.has(r.actionRisk));
-    const notified = notifiable.length > 0 ? await this.notify(notifiable) : 0;
+    const notified = await this.queueReports(actuallyExpired);
 
     const result = { expired: actuallyExpired.length, notified };
     this.opts.logger.info(result, 'ApprovalExpirySweep tick complete');
     return result;
   }
 
-  /** Send the batched principal notification. Returns how many rows it covered (0 if skipped). */
-  private async notify(rows: ActionLogRow[]): Promise<number> {
-    const { outboundGateway, logger } = this.opts;
-    // Expiry has committed and findExpired() won't return these rows again, so a skipped alert
-    // is not retried. Name the rows in every skip log so an operator can follow up by hand.
-    const skipped = {
-      notifiableCount: rows.length,
-      ids: rows.map((r) => r.id),
-      shortRefs: rows.map((r) => r.shortRef),
-    };
-    if (!outboundGateway) {
-      logger.warn(
-        skipped,
-        'ApprovalExpirySweep: outboundGateway not available — skipping expiry notification for high/critical rows',
-      );
-      return 0;
+  /** Queue one digest item per expired row. Returns how many were queued. */
+  private async queueReports(rows: ActionLogRow[]): Promise<number> {
+    let queued = 0;
+    for (const r of rows) {
+      try {
+        await this.opts.bus.publish('system', createPrincipalReport({
+          summary: `Approval expired without an answer: ${r.description ?? r.toolName}`,
+          urgency: 'digest',
+          source: 'approval_expired',
+          ...(r.shortRef ? { actionShortRef: r.shortRef } : {}),
+          // The task that raised the approval, so the item threads back to its cause.
+          parentEventId: r.taskId,
+          sourceLayer: 'system',
+        }));
+        queued += 1;
+      } catch (err) {
+        this.opts.logger.error(
+          { err, id: r.id, shortRef: r.shortRef },
+          'ApprovalExpirySweep: failed to queue the expiry report — the row is expired; this log is its only notice',
+        );
+      }
     }
-
-    // Read at tick time: the ref is refreshed in place when the principal's identities change.
-    // It already holds only a verified + active address (readPrincipalIdentitySnapshot), so a
-    // defunct or bounced address never receives this.
-    const ceoEmail = resolvePrincipalEmail(this.opts.ceoEmail);
-    if (!ceoEmail) {
-      logger.warn(
-        skipped,
-        'ApprovalExpirySweep: no principal email on file — skipping expiry notification',
-      );
-      return 0;
-    }
-
-    // One line per request so the principal can scan quickly. shortRef and description
-    // are nullable — fall back to readable placeholders.
-    const body = rows
-      .map((r) => `• ${r.shortRef ?? '(no ref)'}: ${r.description ?? '(no description)'} [${r.toolName}]`)
-      .join('\n');
-    const sent = await outboundGateway.sendNotification({
-      notificationType: 'approval_expired',
-      ceoEmail,
-      subject: `Approval expired — ${rows.length} request(s) expired without response`,
-      body,
-    });
-    if (!sent) {
-      // The rows are already expired and logged above; only the alert is lost this cycle.
-      logger.warn(
-        skipped,
-        'ApprovalExpirySweep: sendNotification returned false — principal notification not delivered (expiry committed)',
-      );
-      return 0;
-    }
-    return rows.length;
+    return queued;
   }
 }

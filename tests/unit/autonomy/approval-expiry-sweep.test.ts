@@ -8,8 +8,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ApprovalExpirySweep } from '../../../src/autonomy/approval-expiry-sweep.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 import type { ActionLogRow } from '../../../src/autonomy/action-log-types.js';
-import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
-import type { PrincipalEmailRef } from '../../../src/contacts/types.js';
+import type { EventBus } from '../../../src/bus/bus.js';
+import type { BusEvent, PrincipalReportEvent } from '../../../src/bus/events.js';
 import type { Logger } from '../../../src/logger.js';
 
 // --- Fixtures ---
@@ -45,42 +45,41 @@ function makeSweep(overrides: {
   // Rows actually returned by expireRows (RETURNING *). Defaults to findExpiredRows —
   // the common case where nothing was resolved concurrently.
   expireRowsResult?: ActionLogRow[];
-  sendNotificationResult?: boolean;
-  // '' simulates no verified + active principal email on file.
-  ceoEmail?: string;
-  withoutOutboundGateway?: boolean;
+  // Event types whose publish rejects, to simulate a bus failure.
+  failPublishFor?: string[];
 } = {}) {
   const {
     findExpiredRows = [],
     expireRowsResult = findExpiredRows,
-    sendNotificationResult = true,
-    ceoEmail = 'principal@example.com',
-    withoutOutboundGateway = false,
+    failPublishFor = [],
   } = overrides;
 
   const findExpired = vi.fn().mockResolvedValue(findExpiredRows);
   const expireRows = vi.fn().mockResolvedValue(expireRowsResult);
-  const sendNotification = vi.fn().mockResolvedValue(sendNotificationResult);
+  const published: BusEvent[] = [];
+  const publish = vi.fn(async (_layer: string, event: BusEvent) => {
+    if (failPublishFor.includes(event.type)) throw new Error('bus down');
+    published.push(event);
+  });
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
   };
-  const principalEmail: PrincipalEmailRef = { current: ceoEmail };
 
   const sweep = new ApprovalExpirySweep({
     actionLogRepo: { findExpired, expireRows } as unknown as ActionLogRepo,
-    outboundGateway: withoutOutboundGateway
-      ? undefined
-      : ({ sendNotification } as unknown as OutboundGateway),
-    ceoEmail: principalEmail,
+    bus: { publish } as unknown as EventBus,
     logger: logger as unknown as Logger,
     intervalMinutes: 60,
   });
 
-  return { sweep, findExpired, expireRows, sendNotification, logger, principalEmail };
+  return { sweep, findExpired, expireRows, publish, published, logger };
 }
+
+const reports = (events: BusEvent[]) =>
+  events.filter((e): e is PrincipalReportEvent => e.type === 'principal.report');
 
 afterEach(() => {
   vi.useRealTimers();
@@ -90,65 +89,52 @@ afterEach(() => {
 
 describe('ApprovalExpirySweep.tick (#2013)', () => {
   it('does nothing when no approvals have expired', async () => {
-    const { sweep, expireRows, sendNotification } = makeSweep({ findExpiredRows: [] });
+    const { sweep, expireRows, publish } = makeSweep({ findExpiredRows: [] });
 
     const result = await sweep.tick();
 
     expect(result).toEqual({ expired: 0, notified: 0 });
     expect(expireRows).not.toHaveBeenCalled();
-    expect(sendNotification).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
-  it('expires every candidate row without notifying for low/medium tiers', async () => {
+  // #2159: every expiry is one digest line, whatever its risk; nothing is emailed.
+  it('expires every row and queues one digest item per row, of every tier', async () => {
     const rows = [
-      makeRow({ id: 1, shortRef: 'cal-1', actionRisk: 'low' }),
-      makeRow({ id: 2, shortRef: 'email-1', actionRisk: 'medium' }),
+      makeRow({ id: 1, shortRef: 'low-ref', actionRisk: 'low', description: 'Store fact: Dana prefers mornings' }),
+      makeRow({ id: 2, shortRef: 'crit-ref', actionRisk: 'critical', taskId: 'task-9', description: 'Send email reply: Re: Venue' }),
     ];
-    const { sweep, expireRows, sendNotification } = makeSweep({ findExpiredRows: rows });
+    const { sweep, expireRows, published } = makeSweep({ findExpiredRows: rows });
 
     const result = await sweep.tick();
 
     expect(expireRows).toHaveBeenCalledWith([1, 2]);
-    expect(sendNotification).not.toHaveBeenCalled();
-    expect(result).toEqual({ expired: 2, notified: 0 });
+    const items = reports(published);
+    expect(items).toHaveLength(2);
+    expect(items[1]!.sourceLayer).toBe('system');
+    expect(items[1]!.parentEventId).toBe('task-9');
+    expect(items[1]!.payload).toEqual({
+      summary: 'Approval expired without an answer: Send email reply: Re: Venue',
+      urgency: 'digest',
+      source: 'approval_expired',
+      actionShortRef: 'crit-ref',
+    });
+    expect(published.some((e) => e.type === 'outbound.notification')).toBe(false);
+    expect(result).toEqual({ expired: 2, notified: 2 });
   });
 
-  it('expires and sends one batched notification for high/critical rows', async () => {
-    const rows = [
-      makeRow({ id: 1, shortRef: 'low-ref', actionRisk: 'low' }),
-      makeRow({ id: 2, shortRef: 'high-ref', actionRisk: 'high' }),
-      makeRow({ id: 3, shortRef: 'crit-ref', actionRisk: 'critical' }),
-    ];
-    const { sweep, sendNotification } = makeSweep({ findExpiredRows: rows });
+  it('falls back to the tool name when a row has no description', async () => {
+    const { sweep, published } = makeSweep({ findExpiredRows: [makeRow({ id: 1, description: null, toolName: 'email-reply' })] });
 
-    const result = await sweep.tick();
-
-    expect(sendNotification).toHaveBeenCalledTimes(1);
-    const payload = sendNotification.mock.calls[0]![0];
-    expect(payload.notificationType).toBe('approval_expired');
-    expect(payload.ceoEmail).toBe('principal@example.com');
-    expect(payload.subject).toContain('2 request(s)');
-    expect(payload.body).toContain('high-ref');
-    expect(payload.body).toContain('crit-ref');
-    expect(payload.body).not.toContain('low-ref');
-    expect(result).toEqual({ expired: 3, notified: 2 });
-  });
-
-  it('reads the principal email at tick time, so a post-boot bind takes effect', async () => {
-    const rows = [makeRow({ id: 1, shortRef: 'high-ref', actionRisk: 'high' })];
-    const { sweep, sendNotification, principalEmail } = makeSweep({ findExpiredRows: rows, ceoEmail: '' });
-
-    // Bound after construction — the live ref is what the sweep must read.
-    principalEmail.current = 'bound-later@example.com';
     await sweep.tick();
 
-    expect(sendNotification.mock.calls[0]![0].ceoEmail).toBe('bound-later@example.com');
+    expect(reports(published)[0]!.payload.summary).toBe('Approval expired without an answer: email-reply');
   });
 
-  it('only notifies about rows that actually expired (concurrent resolution)', async () => {
+  it('only reports rows that actually expired (concurrent resolution)', async () => {
     const highRow = makeRow({ id: 1, shortRef: 'high-ref', actionRisk: 'high' });
     const critRow = makeRow({ id: 2, shortRef: 'crit-ref', actionRisk: 'critical' });
-    const { sweep, sendNotification, logger } = makeSweep({
+    const { sweep, published, logger } = makeSweep({
       findExpiredRows: [highRow, critRow],
       expireRowsResult: [highRow], // the critical row was resolved before the UPDATE ran
     });
@@ -156,56 +142,32 @@ describe('ApprovalExpirySweep.tick (#2013)', () => {
     const result = await sweep.tick();
 
     expect(logger.warn).toHaveBeenCalled();
-    expect(sendNotification).toHaveBeenCalledTimes(1);
-    const payload = sendNotification.mock.calls[0]![0];
-    expect(payload.subject).toContain('1 request(s)');
-    expect(payload.body).not.toContain('crit-ref');
+    expect(reports(published).map((r) => r.payload.actionShortRef)).toEqual(['high-ref']);
     expect(result).toEqual({ expired: 1, notified: 1 });
   });
 
-  it('still expires but skips the notification when no principal email is on file', async () => {
-    const rows = [makeRow({ id: 1, shortRef: 'high-ref', actionRisk: 'high' })];
-    const { sweep, expireRows, sendNotification, logger } = makeSweep({ findExpiredRows: rows, ceoEmail: '' });
+  it('logs a failed queue at error, naming the row, and carries on with the rest', async () => {
+    const rows = [makeRow({ id: 1, shortRef: 'a-ref' }), makeRow({ id: 2, shortRef: 'b-ref' })];
+    const { sweep, publish, logger } = makeSweep({ findExpiredRows: rows });
+    publish.mockImplementationOnce(async () => { throw new Error('bus down'); });
 
     const result = await sweep.tick();
 
-    expect(expireRows).toHaveBeenCalledWith([1]);
-    expect(sendNotification).not.toHaveBeenCalled();
-    // Expired rows are never retried, so the skip log must name them for manual follow-up.
-    expect(logger.warn).toHaveBeenCalledWith(
-      { notifiableCount: 1, ids: [1], shortRefs: ['high-ref'] },
-      expect.stringContaining('no principal email'),
+    // Expiry has committed and the row won't come back, so the log is the only record.
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1, shortRef: 'a-ref' }),
+      expect.stringContaining('failed to queue'),
     );
-    expect(result).toEqual({ expired: 1, notified: 0 });
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ expired: 2, notified: 1 });
   });
 
-  it('still expires but skips the notification when the outbound gateway is absent', async () => {
-    const rows = [makeRow({ id: 1, shortRef: 'high-ref', actionRisk: 'high' })];
-    const { sweep, expireRows, logger } = makeSweep({ findExpiredRows: rows, withoutOutboundGateway: true });
-
-    const result = await sweep.tick();
-
-    expect(expireRows).toHaveBeenCalledWith([1]);
-    expect(logger.warn).toHaveBeenCalled();
-    expect(result).toEqual({ expired: 1, notified: 0 });
-  });
-
-  it('reports notified:0 when sendNotification returns false', async () => {
-    const rows = [makeRow({ id: 1, shortRef: 'crit-ref', actionRisk: 'critical' })];
-    const { sweep, logger } = makeSweep({ findExpiredRows: rows, sendNotificationResult: false });
-
-    const result = await sweep.tick();
-
-    expect(logger.warn).toHaveBeenCalled();
-    expect(result).toEqual({ expired: 1, notified: 0 });
-  });
-
-  it('rejects when the repository call throws, without notifying', async () => {
-    const { sweep, findExpired, sendNotification } = makeSweep();
+  it('rejects when the repository call throws, without queueing', async () => {
+    const { sweep, findExpired, publish } = makeSweep();
     findExpired.mockRejectedValue(new Error('DB down'));
 
     await expect(sweep.tick()).rejects.toThrow('DB down');
-    expect(sendNotification).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 });
 

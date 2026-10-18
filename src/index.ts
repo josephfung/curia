@@ -2926,15 +2926,12 @@ async function main(): Promise<void> {
     );
   }
 
-  // Approval expiry — marks pending approvals past expires_at as expired and emails the
-  // principal about high/critical ones (#2013). Deterministic, so it runs as a system
-  // interval rather than the hourly coordinator turn it replaced. outboundGateway may be
-  // absent (setup-required mode, no outbound client): expiry still runs, the notification
-  // is skipped with a warning. ceoEmail is the live ref so a post-boot email bind applies.
+  // Approval expiry — marks pending approvals past expires_at as expired and queues a digest
+  // item for each (#2013, #2159). Deterministic, so it runs as a system interval rather than
+  // the hourly coordinator turn it replaced.
   const approvalExpirySweep = new ApprovalExpirySweep({
     actionLogRepo,
-    outboundGateway,
-    ceoEmail: principalEmail,
+    bus,
     logger,
     intervalMinutes: resolveApprovalExpiryConfig(yamlConfig.autonomy).sweepIntervalMinutes,
   });
