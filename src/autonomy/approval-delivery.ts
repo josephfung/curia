@@ -61,6 +61,8 @@ const REPLY_CTA = 'Reply approve or deny, with the reference.';
 
 export class ApprovalDelivery {
   private readonly displays = new Map<string, ApprovalDisplay>();
+  /** Channels that already failed per approval, so they are not offered again (bounded like displays). */
+  private readonly failedChannels = new Map<string, Set<ApprovalChannel>>();
 
   constructor(private readonly deps: ApprovalDeliveryDeps) {}
 
@@ -82,7 +84,8 @@ export class ApprovalDelivery {
   /** Send one pending approval on one channel. Never throws. */
   async deliver(shortRef: string, channel: ApprovalChannel): Promise<DeliverResult> {
     const { actionLogRepo, logger } = this.deps;
-    const available = this.availableChannels();
+    const failed = this.failedChannels.get(shortRef);
+    const available = this.availableChannels().filter((c) => !failed?.has(c));
 
     const row = await actionLogRepo.findPendingByShortRef(shortRef);
     if (!row) return { delivered: false, reason: 'not_found', available };
@@ -130,8 +133,14 @@ export class ApprovalDelivery {
 
     if (failure !== undefined) {
       await this.release(row.id);
-      logger.warn({ rowId: row.id, shortRef, channel, failure }, 'approval-delivery: send failed — claim released');
-      return { delivered: false, reason: 'send_failed', available: available.filter((c) => c !== channel) };
+      const remaining = this.markFailed(shortRef, channel, available);
+      if (remaining.length === 0) {
+        // The safety net will still retry, but every channel the agent could use has failed.
+        logger.error({ rowId: row.id, shortRef, channel, failure }, 'approval-delivery: every channel failed for this approval');
+      } else {
+        logger.warn({ rowId: row.id, shortRef, channel, failure }, 'approval-delivery: send failed — claim released');
+      }
+      return { delivered: false, reason: 'send_failed', available: remaining };
     }
 
     // A reaction on the delivered message resolves the approval (#1479). Email is answered
@@ -145,6 +154,21 @@ export class ApprovalDelivery {
     }
     logger.info({ rowId: row.id, shortRef, channel, queued }, queued ? 'approval-delivery: queued until the channel reconnects' : 'approval-delivery: delivered');
     return { delivered: true, channel };
+  }
+
+  /** Remember a failed channel for this approval; returns the channels still worth trying. */
+  private markFailed(shortRef: string, channel: ApprovalChannel, available: ApprovalChannel[]): ApprovalChannel[] {
+    let failed = this.failedChannels.get(shortRef);
+    if (!failed) {
+      if (this.failedChannels.size >= MAX_DISPLAYS) {
+        const oldest = this.failedChannels.keys().next().value;
+        if (oldest !== undefined) this.failedChannels.delete(oldest);
+      }
+      failed = new Set();
+      this.failedChannels.set(shortRef, failed);
+    }
+    failed.add(channel);
+    return available.filter((c) => !failed.has(c));
   }
 
   private async release(rowId: number): Promise<void> {

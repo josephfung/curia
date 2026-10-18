@@ -2840,6 +2840,56 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(actionLogRepo.setNotificationSentAt).not.toHaveBeenCalled();
   });
 
+  it('wakes the coordinator to deliver an approval held after the turn ended (relayed reply)', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo: makeActionLogRepo(),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE, postTurn: true },
+    );
+
+    const events = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1] as BusEvent);
+    const wakes = events.filter((e) => e.type === 'agent.task');
+    expect(wakes).toHaveLength(1);
+    if (wakes[0]?.type === 'agent.task') {
+      expect(wakes[0].payload).toMatchObject({ agentId: 'coordinator', conversationId: `approval-delivery:${result.actionRef}` });
+      expect(wakes[0].payload.content).toContain('deliver-approval');
+      expect(wakes[0].parentEventId).toBe('task-123');
+    }
+  });
+
+  it('does not wake anyone for a send made inside an agent turn', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo: makeActionLogRepo(),
+    });
+
+    await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
+    );
+
+    const events = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1] as BusEvent);
+    expect(events.some((e) => e.type === 'agent.task')).toBe(false);
+  });
+
   it('registers what the principal is shown with approval delivery', async () => {
     const mocks = createMocks();
     const registerDisplay = vi.fn();

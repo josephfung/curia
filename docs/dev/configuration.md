@@ -184,7 +184,7 @@ autonomy:
 
 The sweep is a system interval, not a scheduled agent job, so it uses no agent turn and no LLM call (#2013). Each tick does two things:
 
-1. It delivers, once, any pending approval no agent delivered within 15 minutes. It uses email, or the principal's first available channel when there is no email.
+1. It delivers, once, any pending approval no agent delivered within 15 minutes. It uses email first, then each of the principal's other channels in turn. At the default interval that is 15–30 minutes after the approval was raised.
 2. It marks stale `pending_approval` rows expired and queues a digest item for each (#2159).
 
 The first tick runs a minute after startup and then every interval, so frequent restarts never starve it. The value is validated at startup as a positive integer within the Node.js timer limit.

@@ -1,6 +1,6 @@
 {
   "name": "deliver-approval",
-  "description": "Send a pending approval to the principal on ONE channel. Choose the channel from the principal's standing preferences for urgent items. If delivery fails, the error lists the channels still available; try the next one. An approval is delivered once; it is mentioned again only in the next digest.",
+  "description": "Send a pending approval to the principal on ONE channel. Choose the channel from the principal's standing preferences for urgent items; if none is stated, use Signal, then SMS, then Slack, then email. If delivery fails, the error lists the channels still available; try the next one. An approval is delivered once; it is mentioned again only in the next digest.",
   "version": "0.1.0",
   "sensitivity": "normal",
   "action_risk": "none",

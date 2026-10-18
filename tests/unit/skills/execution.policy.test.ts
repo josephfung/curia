@@ -3709,6 +3709,24 @@ describe('approval trigger on gate block', () => {
     }
   });
 
+  it('tells a specialist to hand the approval ref to the coordinator', async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+      bus: { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus,
+      approvalTrigger: makeApprovalTrigger({ created: true, shortRef: 'cal-9' }),
+    });
+
+    const result = await layer.invoke('send-email', {}, undefined, { taskEventId: 'task-1', agentId: 'calendar' });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/tell the coordinator/i);
+      expect(result.error).toContain('cal-9');
+    }
+  });
+
   it('falls back to existing error when trigger is not wired', async () => {
     const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));

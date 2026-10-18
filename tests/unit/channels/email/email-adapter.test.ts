@@ -908,7 +908,9 @@ describe('EmailAdapter — sendWithGatedDraftFallback gated-fallback', () => {
 
     expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ to: CEO_EMAIL }),
-      expect.objectContaining({ taskEventId: 'task-evt-1', conversationId: 'email:thread-abc' }),
+      // postTurn: a relayed reply is sent after the agent's turn ended, so a held approval
+      // needs the coordinator woken to deliver it (#2159).
+      expect.objectContaining({ taskEventId: 'task-evt-1', conversationId: 'email:thread-abc', postTurn: true }),
     );
 
     await adapter.stop();

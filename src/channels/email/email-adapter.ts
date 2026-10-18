@@ -850,6 +850,8 @@ export class EmailAdapter implements Channel {
       taskEventId: context.taskEventId,
       conversationId: context.conversationId,
       parentEventId: context.parentEventId,
+      // A relayed reply: the agent's turn is over, so a held approval wakes the coordinator (#2159).
+      postTurn: true,
       ...(context.recipientSource ? { recipientSource: context.recipientSource } : {}),
       ...(context.recipientDisplayName ? { recipientDisplayName: context.recipientDisplayName } : {}),
       reExecRecipe: {

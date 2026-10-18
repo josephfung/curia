@@ -125,6 +125,14 @@ describe('approvalAdvisory', () => {
     expect(text).toContain('deliver-approval');
     expect(text).toMatch(/standing preferences/);
   });
+
+  // deliver-approval is the coordinator's tool; a specialist hands the ref back instead.
+  it('tells a specialist to hand the ref to the coordinator', () => {
+    const text = approvalAdvisory('abcd1234', 'calendar');
+    expect(text).toContain('ref: abcd1234');
+    expect(text).toMatch(/tell the coordinator/i);
+    expect(approvalAdvisory('abcd1234', 'coordinator')).not.toMatch(/tell the coordinator/i);
+  });
 });
 
 describe('ApprovalTriggerService.request()', () => {

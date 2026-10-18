@@ -41,7 +41,7 @@ import {
   RELAY_BODY_MAX_LENGTH,
   REPLY_SKILLS_GATE_C,
 } from './relay-gate-c.js';
-import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
+import { buildApprovalDeliveryWake, type ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import type { BullpenService } from '../memory/bullpen.js';
 import {
@@ -1774,18 +1774,7 @@ export class Dispatcher {
     shortRef: string,
     args: { taskEventId: string; channelId: string; senderId: string },
   ): Promise<void> {
-    const task = createAgentTask({
-      agentId: 'coordinator',
-      conversationId: `approval-delivery:${shortRef}`,
-      channelId: 'scheduler',
-      senderId: 'system',
-      content: [
-        `A reply to ${args.senderId} on ${args.channelId} was held for the principal's approval (ref: ${shortRef}).`,
-        "Deliver it with deliver-approval, on the channel the principal's standing preferences name for urgent items.",
-        'Do not do anything else.',
-      ].join(' '),
-      parentEventId: args.taskEventId,
-    });
+    const task = buildApprovalDeliveryWake(shortRef, `A reply to ${args.senderId} on ${args.channelId}`, args.taskEventId);
     try {
       await this.bus.publish('dispatch', task);
       this.logger.info({ shortRef, taskEventId: args.taskEventId }, 'Dispatcher Gate C: woke the coordinator to deliver a held relay approval');

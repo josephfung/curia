@@ -13,7 +13,7 @@ import { randomBytes } from 'node:crypto';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { ApprovalDelivery } from './approval-delivery.js';
 import type { EventBus } from '../bus/bus.js';
-import { createPrincipalReport } from '../bus/events.js';
+import { createAgentTask, createPrincipalReport, type AgentTaskEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import type { SendRecipientPin } from '../skills/_shared/recipient-reference.js';
@@ -27,13 +27,40 @@ export type ApprovalRequestResult =
 
 /**
  * What the blocked agent is told about a new approval. One place, so every gate gives the
- * same instruction: deliver it yourself, on one channel (#2159).
+ * same instruction: deliver it on one channel (#2159). deliver-approval is the coordinator's
+ * tool, so a specialist is told to hand the ref back instead.
  */
-export function approvalAdvisory(shortRef: string): string {
+export function approvalAdvisory(shortRef: string, agentId?: string): string {
+  if (agentId !== undefined && agentId !== 'coordinator') {
+    return (
+      `An approval request was created (ref: ${shortRef}). Tell the coordinator, in your reply, ` +
+      `that approval ${shortRef} needs delivering to the principal.`
+    );
+  }
   return (
     `An approval request was created (ref: ${shortRef}). Deliver it to the principal now with ` +
     `deliver-approval, on the channel their standing preferences name for urgent items.`
   );
+}
+
+/**
+ * A task that wakes the coordinator to deliver an approval raised after an agent's turn ended
+ * (a dispatcher-relayed reply), when no agent is there to read the advisory (#2159). If it is
+ * lost, the expiry sweep's safety net still delivers the approval.
+ */
+export function buildApprovalDeliveryWake(shortRef: string, what: string, parentEventId: string): AgentTaskEvent {
+  return createAgentTask({
+    agentId: 'coordinator',
+    conversationId: `approval-delivery:${shortRef}`,
+    channelId: 'scheduler',
+    senderId: 'system',
+    content: [
+      `${what} was held for the principal's approval (ref: ${shortRef}).`,
+      "Deliver it with deliver-approval, on the channel the principal's standing preferences name for urgent items.",
+      'Do not do anything else.',
+    ].join(' '),
+    parentEventId,
+  });
 }
 
 // ---------------------------------------------------------------------------

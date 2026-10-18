@@ -233,11 +233,12 @@ The blocked agent is told to deliver the approval itself with `deliver-approval`
 - Delivery claims `notification_sent_at` atomically, so an approval is pinged once.
 - A failed send releases the claim, and the tool's error lists the channels still available.
 - Signal and Slack deliveries are bound, so a 👍/👎 reaction resolves the approval.
-- When a dispatcher-relayed reply is held after the turn has ended, the dispatcher wakes the coordinator to deliver it.
+- When a dispatcher-relayed reply is held after the turn has ended (by Gate C in the dispatcher, or by the score gate on the relay's email send), the coordinator is woken to deliver it.
+- A specialist cannot call `deliver-approval`, so its advisory tells it to hand the reference to the coordinator.
 
 A system interval (`autonomy.approval_expiry.sweep_interval_minutes`, default 15) runs with no agent turn and no LLM call, and does two things:
 
-1. **Safety net.** It delivers, by email or the first available channel, any approval no one delivered within 15 minutes, and logs a warning.
+1. **Safety net.** It delivers, by email or the next available channel, any approval no one delivered within 15 minutes, and logs a warning. With the 15-minute interval, that lands 15–30 minutes after the approval was raised.
 2. **Expiry.** It marks stale rows expired and queues a digest item for each (#2013, #2159).
 
 See [Configuration](../dev/configuration.md#autonomyapproval_expiry).

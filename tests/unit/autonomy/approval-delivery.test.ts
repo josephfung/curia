@@ -188,4 +188,19 @@ describe('ApprovalDelivery.deliver', () => {
     expect(repo.bindDeliveryMessage).not.toHaveBeenCalled();
     expect(repo.releaseNotification).not.toHaveBeenCalled();
   });
+
+  it('stops offering channels that already failed for this approval, and logs at error when none remain', async () => {
+    const { delivery, logger } = makeDelivery({
+      identities: [identity('signal', '+15550001111'), identity('slack', 'U123')],
+      principalEmail: '',
+      sendResult: { success: false, blockedReason: 'down' },
+    });
+
+    const first = await delivery.deliver('abcd1234', 'signal');
+    const second = await delivery.deliver('abcd1234', 'slack');
+
+    expect(first).toMatchObject({ reason: 'send_failed', available: ['slack'] });
+    expect(second).toMatchObject({ reason: 'send_failed', available: [] });
+    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ shortRef: 'abcd1234' }), expect.stringContaining('every channel'));
+  });
 });

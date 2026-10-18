@@ -52,7 +52,7 @@ import type { ChannelReconnectEvent } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { markdownToMrkdwn } from '../format/markdown-to-mrkdwn.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
-import { approvalAdvisory, generateShortRef } from '../autonomy/approval-trigger.js';
+import { approvalAdvisory, buildApprovalDeliveryWake, generateShortRef } from '../autonomy/approval-trigger.js';
 import { enrichGatewayApprovalPayload } from '../autonomy/approval-notification.js';
 import type { ApprovalDelivery } from '../autonomy/approval-delivery.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
@@ -636,6 +636,12 @@ export class OutboundGateway {
        * { gated: true } without an actionRef. Adapters without a re-execution
        * path (e.g. Signal today) simply omit this field.
        */
+      /**
+       * True when no agent turn is waiting on this send — a dispatcher-relayed reply (#2159).
+       * A held approval then wakes the coordinator to deliver it, since nobody reads the
+       * blocked result's advisory.
+       */
+      postTurn?: boolean;
       reExecRecipe?: {
         /** Registered skill name to invoke on approval (e.g. 'send-draft'). */
         toolName: string;
@@ -800,6 +806,9 @@ export class OutboundGateway {
               extraLines: [`Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`],
             });
             await this.queueApprovalMention(candidateRef, recipe.description, options.taskEventId, options.conversationId ?? undefined);
+            if (options.postTurn) {
+              await this.wakeCoordinatorToDeliver(candidateRef, recipe.description, options.taskEventId);
+            }
           }
         }
 
@@ -1575,6 +1584,15 @@ export class OutboundGateway {
    */
   setApprovalDelivery(approvalDelivery: Pick<ApprovalDelivery, 'registerDisplay'>): void {
     this.approvalDelivery = approvalDelivery;
+  }
+
+  /** Wake the coordinator to deliver an approval nobody is there to deliver (#2159). Never throws. */
+  private async wakeCoordinatorToDeliver(shortRef: string, description: string, taskEventId: string): Promise<void> {
+    try {
+      await this.bus.publish('dispatch', buildApprovalDeliveryWake(shortRef, description, taskEventId));
+    } catch (err) {
+      this.log.error({ err, shortRef }, 'outbound-gateway: could not wake the coordinator — the expiry sweep will deliver the approval');
+    }
   }
 
   /** Queue a gate-raised approval's one digest mention (#2159). Never throws. */
