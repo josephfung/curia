@@ -126,6 +126,48 @@ describe('AutonomyScoringPass', () => {
       });
     });
 
+    // #2159: only the principal's own decisions are feedback.
+    it('scores a coordinator-resolved approval as no signal', async () => {
+      const row = makeRow({ id: 20, outcome: 'approved', resolvedBy: 'coordinator' });
+      const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });
+      const pass = new AutonomyScoringPass(repo, makeAutonomyService(), makeLlmProvider(), createSilentLogger(), defaultConfig);
+
+      await pass.run();
+
+      expect(repo.updateScoringFlags).toHaveBeenCalledWith(20, {
+        competenceFlag: null,
+        commitmentFlag: null,
+        compatibility: null,
+        scoredBy: 'deterministic-coordinator',
+      });
+    });
+
+    it('scores a coordinator-denied approval as no signal', async () => {
+      const row = makeRow({ id: 21, outcome: 'denied', resolvedBy: 'coordinator' });
+      const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });
+      const pass = new AutonomyScoringPass(repo, makeAutonomyService(), makeLlmProvider(), createSilentLogger(), defaultConfig);
+
+      await pass.run();
+
+      expect(repo.updateScoringFlags).toHaveBeenCalledWith(21, expect.objectContaining({
+        competenceFlag: null,
+        scoredBy: 'deterministic-coordinator',
+      }));
+    });
+
+    it('keeps the principal signal for a reaction-resolved approval', async () => {
+      const row = makeRow({ id: 22, outcome: 'approved', resolvedBy: 'principal' });
+      const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });
+      const pass = new AutonomyScoringPass(repo, makeAutonomyService(), makeLlmProvider(), createSilentLogger(), defaultConfig);
+
+      await pass.run();
+
+      expect(repo.updateScoringFlags).toHaveBeenCalledWith(22, expect.objectContaining({
+        competenceFlag: 1,
+        scoredBy: 'deterministic',
+      }));
+    });
+
     it('applies deterministic scores for rejected outcome', async () => {
       const row = makeRow({ id: 12, outcome: 'rejected' });
       const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });

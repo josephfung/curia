@@ -14,7 +14,7 @@ import type { LLMProvider } from '../agents/llm/provider.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { AutonomyService } from './autonomy-service.js';
 import type { ActionLogRow, ScoringFlags } from './action-log-types.js';
-import { DETERMINISTIC_SCORES, LLM_SCORED_OUTCOMES } from './action-log-types.js';
+import { DETERMINISTIC_SCORES, LLM_SCORED_OUTCOMES, RESOLVED_BY } from './action-log-types.js';
 
 export interface ScoringPassConfig {
   intervalMs: number;
@@ -34,6 +34,14 @@ const UNPARSEABLE_FLAGS: ScoringFlags = {
   commitmentFlag: null,
   compatibility: null,
   scoredBy: 'llm-judge-unparseable',
+};
+
+/** A coordinator-resolved approval: scored, so it leaves the queue, but carrying no signal (#2159). */
+const COORDINATOR_RESOLVED_FLAGS: ScoringFlags = {
+  competenceFlag: null,
+  commitmentFlag: null,
+  compatibility: null,
+  scoredBy: 'deterministic-coordinator',
 };
 
 const JUDGE_PAYLOAD_PREVIEW_CHARS = 300;
@@ -176,6 +184,15 @@ export class AutonomyScoringPass {
   }
 
   private async scoreRow(row: ActionLogRow, result: ScoringPassResult): Promise<boolean> {
+    // Only the principal's own decisions are feedback (#2159). A resolve tool called by an
+    // agent records the agent's reading of the conversation: in Oct 2026 the coordinator
+    // denied a held reply after misreading the principal's coaching as withdrawal. Score
+    // the row so it leaves the unscored queue, but give it no signal.
+    if (row.resolvedBy === RESOLVED_BY.coordinator) {
+      await this.repo.updateScoringFlags(row.id, COORDINATOR_RESOLVED_FLAGS);
+      return true;
+    }
+
     // Deterministic scoring for outcomes where the principal's or gate's decision
     // already tells us the quality signal — no LLM interpretation needed.
     const deterministicFlags = DETERMINISTIC_SCORES[row.outcome];
