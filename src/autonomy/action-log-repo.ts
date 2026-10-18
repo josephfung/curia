@@ -267,6 +267,24 @@ export class ActionLogRepo {
     return result.rows.length > 0;
   }
 
+  /**
+   * Live pending approvals that no one delivered and that were created before `olderThan`
+   * (#2159). The expiry sweep's safety net emails these once: the agent that raised one did
+   * not call deliver-approval, or the coordinator wake for a held relay was lost.
+   */
+  async findUndelivered(olderThan: Date): Promise<ActionLogRow[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE outcome = 'pending_approval'
+         AND notification_sent_at IS NULL
+         AND expires_at > now()
+         AND created_at < $1
+       ORDER BY created_at ASC`,
+      [olderThan],
+    );
+    return result.rows.map(mapRow);
+  }
+
   /** Undo claimNotification() after a failed send, so the approval can be delivered again. */
   async releaseNotification(id: number): Promise<void> {
     await this.pool.query(

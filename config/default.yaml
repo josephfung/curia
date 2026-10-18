@@ -537,9 +537,10 @@ autonomy:
     derived_child: 90  # posture D floor
 
   # Expires pending approvals past expires_at and queues a digest item for each
-  # (#2013, #2159). A system interval: no agent turn, no LLM call.
+  # (#2013, #2159), and emails any approval no agent delivered within 15 minutes.
+  # A system interval: no agent turn, no LLM call.
   approval_expiry:
-    sweep_interval_minutes: 60
+    sweep_interval_minutes: 15
 
   # Weekly summary of unreported digest items, for installs with no digest job
   # (#2159). Sends once the oldest unreported item passes max_age_days.

@@ -2937,6 +2937,8 @@ async function main(): Promise<void> {
   const approvalExpirySweep = new ApprovalExpirySweep({
     actionLogRepo,
     bus,
+    // Safety net: approvals no agent delivered within 15 minutes go out once by email.
+    approvalDelivery,
     logger,
     intervalMinutes: resolveApprovalExpiryConfig(yamlConfig.autonomy).sweepIntervalMinutes,
   });

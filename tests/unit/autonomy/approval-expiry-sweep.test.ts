@@ -9,6 +9,9 @@ import { ApprovalExpirySweep } from '../../../src/autonomy/approval-expiry-sweep
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 import type { ActionLogRow } from '../../../src/autonomy/action-log-types.js';
 import type { EventBus } from '../../../src/bus/bus.js';
+import type { ApprovalDelivery, DeliverResult } from '../../../src/autonomy/approval-delivery.js';
+
+const NOW = new Date('2026-10-18T12:00:00.000Z');
 import type { BusEvent, PrincipalReportEvent } from '../../../src/bus/events.js';
 import type { Logger } from '../../../src/logger.js';
 
@@ -47,14 +50,27 @@ function makeSweep(overrides: {
   expireRowsResult?: ActionLogRow[];
   // Event types whose publish rejects, to simulate a bus failure.
   failPublishFor?: string[];
+  undeliveredRows?: ActionLogRow[];
+  deliverResults?: DeliverResult[];
+  availableChannels?: string[];
+  withoutDelivery?: boolean;
 } = {}) {
   const {
     findExpiredRows = [],
     expireRowsResult = findExpiredRows,
     failPublishFor = [],
+    undeliveredRows = [],
+    deliverResults = [],
+    availableChannels = ['email'],
+    withoutDelivery = false,
   } = overrides;
 
   const findExpired = vi.fn().mockResolvedValue(findExpiredRows);
+  const findUndelivered = vi.fn().mockResolvedValue(undeliveredRows);
+  const results = [...deliverResults];
+  const deliver = vi.fn(async (_ref: string, channel: string) =>
+    results.shift() ?? ({ delivered: true, channel } as DeliverResult));
+  const approvalDelivery = { deliver, availableChannels: vi.fn().mockReturnValue(availableChannels) };
   const expireRows = vi.fn().mockResolvedValue(expireRowsResult);
   const published: BusEvent[] = [];
   const publish = vi.fn(async (_layer: string, event: BusEvent) => {
@@ -69,13 +85,16 @@ function makeSweep(overrides: {
   };
 
   const sweep = new ApprovalExpirySweep({
-    actionLogRepo: { findExpired, expireRows } as unknown as ActionLogRepo,
+    actionLogRepo: { findExpired, expireRows, findUndelivered } as unknown as ActionLogRepo,
     bus: { publish } as unknown as EventBus,
+    ...(withoutDelivery ? {} : { approvalDelivery: approvalDelivery as unknown as ApprovalDelivery }),
     logger: logger as unknown as Logger,
     intervalMinutes: 60,
+    undeliveredAfterMinutes: 15,
+    now: () => NOW,
   });
 
-  return { sweep, findExpired, expireRows, publish, published, logger };
+  return { sweep, findExpired, expireRows, findUndelivered, deliver, publish, published, logger };
 }
 
 const reports = (events: BusEvent[]) =>
@@ -93,7 +112,7 @@ describe('ApprovalExpirySweep.tick (#2013)', () => {
 
     const result = await sweep.tick();
 
-    expect(result).toEqual({ expired: 0, notified: 0 });
+    expect(result).toEqual({ expired: 0, notified: 0, safetyNetDelivered: 0 });
     expect(expireRows).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });
@@ -120,7 +139,7 @@ describe('ApprovalExpirySweep.tick (#2013)', () => {
       actionShortRef: 'crit-ref',
     });
     expect(published.some((e) => e.type === 'outbound.notification')).toBe(false);
-    expect(result).toEqual({ expired: 2, notified: 2 });
+    expect(result).toEqual({ expired: 2, notified: 2, safetyNetDelivered: 0 });
   });
 
   it('falls back to the tool name when a row has no description', async () => {
@@ -143,7 +162,7 @@ describe('ApprovalExpirySweep.tick (#2013)', () => {
 
     expect(logger.warn).toHaveBeenCalled();
     expect(reports(published).map((r) => r.payload.actionShortRef)).toEqual(['high-ref']);
-    expect(result).toEqual({ expired: 1, notified: 1 });
+    expect(result).toEqual({ expired: 1, notified: 1, safetyNetDelivered: 0 });
   });
 
   it('logs a failed queue at error, naming the row, and carries on with the rest', async () => {
@@ -159,7 +178,7 @@ describe('ApprovalExpirySweep.tick (#2013)', () => {
       expect.stringContaining('failed to queue'),
     );
     expect(publish).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ expired: 2, notified: 1 });
+    expect(result).toEqual({ expired: 2, notified: 1, safetyNetDelivered: 0 });
   });
 
   it('rejects when the repository call throws, without queueing', async () => {
@@ -168,6 +187,75 @@ describe('ApprovalExpirySweep.tick (#2013)', () => {
 
     await expect(sweep.tick()).rejects.toThrow('DB down');
     expect(publish).not.toHaveBeenCalled();
+  });
+});
+
+// --- safety net (#2159) ---
+
+describe('ApprovalExpirySweep safety net (#2159)', () => {
+  it('emails an approval no agent delivered within 15 minutes, once, before expiring anything', async () => {
+    const { sweep, findUndelivered, findExpired, deliver, logger } = makeSweep({
+      undeliveredRows: [makeRow({ id: 9, shortRef: 'late-ref' })],
+    });
+
+    const result = await sweep.tick();
+
+    expect(findUndelivered).toHaveBeenCalledWith(new Date(NOW.getTime() - 15 * 60_000));
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith('late-ref', 'email');
+    // The safety net firing means an agent skipped its delivery: worth a warning.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ shortRef: 'late-ref' }),
+      expect.stringContaining('safety net'),
+    );
+    expect(findUndelivered.mock.invocationCallOrder[0]!).toBeLessThan(findExpired.mock.invocationCallOrder[0]!);
+    expect(result.safetyNetDelivered).toBe(1);
+  });
+
+  it('uses the first available channel when the principal has no email', async () => {
+    const { sweep, deliver } = makeSweep({
+      undeliveredRows: [makeRow({ id: 9, shortRef: 'late-ref' })],
+      deliverResults: [{ delivered: false, reason: 'channel_unavailable', available: ['signal'] }],
+      availableChannels: ['signal'],
+    });
+
+    await sweep.tick();
+
+    expect(deliver.mock.calls.map((c) => c[1])).toEqual(['email', 'signal']);
+  });
+
+  it('logs at error when the safety net cannot deliver either, and tries again next tick', async () => {
+    const { sweep, logger } = makeSweep({
+      undeliveredRows: [makeRow({ id: 9, shortRef: 'late-ref' })],
+      deliverResults: [{ delivered: false, reason: 'send_failed', available: [] }],
+    });
+
+    const result = await sweep.tick();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ shortRef: 'late-ref', reason: 'send_failed' }),
+      expect.stringContaining('safety net'),
+    );
+    expect(result.safetyNetDelivered).toBe(0);
+  });
+
+  it('treats a row someone else delivered in the meantime as done, quietly', async () => {
+    const { sweep, logger } = makeSweep({
+      undeliveredRows: [makeRow({ id: 9, shortRef: 'late-ref' })],
+      deliverResults: [{ delivered: false, reason: 'already_delivered', available: ['email'] }],
+    });
+
+    await sweep.tick();
+
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('skips the safety net without an approval delivery service', async () => {
+    const { sweep, findUndelivered } = makeSweep({ withoutDelivery: true, undeliveredRows: [makeRow()] });
+
+    await sweep.tick();
+
+    expect(findUndelivered).not.toHaveBeenCalled();
   });
 });
 
@@ -258,7 +346,7 @@ describe('ApprovalExpirySweep interval (#2013)', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const tickSpy = vi.spyOn(sweep, 'tick').mockImplementation(async () => {
       await gate;
-      return { expired: 0, notified: 0 };
+      return { expired: 0, notified: 0, safetyNetDelivered: 0 };
     });
 
     sweep.start();

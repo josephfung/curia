@@ -213,8 +213,10 @@ export interface ApprovalExpiryConfig {
 }
 
 const DEFAULT_APPROVAL_EXPIRY_CONFIG: ApprovalExpiryConfig = {
-  // Matches the hourly coordinator cron this replaced.
-  sweepIntervalMinutes: 60,
+  // Every 15 minutes since #2159: the sweep is also the safety net that delivers approvals no
+  // agent delivered within 15 minutes, so an hourly tick would stretch that to 75. Each tick
+  // is two or three queries.
+  sweepIntervalMinutes: 15,
 };
 
 /** Resolve the optional autonomy.approval_expiry block to a fully-populated config. */

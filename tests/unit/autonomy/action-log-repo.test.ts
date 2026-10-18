@@ -413,6 +413,47 @@ describe('ActionLogRepo', () => {
     });
   });
 
+  // #2159: approval delivery claims and the safety net's lookup.
+  describe('claimNotification / releaseNotification', () => {
+    it('claims only an unclaimed pending row, parameterized', async () => {
+      const { pool, queries } = makePool([{ id: 7 }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+
+      await expect(repo.claimNotification(7)).resolves.toBe(true);
+      expect(queries[0]!.sql).toMatch(/notification_sent_at IS NULL/);
+      expect(queries[0]!.sql).toMatch(/outcome = 'pending_approval'/);
+      expect(queries[0]!.params).toEqual([7]);
+    });
+
+    it('reports a lost race as false', async () => {
+      const { pool } = makePool([]);
+      await expect(new ActionLogRepo(pool, createSilentLogger()).claimNotification(7)).resolves.toBe(false);
+    });
+
+    it('releases by id', async () => {
+      const { pool, queries } = makePool([]);
+      await new ActionLogRepo(pool, createSilentLogger()).releaseNotification(7);
+      expect(queries[0]!.sql).toMatch(/SET notification_sent_at = NULL/);
+      expect(queries[0]!.params).toEqual([7]);
+    });
+  });
+
+  describe('findUndelivered', () => {
+    it('finds live pending rows never delivered and older than the cutoff', async () => {
+      const { pool, queries } = makePool([]);
+      const cutoff = new Date('2026-10-18T12:00:00Z');
+
+      await new ActionLogRepo(pool, createSilentLogger()).findUndelivered(cutoff);
+
+      const { sql, params } = queries[0]!;
+      expect(sql).toMatch(/outcome = 'pending_approval'/);
+      expect(sql).toMatch(/notification_sent_at IS NULL/);
+      expect(sql).toMatch(/expires_at > now\(\)/);
+      expect(sql).toMatch(/created_at < \$1/);
+      expect(params).toEqual([cutoff]);
+    });
+  });
+
   describe('findExpired', () => {
     it('returns expired pending_approval rows ordered by created_at asc', async () => {
       const now = new Date();

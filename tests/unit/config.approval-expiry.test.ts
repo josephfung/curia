@@ -25,9 +25,9 @@ function writeConfig(defaultYaml: string): string {
 }
 
 describe('resolveApprovalExpiryConfig (#2013)', () => {
-  it('defaults to an hourly sweep', () => {
-    expect(resolveApprovalExpiryConfig(undefined)).toEqual({ sweepIntervalMinutes: 60 });
-    expect(resolveApprovalExpiryConfig({ bypass_ladder: { same_task: 70 } })).toEqual({ sweepIntervalMinutes: 60 });
+  it('defaults to a 15-minute sweep — it is also the approval-delivery safety net (#2159)', () => {
+    expect(resolveApprovalExpiryConfig(undefined)).toEqual({ sweepIntervalMinutes: 15 });
+    expect(resolveApprovalExpiryConfig({ bypass_ladder: { same_task: 70 } })).toEqual({ sweepIntervalMinutes: 15 });
   });
 
   it('applies an override', () => {

@@ -1,7 +1,12 @@
 // approval-expiry-sweep.ts — expires stale pending approvals on a system interval (#2013).
 //
 // Finds every pending_approval row whose expires_at has passed, batch-transitions them to
-// 'expired', and queues one principal.report digest item per expired row (#2159). Expiry
+// 'expired', and queues one principal.report digest item per expired row (#2159).
+//
+// It is also the safety net for approval delivery (#2159). Approvals are delivered by the
+// agent that raised them, on one channel; a pending approval nobody delivered within
+// undeliveredAfterMinutes (the agent skipped deliver-approval, or a coordinator wake was
+// lost) is delivered here once, by email, before the expiry pass runs. Expiry
 // used to send a batched email for high/critical rows; it is digest material, not an alert,
 // and every expiry — whatever its risk — is worth one line in the digest.
 //
@@ -23,12 +28,19 @@ import type { EventBus } from '../bus/bus.js';
 import { createPrincipalReport } from '../bus/events.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { ActionLogRow } from './action-log-types.js';
+import type { ApprovalDelivery } from './approval-delivery.js';
 
 export interface ApprovalExpirySweepOptions {
-  actionLogRepo: Pick<ActionLogRepo, 'findExpired' | 'expireRows'>;
+  actionLogRepo: Pick<ActionLogRepo, 'findExpired' | 'expireRows' | 'findUndelivered'>;
   bus: Pick<EventBus, 'publish'>;
+  /** Absent without an outbound stack: the safety-net pass is skipped. */
+  approvalDelivery?: Pick<ApprovalDelivery, 'deliver' | 'availableChannels'>;
   logger: Logger;
   intervalMinutes: number;
+  /** How long an approval may wait undelivered before the safety net sends it. Default 15. */
+  undeliveredAfterMinutes?: number;
+  /** Injectable clock for tests. */
+  now?: () => Date;
 }
 
 export interface ApprovalExpirySweepResult {
@@ -36,7 +48,11 @@ export interface ApprovalExpirySweepResult {
   expired: number;
   /** Expired rows queued for the principal's digest. */
   notified: number;
+  /** Undelivered approvals the safety net delivered this tick. */
+  safetyNetDelivered: number;
 }
+
+const DEFAULT_UNDELIVERED_AFTER_MINUTES = 15;
 
 // Delay before the first tick after start(). The cron this replaced fired on the wall clock, so
 // a restart never postponed it; a bare setInterval would push every sweep a full interval past
@@ -101,10 +117,13 @@ export class ApprovalExpirySweep {
 
   /** One pass: expire stale approvals and queue a digest item for each. */
   async tick(): Promise<ApprovalExpirySweepResult> {
+    // Before expiry, so an approval close to its deadline still gets its one ping.
+    const safetyNetDelivered = await this.deliverUndelivered();
+
     const expired: ActionLogRow[] = await this.opts.actionLogRepo.findExpired();
     if (expired.length === 0) {
       this.opts.logger.debug('ApprovalExpirySweep: nothing to expire');
-      return { expired: 0, notified: 0 };
+      return { expired: 0, notified: 0, safetyNetDelivered };
     }
 
     // expireRows() uses WHERE outcome = 'pending_approval' ... RETURNING *, so a row resolved
@@ -126,9 +145,42 @@ export class ApprovalExpirySweep {
 
     const notified = await this.queueReports(actuallyExpired);
 
-    const result = { expired: actuallyExpired.length, notified };
+    const result = { expired: actuallyExpired.length, notified, safetyNetDelivered };
     this.opts.logger.info(result, 'ApprovalExpirySweep tick complete');
     return result;
+  }
+
+  /** Deliver, once, each pending approval nobody delivered in time. Returns how many went out. */
+  private async deliverUndelivered(): Promise<number> {
+    const { approvalDelivery, logger } = this.opts;
+    if (!approvalDelivery) return 0;
+    const after = this.opts.undeliveredAfterMinutes ?? DEFAULT_UNDELIVERED_AFTER_MINUTES;
+    const now = this.opts.now?.() ?? new Date();
+    const rows = await this.opts.actionLogRepo.findUndelivered(new Date(now.getTime() - after * 60_000));
+
+    let delivered = 0;
+    for (const r of rows) {
+      if (!r.shortRef) continue;
+      // Email first, as the spec says; an install without one uses its first channel.
+      let result = await approvalDelivery.deliver(r.shortRef, 'email');
+      if (!result.delivered && result.reason === 'channel_unavailable' && result.available.length > 0) {
+        result = await approvalDelivery.deliver(r.shortRef, result.available[0]!);
+      }
+      if (result.delivered) {
+        delivered += 1;
+        // An agent was told to deliver this and did not; worth seeing in the logs.
+        logger.warn(
+          { id: r.id, shortRef: r.shortRef, channel: result.channel, afterMinutes: after },
+          'ApprovalExpirySweep: approval delivered by the safety net — no agent delivered it',
+        );
+      } else if (result.reason !== 'already_delivered' && result.reason !== 'not_found') {
+        logger.error(
+          { id: r.id, shortRef: r.shortRef, reason: result.reason },
+          'ApprovalExpirySweep: safety net could not deliver the approval — will retry next tick',
+        );
+      }
+    }
+    return delivered;
   }
 
   /** Queue one digest item per expired row. Returns how many were queued. */

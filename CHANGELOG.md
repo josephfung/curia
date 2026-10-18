@@ -18,10 +18,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Style scenarios** — seven cases score reply length, filler and register under a fixed office identity. (#2143)
 - **Report queue** — new `principal.report` bus event and `reports` tools collect digest items. (#2159)
 - **Weekly fallback digest** — sent when queued items go a week unreported. (#2159)
+- **`deliver-approval`** — sends a pending approval on one chosen channel; undelivered ones email after 15 minutes. (#2159)
+- **`approvalDelivery` capability** — new `ToolContext` field for tools that deliver approvals. (#2159)
 
 ### Changed
 
 - **Principal notices** — notes, block notices and expired approvals go to the digest, not email. (#2159)
+- **Approval delivery** — one message on the principal's preferred channel, not email, Signal and Slack. (#2159)
+- **One-channel standing preference** — fresh installs seed it: Signal, then SMS, then email. (#2159)
+- **Approval expiry sweep** — runs every 15 minutes, doubling as the approval-delivery safety net. (#2159)
 
 ### Changed
 
