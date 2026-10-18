@@ -480,8 +480,8 @@ committed record.
 
 ## Style cases
 
-The 40 cases (#2143, tag `style`) measure how Curia writes: length, filler and register,
-under a brief, dry office identity. Run them as a group:
+The seven style cases, 40a–40g (#2143, tag `style`), measure how Curia writes: length,
+filler and register, under a brief, dry office identity. Run them as a group:
 
 ```bash
 pnpm scenarios --tags style --model deepseek/deepseek-v4.1-flash
