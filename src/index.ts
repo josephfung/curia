@@ -2300,7 +2300,13 @@ async function main(): Promise<void> {
     : undefined;
   // The gateway's own gate sites register displays too; set after construction because
   // ApprovalDelivery sends through the gateway.
-  if (outboundGateway && approvalDelivery) outboundGateway.setApprovalDelivery(approvalDelivery);
+  if (outboundGateway && approvalDelivery) {
+    outboundGateway.setApprovalDelivery(approvalDelivery);
+  } else {
+    // Gate advisories still tell agents to call deliver-approval, which will fail; approvals
+    // then reach the principal only as digest mentions.
+    logger.warn('ApprovalDelivery not available — no outbound gateway; approvals will appear only in the digest');
+  }
 
   // Approval trigger — creates pending_approval rows when autonomy gates block a skill
   // (ADR-018, #427). It notifies no one (#2159): it queues the request's digest mention and

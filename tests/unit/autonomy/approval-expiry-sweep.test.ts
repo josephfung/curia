@@ -250,6 +250,52 @@ describe('ApprovalExpirySweep safety net (#2159)', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it('falls through to the next channel when email delivery fails', async () => {
+    const { sweep, deliver } = makeSweep({
+      undeliveredRows: [makeRow({ id: 9, shortRef: 'late-ref' })],
+      deliverResults: [{ delivered: false, reason: 'send_failed', available: ['signal', 'sms'] }],
+    });
+
+    const result = await sweep.tick();
+
+    expect(deliver.mock.calls.map((c) => c[1])).toEqual(['email', 'signal']);
+    expect(result.safetyNetDelivered).toBe(1);
+  });
+
+  it('a failing row does not stop the other rows or the expiry pass', async () => {
+    const { sweep, deliver, expireRows, logger } = makeSweep({
+      undeliveredRows: [makeRow({ id: 1, shortRef: 'bad-ref' }), makeRow({ id: 2, shortRef: 'ok-ref' })],
+      findExpiredRows: [makeRow({ id: 3, shortRef: 'old-ref' })],
+    });
+    deliver.mockImplementationOnce(async () => { throw new Error('db down'); });
+
+    const result = await sweep.tick();
+
+    expect(deliver.mock.calls.map((c) => c[0])).toEqual(['bad-ref', 'ok-ref']);
+    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ shortRef: 'bad-ref' }), expect.stringContaining('safety net'));
+    expect(expireRows).toHaveBeenCalledWith([3]);
+    expect(result.safetyNetDelivered).toBe(1);
+  });
+
+  it('still expires rows when the safety-net lookup itself fails', async () => {
+    const { sweep, findUndelivered, expireRows, logger } = makeSweep({ findExpiredRows: [makeRow({ id: 3 })] });
+    findUndelivered.mockRejectedValue(new Error('db down'));
+
+    await sweep.tick();
+
+    expect(logger.error).toHaveBeenCalled();
+    expect(expireRows).toHaveBeenCalledWith([3]);
+  });
+
+  it('logs a pending row with no reference instead of skipping it silently', async () => {
+    const { sweep, deliver, logger } = makeSweep({ undeliveredRows: [makeRow({ id: 4, shortRef: null })] });
+
+    await sweep.tick();
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ id: 4 }), expect.any(String));
+  });
+
   it('skips the safety net without an approval delivery service', async () => {
     const { sweep, findUndelivered } = makeSweep({ withoutDelivery: true, undeliveredRows: [makeRow()] });
 

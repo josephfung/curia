@@ -91,13 +91,23 @@ export class ApprovalDelivery {
     const recipient = this.recipientFor(channel);
     if (recipient === null) return { delivered: false, reason: 'channel_unavailable', available };
 
+    // Build before claiming: a payload the renderer chokes on must not leave a claim behind,
+    // which would make the row look delivered to the safety net forever.
+    let request: OutboundSendRequest;
+    try {
+      request = this.buildRequest(row, channel, recipient);
+    } catch (err) {
+      logger.error({ err, rowId: row.id, shortRef, channel }, 'approval-delivery: could not build the approval message');
+      return { delivered: false, reason: 'send_failed', available: available.filter((c) => c !== channel) };
+    }
+
     // Claim before sending: of two concurrent callers, exactly one gets to ping.
     if (!(await actionLogRepo.claimNotification(row.id))) {
       return { delivered: false, reason: 'already_delivered', available };
     }
 
-    const request = this.buildRequest(row, channel, recipient);
     let messageId: string | undefined;
+    let queued = false;
     let failure: string | undefined;
     try {
       // isSystemNotification: an approval must reach the principal even below the send
@@ -106,6 +116,11 @@ export class ApprovalDelivery {
       const result = await this.deps.outboundGateway.send(request, { isSystemNotification: true, skipNotificationOnBlock: true });
       if (result.success) {
         messageId = result.messageId;
+        // Durably queued while the transport is down (#1380): it goes out on reconnect, so
+        // the claim stands. messageId is then a queue row id, not the provider's, so it is
+        // not bound; the reaction mapper binds the real message from its "Reference:" line
+        // when it is actually delivered.
+        queued = result.queued === true;
       } else {
         failure = result.blockedReason ?? 'send failed';
       }
@@ -121,14 +136,14 @@ export class ApprovalDelivery {
 
     // A reaction on the delivered message resolves the approval (#1479). Email is answered
     // by reply, so it has nothing to bind.
-    if (messageId && (channel === 'signal' || channel === 'slack')) {
+    if (messageId && !queued && (channel === 'signal' || channel === 'slack')) {
       try {
         await actionLogRepo.bindDeliveryMessage(row.id, channel, messageId);
       } catch (err) {
         logger.warn({ err, rowId: row.id, channel }, 'approval-delivery: delivered, but the reaction binding failed — a reply still works');
       }
     }
-    logger.info({ rowId: row.id, shortRef, channel }, 'approval-delivery: delivered');
+    logger.info({ rowId: row.id, shortRef, channel, queued }, queued ? 'approval-delivery: queued until the channel reconnects' : 'approval-delivery: delivered');
     return { delivered: true, channel };
   }
 
@@ -153,7 +168,13 @@ export class ApprovalDelivery {
   }
 
   private buildRequest(row: ActionLogRow, channel: ApprovalChannel, recipient: string): OutboundSendRequest {
-    const display = (row.shortRef ? this.displays.get(row.shortRef) : undefined) ?? {
+    const registered = row.shortRef ? this.displays.get(row.shortRef) : undefined;
+    if (!registered) {
+      // After a restart (or eviction) the raise-time display is gone; the stored payload may
+      // show contact references rather than names (#2033). The description still names who.
+      this.deps.logger.debug({ rowId: row.id }, 'approval-delivery: no registered display — rendering the stored payload');
+    }
+    const display = registered ?? {
       preamble: row.description ?? `Curia wants to run ${row.toolName}.`,
       payload: row.payload ?? {},
     };

@@ -28,7 +28,7 @@ import type { EventBus } from '../bus/bus.js';
 import { createPrincipalReport } from '../bus/events.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { ActionLogRow } from './action-log-types.js';
-import type { ApprovalDelivery } from './approval-delivery.js';
+import type { ApprovalDelivery, DeliverResult } from './approval-delivery.js';
 
 export interface ApprovalExpirySweepOptions {
   actionLogRepo: Pick<ActionLogRepo, 'findExpired' | 'expireRows' | 'findUndelivered'>;
@@ -150,37 +150,66 @@ export class ApprovalExpirySweep {
     return result;
   }
 
-  /** Deliver, once, each pending approval nobody delivered in time. Returns how many went out. */
+  /**
+   * Deliver, once, each pending approval nobody delivered in time. Returns how many went out.
+   * Never throws: a failure here must not stop the expiry pass, and one bad row must not stop
+   * the others.
+   */
   private async deliverUndelivered(): Promise<number> {
     const { approvalDelivery, logger } = this.opts;
     if (!approvalDelivery) return 0;
     const after = this.opts.undeliveredAfterMinutes ?? DEFAULT_UNDELIVERED_AFTER_MINUTES;
     const now = this.opts.now?.() ?? new Date();
-    const rows = await this.opts.actionLogRepo.findUndelivered(new Date(now.getTime() - after * 60_000));
+
+    let rows: ActionLogRow[];
+    try {
+      rows = await this.opts.actionLogRepo.findUndelivered(new Date(now.getTime() - after * 60_000));
+    } catch (err) {
+      logger.error({ err }, 'ApprovalExpirySweep: safety net lookup failed — undelivered approvals wait for the next tick');
+      return 0;
+    }
 
     let delivered = 0;
     for (const r of rows) {
-      if (!r.shortRef) continue;
-      // Email first, as the spec says; an install without one uses its first channel.
-      let result = await approvalDelivery.deliver(r.shortRef, 'email');
-      if (!result.delivered && result.reason === 'channel_unavailable' && result.available.length > 0) {
-        result = await approvalDelivery.deliver(r.shortRef, result.available[0]!);
+      if (!r.shortRef) {
+        // deliver() is keyed on the reference; a pending row without one cannot be sent.
+        logger.error({ id: r.id }, 'ApprovalExpirySweep: safety net cannot deliver a pending approval with no short_ref');
+        continue;
       }
-      if (result.delivered) {
-        delivered += 1;
-        // An agent was told to deliver this and did not; worth seeing in the logs.
-        logger.warn(
-          { id: r.id, shortRef: r.shortRef, channel: result.channel, afterMinutes: after },
-          'ApprovalExpirySweep: approval delivered by the safety net — no agent delivered it',
-        );
-      } else if (result.reason !== 'already_delivered' && result.reason !== 'not_found') {
-        logger.error(
-          { id: r.id, shortRef: r.shortRef, reason: result.reason },
-          'ApprovalExpirySweep: safety net could not deliver the approval — will retry next tick',
-        );
+      try {
+        const result = await this.deliverOnFirstWorkingChannel(r.shortRef);
+        if (result.delivered) {
+          delivered += 1;
+          // An agent was told to deliver this and did not; worth seeing in the logs.
+          logger.warn(
+            { id: r.id, shortRef: r.shortRef, channel: result.channel, afterMinutes: after },
+            'ApprovalExpirySweep: approval delivered by the safety net — no agent delivered it',
+          );
+        } else if (result.reason !== 'already_delivered' && result.reason !== 'not_found') {
+          logger.error(
+            { id: r.id, shortRef: r.shortRef, reason: result.reason },
+            'ApprovalExpirySweep: safety net could not deliver the approval — will retry next tick',
+          );
+        }
+      } catch (err) {
+        logger.error({ err, id: r.id, shortRef: r.shortRef }, 'ApprovalExpirySweep: safety net delivery threw — will retry next tick');
       }
     }
     return delivered;
+  }
+
+  /** Email first, as the spec says; then each other available channel, one at a time. */
+  private async deliverOnFirstWorkingChannel(shortRef: string): Promise<DeliverResult> {
+    const approvalDelivery = this.opts.approvalDelivery!;
+    let result = await approvalDelivery.deliver(shortRef, 'email');
+    const tried = new Set<string>(['email']);
+    while (!result.delivered && (result.reason === 'channel_unavailable' || result.reason === 'send_failed')) {
+      const next = result.available.find((c) => !tried.has(c));
+      if (!next) break;
+      tried.add(next);
+      result = await approvalDelivery.deliver(shortRef, next);
+    }
+    return result;
   }
 
   /** Queue one digest item per expired row. Returns how many were queued. */

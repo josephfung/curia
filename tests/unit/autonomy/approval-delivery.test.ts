@@ -167,4 +167,25 @@ describe('ApprovalDelivery.deliver', () => {
     await expect(delivery.deliver('abcd1234', 'signal')).resolves.toMatchObject({ delivered: false, reason: 'send_failed' });
     expect(repo.releaseNotification).toHaveBeenCalledWith(42);
   });
+
+  // Review fixes (#2159).
+  it('releases the claim when building the message throws, so the approval is not stranded', async () => {
+    const { delivery, repo, send } = makeDelivery();
+    const payload = {};
+    Object.defineProperty(payload, 'cc', { enumerable: true, get: () => { throw new Error('bad payload'); } });
+    delivery.registerDisplay('abcd1234', { preamble: 'x', payload });
+
+    await expect(delivery.deliver('abcd1234', 'signal')).resolves.toMatchObject({ delivered: false, reason: 'send_failed' });
+    expect(send).not.toHaveBeenCalled();
+    // Either never claimed or released: the row must still look undelivered to the safety net.
+    expect(repo.claimNotification.mock.calls.length).toBe(repo.releaseNotification.mock.calls.length);
+  });
+
+  it('counts a durably queued send as delivered but does not bind the queue id for reactions', async () => {
+    const { delivery, repo } = makeDelivery({ sendResult: { success: true, messageId: 'queue-row-9', queued: true } as never });
+
+    await expect(delivery.deliver('abcd1234', 'signal')).resolves.toEqual({ delivered: true, channel: 'signal' });
+    expect(repo.bindDeliveryMessage).not.toHaveBeenCalled();
+    expect(repo.releaseNotification).not.toHaveBeenCalled();
+  });
 });

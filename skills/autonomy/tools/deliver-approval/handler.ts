@@ -51,6 +51,12 @@ export class DeliverApprovalHandler implements ToolHandler {
           return { success: false, error: `The principal has no verified ${CHANNEL_NAMES[chosen]} identity. Channels available: ${list(result.available)}.` };
         case 'not_found':
           return { success: false, error: `No pending approval with reference ${shortRef}; it may have been resolved or expired.` };
+        default: {
+          // Exhaustive: a new reason must be given its own wording here.
+          const unhandled: never = result.reason;
+          ctx.log.error({ reason: unhandled }, 'deliver-approval: unhandled delivery result');
+          return { success: false, error: 'deliver-approval failed' };
+        }
       }
     } catch (err) {
       ctx.log.error({ err, shortRef, channel }, 'deliver-approval: unexpected failure');

@@ -1037,7 +1037,8 @@ export class OutboundGateway {
               },
               extraLines: [`Items:\n${itemSummary}`],
             });
-            await this.queueApprovalMention(actionRef, options.reExecRecipe.description, options.taskEventId!, options.conversationId ?? undefined);
+            // actionRef is set only after an insert that required taskEventId, so it is present.
+            await this.queueApprovalMention(actionRef, options.reExecRecipe.description, options.taskEventId ?? options.parentEventId ?? '', options.conversationId ?? undefined);
           }
           return {
             success: false,
