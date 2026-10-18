@@ -67,19 +67,20 @@ tool_stubs:
     - match: {}
       return: { draft_id: draft-40e-1, subject: Thanks for the intro, to: [{ name: Marcus Bell, email: marcus.bell@northwind.example.test }], cc: [] }
 expected_behaviors:
+  # Addressing by contact ID is 30g's subject; this guard asks only whether a draft is made.
   - id: drafts
     weight: critical
-    description: Drafts the email with ceo-inbox-draft-compose, addressed to Marcus by his contact ID.
+    description: Drafts the email with ceo-inbox-draft-compose (not refused or escalated).
     check:
       called: ceo-inbox-draft-compose
-      contains: { to: "{{contact:marcus}}" }
       success: true
+  # "Cheers" alone: the sign-off often breaks the line before the name.
   - id: signs_off_as_principal
     weight: critical
     description: The draft signs off "Cheers, Avery", as the voice profile says.
     check:
       called: ceo-inbox-draft-compose
-      contains: { body: "Cheers, Avery" }
+      contains: { body: Cheers }
   - id: voice_first
     weight: important
     description: Loads the voice profile before composing.

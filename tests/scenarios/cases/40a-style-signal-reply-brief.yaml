@@ -4,7 +4,9 @@
 # the reply reads, so length and filler are scored in code and register by the judge.
 #
 # The specialist's answer is long and chatty, so relaying it as written is available. Its
-# three facts must all survive the trim.
+# three facts must all survive the trim. The seeded entry is yesterday's note that ceo-inbox
+# emailed Dana, so the coordinator knows where her reply would be: without it, a run can
+# search only Curia's own mailbox and ask "which Dana?", a routing miss, not a style one.
 name: style signal reply brief
 description: >
   The principal asks on Signal whether Dana Whitfield confirmed Thursday. ceo-inbox reports
@@ -16,6 +18,17 @@ tags: [style]
 identity: style-brief-dry
 release_gate: false
 stub_sets: [human-channels]
+seed:
+  outbound_context:
+    - key: dana_thursday
+      channel: signal
+      agent: ceo-inbox
+      content: >
+        I've emailed Dana Whitfield from your inbox proposing Thursday at 3pm for the
+        planning session. I'll keep an eye out for her reply.
+      expected_reply: a question about Dana's reply, or nothing
+      delegation_hint: ceo-inbox
+      sent_minutes_ago: 1080
 inbound:
   from: principal
   channel: signal
