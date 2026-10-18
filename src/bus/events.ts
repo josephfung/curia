@@ -351,30 +351,28 @@ interface OutboundNoReplyPayload {
 // dispatchEmail() bypass. See #206.
 //
 // notificationType discriminates between alert categories:
-//   - 'blocked_content': principal alert that an outbound message was blocked by the content filter
+//   - 'blocked_content': no longer emitted (#2159: block notices go to the digest queue); kept for historical audit rows
 //   - 'contact_rate_limited': principal alert that contact auto-creation was throttled due to rate limits
 //   - 'approval_requested':   principal alert that an autonomy gate blocked a skill and approval is needed
-//   - 'approval_expired':     principal alert that pending approvals expired without response (ApprovalExpirySweep, #2013)
+//   - 'approval_expired':     no longer emitted (#2159: expiries go to the digest queue); kept for historical audit rows
 //   - 'schedule_suspended': principal alert that a scheduled job was auto-suspended after consecutive failures (#538)
 //   - 'schedule_recovered': principal alert that a stuck job was auto-recovered (reset to pending or suspended) (#207)
 //   - 'learning_proposal':  principal alert surfacing a learning-digest item (voice-guide proposal or sent-mail
 //                           task-completion undo/confirm) event-driven when produced, after #1464 removed
 //                           the scheduled digest that used to surface them (#1466)
 //   - 'database_unavailable': principal alert that Postgres has been unreachable for >5 minutes (#1381)
-//   - 'principal_note':     a note for the principal cut out of a reply to someone else (prompt trim PR 5)
-//   - 'report_digest':      weekly fallback summary for installs with no digest job (ReportFallbackDigest, #2159)
+//   - 'principal_note':     no longer emitted (#2159: notes go to the digest queue); kept for historical audit rows
 export interface OutboundNotificationPayload {
   notificationType:
-    | 'blocked_content'
+    | 'blocked_content'         // no longer emitted (#2159); kept for historical audit rows
     | 'contact_rate_limited'
     | 'approval_requested'
-    | 'approval_expired'        // batched expiry notification (ApprovalExpirySweep, #2013)
+    | 'approval_expired'        // no longer emitted (#2159); kept for historical audit rows
     | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
     | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
     | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
     | 'database_unavailable'  // Postgres unreachable beyond escalation threshold (#1381)
-    | 'principal_note'        // note for the principal from a reply to someone else (prompt trim PR 5)
-    | 'report_digest';        // weekly fallback summary of unreported principal.report items (#2159)
+    | 'principal_note';       // no longer emitted (#2159); kept for historical audit rows
   /** Recipient email for this notification (always the principal email today). */
   ceoEmail: string;
   subject: string;

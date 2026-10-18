@@ -1,10 +1,8 @@
 // ReportQueue — reads principal.report audit rows for the digest (#2159).
 import { describe, it, expect, vi } from 'vitest';
-import { ReportQueue, REPORT_SETTLE_MS } from '../../../src/reports/report-queue.js';
-import type { AuditLogRow, EventTypesAuditQuery, TimelinePage } from '../../../src/audit/audit-log-repo.js';
+import { ReportQueue, InvalidReportCursorError } from '../../../src/reports/report-queue.js';
+import type { AuditLogRow, SeqPage } from '../../../src/audit/audit-log-repo.js';
 import { createSilentLogger } from '../../../src/logger.js';
-
-const NOW = new Date('2026-10-18T12:00:00.000Z');
 
 function row(id: string, at: string, payload: Record<string, unknown>): AuditLogRow {
   return {
@@ -28,32 +26,34 @@ function row(id: string, at: string, payload: Record<string, unknown>): AuditLog
 }
 
 function makeQueue(opts: {
-  pages?: TimelinePage[];
+  pages?: SeqPage[];
   stored?: string | null;
   setResult?: { stored: boolean };
+  existingSeqs?: string[];
 }) {
   const pages = [...(opts.pages ?? [{ rows: [], hasMore: false }])];
-  const findByEventTypes = vi.fn(async (_types: string[], _q: EventTypesAuditQuery) => pages.shift() ?? { rows: [], hasMore: false });
+  const findByEventTypeAfterSeq = vi.fn(async (_type: string, _after: string | null, _limit: number) =>
+    pages.shift() ?? { rows: [], hasMore: false });
+  const hasEventAtSeq = vi.fn(async (_type: string, seq: string) => (opts.existingSeqs ?? []).includes(seq));
   const get = vi.fn().mockResolvedValue(opts.stored ?? null);
   const set = vi.fn().mockResolvedValue(opts.setResult ?? { stored: true });
   const logger = createSilentLogger();
   const warn = vi.spyOn(logger, 'warn');
   const queue = new ReportQueue({
-    auditLogRepo: { findByEventTypes },
+    auditLogRepo: { findByEventTypeAfterSeq, hasEventAtSeq },
     configStore: { get, set },
     logger,
-    now: () => NOW,
   });
-  return { queue, findByEventTypes, get, set, warn };
+  return { queue, findByEventTypeAfterSeq, hasEventAtSeq, get, set, warn };
 }
 
 describe('ReportQueue.list', () => {
-  it('reads everything up to the settle lag when nothing has been acknowledged', async () => {
-    const { queue, findByEventTypes } = makeQueue({
+  it('reads from the start when nothing has been acknowledged', async () => {
+    const { queue, findByEventTypeAfterSeq } = makeQueue({
       pages: [{
         rows: [
-          row('a', '2026-10-18T09:00:00.000Z', { summary: 'Replied to Dana.', urgency: 'digest', source: 'agent', conversationId: 'email:t1' }),
-          row('b', '2026-10-18T10:00:00.000Z', { summary: 'Approval expired.', urgency: 'digest', source: 'approval_expired', actionShortRef: 'abcd1234' }),
+          { seq: '11', row: row('a', '2026-10-18T09:00:00.000Z', { summary: 'Replied to Dana.', urgency: 'digest', source: 'agent', conversationId: 'email:t1' }) },
+          { seq: '14', row: row('b', '2026-10-18T10:00:00.000Z', { summary: 'Approval expired.', urgency: 'digest', source: 'approval_expired', actionShortRef: 'abcd1234' }) },
         ],
         hasMore: false,
       }],
@@ -61,32 +61,36 @@ describe('ReportQueue.list', () => {
 
     const batch = await queue.list();
 
-    const [types, query] = findByEventTypes.mock.calls[0]!;
-    expect(types).toEqual(['principal.report']);
-    expect(query.after).toBeUndefined();
-    expect(query.to).toEqual(new Date(NOW.getTime() - REPORT_SETTLE_MS));
+    expect(findByEventTypeAfterSeq).toHaveBeenCalledWith('principal.report', null, 100);
     expect(batch.items.map((i) => i.summary)).toEqual(['Replied to Dana.', 'Approval expired.']);
     expect(batch.items[0]!.conversationId).toBe('email:t1');
     expect(batch.items[1]!.actionShortRef).toBe('abcd1234');
-    expect(JSON.parse(batch.cursor!)).toEqual({ t: '2026-10-18T10:00:00.000Z', id: 'b' });
+    expect(batch.cursor).toBe('14');
     expect(batch.hasMore).toBe(false);
   });
 
   it('starts after the acknowledged marker', async () => {
-    const { queue, findByEventTypes } = makeQueue({
-      stored: JSON.stringify({ t: '2026-10-17T08:00:00.000Z', id: 'z' }),
-    });
+    const { queue, findByEventTypeAfterSeq } = makeQueue({ stored: '42' });
 
     const batch = await queue.list();
 
-    expect(findByEventTypes.mock.calls[0]![1].after).toEqual({ timestamp: new Date('2026-10-17T08:00:00.000Z'), id: 'z' });
+    expect(findByEventTypeAfterSeq).toHaveBeenCalledWith('principal.report', '42', 100);
     expect(batch.items).toEqual([]);
     expect(batch.cursor).toBeNull();
   });
 
+  it('pages from an earlier batch cursor, not from the marker', async () => {
+    const { queue, findByEventTypeAfterSeq, get } = makeQueue({ stored: '42' });
+
+    await queue.list({ after: '57', limit: 10 });
+
+    expect(findByEventTypeAfterSeq).toHaveBeenCalledWith('principal.report', '57', 10);
+    expect(get).not.toHaveBeenCalled();
+  });
+
   it('never moves the marker — only ack does, after the digest is sent', async () => {
     const { queue, set } = makeQueue({
-      pages: [{ rows: [row('a', '2026-10-18T09:00:00.000Z', { summary: 'x', urgency: 'digest', source: 'agent' })], hasMore: false }],
+      pages: [{ rows: [{ seq: '1', row: row('a', '2026-10-18T09:00:00.000Z', { summary: 'x', urgency: 'digest', source: 'agent' }) }], hasMore: false }],
     });
 
     await queue.list();
@@ -98,8 +102,8 @@ describe('ReportQueue.list', () => {
     const { queue, warn } = makeQueue({
       pages: [{
         rows: [
-          row('a', '2026-10-18T09:00:00.000Z', { urgency: 'digest', source: 'agent' }),
-          row('b', '2026-10-18T09:30:00.000Z', { summary: 'ok', urgency: 'bogus', source: 'agent' }),
+          { seq: '1', row: row('a', '2026-10-18T09:00:00.000Z', { urgency: 'digest', source: 'agent' }) },
+          { seq: '2', row: row('b', '2026-10-18T09:30:00.000Z', { summary: 'ok', urgency: 'bogus', source: 'agent' }) },
         ],
         hasMore: false,
       }],
@@ -111,52 +115,53 @@ describe('ReportQueue.list', () => {
     // An unknown urgency falls back to digest rather than dropping the item.
     expect(batch.items[0]!.urgency).toBe('digest');
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(batch.cursor!).id).toBe('b');
+    expect(batch.cursor).toBe('2');
   });
 
   it('treats an unreadable stored marker as no marker, with a warning', async () => {
-    const { queue, findByEventTypes, warn } = makeQueue({ stored: 'not json' });
+    const { queue, findByEventTypeAfterSeq, warn } = makeQueue({ stored: 'not a seq' });
 
     await queue.list();
 
-    expect(findByEventTypes.mock.calls[0]![1].after).toBeUndefined();
+    expect(findByEventTypeAfterSeq.mock.calls[0]![1]).toBeNull();
     expect(warn).toHaveBeenCalled();
   });
 });
 
 describe('ReportQueue.ack', () => {
-  it('stores the cursor', async () => {
-    const { queue, set } = makeQueue({});
-    const cursor = JSON.stringify({ t: '2026-10-18T10:00:00.000Z', id: 'b' });
+  it('stores a cursor that names a real report row', async () => {
+    const { queue, set } = makeQueue({ existingSeqs: ['14'] });
 
-    await expect(queue.ack(cursor)).resolves.toBe(true);
+    await expect(queue.ack('14')).resolves.toBe(true);
 
-    expect(set).toHaveBeenCalledWith('reports', 'last_reported', cursor);
+    expect(set).toHaveBeenCalledWith('reports', 'last_reported', '14');
   });
 
   it('returns false when the config store soft-rejects the write', async () => {
-    const { queue } = makeQueue({ setResult: { stored: false } });
+    const { queue } = makeQueue({ existingSeqs: ['14'], setResult: { stored: false } });
 
-    await expect(queue.ack(JSON.stringify({ t: '2026-10-18T10:00:00.000Z', id: 'b' }))).resolves.toBe(false);
+    await expect(queue.ack('14')).resolves.toBe(false);
   });
 
-  it('rejects a cursor it did not issue', async () => {
-    const { queue, set } = makeQueue({});
+  it('rejects a cursor it did not issue — malformed, or naming no report row', async () => {
+    const { queue, set } = makeQueue({ existingSeqs: ['14'] });
 
-    await expect(queue.ack('garbage')).rejects.toThrow('invalid report cursor');
-    await expect(queue.ack(JSON.stringify({ t: 'yesterday', id: 'b' }))).rejects.toThrow('invalid report cursor');
+    await expect(queue.ack('garbage')).rejects.toBeInstanceOf(InvalidReportCursorError);
+    // An invented cursor ahead of the queue would silently skip every waiting item.
+    await expect(queue.ack('999999')).rejects.toBeInstanceOf(InvalidReportCursorError);
     expect(set).not.toHaveBeenCalled();
   });
 });
 
 describe('ReportQueue.oldestUnreported', () => {
   it('returns the first unacknowledged item time', async () => {
-    const { queue, findByEventTypes } = makeQueue({
-      pages: [{ rows: [row('a', '2026-10-10T09:00:00.000Z', { summary: 'x', urgency: 'digest', source: 'agent' })], hasMore: true }],
+    const { queue, findByEventTypeAfterSeq } = makeQueue({
+      stored: '5',
+      pages: [{ rows: [{ seq: '6', row: row('a', '2026-10-10T09:00:00.000Z', { summary: 'x', urgency: 'digest', source: 'agent' }) }], hasMore: true }],
     });
 
     await expect(queue.oldestUnreported()).resolves.toEqual(new Date('2026-10-10T09:00:00.000Z'));
-    expect(findByEventTypes.mock.calls[0]![1].limit).toBe(1);
+    expect(findByEventTypeAfterSeq).toHaveBeenCalledWith('principal.report', '5', 1);
   });
 
   it('returns null when nothing is waiting', async () => {

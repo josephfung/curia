@@ -1,7 +1,9 @@
 // ReportFallbackDigest — the weekly summary for installs with no digest job (#2159).
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ReportFallbackDigest } from '../../../src/reports/report-fallback-digest.js';
-import type { ReportBatch, ReportItem } from '../../../src/reports/report-queue.js';
+import { ReportQueue, type ReportBatch, type ReportItem } from '../../../src/reports/report-queue.js';
+import type { AuditLogRow } from '../../../src/audit/audit-log-repo.js';
+import { createSilentLogger } from '../../../src/logger.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
 import type { PrincipalEmailRef } from '../../../src/contacts/types.js';
 import type { Logger } from '../../../src/logger.js';
@@ -23,15 +25,17 @@ function makeDigest(opts: {
   const batches = [...(opts.batches ?? [])];
   const queue = {
     oldestUnreported: vi.fn().mockResolvedValue(opts.oldest === undefined ? null : opts.oldest),
-    list: vi.fn(async () => batches.shift() ?? { items: [], cursor: null, hasMore: false }),
+    list: vi.fn(async (_opts?: { limit?: number; after?: string }) => batches.shift() ?? { items: [], cursor: null, hasMore: false }),
     ack: vi.fn().mockResolvedValue(true),
   };
-  const sendNotification = vi.fn().mockResolvedValue(opts.sendResult ?? true);
+  const send = vi.fn().mockResolvedValue(
+    opts.sendResult === false ? { success: false, blockedReason: 'secret-pattern' } : { success: true, messageId: 'm1' },
+  );
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const ceoEmail: PrincipalEmailRef = { current: opts.ceoEmail ?? 'principal@example.com' };
   const digest = new ReportFallbackDigest({
     queue,
-    outboundGateway: opts.withoutGateway ? undefined : ({ sendNotification } as unknown as OutboundGateway),
+    outboundGateway: opts.withoutGateway ? undefined : ({ send } as unknown as OutboundGateway),
     ceoEmail,
     logger: logger as unknown as Logger,
     maxAgeDays: 7,
@@ -39,7 +43,7 @@ function makeDigest(opts: {
     timezone: 'America/Toronto',
     now: () => NOW,
   });
-  return { digest, queue, sendNotification, logger };
+  return { digest, queue, send, logger };
 }
 
 afterEach(() => {
@@ -48,34 +52,34 @@ afterEach(() => {
 
 describe('ReportFallbackDigest.tick', () => {
   it('does nothing when no item is waiting', async () => {
-    const { digest, queue, sendNotification } = makeDigest({ oldest: null });
+    const { digest, queue, send } = makeDigest({ oldest: null });
 
     await expect(digest.tick()).resolves.toEqual({ sent: false, items: 0 });
     expect(queue.list).not.toHaveBeenCalled();
-    expect(sendNotification).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('does nothing while the oldest item is under a week old — a digest job may still pick it up', async () => {
-    const { digest, sendNotification } = makeDigest({ oldest: new Date(NOW.getTime() - 6 * DAY) });
+    const { digest, send } = makeDigest({ oldest: new Date(NOW.getTime() - 6 * DAY) });
 
     await expect(digest.tick()).resolves.toEqual({ sent: false, items: 0 });
-    expect(sendNotification).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('sends one numbered summary past a week, then acknowledges', async () => {
     const cursor = '{"t":"2026-10-10T12:00:00.000Z","id":"id-2"}';
-    const { digest, queue, sendNotification } = makeDigest({
+    const { digest, queue, send } = makeDigest({
       oldest: new Date(NOW.getTime() - 8 * DAY),
       batches: [{ items: [item(1, 'Replied to Dana.'), item(2, 'Block notice.\nReason: secret-pattern')], cursor, hasMore: false }],
     });
 
     await expect(digest.tick()).resolves.toEqual({ sent: true, items: 2 });
 
-    expect(sendNotification).toHaveBeenCalledTimes(1);
-    const payload = sendNotification.mock.calls[0]![0];
-    expect(payload.notificationType).toBe('report_digest');
-    expect(payload.ceoEmail).toBe('principal@example.com');
-    expect(payload.subject).toBe('Curia: weekly summary');
+    expect(send).toHaveBeenCalledTimes(1);
+    const [payload, sendOpts] = send.mock.calls[0]!;
+    expect(payload).toMatchObject({ channel: 'email', to: 'principal@example.com', subject: 'Curia: weekly summary' });
+    // Delivered even below the send threshold; a blocked summary must not report itself.
+    expect(sendOpts).toEqual({ isSystemNotification: true, skipNotificationOnBlock: true });
     expect(payload.body).toMatch(/^1\. Replied to Dana\./m);
     expect(payload.body).toMatch(/^2\. Block notice\. \(Oct 10\)$/m);
     // A multi-line item stays under its number.
@@ -84,7 +88,7 @@ describe('ReportFallbackDigest.tick', () => {
   });
 
   it('reads every page before sending and acknowledges the last cursor', async () => {
-    const { digest, queue, sendNotification } = makeDigest({
+    const { digest, queue, send } = makeDigest({
       oldest: new Date(NOW.getTime() - 8 * DAY),
       batches: [
         { items: [item(1, 'One.')], cursor: 'c1', hasMore: true },
@@ -93,7 +97,8 @@ describe('ReportFallbackDigest.tick', () => {
     });
 
     await expect(digest.tick()).resolves.toEqual({ sent: true, items: 2 });
-    expect(sendNotification.mock.calls[0]![0].body).toMatch(/^2\. Two\./m);
+    expect(send.mock.calls[0]![0].body).toMatch(/^2\. Two\./m);
+    expect(queue.list.mock.calls.map((c) => c[0])).toEqual([{ limit: 100 }, { limit: 100, after: 'c1' }]);
     expect(queue.ack).toHaveBeenCalledTimes(1);
     expect(queue.ack).toHaveBeenCalledWith('c2');
   });
@@ -129,6 +134,48 @@ describe('ReportFallbackDigest.tick', () => {
     const noGateway = makeDigest({ oldest: new Date(NOW.getTime() - 8 * DAY), withoutGateway: true });
     await expect(noGateway.digest.tick()).resolves.toEqual({ sent: false, items: 0 });
     expect(noGateway.logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('ReportFallbackDigest with a real ReportQueue', () => {
+  // Pages through the real queue: a list() that ignored its cursor would repeat page one.
+  it('sends every waiting item once across pages and acknowledges the last seq', async () => {
+    const rows = Array.from({ length: 150 }, (_, i) => ({
+      seq: String(i + 1),
+      row: {
+        id: `id-${i + 1}`, timestamp: new Date(NOW.getTime() - 9 * DAY), eventType: 'principal.report', sourceLayer: 'system',
+        sourceId: 'system', conversationId: null, taskId: null, parentEventId: 't', payload: { summary: `Item ${i + 1}`, urgency: 'digest', source: 'agent' },
+        action: null, outcome: null, targetType: null, targetId: null, initiatorType: null, initiatorId: null, entryHash: null,
+      } as AuditLogRow,
+    }));
+    const set = vi.fn().mockResolvedValue({ stored: true });
+    const queue = new ReportQueue({
+      auditLogRepo: {
+        findByEventTypeAfterSeq: vi.fn(async (_t: string, after: string | null, limit: number) => {
+          const start = after === null ? 0 : Number(after);
+          return { rows: rows.slice(start, start + limit), hasMore: start + limit < rows.length };
+        }),
+        hasEventAtSeq: vi.fn(async (_t: string, seq: string) => Number(seq) >= 1 && Number(seq) <= rows.length),
+      },
+      configStore: { get: vi.fn().mockResolvedValue(null), set },
+      logger: createSilentLogger(),
+    });
+    const send = vi.fn().mockResolvedValue({ success: true });
+    const digest = new ReportFallbackDigest({
+      queue,
+      outboundGateway: { send } as unknown as OutboundGateway,
+      ceoEmail: 'principal@example.com',
+      logger: createSilentLogger(),
+      maxAgeDays: 7,
+      checkIntervalHours: 24,
+      now: () => NOW,
+    });
+
+    await expect(digest.tick()).resolves.toEqual({ sent: true, items: 150 });
+    const body = send.mock.calls[0]![0].body as string;
+    expect(body.match(/^\d+\. Item 1 /gm)).toHaveLength(1);
+    expect(body).toMatch(/^150\. Item 150 /m);
+    expect(set).toHaveBeenCalledWith('reports', 'last_reported', '150');
   });
 });
 

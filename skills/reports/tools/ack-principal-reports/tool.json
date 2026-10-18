@@ -13,6 +13,6 @@
   "permissions": [],
   "secrets": [],
   "timeout": 15000,
-  "capabilities": ["entityMemory"],
+  "capabilities": ["auditLogRepo", "entityMemory"],
   "allowed_callers": ["coordinator"]
 }

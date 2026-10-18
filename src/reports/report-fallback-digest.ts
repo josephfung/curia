@@ -23,8 +23,13 @@ import type { ReportItem, ReportQueue } from './report-queue.js';
 
 export interface ReportFallbackDigestOptions {
   queue: Pick<ReportQueue, 'oldestUnreported' | 'list' | 'ack'>;
-  /** Absent in setup-required mode or with no outbound client: the check logs and skips. */
-  outboundGateway?: Pick<OutboundGateway, 'sendNotification'>;
+  /**
+   * Absent in setup-required mode or with no outbound client: the check logs and skips.
+   * The summary is sent with send(), not sendNotification(): the marker may advance only on
+   * a confirmed delivery, and sendNotification() reports success once the bus publish
+   * succeeds, before the email adapter has tried (or been blocked).
+   */
+  outboundGateway?: Pick<OutboundGateway, 'send'>;
   /** Plain string (tests) or the live ref, so a post-boot email bind takes effect (#1514). */
   ceoEmail: string | PrincipalEmailRef;
   logger: Logger;
@@ -122,7 +127,8 @@ export class ReportFallbackDigest {
     const items: ReportItem[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const batch = await this.opts.queue.list(PAGE_SIZE);
+      // Each page starts after the previous one; list() never moves the stored marker.
+      const batch = await this.opts.queue.list({ limit: PAGE_SIZE, ...(cursor ? { after: cursor } : {}) });
       items.push(...batch.items);
       if (batch.cursor) cursor = batch.cursor;
       if (!batch.hasMore) break;
@@ -130,18 +136,25 @@ export class ReportFallbackDigest {
     // Every row read could be malformed and skipped; there is then nothing to say, but the
     // cursor still moves past them so they don't hold the queue.
     if (items.length === 0) {
-      if (cursor) await this.opts.queue.ack(cursor);
+      if (cursor && !(await this.opts.queue.ack(cursor))) {
+        logger.error({ cursor }, 'ReportFallbackDigest: could not move the marker past unreadable report rows');
+      }
       return { sent: false, items: 0 };
     }
 
-    const sent = await this.opts.outboundGateway.sendNotification({
-      notificationType: 'report_digest',
-      ceoEmail,
-      subject: 'Curia: weekly summary',
-      body: this.renderBody(items),
-    });
-    if (!sent) {
-      logger.error({ items: items.length, ageDays }, 'ReportFallbackDigest: weekly summary not delivered — will retry tomorrow');
+    // isSystemNotification: the principal must hear this even when the score is below the
+    // send threshold. skipNotificationOnBlock: a blocked summary must not report itself.
+    const result = await this.opts.outboundGateway.send(
+      { channel: 'email', to: ceoEmail, subject: 'Curia: weekly summary', body: this.renderBody(items) },
+      { isSystemNotification: true, skipNotificationOnBlock: true },
+    );
+    if (!result.success) {
+      // Not acknowledged, so the same items go out with tomorrow's check. A summary the
+      // content filter blocks every time will keep failing here; the reason says which.
+      logger.error(
+        { items: items.length, ageDays, blockedReason: result.blockedReason },
+        'ReportFallbackDigest: weekly summary not delivered — will retry tomorrow',
+      );
       return { sent: false, items: items.length };
     }
 

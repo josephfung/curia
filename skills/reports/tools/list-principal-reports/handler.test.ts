@@ -20,7 +20,9 @@ function makeCtx(rows: AuditLogRow[], hasMore = false) {
     secret: () => { throw new Error('no secrets'); },
     log: createSilentLogger(),
     timezone: 'America/Toronto',
-    auditLogRepo: { findByEventTypes: vi.fn().mockResolvedValue({ rows, hasMore }) } as unknown as AuditLogRepo,
+    auditLogRepo: {
+      findByEventTypeAfterSeq: vi.fn().mockResolvedValue({ rows: rows.map((r, i) => ({ seq: String(i + 1), row: r })), hasMore }),
+    } as unknown as AuditLogRepo,
     // No marker stored yet: findEntities finds no config anchor.
     entityMemory: { findEntities: vi.fn().mockResolvedValue([]), getFacts: vi.fn(), storeFact } as unknown as EntityMemory,
   } as unknown as ToolContext;
@@ -43,7 +45,7 @@ describe('ListPrincipalReportsHandler', () => {
     expect(data.items[0]!.at).toBe('2026-10-18T09:00:00.000-04:00');
     // Audit ids are never shown: numbers only.
     expect(data.items[0]).not.toHaveProperty('id');
-    expect(JSON.parse(data.cursor).id).toBe('b');
+    expect(data.cursor).toBe('2');
     expect(data.hasMore).toBe(false);
     expect(data.displayTimezone).toBeTruthy();
     expect(storeFact).not.toHaveBeenCalled();
@@ -58,7 +60,7 @@ describe('ListPrincipalReportsHandler', () => {
 
   it('returns an error, not a throw, when the audit read fails', async () => {
     const { ctx } = makeCtx([]);
-    (ctx.auditLogRepo!.findByEventTypes as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+    (ctx.auditLogRepo!.findByEventTypeAfterSeq as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
 
     const result = await new ListPrincipalReportsHandler().execute(ctx);
 

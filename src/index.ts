@@ -2957,7 +2957,9 @@ async function main(): Promise<void> {
   if (reportFallbackDigest) {
     reportFallbackDigest.start();
   } else {
-    logger.warn('ReportFallbackDigest not started — no entity memory for its marker');
+    // Without entity memory the digest tools can't keep a marker either, so queued notices
+    // would reach no one. Loud, not a warning.
+    logger.error('ReportFallbackDigest not started — no entity memory for its marker; queued notices will not reach the principal');
   }
 
   // Conversation checkpoint processor — System Layer subscriber that runs background
