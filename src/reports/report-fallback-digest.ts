@@ -11,7 +11,9 @@
 //
 // The marker advances only after the send succeeds. A failed send logs at error and the next
 // daily check tries again; a failed acknowledgement after a successful send logs at error,
-// and the same items repeat in the next summary rather than vanish.
+// and the same items repeat in the next summary rather than vanish. When the content filter
+// holds the summary, an item-free notice goes out instead, so one bad item cannot leave the
+// principal hearing nothing.
 //
 // Shaped like ApprovalExpirySweep: an interval with an in-flight guard, a first check shortly
 // after boot, and a tick() that tests can call directly.
@@ -44,6 +46,8 @@ export interface ReportFallbackDigestOptions {
 export interface ReportFallbackDigestResult {
   sent: boolean;
   items: number;
+  /** Set when the content filter held the summary: whether the item-free notice went out. */
+  noticeSent?: boolean;
 }
 
 const FIRST_TICK_DELAY_MS = 60_000;
@@ -149,12 +153,19 @@ export class ReportFallbackDigest {
       { isSystemNotification: true, skipNotificationOnBlock: true },
     );
     if (!result.success) {
-      // Not acknowledged, so the same items go out with tomorrow's check. A summary the
-      // content filter blocks every time will keep failing here; the reason says which.
+      // Not acknowledged, so the same items go out with tomorrow's check.
       logger.error(
-        { items: items.length, ageDays, blockedReason: result.blockedReason },
+        { items: items.length, ageDays, blockedReason: result.blockedReason, blockedRules: result.blockedRules },
         'ReportFallbackDigest: weekly summary not delivered — will retry tomorrow',
       );
+      // A content-filter hold (blockedRules set) can repeat every day: one item with a
+      // secret-like string, or a third-party address while the contact lookup is down,
+      // holds the whole summary. Tell the principal the items exist with a notice that
+      // carries no item text, so it cannot trip the same rule. The items stay queued for a
+      // digest, or for the principal to ask about.
+      if (result.blockedRules && result.blockedRules.length > 0) {
+        return { sent: false, items: items.length, noticeSent: await this.sendHeldNotice(this.opts.outboundGateway, ceoEmail, items.length, result.blockedRules) };
+      }
       return { sent: false, items: items.length };
     }
 
@@ -163,6 +174,33 @@ export class ReportFallbackDigest {
     }
     logger.info({ items: items.length, ageDays }, 'ReportFallbackDigest: weekly summary sent');
     return { sent: true, items: items.length };
+  }
+
+  /** Item-free notice for a summary the content filter held. Returns whether it was delivered. */
+  private async sendHeldNotice(
+    gateway: Pick<OutboundGateway, 'send'>,
+    ceoEmail: string,
+    count: number,
+    rules: string[],
+  ): Promise<boolean> {
+    const body = [
+      `${count} ${count === 1 ? 'item has' : 'items have'} waited more than ${this.opts.maxAgeDays} days for a digest.`,
+      `Curia's content filter held the summary (${rules.join(', ')}), so this note leaves the items out.`,
+      'Ask Curia to show the items waiting for your digest.',
+    ].join('\n');
+    const result = await gateway.send(
+      { channel: 'email', to: ceoEmail, subject: 'Curia: weekly summary', body },
+      { isSystemNotification: true, skipNotificationOnBlock: true },
+    );
+    if (!result.success) {
+      this.opts.logger.error(
+        { items: count, blockedReason: result.blockedReason },
+        'ReportFallbackDigest: the item-free notice was not delivered either — the principal has not heard about these items',
+      );
+      return false;
+    }
+    this.opts.logger.warn({ items: count, rules }, 'ReportFallbackDigest: summary held by the content filter — item-free notice sent');
+    return true;
   }
 
   private renderBody(items: ReportItem[]): string {

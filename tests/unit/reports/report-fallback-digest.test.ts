@@ -115,6 +115,47 @@ describe('ReportFallbackDigest.tick', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
+  // One item the content filter will not pass (a third-party address while the contact
+  // lookup is down, a secret-like string) must not leave the principal hearing nothing.
+  it('sends an item-free notice when the content filter holds the summary, and keeps the items queued', async () => {
+    const { digest, queue, send, logger } = makeDigest({
+      oldest: new Date(NOW.getTime() - 8 * DAY),
+      batches: [{ items: [item(1, 'One.'), item(2, 'Blocked send to dana@example.com.')], cursor: 'c1', hasMore: false }],
+    });
+    send
+      .mockResolvedValueOnce({ success: false, blockedReason: 'held', blockedRules: ['contact-data-leak'] })
+      .mockResolvedValueOnce({ success: true, messageId: 'm2' });
+
+    await expect(digest.tick()).resolves.toEqual({ sent: false, items: 2, noticeSent: true });
+
+    expect(send).toHaveBeenCalledTimes(2);
+    const [notice, noticeOpts] = send.mock.calls[1]!;
+    expect(notice).toMatchObject({ channel: 'email', to: 'principal@example.com', subject: 'Curia: weekly summary' });
+    expect(notice.body).toContain('2 items');
+    expect(notice.body).toContain('contact-data-leak');
+    // No item text, so the notice cannot trip the rule that held the summary.
+    expect(notice.body).not.toContain('One.');
+    expect(notice.body).not.toContain('dana@example.com');
+    expect(noticeOpts).toEqual({ isSystemNotification: true, skipNotificationOnBlock: true });
+    // Not acknowledged: the items stay queued until a digest or the principal reads them.
+    expect(queue.ack).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ blockedRules: ['contact-data-leak'] }), expect.any(String));
+  });
+
+  it('logs at error when the item-free notice is also not delivered', async () => {
+    const { digest, queue, send, logger } = makeDigest({
+      oldest: new Date(NOW.getTime() - 8 * DAY),
+      batches: [{ items: [item(1, 'One.')], cursor: 'c1', hasMore: false }],
+    });
+    send
+      .mockResolvedValueOnce({ success: false, blockedReason: 'held', blockedRules: ['secret-pattern'] })
+      .mockResolvedValueOnce({ success: false, blockedReason: 'email down' });
+
+    await expect(digest.tick()).resolves.toEqual({ sent: false, items: 1, noticeSent: false });
+    expect(queue.ack).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('notice'));
+  });
+
   it('logs at error when the send succeeded but the acknowledgement did not stick', async () => {
     const { digest, queue, logger } = makeDigest({
       oldest: new Date(NOW.getTime() - 8 * DAY),
