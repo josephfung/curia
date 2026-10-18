@@ -1,15 +1,15 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent, AuthorizationDecisionEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createOutboundNotification, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createPrincipalReport, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import {
   summarizeAuthorizationDecision,
   formatAuthorizationSubjectSummary,
 } from '../contacts/authorization.js';
-import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator, ChannelIdentity, PrincipalEmailRef } from '../contacts/types.js';
-import { isAutomatedKind, resolvePrincipalEmail } from '../contacts/types.js';
-import { principalNoteBody, principalNoteSubject } from './principal-note-notification.js';
+import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator, ChannelIdentity } from '../contacts/types.js';
+import { isAutomatedKind } from '../contacts/types.js';
+import { principalNoteBody } from './principal-note-notification.js';
 import { unknownSenderPolicy } from '../contacts/channel-sender-policy.js';
 import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
 import type { InboundScanner } from './inbound-scanner.js';
@@ -149,15 +149,9 @@ export interface DispatcherConfig {
    */
   bullpenService?: BullpenService;
   /**
-   * Where a note for the principal is emailed (prompt trim PR 5): the principal's verified
-   * email, as a live ref so a post-boot bind is seen. Empty or absent: the note is logged
-   * as undelivered and stays only on the agent.response audit record.
-   */
-  principalEmail?: string | PrincipalEmailRef;
-  /**
    * The principal's verified identities (the shared array index.ts refreshes), so a send
    * that reached the principal during a turn can be recognised and a note on that turn not
-   * emailed as well. Absent: every note is emailed.
+   * queued as well. Absent: every note is queued.
    */
   principalIdentities?: readonly ChannelIdentity[];
   /**
@@ -256,7 +250,6 @@ export class Dispatcher {
   private approvalTrigger?: ApprovalTriggerService;
   private escalationJudge?: EscalationJudge;
   private bullpenService?: BullpenService;
-  private principalEmail?: string | PrincipalEmailRef;
   private principalIdentities?: readonly ChannelIdentity[];
   private principalBacklog?: PrincipalBacklogSource;
 
@@ -278,7 +271,6 @@ export class Dispatcher {
     this.approvalTrigger = config.approvalTrigger;
     this.escalationJudge = config.escalationJudge;
     this.bullpenService = config.bullpenService;
-    this.principalEmail = config.principalEmail;
     this.principalIdentities = config.principalIdentities;
     this.principalBacklog = config.principalBacklog;
   }
@@ -1154,10 +1146,12 @@ export class Dispatcher {
   }
 
   /**
-   * Email a note for the principal cut out of a reply to someone else (prompt trim PR 5),
-   * as a `principal_note` system notification. Not sent when a send already reached the
-   * principal on this turn, which the note would repeat. Never fails the relay. Either way
-   * the note stays on the agent.response audit record; logs carry lengths, never its text.
+   * Queue a note for the principal cut out of a reply to someone else (prompt trim PR 5) as
+   * a `principal.report` item for their digest. It used to be emailed on its own; #2159
+   * moved it to the digest queue, so it needs no principal address. Not queued when a send
+   * already reached the principal on this turn, which the note would repeat. Never fails the
+   * relay. Either way the note stays on the agent.response audit record; logs carry lengths,
+   * never its text.
    */
   private async deliverPrincipalNote(
     event: AgentResponseEvent,
@@ -1172,12 +1166,7 @@ export class Dispatcher {
       noteLength: note.length,
     };
     if (routing.principalSendMade) {
-      this.logger.info(fields, 'Principal note not emailed — a send already reached the principal on this turn');
-      return;
-    }
-    const ceoEmail = resolvePrincipalEmail(this.principalEmail);
-    if (ceoEmail === '') {
-      this.logger.warn(fields, 'Principal note not emailed — no verified principal email is bound');
+      this.logger.info(fields, 'Principal note not queued — a send already reached the principal on this turn');
       return;
     }
     const source = {
@@ -1186,18 +1175,18 @@ export class Dispatcher {
       channelId: routing.channelId,
     };
     try {
-      await this.bus.publish('dispatch', createOutboundNotification({
-        notificationType: 'principal_note',
-        ceoEmail,
-        subject: principalNoteSubject(source),
-        body: principalNoteBody(note, source),
-        originalChannel: routing.channelId,
-        originalRecipientId: routing.senderId,
+      await this.bus.publish('dispatch', createPrincipalReport({
+        // The body already says who the reply went to and that they were not sent the note.
+        summary: principalNoteBody(note, source),
+        urgency: 'digest',
+        source: 'principal_note',
+        conversationId: routing.conversationId,
         parentEventId: event.id,
+        sourceLayer: 'dispatch',
       }));
-      this.logger.info(fields, 'Principal note emailed');
+      this.logger.info(fields, 'Principal note queued for the digest');
     } catch (err) {
-      this.logger.error({ err, ...fields }, 'Failed to publish the principal note notification — the note is only on the agent.response audit record');
+      this.logger.error({ err, ...fields }, 'Failed to queue the principal note — the note is only on the agent.response audit record');
     }
   }
 

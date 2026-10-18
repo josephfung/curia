@@ -2829,7 +2829,6 @@ async function main(): Promise<void> {
     approvalTrigger,
     escalationJudge,
     bullpenService,
-    principalEmail,
     principalIdentities,
     principalBacklog: createPrincipalBacklogSource(pool),
   });

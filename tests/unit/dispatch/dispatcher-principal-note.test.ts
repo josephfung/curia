@@ -1,17 +1,18 @@
-// A note for the principal cut out of a reply to someone else is emailed to the principal
-// as a `principal_note` notification, whatever happens to the relay (prompt trim PR 5).
+// A note for the principal cut out of a reply to someone else is queued for the principal's
+// digest as a `principal.report` item, whatever happens to the relay (prompt trim PR 5;
+// queued rather than emailed since #2159).
 import { describe, it, expect, vi } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { Logger } from '../../../src/logger.js';
-import type { ChannelIdentity, PrincipalEmailRef } from '../../../src/contacts/types.js';
+import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import {
   createAgentResponse,
   createToolResult,
   type BusEvent,
   type OutboundMessageEvent,
   type OutboundNoReplyEvent,
-  type OutboundNotificationEvent,
+  type PrincipalReportEvent,
 } from '../../../src/bus/events.js';
 
 const PRINCIPAL_EMAIL = 'avery@example.test';
@@ -26,7 +27,7 @@ function identity(channel: string, channelIdentifier: string, verified = true): 
   };
 }
 
-function harness(opts: { principalEmail?: string | PrincipalEmailRef; principalIdentities?: ChannelIdentity[] } = {}) {
+function harness(opts: { principalIdentities?: ChannelIdentity[] } = {}) {
   const published: BusEvent[] = [];
   const handlers = new Map<string, (event: BusEvent) => void | Promise<void>>();
   const bus = {
@@ -39,7 +40,6 @@ function harness(opts: { principalEmail?: string | PrincipalEmailRef; principalI
   const dispatcher = new Dispatcher({
     bus,
     logger,
-    principalEmail: 'principalEmail' in opts ? opts.principalEmail : { current: PRINCIPAL_EMAIL },
     principalIdentities: opts.principalIdentities ?? [identity('email', PRINCIPAL_EMAIL), identity('signal', '+15550001111')],
   });
   dispatcher.register();
@@ -90,29 +90,30 @@ async function sent(
   }));
 }
 
-const notifications = (events: BusEvent[]) =>
-  events.filter((e): e is OutboundNotificationEvent => e.type === 'outbound.notification');
+const reports = (events: BusEvent[]) =>
+  events.filter((e): e is PrincipalReportEvent => e.type === 'principal.report');
+const emails = (events: BusEvent[]) => events.filter((e) => e.type === 'outbound.notification');
 const relays = (events: BusEvent[]) =>
   events.filter((e): e is OutboundMessageEvent => e.type === 'outbound.message');
 
 describe('Dispatcher — note for the principal (prompt trim PR 5)', () => {
-  it('emails the note to the principal and relays the reply unchanged', async () => {
+  it('queues the note for the digest, emails nothing, and relays the reply unchanged', async () => {
     const { dispatcher, handlers, published } = harness();
     seedRouting(dispatcher, 'task-1');
     const responseId = await respond(handlers, { taskId: 'task-1', principalNote: NOTE });
 
-    const [notification] = notifications(published);
+    const [notification] = reports(published);
     expect(notification).toBeDefined();
+    expect(notification!.sourceLayer).toBe('dispatch');
     expect(notification!.payload).toMatchObject({
-      notificationType: 'principal_note',
-      ceoEmail: PRINCIPAL_EMAIL,
-      subject: "Note about Dana Whitfield's email",
-      originalChannel: 'email',
-      originalRecipientId: SENDER,
+      source: 'principal_note',
+      urgency: 'digest',
+      conversationId: CONVERSATION,
     });
-    expect(notification!.payload.body).toContain(NOTE);
-    expect(notification!.payload.body).toContain(`an email from Dana Whitfield (${SENDER})`);
+    expect(notification!.payload.summary).toContain(NOTE);
+    expect(notification!.payload.summary).toContain(`an email from Dana Whitfield (${SENDER})`);
     expect(notification!.parentEventId).toBe(responseId);
+    expect(emails(published)).toHaveLength(0);
 
     const [relay] = relays(published);
     expect(relay!.payload.content).toBe('Thursday at 10 works.');
@@ -121,32 +122,32 @@ describe('Dispatcher — note for the principal (prompt trim PR 5)', () => {
     expect(published.indexOf(notification!)).toBeLessThan(published.indexOf(relay!));
   });
 
-  it('still emails the note when the reply is a decline', async () => {
+  it('still queues the note when the reply is a decline', async () => {
     const { dispatcher, handlers, published } = harness();
     seedRouting(dispatcher, 'task-1');
     await respond(handlers, { taskId: 'task-1', content: '', suppressDelivery: true, principalNote: NOTE });
 
-    expect(notifications(published)).toHaveLength(1);
+    expect(reports(published)).toHaveLength(1);
     expect(relays(published)).toHaveLength(0);
     expect(published.some((e): e is OutboundNoReplyEvent => e.type === 'outbound.no_reply')).toBe(true);
   });
 
-  it('still emails the note when the reply-lock suppresses the relay', async () => {
+  it('still queues the note when the reply-lock suppresses the relay', async () => {
     const { dispatcher, handlers, published } = harness();
     seedRouting(dispatcher, 'task-1', { humanReplySent: true });
     await respond(handlers, { taskId: 'task-1', principalNote: NOTE });
 
-    expect(notifications(published)).toHaveLength(1);
+    expect(reports(published)).toHaveLength(1);
     expect(relays(published)).toHaveLength(0);
   });
 
-  it('does not email the note when a send already reached the principal on this turn', async () => {
+  it('does not queue the note when a send already reached the principal on this turn', async () => {
     const { dispatcher, handlers, published, logger } = harness();
     seedRouting(dispatcher, 'task-1');
     await sent(handlers, { taskId: 'task-1', toolName: 'signal-send', data: { delivered_to: '+15550001111' } });
     await respond(handlers, { taskId: 'task-1', principalNote: NOTE });
 
-    expect(notifications(published)).toHaveLength(0);
+    expect(reports(published)).toHaveLength(0);
     expect(relays(published)).toHaveLength(1);
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({ noteLength: NOTE.length }),
@@ -154,7 +155,7 @@ describe('Dispatcher — note for the principal (prompt trim PR 5)', () => {
     );
   });
 
-  it('emails the note when the turn sent only to someone else, or to an unverified principal identity', async () => {
+  it('queues the note when the turn sent only to someone else, or to an unverified principal identity', async () => {
     const { dispatcher, handlers, published } = harness({
       principalIdentities: [identity('email', PRINCIPAL_EMAIL), identity('email', 'old@example.test', false)],
     });
@@ -162,7 +163,7 @@ describe('Dispatcher — note for the principal (prompt trim PR 5)', () => {
     await sent(handlers, { taskId: 'task-1', toolName: 'email-send', data: { to: 'cfo@example.test, old@example.test' } });
     await respond(handlers, { taskId: 'task-1', principalNote: NOTE });
 
-    expect(notifications(published)).toHaveLength(1);
+    expect(reports(published)).toHaveLength(1);
   });
 
   it('marks only the turn whose send reached the principal', async () => {
@@ -172,22 +173,7 @@ describe('Dispatcher — note for the principal (prompt trim PR 5)', () => {
     await sent(handlers, { taskId: 'task-1', toolName: 'email-send', data: { to: PRINCIPAL_EMAIL } });
     await respond(handlers, { taskId: 'task-2', principalNote: NOTE });
 
-    expect(notifications(published)).toHaveLength(1);
-  });
-
-  it('logs and sends nothing when no principal email is bound', async () => {
-    const { dispatcher, handlers, published, logger } = harness({ principalEmail: { current: '' } });
-    seedRouting(dispatcher, 'task-1');
-    await respond(handlers, { taskId: 'task-1', principalNote: NOTE });
-
-    expect(notifications(published)).toHaveLength(0);
-    expect(relays(published)).toHaveLength(1);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ noteLength: NOTE.length }),
-      expect.stringContaining('no verified principal email'),
-    );
-    // Lengths only: the note can carry a sender's details.
-    for (const call of vi.mocked(logger.warn).mock.calls) expect(JSON.stringify(call)).not.toContain('CFO');
+    expect(reports(published)).toHaveLength(1);
   });
 
   it('names the sender by their identifier when they did not resolve', async () => {
@@ -195,9 +181,8 @@ describe('Dispatcher — note for the principal (prompt trim PR 5)', () => {
     seedRouting(dispatcher, 'task-1', { senderLabel: undefined });
     await respond(handlers, { taskId: 'task-1', principalNote: NOTE });
 
-    const [notification] = notifications(published);
-    expect(notification!.payload.subject).toBe(`Note about ${SENDER}'s email`);
-    expect(notification!.payload.body).toContain(`an email from ${SENDER}.`);
+    const [notification] = reports(published);
+    expect(notification!.payload.summary).toContain(`an email from ${SENDER}.`);
   });
 
   it('logs a failed note publish and still relays the reply', async () => {
@@ -205,17 +190,17 @@ describe('Dispatcher — note for the principal (prompt trim PR 5)', () => {
     const bus = (dispatcher as unknown as { bus: EventBus }).bus;
     const publish = vi.mocked(bus.publish);
     publish.mockImplementation(async (_layer, event) => {
-      if (event.type === 'outbound.notification') throw new Error('bus down');
+      if (event.type === 'principal.report') throw new Error('bus down');
       published.push(event);
     });
     seedRouting(dispatcher, 'task-1');
     await respond(handlers, { taskId: 'task-1', principalNote: NOTE });
 
-    expect(notifications(published)).toHaveLength(0);
+    expect(reports(published)).toHaveLength(0);
     expect(relays(published)).toHaveLength(1);
     expect(logger.error).toHaveBeenCalledWith(
       expect.objectContaining({ noteLength: NOTE.length }),
-      expect.stringContaining('Failed to publish the principal note notification'),
+      expect.stringContaining('Failed to queue the principal note'),
     );
   });
 
@@ -223,13 +208,13 @@ describe('Dispatcher — note for the principal (prompt trim PR 5)', () => {
     const { dispatcher, handlers, published } = harness();
     seedRouting(dispatcher, 'task-1');
     await respond(handlers, { taskId: 'task-1' });
-    expect(notifications(published)).toHaveLength(0);
+    expect(reports(published)).toHaveLength(0);
   });
 
   it('warns about a note on a response with no routing entry, and sends nothing', async () => {
     const { handlers, published, logger } = harness();
     await respond(handlers, { taskId: 'no-such-task', principalNote: NOTE });
-    expect(notifications(published)).toHaveLength(0);
+    expect(reports(published)).toHaveLength(0);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ noteLength: NOTE.length }),
       expect.stringContaining('no routing entry'),

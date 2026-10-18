@@ -1,14 +1,13 @@
-// The email that carries a note for the principal (prompt trim PR 5).
+// The text of a note for the principal (prompt trim PR 5), queued for their digest (#2159).
 //
 // When the coordinator answers someone other than the principal, anything it wants the
 // principal to hear goes in a <note_for_principal> block, which the runtime cuts out of
-// the reply (src/agents/principal-note.ts). The dispatcher delivers the note as a
-// `principal_note` system notification: email to the principal's verified address, through
-// the gateway's content checks, like approval alerts.
+// the reply (src/agents/principal-note.ts). The dispatcher queues the note as a
+// `principal.report` item for the principal's digest (#2159; it used to be its own email).
 //
 // Pure module. The sender's label and address are sender-controlled text (a self-claimed
 // display name, a From address), so they are folded onto one line and bounded before they
-// reach a subject line.
+// reach the digest line.
 
 /** What the principal needs to place the note: who the reply went to, and how. */
 export interface PrincipalNoteSource {
@@ -37,11 +36,6 @@ function oneLine(text: string): string {
 
 function channelNoun(channelId: string): readonly [string, string] {
   return CHANNEL_NOUN[channelId] ?? ['a', 'message'];
-}
-
-export function principalNoteSubject(source: PrincipalNoteSource): string {
-  const label = oneLine(source.senderLabel) || 'a sender';
-  return `Note about ${label}'s ${channelNoun(source.channelId)[1]}`;
 }
 
 export function principalNoteBody(note: string, source: PrincipalNoteSource): string {
