@@ -168,6 +168,7 @@ function buildContext(provider: LLMProvider, configs: AgentYamlConfig[]): AgentA
     } as unknown as AutonomyService,
     officeIdentityService: {
       compileSystemPromptBlock: () => '## Identity\nYou are Curia.',
+      compileWritesAsBlock: () => '## Identity\nYou write as Curia.',
     } as unknown as OfficeIdentityService,
     securityContextBlock: '## Security\nPolicy here.',
     timezone: 'America/Toronto',
@@ -233,7 +234,9 @@ describe('assembleAgent', () => {
     expect(specialist.systemPrompt).toContain('LOOKUP SKILL BODY');
 
     const rc = specialist.runtimeConfig;
-    expect(rc.officeIdentityService).toBeUndefined();
+    // Every agent gets the identity service (#2143); buildBaseSystemPrompt gives a
+    // specialist the writes-as block.
+    expect(rc.officeIdentityService).toBe(ctx.officeIdentityService);
     expect(rc.securityContextBlock).toBeUndefined();
     expect(rc.autonomyService).toBeUndefined();
     expect(rc.availableSpecialists).toBeUndefined();
@@ -386,6 +389,20 @@ describe('resolveAgentModelBinding', () => {
       expect((err as AgentAssemblyError).agentName).toBe('coordinator');
       expect((err as AgentAssemblyError).details).toMatchObject({ provider: 'anthropic' });
     }
+  });
+});
+
+describe('identity block per agent (#2143)', () => {
+  it('gives the coordinator the identity block and every other agent the writes-as block', async () => {
+    const configs = [coordinatorYaml(), specialistYaml()];
+    const ctx = buildContext(textProvider(), configs);
+    const [coordinator, specialist] = assembleAgents(configs, ctx);
+    const coordinatorPrompt = await buildBaseSystemPrompt(coordinator!.runtimeConfig, { now: FIXED_NOW, logger: ctx.logger });
+    const specialistPrompt = await buildBaseSystemPrompt(specialist!.runtimeConfig, { now: FIXED_NOW, logger: ctx.logger });
+    expect(coordinatorPrompt).toContain('You are Curia.');
+    expect(coordinatorPrompt).not.toContain('You write as Curia.');
+    expect(specialistPrompt).toContain('You write as Curia.');
+    expect(specialistPrompt).not.toContain('You are Curia.');
   });
 });
 

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import type { EventBus } from '../../../src/bus/bus.js';
 import { DEFAULT_OFFICE_IDENTITY } from '../../../src/identity/defaults.js';
-import { HONESTY_LINE, OfficeIdentityService, REGISTER_LINE } from '../../../src/identity/service.js';
+import { HONESTY_LINE, OfficeIdentityService, REGISTER_LINE, WRITES_AS_SCOPE_LINES } from '../../../src/identity/service.js';
 import type { OfficeIdentity } from '../../../src/identity/types.js';
 import type { Logger } from '../../../src/logger.js';
 import { CONTENT_LINE, LENGTH_EXCEPTION } from '../../../src/identity/length.js';
@@ -98,6 +98,26 @@ describe('OfficeIdentityService.compileSystemPromptBlock (#2143)', () => {
       expect(log.error).toHaveBeenCalledOnce();
     });
   }
+});
+
+describe('OfficeIdentityService.compileWritesAsBlock (#2143)', () => {
+  it('says who outward writing goes out from, scoped by the two fixed sentences', async () => {
+    const block = (await serviceWith(IDENTITY)).compileWritesAsBlock();
+    expect(block).toContain('**Who you write as:**');
+    expect(block).toContain(
+      'Anything you write for the principal or for anyone outside the office goes out from Alex Curia, Digital EA, and follows the contract below.',
+    );
+    for (const line of WRITES_AS_SCOPE_LINES) expect(block).toContain(line);
+    // The agent's own YAML says who it is; the block never claims it is the assistant.
+    expect(block).not.toContain('**Who you are:**');
+    expect(block).not.toContain('You are Alex Curia');
+  });
+
+  it('is otherwise the coordinator block: constraints, style, length, honesty, preferences', async () => {
+    const service = await serviceWith(IDENTITY);
+    const strip = (block: string): string => block.replace(/\*\*Who you (are|write as):\*\*\n(.+\n)+?\n/, '');
+    expect(strip(service.compileWritesAsBlock())).toBe(strip(service.compileSystemPromptBlock()));
+  });
 });
 
 describe('OfficeIdentityService validation (#2143)', () => {

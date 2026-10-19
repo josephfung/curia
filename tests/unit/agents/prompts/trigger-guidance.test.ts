@@ -25,7 +25,7 @@ import {
 } from '../../../../src/agents/prompts/debrief-recap-instruction.js';
 import { NO_MATCHING_TOOL_NEXT_STEP_LINES, WEB_FETCH_NOT_FOUND_LINES } from '../../../../src/agents/prompts/dead-end-guidance.js';
 import { TRIGGER_GUIDANCE_MARKER_SOURCES } from '../../../../src/agents/prompts/trigger-guidance-sources.js';
-import { HONESTY_LINE, REGISTER_LINE } from '../../../../src/identity/service.js';
+import { HONESTY_LINE, REGISTER_LINE, WRITES_AS_SCOPE_LINES } from '../../../../src/identity/service.js';
 import { CONTENT_LINE, LENGTH_EXCEPTION, turnLengthReminder } from '../../../../src/identity/length.js';
 import {
   extractPromptExfiltrationMarkers,
@@ -136,7 +136,7 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     ['weekly debrief recap', WEEKLY_DEBRIEF_RECAP_LINES.join('\n')],
     ['tool-registry no-match next_step', NO_MATCHING_TOOL_NEXT_STEP_LINES.join('\n')],
     ['web-fetch 404', WEB_FETCH_NOT_FOUND_LINES.join('\n')],
-    ['identity block fixed lines (#2143)', [REGISTER_LINE, HONESTY_LINE, LENGTH_EXCEPTION, CONTENT_LINE].join('\n')],
+    ['identity block fixed lines (#2143)', [REGISTER_LINE, HONESTY_LINE, LENGTH_EXCEPTION, CONTENT_LINE, ...WRITES_AS_SCOPE_LINES].join('\n')],
     ['length reminder, Signal brief (#2143)', turnLengthReminder('signal', 15)!],
   ];
 

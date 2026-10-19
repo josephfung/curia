@@ -19,7 +19,7 @@ import {
   PAUSED_NEXT_STEP_LINES,
 } from './delegate-result-guidance.js';
 import { TURN_GUIDANCE_TEXTS } from './turn-guidance.js';
-import { HONESTY_LINE, REGISTER_LINE } from '../../identity/service.js';
+import { HONESTY_LINE, REGISTER_LINE, WRITES_AS_SCOPE_LINES } from '../../identity/service.js';
 import { CONTENT_LINE, LENGTH_EXCEPTION, TURN_LENGTH_REMINDER_TEXTS } from '../../identity/length.js';
 
 /** Newline-joined guidance texts, one marker per line once extracted. */
@@ -44,6 +44,6 @@ export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
   // is injected at runtime, so its text is not in any agent's prompt template. The
   // operator's tone.style is deliberately not a source: it holds example lines Curia is
   // meant to imitate. Band texts shorter than the marker floor are skipped by extraction.
-  [REGISTER_LINE, HONESTY_LINE, LENGTH_EXCEPTION, CONTENT_LINE].join('\n'),
+  [REGISTER_LINE, HONESTY_LINE, LENGTH_EXCEPTION, CONTENT_LINE, ...WRITES_AS_SCOPE_LINES].join('\n'),
   ...TURN_LENGTH_REMINDER_TEXTS,
 ];
