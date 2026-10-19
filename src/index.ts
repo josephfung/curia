@@ -194,6 +194,8 @@ import { LateDelegationSweep } from './agents/late-delegation-sweep.js';
 import { ApprovalExpirySweep } from './autonomy/approval-expiry-sweep.js';
 import { ReportQueue } from './reports/report-queue.js';
 import { ReportFallbackDigest } from './reports/report-fallback-digest.js';
+import { SpotCheckBinder } from './reports/spot-check-binder.js';
+import { SpotCheckStore } from './reports/spot-check-store.js';
 import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
 import {
   DeliverableKgPromotionSubscriber,
@@ -2923,6 +2925,20 @@ async function main(): Promise<void> {
     },
   });
   reactionApprovalMapper.register();
+
+  // Spot-check binder (#2159): records which delivered message (and email thread) carried a
+  // digest's spot-check set, so a numbered reply resolves against the right digest. It needs
+  // the KG-backed config store (where the sets live), the gateway (to read an email's thread
+  // id) and the principal's identities (only their digests are graded).
+  if (entityMemory && outboundGateway && principalIdentities.length > 0) {
+    new SpotCheckBinder({
+      bus,
+      store: new SpotCheckStore(new ConfigStore(entityMemory, logger), logger),
+      gateway: outboundGateway,
+      principalIdentities,
+      logger,
+    }).register();
+  }
 
   // Resume-after-capture subscriber (#972) — listens for secret.captured (published by the
   // capture endpoint on a successful redeem) and re-enters the originating agent with a synthetic
