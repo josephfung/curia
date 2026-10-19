@@ -210,6 +210,19 @@ describe('DenyActionHandler', () => {
       expect(repo.resolveRow).not.toHaveBeenCalled();
     });
 
+    // Q1: a reference under the wrong key must not read as "no reference" and fall back to
+    // the sole pending approval.
+    it('fails closed on a reference passed under another key, resolving nothing', async () => {
+      const repo = routingRepo();
+      const result = await new DenyActionHandler().execute(makeCtx({
+        input: { approval_number: '3' }, actionLogRepo: repo, bus: makeMockBus(),
+      }));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('short_ref');
+      expect(repo.resolvePending).not.toHaveBeenCalled();
+      expect(repo.resolveRow).not.toHaveBeenCalled();
+    });
+
     it('falls back to the sole pending row only when short_ref is null', async () => {
       const repo = routingRepo();
       const result = await new DenyActionHandler().execute(makeCtx({

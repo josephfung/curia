@@ -557,6 +557,30 @@ describe('ActionLogRepo', () => {
       });
     });
 
+    // Q2: a retry with no reference would fall back to the sole pending approval, which may not
+    // be the one the principal named. Every not-found, expired or already-resolved error for a
+    // given reference says not to.
+    describe('a failed lookup by reference says not to retry without one', () => {
+      const NO_RETRY = 'Do not retry without a reference; ask the principal which approval they meant.';
+      const numbered = { ...pendingRow, approval_number: 3 };
+      it.each([
+        ['short_ref not_found', 'cal-99', [[], []]],
+        ['short_ref already_resolved', 'cal-1', [[], [{ ...pendingRow, outcome: 'approved' }]]],
+        ['short_ref expired', 'cal-1', [[], [{ ...pendingRow, expires_at: new Date(Date.now() - 1000) }]]],
+        ['number not_found', '7', [[], []]],
+        ['number already_resolved', '3', [[], [{ ...numbered, outcome: 'approved' }]]],
+        ['number expired', '3', [[], [{ ...numbered, expires_at: new Date(Date.now() - 1000) }]]],
+      ] as const)('%s', async (_label, ref, responses) => {
+        const { pool } = makeSequentialPool(responses as unknown as Record<string, unknown>[][]);
+        const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending(ref);
+        expect(result.found).toBe(false);
+        if (!result.found) {
+          expect(result.error).toContain(NO_RETRY);
+          expect(result.error).not.toMatch(/omit/i);
+        }
+      });
+    });
+
     it('resolvePending(a3f7c12b) still looks up by short_ref, never by number', async () => {
       const { pool, queries } = makeSequentialPool([[{ ...pendingRow, short_ref: 'a3f7c12b' }]]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
@@ -734,6 +758,7 @@ describe('ActionLogRepo', () => {
         const b = { ...pendingRow, id: 11, short_ref: 'b5e1d9a0', description: 'Invite Sam' };
         const { pool } = makePool([a, b]);
         const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending();
+        expect(result.found).toBe(false);
         if (!result.found) {
           expect(result.error).toContain('specify the reference');
           expect(result.error).toContain('a3f7c12b: Email Dana');
@@ -746,6 +771,7 @@ describe('ActionLogRepo', () => {
         const b = { ...pendingRow, id: 11, short_ref: 'b5e1d9a0', description: 'Invite Sam' };
         const { pool } = makePool([a, b]);
         const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending();
+        expect(result.found).toBe(false);
         if (!result.found) {
           expect(result.error).toContain('specify the approval number');
           expect(result.error).toContain('Approval 3 (a3f7c12b): Email Dana');
@@ -758,6 +784,7 @@ describe('ActionLogRepo', () => {
         const b = { ...pendingRow, id: 11, approval_number: 3, short_ref: 'b5e1d9a0', description: 'Invite Sam' };
         const { pool } = makeSequentialPool([[a, b]]);
         const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending('3');
+        expect(result.found).toBe(false);
         if (!result.found) {
           expect(result.reason).toBe('ambiguous');
           expect(result.error).toContain('Approval 3 (a3f7c12b');

@@ -721,16 +721,16 @@ export class ActionLogRepo {
         [shortRef],
       );
       if (any.rows.length === 0) {
-        return { found: false, reason: 'not_found', error: `No approval request found with reference '${shortRef}'` };
+        return { found: false, reason: 'not_found', error: `No approval request found with reference '${shortRef}'. ${NO_REF_RETRY_GUIDANCE}` };
       }
 
       const row = mapRow(any.rows[0]);
       if (row.outcome !== 'pending_approval') {
         // Row exists but has already resolved to a terminal outcome
-        return { found: false, reason: 'already_resolved', error: `Request '${shortRef}' is already resolved (outcome: ${row.outcome})` };
+        return { found: false, reason: 'already_resolved', error: `Request '${shortRef}' is already resolved (outcome: ${row.outcome}). ${NO_REF_RETRY_GUIDANCE}` };
       }
       // outcome is still pending_approval but expires_at <= now() (expired)
-      return { found: false, reason: 'expired', error: `Request '${shortRef}' has expired` };
+      return { found: false, reason: 'expired', error: `Request '${shortRef}' has expired. ${NO_REF_RETRY_GUIDANCE}` };
     }
 
     // No short_ref — try to auto-resolve to the sole pending row
@@ -791,13 +791,13 @@ export class ActionLogRepo {
       [approvalNumber],
     );
     if (any.rows.length === 0) {
-      return { found: false, reason: 'not_found', error: `No approval request found with number ${approvalNumber}` };
+      return { found: false, reason: 'not_found', error: `No approval request found with number ${approvalNumber}. ${NO_REF_RETRY_GUIDANCE}` };
     }
     const row = mapRow(any.rows[0]);
     if (row.outcome !== 'pending_approval') {
-      return { found: false, reason: 'already_resolved', error: `Approval ${approvalNumber} is already resolved (outcome: ${row.outcome})` };
+      return { found: false, reason: 'already_resolved', error: `Approval ${approvalNumber} is already resolved (outcome: ${row.outcome}). ${NO_REF_RETRY_GUIDANCE}` };
     }
-    return { found: false, reason: 'expired', error: `Approval ${approvalNumber} has expired` };
+    return { found: false, reason: 'expired', error: `Approval ${approvalNumber} has expired. ${NO_REF_RETRY_GUIDANCE}` };
   }
 
   /**
@@ -935,6 +935,14 @@ export class ActionLogRepo {
     return live.length === 1 ? live[0]! : null;
   }
 }
+
+/**
+ * Appended to every error for a reference that matched nothing usable (not found, expired,
+ * already resolved), and by approve-/deny-/dismiss-action to an unusable reference. A retry
+ * with no reference falls back to the sole pending approval, which may not be the one the
+ * principal named, so the coordinator is told to ask instead.
+ */
+export const NO_REF_RETRY_GUIDANCE = 'Do not retry without a reference; ask the principal which approval they meant.';
 
 // A ref of 1 to 3 digits is an approval number (#2159 Phase 3). short_refs are 8 hex
 // characters (generateShortRef), so an all-digit ref this short can only be a number.

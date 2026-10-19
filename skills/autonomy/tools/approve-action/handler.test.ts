@@ -344,6 +344,20 @@ describe('ApproveActionHandler', () => {
       expect(execLayer.invoke).not.toHaveBeenCalled();
     });
 
+    // Q1: a reference under the wrong key must not read as "no reference" and fall back to
+    // the sole pending approval.
+    it('fails closed on a reference passed under another key, resolving nothing', async () => {
+      const repo = routingRepo();
+      const execLayer = makeMockExecutionLayer();
+      const result = await new ApproveActionHandler().execute(makeCtx({
+        input: { number: 3 }, actionLogRepo: repo, bus: makeMockBus(), executionLayer: execLayer,
+      }));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('short_ref');
+      expect(repo.resolvePending).not.toHaveBeenCalled();
+      expect(execLayer.invoke).not.toHaveBeenCalled();
+    });
+
     it('falls back to the sole pending row only when short_ref is null', async () => {
       const repo = routingRepo();
       const execLayer = makeMockExecutionLayer();

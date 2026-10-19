@@ -30,11 +30,11 @@ export class ApproveActionHandler implements ToolHandler {
 
     try {
       // Resolve the pending row
-      // A short_ref that is present but unreadable fails closed here; only an absent one may
+      // A short_ref that is present but unreadable, or a ref under another key, fails closed here; only an absent one may
       // fall back to the sole pending approval (#2159 Phase 3, see approval-ref.ts).
-      const parsedRef = parseApprovalRefInput(ctx.input.short_ref);
+      const parsedRef = parseApprovalRefInput(ctx.input);
       if (!parsedRef.ok) {
-        ctx.log.warn({ shortRefType: typeof ctx.input.short_ref }, 'approve-action: unusable short_ref — refusing to resolve');
+        ctx.log.warn({ shortRefType: typeof ctx.input.short_ref, inputKeys: Object.keys(ctx.input) }, 'approve-action: unusable or mis-keyed approval reference — refusing to resolve');
         return { success: false, error: parsedRef.error };
       }
 
