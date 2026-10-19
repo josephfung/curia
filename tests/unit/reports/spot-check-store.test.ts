@@ -127,6 +127,14 @@ describe('SpotCheckStore', () => {
     expect(await store.hasSetCreatedAfter(NOW - 11 * HOUR, 5 * 60_000, 'none')).toBe(false);
   });
 
+  it('reports whether any set was drawn in a conversation', async () => {
+    const { store } = makeStore();
+    await store.add(makeSet({ conversationId: 'scheduler:job1:run1' }));
+
+    expect(await store.hasSetForConversation('scheduler:job1:run1')).toBe(true);
+    expect(await store.hasSetForConversation('scheduler:job1:run2')).toBe(false);
+  });
+
   it('prunes sets older than 14 days on the next add', async () => {
     const { store, stored } = makeStore();
     await store.add(makeSet({ id: 'old', createdAt: new Date(NOW - 15 * DAY).toISOString() }));

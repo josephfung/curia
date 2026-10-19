@@ -39,7 +39,7 @@ const BOUND_SET: SpotCheckSet = {
 
 describe('SpotCheckBinder', () => {
   let bus: { subscribe: ReturnType<typeof vi.fn>; publish: ReturnType<typeof vi.fn> };
-  let store: { bindDelivery: ReturnType<typeof vi.fn> };
+  let store: { bindDelivery: ReturnType<typeof vi.fn>; hasSetForConversation: ReturnType<typeof vi.fn> };
   let actionLogRepo: { markSampled: ReturnType<typeof vi.fn> };
   let gateway: { getEmailMessage: ReturnType<typeof vi.fn> };
   let logger: ReturnType<typeof createSilentLogger>;
@@ -50,7 +50,10 @@ describe('SpotCheckBinder', () => {
 
   beforeEach(() => {
     bus = { subscribe: vi.fn(), publish: vi.fn() };
-    store = { bindDelivery: vi.fn().mockResolvedValue({ kind: 'bound', set: BOUND_SET }) };
+    store = {
+      bindDelivery: vi.fn().mockResolvedValue({ kind: 'bound', set: BOUND_SET }),
+      hasSetForConversation: vi.fn().mockResolvedValue(false),
+    };
     gateway = { getEmailMessage: vi.fn().mockResolvedValue({ threadId: 'th1' }) };
     actionLogRepo = { markSampled: vi.fn().mockResolvedValue(1) };
     logger = createSilentLogger();
@@ -63,7 +66,7 @@ describe('SpotCheckBinder', () => {
 
     new SpotCheckBinder({
       bus: bus as unknown as EventBus,
-      store: store as unknown as Pick<SpotCheckStore, 'bindDelivery'>,
+      store: store as unknown as Pick<SpotCheckStore, 'bindDelivery' | 'hasSetForConversation'>,
       gateway: gateway as unknown as Pick<OutboundGateway, 'getEmailMessage'>,
       actionLogRepo: actionLogRepo as unknown as Pick<ActionLogRepo, 'markSampled'>,
       principalIdentities: [
@@ -228,6 +231,58 @@ describe('SpotCheckBinder', () => {
     expect(gateway.getEmailMessage).not.toHaveBeenCalled();
   });
 
+  // M2: a digest that drew a set but went out without its block (the agent dropped or reworded
+  // it) leaves those rows unshown. Say so at info, but only when a set was actually drawn for
+  // that digest's conversation, so a digest that drew nothing stays quiet.
+  describe('a digest delivered without its block', () => {
+    const NO_BLOCK = 'digest delivered without its spot-check block';
+
+    it.each(['scheduler:job1:run1', 'report-fallback:2026-10-19T18:00:00.000Z'])(
+      'logs at info when a set exists for the digest conversation %s',
+      async (conversationId) => {
+        store.hasSetForConversation.mockResolvedValue(true);
+
+        await handler(createOutboundDelivered({
+          channel: 'signal', recipientId: '+15555550100', content: "Today's recap", conversationId, messageId: '1710000000000',
+        }));
+
+        expect(store.hasSetForConversation).toHaveBeenCalledWith(conversationId);
+        expect(info).toHaveBeenCalledWith(expect.objectContaining({ conversationId }), NO_BLOCK);
+        expect(store.bindDelivery).not.toHaveBeenCalled();
+      },
+    );
+
+    it('stays quiet when no set was drawn for the digest', async () => {
+      await handler(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15555550100', content: "Today's recap", conversationId: 'scheduler:job1:run1', messageId: '1710000000000',
+      }));
+
+      expect(store.hasSetForConversation).toHaveBeenCalledWith('scheduler:job1:run1');
+      expect(info).not.toHaveBeenCalledWith(expect.anything(), NO_BLOCK);
+    });
+
+    it('does not read the store for a message that is not a digest, or not to the principal', async () => {
+      await handler(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15555550100', content: 'Dana confirmed Thursday.', conversationId: 'signal:+15555550100', messageId: '1',
+      }));
+      await handler(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15555550199', content: "Today's recap", conversationId: 'scheduler:job1:run1', messageId: '2',
+      }));
+
+      expect(store.hasSetForConversation).not.toHaveBeenCalled();
+    });
+
+    it('warns, and does not throw, when the store lookup fails', async () => {
+      store.hasSetForConversation.mockRejectedValue(new Error('db down'));
+
+      await expect(handler(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15555550100', content: "Today's recap", conversationId: 'scheduler:job1:run1', messageId: '1',
+      }))).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'scheduler:job1:run1' }), expect.any(String));
+    });
+  });
+
   it('still binds, without a thread id, and warns when the email lookup throws', async () => {
     gateway.getEmailMessage.mockRejectedValue(new Error('nylas down'));
 
@@ -304,7 +359,7 @@ describe('SpotCheckBinder wiring', () => {
     const store = { bindDelivery: vi.fn().mockResolvedValue({ kind: 'bound', set: BOUND_SET }) };
     new SpotCheckBinder({
       bus: bus as unknown as EventBus,
-      store: store as unknown as Pick<SpotCheckStore, 'bindDelivery'>,
+      store: store as unknown as Pick<SpotCheckStore, 'bindDelivery' | 'hasSetForConversation'>,
       gateway: { getEmailMessage: vi.fn() } as unknown as Pick<OutboundGateway, 'getEmailMessage'>,
       actionLogRepo: { markSampled: vi.fn().mockResolvedValue(1) } as unknown as Pick<ActionLogRepo, 'markSampled'>,
       principalIdentities: identities,

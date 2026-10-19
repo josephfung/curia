@@ -4,8 +4,8 @@
 // grade by replying "2 good". The numbers mean nothing outside the digest that showed
 // them, so each digest's map (number -> audit action id) and the message(s) that carried
 // it are kept here. When a reply arrives, the record-spot-check tool resolves the number
-// against the right digest: the one on the reply's email thread, or else the most recent
-// delivered one within a short window.
+// against the right digest: for an email reply, the one on its thread; for a chat reply, the
+// most recent delivered one within a short window.
 //
 // Storage is one JSON value, `{ sets: SpotCheckSet[] }`, under reports / spot_checks. The
 // config store has no delete or TTL, so every write prunes: sets older than 14 days are
@@ -260,6 +260,12 @@ export class SpotCheckStore {
       }
     }
     return best?.set ?? null;
+  }
+
+  /** Whether any stored set was drawn in `conversationId` (delivered or not). */
+  async hasSetForConversation(conversationId: string): Promise<boolean> {
+    const sets = await this.read();
+    return sets.some((s) => s.conversationId === conversationId);
   }
 
   /**

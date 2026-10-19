@@ -13,8 +13,7 @@
 //
 // Failure policy: binding is best-effort bookkeeping. A failure is logged and never thrown,
 // because it runs inside a bus handler and must not disturb delivery. The cost of a missed
-// bind is bounded: a reply on a thread falls back to the "most recent delivered digest within
-// 24 hours" match, or the tool asks the principal.
+// bind is bounded: the reply's numbers do not resolve, and the tool asks the principal.
 
 import type { EventBus } from '../bus/bus.js';
 import type { OutboundDeliveredEvent } from '../bus/events.js';
@@ -28,9 +27,15 @@ import { ConfigStore } from '../memory/config-store.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import { SPOT_CHECK_HEADER } from './spot-check-sampler.js';
 
+/**
+ * Conversations a digest is composed in: a scheduled report run, or the fallback digest. Only
+ * these can have drawn a spot-check set, so only these are checked for a dropped block.
+ */
+const DIGEST_CONVERSATION_PREFIXES = ['scheduler:', 'report-fallback:'] as const;
+
 export interface SpotCheckBinderDeps {
   bus: EventBus;
-  store: Pick<SpotCheckStore, 'bindDelivery'>;
+  store: Pick<SpotCheckStore, 'bindDelivery' | 'hasSetForConversation'>;
   gateway: Pick<OutboundGateway, 'getEmailMessage'>;
   /** Marks a bound set's rows sampled, taking them out of the pool. */
   actionLogRepo: Pick<ActionLogRepo, 'markSampled'>;
@@ -40,7 +45,7 @@ export interface SpotCheckBinderDeps {
 
 export class SpotCheckBinder {
   private readonly bus: EventBus;
-  private readonly store: Pick<SpotCheckStore, 'bindDelivery'>;
+  private readonly store: Pick<SpotCheckStore, 'bindDelivery' | 'hasSetForConversation'>;
   private readonly gateway: Pick<OutboundGateway, 'getEmailMessage'>;
   private readonly actionLogRepo: Pick<ActionLogRepo, 'markSampled'>;
   private readonly principalIdentities: readonly ChannelIdentity[];
@@ -67,8 +72,11 @@ export class SpotCheckBinder {
     const { channel, recipientId, content, conversationId, messageId } = event.payload;
 
     // A digest that lost the block cannot be answered by number, so it must not be bound.
-    // Checked first: it keeps everything below (logging included) off every other message.
-    if (!content.includes(SPOT_CHECK_HEADER)) return;
+    // Checked first: it keeps everything below off every other message.
+    if (!content.includes(SPOT_CHECK_HEADER)) {
+      await this.noteDroppedBlock(channel, recipientId, conversationId);
+      return;
+    }
 
     // The block went out but cannot be tied to its set (a queue-flushed send carries no
     // conversationId). The principal now holds numbers nothing can resolve: say so.
@@ -84,8 +92,9 @@ export class SpotCheckBinder {
     if (!isPrincipalIdentity(channel, recipientId, this.principalIdentities)) return;
 
     try {
-      // Email replies resolve by thread, so look the thread up. If that fails, bind anyway:
-      // the reply then resolves through the 24 hour "most recent digest" match instead.
+      // Email replies resolve only by thread, so look the thread up. If that fails, bind anyway:
+      // a chat reply can still resolve against the set (24 hour match) and its rows are marked
+      // shown; an email reply on this thread will not resolve, and the tool asks the principal.
       let threadId: string | undefined;
       if (channel === 'email') {
         try {
@@ -123,6 +132,25 @@ export class SpotCheckBinder {
         { err, conversationId, messageId },
         'spot-check binder: failed to bind the delivery to its spot-check set',
       );
+    }
+  }
+
+  /**
+   * A principal-bound digest went out without the block. If the digest had drawn a set, the
+   * agent dropped or reworded the block, and those rows go unshown (they stay in the pool):
+   * worth an info line. A digest that drew nothing is normal, so the store is read only for a
+   * digest conversation, and the line is logged only when a set exists for it.
+   */
+  private async noteDroppedBlock(channel: string, recipientId: string, conversationId: string | undefined): Promise<void> {
+    if (!conversationId || !DIGEST_CONVERSATION_PREFIXES.some((p) => conversationId.startsWith(p))) return;
+    if (!isPrincipalIdentity(channel, recipientId, this.principalIdentities)) return;
+    try {
+      if (await this.store.hasSetForConversation(conversationId)) {
+        this.log.info({ conversationId, channel }, 'digest delivered without its spot-check block');
+      }
+    } catch (err) {
+      // Diagnostic only; delivery is unaffected.
+      this.log.warn({ err, conversationId }, 'spot-check binder: could not check for a dropped spot-check block');
     }
   }
 
