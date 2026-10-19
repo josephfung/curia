@@ -9,6 +9,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { RESOLVED_BY } from '../../../../src/autonomy/action-log-types.js';
+import { parseApprovalRefInput } from '../../../_shared/approval-ref.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 
@@ -22,11 +23,15 @@ export class DenyActionHandler implements ToolHandler {
     }
 
     try {
-      const shortRef = typeof ctx.input.short_ref === 'string' && ctx.input.short_ref.trim()
-        ? ctx.input.short_ref.trim()
-        : undefined;
+      // A short_ref that is present but unreadable fails closed here; only an absent one may
+      // fall back to the sole pending approval (#2159 Phase 3, see approval-ref.ts).
+      const parsedRef = parseApprovalRefInput(ctx.input.short_ref);
+      if (!parsedRef.ok) {
+        ctx.log.warn({ shortRefType: typeof ctx.input.short_ref }, 'deny-action: unusable short_ref — refusing to resolve');
+        return { success: false, error: parsedRef.error };
+      }
 
-      const resolved = await ctx.actionLogRepo.resolvePending(shortRef);
+      const resolved = await ctx.actionLogRepo.resolvePending(parsedRef.ref);
       if (!resolved.found) {
         return { success: false, error: resolved.error };
       }

@@ -170,4 +170,62 @@ describe('DismissActionHandler', () => {
     expect(repo.resolvePending).toHaveBeenCalledWith('3');
     expect(repo.resolveRow).toHaveBeenCalledWith(33, 'resolved_externally', 'coordinator');
   });
+
+  // Review fix F1 (#2159 Phase 3): a model may relay "approve 3" as the JSON number 3. Reading
+  // only strings dropped it to undefined, and resolvePending(undefined) then picked the SOLE
+  // pending approval, which could be a different one. A present short_ref must never fall back.
+  describe('short_ref input handling', () => {
+    const SOLE = { ...PENDING_ROW, id: 50, shortRef: 'b5e1d9a0', approvalNumber: 5 };
+    const NUMBERED = { ...PENDING_ROW, id: 33, shortRef: 'a3f7c12b', approvalNumber: 3 };
+    // resolvePending stand-in: no ref means "the sole pending row", '3' means approval 3.
+    function routingRepo(): ActionLogRepo {
+      return makeMockRepo({
+        resolvePending: vi.fn().mockImplementation(async (ref?: string) => {
+          if (ref === undefined) return { found: true, row: SOLE };
+          if (ref === '3') return { found: true, row: NUMBERED };
+          return { found: false, reason: 'not_found', error: `No approval request found with number ${ref}` };
+        }),
+      });
+    }
+
+    it('resolves a numeric short_ref (3) to approval 3, not the sole pending row', async () => {
+      const repo = routingRepo();
+      const result = await new DismissActionHandler().execute(makeCtx({
+        input: { short_ref: 3 }, actionLogRepo: repo, bus: makeMockBus(),
+      }));
+      expect(result.success).toBe(true);
+      expect(repo.resolvePending).toHaveBeenCalledWith('3');
+      expect(repo.resolveRow).toHaveBeenCalledWith(33, 'resolved_externally', 'coordinator');
+    });
+
+    it.each([
+      ['an empty string', ''],
+      ['whitespace', '   '],
+      ['an object', {}],
+      ['a boolean', true],
+      ['a negative number', -1],
+      ['a fractional number', 2.5],
+      ['NaN', Number.NaN],
+      ['Infinity', Number.POSITIVE_INFINITY],
+    ])('fails closed on %s, resolving nothing', async (_label, shortRef) => {
+      const repo = routingRepo();
+      const result = await new DismissActionHandler().execute(makeCtx({
+        input: { short_ref: shortRef }, actionLogRepo: repo, bus: makeMockBus(),
+      }));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/short_ref/);
+      expect(repo.resolvePending).not.toHaveBeenCalled();
+      expect(repo.resolveRow).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the sole pending row only when short_ref is null', async () => {
+      const repo = routingRepo();
+      const result = await new DismissActionHandler().execute(makeCtx({
+        input: { short_ref: null }, actionLogRepo: repo, bus: makeMockBus(),
+      }));
+      expect(result.success).toBe(true);
+      expect(repo.resolvePending).toHaveBeenCalledWith(undefined);
+      expect(repo.resolveRow).toHaveBeenCalledWith(50, 'resolved_externally', 'coordinator');
+    });
+  });
 });
