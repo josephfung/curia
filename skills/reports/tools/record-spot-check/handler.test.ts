@@ -52,6 +52,7 @@ function makeCtx(over: Partial<ToolContext> = {}) {
     .mockResolvedValue(true);
   const log = createSilentLogger();
   const warn = vi.spyOn(log, 'warn');
+  const error = vi.spyOn(log, 'error');
   const input = over.input ?? { verdicts: [{ n: 2, verdict: 'bad', reason: 'that was a renewal notice' }] };
   const ctx = {
     input,
@@ -65,7 +66,7 @@ function makeCtx(over: Partial<ToolContext> = {}) {
     entityMemory: { findEntities: vi.fn(), getFacts: vi.fn(), storeFact: vi.fn() } as unknown as EntityMemory,
     ...over,
   } as unknown as ToolContext;
-  return { ctx, recordPrincipalVerdict, warn };
+  return { ctx, recordPrincipalVerdict, warn, error };
 }
 
 beforeEach(() => {
@@ -85,7 +86,7 @@ describe('RecordSpotCheckHandler', () => {
     // Numbers and summaries only: the action-log id is never returned.
     expect(result).toEqual({
       success: true,
-      data: { recorded: [{ n: 2, summary: 'Archived an email from Sam.', verdict: 'bad' }] },
+      data: { recorded: [{ n: 2, summary: 'Archived an email from Sam.', verdict: 'bad' }], skipped: [] },
     });
   });
 
@@ -239,7 +240,9 @@ describe('RecordSpotCheckHandler', () => {
     expect(recordPrincipalVerdict).toHaveBeenCalledWith(102, false, reason);
   });
 
-  it('warns and leaves a number out of recorded when its row is no longer a pool row', async () => {
+  // F5: a number whose row is gone or no longer a pool row is reported back as skipped, so the
+  // coordinator can tell the principal rather than claim it was noted.
+  it('reports a number as skipped when its row is no longer a pool row', async () => {
     const { ctx, recordPrincipalVerdict, warn } = makeCtx({
       input: { verdicts: [{ n: 1, verdict: 'good' }, { n: 2, verdict: 'bad' }] },
     });
@@ -249,12 +252,74 @@ describe('RecordSpotCheckHandler', () => {
 
     expect(result).toEqual({
       success: true,
-      data: { recorded: [{ n: 2, summary: 'Archived an email from Sam.', verdict: 'bad' }] },
+      data: {
+        recorded: [{ n: 2, summary: 'Archived an email from Sam.', verdict: 'bad' }],
+        skipped: [{ n: 1, reason: 'not a gradable action any more' }],
+      },
     });
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({ n: 1, actionLogId: 101, setId: 'set-1' }),
       expect.any(String),
     );
+  });
+
+  it('fails with "Nothing was recorded" when every number is skipped', async () => {
+    const { ctx, recordPrincipalVerdict } = makeCtx({
+      input: { verdicts: [{ n: 1, verdict: 'good' }, { n: 2, verdict: 'bad' }] },
+    });
+    recordPrincipalVerdict.mockResolvedValue(false);
+
+    const result = await new RecordSpotCheckHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    const message = (result as { error: string }).error;
+    expect(message).toMatch(/^Nothing was recorded: /);
+    expect(message).toContain('1 and 2');
+    expect(message).toContain('not a gradable action any more');
+  });
+
+  // F4: the writes are independent UPDATEs, so a throw on one leaves the earlier ones
+  // committed. The result must say which numbers landed and which did not.
+  it('names the recorded and the failed numbers when a later write throws', async () => {
+    const { ctx, recordPrincipalVerdict, error } = makeCtx({
+      input: { verdicts: [{ n: 1, verdict: 'good' }, { n: 2, verdict: 'bad' }] },
+    });
+    recordPrincipalVerdict.mockImplementation(async (id) => {
+      if (id === 102) throw new Error('connection reset');
+      return true;
+    });
+
+    const result = await new RecordSpotCheckHandler().execute(ctx);
+
+    expect(recordPrincipalVerdict).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(false);
+    const message = (result as { error: string }).error;
+    expect(message).toContain('Recorded: 1.');
+    expect(message).toContain('Failed: 2 (connection reset).');
+    expect(message).toContain('Resending the failed numbers is safe');
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ setId: 'set-1', recorded: [1], failed: [{ n: 2, error: 'connection reset' }] }),
+      expect.any(String),
+    );
+  });
+
+  it('still writes the later verdicts when an earlier write throws, and names them all', async () => {
+    const { ctx, recordPrincipalVerdict } = makeCtx({
+      input: { verdicts: [{ n: 1, verdict: 'good' }, { n: 2, verdict: 'bad' }, { n: 3, verdict: 'good' }] },
+    });
+    recordPrincipalVerdict.mockImplementation(async (id) => {
+      if (id === 101) throw new Error('timeout');
+      return id !== 103;
+    });
+
+    const result = await new RecordSpotCheckHandler().execute(ctx);
+
+    expect(recordPrincipalVerdict).toHaveBeenCalledTimes(3);
+    const message = (result as { error: string }).error;
+    expect(result.success).toBe(false);
+    expect(message).toContain('Recorded: 2.');
+    expect(message).toContain('Failed: 1 (timeout).');
+    expect(message).toContain('Skipped: 3 (not a gradable action any more).');
   });
 
   it('returns success false instead of throwing when the store read fails', async () => {

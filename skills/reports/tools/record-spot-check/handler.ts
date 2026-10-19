@@ -28,6 +28,34 @@ import { ConfigStore } from '../../../../src/memory/config-store.js';
 
 const MAX_REASON_LENGTH = 500;
 
+/** Why a number was left out: its action-log row is gone or is no longer a sample-pool row. */
+const SKIPPED_REASON = 'not a gradable action any more';
+
+/** "1", "1 and 2", "1, 2 and 3". */
+function numberList(items: readonly (number | string)[]): string {
+  if (items.length <= 1) return items.map(String).join('');
+  return `${items.slice(0, -1).join(', ')} and ${String(items[items.length - 1])}`;
+}
+
+/**
+ * The error for a run where at least one write threw (F4). Names what landed and what did
+ * not, so the coordinator neither claims the whole set nor reports a total failure, and says
+ * a resend is safe because a later verdict replaces an earlier one.
+ */
+function partialFailureError(
+  recorded: ReadonlyArray<{ n: number }>,
+  failed: ReadonlyArray<{ n: number; error: string }>,
+  skipped: ReadonlyArray<{ n: number }>,
+): string {
+  const parts = [
+    `Recorded: ${recorded.length > 0 ? numberList(recorded.map((r) => r.n)) : 'none'}.`,
+    `Failed: ${numberList(failed.map((f) => `${f.n} (${f.error})`))}.`,
+  ];
+  if (skipped.length > 0) parts.push(`Skipped: ${numberList(skipped.map((r) => r.n))} (${SKIPPED_REASON}).`);
+  parts.push('Resending the failed numbers is safe: a later verdict replaces an earlier one.');
+  return `record-spot-check did not record every verdict. ${parts.join(' ')}`;
+}
+
 const NOT_TYPED_ERROR =
   'record-spot-check only records the numbers and verdicts the principal typed in this message. Nothing was recorded.';
 
@@ -141,26 +169,59 @@ export class RecordSpotCheckHandler implements ToolHandler {
       const matched = matchVerdicts(resolved.set, parsed.verdicts);
       if (!matched.ok) return { success: false, error: matched.error };
 
+      // The writes are independent UPDATEs, not one transaction, so each verdict's outcome is
+      // collected on its own (F4, F5): a throw on one leaves the earlier ones committed, and the
+      // result has to say exactly which numbers landed. A later verdict on the same action
+      // replaces an earlier one (recordPrincipalVerdict), so resending a failed number is safe.
       const recorded: Array<{ n: number; summary: string; verdict: 'good' | 'bad' }> = [];
+      const skipped: Array<{ n: number; reason: string }> = [];
+      const failed: Array<{ n: number; error: string }> = [];
       for (const m of matched.matched) {
-        const written = await actionLogRepo.recordPrincipalVerdict(m.item.actionLogId, m.verdict === 'good', m.reason ?? null);
+        let written: boolean;
+        try {
+          written = await actionLogRepo.recordPrincipalVerdict(m.item.actionLogId, m.verdict === 'good', m.reason ?? null);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          ctx.log.error(
+            { err, setId: resolved.set.id, n: m.n, actionLogId: m.item.actionLogId },
+            'record-spot-check: writing one verdict failed; continuing with the rest',
+          );
+          failed.push({ n: m.n, error: message });
+          continue;
+        }
         if (!written) {
           // The row was deleted or is no longer a pool row. The other verdicts still stand; this
-          // number is left out of `recorded` so the coordinator does not claim it was noted.
+          // number goes back as skipped so the coordinator tells the principal instead of
+          // claiming it was noted.
           ctx.log.warn(
             { setId: resolved.set.id, n: m.n, actionLogId: m.item.actionLogId },
             'record-spot-check: action log row is not a sample-pool row; verdict not recorded',
           );
+          skipped.push({ n: m.n, reason: SKIPPED_REASON });
           continue;
         }
         recorded.push({ n: m.n, summary: m.item.summary, verdict: m.verdict });
       }
 
-      ctx.log.info(
-        { setId: resolved.set.id, requested: matched.matched.length, recorded: recorded.length },
-        'record-spot-check: recorded principal verdicts',
-      );
-      return { success: true, data: { recorded } };
+      const outcome = {
+        setId: resolved.set.id,
+        recorded: recorded.map((r) => r.n),
+        skipped: skipped.map((r) => r.n),
+        failed,
+      };
+      if (failed.length > 0) {
+        ctx.log.error(outcome, 'record-spot-check: some verdicts were not recorded because of an error');
+        return { success: false, error: partialFailureError(recorded, failed, skipped) };
+      }
+      if (recorded.length === 0) {
+        ctx.log.warn(outcome, 'record-spot-check: nothing recorded; every number was skipped');
+        return {
+          success: false,
+          error: `Nothing was recorded: skipped ${numberList(skipped.map((r) => r.n))} (${SKIPPED_REASON}).`,
+        };
+      }
+      ctx.log.info(outcome, 'record-spot-check: recorded principal verdicts');
+      return { success: true, data: { recorded, skipped } };
     } catch (err) {
       ctx.log.error({ err }, 'record-spot-check: failed to record verdicts');
       const message = err instanceof Error ? err.message : String(err);
