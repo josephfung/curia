@@ -202,6 +202,13 @@ export interface AgentConfig {
   /** Optional autonomy service — when provided, the autonomy block is injected
    *  into the effective system prompt on every task. Only the coordinator receives this. */
   autonomyService?: AutonomyService;
+  /** Delegated sign-in verifications (#2017). When provided, the live verifications are
+   *  injected into the coordinator's and ceo-inbox's system string on every turn
+   *  (src/agents/system-prompt.ts). Granted to those two agents only. */
+  verification?: import('../verification/index.js').VerificationRuntime;
+  /** Whether a browser session id is still live, for the verification block. Absent when
+   *  no browser service runs, in which case every session reads as gone. */
+  browserSessionAlive?: (sessionId: string) => boolean;
   /** Optional identity service — when provided, the freshly-compiled identity block is
    *  PREPENDED to the system prompt as a preamble (above the body) on every task turn.
    *  This enables hot-reload: identity changes via the API or file watcher take effect

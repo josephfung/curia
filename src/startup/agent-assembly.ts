@@ -46,6 +46,7 @@ import type { ConversationEntityState } from '../entity-context/conversation-ent
 import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import { DEFAULT_ERROR_BUDGET } from '../errors/types.js';
+import type { VerificationRuntime } from '../verification/index.js';
 
 /** Discovery tools injected for agents with `allow_discovery: true`. */
 const DISCOVERY_TOOLS = ['tool-registry', 'skill-activate'] as const;
@@ -202,6 +203,8 @@ export type SystemPromptSourceContext = Pick<
   | 'principalIdentities'
   | 'principalPrimaryEmail'
   | 'agentContactId'
+  | 'verification'
+  | 'browserSessionAlive'
 >;
 
 /**
@@ -221,6 +224,8 @@ export const SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS = [
   'principalIdentities',
   'principalPrimaryEmail',
   'agentContactId',
+  'verification',
+  'browserSessionAlive',
 ] as const satisfies readonly (keyof SystemPromptSourceContext)[];
 
 type UnlistedSourceContextKey = Exclude<
@@ -284,6 +289,10 @@ export function resolveSystemPromptSources(
     // Coordinator-only own contact ID in "## Your Contact Details". Specialists keep
     // the ${agent_contact_id} bootstrap placeholder.
     agentContactId: isCoordinator ? ctx.agentContactId : undefined,
+    // Live sign-in verifications (#2017): coordinator and ceo-inbox only. ceo-inbox reads the
+    // code emails; no other agent is told a sign-in is in flight.
+    verification: isCoordinator || agentConfig.name === 'ceo-inbox' ? ctx.verification : undefined,
+    browserSessionAlive: isCoordinator || agentConfig.name === 'ceo-inbox' ? ctx.browserSessionAlive : undefined,
     // Map YAML snake_case to AgentConfig camelCase, defaulting omitted fields.
     errorBudget: agentConfig.error_budget ? {
       maxTurns: agentConfig.error_budget.max_turns ?? DEFAULT_ERROR_BUDGET.maxTurns,
@@ -317,6 +326,10 @@ export interface AgentAssemblyContext {
   principalPrimaryEmail: PrincipalPrimaryEmailRef;
   agentContactId?: string;
   principalContactId?: string;
+  /** Delegated sign-in verifications (#2017); injected per turn into the coordinator and ceo-inbox. */
+  verification?: VerificationRuntime;
+  /** True while a browser session id is live. Absent when no browser service runs. */
+  browserSessionAlive?: (sessionId: string) => boolean;
   defaultDelegateTimeoutMs?: number;
   lateDelivery: { ttlMinutes: number; sweepIntervalMinutes: number };
   bullpenService?: BullpenService;

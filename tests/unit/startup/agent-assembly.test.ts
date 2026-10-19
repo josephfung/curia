@@ -26,6 +26,7 @@ import { createAgentTask, type ContextBudgetEvent } from '../../../src/bus/event
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import type { OfficeIdentityService } from '../../../src/identity/service.js';
 import { createLogger } from '../../../src/logger.js';
+import type { VerificationRuntime } from '../../../src/verification/index.js';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
@@ -314,7 +315,7 @@ describe('resolveSystemPromptSources', () => {
   const SOURCE_FIELDS = [
     'agentId', 'systemPrompt', 'officeIdentityService', 'securityContextBlock', 'availableSpecialists',
     'autonomyService', 'timezone', 'channelAccounts', 'agentContactId', 'principalIdentities',
-    'principalPrimaryEmail', 'errorBudget',
+    'principalPrimaryEmail', 'errorBudget', 'verification', 'browserSessionAlive',
   ] as const;
 
   it('is exactly the prompt half of the runtime config assembleAgent builds', () => {
@@ -358,6 +359,20 @@ describe('resolveSystemPromptSources', () => {
     expect(autonomyFor(configs[0]!)).toBe(ctx.autonomyService);
     expect(autonomyFor(configs[1]!)).toBeUndefined();
     expect(autonomyFor(configs[2]!)).toBe(ctx.autonomyService);
+  });
+
+  it('gives the verification runtime and liveness lookup to the coordinator and ceo-inbox only', () => {
+    const configs = [coordinatorYaml(), specialistYaml(), specialistYaml({ name: 'ceo-inbox' })];
+    const verification = {} as unknown as VerificationRuntime;
+    const browserSessionAlive = () => true;
+    const ctx = { ...buildContext(textProvider(), configs), verification, browserSessionAlive };
+    const sourcesFor = (config: AgentYamlConfig) => resolveSystemPromptSources(config, 'body', ctx);
+    expect(sourcesFor(configs[0]!).verification).toBe(verification);
+    expect(sourcesFor(configs[0]!).browserSessionAlive).toBe(browserSessionAlive);
+    expect(sourcesFor(configs[1]!).verification).toBeUndefined();
+    expect(sourcesFor(configs[1]!).browserSessionAlive).toBeUndefined();
+    expect(sourcesFor(configs[2]!).verification).toBe(verification);
+    expect(sourcesFor(configs[2]!).browserSessionAlive).toBe(browserSessionAlive);
   });
 
   it('reads the roster only through specialistSummary, so a snapshot adapter is enough', () => {

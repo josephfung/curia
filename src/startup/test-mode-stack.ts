@@ -229,6 +229,13 @@ export interface TestModeStackOptions {
    * subscribes here.
    */
   observeBus?: (bus: EventBus) => void;
+  /**
+   * Which browser session ids read as alive in the per-turn sign-in verification block
+   * (#2017). There is no browser service in this stack, so without it every session reads
+   * as gone; a suite that seeds a verification and stubs `web-browser` passes the ids its
+   * stub honours.
+   */
+  browserSessionAlive?: (sessionId: string) => boolean;
   /** Override for fixtures. Default <repo>/agents and <repo>/skills. */
   agentsDir?: string;
   skillsDir?: string;
@@ -836,6 +843,9 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       principalPrimaryEmail,
       agentContactId,
       principalContactId: principalContact?.id,
+      // The per-turn sign-in verification block (#2017), same gating as production.
+      verification,
+      browserSessionAlive: options.browserSessionAlive,
       defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
       lateDelivery: { ttlMinutes: lateDelivery.ttlMinutes, sweepIntervalMinutes: lateDelivery.sweepIntervalMinutes },
       bullpenService: readOnlyBullpen(

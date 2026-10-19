@@ -2577,6 +2577,8 @@ async function main(): Promise<void> {
   // Pass 2: assemble each agent (pins, SKILL.md, interpolation, model binding,
   // coordinator-only blocks) and start its runtime. All of that lives in
   // assembleAgent() so smoke, scenarios and the render script get the same agents.
+  // `browserService` is a reassigned `let`; the liveness closure needs a stable binding.
+  const assemblyBrowserService = browserService;
   const assemblyContext: AgentAssemblyContext = {
     logger,
     bus,
@@ -2603,6 +2605,12 @@ async function main(): Promise<void> {
     principalPrimaryEmail,
     agentContactId: agentIdentityContactId,
     principalContactId: principalContact?.id,
+    // Delegated sign-in verifications (#2017): coordinator and ceo-inbox get the live list
+    // injected per turn. A session is alive while the browser service still holds it.
+    verification: verificationRuntime,
+    browserSessionAlive: assemblyBrowserService
+      ? (sessionId: string) => assemblyBrowserService.getSession(sessionId) !== undefined
+      : undefined,
     defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
     lateDelivery: {
       ttlMinutes: lateDeliveryConfig.ttlMinutes,

@@ -33,6 +33,11 @@ import {
   OWN_CONTACT_DETAILS_INTRO,
 } from './principal-contact-block.js';
 import { DATE_RESOLVE_GUARDRAIL } from './prompts/date-resolve-guardrail.js';
+import {
+  renderCeoInboxVerificationBlock,
+  renderCoordinatorVerificationBlock,
+  type VerificationView,
+} from './prompts/verification-block.js';
 import { formatTurnBudgetBlock } from './turn-budget.js';
 import type { AgentConfig } from './runtime.js';
 
@@ -55,6 +60,8 @@ export type SystemPromptSources = Pick<
   | 'principalIdentities'
   | 'principalPrimaryEmail'
   | 'errorBudget'
+  | 'verification'
+  | 'browserSessionAlive'
 >;
 
 /**
@@ -71,7 +78,8 @@ export function resolveMaxTurns(errorBudget: AgentConfig['errorBudget']): number
  * Order (do not change without updating the tests that pin it):
  *   identity → security → ## Your Contact Details → ## Who you serve (with
  *   ### Principal Contact Details) → YAML body → ## Available Specialists →
- *   autonomy → date guardrail (coordinator) → time → turn budget
+ *   autonomy → live sign-in verifications (coordinator, ceo-inbox) → date guardrail
+ *   (coordinator) → time → turn budget
  *
  * Specialists get no identity or security block, so theirs starts at
  * ## Your Contact Details.
@@ -184,6 +192,35 @@ export async function buildBaseSystemPrompt(
       // Log at error level (operator signal) and proceed without the block.
       failBlock('autonomy', err);
       logger.error({ err, agentId }, 'Failed to load autonomy config — proceeding with base system prompt');
+    }
+  }
+
+  // Live sign-in verifications (#2017): pending or recently closed, so a turn the principal
+  // did not start (their code reply, a task wake) knows what is waiting. Coordinator and
+  // ceo-inbox only, and absent when nothing is active. Not part of the always-on prompt
+  // budget — this is the injection rung of ADR-046. A failed lookup omits the block; it
+  // never fails the turn.
+  if (sources.verification && (agentId === 'coordinator' || agentId === 'ceo-inbox')) {
+    try {
+      const alive = sources.browserSessionAlive ?? (() => false);
+      const items: VerificationView[] = (await sources.verification.listActive(now)).map((v) => ({
+        ...v,
+        sessionAlive: alive(v.browserSessionId),
+      }));
+      const verificationTimezone = sources.timezone?.trim() || 'UTC';
+      const block = agentId === 'coordinator'
+        ? renderCoordinatorVerificationBlock(items, {
+            askChannel: sources.verification.askChannel(),
+            timezone: verificationTimezone,
+          })
+        : renderCeoInboxVerificationBlock(items, {
+            timezone: verificationTimezone,
+            emailWaitSeconds: sources.verification.service.config.emailWaitSeconds,
+          });
+      if (block) prompt += '\n\n' + block;
+    } catch (err) {
+      failBlock('verification', err);
+      logger.error({ err, agentId }, 'Failed to build verification block — omitted this turn');
     }
   }
 
