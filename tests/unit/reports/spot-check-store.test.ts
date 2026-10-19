@@ -191,6 +191,43 @@ describe('SpotCheckStore', () => {
     expect(byId['older']!.deliveries).toHaveLength(0);
   });
 
+  // add() and bindDelivery() read the whole list, change it and write it back. The tool and the
+  // boot wiring each build their own store, so two digests drawn at once must not lose a set.
+  it('keeps both sets when two store instances add at the same time', async () => {
+    const { get, set, stored } = makeStore();
+    const logger = createSilentLogger();
+    const a = new SpotCheckStore({ get, set }, logger, () => NOW);
+    const b = new SpotCheckStore({ get, set }, logger, () => NOW);
+
+    await Promise.all([
+      a.add(makeSet({ id: 'a', conversationId: 'conv-a' })),
+      b.add(makeSet({ id: 'b', conversationId: 'conv-b' })),
+    ]);
+
+    expect(stored().sets.map((s) => s.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('serializes a bind behind an add, and a failed op does not block the next one', async () => {
+    const { get, set, stored } = makeStore();
+    const logger = createSilentLogger();
+    const a = new SpotCheckStore({ get, set }, logger, () => NOW);
+    const b = new SpotCheckStore({ get, set }, logger, () => NOW);
+    get.mockRejectedValueOnce(new Error('db blip'));
+
+    const results = await Promise.allSettled([
+      a.add(makeSet({ id: 'lost', conversationId: 'conv-x' })),
+      b.add(makeSet({ id: 'kept', conversationId: 'conv-1' })),
+      a.bindDelivery('conv-1', { channel: 'signal', messageId: 'm1', at: new Date(NOW).toISOString() }),
+    ]);
+
+    // The failure reaches only its own caller.
+    expect(results[0]!.status).toBe('rejected');
+    expect(results[1]!.status).toBe('fulfilled');
+    expect(results[2]!.status).toBe('fulfilled');
+    expect(stored().sets.map((s) => s.id)).toEqual(['kept']);
+    expect(stored().sets[0]!.deliveries).toHaveLength(1);
+  });
+
   it('lets a config-store read error propagate', async () => {
     const { store } = makeStore({ getError: new Error('db down') });
     await expect(store.add(makeSet())).rejects.toThrow('db down');

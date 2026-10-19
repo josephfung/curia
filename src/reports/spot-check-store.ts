@@ -21,6 +21,12 @@
 //     database outage look like "no digest found", and a read-modify-write on a failed read
 //     would overwrite every stored set with a one-element list.
 //   - A soft-rejected write (`{ stored: false }`) returns false; the caller decides.
+//
+// Concurrency: add() and bindDelivery() are read-modify-write on one value. Two of them
+// overlapping would each write back the list it read, and one set (or delivery) would be lost.
+// They run one at a time through a module-level chain (see `serialize`), not a per-instance
+// lock: the list-spot-checks tool builds a store per call and the boot wiring builds its own,
+// so an instance lock would never see the other's writes.
 
 import type { ConfigStore } from '../memory/config-store.js';
 import type { Logger } from '../logger.js';
@@ -60,6 +66,23 @@ const MAX_SETS = 30;
 /** A delivery is bound shortly after the digest is composed; an older set is a different digest. */
 const BIND_WINDOW_MS = 2 * 3_600_000;
 
+/** Tail of the add/bindDelivery queue. It never rejects, so one failed op cannot stall the rest. */
+let mutationChain: Promise<void> = Promise.resolve();
+
+/**
+ * Run `op` after every earlier add/bindDelivery has settled. Its result or error goes to this
+ * caller only: the chain keeps a settled-either-way copy so the next op starts regardless.
+ */
+function serialize<T>(op: () => Promise<T>): Promise<T> {
+  const run = mutationChain.then(op);
+  mutationChain = run.then(
+    () => undefined,
+    // Not swallowed: `run` (returned below) still rejects to the caller, who logs it.
+    () => undefined,
+  );
+  return run;
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -97,11 +120,13 @@ export class SpotCheckStore {
 
   /** Store a new set, pruning old ones. Returns false when the config store soft-rejects the write. */
   async add(set: SpotCheckSet): Promise<boolean> {
-    const sets = await this.read();
-    // Replace a set re-added under the same id rather than listing it twice.
-    const next = sets.filter((s) => s.id !== set.id);
-    next.push(set);
-    return this.write(next);
+    return serialize(async () => {
+      const sets = await this.read();
+      // Replace a set re-added under the same id rather than listing it twice.
+      const next = sets.filter((s) => s.id !== set.id);
+      next.push(set);
+      return this.write(next);
+    });
   }
 
   /**
@@ -110,17 +135,19 @@ export class SpotCheckStore {
    * recorded is a no-op that still returns true: the delivery is bound, a retry changed nothing.
    */
   async bindDelivery(conversationId: string, delivery: SpotCheckDelivery): Promise<boolean> {
-    const sets = await this.read();
-    const cutoff = this.now() - BIND_WINDOW_MS;
-    let target: SpotCheckSet | undefined;
-    for (const s of sets) {
-      if (s.conversationId !== conversationId || Date.parse(s.createdAt) < cutoff) continue;
-      if (!target || Date.parse(s.createdAt) > Date.parse(target.createdAt)) target = s;
-    }
-    if (!target) return false;
-    if (target.deliveries.some((d) => d.messageId === delivery.messageId)) return true;
-    target.deliveries.push(delivery);
-    return this.write(sets);
+    return serialize(async () => {
+      const sets = await this.read();
+      const cutoff = this.now() - BIND_WINDOW_MS;
+      let target: SpotCheckSet | undefined;
+      for (const s of sets) {
+        if (s.conversationId !== conversationId || Date.parse(s.createdAt) < cutoff) continue;
+        if (!target || Date.parse(s.createdAt) > Date.parse(target.createdAt)) target = s;
+      }
+      if (!target) return false;
+      if (target.deliveries.some((d) => d.messageId === delivery.messageId)) return true;
+      target.deliveries.push(delivery);
+      return this.write(sets);
+    });
   }
 
   /** The set delivered on this email thread (the newest delivery wins if two sets share one). No time limit. */
