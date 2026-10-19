@@ -4020,6 +4020,27 @@ describe('spot-check pool (#2159 Phase 3)', () => {
     );
   });
 
+  it('warns once, at construction, when no actionLogRepo is wired', async () => {
+    const warn = vi.fn();
+    const child = { ...mocks.logger, warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const spyLogger = { ...mocks.logger, child: () => child } as unknown as typeof mocks.logger;
+    const gw = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService, contentFilter: mocks.contentFilter, bus: mocks.bus, logger: spyLogger,
+    });
+    const poolWarnings = () => warn.mock.calls.filter((c) => String(c[1]).includes('spot-check pool disabled: no actionLogRepo'));
+    expect(poolWarnings()).toHaveLength(1);
+    // Not per send.
+    await gw.send(danaReq, { taskEventId: 't1' });
+    await gw.send(danaReq, { taskEventId: 't2' });
+    expect(poolWarnings()).toHaveLength(1);
+
+    warn.mockClear();
+    mocks.logger = spyLogger;
+    makePoolGateway({ actionLogRepo: makeActionLogRepo() });
+    expect(poolWarnings()).toHaveLength(0);
+  });
+
   it('labels chat sends by channel with the first line of the message', async () => {
     const signalClient = { send: vi.fn().mockResolvedValue({ timestamp: 1 }), isConnected: () => true };
     const actionLogRepo = makeActionLogRepo();

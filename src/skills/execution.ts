@@ -441,6 +441,11 @@ export class ExecutionLayer {
     this.exportControlService = options?.exportControlService;
     this.sensitivityClassifier = options?.sensitivityClassifier;
     this.openDelegationLookup = options?.openDelegationLookup;
+    if (!this.actionLogRepo) {
+      // Once here rather than per call: without the repo no autonomous action reaches the
+      // spot-check pool (#2159 Phase 3), and that should not be invisible.
+      this.logger.warn({ actionLogRepo: false }, 'execution: spot-check pool disabled: no actionLogRepo');
+    }
   }
 
   /**

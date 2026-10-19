@@ -4761,6 +4761,27 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
     });
   });
 
+  it('warns once, at construction, when no actionLogRepo is wired', async () => {
+    const warn = vi.fn();
+    const spyLogger = {
+      ...logger,
+      warn,
+      child: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+    } as unknown as typeof logger;
+    const registry = new ToolRegistry();
+    const layer = new ExecutionLayer(registry, spyLogger, { autonomyService: makeAutonomyService(85), bus: makeBus() });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![1]).toContain('spot-check pool disabled: no actionLogRepo');
+    // Not per call: a sampled action on an unwired layer adds nothing.
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), makeHandler({ ok: true }));
+    expect((await layer.invoke('calendar-create-event', {}, undefined, agentTurn)).success).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    const wiredWarn = vi.fn();
+    new ExecutionLayer(new ToolRegistry(), { ...spyLogger, warn: wiredWarn } as unknown as typeof logger, { actionLogRepo: makeSampleRepo() });
+    expect(wiredWarn).not.toHaveBeenCalled();
+  });
+
   it('still returns the tool result when deciding whether to sample throws', async () => {
     // isSampledTool → minScoreForActionRisk throws on a risk label it does not know. The
     // action has already run by then, so a throw must not turn its success into a failure.

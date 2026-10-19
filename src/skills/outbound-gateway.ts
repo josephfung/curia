@@ -608,6 +608,11 @@ export class OutboundGateway {
       // that replaces them, sends would go out with no disclosure review at all.
       this.log.error({ gating: this.gating }, 'outbound-gateway: band gating without a band review — sends get no disclosure review');
     }
+    if (!this.actionLogRepo) {
+      // Once here rather than per send: without the repo no autonomous send reaches the
+      // spot-check pool (#2159 Phase 3), and that should not be invisible.
+      this.log.warn({ actionLogRepo: false }, 'outbound-gateway: spot-check pool disabled: no actionLogRepo');
+    }
   }
 
   /**
