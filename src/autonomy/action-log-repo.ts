@@ -107,11 +107,13 @@ export class ActionLogRepo {
     // instead of reusing one in an unknown transaction state.
     let brokenConnection: Error | undefined;
     try {
-      await client.query('BEGIN');
+      // READ COMMITTED is set explicitly, not inherited: correctness depends on it (see below),
+      // and a server or role default of REPEATABLE READ would otherwise silently break it.
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
       await client.query(`SELECT pg_advisory_xact_lock(hashtext('autonomy_approval_number'))`);
-      // Under READ COMMITTED (the default; nothing here changes it) this statement takes a fresh
-      // snapshot after the lock is granted, so it sees the number the previous holder committed.
-      // A REPEATABLE READ transaction would snapshot at its first statement and could miss it.
+      // Under READ COMMITTED this statement takes a fresh snapshot after the lock is granted, so
+      // it sees the number the previous holder committed. A REPEATABLE READ transaction would
+      // snapshot at its first statement (the lock wait) and two allocators could pick the same number.
       const free = await client.query<{ n: number }>(
         `SELECT n FROM generate_series(1, 999) AS n
          WHERE n NOT IN (SELECT approval_number FROM autonomy_action_log

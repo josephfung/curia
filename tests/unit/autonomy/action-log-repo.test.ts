@@ -111,7 +111,8 @@ describe('ActionLogRepo', () => {
       expect(poolQueries).toHaveLength(0);
       const sqls = clientQueries.map((q) => q.sql);
       expect(sqls).toHaveLength(5);
-      expect(sqls[0]).toBe('BEGIN');
+      // READ COMMITTED explicitly: the free-number read must see the previous holder's commit.
+      expect(sqls[0]).toBe('BEGIN ISOLATION LEVEL READ COMMITTED');
       expect(sqls[1]).toContain("SELECT pg_advisory_xact_lock(hashtext('autonomy_approval_number'))");
       expect(sqls[2]).toContain('generate_series(1, 999)');
       expect(sqls[2]).toContain("created_at > now() - interval '7 days'");
@@ -139,6 +140,20 @@ describe('ActionLogRepo', () => {
 
       expect(release).toHaveBeenCalledTimes(1);
       expect(release.mock.calls[0]![0]).toBeInstanceOf(Error);
+    });
+
+    it('rolls back without inserting, releases once and rethrows when the free-number SELECT fails', async () => {
+      const { pool, clientQueries, release } = makeTxPool({ failOn: 'generate_series' });
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+
+      await expect(repo.insert(pendingInsert)).rejects.toMatchObject({ code: '23505' });
+
+      const sqls = clientQueries.map((q) => q.sql);
+      expect(sqls.some((sql) => sql.includes('INSERT INTO autonomy_action_log'))).toBe(false);
+      expect(sqls).not.toContain('COMMIT');
+      expect(sqls[sqls.length - 1]).toBe('ROLLBACK');
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(release.mock.calls[0]![0]).toBeUndefined();
     });
 
     it('rolls back, releases the client and rethrows when the INSERT fails', async () => {
@@ -602,23 +617,29 @@ describe('ActionLogRepo', () => {
       });
 
       it('returns already_resolved when the numbered row is no longer pending', async () => {
-        const { pool } = makeSequentialPool([[], [{ ...numbered, outcome: 'approved' }]]);
+        const { pool, queries } = makeSequentialPool([[], [{ ...numbered, outcome: 'approved' }]]);
         const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending('3');
         expect(result).toEqual({ found: false, reason: 'already_resolved', error: expect.stringContaining('already resolved') });
+        // Guard: these fixtures would give the same reason on the short_ref path.
+        expect(queries[0]!.sql).toContain('approval_number = $1');
+        expect(queries[1]!.sql).toContain('approval_number = $1');
       });
 
       it('returns expired when the numbered row is pending but past expires_at', async () => {
-        const { pool } = makeSequentialPool([[], [{ ...numbered, expires_at: new Date(Date.now() - 1000) }]]);
+        const { pool, queries } = makeSequentialPool([[], [{ ...numbered, expires_at: new Date(Date.now() - 1000) }]]);
         const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending('3');
         expect(result).toEqual({ found: false, reason: 'expired', error: expect.stringContaining('expired') });
+        expect(queries[0]!.sql).toContain('approval_number = $1');
+        expect(queries[1]!.sql).toContain('approval_number = $1');
       });
 
       it('refuses to pick when two live rows carry the same number', async () => {
         // Allocation makes this impossible; if it ever happens, never resolve the wrong approval.
-        const { pool } = makeSequentialPool([[numbered, { ...numbered, id: 11 }]]);
+        const { pool, queries } = makeSequentialPool([[numbered, { ...numbered, id: 11 }]]);
         const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending('3');
         expect(result.found).toBe(false);
         if (!result.found) expect(result.reason).toBe('ambiguous');
+        expect(queries[0]!.sql).toContain('approval_number = $1');
       });
     });
 
