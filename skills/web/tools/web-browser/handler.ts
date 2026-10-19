@@ -23,6 +23,11 @@ import type { Page, Frame, Locator } from 'playwright';
 import { extractFrameContent } from './dom-extract.js';
 import { jitteredDelay, simulateHumanPresence, humanClick, humanType } from '../../../../src/browser/human-behavior.js';
 import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLanding } from '../../../../src/skills/_shared/google-workspace-url.js';
+import { isCodeShaped } from '../../../../src/verification/code-shape.js';
+import { registrableDomain, sameRegistrableDomain } from '../../../../src/verification/domain.js';
+import type { VerificationRuntime } from '../../../../src/verification/index.js';
+import type { Verification } from '../../../../src/verification/types.js';
+import { detectVerificationScreen } from './verification-detect.js';
 
 // Maximum cleaned DOM content length before truncation.
 // Prevents token blowout on content-heavy pages.
@@ -88,6 +93,11 @@ const VALID_ACTIONS: BrowserAction[] = ['navigate', 'click', 'type', 'select', '
 // under the skill timeout and stops a runaway sequence. Exceeding it is a clear error, not a
 // silent truncation.
 const MAX_BATCH_ACTIONS = 50;
+
+// Browser destination guard (#2017, design §5). The execution layer exempts web-browser
+// from its sign-in-code scrub so a code can actually be typed; this is the refusal when a
+// tracked code is headed anywhere but its verification's page domain. Never echoes the value.
+const TRACKED_CODE_REFUSAL = 'refused: that value is a sign-in code for another site and can only be entered there';
 
 /** One step in a batched call — the same per-action fields as a single invocation, minus
  *  the call-level fields (session_id/incognito/block_ads/screenshot), which apply to the
@@ -299,7 +309,9 @@ export class WebBrowserHandler implements ToolHandler {
         break;
       }
 
-      ctx.log.info({ action: stepAction, sessionId, url: step.url, selector: step.selector, batchIndex: isBatch ? i : undefined }, 'Executing browser action');
+      // A navigate URL can carry a tracked sign-in code (#2017): never log one.
+      const logUrl = typeof step.url === 'string' ? scrubTrackedCodes(ctx, step.url) : step.url;
+      ctx.log.info({ action: stepAction, sessionId, url: logUrl, selector: step.selector, batchIndex: isBatch ? i : undefined }, 'Executing browser action');
 
       try {
         const outcome = await performAction(step, { page, session, ctx, sessionId, markSecretInjected });
@@ -331,8 +343,9 @@ export class WebBrowserHandler implements ToolHandler {
         // the backstop must cover error paths too — so we log the redacted message and a
         // redacted stack rather than the raw err object (whose .message/.stack are the
         // unredacted source). No `{ err }` here: pino would serialize the unscrubbed original.
-        const safeMessage = session.redactInjectedSecrets(message);
-        const safeStack = err instanceof Error && err.stack ? session.redactInjectedSecrets(err.stack) : undefined;
+        // Tracked sign-in codes (#2017) are scrubbed too: one may be tracked before this session typed it.
+        const safeMessage = scrubTrackedCodes(ctx, session.redactInjectedSecrets(message));
+        const safeStack = err instanceof Error && err.stack ? scrubTrackedCodes(ctx, session.redactInjectedSecrets(err.stack)) : undefined;
         ctx.log.error({ action: stepAction, sessionId, errMessage: safeMessage, stack: safeStack, batchIndex: isBatch ? i : undefined }, 'Browser action failed');
         failure = { index: i, error: safeMessage, kind: 'execution' };
         break;
@@ -406,6 +419,14 @@ export class WebBrowserHandler implements ToolHandler {
       }
     }
 
+    // Verification hint (#2017, design §2): the page looks like a sign-in code screen. Only
+    // with the verification runtime wired; otherwise the result is exactly as before.
+    if (ctx.verification) {
+      const signals = await detectVerificationScreen(page, ctx.log);
+      const pageDomain = signals.length > 0 ? registrableDomain(page.url()) : null;
+      if (pageDomain) result.verification_suspected = { page_domain: pageDomain, signals };
+    }
+
     // Capture screenshot if explicitly requested (call-level flag or standalone/batch screenshot
     // action). HARD GUARD (#973): refuse to capture on a call that injected a secret by reference. The
     // value-aware backstop scrubs TEXT only — it cannot touch a PNG, and a secret filled into a
@@ -467,7 +488,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       try {
         parsedUrl = new URL(url);
       } catch {
-        return { ok: false, error: `Invalid URL: "${url}"` };
+        return { ok: false, error: `Invalid URL: "${scrubTrackedCodes(ctx, url)}"` };
       }
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
         return { ok: false, error: `Only http: and https: are allowed, got: ${parsedUrl.protocol}` };
@@ -479,6 +500,11 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // The browser has no Google credentials either: a Google file gets a sign-in page.
       if (isGoogleWorkspaceFileUrl(parsedUrl)) {
         return { ok: false, error: googleWorkspaceUrlError('web-browser') };
+      }
+      // A tracked sign-in code in the URL may only travel to its own page domain (#2017).
+      // Check the decoded forms too, so percent-encoding can't smuggle one past the matcher.
+      if (urlVariants(url).some((variant) => !trackedCodeAllowedOn(ctx, variant, parsedUrl.toString()))) {
+        return { ok: false, error: TRACKED_CODE_REFUSAL };
       }
       const response = await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
 
@@ -510,7 +536,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // longer be representative after the recovery attempt). (#1053)
       let reloadResponse: Awaited<ReturnType<typeof page.reload>> | undefined;
       if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
-        ctx.log.info({ sessionId, url: parsedUrl.toString(), pageTitle }, 'Soft block suspected — dwelling and reloading once');
+        ctx.log.info({ sessionId, url: scrubTrackedCodes(ctx, parsedUrl.toString()), pageTitle }, 'Soft block suspected — dwelling and reloading once');
         await jitteredDelay(1500, 3000);
         reloadResponse = await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch((err) => {
           ctx.log.debug({ err, sessionId }, 'Reload during soft-block recovery failed — proceeding with current DOM');
@@ -529,7 +555,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // Use the reload response status when available — it reflects the post-recovery state.
       const status = reloadResponse?.status() ?? response?.status();
       if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
-        ctx.log.warn({ sessionId, url: parsedUrl.toString(), status, pageTitle }, 'Navigation hit a hard edge block');
+        ctx.log.warn({ sessionId, url: scrubTrackedCodes(ctx, parsedUrl.toString()), status, pageTitle }, 'Navigation hit a hard edge block');
         return {
           ok: false,
           error: `Site blocked automated access (HTTP ${status ?? '?'}${pageTitle ? `, "${pageTitle}"` : ''}). This site can't be driven from the server — hand off to the principal or draft the request instead.`,
@@ -638,9 +664,16 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
         if (typeof text !== 'string') {
           return { ok: false, error: 'type requires text (string) or secret_ref (string)' };
         }
+        // Destination guard (#2017): a tracked sign-in code types only on its own page domain.
+        if (!trackedCodeAllowedOn(ctx, text, page.url())) {
+          return { ok: false, error: TRACKED_CODE_REFUSAL };
+        }
         fillValue = text;
       }
 
+      // The domain the value is typed on, read before typing (an Enter-less fill rarely
+      // navigates, but the tracking below must key on where the code actually went).
+      const typedOnUrl = page.url();
       const typeTarget = await resolveLocator(page, selector, ctx.log);
       // Focus the field with a human cursor approach, clear any existing content
       // (humanType appends; we want replace semantics), then type with human cadence.
@@ -651,6 +684,12 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       await page.keyboard.press('ControlOrMeta+a');
       await page.keyboard.press('Delete');
       await humanType(page, fillValue, { log: ctx.log });
+      // Tracked values, source 1 (#2017, design §5): a code-shaped literal typed on a pending
+      // or recent verification's page domain is the code actually used — track it so every
+      // later write path scrubs it. Only after the type succeeded; never for secret_ref.
+      if (!hasSecretRef && ctx.verification && isCodeShaped(fillValue, { allowShort: true })) {
+        await trackTypedCode(ctx.verification, session, typedOnUrl, fillValue, ctx, sessionId);
+      }
       return { ok: true };
     }
 
@@ -680,6 +719,70 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // Unreachable: execute() validated the verb against VALID_ACTIONS before dispatching.
       return { ok: false, error: `Unknown action: "${String(action)}"` };
   }
+}
+
+/** `text` with tracked sign-in codes replaced, for logs and errors (#2017). Identity without the runtime. */
+function scrubTrackedCodes(ctx: ToolContext, text: string): string {
+  return ctx.verification ? ctx.verification.tracker.scrubText(text) : text;
+}
+
+/**
+ * Destination guard (#2017): false when `value` contains a tracked sign-in code and
+ * `destinationUrl` is not on the registrable domain of any verification that tracked it.
+ * True when there is no runtime or the value holds no tracked code. A destination with
+ * no registrable domain (about:blank, an IP) never matches, so it fails closed.
+ */
+function trackedCodeAllowedOn(ctx: ToolContext, value: string, destinationUrl: string): boolean {
+  const allowed = ctx.verification?.tracker.allowedDomainsFor(value);
+  if (!allowed) return true;
+  for (const domain of allowed) {
+    if (sameRegistrableDomain(destinationUrl, domain)) return true;
+  }
+  return false;
+}
+
+/** A URL plus its percent-decoded and form-decoded forms, for the destination guard. */
+function urlVariants(url: string): string[] {
+  const variants = new Set([url, url.replace(/\+/g, ' ')]);
+  for (const v of [...variants]) {
+    try {
+      variants.add(decodeURIComponent(v));
+    } catch {
+      // Malformed percent-encoding: the raw form is still checked, and new URL() accepted it.
+      continue;
+    }
+  }
+  return [...variants];
+}
+
+/**
+ * Register a code-shaped value typed on `typedOnUrl` against every pending or recent
+ * verification whose page domain it matches, and have the session scrub it from what it
+ * reads back. Never logs the value. A failed lookup still scrubs the session's own output
+ * (under-capture is the failure to avoid) and does not fail the type, which already ran.
+ */
+async function trackTypedCode(
+  runtime: VerificationRuntime,
+  session: BrowserSession,
+  typedOnUrl: string,
+  value: string,
+  ctx: ToolContext,
+  sessionId: string,
+): Promise<void> {
+  let active: Verification[];
+  try {
+    active = await runtime.listActive();
+  } catch (err) {
+    session.registerInjectedSecret(value);
+    const errMessage = runtime.tracker.scrubText(session.redactInjectedSecrets(err instanceof Error ? err.message : String(err)));
+    ctx.log.error({ sessionId, errMessage }, 'Could not list verifications; a typed code-shaped value was not tracked');
+    return;
+  }
+  const matching = active.filter((v) => sameRegistrableDomain(typedOnUrl, v.pageDomain));
+  if (matching.length === 0) return;
+  for (const v of matching) runtime.tracker.register(v.id, v.pageDomain, value);
+  session.registerInjectedSecret(value);
+  ctx.log.info({ sessionId, verificationIds: matching.map((v) => v.id) }, 'Typed sign-in code tracked for its verification(s)');
 }
 
 /**
