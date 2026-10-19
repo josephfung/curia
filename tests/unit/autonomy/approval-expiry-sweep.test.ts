@@ -24,6 +24,7 @@ function makeRow(overrides: Partial<ActionLogRow> = {}): ActionLogRow {
   return {
     id: 1,
     shortRef: 'cal-1',
+    approvalNumber: null,
     toolName: 'create-calendar-event',
     description: 'Create event: Lunch',
     actionRisk: 'medium',

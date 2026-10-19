@@ -28,6 +28,7 @@ function makeRow(overrides: Partial<ActionLogRow>): ActionLogRow {
     expiresAt: null,
     parentActionId: null,
     shortRef: null,
+    approvalNumber: null,
     description: null,
     createdAt: new Date(),
     ...overrides,

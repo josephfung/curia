@@ -40,7 +40,169 @@ function makeSequentialPool(
   return { pool, queries };
 }
 
+/**
+ * A pool whose connect() hands out a fake client that records every query it runs (#2159
+ * Phase 3). Pending-approval inserts allocate their approval number on that client inside a
+ * transaction. `pool.query` is recorded separately, so a test can prove which path ran.
+ *
+ * `freeNumber` is what the free-number query returns (null: all 999 are taken).
+ * `failOn` makes the first query whose SQL contains it throw, to exercise the rollback path;
+ * `failRollback` makes the ROLLBACK itself throw too.
+ */
+function makeTxPool(opts: { freeNumber?: number | null; insertedId?: string; failOn?: string; failRollback?: boolean } = {}): {
+  pool: Pool;
+  clientQueries: Array<{ sql: string; params: unknown[] }>;
+  poolQueries: Array<{ sql: string; params: unknown[] }>;
+  release: ReturnType<typeof vi.fn>;
+} {
+  const clientQueries: Array<{ sql: string; params: unknown[] }> = [];
+  const poolQueries: Array<{ sql: string; params: unknown[] }> = [];
+  const release = vi.fn();
+  const freeNumber = opts.freeNumber === undefined ? 3 : opts.freeNumber;
+  const client = {
+    query: vi.fn(async (sql: string, params?: unknown[]) => {
+      clientQueries.push({ sql, params: params ?? [] });
+      if (opts.failRollback && sql === 'ROLLBACK') throw new Error('connection terminated');
+      if (opts.failOn && sql.includes(opts.failOn)) {
+        throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+      }
+      if (sql.includes('generate_series')) {
+        const rows = freeNumber === null ? [] : [{ n: freeNumber }];
+        return { rows, rowCount: rows.length } as unknown as QueryResult;
+      }
+      if (sql.includes('INSERT INTO autonomy_action_log')) {
+        return { rows: [{ id: opts.insertedId ?? '42' }], rowCount: 1 } as unknown as QueryResult;
+      }
+      return { rows: [], rowCount: 0 } as unknown as QueryResult;
+    }),
+    release,
+  };
+  const pool = {
+    query: vi.fn(async (sql: string, params?: unknown[]) => {
+      poolQueries.push({ sql, params: params ?? [] });
+      return { rows: [{ id: '7' }], rowCount: 1 } as unknown as QueryResult;
+    }),
+    connect: vi.fn(async () => client),
+  } as unknown as Pool;
+  return { pool, clientQueries, poolQueries, release };
+}
+
+const pendingInsert = {
+  taskId: 'task-1',
+  toolName: 'email-send',
+  actionRisk: 'medium',
+  outcome: 'pending_approval' as const,
+  shortRef: 'a3f7c12b',
+  description: 'Send email to dana@example.com',
+  expiresAt: new Date('2026-10-20T12:00:00Z'),
+};
+
 describe('ActionLogRepo', () => {
+  // #2159 Phase 3: a pending approval gets a small number the principal can type ("approve 3").
+  describe('insert: approval number allocation', () => {
+    it('allocates under an advisory lock and inserts the number on the same client, in one transaction', async () => {
+      const { pool, clientQueries, poolQueries, release } = makeTxPool({ freeNumber: 3, insertedId: '42' });
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+
+      const id = await repo.insert(pendingInsert);
+
+      // Return value unchanged: the id, coerced from pg's int8 string.
+      expect(id).toBe(42);
+      expect(poolQueries).toHaveLength(0);
+      const sqls = clientQueries.map((q) => q.sql);
+      expect(sqls).toHaveLength(5);
+      expect(sqls[0]).toBe('BEGIN');
+      expect(sqls[1]).toContain("SELECT pg_advisory_xact_lock(hashtext('autonomy_approval_number'))");
+      expect(sqls[2]).toContain('generate_series(1, 999)');
+      expect(sqls[2]).toContain("created_at > now() - interval '7 days'");
+      expect(sqls[2]).toContain('approval_number IS NOT NULL');
+      expect(sqls[3]).toContain('INSERT INTO autonomy_action_log');
+      expect(sqls[3]).toContain('approval_number)');
+      expect(sqls[4]).toBe('COMMIT');
+      // Controller ruling R1: approval_number is the LAST column ($17), so the positional
+      // indices of the existing 16 params are unchanged.
+      const insertParams = clientQueries[3]!.params;
+      expect(insertParams).toHaveLength(17);
+      expect(insertParams[16]).toBe(3);
+      expect(insertParams[4]).toBe('pending_approval');
+      expect(insertParams[8]).toBe('a3f7c12b');
+      expect(release).toHaveBeenCalledTimes(1);
+      // Released cleanly, not with an error (which would destroy the connection).
+      expect(release.mock.calls[0]![0]).toBeUndefined();
+    });
+
+    it('destroys the connection when ROLLBACK itself fails, and still rethrows the original error', async () => {
+      const { pool, release } = makeTxPool({ failOn: 'INSERT INTO autonomy_action_log', failRollback: true });
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+
+      await expect(repo.insert(pendingInsert)).rejects.toMatchObject({ code: '23505' });
+
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(release.mock.calls[0]![0]).toBeInstanceOf(Error);
+    });
+
+    it('rolls back, releases the client and rethrows when the INSERT fails', async () => {
+      const { pool, clientQueries, release } = makeTxPool({ failOn: 'INSERT INTO autonomy_action_log' });
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+
+      // The original error comes through unchanged: approval-trigger retries on its 23505 code.
+      await expect(repo.insert(pendingInsert)).rejects.toMatchObject({ code: '23505' });
+
+      const sqls = clientQueries.map((q) => q.sql);
+      expect(sqls[sqls.length - 1]).toBe('ROLLBACK');
+      expect(sqls).not.toContain('COMMIT');
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it('inserts NULL and warns when all 999 numbers are in use', async () => {
+      const { pool, clientQueries, release } = makeTxPool({ freeNumber: null });
+      const logger = createSilentLogger();
+      const warn = vi.spyOn(logger, 'warn');
+      const repo = new ActionLogRepo(pool, logger);
+
+      await repo.insert(pendingInsert);
+
+      const insert = clientQueries.find((q) => q.sql.includes('INSERT INTO autonomy_action_log'))!;
+      expect(insert.params[16]).toBeNull();
+      expect(clientQueries[clientQueries.length - 1]!.sql).toBe('COMMIT');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not allocate for a non-pending insert, and uses pool.query as before', async () => {
+      const { pool, clientQueries, poolQueries } = makeTxPool();
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+
+      const id = await repo.insert({ ...pendingInsert, outcome: 'success' });
+
+      expect(id).toBe(7);
+      expect(clientQueries).toHaveLength(0);
+      expect(pool.connect).not.toHaveBeenCalled();
+      expect(poolQueries).toHaveLength(1);
+      expect(poolQueries[0]!.sql).not.toContain('pg_advisory_xact_lock');
+      // The column is still in the list (one insert shape), always NULL off the pending path.
+      expect(poolQueries[0]!.params).toHaveLength(17);
+      expect(poolQueries[0]!.params[16]).toBeNull();
+    });
+  });
+
+  describe('findApprovalNumber', () => {
+    it('returns the number for the row', async () => {
+      const { pool, queries } = makePool([{ approval_number: 5 }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      expect(await repo.findApprovalNumber(42)).toBe(5);
+      expect(queries[0]!.sql).toContain('approval_number');
+      expect(queries[0]!.params).toEqual([42]);
+    });
+
+    it('returns null when the row has no number or does not exist', async () => {
+      const unnumbered = makePool([{ approval_number: null }]);
+      expect(await new ActionLogRepo(unnumbered.pool, createSilentLogger()).findApprovalNumber(42)).toBeNull();
+      const missing = makePool([]);
+      expect(await new ActionLogRepo(missing.pool, createSilentLogger()).findApprovalNumber(42)).toBeNull();
+    });
+  });
+
   describe('insert', () => {
     it('inserts a row and returns the id coerced from pg\'s int8 string', async () => {
       // pg returns the BIGSERIAL id as a string; the repo coerces it to a number at the boundary.
@@ -377,6 +539,86 @@ describe('ActionLogRepo', () => {
         found: false,
         reason: 'expired',
         error: expect.stringContaining('expired'),
+      });
+    });
+
+    it('resolvePending(a3f7c12b) still looks up by short_ref, never by number', async () => {
+      const { pool, queries } = makeSequentialPool([[{ ...pendingRow, short_ref: 'a3f7c12b' }]]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolvePending('a3f7c12b');
+      expect(result.found).toBe(true);
+      expect(queries).toHaveLength(1);
+      expect(queries[0]!.sql).toContain('WHERE short_ref = $1');
+      expect(queries[0]!.sql).not.toContain('approval_number');
+      expect(queries[0]!.params).toEqual(['a3f7c12b']);
+    });
+
+    // #2159 Phase 3: approval numbers.
+    describe('by approval number', () => {
+      const numbered = { ...pendingRow, approval_number: 3 };
+
+      it('resolvePending(3) looks the number up among pending, non-expired rows of the last 7 days', async () => {
+        const { pool, queries } = makeSequentialPool([[numbered]]);
+        const repo = new ActionLogRepo(pool, createSilentLogger());
+        const result = await repo.resolvePending('3');
+        expect(result.found).toBe(true);
+        if (result.found) {
+          expect(result.row.id).toBe(10);
+          expect(result.row.approvalNumber).toBe(3);
+        }
+        expect(queries).toHaveLength(1);
+        const { sql, params } = queries[0]!;
+        expect(sql).toContain('approval_number = $1');
+        expect(sql).toContain("outcome = 'pending_approval'");
+        expect(sql).toContain('expires_at > now()');
+        expect(sql).toContain("created_at > now() - interval '7 days'");
+        expect(sql).not.toContain('short_ref');
+        // Parameterized, and as a number: '3' and '03' are the same approval.
+        expect(params).toEqual([3]);
+      });
+
+      it('accepts leading zeros up to three digits', async () => {
+        const { pool, queries } = makeSequentialPool([[numbered]]);
+        await new ActionLogRepo(pool, createSilentLogger()).resolvePending('003');
+        expect(queries[0]!.params).toEqual([3]);
+      });
+
+      it('treats four digits as a short_ref, not a number', async () => {
+        const { pool, queries } = makeSequentialPool([[], []]);
+        await new ActionLogRepo(pool, createSilentLogger()).resolvePending('1234');
+        expect(queries[0]!.sql).toContain('short_ref = $1');
+        expect(queries[0]!.params).toEqual(['1234']);
+      });
+
+      it('returns not_found when no row in the last 7 days carries the number', async () => {
+        const { pool, queries } = makeSequentialPool([[], []]);
+        const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending('7');
+        expect(result).toEqual({ found: false, reason: 'not_found', error: expect.stringContaining('7') });
+        // The fallback lookup is restricted to the same 7-day window, newest first.
+        expect(queries[1]!.sql).toContain('approval_number = $1');
+        expect(queries[1]!.sql).toContain("created_at > now() - interval '7 days'");
+        expect(queries[1]!.sql).toContain('ORDER BY created_at DESC');
+        expect(queries[1]!.params).toEqual([7]);
+      });
+
+      it('returns already_resolved when the numbered row is no longer pending', async () => {
+        const { pool } = makeSequentialPool([[], [{ ...numbered, outcome: 'approved' }]]);
+        const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending('3');
+        expect(result).toEqual({ found: false, reason: 'already_resolved', error: expect.stringContaining('already resolved') });
+      });
+
+      it('returns expired when the numbered row is pending but past expires_at', async () => {
+        const { pool } = makeSequentialPool([[], [{ ...numbered, expires_at: new Date(Date.now() - 1000) }]]);
+        const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending('3');
+        expect(result).toEqual({ found: false, reason: 'expired', error: expect.stringContaining('expired') });
+      });
+
+      it('refuses to pick when two live rows carry the same number', async () => {
+        // Allocation makes this impossible; if it ever happens, never resolve the wrong approval.
+        const { pool } = makeSequentialPool([[numbered, { ...numbered, id: 11 }]]);
+        const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending('3');
+        expect(result.found).toBe(false);
+        if (!result.found) expect(result.reason).toBe('ambiguous');
       });
     });
 

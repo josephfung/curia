@@ -32,6 +32,7 @@ function makeRow(overrides: Partial<ActionLogRow> = {}): ActionLogRow {
     expiresAt: new Date(Date.now() + 86_400_000),
     parentActionId: null,
     shortRef: 'abcd1234',
+    approvalNumber: null,
     description: 'Create calendar event: Board sync',
     createdAt: new Date('2026-07-01T12:00:00Z'),
     ...overrides,

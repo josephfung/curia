@@ -21,7 +21,7 @@ function makeRow(overrides: Partial<ActionLogRow> = {}): ActionLogRow {
     outcome: 'pending_approval', taskSummary: null, competenceFlag: null, commitmentFlag: null, compatibility: null,
     scoredBy: null, payload: { cc: 'contact-uuid-1', body: 'Thursday works.' }, notificationSentAt: null,
     resolvedAt: null, resolvedBy: null, expiresAt: new Date(Date.now() + 86_400_000), parentActionId: null,
-    shortRef: 'abcd1234', description: 'Send email reply: Dana', createdAt: new Date(),
+    shortRef: 'abcd1234', approvalNumber: null, description: 'Send email reply: Dana', createdAt: new Date(),
     ...overrides,
   };
 }

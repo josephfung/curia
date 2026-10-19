@@ -23,14 +23,20 @@ export class ActionLogRepo {
   ) {}
 
   /** Column list + positional VALUES tuple shared by insert() and insertShadowEvaluated().
-   *  Kept in one place so the two insert paths cannot drift. */
-  private insertColumnsAndParams(row: ActionLogInsert): { columns: string; values: string; params: unknown[] } {
+   *  Kept in one place so the two insert paths cannot drift.
+   *
+   *  `approvalNumber` is allocated by insert() for pending approvals only (#2159 Phase 3) and is
+   *  NULL everywhere else. It is the LAST column ($17) so every other param keeps its position. */
+  private insertColumnsAndParams(
+    row: ActionLogInsert,
+    approvalNumber: number | null = null,
+  ): { columns: string; values: string; params: unknown[] } {
     return {
       columns:
         '(task_id, conversation_id, skill_name, action_risk, outcome, task_summary, ' +
         'payload, expires_at, short_ref, description, parent_action_id, ' +
-        'competence_flag, commitment_flag, compatibility, scored_by, send_resolution)',
-      values: 'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)',
+        'competence_flag, commitment_flag, compatibility, scored_by, send_resolution, approval_number)',
+      values: 'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)',
       params: [
         row.taskId,
         row.conversationId ?? null,
@@ -50,12 +56,21 @@ export class ActionLogRepo {
         null,
         row.scoredBy ?? null,
         row.sendResolution && row.sendResolution.length > 0 ? JSON.stringify(row.sendResolution) : null,
+        approvalNumber,
       ],
     };
   }
 
-  /** Insert a new row and return the generated id. */
+  /**
+   * Insert a new row and return the generated id.
+   *
+   * A `pending_approval` row also gets an approval number (#2159 Phase 3), allocated inside a
+   * transaction; every other outcome is a single pool.query as before.
+   */
   async insert(row: ActionLogInsert): Promise<number> {
+    if (row.outcome === 'pending_approval') {
+      return this.insertPendingWithNumber(row);
+    }
     const { columns, values, params } = this.insertColumnsAndParams(row);
     // `id` is BIGSERIAL; node-postgres returns int8 as a STRING (no global bigint type-parser is
     // registered), so coerce to number at the repository boundary to honor the declared return
@@ -67,6 +82,86 @@ export class ActionLogRepo {
     const id = Number(result.rows[0]!.id);
     this.logger.debug({ id, toolName: row.toolName, outcome: row.outcome }, 'action-log-repo: inserted row');
     return id;
+  }
+
+  /**
+   * Insert a pending approval with the lowest approval number no row used in the last 7 days.
+   *
+   * Why the transaction and the lock: two approvals raised at the same moment would otherwise
+   * both read the same free number and both insert it, and "approve 3" would then match two
+   * approvals. pg_advisory_xact_lock serialises allocators (it is released at COMMIT/ROLLBACK),
+   * so the free-number read and the INSERT that claims it are atomic with respect to every
+   * other allocator. There is no unique index to lean on instead: numbers are deliberately
+   * reused after 7 days.
+   *
+   * Why 7 days: approvals expire within 48h, so a number cannot be reused while its approval
+   * could still be answered, nor soon enough that a late reply ("approve 3" to last week's
+   * message) reaches a newer approval.
+   *
+   * When all 999 are in use, the row is inserted with NULL and a warning: the approval still
+   * works by its short_ref, which is better than refusing to raise it.
+   */
+  private async insertPendingWithNumber(row: ActionLogInsert): Promise<number> {
+    const client = await this.pool.connect();
+    // Set only when ROLLBACK itself fails: release(err) makes the pool destroy the connection
+    // instead of reusing one in an unknown transaction state.
+    let brokenConnection: Error | undefined;
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext('autonomy_approval_number'))`);
+      // Under READ COMMITTED (the default; nothing here changes it) this statement takes a fresh
+      // snapshot after the lock is granted, so it sees the number the previous holder committed.
+      // A REPEATABLE READ transaction would snapshot at its first statement and could miss it.
+      const free = await client.query<{ n: number }>(
+        `SELECT n FROM generate_series(1, 999) AS n
+         WHERE n NOT IN (SELECT approval_number FROM autonomy_action_log
+                         WHERE approval_number IS NOT NULL AND created_at > now() - interval '7 days')
+         ORDER BY n LIMIT 1`,
+      );
+      const approvalNumber = free.rows[0] ? Number(free.rows[0].n) : null;
+      if (approvalNumber === null) {
+        this.logger.warn(
+          { taskId: row.taskId, toolName: row.toolName, shortRef: row.shortRef ?? null },
+          'action-log-repo: all 999 approval numbers are in use — inserting without one; the approval falls back to its short_ref',
+        );
+      }
+      const { columns, values, params } = this.insertColumnsAndParams(row, approvalNumber);
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO autonomy_action_log ${columns} ${values} RETURNING id`,
+        params,
+      );
+      await client.query('COMMIT');
+      // int8 -> number at the boundary (see insert()).
+      const id = Number(result.rows[0]!.id);
+      this.logger.debug(
+        { id, toolName: row.toolName, outcome: row.outcome, approvalNumber },
+        'action-log-repo: inserted pending approval',
+      );
+      return id;
+    } catch (err) {
+      // Roll back so the advisory lock is released and no half-written row survives, then
+      // rethrow the ORIGINAL error: approval-trigger retries on its 23505 code.
+      this.logger.warn({ err, taskId: row.taskId, toolName: row.toolName }, 'action-log-repo: pending-approval insert failed — rolling back');
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        this.logger.error({ err: rollbackErr, originalErr: err }, 'action-log-repo: ROLLBACK failed after a pending-approval insert error');
+        brokenConnection = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
+      }
+      throw err;
+    } finally {
+      client.release(brokenConnection);
+    }
+  }
+
+  /** The approval number of a row, or null when it has none or the row does not exist. */
+  async findApprovalNumber(id: number): Promise<number | null> {
+    const result = await this.pool.query<{ approval_number: number | null }>(
+      `SELECT approval_number FROM autonomy_action_log WHERE id = $1`,
+      [id],
+    );
+    const value = result.rows[0]?.approval_number;
+    return value == null ? null : Number(value);
   }
 
   /**
@@ -559,16 +654,24 @@ export class ActionLogRepo {
   }
 
   /**
-   * Resolve a short_ref (or the sole pending row) to a single ActionLogRow.
+   * Resolve an approval number, a short_ref, or (with no ref) the sole pending row to a
+   * single ActionLogRow.
    *
-   * When short_ref is provided: look up by short_ref among pending + non-expired rows.
+   * When ref is 1 to 3 digits: it is an approval number (#2159 Phase 3); see
+   * resolvePendingByNumber(). A short_ref is 8 hex characters, so the two never overlap.
+   *
+   * When ref is a short_ref: look up by short_ref among pending + non-expired rows.
    * If not found there, make a second query (any outcome) to distinguish between
    * not_found, already_resolved, and expired.
    *
    * When omitted: fetch all non-expired pending rows. If exactly one, return it.
    * If multiple, return ambiguous with the full list so the caller can show options.
    */
-  async resolvePending(shortRef?: string): Promise<ResolveResult> {
+  async resolvePending(ref?: string): Promise<ResolveResult> {
+    if (ref !== undefined && APPROVAL_NUMBER_PATTERN.test(ref)) {
+      return this.resolvePendingByNumber(Number(ref));
+    }
+    const shortRef = ref;
     if (shortRef !== undefined) {
       // Query 1: look up by short_ref — pending + non-expired only.
       // LIMIT 2 (not 1): short_ref is globally unique (migration 033), so two
@@ -638,6 +741,65 @@ export class ActionLogRepo {
       error: `Multiple pending requests — specify a short_ref. Pending: ${refs}`,
       pending: allPending,
     };
+  }
+
+  /**
+   * Resolve an approval number the principal typed ("approve 3") to its pending row.
+   *
+   * Every lookup is restricted to rows created in the last 7 days, the window in which
+   * insert() keeps numbers unique. An older row with the same number belongs to an earlier
+   * approval that the number has since been reused from, so it must never match, not even to
+   * explain an error. Mirrors the short_ref path: a second query over the same window tells
+   * not_found, already_resolved and expired apart.
+   */
+  private async resolvePendingByNumber(approvalNumber: number): Promise<ResolveResult> {
+    // LIMIT 2: allocation makes a second live row with the same number impossible. If one ever
+    // appears, refuse to pick (ambiguous) rather than act on what may be the wrong approval.
+    const pending = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE approval_number = $1
+         AND outcome = 'pending_approval'
+         AND expires_at > now()
+         AND created_at > now() - interval '7 days'
+       ORDER BY created_at ASC
+       LIMIT 2`,
+      [approvalNumber],
+    );
+    if (pending.rows.length === 1) {
+      return { found: true, row: mapRow(pending.rows[0]) };
+    }
+    if (pending.rows.length > 1) {
+      const rows = pending.rows.map(mapRow);
+      this.logger.error(
+        { approvalNumber, ids: rows.map((r) => r.id) },
+        'action-log-repo: two live approvals share an approval number — allocation invariant broken',
+      );
+      const refs = rows.map(r => `${r.shortRef} (task: ${r.taskId}): ${r.description}`).join(', ');
+      return {
+        found: false,
+        reason: 'ambiguous',
+        error: `Approval ${approvalNumber} matches multiple pending requests — use the reference instead. Pending: ${refs}`,
+        pending: rows,
+      };
+    }
+
+    // Not live: find the most recent row in the window carrying the number, to say why.
+    const any = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE approval_number = $1
+         AND created_at > now() - interval '7 days'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [approvalNumber],
+    );
+    if (any.rows.length === 0) {
+      return { found: false, reason: 'not_found', error: `No approval request found with number ${approvalNumber}` };
+    }
+    const row = mapRow(any.rows[0]);
+    if (row.outcome !== 'pending_approval') {
+      return { found: false, reason: 'already_resolved', error: `Approval ${approvalNumber} is already resolved (outcome: ${row.outcome})` };
+    }
+    return { found: false, reason: 'expired', error: `Approval ${approvalNumber} has expired` };
   }
 
   /**
@@ -728,6 +890,10 @@ export class ActionLogRepo {
   }
 }
 
+// A ref of 1 to 3 digits is an approval number (#2159 Phase 3). short_refs are 8 hex
+// characters (generateShortRef), so an all-digit ref this short can only be a number.
+const APPROVAL_NUMBER_PATTERN = /^\d{1,3}$/;
+
 // Largest tool input (as JSON) kept on a spot-check pool row. Enough for message ids, labels
 // and short titles; a long event description or email body is not worth the row size.
 const SAMPLE_INPUT_MAX_CHARS = 2000;
@@ -764,6 +930,8 @@ function mapRow(row: Record<string, unknown>): ActionLogRow {
     expiresAt: row.expires_at ? new Date(row.expires_at as string) : null,
     parentActionId: row.parent_action_id == null ? null : Number(row.parent_action_id),
     shortRef: row.short_ref as string | null,
+    // SMALLINT arrives as a number; `== null` also covers rows read before migration 098 ran.
+    approvalNumber: row.approval_number == null ? null : Number(row.approval_number),
     description: row.description as string | null,
     sendResolution: readSendResolution(row.send_resolution),
     createdAt: new Date(row.created_at as string),

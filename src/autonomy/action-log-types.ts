@@ -55,6 +55,13 @@ export interface ActionLogRow {
   expiresAt: Date | null;
   parentActionId: number | null;
   shortRef: string | null;
+  /**
+   * The small number the principal types to answer a pending approval ("approve 3"), in place
+   * of shortRef (#2159 Phase 3). Allocated at insert, unique among rows of the last 7 days.
+   * Null on non-approval rows, on approvals raised before migration 098, and when all 999
+   * numbers were in use (the approval then falls back to its shortRef).
+   */
+  approvalNumber: number | null;
   description: string | null;
   /**
    * Hinted recipients pinned at approval time. Null on older rows and on

@@ -14,7 +14,7 @@ function row(id: number, over: Partial<ActionLogRow> = {}): ActionLogRow {
     id, taskId: `task-${id}`, conversationId: null, toolName: 'email-send', actionRisk: 'medium',
     outcome: 'success', taskSummary: null, competenceFlag: null, commitmentFlag: null, compatibility: null,
     scoredBy: 'sample-pool', payload: { sample: { signals: {} } }, notificationSentAt: null, resolvedAt: null,
-    resolvedBy: null, expiresAt: null, parentActionId: null, shortRef: null,
+    resolvedBy: null, expiresAt: null, parentActionId: null, shortRef: null, approvalNumber: null,
     description: `Emailed dana@example.com: "Action ${id}"`, createdAt: new Date(NOW - id * 60_000),
     ...over,
   };
