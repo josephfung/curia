@@ -157,3 +157,11 @@ export type ResolveResult =
   | { found: false; reason: 'ambiguous'; error: string; pending: ActionLogRow[] }
   | { found: false; reason: 'expired'; error: string }
   | { found: false; reason: 'already_resolved'; error: string };
+
+/**
+ * Appended to every error for a reference that matched nothing usable (not found, expired,
+ * already resolved), and by approve-/deny-/dismiss-action to an unusable reference. A retry
+ * with no reference falls back to the sole pending approval, which may not be the one the
+ * principal named, so the coordinator is told to ask instead.
+ */
+export const NO_REF_RETRY_GUIDANCE = 'Do not retry without a reference; ask the principal which approval they meant.';

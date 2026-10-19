@@ -12,7 +12,7 @@ import type {
   ScoringFlags,
   ResolveResult,
 } from './action-log-types.js';
-import { TERMINAL_OUTCOMES } from './action-log-types.js';
+import { NO_REF_RETRY_GUIDANCE, TERMINAL_OUTCOMES } from './action-log-types.js';
 import { SAMPLE_POOL_SCORED_BY } from './sample-pool.js';
 import type { SampledActionInsert } from './sample-pool.js';
 
@@ -935,14 +935,6 @@ export class ActionLogRepo {
     return live.length === 1 ? live[0]! : null;
   }
 }
-
-/**
- * Appended to every error for a reference that matched nothing usable (not found, expired,
- * already resolved), and by approve-/deny-/dismiss-action to an unusable reference. A retry
- * with no reference falls back to the sole pending approval, which may not be the one the
- * principal named, so the coordinator is told to ask instead.
- */
-export const NO_REF_RETRY_GUIDANCE = 'Do not retry without a reference; ask the principal which approval they meant.';
 
 // A ref of 1 to 3 digits is an approval number (#2159 Phase 3). short_refs are 8 hex
 // characters (generateShortRef), so an all-digit ref this short can only be a number.

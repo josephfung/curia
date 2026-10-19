@@ -76,4 +76,30 @@ describe('parseApprovalRefInput', () => {
     expect(parseApprovalRefInput({ id: null, short_ref: '3' })).toEqual({ ok: true, ref: '3' });
     expect(parseApprovalRefInput({ ref: undefined })).toEqual({ ok: true, ref: undefined });
   });
+
+  // short_ref is the tools' only input, so it is an allowlist: a key nobody listed (a casing or
+  // spelling variant, any other name) must fail closed too, not read as "no reference".
+  it.each([
+    [{ approvalNumber: 3 }, 'approvalNumber'],
+    [{ approval_id: '3' }, 'approval_id'],
+    [{ n: 3 }, 'n'],
+    [{ shortref: '3' }, 'shortref'],
+    [{ 'short-ref': '3' }, 'short-ref'],
+    [{ Short_ref: '3' }, 'Short_ref'],
+    [{ SHORT_REF: '3' }, 'SHORT_REF'],
+  ])('fails closed on any key other than short_ref: %j', (input, key) => {
+    const parsed = parseApprovalRefInput(input);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toContain(key);
+      expect(parsed.error).toContain('short_ref');
+      expect(parsed.error).toContain(NO_RETRY);
+    }
+  });
+
+  it('still falls back for an empty input or an undefined short_ref, and accepts an empty extra key', () => {
+    expect(parseApprovalRefInput({})).toEqual({ ok: true, ref: undefined });
+    expect(parseApprovalRefInput({ short_ref: undefined })).toEqual({ ok: true, ref: undefined });
+    expect(parseApprovalRefInput({ short_ref: '3', note: null })).toEqual({ ok: true, ref: '3' });
+  });
 });
