@@ -55,8 +55,13 @@ export const APPROVAL_FINGERPRINT_RE =
  */
 const APPROVAL_LOOKALIKE_RE = /^(?:Approval \d|Reference: [0-9a-f]{8})/m;
 
-/** An `Expires:` line, the other half of a notification. With a look-alike line, a near-miss. */
-const EXPIRES_LINE_RE = /^Expires: /m;
+/**
+ * A look-alike identifier line with an `Expires:` line DIRECTLY under it: shaped like a
+ * notification's fingerprint, so a message matching this but not the strict regex is a near-miss.
+ * Adjacency matters: a debrief listing pending approvals has both kinds of line, but with other
+ * lines between them, and that is ordinary prose.
+ */
+const NEAR_MISS_RE = /^(?:Approval \d|Reference: [0-9a-f]{8})[^\n]*\nExpires:/m;
 
 /**
  * The approval a delivered body identifies, taken from the LAST fingerprint. The detail block
@@ -203,11 +208,12 @@ export class ReactionApprovalMapper {
     const identifier = lastApprovalIdentifier(content);
     if (!identifier) {
       // Real notifications always carry the strict fingerprint. A near-miss (an identifier-like
-      // line AND an Expires line, yet no strict match) means the renderer and this regex drifted
-      // apart (reactions silently stop working) or someone is imitating a notification: warn. A
-      // look-alike line alone is ordinary coordinator prose ("Approval 3: email Dana"): debug.
+      // line with an Expires line directly under it, yet no strict match) means the renderer and
+      // this regex drifted apart (reactions silently stop working) or someone is imitating a
+      // notification: warn. A look-alike line otherwise is ordinary coordinator prose
+      // ("Approval 3: email Dana", or a debrief listing approvals and their expiries): debug.
       if (APPROVAL_LOOKALIKE_RE.test(content)) {
-        if (EXPIRES_LINE_RE.test(content)) {
+        if (NEAR_MISS_RE.test(content)) {
           this.log.warn(
             { channel, messageId },
             'reaction-approval: near-miss approval notification to the principal fails the strict fingerprint — not binding',

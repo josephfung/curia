@@ -695,6 +695,27 @@ describe('ReactionApprovalMapper', () => {
       expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
     });
 
+    // A debrief listing pending approvals has "Approval N" lines and "Expires:" lines, but not one
+    // straight after the other. Only an adjacent pair is shaped like a notification.
+    it('does not warn on a list whose Expires lines are not directly under an approval line', async () => {
+      await loggingMapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15551234567',
+        content: [
+          'Pending approvals:',
+          'Approval 3: email Dana the budget',
+          'Sent to: dana@example.com',
+          'Expires: Friday',
+          '',
+          'Approval 5: invite Sam to the board sync',
+          'Calendar: work',
+          'Expires: Monday',
+        ].join('\n'),
+        messageId: 'sig-l7',
+      }));
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
+    });
+
     it('warns when the fingerprint expiry does not match the approval', async () => {
       actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(
         makeRow({ approvalNumber: 3, expiresAt: new Date('2026-07-09T00:00:00.000Z') }),
