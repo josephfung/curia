@@ -26,6 +26,9 @@ export class ListPendingActionsHandler implements ToolHandler {
 
       const tz = ctx.timezone;
       const pending = rows.map((row) => ({
+        // The number the principal was shown and answers with ("approve 3"), #2159 Phase 3.
+        // Null for approvals raised before migration 098: those are answered by short_ref.
+        number: row.approvalNumber,
         short_ref: row.shortRef,
         description: row.description,
         skill_name: row.toolName,

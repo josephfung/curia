@@ -40,6 +40,12 @@ export interface ApprovalDisplay {
   preamble: string;
   payload: Record<string, unknown>;
   extraLines?: string[];
+  /**
+   * The approval number the raise site read back after its insert (#2159 Phase 3), null when
+   * it has none. The number SHOWN is always the row's own (it is what "approve 3" resolves
+   * against); this one is only checked against it.
+   */
+  approvalNumber?: number | null;
 }
 
 export interface ApprovalDeliveryDeps {
@@ -57,7 +63,13 @@ export interface ApprovalDeliveryDeps {
 const MAX_DISPLAYS = 500;
 
 const REACT_CTA = 'React 👍 to approve or 👎 to deny this request.';
+// For approvals without a number (raised before migration 098, or when all 999 were in use).
 const REPLY_CTA = 'Reply approve or deny, with the reference.';
+
+/** What to reply to a numbered approval (#2159 Phase 3): the principal types the number. */
+function replyByNumberCta(approvalNumber: number): string {
+  return `Reply "approve ${approvalNumber}" or "deny ${approvalNumber}".`;
+}
 
 export class ApprovalDelivery {
   private readonly displays = new Map<string, ApprovalDisplay>();
@@ -121,8 +133,8 @@ export class ApprovalDelivery {
         messageId = result.messageId;
         // Durably queued while the transport is down (#1380): it goes out on reconnect, so
         // the claim stands. messageId is then a queue row id, not the provider's, so it is
-        // not bound; the reaction mapper binds the real message from its "Reference:" line
-        // when it is actually delivered.
+        // not bound; the reaction mapper binds the real message from its "Approval <n>" (or,
+        // unnumbered, "Reference:") line when it is actually delivered.
         queued = result.queued === true;
       } else {
         failure = result.blockedReason ?? 'send failed';
@@ -202,16 +214,28 @@ export class ApprovalDelivery {
       preamble: row.description ?? `Curia wants to run ${row.toolName}.`,
       payload: row.payload ?? {},
     };
+    // The row's number, never the display's: "approve 3" resolves against the row, so showing
+    // any other number could point the principal at a different approval. The two come from
+    // the same row and should always agree; a mismatch means a bug upstream.
+    const approvalNumber = row.approvalNumber;
+    if (display.approvalNumber != null && display.approvalNumber !== approvalNumber) {
+      this.deps.logger.error(
+        { rowId: row.id, shortRef: row.shortRef, rowNumber: approvalNumber, displayNumber: display.approvalNumber },
+        'approval-delivery: registered approval number disagrees with the row — showing the row\'s',
+      );
+    }
+    const reactable = channel === 'signal' || channel === 'slack';
     const body = buildApprovalNotificationBody({
       preamble: display.preamble,
       shortRef: row.shortRef ?? String(row.id),
+      approvalNumber,
       expiresAt: row.expiresAt ?? new Date(),
       toolName: row.toolName,
       payload: display.payload,
       // Every channel here is one of the principal's own verified identities.
       recipientTier: 'principal',
       ...(display.extraLines ? { extraLines: display.extraLines } : {}),
-      callToAction: channel === 'signal' || channel === 'slack' ? REACT_CTA : REPLY_CTA,
+      callToAction: reactable ? REACT_CTA : approvalNumber != null ? replyByNumberCta(approvalNumber) : REPLY_CTA,
       logger: this.deps.logger,
     });
     switch (channel) {

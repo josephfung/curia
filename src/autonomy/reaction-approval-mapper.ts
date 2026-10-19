@@ -29,8 +29,27 @@ import {
   type ReactionIntentConfig,
 } from './reaction-intent.js';
 
-/** Matches `Reference: <8-hex>` from approval notification bodies. */
-const REFERENCE_RE = /\bReference:\s*([0-9a-f]{8})\b/i;
+/**
+ * Matches the approval's identifier line in a notification body: `Approval <n>` for numbered
+ * approvals (#2159 Phase 3), or `Reference: <8-hex>` for ones raised before migration 098.
+ * Group 1 is the short_ref, group 2 the number.
+ */
+const REFERENCE_RE = /\b(?:Reference:\s*([0-9a-f]{8})|Approval\s+(\d{1,3}))\b/i;
+
+/**
+ * The approval a delivered body identifies, taken from the LAST match. The detail block
+ * (message bodies, subjects, descriptions) holds agent and third-party text and sits above the
+ * identifier line, which only fixed text follows (Expires, the call to action). A body quoting
+ * "Approval 2" or "Reference: …" must not bind this notification to that other approval, or a
+ * 👍 here would approve something the principal was not shown.
+ */
+function lastApprovalIdentifier(content: string): { shortRef: string } | { approvalNumber: number } | null {
+  let last: RegExpExecArray | null = null;
+  for (const match of content.matchAll(new RegExp(REFERENCE_RE.source, 'gi'))) last = match;
+  if (!last) return null;
+  if (last[1]) return { shortRef: last[1].toLowerCase() };
+  return last[2] ? { approvalNumber: Number(last[2]) } : null;
+}
 
 export const UNRECOGNIZED_REACTION_HINT =
   "That reaction isn't recognized for approvals. React 👍 to approve or 👎 to reject.";
@@ -73,7 +92,7 @@ export class ReactionApprovalMapper {
     });
 
     // Secondary binding path: when an outbound approval message is delivered
-    // with a body that embeds `Reference: <short_ref>`, bind its provider
+    // with a body that embeds `Approval <n>` or `Reference: <short_ref>`, bind its provider
     // message id so a later reaction can correlate without channel branching.
     this.bus.subscribe('outbound.delivered', 'dispatch', async (event) => {
       await this.handleDelivered(event as OutboundDeliveredEvent);
@@ -144,17 +163,19 @@ export class ReactionApprovalMapper {
     const { channel, messageId, content } = event.payload;
     if (!messageId || !content) return;
 
-    const match = REFERENCE_RE.exec(content);
-    if (!match?.[1]) return;
+    const identifier = lastApprovalIdentifier(content);
+    if (!identifier) return;
 
-    const shortRef = match[1]!.toLowerCase();
-    const row = await this.actionLogRepo.findPendingByShortRef(shortRef);
+    // A number resolves only among live approvals of the last 7 days, where it is unique.
+    const row = 'approvalNumber' in identifier
+      ? await this.actionLogRepo.findPendingByApprovalNumber(identifier.approvalNumber)
+      : await this.actionLogRepo.findPendingByShortRef(identifier.shortRef);
     if (!row) return;
 
     try {
       await this.actionLogRepo.bindDeliveryMessage(row.id, channel, messageId);
       this.log.info(
-        { actionLogId: row.id, shortRef, channel, messageId },
+        { actionLogId: row.id, shortRef: row.shortRef, approvalNumber: row.approvalNumber, channel, messageId },
         'reaction-approval: bound delivered message to pending approval',
       );
     } catch (err) {

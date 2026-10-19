@@ -643,6 +643,34 @@ describe('ActionLogRepo', () => {
       });
     });
 
+    // #2159 Phase 3: the reaction mapper binds a delivered "Approval <n>" message by number.
+    describe('findPendingByApprovalNumber', () => {
+      const numbered = { ...pendingRow, approval_number: 3 };
+
+      it('finds the live row among pending, non-expired rows of the last 7 days', async () => {
+        const { pool, queries } = makeSequentialPool([[numbered]]);
+        const row = await new ActionLogRepo(pool, createSilentLogger()).findPendingByApprovalNumber(3);
+        expect(row?.id).toBe(10);
+        expect(row?.approvalNumber).toBe(3);
+        const { sql, params } = queries[0]!;
+        expect(sql).toContain('approval_number = $1');
+        expect(sql).toContain("outcome = 'pending_approval'");
+        expect(sql).toContain('expires_at > now()');
+        expect(sql).toContain("created_at > now() - interval '7 days'");
+        expect(params).toEqual([3]);
+      });
+
+      it('returns null when no live row carries the number', async () => {
+        const { pool } = makeSequentialPool([[]]);
+        expect(await new ActionLogRepo(pool, createSilentLogger()).findPendingByApprovalNumber(3)).toBeNull();
+      });
+
+      it('returns null, never a guess, when two live rows carry the same number', async () => {
+        const { pool } = makeSequentialPool([[numbered, { ...numbered, id: 11 }]]);
+        expect(await new ActionLogRepo(pool, createSilentLogger()).findPendingByApprovalNumber(3)).toBeNull();
+      });
+    });
+
     it('resolves to sole pending row when no short_ref provided', async () => {
       // findAllPending returns one row
       const { pool } = makePool([pendingRow]);

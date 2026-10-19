@@ -22,25 +22,51 @@ import type { SendRecipientPin } from '../skills/_shared/recipient-reference.js'
 // ---------------------------------------------------------------------------
 
 export type ApprovalRequestResult =
-  | { created: true; shortRef: string }
+  /** approvalNumber is null when the row has none (all 999 in use) or it could not be read back. */
+  | { created: true; shortRef: string; approvalNumber: number | null }
   | { created: false; reason: 'duplicate'; existingShortRef: string };
 
 /**
  * What the blocked agent is told about a new approval. One place, so every gate gives the
  * same instruction: deliver it on one channel (#2159). deliver-approval is the coordinator's
  * tool, so a specialist is told to hand the ref back instead.
+ *
+ * When the approval has a number (#2159 Phase 3) the advisory quotes it too: it is what the
+ * principal sees and answers with ("approve 3"). The ref stays, because deliver-approval is
+ * keyed on it.
  */
-export function approvalAdvisory(shortRef: string, agentId?: string): string {
+export function approvalAdvisory(shortRef: string, agentId?: string, approvalNumber?: number | null): string {
+  const created = approvalNumber != null
+    ? `An approval request was created (approval ${approvalNumber}, ref: ${shortRef}).`
+    : `An approval request was created (ref: ${shortRef}).`;
   if (agentId !== undefined && agentId !== 'coordinator') {
-    return (
-      `An approval request was created (ref: ${shortRef}). Tell the coordinator, in your reply, ` +
-      `that approval ${shortRef} needs delivering to the principal.`
-    );
+    const which = approvalNumber != null ? `approval ${approvalNumber} (ref ${shortRef})` : `approval ${shortRef}`;
+    return `${created} Tell the coordinator, in your reply, that ${which} needs delivering to the principal.`;
   }
   return (
-    `An approval request was created (ref: ${shortRef}). Deliver it to the principal now with ` +
+    `${created} Deliver it to the principal now with ` +
     `deliver-approval, on the channel their standing preferences name for urgent items.`
   );
+}
+
+/**
+ * Read back the approval number insert() allocated for a pending row (#2159 Phase 3). Never
+ * throws: the row already exists and works by its short_ref, so a failed read only means the
+ * advisory and display go without the number. Delivery re-reads the row, so the principal is
+ * still shown its number.
+ */
+export async function readApprovalNumber(
+  actionLogRepo: Pick<ActionLogRepo, 'findApprovalNumber'>,
+  rowId: number,
+  logger: Logger,
+): Promise<number | null> {
+  try {
+    return await actionLogRepo.findApprovalNumber(rowId);
+  } catch (err) {
+    // Shared by the trigger and the gateway's gates; rowId says which approval.
+    logger.warn({ err, rowId }, 'approval: could not read back the approval number — the approval still works by its reference');
+    return null;
+  }
 }
 
 /**
@@ -307,8 +333,11 @@ export class ApprovalTriggerService {
       }
     }
 
+    // insert() allocated the number inside its transaction but returns only the id.
+    const approvalNumber = await readApprovalNumber(this.actionLogRepo, rowId, this.logger);
+
     this.logger.info(
-      { rowId, taskId, toolName, shortRef, currentScore, requiredScore },
+      { rowId, taskId, toolName, shortRef, approvalNumber, currentScore, requiredScore },
       'approval-trigger: pending_approval row created',
     );
 
@@ -317,7 +346,7 @@ export class ApprovalTriggerService {
     const preamble = opts.reason ??
       `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
       `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).`;
-    this.approvalDelivery?.registerDisplay(shortRef, { preamble, payload: shown });
+    this.approvalDelivery?.registerDisplay(shortRef, { preamble, payload: shown, approvalNumber });
 
     // The request's one digest mention (#2159). Best-effort: the row exists either way, and
     // the agent has been told to deliver it.
@@ -337,6 +366,6 @@ export class ApprovalTriggerService {
       }
     }
 
-    return { created: true, shortRef };
+    return { created: true, shortRef, approvalNumber };
   }
 }

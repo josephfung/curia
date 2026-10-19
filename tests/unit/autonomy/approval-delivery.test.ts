@@ -122,6 +122,56 @@ describe('ApprovalDelivery.deliver', () => {
     expect(repo.bindDeliveryMessage).not.toHaveBeenCalled();
   });
 
+  // #2159 Phase 3: a numbered approval is shown and answered by its number.
+  it('emails a numbered approval with "Approval <n>" and a reply-by-number call to action', async () => {
+    const { delivery, send } = makeDelivery({ row: makeRow({ approvalNumber: 3 }), sendResult: { success: true } });
+
+    await delivery.deliver('abcd1234', 'email');
+
+    const body = send.mock.calls[0]![0].body as string;
+    expect(body.split('\n')).toContain('Approval 3');
+    expect(body).not.toContain('Reference:');
+    expect(body).toContain('Reply "approve 3" or "deny 3".');
+    expect(body).not.toContain('with the reference');
+  });
+
+  it('shows a numbered approval on Signal by number, with the reaction call to action', async () => {
+    const { delivery, send } = makeDelivery({ row: makeRow({ approvalNumber: 7 }) });
+
+    await delivery.deliver('abcd1234', 'signal');
+
+    const message = send.mock.calls[0]![0].message as string;
+    expect(message.split('\n')).toContain('Approval 7');
+    expect(message).toMatch(/React 👍 to approve or 👎 to deny/);
+  });
+
+  // The row is what "approve <n>" resolves against, so the row's number is the one shown,
+  // even if a registered display disagrees.
+  it('shows the row\'s own number, not a disagreeing registered one', async () => {
+    const { delivery, send, logger } = makeDelivery({ row: makeRow({ approvalNumber: 4 }), sendResult: { success: true } });
+    delivery.registerDisplay('abcd1234', { preamble: 'p', payload: {}, approvalNumber: 9 });
+
+    await delivery.deliver('abcd1234', 'email');
+
+    const body = send.mock.calls[0]![0].body as string;
+    expect(body.split('\n')).toContain('Approval 4');
+    expect(body).not.toContain('Approval 9');
+    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ rowNumber: 4, displayNumber: 9 }), expect.any(String));
+  });
+
+  // A pre-098 row has no number; a stale display number must not be shown for it either.
+  it('falls back to the reference for an unnumbered row, even when the display carries a number', async () => {
+    const { delivery, send } = makeDelivery({ sendResult: { success: true } });
+    delivery.registerDisplay('abcd1234', { preamble: 'p', payload: {}, approvalNumber: 5 });
+
+    await delivery.deliver('abcd1234', 'email');
+
+    const body = send.mock.calls[0]![0].body as string;
+    expect(body).toContain('Reference: abcd1234');
+    expect(body).not.toContain('Approval 5');
+    expect(body).toMatch(/Reply approve or deny, with the reference\./);
+  });
+
   it('refuses a second delivery: one ping per approval', async () => {
     const { delivery, send } = makeDelivery({ row: makeRow({ notificationSentAt: new Date() }) });
 

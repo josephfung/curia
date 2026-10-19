@@ -3361,7 +3361,7 @@ describe('approval trigger on gate block', () => {
     const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
-    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1' });
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1', approvalNumber: null });
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
 
     const layer = new ExecutionLayer(registry, logger, {
@@ -3382,10 +3382,29 @@ describe('approval trigger on gate block', () => {
     expect(trigger.request).toHaveBeenCalledOnce();
   });
 
+  // #2159 Phase 3: the agent is told the number the principal will answer with.
+  it('Gate B quotes the approval number in the advisory when the approval has one', async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+      bus: { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus,
+      approvalTrigger: makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 }),
+    });
+
+    const result = await layer.invoke('send-email', { to: 'a@b.com' }, undefined, { taskEventId: 'task-1' });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('approval 3');
+      expect(result.error).toContain('ref: a3f7c12b');
+    }
+  });
+
   it('shows the approver the resolved recipient of a send by reference, and stores the reference (#2033)', async () => {
     const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler('no'));
-    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-2' });
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-2', approvalNumber: null });
     const ref = '44444444-4444-4444-8444-444444444444';
     const opsRef = '77777777-7777-4777-8777-777777777777';
     const entry = (id: string, displayName: string, address: string) => ({
@@ -3427,7 +3446,7 @@ describe('approval trigger on gate block', () => {
       registry.register(makeRiskyManifest('signal-send', 'medium'), handler);
       registry.register(makeRiskyManifest('sms-send', 'medium'), handler);
       registry.register(makeRiskyManifest('slack-send', 'medium'), handler);
-      const trigger = makeApprovalTrigger({ created: true, shortRef: 'x' });
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'x', approvalNumber: null });
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(65), // Gate B would file an approval
         bus: { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus,
@@ -3520,7 +3539,7 @@ describe('approval trigger on gate block', () => {
       const registry = new ToolRegistry();
       // medium (not the manifest's real low) so Gate B holds it at score 65.
       registry.register(makeRiskyManifest('email-draft-save', 'medium'), makeHandler('should not run'));
-      const trigger = makeApprovalTrigger({ created: true, shortRef: 'x' });
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'x', approvalNumber: null });
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(65),
         bus: { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus,
@@ -3608,7 +3627,7 @@ describe('approval trigger on gate block', () => {
     const handler = makeHandler('should not run');
     registry.register(makeRiskyManifest('calendar-respond-to-invite', 'medium'), handler);
 
-    const trigger = makeApprovalTrigger({ created: true, shortRef: 'rsvp-1' });
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'rsvp-1', approvalNumber: null });
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
 
     const layer = new ExecutionLayer(registry, logger, {
@@ -3641,7 +3660,7 @@ describe('approval trigger on gate block', () => {
     const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('store-fact', 'low'), makeHandler('no'));
 
-    const trigger = makeApprovalTrigger({ created: true, shortRef: 'mem-1' });
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'mem-1', approvalNumber: null });
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
 
     const layer = new ExecutionLayer(registry, logger, {
@@ -3691,7 +3710,7 @@ describe('approval trigger on gate block', () => {
     const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
-    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1' });
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1', approvalNumber: null });
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
 
     const layer = new ExecutionLayer(registry, logger, {
@@ -3718,7 +3737,7 @@ describe('approval trigger on gate block', () => {
     const layer = new ExecutionLayer(registry, logger, {
       autonomyService: makeAutonomyService(65),
       bus: { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus,
-      approvalTrigger: makeApprovalTrigger({ created: true, shortRef: 'cal-9' }),
+      approvalTrigger: makeApprovalTrigger({ created: true, shortRef: 'cal-9', approvalNumber: null }),
     });
 
     const result = await layer.invoke('send-email', {}, undefined, { taskEventId: 'task-1', agentId: 'calendar' });
@@ -3758,7 +3777,7 @@ describe('approval trigger on gate block', () => {
     const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
-    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1' });
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1', approvalNumber: null });
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
 
     const layer = new ExecutionLayer(registry, logger, {
@@ -3782,7 +3801,7 @@ describe('approval trigger on gate block', () => {
     const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('store-fact', 'low'), makeHandler('no'));
 
-    const trigger = makeApprovalTrigger({ created: true, shortRef: 'mem-1' });
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'mem-1', approvalNumber: null });
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
 
     const layer = new ExecutionLayer(registry, logger, {

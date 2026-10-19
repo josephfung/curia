@@ -52,7 +52,7 @@ import type { ChannelReconnectEvent } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { markdownToMrkdwn } from '../format/markdown-to-mrkdwn.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
-import { approvalAdvisory, buildApprovalDeliveryWake, generateShortRef } from '../autonomy/approval-trigger.js';
+import { approvalAdvisory, buildApprovalDeliveryWake, generateShortRef, readApprovalNumber } from '../autonomy/approval-trigger.js';
 import { enrichGatewayApprovalPayload } from '../autonomy/approval-notification.js';
 import type { ApprovalDelivery } from '../autonomy/approval-delivery.js';
 import type { AutonomyGating } from '../autonomy/band-policy.js';
@@ -817,9 +817,9 @@ export class OutboundGateway {
         // When present, write a pending_approval row so approve-action can invoke the
         // correct skill on principal approval. DB failure must NOT cause fail-open — the send
         // stays blocked even if the row can't be written (actionRef will be absent).
-        let actionRef: string | undefined;
+        let raised: { shortRef: string; approvalNumber: number | null } | undefined;
         if (options?.taskEventId && options?.reExecRecipe) {
-          actionRef = await this.raiseSendApproval(
+          raised = await this.raiseSendApproval(
             request,
             options.reExecRecipe,
             { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn },
@@ -827,12 +827,12 @@ export class OutboundGateway {
           );
         }
 
-        if (actionRef) {
+        if (raised) {
           return {
             success: false,
             gated: true,
-            actionRef,
-            blockedReason: `Autonomy score ${autonomyConfig.score} is below send threshold ${sendThreshold}. ${approvalAdvisory(actionRef)}`,
+            actionRef: raised.shortRef,
+            blockedReason: `Autonomy score ${autonomyConfig.score} is below send threshold ${sendThreshold}. ${approvalAdvisory(raised.shortRef, undefined, raised.approvalNumber)}`,
           };
         }
 
@@ -1027,11 +1027,12 @@ export class OutboundGateway {
           );
           const itemSummary = ExportControlServiceClass.formatItemSummary(items);
           let actionRef: string | undefined;
+          let rowId: number | undefined;
           if (this.actionLogRepo && options?.taskEventId && options?.reExecRecipe) {
             const recipe = options.reExecRecipe;
             const candidateRef = generateShortRef();
             try {
-              await this.actionLogRepo.insert({
+              rowId = await this.actionLogRepo.insert({
                 taskId: options.taskEventId,
                 conversationId: options.conversationId ?? undefined,
                 toolName: recipe.toolName,
@@ -1047,6 +1048,11 @@ export class OutboundGateway {
               this.log.error({ err }, 'outbound-gateway: failed to write export-gate action_log row');
             }
           }
+          // As at the score gate (raiseSendApproval): the number insert() allocated, read back
+          // by row id (#2159 Phase 3). actionRef and rowId are set together.
+          const approvalNumber = actionRef && this.actionLogRepo && rowId !== undefined
+            ? await readApprovalNumber(this.actionLogRepo, rowId, this.log)
+            : null;
           // As at the score gate: no notification (#2159); the agent delivers it.
           if (actionRef && options?.reExecRecipe) {
             this.approvalDelivery?.registerDisplay(actionRef, {
@@ -1060,6 +1066,7 @@ export class OutboundGateway {
                 export_items: items.map((i) => ({ node_id: i.nodeId, label: i.label, sensitivity: i.sensitivity })),
               },
               extraLines: [`Items:\n${itemSummary}`],
+              approvalNumber,
             });
             // actionRef is set only after an insert that required taskEventId, so it is present.
             await this.queueApprovalMention(actionRef, options.reExecRecipe.description, options.taskEventId ?? options.parentEventId ?? '', options.conversationId ?? undefined);
@@ -1068,7 +1075,7 @@ export class OutboundGateway {
             success: false,
             gated: true,
             actionRef,
-            blockedReason: `${outcome.message}\n\n${itemSummary}${actionRef ? `\n\n${approvalAdvisory(actionRef)}` : ''}`,
+            blockedReason: `${outcome.message}\n\n${itemSummary}${actionRef ? `\n\n${approvalAdvisory(actionRef, undefined, approvalNumber)}` : ''}`,
           };
         }
 
@@ -1657,15 +1664,16 @@ export class OutboundGateway {
    * Write a pending_approval row for a held send, register what the principal will be shown,
    * queue its one digest mention, and wake the coordinator for a relayed reply (#2159).
    * Nobody is notified here: the agent that tried the send delivers the approval on one
-   * channel with deliver-approval. Returns the short ref, or undefined when there is no
-   * action log or the row could not be written (the send stays held either way).
+   * channel with deliver-approval. Returns the short ref and approval number (#2159 Phase 3;
+   * null when the row has none), or undefined when there is no action log or the row could not
+   * be written (the send stays held either way).
    */
   private async raiseSendApproval(
     request: OutboundSendRequest,
     recipe: SendRecipe,
     ctx: { taskEventId: string; conversationId?: string | null; postTurn?: boolean },
     extraLines: string[],
-  ): Promise<string | undefined> {
+  ): Promise<{ shortRef: string; approvalNumber: number | null } | undefined> {
     const actionLogRepo = this.actionLogRepo;
     if (!actionLogRepo) {
       this.log.warn({ channel: request.channel }, 'outbound-gateway: no action log wired — a held send cannot raise an approval');
@@ -1673,8 +1681,9 @@ export class OutboundGateway {
     }
     // Hoist candidateRef so the display registration names the row the insert wrote.
     const candidateRef = generateShortRef();
+    let rowId: number;
     try {
-      await actionLogRepo.insert({
+      rowId = await actionLogRepo.insert({
         taskId: ctx.taskEventId,
         conversationId: ctx.conversationId ?? undefined,
         toolName: recipe.toolName,
@@ -1692,6 +1701,8 @@ export class OutboundGateway {
       );
       return undefined;
     }
+    // insert() allocated the number inside its transaction but returns only the id.
+    const approvalNumber = await readApprovalNumber(actionLogRepo, rowId, this.log);
     // Show the principal the resolved recipients, not the stored contact references (#2033).
     const displayPayload = enrichGatewayApprovalPayload(
       withoutRecipientReferences(recipe.partialPayload ?? {}),
@@ -1706,12 +1717,13 @@ export class OutboundGateway {
       preamble: recipe.description,
       payload: displayPayload,
       extraLines,
+      approvalNumber,
     });
     await this.queueApprovalMention(candidateRef, recipe.description, ctx.taskEventId, ctx.conversationId ?? undefined);
     if (ctx.postTurn) {
       await this.wakeCoordinatorToDeliver(candidateRef, recipe.description, ctx.taskEventId);
     }
-    return candidateRef;
+    return { shortRef: candidateRef, approvalNumber };
   }
 
   /**
@@ -1895,21 +1907,21 @@ export class OutboundGateway {
       );
     };
     if (recipe && options?.taskEventId) {
-      const actionRef = await this.raiseSendApproval(
+      const raised = await this.raiseSendApproval(
         request,
         recipe,
         { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn },
         [`Held by the send review: ${decision.reason}`],
       );
-      if (!actionRef) await reportUnapprovedHold('the approval row could not be written');
+      if (!raised) await reportUnapprovedHold('the approval row could not be written');
       return {
         content,
         result: {
           success: false,
           gated: true,
-          ...(actionRef ? { actionRef } : {}),
-          blockedReason: actionRef
-            ? `${decision.reason} ${approvalAdvisory(actionRef)}`
+          ...(raised ? { actionRef: raised.shortRef } : {}),
+          blockedReason: raised
+            ? `${decision.reason} ${approvalAdvisory(raised.shortRef, undefined, raised.approvalNumber)}`
             : `${decision.reason} No approval request could be recorded — ask the principal before sending it.`,
         },
       };

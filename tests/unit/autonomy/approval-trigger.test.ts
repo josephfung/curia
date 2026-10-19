@@ -117,6 +117,7 @@ function makeMockRepo(overrides?: Partial<ActionLogRepo>): ActionLogRepo {
   return {
     findPendingByTaskAndSkill: vi.fn().mockResolvedValue(null),
     insert: vi.fn().mockResolvedValue(1),
+    findApprovalNumber: vi.fn().mockResolvedValue(null),
     ...overrides,
   } as unknown as ActionLogRepo;
 }
@@ -163,6 +164,22 @@ describe('approvalAdvisory', () => {
     expect(text).toMatch(/tell the coordinator/i);
     expect(approvalAdvisory('abcd1234', 'coordinator')).not.toMatch(/tell the coordinator/i);
   });
+
+  // #2159 Phase 3: the principal answers by number, so the agent should know it. The ref
+  // stays: deliver-approval is keyed on it.
+  it('quotes the approval number when there is one, and keeps the ref', () => {
+    const text = approvalAdvisory('abcd1234', undefined, 3);
+    expect(text).toContain('approval 3');
+    expect(text).toContain('ref: abcd1234');
+    const specialist = approvalAdvisory('abcd1234', 'calendar', 3);
+    expect(specialist).toContain('approval 3');
+    expect(specialist).toContain('abcd1234');
+  });
+
+  it('reads as before without a number', () => {
+    expect(approvalAdvisory('abcd1234', undefined, null)).toBe(approvalAdvisory('abcd1234'));
+    expect(approvalAdvisory('abcd1234', 'calendar', null)).toBe(approvalAdvisory('abcd1234', 'calendar'));
+  });
 });
 
 describe('ApprovalTriggerService.request()', () => {
@@ -172,7 +189,7 @@ describe('ApprovalTriggerService.request()', () => {
 
     const result = await service.request(BASE_OPTS);
 
-    expect(result).toEqual({ created: true, shortRef: expect.stringMatching(/^[0-9a-f]{8}$/) });
+    expect(result).toEqual({ created: true, shortRef: expect.stringMatching(/^[0-9a-f]{8}$/), approvalNumber: null });
     expect(repo.insert).toHaveBeenCalledOnce();
     // The only thing published is the digest item: no email, no chat DM.
     expect((bus.publish as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
@@ -202,9 +219,39 @@ describe('ApprovalTriggerService.request()', () => {
     expect(approvalDelivery.registerDisplay).toHaveBeenCalledWith(result.created ? result.shortRef : '', {
       preamble: expect.stringContaining('Curia wanted to send Signal message'),
       payload: { ...input, recipient: '+15550142 (contact "Alex Vendor")' },
+      approvalNumber: null,
     });
     // Approval re-runs the skill with the reference, which it re-resolves then.
     expect((repo.insert as ReturnType<typeof vi.fn>).mock.calls[0]![0].payload).toEqual(input);
+  });
+
+  // #2159 Phase 3: insert() allocates the number; the service reads it back by row id.
+  it('returns the approval number read back after insert, and registers it for display', async () => {
+    const repo = makeMockRepo({
+      insert: vi.fn().mockResolvedValue(55),
+      findApprovalNumber: vi.fn().mockResolvedValue(3),
+    });
+    const { service, approvalDelivery } = makeService(repo);
+
+    const result = await service.request(BASE_OPTS);
+
+    expect(repo.findApprovalNumber).toHaveBeenCalledWith(55);
+    expect(result).toEqual({ created: true, shortRef: expect.stringMatching(/^[0-9a-f]{8}$/), approvalNumber: 3 });
+    expect(approvalDelivery.registerDisplay).toHaveBeenCalledWith(
+      result.created ? result.shortRef : '',
+      expect.objectContaining({ approvalNumber: 3 }),
+    );
+  });
+
+  // The row exists and works by its reference; a failed read must not lose the approval.
+  it('still creates the approval, unnumbered, when the number cannot be read back', async () => {
+    const repo = makeMockRepo({ findApprovalNumber: vi.fn().mockRejectedValue(new Error('db blip')) });
+    const { service, logger } = makeService(repo);
+
+    const result = await service.request(BASE_OPTS);
+
+    expect(result).toMatchObject({ created: true, approvalNumber: null });
+    expect(logger.warn).toHaveBeenCalled();
   });
 
   it('uses the gate reason as the preamble when one is given', async () => {

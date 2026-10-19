@@ -91,6 +91,22 @@ describe('ListPendingActionsHandler', () => {
     expect(data.displayTimezone).toBe('UTC');
   });
 
+  // #2159 Phase 3: the principal answers by number; pre-098 rows have none (null), and keep
+  // their short_ref.
+  it('returns each pending item\'s approval number, null when it has none', async () => {
+    const now = new Date();
+    const repo = makeMockRepo({
+      findAllPending: vi.fn().mockResolvedValue([
+        { id: 1, shortRef: 'a3f7c12b', approvalNumber: 3, description: 'Create calendar event: Lunch', toolName: 'calendar-create-event', createdAt: now, expiresAt: now },
+        { id: 2, shortRef: 'b4e8d23c', approvalNumber: null, description: 'Send email reply: Dana', toolName: 'email-reply', createdAt: now, expiresAt: now },
+      ]),
+    });
+    const result = await new ListPendingActionsHandler().execute(makeCtx({ actionLogRepo: repo }));
+    const data = (result as { success: true; data: unknown }).data as { pending: Array<Record<string, unknown>> };
+    expect(data.pending[0]).toMatchObject({ number: 3, short_ref: 'a3f7c12b' });
+    expect(data.pending[1]).toMatchObject({ number: null, short_ref: 'b4e8d23c' });
+  });
+
   it('returns ToolResult error when findAllPending throws', async () => {
     const repo = makeMockRepo({
       findAllPending: vi.fn().mockRejectedValue(new Error('DB connection lost')),

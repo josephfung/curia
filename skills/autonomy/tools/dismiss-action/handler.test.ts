@@ -158,4 +158,16 @@ describe('DismissActionHandler', () => {
     expect(result.success).toBe(true);
     expect(repo.resolvePending).toHaveBeenCalledWith(undefined);
   });
+
+  // #2159 Phase 3: "dismiss 3" passes the approval number through short_ref; resolvePending
+  // resolves it to the one live row carrying that number.
+  it('dismisses the row numbered 3 when short_ref is "3"', async () => {
+    const numbered = { ...PENDING_ROW, id: 33, shortRef: 'a3f7c12b', approvalNumber: 3 };
+    const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: numbered }) });
+    const handler = new DismissActionHandler();
+    const result = await handler.execute(makeCtx({ input: { short_ref: '3' }, actionLogRepo: repo, bus: makeMockBus() }));
+    expect(result.success).toBe(true);
+    expect(repo.resolvePending).toHaveBeenCalledWith('3');
+    expect(repo.resolveRow).toHaveBeenCalledWith(33, 'resolved_externally', 'coordinator');
+  });
 });

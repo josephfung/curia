@@ -2655,7 +2655,16 @@ function makeActionLogRepo() {
     findPendingByDeliveryMessage: vi.fn().mockResolvedValue(null),
     findPendingByShortRef: vi.fn().mockResolvedValue(null),
     insertSampled: vi.fn().mockResolvedValue(1),
+    findApprovalNumber: vi.fn().mockResolvedValue(null),
   } as unknown as ActionLogRepo;
+}
+
+/** An action log whose pending insert returns row 7, numbered `n` (#2159 Phase 3). */
+function makeNumberedActionLogRepo(n: number) {
+  const repo = makeActionLogRepo();
+  vi.mocked(repo.insert).mockResolvedValue(7);
+  vi.mocked(repo.findApprovalNumber).mockResolvedValue(n);
+  return repo;
 }
 
 describe('gated draft-fallback (two-step pattern)', () => {
@@ -2917,6 +2926,100 @@ describe('gated draft-fallback (two-step pattern)', () => {
       preamble: TEST_RECIPE.description,
       payload: expect.objectContaining({ to: 'recipient@example.com', subject: 'Hello' }),
     }));
+  });
+
+  // #2159 Phase 3: the principal answers by number. The gate reads it back by row id, shows
+  // it, and tells the agent; the ref stays, since deliver-approval is keyed on it.
+  it('registers and quotes the approval number read back after the insert', async () => {
+    const mocks = createMocks();
+    const registerDisplay = vi.fn();
+    const actionLogRepo = makeNumberedActionLogRepo(3);
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+    gateway.setApprovalDelivery({ registerDisplay } as never);
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
+    );
+
+    expect(actionLogRepo.findApprovalNumber).toHaveBeenCalledWith(7);
+    expect(registerDisplay).toHaveBeenCalledWith(result.actionRef, expect.objectContaining({ approvalNumber: 3 }));
+    expect(result.actionRef).toMatch(/^[0-9a-f]{8}$/);
+    expect(result.blockedReason).toContain('approval 3');
+    expect(result.blockedReason).toContain(`ref: ${result.actionRef}`);
+  });
+
+  it('keeps the held send gated, unnumbered, when the number cannot be read back', async () => {
+    const mocks = createMocks();
+    const registerDisplay = vi.fn();
+    const actionLogRepo = makeActionLogRepo();
+    vi.mocked(actionLogRepo.findApprovalNumber).mockRejectedValue(new Error('db blip'));
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+    gateway.setApprovalDelivery({ registerDisplay } as never);
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
+    );
+
+    expect(result).toMatchObject({ success: false, gated: true, actionRef: expect.stringMatching(/^[0-9a-f]{8}$/) });
+    expect(registerDisplay).toHaveBeenCalledWith(result.actionRef, expect.objectContaining({ approvalNumber: null }));
+    expect(result.blockedReason).not.toMatch(/approval \d/);
+  });
+
+  it('numbers an export-gate approval the same way', async () => {
+    const mocks = createMocks();
+    const registerDisplay = vi.fn();
+    const actionLogRepo = makeNumberedActionLogRepo(6);
+    const exportControlService = {
+      evaluateGatewayAttachments: vi.fn().mockResolvedValue({
+        outcome: { action: 'approval_required', code: 'bulk_export', message: 'This export needs the principal\'s approval.' },
+        items: [{ label: 'board.pdf', sensitivity: 'confidential' }],
+      }),
+    };
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      actionLogRepo,
+      exportControlService: exportControlService as never,
+    });
+    gateway.setApprovalDelivery({ registerDisplay } as never);
+
+    const result = await gateway.send(
+      {
+        channel: 'email', to: 'recipient@example.com', subject: 'Board pack', body: 'Attached.',
+        attachments: [{ fileUrl: 'file:///tmp/board.pdf', filename: 'board.pdf', contentType: 'application/pdf' }],
+      },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
+    );
+
+    expect(result).toMatchObject({ success: false, gated: true, actionRef: expect.stringMatching(/^[0-9a-f]{8}$/) });
+    expect(actionLogRepo.findApprovalNumber).toHaveBeenCalledWith(7);
+    expect(registerDisplay).toHaveBeenCalledWith(result.actionRef, expect.objectContaining({ approvalNumber: 6 }));
+    expect(result.blockedReason).toContain('approval 6');
+    expect(result.blockedReason).toContain(`ref: ${result.actionRef}`);
   });
 
   it('still returns the gated result when the digest mention fails to queue', async () => {
@@ -3701,6 +3804,17 @@ describe('band review (#2159)', () => {
     });
     expect(result).toMatchObject({ gated: true, actionRef: expect.any(String) });
     expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'email-send', payload: { to: 'contact-1' } }));
+  });
+
+  it('quotes the approval number of a held send to the agent (#2159 Phase 3)', async () => {
+    const actionLogRepo = makeNumberedActionLogRepo(4);
+    const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo });
+    const result = await gw.send(emailReq, {
+      taskEventId: 't1', holdRecipe: { toolName: 'email-send', partialPayload: { to: 'contact-1' }, description: 'Email to joel@example.com' },
+    });
+    expect(result).toMatchObject({ gated: true, actionRef: expect.any(String) });
+    expect(result.blockedReason).toContain('approval 4');
+    expect(result.blockedReason).toContain(`ref: ${result.actionRef}`);
   });
 
   it('refuses a held send with no recipe, telling the agent to ask', async () => {

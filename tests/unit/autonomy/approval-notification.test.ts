@@ -221,6 +221,24 @@ describe('buildApprovalNotificationBody', () => {
     expect(body).toContain('Autonomy score: 65 (threshold: 70)');
     expect(body.indexOf('Autonomy score')).toBeLessThan(body.indexOf('Reference:'));
   });
+
+  // #2159 Phase 3: the principal answers "approve 3", so the number replaces the 8-character ref.
+  it('shows "Approval <n>" and no Reference line when the approval has a number', () => {
+    const body = buildApprovalNotificationBody({ ...baseOpts, recipientTier: 'principal', approvalNumber: 3 });
+    expect(body.split('\n')).toContain('Approval 3');
+    expect(body).not.toContain('Reference:');
+    expect(body).not.toContain('c6fd31ad');
+    expect(body).toContain('Expires: 2026-07-02T20:53:26.183Z');
+  });
+
+  // Approvals raised before migration 098 have no number; they keep the reference.
+  it('keeps the Reference line when the approval has no number', () => {
+    for (const approvalNumber of [null, undefined]) {
+      const body = buildApprovalNotificationBody({ ...baseOpts, recipientTier: 'principal', approvalNumber });
+      expect(body).toContain('Reference: c6fd31ad');
+      expect(body).not.toMatch(/^Approval /m);
+    }
+  });
 });
 
 describe('resolveNotificationRecipientTier', () => {

@@ -80,8 +80,11 @@ interface AgentBudget {
 // channel the coordinator chooses, replacing code fan-out: 78,226 bytes over 71 local tools.
 // #2159 Phase 3 numbering: resolve-learning-digest takes `number` and list-learning-digest returns
 // `n`, so the principal replies "confirm 2" instead of quoting a task id: +119 bytes, 78,345 over 71 local tools.
+// #2159 Phase 3 approval numbers: approve-, deny- and dismiss-action's short_ref takes the
+// approval number ("approve 3"), and list-pending-actions returns `number` and says to pass it:
+// +124 bytes, 78,469 over 71 local tools.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 78_419, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 78_543, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   { agent: 'calendar', alwaysOnPromptTokens: 6_200, localToolDefinitionBytes: 25_000, allowMcpPins: false },

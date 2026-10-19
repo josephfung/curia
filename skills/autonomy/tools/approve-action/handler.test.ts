@@ -261,4 +261,36 @@ describe('ApproveActionHandler', () => {
     expect(repo.resolveRow).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  // #2159 Phase 3: "approve 3" passes the approval number through short_ref; resolvePending
+  // resolves it to the one live row carrying that number, and that row is what re-runs.
+  it('approves and re-executes the row numbered 3 when short_ref is "3"', async () => {
+    const numbered = { ...PENDING_ROW, id: 33, shortRef: 'a3f7c12b', approvalNumber: 3, payload: { title: 'Board sync' } };
+    const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: numbered }) });
+    const execLayer = makeMockExecutionLayer();
+    const handler = new ApproveActionHandler();
+
+    const result = await handler.execute(makeCtx({
+      input: { short_ref: '3' }, actionLogRepo: repo, bus: makeMockBus(), executionLayer: execLayer,
+    }));
+
+    expect(result.success).toBe(true);
+    expect(repo.resolvePending).toHaveBeenCalledWith('3');
+    expect(repo.resolveRow).toHaveBeenCalledWith(33, 'approved', 'coordinator');
+    const invokeArgs = (execLayer.invoke as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(invokeArgs[1]).toEqual({ title: 'Board sync' });
+  });
+
+  it('forwards a number that matches no live approval as an error, re-running nothing', async () => {
+    const repo = makeMockRepo({
+      resolvePending: vi.fn().mockResolvedValue({ found: false, reason: 'not_found', error: 'No approval request found with number 9' }),
+    });
+    const execLayer = makeMockExecutionLayer();
+    const result = await new ApproveActionHandler().execute(makeCtx({
+      input: { short_ref: '9' }, actionLogRepo: repo, bus: makeMockBus(), executionLayer: execLayer,
+    }));
+    expect(result).toEqual({ success: false, error: 'No approval request found with number 9' });
+    expect(repo.resolveRow).not.toHaveBeenCalled();
+    expect(execLayer.invoke).not.toHaveBeenCalled();
+  });
 });

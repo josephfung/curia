@@ -890,6 +890,38 @@ export class ActionLogRepo {
     );
     return result.rows[0] ? mapRow(result.rows[0]) : null;
   }
+
+  /**
+   * Find the live approval carrying `approvalNumber` (#2159 Phase 3). Used when binding from
+   * outbound.delivered content that shows `Approval <n>`, so a reaction on that message can
+   * resolve the approval.
+   *
+   * Same filter as resolvePendingByNumber(): pending, non-expired, and created in the last 7
+   * days, the window in which insert() keeps numbers unique. An older row with the number is an
+   * earlier approval the number was reused from and must never match. Two live rows sharing a
+   * number would break the allocation invariant; then nothing is returned rather than a guess,
+   * since binding the wrong row would let a reaction approve an action the principal never saw.
+   */
+  async findPendingByApprovalNumber(approvalNumber: number): Promise<ActionLogRow | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE approval_number = $1
+         AND outcome = 'pending_approval'
+         AND expires_at > now()
+         AND created_at > now() - interval '7 days'
+       ORDER BY created_at ASC
+       LIMIT 2`,
+      [approvalNumber],
+    );
+    if (result.rows.length > 1) {
+      this.logger.error(
+        { approvalNumber, ids: result.rows.map((r) => Number((r as { id: unknown }).id)) },
+        'action-log-repo: two live approvals share an approval number — allocation invariant broken; not binding either',
+      );
+      return null;
+    }
+    return result.rows[0] ? mapRow(result.rows[0]) : null;
+  }
 }
 
 // A ref of 1 to 3 digits is an approval number (#2159 Phase 3). short_refs are 8 hex

@@ -320,6 +320,12 @@ export interface BuildApprovalNotificationBodyOpts {
   /** Opening paragraph — gate reason or short description. */
   preamble: string;
   shortRef: string;
+  /**
+   * The approval's number (#2159 Phase 3). When set, the body shows `Approval <n>` in place of
+   * the `Reference:` line: the principal answers "approve 3". Null or absent for approvals
+   * raised before migration 098 (or when all numbers were in use), which keep the reference.
+   */
+  approvalNumber?: number | null;
   expiresAt: Date;
   toolName: string;
   payload: Record<string, unknown>;
@@ -376,8 +382,11 @@ export function buildApprovalNotificationBody(opts: BuildApprovalNotificationBod
     });
   }
 
+  // This line stays the last approval identifier in the body: the reaction mapper binds a
+  // delivered message by the LAST `Approval <n>` / `Reference:` match, so anything quoted in the
+  // detail block above cannot redirect the binding to another approval.
   lines.push(
-    `Reference: ${opts.shortRef}`,
+    opts.approvalNumber != null ? `Approval ${opts.approvalNumber}` : `Reference: ${opts.shortRef}`,
     `Expires: ${opts.expiresAt.toISOString()}`,
     '',
     opts.callToAction ?? 'Reply to approve, deny, or dismiss this request.',

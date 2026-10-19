@@ -59,6 +59,7 @@ describe('ReactionApprovalMapper', () => {
   let actionLogRepo: {
     findPendingByDeliveryMessage: ReturnType<typeof vi.fn>;
     findPendingByShortRef: ReturnType<typeof vi.fn>;
+    findPendingByApprovalNumber: ReturnType<typeof vi.fn>;
     bindDeliveryMessage: ReturnType<typeof vi.fn>;
     resolveRow: ReturnType<typeof vi.fn>;
     insert: ReturnType<typeof vi.fn>;
@@ -72,6 +73,7 @@ describe('ReactionApprovalMapper', () => {
     actionLogRepo = {
       findPendingByDeliveryMessage: vi.fn(),
       findPendingByShortRef: vi.fn(),
+      findPendingByApprovalNumber: vi.fn(),
       bindDeliveryMessage: vi.fn().mockResolvedValue(true),
       resolveRow: vi.fn().mockResolvedValue(true),
       insert: vi.fn().mockResolvedValue(99),
@@ -424,5 +426,63 @@ describe('ReactionApprovalMapper', () => {
       'slack',
       '1710000000.000100',
     );
+  });
+
+  // #2159 Phase 3: numbered approvals show "Approval <n>" in place of the Reference line.
+  it('binds outbound.delivered messageId when content embeds Approval <n>', async () => {
+    actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(makeRow({ id: 77, approvalNumber: 3 }));
+
+    await mapper.handleDelivered(createOutboundDelivered({
+      channel: 'signal',
+      recipientId: '+15551234567',
+      content: 'Curia wanted to create a calendar event.\n\nApproval 3\nExpires: 2026-07-02T00:00:00.000Z',
+      messageId: 'sig-1',
+    }));
+
+    expect(actionLogRepo.findPendingByApprovalNumber).toHaveBeenCalledWith(3);
+    expect(actionLogRepo.findPendingByShortRef).not.toHaveBeenCalled();
+    expect(actionLogRepo.bindDeliveryMessage).toHaveBeenCalledWith(77, 'signal', 'sig-1');
+  });
+
+  it('does not bind when no live approval carries the number', async () => {
+    actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(null);
+
+    await mapper.handleDelivered(createOutboundDelivered({
+      channel: 'signal',
+      recipientId: '+15551234567',
+      content: 'Approval 12\nExpires: 2026-07-02T00:00:00.000Z',
+      messageId: 'sig-2',
+    }));
+
+    expect(actionLogRepo.findPendingByApprovalNumber).toHaveBeenCalledWith(12);
+    expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
+  });
+
+  // The detail block (message bodies, subjects) comes from agent and third-party text and
+  // sits ABOVE the approval's own line. A body saying "Approval 2" or "Reference: …" must not
+  // bind this notification to a different approval, or a 👍 here would approve that one.
+  it('binds by the last approval line, ignoring numbers or references quoted in the details', async () => {
+    actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(makeRow({ id: 88, approvalNumber: 5 }));
+
+    await mapper.handleDelivered(createOutboundDelivered({
+      channel: 'slack',
+      recipientId: 'U_CEO',
+      content: [
+        'Curia wanted to send an email reply.',
+        '',
+        'Message: Approval 2 is fine by us. Reference: deadbeef',
+        '',
+        'Approval 5',
+        'Expires: 2026-07-02T00:00:00.000Z',
+        '',
+        'React 👍 to approve or 👎 to deny this request.',
+      ].join('\n'),
+      messageId: '1710000000.000200',
+    }));
+
+    expect(actionLogRepo.findPendingByApprovalNumber).toHaveBeenCalledTimes(1);
+    expect(actionLogRepo.findPendingByApprovalNumber).toHaveBeenCalledWith(5);
+    expect(actionLogRepo.findPendingByShortRef).not.toHaveBeenCalled();
+    expect(actionLogRepo.bindDeliveryMessage).toHaveBeenCalledWith(88, 'slack', '1710000000.000200');
   });
 });

@@ -661,7 +661,7 @@ export class ExecutionLayer {
           );
         }
         // The trigger notifies no one; the agent delivers it on one channel (#2159).
-        return baseMsg + approvalAdvisory(result.shortRef, options?.agentId);
+        return baseMsg + approvalAdvisory(result.shortRef, options?.agentId, result.approvalNumber);
       } catch (err) {
         // Approval trigger failure should not change the gate behavior.
         // The skill is still blocked; we just can't create the approval row.
@@ -721,7 +721,7 @@ export class ExecutionLayer {
           );
         }
         // The trigger notifies no one; the agent delivers it on one channel (#2159).
-        return baseMsg + approvalAdvisory(result.shortRef, options?.agentId);
+        return baseMsg + approvalAdvisory(result.shortRef, options?.agentId, result.approvalNumber);
       } catch (err) {
         skillLogger.warn(
           { err, toolName },
@@ -843,7 +843,7 @@ export class ExecutionLayer {
           );
         }
         // The trigger notifies no one; the agent delivers it on one channel (#2159).
-        return baseMsg + approvalAdvisory(result.shortRef, options?.agentId);
+        return baseMsg + approvalAdvisory(result.shortRef, options?.agentId, result.approvalNumber);
       } catch (err) {
         skillLogger.warn({ err, toolName }, 'export gate approval trigger failed');
       }
