@@ -58,7 +58,8 @@ const PRINCIPAL_REPLY_SHAPED = [
  * the principal; as written, 10 of 10 (baseline log, PR 5).
  *
  * The reply-shaped bullets say what to write and where the open question goes, not which
- * questions to keep from the sender (prompt trim PR 10).
+ * questions to keep from the sender (prompt trim PR 10). They name no tone and quote no
+ * sample reply: how Curia sounds is the office identity's tone.style (#2143).
  */
 const NON_PRINCIPAL_REPLY_SHAPED = [
   'Your final response is sent to this sender. The principal does not see it first, so it',
@@ -73,8 +74,8 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   'cannot see ("Yes, go ahead", "The second one works") is reply-shaped. For one of those:',
   '- Make one attempt to place it, such as a mailbox search on the subject line. If that finds',
   '  the thread, act on the message as you would any message from this sender.',
-  '- If it does not, stop searching. Reply with a short, warm acknowledgment ("Thanks, noted.',
-  '  I\'ll follow up shortly."), or NO_REPLY when nothing needs to go back. In the note, ask',
+  '- If it does not, stop searching. Reply with a short acknowledgment that you have the',
+  '  message and will follow up, or NO_REPLY when nothing needs to go back. In the note, ask',
   '  the principal what it refers to, giving who wrote, the subject, and what they said.',
   '',
   'Write the message to the sender, or NO_REPLY. If the principal needs to hear something from',

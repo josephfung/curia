@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Prompt tone directives** — "warm" and sample sentences removed; the office identity alone sets tone. (#2143)
 - **Specialist agents** — now get the office identity block, scoped so drafts in the principal's voice keep it. (#2143)
 - **`inspect-prompts.ts`** — snapshot gains `office_identity_writes_as_block` for curia-deploy's eval harness. (#2143)
 - **Detail setting** — now concrete per-channel length limits, repeated as a reminder on each reply. (#2143)

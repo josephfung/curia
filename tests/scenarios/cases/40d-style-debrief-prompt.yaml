@@ -1,7 +1,7 @@
 # Style case 40d (#2143): the debrief prompt meeting-debrief writes for the coordinator to
 # relay, under a brief, dry identity. Since tone & style PR 4, meeting-debrief gets the
-# identity block in writes-as mode; its Step 6 still asks for "a brief, warm debrief prompt"
-# (agents/meeting-debrief.yaml) until PR 5 drops "warm". This case measures both.
+# identity block in writes-as mode, and since PR 5 its Step 6 names no tone and quotes no
+# sample prompt (agents/meeting-debrief.yaml), so the register comes from the block alone.
 # Same wake as 32b; see docs/wip/2026-10-15-tone-and-style-design.md.
 name: style debrief prompt
 description: >
