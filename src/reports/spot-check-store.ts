@@ -144,6 +144,19 @@ function abandonedError(): Error {
   return new Error('spot-check store: operation abandoned after its timeout; not writing a stale list');
 }
 
+/**
+ * Whether `content` holds `line` as a whole line's end: followed by a line break or the end of
+ * the content. A bare substring check would let "1. Send email to Bob" match inside
+ * "1. Send email to Bobby" and bind the other digest's numbers.
+ */
+function showsWholeLine(content: string, line: string): boolean {
+  for (let at = content.indexOf(line); at !== -1; at = content.indexOf(line, at + 1)) {
+    const next = content[at + line.length];
+    if (next === undefined || next === '\n' || next === '\r') return true;
+  }
+  return false;
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -196,7 +209,7 @@ export class SpotCheckStore {
    *
    * Which set: a conversation can hold more than one recent set (a retried digest draws
    * again), so the set bound is the newest one whose first numbered line (`1. <summary>`)
-   * appears in the content: the numbers the principal sees must resolve to what they saw.
+   * appears in the content as a whole line: the numbers the principal sees must resolve to what they saw.
    * When no set's line appears (the agent reworded the block), the delivery is bound only if
    * the conversation has exactly one set in the window; with several, guessing could bind the
    * wrong numbers, so it returns no_set and writes nothing (the binder warns).
@@ -211,7 +224,7 @@ export class SpotCheckStore {
       const candidates = sets
         .filter((s) => s.conversationId === conversationId && Date.parse(s.createdAt) >= cutoff)
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-      const shown = candidates.find((s) => s.items[0] !== undefined && content.includes(`1. ${s.items[0].summary}`));
+      const shown = candidates.find((s) => s.items[0] !== undefined && showsWholeLine(content, `1. ${s.items[0].summary}`));
       const target = shown ?? (candidates.length === 1 ? candidates[0] : undefined);
       if (!target) return { kind: 'no_set' };
       if (target.deliveries.some((d) => d.messageId === delivery.messageId)) return { kind: 'bound', set: target };

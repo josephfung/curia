@@ -243,6 +243,44 @@ describe('SpotCheckStore', () => {
       expect(byId['newer']!.deliveries).toHaveLength(0);
     });
 
+    // "1. Send email to Bob" is a prefix of "1. Send email to Bobby": a bare substring match
+    // would bind the wrong set's numbers.
+    it('matches the first line whole, not as a prefix of a longer line', async () => {
+      const { store, stored } = makeStore();
+      await store.add(makeSet({
+        id: 'bobby', createdAt: new Date(NOW - HOUR).toISOString(),
+        items: [{ n: 1, actionLogId: 401, summary: 'Send email to Bobby' }],
+      }));
+      await store.add(makeSet({
+        id: 'bob', createdAt: new Date(NOW - 60_000).toISOString(),
+        items: [{ n: 1, actionLogId: 402, summary: 'Send email to Bob' }],
+      }));
+
+      const result = await store.bindDelivery('conv-1', delivery, 'Spot check (optional, reply with a number):\n1. Send email to Bobby\n2. Other');
+
+      expect(result).toMatchObject({ kind: 'bound', set: { id: 'bobby' } });
+      const byId = Object.fromEntries(stored().sets.map((s) => [s.id, s]));
+      expect(byId['bob']!.deliveries).toHaveLength(0);
+    });
+
+    it('matches a first line at the very end of the content', async () => {
+      const { store } = makeStore();
+      await store.add(older);
+      await store.add(newer);
+
+      await expect(store.bindDelivery('conv-1', delivery, 'Spot check (optional, reply with a number):\n1. Archive an email: "Statement ready"'))
+        .resolves.toMatchObject({ kind: 'bound', set: { id: 'older' } });
+    });
+
+    it('matches a first line ending in CRLF', async () => {
+      const { store } = makeStore();
+      await store.add(older);
+      await store.add(newer);
+
+      await expect(store.bindDelivery('conv-1', delivery, 'Spot check (optional, reply with a number):\r\n1. Archive an email: "Statement ready"\r\n2. x'))
+        .resolves.toMatchObject({ kind: 'bound', set: { id: 'older' } });
+    });
+
     it('binds nothing when the content matches neither of several sets', async () => {
       const { store, set } = makeStore();
       await store.add(older);
