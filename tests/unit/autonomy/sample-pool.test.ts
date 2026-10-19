@@ -28,4 +28,8 @@ describe('isSampledTool', () => {
   it('skips medium-risk reads', () => {
     expect(isSampledTool('file-parse', 'medium')).toBe(false);
   });
+  it('skips web-browser, which floods the pool, and voice-learn, which only proposes', () => {
+    expect(isSampledTool('web-browser', 'medium')).toBe(false);
+    expect(isSampledTool('voice-learn', 'medium')).toBe(false);
+  });
 });

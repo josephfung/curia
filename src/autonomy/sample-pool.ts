@@ -23,8 +23,17 @@ export const TRIAGE_SKILLS: ReadonlySet<string> = new Set([
   'ceo-inbox-archive', 'ceo-inbox-label', 'email-archive', 'email-label',
 ]);
 
-// Medium-risk tools with no effect outside Curia: reading a file is not an action to check.
-const NOT_SAMPLED: ReadonlySet<string> = new Set(['file-parse']);
+// Medium-risk tools that would only add noise to the pool.
+const NOT_SAMPLED: ReadonlySet<string> = new Set([
+  // No effect outside Curia: reading a file is not an action to check.
+  'file-parse',
+  // One browsing task makes many calls (navigate, click, read), which would flood the pool
+  // with steps of a single action. TODO: revisit once a form submission is distinguishable
+  // from navigation, since a submission is worth spot-checking.
+  'web-browser',
+  // Only queues a writing-voice proposal; the principal approves it before anything changes.
+  'voice-learn',
+]);
 
 // The gateway records every send (skill or relay) with the review's signals; the
 // execution layer must not record them a second time.
