@@ -10,7 +10,7 @@
 // only runs in a live principal turn. executionLayer capability is restricted to this skill.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { RESOLVED_BY } from '../../../../src/autonomy/action-log-types.js';
+import { RESOLVED_BY, approvalLabel } from '../../../../src/autonomy/action-log-types.js';
 import { parseApprovalRefInput } from '../../../_shared/approval-ref.js';
 import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipient-reference.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
@@ -48,7 +48,7 @@ export class ApproveActionHandler implements ToolHandler {
       // Validate payload exists — re-execution needs the original skill input
       if (!row.payload) {
         ctx.log.error({ rowId: row.id }, 'approve-action: row has null payload — cannot re-execute');
-        return { success: false, error: `Cannot approve request '${row.shortRef}': no stored payload for re-execution` };
+        return { success: false, error: `Cannot approve ${approvalLabel(row)}: no stored payload for re-execution` };
       }
 
       const pins = row.sendResolution;
@@ -72,7 +72,7 @@ export class ApproveActionHandler implements ToolHandler {
       const transitioned = await ctx.actionLogRepo.resolveRow(row.id, 'approved', RESOLVED_BY.coordinator);
       if (!transitioned) {
         ctx.log.warn({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: row was already resolved concurrently — aborting re-execution');
-        return { success: false, error: `Request '${row.shortRef}' was already resolved by another action — approval aborted` };
+        return { success: false, error: `${approvalLabel(row)} was already resolved by another action — approval aborted` };
       }
       ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: row transitioned to approved');
 
@@ -160,7 +160,8 @@ export class ApproveActionHandler implements ToolHandler {
       return {
         success: true,
         data: {
-          approved: row.shortRef,
+          // Named the way the principal saw it: "Approval 3", or the reference for an unnumbered row.
+          approved: approvalLabel(row),
           description: row.description,
           reExecutionSuccess: reResult.success,
           reExecutionResult: reResult.success ? reResult.data : (reResult as { error: string }).error,

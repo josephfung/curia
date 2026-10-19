@@ -711,6 +711,61 @@ describe('ActionLogRepo', () => {
         expect((result as { pending: unknown[] }).pending).toHaveLength(2);
       }
     });
+
+    // Review fix F5 (#2159 Phase 3): the principal sees "Approval 3", not the short_ref, so the
+    // ambiguity lists the coordinator relays must name approvals the way the notifications did.
+    describe('ambiguity lists name approvals by number', () => {
+      it('lists numbered rows as "Approval N (ref): description" and asks for the approval number', async () => {
+        const a = { ...pendingRow, id: 10, approval_number: 3, short_ref: 'a3f7c12b', description: 'Email Dana' };
+        const b = { ...pendingRow, id: 11, approval_number: 5, short_ref: 'b5e1d9a0', description: 'Invite Sam' };
+        const { pool } = makePool([a, b]);
+        const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending();
+        expect(result.found).toBe(false);
+        if (!result.found) {
+          expect(result.error).toContain('specify the approval number');
+          expect(result.error).toContain('Approval 3 (a3f7c12b): Email Dana');
+          expect(result.error).toContain('Approval 5 (b5e1d9a0): Invite Sam');
+          expect(result.error).not.toContain('short_ref');
+        }
+      });
+
+      it('falls back to the reference wording only when no row has a number', async () => {
+        const a = { ...pendingRow, id: 10, short_ref: 'a3f7c12b', description: 'Email Dana' };
+        const b = { ...pendingRow, id: 11, short_ref: 'b5e1d9a0', description: 'Invite Sam' };
+        const { pool } = makePool([a, b]);
+        const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending();
+        if (!result.found) {
+          expect(result.error).toContain('specify the reference');
+          expect(result.error).toContain('a3f7c12b: Email Dana');
+          expect(result.error).not.toContain('Approval');
+        }
+      });
+
+      it('mixes the two forms when only some rows have a number', async () => {
+        const a = { ...pendingRow, id: 10, approval_number: 3, short_ref: 'a3f7c12b', description: 'Email Dana' };
+        const b = { ...pendingRow, id: 11, short_ref: 'b5e1d9a0', description: 'Invite Sam' };
+        const { pool } = makePool([a, b]);
+        const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending();
+        if (!result.found) {
+          expect(result.error).toContain('specify the approval number');
+          expect(result.error).toContain('Approval 3 (a3f7c12b): Email Dana');
+          expect(result.error).toContain('b5e1d9a0: Invite Sam');
+        }
+      });
+
+      it('names the shared number in the duplicate-number list and asks for the reference', async () => {
+        const a = { ...pendingRow, id: 10, approval_number: 3, short_ref: 'a3f7c12b', description: 'Email Dana' };
+        const b = { ...pendingRow, id: 11, approval_number: 3, short_ref: 'b5e1d9a0', description: 'Invite Sam' };
+        const { pool } = makeSequentialPool([[a, b]]);
+        const result = await new ActionLogRepo(pool, createSilentLogger()).resolvePending('3');
+        if (!result.found) {
+          expect(result.reason).toBe('ambiguous');
+          expect(result.error).toContain('Approval 3 (a3f7c12b');
+          expect(result.error).toContain('Approval 3 (b5e1d9a0');
+          expect(result.error).toContain('use the reference');
+        }
+      });
+    });
   });
 
   // #2159: approval delivery claims and the safety net's lookup.

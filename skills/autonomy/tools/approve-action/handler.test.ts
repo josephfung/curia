@@ -355,4 +355,43 @@ describe('ApproveActionHandler', () => {
       expect(repo.resolveRow).toHaveBeenCalledWith(50, 'approved', 'coordinator');
     });
   });
+
+  // Review fix F5 (#2159 Phase 3): the confirmation names the approval the way the principal saw
+  // it: "Approval 3" when the row has a number, the short_ref only for rows without one.
+  describe('confirmation label', () => {
+    it('names a numbered approval as "Approval N"', async () => {
+      const numbered = { ...PENDING_ROW, id: 33, shortRef: 'a3f7c12b', approvalNumber: 3 };
+      const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: numbered }) });
+      const result = await new ApproveActionHandler().execute(makeCtx({
+        input: { short_ref: '3' }, actionLogRepo: repo, bus: makeMockBus(), executionLayer: makeMockExecutionLayer(),
+      }));
+      expect(result.success).toBe(true);
+      expect((result as { data: { approved: string } }).data.approved).toBe('Approval 3');
+    });
+
+    it('names an unnumbered approval by its reference', async () => {
+      const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: { ...PENDING_ROW, approvalNumber: null } }) });
+      const result = await new ApproveActionHandler().execute(makeCtx({
+        actionLogRepo: repo, bus: makeMockBus(), executionLayer: makeMockExecutionLayer(),
+      }));
+      expect(result.success).toBe(true);
+      expect((result as { data: { approved: string } }).data.approved).toBe('cal-1');
+    });
+
+    it('names a numbered approval as "Approval N" when it was already resolved', async () => {
+      const numbered = { ...PENDING_ROW, id: 33, shortRef: 'a3f7c12b', approvalNumber: 3 };
+      const repo = makeMockRepo({
+        resolvePending: vi.fn().mockResolvedValue({ found: true, row: numbered }),
+        resolveRow: vi.fn().mockResolvedValue(false),
+      });
+      const result = await new ApproveActionHandler().execute(makeCtx({
+        input: { short_ref: '3' }, actionLogRepo: repo, bus: makeMockBus(), executionLayer: makeMockExecutionLayer(),
+      }));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('Approval 3');
+        expect(result.error).not.toContain('a3f7c12b');
+      }
+    });
+  });
 });

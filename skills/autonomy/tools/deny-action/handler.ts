@@ -8,7 +8,7 @@
 // live-principal gate (#1126). No handler-level re-check.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { RESOLVED_BY } from '../../../../src/autonomy/action-log-types.js';
+import { RESOLVED_BY, approvalLabel } from '../../../../src/autonomy/action-log-types.js';
 import { parseApprovalRefInput } from '../../../_shared/approval-ref.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
@@ -43,7 +43,7 @@ export class DenyActionHandler implements ToolHandler {
       const transitioned = await ctx.actionLogRepo.resolveRow(row.id, 'denied', RESOLVED_BY.coordinator);
       if (!transitioned) {
         ctx.log.warn({ rowId: row.id, shortRef: row.shortRef }, 'deny-action: row was already resolved concurrently');
-        return { success: false, error: `Request '${row.shortRef}' was already resolved by another action` };
+        return { success: false, error: `${approvalLabel(row)} was already resolved by another action` };
       }
 
       // Publish human.decision audit event (best-effort).
@@ -86,7 +86,8 @@ export class DenyActionHandler implements ToolHandler {
       }
 
       ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'deny-action: request denied');
-      return { success: true, data: `Denied: ${row.description ?? row.toolName} (${row.shortRef})` };
+      // Named the way the principal saw it: "Approval 3", or the reference for an unnumbered row.
+      return { success: true, data: `Denied: ${row.description ?? row.toolName} (${approvalLabel(row)})` };
     } catch (err) {
       ctx.log.error({ err }, 'deny-action: unexpected failure');
       return { success: false, error: 'deny-action failed unexpectedly' };

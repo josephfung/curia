@@ -695,7 +695,7 @@ export class ActionLogRepo {
       }
       if (pending.rows.length > 1) {
         const rows = pending.rows.map(mapRow);
-        const refs = rows.map(r => `${r.shortRef} (task: ${r.taskId}): ${r.description}`).join(', ');
+        const refs = rows.map(r => describeForChoice(r, { withTask: true })).join(', ');
         return {
           found: false,
           reason: 'ambiguous',
@@ -735,12 +735,16 @@ export class ActionLogRepo {
     if (allPending.length === 1) {
       return { found: true, row: allPending[0]! };
     }
-    // Multiple pending rows — caller must specify a short_ref
-    const refs = allPending.map(r => `${r.shortRef}: ${r.description}`).join(', ');
+    // Multiple pending rows — the caller must name one. Ask for the identifier the principal was
+    // shown: the approval number, or the reference only when no listed row has a number (#2159).
+    const refs = allPending.map(r => describeForChoice(r)).join(', ');
+    const ask = allPending.some(r => r.approvalNumber != null)
+      ? 'specify the approval number'
+      : 'specify the reference (short_ref)';
     return {
       found: false,
       reason: 'ambiguous',
-      error: `Multiple pending requests — specify a short_ref. Pending: ${refs}`,
+      error: `Multiple pending requests — ${ask}. Pending: ${refs}`,
       pending: allPending,
     };
   }
@@ -761,7 +765,8 @@ export class ActionLogRepo {
     }
     if (live.length > 1) {
       // Refuse to pick (ambiguous) rather than act on what may be the wrong approval.
-      const refs = live.map(r => `${r.shortRef} (task: ${r.taskId}): ${r.description}`).join(', ');
+      // Every listed row carries the same number, so only the reference tells them apart.
+      const refs = live.map(r => describeForChoice(r, { withTask: true })).join(', ');
       return {
         found: false,
         reason: 'ambiguous',
@@ -928,6 +933,21 @@ export class ActionLogRepo {
 // A ref of 1 to 3 digits is an approval number (#2159 Phase 3). short_refs are 8 hex
 // characters (generateShortRef), so an all-digit ref this short can only be a number.
 const APPROVAL_NUMBER_PATTERN = /^\d{1,3}$/;
+
+/**
+ * One pending row in an ambiguity list the coordinator relays to the principal (#2159 Phase 3):
+ * `Approval 3 (a3f7c12b): <description>` for a numbered row, `a3f7c12b: <description>` otherwise.
+ * The number leads because it is what the notification showed; the reference follows so two rows
+ * sharing a number can still be told apart.
+ */
+function describeForChoice(row: ActionLogRow, opts: { withTask?: boolean } = {}): string {
+  const task = opts.withTask ? `task: ${row.taskId}` : null;
+  if (row.approvalNumber != null) {
+    const inParens = task ? `${row.shortRef}, ${task}` : row.shortRef;
+    return `Approval ${row.approvalNumber} (${inParens}): ${row.description}`;
+  }
+  return task ? `${row.shortRef} (${task}): ${row.description}` : `${row.shortRef}: ${row.description}`;
+}
 
 // Largest tool input (as JSON) kept on a spot-check pool row. Enough for message ids, labels
 // and short titles; a long event description or email body is not worth the row size.

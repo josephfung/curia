@@ -72,6 +72,17 @@ export interface ActionLogRow {
   createdAt: Date;
 }
 
+/**
+ * How a pending approval is named back to the principal: `Approval <n>` when the row has a number
+ * (#2159 Phase 3, the only identifier its notification showed), otherwise its short_ref (what an
+ * unnumbered notification showed; approval-delivery renders `shortRef ?? id`, mirrored here).
+ * Confirmations and errors must never name a reference the principal was not shown.
+ */
+export function approvalLabel(row: Pick<ActionLogRow, 'approvalNumber' | 'shortRef' | 'id'>): string {
+  if (row.approvalNumber != null) return `Approval ${row.approvalNumber}`;
+  return row.shortRef ?? String(row.id);
+}
+
 /** Fields required to insert a new autonomy_action_log row. */
 export interface ActionLogInsert {
   taskId: string;
