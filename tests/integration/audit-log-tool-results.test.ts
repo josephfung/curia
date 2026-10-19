@@ -5,6 +5,7 @@ import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import { AuditLogRepo } from '../../src/audit/audit-log-repo.js';
 import { createSilentLogger } from '../../src/logger.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -16,6 +17,9 @@ describeIf('audit-log findToolResultsForTasks (#2159)', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    // audit_log is append-only (no DELETE), so the rows this suite seeds can't be cleaned up.
+    // Refuse anything but the isolated test database before writing a single one.
+    await requireCuriaTestDatabase(pool);
     repo = new AuditLogRepo(pool, createSilentLogger());
     await pool.query('SELECT 1 FROM audit_log LIMIT 0');
   });
