@@ -538,6 +538,23 @@ What it shows:
   style; the judge marks the register down for it. PR 5 removes such directives from core
   prompts; a deployment's job payloads are its own to change.
 
+### PR 4 checks
+
+`deepseek/deepseek-v4.1-flash`, 2026-10-19, 5 runs each, with every agent on the identity
+block:
+- **40e (guard) holds:** 5/5 drafts produced, all in the principal's voice ("Marcus —",
+  "Cheers, Avery"); no refusal under the "Never impersonate the principal" constraint.
+- **40d is unchanged:** every prompt still copies meeting-debrief.yaml's example sentence.
+  PR 5 removes it.
+- **Specialist cases:** a 3-run screen of every `specialist-*` case (46 cases, about
+  $1.17) passed all but two. Both were rerun on main and on this branch:
+  - 31e's `both_timezones` (a draft to London giving both time zones): branch 10/10,
+    main 9.5/10.
+  - 30d's verbatim slot strings: 5/5 on both arms. Its screen miss was a run that drafted
+    nothing at all, the case's known flakiness.
+
+  Neither is a regression.
+
 ## PR sequence
 
 | PR | Delivers | Measurement |

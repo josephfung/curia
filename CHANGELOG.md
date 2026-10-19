@@ -23,6 +23,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Specialist agents** — now get the office identity block, scoped so drafts in the principal's voice keep it. (#2143)
+- **`inspect-prompts.ts`** — snapshot gains `office_identity_writes_as_block` for curia-deploy's eval harness. (#2143)
 - **Detail setting** — now concrete per-channel length limits, repeated as a reminder on each reply. (#2143)
 - **Identity block** — tells Curia to say what is there, not what isn't, and skip narration. (#2143)
 - **Console Detail preview** — shows each channel's length limit at the current setting. (#2143)
