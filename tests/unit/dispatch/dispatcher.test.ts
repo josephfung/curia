@@ -2661,6 +2661,34 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
     expect(tasks[0]!.payload.turnGuidance).toContain('spot-check-reply');
   });
 
+  it('adds it for a principal reply followed by a realistic multi-hundred-character quoted digest', async () => {
+    const { bus, tasks } = setup('principal');
+    // Mail clients quote the whole digest under the reply; the length gate must measure
+    // only the new text above the quote, or no real reply would ever match.
+    const quotedDigest = [
+      'On Mon, Oct 19, 2026 at 5:00 PM Curia <curia@example.com> wrote:',
+      '> Daily digest for Dana',
+      '> ',
+      '> Handled today: 14 emails triaged, 3 meetings rescheduled, 2 invoices filed.',
+      '> Waiting on you: Priya has asked for sign-off on the vendor renewal.',
+      '> ',
+      '> Spot check (optional, reply with a number):',
+      '> 1. Archived a newsletter from the design collective.',
+      '> 2. Declined a meeting request from Sam about the Q4 planning offsite.',
+      '> 3. Filed an invoice from the catering company under operations.',
+    ].join('\n');
+    const content = `Subject: Re: Your daily digest\n\n2 bad, that was a renewal notice\n\n${quotedDigest}`;
+    expect(content.length).toBeGreaterThan(400);
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-digest-quoted',
+      channelId: 'email',
+      senderId: 'dana@example.com',
+      content,
+    }));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.turnGuidance).toContain('spot-check-reply');
+  });
+
   it('adds it for a principal message on a non-email channel too', async () => {
     const { bus, tasks } = setup('principal');
     await bus.publish('channel', createInboundMessage({

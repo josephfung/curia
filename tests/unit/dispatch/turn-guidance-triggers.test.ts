@@ -172,10 +172,45 @@ describe('looksLikeSpotCheckReply', () => {
 
 describe('spotCheckCandidateText', () => {
   it('drops the Subject line the email channel prepends, so a reply body starts the text', () => {
-    expect(spotCheckCandidateText('email', 'Subject: Re: Daily digest\n\n2 bad, renewal notice\n\n> quoted')).toBe(
-      '2 bad, renewal notice\n\n> quoted',
+    expect(spotCheckCandidateText('email', 'Subject: Re: Daily digest\n\n2 bad, renewal notice')).toBe(
+      '2 bad, renewal notice',
     );
     expect(looksLikeSpotCheckReply(spotCheckCandidateText('email', 'Subject: Re: Daily digest\n\n2 bad'))).toBe(true);
+  });
+
+  describe('cuts the quoted earlier message off an email reply', () => {
+    const REPLY = '2 bad, that was a renewal notice';
+    const QUOTED_TAIL = 'x'.repeat(600);
+    // The text a verdict check measures: the reply with the quote cut off.
+    const candidate = (body: string) => spotCheckCandidateText('email', `Subject: Re: Daily digest\n\n${body}`);
+
+    it.each([
+      ['a ">" quoted line', `${REPLY}\n\n> ${QUOTED_TAIL}`],
+      ['an "On ... wrote:" header', `${REPLY}\n\nOn Mon, Oct 19, 2026 at 5:00 PM Curia <curia@example.com> wrote:\n${QUOTED_TAIL}`],
+      [
+        'an "On ... wrote:" header wrapped onto two lines',
+        `${REPLY}\n\nOn Mon, Oct 19, 2026 at 5:00 PM Curia <curia@example.com>\nwrote:\n${QUOTED_TAIL}`,
+      ],
+      ['an Original Message rule', `${REPLY}\n\n-----Original Message-----\n${QUOTED_TAIL}`],
+      ['an Outlook From: header after a blank line', `${REPLY}\n\nFrom: Curia <curia@example.com>\nSent: Monday\n${QUOTED_TAIL}`],
+    ])('at %s', (_name, body) => {
+      expect(candidate(body)).toBe(REPLY);
+      // Without the cut, the quoted tail would push the message past the length gate.
+      expect(looksLikeSpotCheckReply(body)).toBe(false);
+      expect(looksLikeSpotCheckReply(candidate(body))).toBe(true);
+    });
+
+    it('does not cut at a From: line that does not follow a blank line', () => {
+      expect(candidate(`${REPLY}\nFrom: the vendor\nthat was it`)).toContain('that was it');
+    });
+
+    it('does not cut at a mid-line ">" or an "On" sentence that is not a header', () => {
+      expect(candidate('2 bad, a > b\nOn Monday I will explain')).toBe('2 bad, a > b\nOn Monday I will explain');
+    });
+
+    it('cuts only at the FIRST marker', () => {
+      expect(candidate(`${REPLY}\n> one\n\nsecond\n> two`)).toBe(REPLY);
+    });
   });
 
   it('leaves non-email content alone', () => {

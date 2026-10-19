@@ -50,13 +50,40 @@ export function looksLikeSpotCheckReply(text: string): boolean {
 // which would hide a reply's first words from the start-of-message rule.
 const EMAIL_SUBJECT_PREFIX = /^Subject:[^\n]*\n+/;
 
+// Where a mail client starts quoting the message being replied to. A reply on the digest's
+// thread quotes the whole digest (several hundred characters, htmlToText keeps it, nothing
+// in src/ strips it), which would blow the length gate. Heuristic on purpose: a marker we
+// miss only means the guidance does not fire for that reply, never that a score is wrong.
+const QUOTE_HEADER_ON_WROTE = /^On .+ wrote:$/i;
+const QUOTE_ORIGINAL_MESSAGE = /^-{2,}\s*Original Message\s*-{2,}$/i;
+
+/** Index of the first line that starts quoted text, or -1 when the reply quotes nothing. */
+function firstQuoteLine(lines: readonly string[]): number {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!.trim();
+    if (line.startsWith('>')) return i;
+    if (QUOTE_ORIGINAL_MESSAGE.test(line)) return i;
+    if (QUOTE_HEADER_ON_WROTE.test(line)) return i;
+    // Gmail wraps a long "On ... <address> wrote:" header onto a second line.
+    if (/^On /i.test(line) && i + 1 < lines.length && QUOTE_HEADER_ON_WROTE.test(`${line} ${lines[i + 1]!.trim()}`)) return i;
+    // Outlook-style header block. Only after a blank line, so a "From:" inside the reply's
+    // own sentence-per-line text is not mistaken for one.
+    if (/^From:\s/i.test(line) && i > 0 && lines[i - 1]!.trim() === '') return i;
+  }
+  return -1;
+}
+
 /**
  * The text to test with looksLikeSpotCheckReply: the inbound content, minus the email
- * channel's Subject line. The dispatcher has no quote-stripped body, but a reply puts its
- * new text first, so the start-of-message rule works on the whole body.
+ * channel's Subject line and, for email, minus the quoted earlier message. The dispatcher
+ * has no quote-stripped body, but a reply puts its new text first, so cutting at the first
+ * quote marker leaves just the reply for the start-of-message rule and the length gate.
  */
 export function spotCheckCandidateText(channelId: string, content: string): string {
-  return channelId === 'email' ? content.replace(EMAIL_SUBJECT_PREFIX, '') : content;
+  if (channelId !== 'email') return content;
+  const lines = content.replace(EMAIL_SUBJECT_PREFIX, '').split('\n');
+  const quoteAt = firstQuoteLine(lines);
+  return (quoteAt === -1 ? lines : lines.slice(0, quoteAt)).join('\n').trim();
 }
 
 export function inboundTurnGuidance(facts: InboundGuidanceFacts): TurnGuidanceKey[] {
