@@ -1273,3 +1273,47 @@ ALTER TABLE autonomy_action_log DROP COLUMN IF EXISTS approval_number;
 13. **Approval numbers need a column (D2),** pending approval. The no-schema alternatives were each worse:
     - reusing `short_ref` conflicts with its global uniqueness;
     - a config-store map has no transactional allocation.
+
+## Execution notes (2026-10-19)
+
+Executed subagent-driven as four stacked PRs: A #2185, B #2186, C #2187, D. Each task had its own review, each PR had code, silent-failure and (where relevant) security review, and a final whole-branch review drove one last fix wave on PR D. **Merge all four before deploying:** the final wave's fixes for A–C code live on D.
+
+### Decisions taken with the principal
+- Only the principal's verdicts score sampled rows; the pool is sends + triage + medium-risk and up; numbering ships in Phase 3; migration 098 approved.
+
+### Rulings made during execution (each with its cost if wrong)
+**Pool (PR A)**
+- Pool rows are written under `tier` gating too (spec samples at every band). Cost: extra unscored rows on tier installs.
+- Tool input ≤2000 chars is kept on the pool row so summaries can name the email. Cost: input stored in the action log (pending rows already store it).
+- `ceo-inbox-update-folders` left out of triage (paired with archive). Cost: folder moves without an archive aren't sampled.
+- `file-parse`, `web-browser`, `voice-learn` and every MCP-sourced tool are never sampled. Cost: autonomous browsing and MCP writes (e.g. Bluesky posts) aren't spot-checked until an opt-in exists.
+- First contact = a person recipient whose contact record is under 24 h old or absent. Cost: outreach to an older, never-messaged contact isn't up-weighted.
+- `send-draft` isn't pooled when principal-approved (its guard is `principalDirected`).
+**Digest (PR B)**
+- Rows are marked sampled when the digest's delivery is bound, not when drawn. Cost: two digests drawn before either binds can show the same row.
+- Candidates are fetched per class with at least one non-triage slot whenever any exist; a no-op archive isn't pooled. Cost: triage slightly under-sampled.
+- `ceo-inbox-archive`/`-label` return the email's subject and sender (B3b); the sender renders `Name (email)` so the output sanitizer keeps it. Untrusted subjects are sanitised to a fixed point, markup neutralised and entities defused.
+- An ungradable triage sample is labelled "(details unavailable)" rather than dropped. Cost: a slot the principal can't judge.
+- The binder registers whenever its services exist (live principal identities). Store writes are serialised through a process-wide queue with a 10 s per-op timeout.
+**Verdicts (PR C)**
+- `record-spot-check` records only number/verdict pairs the dispatcher parsed from the principal's own message (stamped in trusted metadata). Cost: a verdict typed mid-message, or in a voice turn, is refused and the principal resends "N good/bad".
+- The trigger is skipped when Curia is only CC'd; guidance is conditional and asks for a read-back. Forward and quote markers (Gmail, Apple, Outlook, OWA) are cut before the stamp.
+- An email reply resolves only by its thread; chat replies use the latest delivered digest within 24 h, refused if a newer set was drawn after it. Cost: an extra clarifying question.
+- `record-spot-check` is `action_risk: none` and refuses woken turns, mirroring the elevated gate.
+**Numbers (PR D)**
+- Learning items: allocated max+1, never reused while any item is live; commands are "confirm/dismiss/undo task N"; resolution names the item. Residual: the top number can be reissued once it alone is resolved.
+- Approvals: allocated under an advisory lock at explicit READ COMMITTED, not reused for 7 days.
+- Reaction binding requires the notification's exact fingerprint (`Approval N`/`Reference: x` line directly above its `Expires:` line, case-sensitive), the approval's exact millisecond expiry, and a principal recipient. Cost: a reformatted notification isn't 👍-bindable; "approve N" still works.
+- Approval tools accept only `short_ref`; any other reference key, or an unusable value, fails closed. "#3" and "Approval 3" normalise to 3. No error invites a retry without a reference.
+**Plan defects corrected**
+- The D4 reference regex (unanchored, case-insensitive, newline-crossing) would have bound coordinator prose to live approvals; replaced by the fingerprint above.
+- The D1 lowest-free numbering would have let a stale "confirm 2" hit a newer item; replaced by max+1.
+- C1's `"array (...)"` input type doesn't load; `"object[] (...)"` used.
+- Prompt-budget raises: +119 (D1), +124 (D4), +202 (PR D fixes), each measured.
+
+### Deferred minors (open)
+- **Before deploy:** a read-only prod projection of `countScored` and the capability score with expired rows excluded (prod sits near the 80 edge). Watch CI for the first real-Postgres runs of the 098 and approval-number integration tests.
+- **Before release:** curia-docs `configuration.mdx` still documents `weakExpiredWeight` (a config that sets it now fails boot).
+- **Hardening ideas:** a typed stamp for "approve/deny N" like the spot-check stamp; a nonce in the approval fingerprint; a persisted high-water mark for learning numbers.
+- **Behaviour edges accepted:** queued sends flushed later are never pooled; group/Slack-channel summaries show raw ids; a config-store write past its timeout can overwrite the next write; "2 and 3 bad" stamps only 3; non-English or bottom-posted replies don't trigger; NUL in a subject would fail that pool insert; approval-number exhaustion only warns; `get-autonomy` still counts expired/dead-letter rows; "dismiss 2" relies on tool descriptions to tell approvals from learning items.
+- **Test polish:** several tests under-assert (gateway exclusion sends, store malformed entries, conflicting-verdict text, `wakeContext: null`, HTML-path quote cutting); a few integration assertions can flake against parallel suites.
