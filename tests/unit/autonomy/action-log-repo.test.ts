@@ -665,6 +665,28 @@ describe('ActionLogRepo', () => {
       expect(queries[0]!.params).toEqual([since, 200]);
     });
 
+    it('insertSampled persists a small tool input on the row', async () => {
+      const { pool, queries } = makePool([{ id: '43' }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.insertSampled({
+        taskId: 't1', toolName: 'ceo-inbox-archive', actionRisk: 'low',
+        summary: 'Archive an email', signals: { triage: true }, input: { message_id: 'm-1' },
+      });
+      expect(JSON.parse(queries[0]!.params[6] as string)).toEqual({
+        sample: { signals: { triage: true }, input: { message_id: 'm-1' } },
+      });
+    });
+
+    it('insertSampled omits a tool input over 2000 characters of JSON', async () => {
+      const { pool, queries } = makePool([{ id: '44' }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.insertSampled({
+        taskId: 't1', toolName: 'calendar-create-event', actionRisk: 'high',
+        summary: 'Create a calendar event', signals: {}, input: { description: 'x'.repeat(2001) },
+      });
+      expect(JSON.parse(queries[0]!.params[6] as string)).toEqual({ sample: { signals: {} } });
+    });
+
     it('markSampled stamps the ids and returns the count, and does nothing for an empty list', async () => {
       const { pool, queries } = makePool([], 2);
       const repo = new ActionLogRepo(pool, createSilentLogger());

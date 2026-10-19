@@ -52,6 +52,36 @@ describe('buildDescription', () => {
     expect(desc).toContain('Dana prefers mornings');
   });
 
+  // Spot-check pool tools (#2159 Phase 3): a pool summary of "Run ceo-inbox-archive" tells
+  // the principal nothing, and the row's description is fixed once written.
+  it.each([
+    ['ceo-inbox-archive', { message_id: 'm-1' }, 'Archive an email'],
+    ['email-archive', { message_id: 'm-1', account: 'work' }, 'Archive an email'],
+    ['ceo-inbox-label', { message_id: 'm-1' }, 'Label an email'],
+    ['email-label', { message_id: 'm-1' }, 'Label an email'],
+    ['contact-merge', { primary_contact_id: 'a', secondary_contact_id: 'b' }, 'Merge contacts'],
+    ['contact-set-tier', { contact_id: 'a', tier: 'trusted' }, 'Change a contact\'s trust tier'],
+    ['contact-set-role', { contact_id: 'a', role: 'Board member' }, 'Change a contact\'s role'],
+    ['executive-profile-update', { writing_voice: { tone: ['warm'] } }, 'Update the principal\'s profile'],
+    ['calendar-create-hold', { calendarId: 'c1', start: 's', end: 'e' }, 'Place a calendar hold'],
+  ])('describes %s', (tool, input, expected) => {
+    expect(buildDescription(tool, input)).toBe(expected);
+  });
+
+  it('appends the labels applied by a label tool', () => {
+    expect(buildDescription('ceo-inbox-label', { message_id: 'm-1', labels: ['🚨 Urgent', 'BOARD'] }))
+      .toBe('Label an email: 🚨 Urgent, BOARD');
+    expect(buildDescription('email-label', { message_id: 'm-1', label: 'Receipts' }))
+      .toBe('Label an email: Receipts');
+  });
+
+  it('appends a calendar hold\'s title', () => {
+    expect(buildDescription('calendar-create-hold', { calendarId: 'c1', title: 'Hold: Q4 review' }))
+      .toBe('Place a calendar hold: Hold: Q4 review');
+    expect(buildDescription('calendar-create-hold', { calendarId: 'c1', subject: 'Intro with Sam' }))
+      .toBe('Place a calendar hold: Intro with Sam');
+  });
+
   it('falls back to "Run {skill_name}" for unknown skills', () => {
     const desc = buildDescription('some-unknown-skill', {});
     expect(desc).toBe('Run some-unknown-skill');

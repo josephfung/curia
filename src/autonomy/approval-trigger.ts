@@ -99,6 +99,15 @@ const VERB_RULES: Array<{ test: (name: string) => boolean; verb: string }> = [
   { test: (n) => n.startsWith('signal-'), verb: 'Send Signal message' },
   { test: (n) => n.startsWith('sms-'), verb: 'Send SMS' },
   { test: (n) => n.startsWith('scheduler-'), verb: 'Schedule job' },
+  // Tools the spot-check pool samples (#2159 Phase 3). A pool row's description is written
+  // once and shown to the principal as-is, so "Run ceo-inbox-archive" would never improve.
+  { test: (n) => n === 'ceo-inbox-archive' || n === 'email-archive', verb: 'Archive an email' },
+  { test: (n) => n === 'ceo-inbox-label' || n === 'email-label', verb: 'Label an email' },
+  { test: (n) => n === 'contact-merge', verb: 'Merge contacts' },
+  { test: (n) => n === 'contact-set-tier', verb: 'Change a contact\'s trust tier' },
+  { test: (n) => n === 'contact-set-role', verb: 'Change a contact\'s role' },
+  { test: (n) => n === 'executive-profile-update', verb: 'Update the principal\'s profile' },
+  { test: (n) => n === 'calendar-create-hold', verb: 'Place a calendar hold' },
 ];
 
 /**
@@ -126,6 +135,14 @@ export function buildDescription(
       contextParts.push(truncate(val.trim(), MAX_VALUE_LENGTH));
     }
   }
+  // Label tools take `labels` as a list of names (ceo-inbox-label, email-label); name them
+  // so "Label an email" says which label. A single string is accepted too.
+  const labels = input.labels;
+  const labelNames = typeof labels === 'string'
+    ? [labels]
+    : Array.isArray(labels) ? labels.filter((l): l is string => typeof l === 'string') : [];
+  const labelText = labelNames.map((l) => l.trim()).filter(Boolean).join(', ');
+  if (labelText) contextParts.push(truncate(labelText, MAX_VALUE_LENGTH));
 
   // Known skill but no recognizable context fields — return just the verb.
   // (Fallback to "Run {toolName}" is only for truly unknown skills above.)

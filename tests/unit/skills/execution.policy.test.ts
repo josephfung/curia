@@ -4705,6 +4705,8 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
       actionRisk: 'high',
       summary: buildDescription('calendar-create-event', input),
       signals: {},
+      // The repo keeps it when small, so a later spot check can say what the action touched.
+      input,
     }]]);
   });
 

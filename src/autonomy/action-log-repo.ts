@@ -202,7 +202,7 @@ export class ActionLogRepo {
       actionRisk: row.actionRisk,
       outcome: 'success',
       description: row.summary,
-      payload: { sample: { signals: row.signals } },
+      payload: { sample: { signals: row.signals, ...sampleInput(row.input) } },
       // scored_by set + every flag null: findUnscoredTerminal skips the row and the scorer
       // ignores it until the principal gives a verdict.
       scoredBy: SAMPLE_POOL_SCORED_BY,
@@ -720,6 +720,20 @@ export class ActionLogRepo {
     );
     return result.rows[0] ? mapRow(result.rows[0]) : null;
   }
+}
+
+// Largest tool input (as JSON) kept on a spot-check pool row. Enough for message ids, labels
+// and short titles; a long event description or email body is not worth the row size.
+const SAMPLE_INPUT_MAX_CHARS = 2000;
+
+/**
+ * The tool input to persist on a pool row, or nothing when absent or too large. Keeping it
+ * lets the spot-check digest resolve what a triage action touched (subject, sender) from the
+ * message id, which is all a triage tool's input carries (#2159 Phase 3).
+ */
+function sampleInput(input: Record<string, unknown> | undefined): { input?: Record<string, unknown> } {
+  if (!input) return {};
+  return JSON.stringify(input).length <= SAMPLE_INPUT_MAX_CHARS ? { input } : {};
 }
 
 /** Map a snake_case DB row to a camelCase ActionLogRow. */

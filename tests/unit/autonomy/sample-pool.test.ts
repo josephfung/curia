@@ -20,6 +20,11 @@ describe('isSampledTool', () => {
     expect(isSampledTool('activity-log', 'none')).toBe(false);
     expect(isSampledTool('some-tool', 65)).toBe(false);
   });
+  it('leaves ceo-inbox-update-folders out: triage pairs it with an archive of the same message', () => {
+    // One triage decision must be one pool row, not two (#2159 Phase 3 review).
+    expect(TRIAGE_SKILLS.has('ceo-inbox-update-folders')).toBe(false);
+    expect(isSampledTool('ceo-inbox-update-folders', 'low')).toBe(false);
+  });
   it('skips medium-risk reads', () => {
     expect(isSampledTool('file-parse', 'medium')).toBe(false);
   });

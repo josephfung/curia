@@ -1531,6 +1531,9 @@ export class ExecutionLayer {
         toolName,
         actionRisk: String(actionRisk),
         summary: buildDescription(toolName, input),
+        // Kept on the row when small (the repo decides), so the spot check can later name
+        // what a triage action touched; triage tools carry only a message id.
+        input,
         signals: {
           ...(TRIAGE_SKILLS.has(toolName) ? { triage: true } : {}),
           ...(gateProceeded ? { gateProceeded: true } : {}),

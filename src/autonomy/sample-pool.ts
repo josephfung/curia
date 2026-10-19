@@ -12,9 +12,15 @@ import type { ActionRisk } from '../skills/types.js';
 export const SAMPLE_POOL_SCORED_BY = 'sample-pool';
 export const PRINCIPAL_SCORED_BY = 'principal';
 
-/** Mail triage: archiving, labelling or moving the principal's mail. Sampled at any risk. */
+/**
+ * Mail triage: archiving or labelling the principal's mail. Sampled at any risk.
+ *
+ * Not ceo-inbox-update-folders: ceo-inbox triage calls it AND ceo-inbox-archive for the same
+ * message, so sampling both turned one triage decision into two pool rows. It is low risk,
+ * so outside this set it is not sampled at all.
+ */
 export const TRIAGE_SKILLS: ReadonlySet<string> = new Set([
-  'ceo-inbox-archive', 'ceo-inbox-label', 'ceo-inbox-update-folders', 'email-archive', 'email-label',
+  'ceo-inbox-archive', 'ceo-inbox-label', 'email-archive', 'email-label',
 ]);
 
 // Medium-risk tools with no effect outside Curia: reading a file is not an action to check.
@@ -43,6 +49,8 @@ export interface SampledActionInsert {
   /** What the principal reads in the spot check, e.g. 'Emailed dana@example.com: "Re: Payment schedule"'. */
   summary: string;
   signals: SampleSignals;
+  /** The tool's input, kept on the row when its JSON is at most 2000 characters. */
+  input?: Record<string, unknown>;
 }
 
 /** Whether the execution layer records a successful autonomous call of this tool in the pool. */
