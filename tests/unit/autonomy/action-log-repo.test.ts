@@ -696,6 +696,14 @@ describe('ActionLogRepo', () => {
       expect(queries[0]!.params).toEqual([[3, 4], '2026-10-19T12:00:00.000Z']);
     });
 
+    it('markSampled stamps pool rows only, so its count means what the warning says', async () => {
+      const { pool, queries } = makePool([], 1);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.markSampled([3], new Date('2026-10-19T12:00:00Z'));
+      expect(queries[0]!.sql).toContain("outcome = 'success'");
+      expect(queries[0]!.sql).toContain("scored_by IN ('sample-pool', 'principal')");
+    });
+
     it('markSampled warns when fewer rows were stamped than asked for', async () => {
       const { pool } = makePool([], 1);
       const logger = createSilentLogger();

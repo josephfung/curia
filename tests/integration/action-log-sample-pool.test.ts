@@ -65,6 +65,18 @@ describeIf('action-log sample pool (#2159 Phase 3)', () => {
     expect(candidates.map((r) => r.id)).not.toContain(id);
   });
 
+  it('leaves a row outside the pool untouched when asked to mark it sampled', async () => {
+    const id = await repo.insert({
+      taskId: `${TASK_PREFIX}mark-not-pool`,
+      toolName: 'calendar-create-event',
+      actionRisk: 'high',
+      outcome: 'success',
+    });
+    expect(await repo.markSampled([id], new Date())).toBe(0);
+    const { rows } = await pool.query('SELECT payload FROM autonomy_action_log WHERE id = $1', [id]);
+    expect(rows[0].payload).toBeNull();
+  });
+
   it('scores nothing until the principal gives a verdict, then counts competence only', async () => {
     const before = await repo.countScored();
     const id = await seedPoolRow('verdict');

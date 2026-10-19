@@ -228,13 +228,19 @@ export class ActionLogRepo {
    * Mark pool rows as shown, so the next digest draws different ones. Returns the number of
    * rows stamped; fewer than `ids.length` means some ids no longer exist (or were never pool
    * rows), which the caller may want to know about, so it is logged here too.
+   *
+   * The pool predicate matches recordPrincipalVerdict's. Without it a non-pool id would count
+   * as stamped, and its NULL payload would be rewritten to '{}' (jsonb_set cannot create the
+   * missing 'sample' parent).
    */
   async markSampled(ids: readonly number[], at: Date): Promise<number> {
     if (ids.length === 0) return 0;
     const result = await this.pool.query(
       `UPDATE autonomy_action_log
        SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{sample,sampledAt}', to_jsonb($2::text), true)
-       WHERE id = ANY($1::bigint[])`,
+       WHERE id = ANY($1::bigint[])
+         AND outcome = 'success'
+         AND scored_by IN ('sample-pool', 'principal')`,
       [ids, at.toISOString()],
     );
     const updated = result.rowCount ?? 0;
