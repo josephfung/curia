@@ -229,7 +229,7 @@ describe('SpotCheckSampler.draw', () => {
       const drawn = await sampler.draw('conv-1');
 
       expect(drawnOf(drawn).count).toBe(2);
-      expect(drawnOf(drawn).block.split('\n')[1]).toBe('1. Archive an email');
+      expect(drawnOf(drawn).block.split('\n')[1]).toBe('1. Archive an email (details unavailable)');
       expect(warn).toHaveBeenCalled();
       expect(add).toHaveBeenCalledTimes(1);
       expect(add.mock.calls[0]![0].items.map((i) => i.actionLogId)).toEqual([1, 2]);
@@ -242,7 +242,7 @@ describe('SpotCheckSampler.draw', () => {
 
       const drawn = await sampler.draw('conv-1');
 
-      expect(drawnOf(drawn).block.split('\n')[1]).toBe('1. Archive an email');
+      expect(drawnOf(drawn).block.split('\n')[1]).toBe('1. Archive an email (details unavailable)');
       expect(warn).toHaveBeenCalled();
     });
 
@@ -255,7 +255,7 @@ describe('SpotCheckSampler.draw', () => {
       await vi.advanceTimersByTimeAsync(3_000);
       const drawn = await pending;
 
-      expect(drawnOf(drawn).block.split('\n')[1]).toBe('1. Archive an email');
+      expect(drawnOf(drawn).block.split('\n')[1]).toBe('1. Archive an email (details unavailable)');
       expect(warn).toHaveBeenCalled();
     });
 
@@ -286,6 +286,36 @@ describe('SpotCheckSampler.draw', () => {
       await sampler.draw('conv-1');
 
       expect(describeEmail).toHaveBeenCalledWith('msg-1', undefined);
+    });
+
+    // "Archive an email" with no subject cannot be graded from the digest. Saying so lets the
+    // principal skip it instead of guessing which email it was.
+    it('says details are unavailable when the lookup finds a sender but no subject', async () => {
+      const describeEmail = vi.fn(async () => ({ from: 'sam@example.com' }));
+      const { sampler } = makeDeps({ rows: [triageRow(1, { message_id: 'msg-1' })], describeEmail });
+
+      const drawn = await sampler.draw('conv-1');
+
+      expect(drawnOf(drawn).block.split('\n')[1]).toBe('1. Archive an email: from sam@example.com (details unavailable)');
+    });
+
+    it('says details are unavailable for a triage row when no lookup is wired, or it has no message id', async () => {
+      const { sampler } = makeDeps({ rows: [triageRow(1, { message_id: 'msg-1' }), triageRow(2, { labels: ['FYI'] }, 'email-label')] });
+
+      const lines = drawnOf(await sampler.draw('conv-1')).block.split('\n');
+
+      expect(lines[1]).toBe('1. Archive an email (details unavailable)');
+      expect(lines[2]).toBe('2. Archive an email (details unavailable)');
+    });
+
+    it('leaves a non-triage row and a triage row with a subject as they are', async () => {
+      const describeEmail = vi.fn(async () => ({ subject: 'Q4 board deck' }));
+      const { sampler } = makeDeps({ rows: [row(1), triageRow(2, { message_id: 'msg-2' })], describeEmail });
+
+      const lines = drawnOf(await sampler.draw('conv-1')).block.split('\n');
+
+      expect(lines[1]).toBe('1. Emailed dana@example.com: "Action 1"');
+      expect(lines[2]).toBe('2. Archive an email: "Q4 board deck"');
     });
 
     it('never looks up a non-triage row, or a triage row without a message id', async () => {

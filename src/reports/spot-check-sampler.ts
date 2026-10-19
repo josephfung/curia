@@ -36,6 +36,8 @@ const CANDIDATE_LIMIT = 200;
 const MAX_SAMPLES = 3;
 /** One slow mail lookup must not hold up the digest. */
 const DESCRIBE_TIMEOUT_MS = 3_000;
+/** Appended to a triage line that names no subject: the principal cannot tell which email it was. */
+const DETAILS_UNAVAILABLE = ' (details unavailable)';
 
 /**
  * Looks up the subject and sender of an email so a triage sample reads as more than
@@ -58,7 +60,7 @@ export interface SpotCheckSamplerDeps {
   logger: Logger;
   random?: () => number;
   now?: () => number;
-  /** Optional: without it, triage samples keep their stored summary. */
+  /** Optional: without it, triage samples keep their stored summary, marked "(details unavailable)". */
   describeEmail?: DescribeEmail;
 }
 
@@ -137,19 +139,31 @@ export class SpotCheckSampler {
   /**
    * The line the principal reads for a row. A triage row's stored summary ("Archive an email")
    * cannot be graded on its own, so when a mail lookup is wired, the subject and sender are
-   * added. Any lookup failure keeps the stored summary: it is a nicety, not a requirement.
+   * added. Any lookup failure keeps the stored summary: the sample is still shown. A triage line
+   * that still names no subject ends "(details unavailable)", so the principal knows it cannot
+   * be judged from the digest rather than guessing which email it was.
    */
   private async summarize(row: ActionLogRow): Promise<string> {
     const base = oneLine(row.description ?? row.toolName);
-    const describeEmail = this.deps.describeEmail;
-    if (!describeEmail || !TRIAGE_SKILLS.has(row.toolName)) return base;
+    if (!TRIAGE_SKILLS.has(row.toolName)) return base;
+    const { line, hasSubject } = await this.describeTriage(row, base);
+    return hasSubject ? line : `${line}${DETAILS_UNAVAILABLE}`;
+  }
+
+  /** A triage row's line, and whether it names the email's subject. Never throws. */
+  private async describeTriage(row: ActionLogRow, base: string): Promise<{ line: string; hasSubject: boolean }> {
+    const unchanged = { line: base, hasSubject: false };
     // The tool returned the subject when it ran (ceo-inbox-*, whose mail the gateway lookup
     // cannot reach), so the stored summary already names the email: no lookup, no warning.
     const stored = readSample(row.payload)?.['email'];
-    if (isPlainObject(stored) && typeof stored['subject'] === 'string' && stored['subject'].trim()) return base;
+    if (isPlainObject(stored) && typeof stored['subject'] === 'string' && stored['subject'].trim()) {
+      return { line: base, hasSubject: true };
+    }
 
+    const describeEmail = this.deps.describeEmail;
+    if (!describeEmail) return unchanged;
     const input = readSample(row.payload)?.['input'];
-    if (!isPlainObject(input) || typeof input['message_id'] !== 'string') return base;
+    if (!isPlainObject(input) || typeof input['message_id'] !== 'string') return unchanged;
     const messageId = input['message_id'];
     const account = typeof input['account'] === 'string' ? input['account'] : undefined;
 
@@ -161,16 +175,18 @@ export class SpotCheckSampler {
       const described = await Promise.race([describeEmail(messageId, account), timeout]);
       if (described === 'timeout') {
         this.deps.logger.warn({ actionLogId: row.id, toolName: row.toolName }, 'spot-check sampler: email lookup timed out; keeping the stored summary');
-        return base;
+        return unchanged;
       }
       const enriched = formatEmailSummary(base, described?.subject, described?.from);
       if (enriched === base) {
         this.deps.logger.warn({ actionLogId: row.id, toolName: row.toolName }, 'spot-check sampler: email lookup found nothing to add; keeping the stored summary');
       }
-      return enriched;
+      // Whether the subject itself made it into the line (it may be absent, or clean to nothing).
+      const hasSubject = described?.subject !== undefined && formatEmailSummary(base, described.subject) !== base;
+      return { line: enriched, hasSubject };
     } catch (err) {
       this.deps.logger.warn({ err, actionLogId: row.id, toolName: row.toolName }, 'spot-check sampler: email lookup failed; keeping the stored summary');
-      return base;
+      return unchanged;
     } finally {
       clearTimeout(timer);
     }
