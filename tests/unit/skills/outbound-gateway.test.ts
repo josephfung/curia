@@ -3780,12 +3780,22 @@ describe('band review (#2159)', () => {
       expect(result.success).toBe(true);
     });
 
-    it('skips the review for an approved draft', async () => {
+    it('skips the review when the principal directed this draft send', async () => {
       withDraftClient();
       const review = vi.fn();
       const gw = makeBandGateway({ review, score: 84 });
-      await gw.sendEmailDraft('d1', 'curia', draftMeta, { humanApproved: true });
+      await gw.sendEmailDraft('d1', 'curia', draftMeta, { humanApproved: true, principalDirected: true });
       expect(review).not.toHaveBeenCalled();
+    });
+
+    it('reviews a draft a woken task sends, though send-draft always marks it humanApproved', async () => {
+      // send-draft passes humanApproved on every call (its own task-origin check is the
+      // gate), so humanApproved does not mean the principal read this draft.
+      withDraftClient();
+      const review = vi.fn().mockResolvedValue({ kind: 'send', content: draftMeta.body });
+      const gw = makeBandGateway({ review, score: 84 });
+      await gw.sendEmailDraft('d1', 'curia', draftMeta, { humanApproved: true, principalDirected: false, taskEventId: 't1' });
+      expect(review).toHaveBeenCalledWith(expect.objectContaining({ principalDirected: false }));
     });
   });
 });

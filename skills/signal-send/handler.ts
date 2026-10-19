@@ -155,6 +155,8 @@ export class SignalSendHandler implements ToolHandler {
           taskEventId: ctx.taskEventId,
           conversationId: ctx.conversationId,
           principalDirected: isPrincipalDirectedSend(ctx),
+          // Used only if band review holds this send (#2159): approval replays this skill with this input.
+          holdRecipe: { toolName: 'signal-send', partialPayload: ctx.input, description: 'Signal message to a group' },
         });
 
         if (!result.success) {
@@ -214,6 +216,8 @@ export class SignalSendHandler implements ToolHandler {
         taskEventId: ctx.taskEventId,
         conversationId: ctx.conversationId,
         principalDirected: isPrincipalDirectedSend(ctx),
+        // Used only if band review holds this send (#2159): approval replays this skill with this input.
+        holdRecipe: { toolName: 'signal-send', partialPayload: ctx.input, description: `Signal message to ${identityName ?? destination}` },
       });
 
       if (!result.success) {

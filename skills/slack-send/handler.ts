@@ -109,6 +109,8 @@ export class SlackSendHandler implements ToolHandler {
           taskEventId: ctx.taskEventId,
           conversationId: ctx.conversationId,
           principalDirected: isPrincipalDirectedSend(ctx),
+          // Used only if band review holds this send (#2159): approval replays this skill with this input.
+          holdRecipe: { toolName: 'slack-send', partialPayload: ctx.input, description: `Slack message to ${identityName ?? destination}` },
         },
       );
 

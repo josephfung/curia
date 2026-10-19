@@ -55,7 +55,13 @@ describe('sms-send handler', () => {
       }));
       expect(result.success).toBe(true);
       expect(resolveRecipientReference).toHaveBeenCalledWith('sms', 'principal', { field: 'recipient' });
-      expect(send).toHaveBeenCalledWith({ channel: 'sms', recipient: '+15195550100', message: 'Hello' }, expect.any(Object));
+      expect(send).toHaveBeenCalledWith(
+        { channel: 'sms', recipient: '+15195550100', message: 'Hello' },
+        // Replayed on approval if band review holds the send (#2159).
+        expect.objectContaining({
+          holdRecipe: { toolName: 'sms-send', partialPayload: { recipient: 'principal', message: 'Hello' }, description: expect.stringMatching(/^SMS to /) },
+        }),
+      );
       if (result.success) {
         expect(result.data).toMatchObject({ delivered_to: '+15195550100' });
         expect(result.data).not.toHaveProperty('contact_id');

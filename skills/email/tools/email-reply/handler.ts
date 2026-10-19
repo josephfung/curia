@@ -238,6 +238,8 @@ export class EmailReplyHandler implements ToolHandler {
         conversationId: ctx.conversationId,
         humanApproved: ctx.humanApproved,
         principalDirected: isPrincipalDirectedSend(ctx),
+        // Used only if band review holds this send (#2159): approval replays this skill with this input.
+        holdRecipe: { toolName: 'email-reply', partialPayload: ctx.input, description: `Email reply to ${originalFrom} — "${replySubject}"` },
         ...(provenance ? { recipientSource: provenance } : {}),
         ...(fromName ? { recipientDisplayName: fromName } : {}),
         ...(attachmentsParsed.length > 0

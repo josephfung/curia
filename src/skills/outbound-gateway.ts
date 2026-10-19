@@ -2918,8 +2918,12 @@ export class OutboundGateway {
     // Step 2.5: Band review (#2159) — as in send(). A stored draft cannot be trimmed, so a
     // review that would cut statements holds it instead.
     // ------------------------------------------------------------------
+    // Keyed on principalDirected, not humanApproved: send-draft sets humanApproved on every
+    // call (its task-origin check is its gate), so it does not mean the principal read this
+    // draft. A live principal turn or an explicit approval did; a woken task did not. This
+    // is also when tier gating skips Stage 2.5.
     let bandReport: BandReviewReport | undefined;
-    if (this.gating === 'band' && this.bandReview && !options?.humanApproved && !draftPrincipalSole) {
+    if (this.gating === 'band' && this.bandReview && !options?.principalDirected && !draftPrincipalSole) {
       const outcome = await this.runBandReview({
         request: {
           channel: 'email',

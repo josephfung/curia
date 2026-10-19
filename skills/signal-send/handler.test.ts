@@ -243,7 +243,11 @@ describe('SignalSendHandler', () => {
     }
     expect(gateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'signal', recipient: '+14155551234', message: 'hello' }),
-      { taskEventId: undefined, conversationId: undefined, principalDirected: false },
+      {
+        taskEventId: undefined, conversationId: undefined, principalDirected: false,
+        // Replayed on approval if band review holds the send (#2159).
+        holdRecipe: { toolName: 'signal-send', partialPayload: ctx.input, description: expect.stringMatching(/^Signal message to /) },
+      },
     );
   });
 
@@ -294,7 +298,10 @@ describe('SignalSendHandler', () => {
     }
     expect(gateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'signal', groupId: 'grpABC==', message: 'team update' }),
-      { taskEventId: undefined, conversationId: undefined, principalDirected: false },
+      {
+        taskEventId: undefined, conversationId: undefined, principalDirected: false,
+        holdRecipe: { toolName: 'signal-send', partialPayload: ctx.input, description: 'Signal message to a group' },
+      },
     );
   });
 
