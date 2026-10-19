@@ -12,9 +12,11 @@
 //
 // Second guard (#2159 F2): on the principal's own live turn, injected text in quoted or
 // forwarded mail, or in a tool result, could still steer the coordinator into calling this
-// tool with numbers the principal never typed. The dispatcher stamps the pairs the principal
-// typed into trusted task metadata (`spotCheckVerdicts`, stripped from untrusted metadata in
-// mergeTaskMetadata), and every requested pair must be one of them.
+// tool with numbers the principal never typed. The dispatcher stamps the pairs in the
+// message above any recognised quote or forward marker into trusted task metadata
+// (`spotCheckVerdicts`, stripped from untrusted metadata in mergeTaskMetadata), and every
+// requested pair must be one of them. Text above the marker, typed or pasted, can still add
+// pairs; the read-back of what was recorded is the check on that.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isLivePrincipalTurn } from '../../../../src/contacts/principal.js';

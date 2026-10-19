@@ -276,6 +276,64 @@ describe('spotCheckCandidateText', () => {
       expect(candidate(`${REPLY}\n---\nFrom: Curia <curia@example.com>\nSent: Monday\n${QUOTED_TAIL}`)).toBe(REPLY);
     });
 
+    // Forward markers: text below them was written by someone else, so it must neither count
+    // toward the length gate nor add a pair to the dispatcher's typed-verdicts stamp. Each
+    // forwarded body here carries its own "1 good 3 good" that must not be stamped.
+    describe('forward markers', () => {
+      const FORWARDED_PAIRS = '1 good 3 good';
+
+      it('cuts a Gmail forward at its "Forwarded message" line (real converter output)', () => {
+        const html = [
+          '<div dir="ltr">2 bad<br><br>',
+          '<div class="gmail_quote"><div dir="ltr" class="gmail_attr">',
+          '---------- Forwarded message ---------<br>',
+          'From: <strong class="gmail_sendername" dir="auto">Sam</strong> ',
+          '<span dir="auto">&lt;sam@example.com&gt;</span><br>',
+          'Date: Mon, Oct 19, 2026 at 5:00 PM<br>',
+          'Subject: Spot check<br>',
+          'To: Dana &lt;dana@example.com&gt;<br></div><br><br>',
+          `<div dir="ltr">${FORWARDED_PAIRS}</div></div></div>`,
+        ].join('');
+        const body = htmlToText(html);
+        // Guard the premise: the converter keeps Gmail's marker line, and From: follows it
+        // directly, so the blank-line From: rule alone does not cut here.
+        expect(body).toMatch(/^-{2,} Forwarded message -{2,}$/m);
+        expect(candidate(body)).toBe('2 bad');
+        expect(parseSpotCheckVerdicts(candidate(body))).toEqual([{ n: 2, verdict: 'bad' }]);
+      });
+
+      it('cuts an Apple Mail forward at "Begin forwarded message:" (real converter output)', () => {
+        const html = [
+          '<div>2 bad<br><div><br><blockquote type="cite">',
+          '<div>Begin forwarded message:</div><br>',
+          '<div><b>From: </b>Sam &lt;sam@example.com&gt;<br><b>Subject: </b>Spot check<br></div><br>',
+          `<div>${FORWARDED_PAIRS}</div></blockquote></div></div>`,
+        ].join('');
+        const body = htmlToText(html);
+        expect(body).toMatch(/^Begin forwarded message:$/m);
+        // Cut at the marker itself, not the From: below it, so it does not dangle on the reply.
+        expect(candidate(body)).toBe('2 bad');
+        expect(parseSpotCheckVerdicts(candidate(body))).toEqual([{ n: 2, verdict: 'bad' }]);
+      });
+
+      it.each([
+        ['a classic Outlook underscore separator', '________________________________'],
+        ['a ten-underscore separator', '__________'],
+      ])('cuts at %s', (_name, rule) => {
+        const body = `2 bad\n\n${rule}\nFrom: Sam <sam@example.com>\nSent: Monday\n\n${FORWARDED_PAIRS}`;
+        expect(candidate(body)).toBe('2 bad');
+        expect(parseSpotCheckVerdicts(candidate(body))).toEqual([{ n: 2, verdict: 'bad' }]);
+      });
+
+      it('cuts at an underscore separator even with no From: header below it', () => {
+        expect(candidate(`2 bad\n________________________________\n${FORWARDED_PAIRS}`)).toBe('2 bad');
+      });
+
+      it('does not cut at a short underscore run (fewer than ten)', () => {
+        expect(candidate('2 bad\n_________\nthat was it')).toContain('that was it');
+      });
+    });
+
     it('does not cut at a From: line after a rule line that is not bare dashes', () => {
       expect(candidate(`${REPLY}\n--- notes\nFrom: the vendor\nthat was it`)).toContain('that was it');
     });

@@ -2759,6 +2759,27 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
       expect(tasks[0]!.payload.metadata?.spotCheckVerdicts).toEqual(expected);
     });
 
+    it('does not stamp pairs from a forwarded message below a Gmail forward marker', async () => {
+      const { bus, tasks } = setup('principal');
+      await bus.publish('channel', createInboundMessage({
+        conversationId: 'email:thread-fwd-1',
+        channelId: 'email',
+        senderId: 'dana@example.com',
+        content: [
+          'Subject: Fwd: Spot check',
+          '',
+          '2 bad',
+          '',
+          '---------- Forwarded message ---------',
+          'From: Sam <sam@example.com>',
+          'Date: Mon, Oct 19, 2026 at 5:00 PM',
+          '',
+          '1 good 3 good',
+        ].join('\n'),
+      }));
+      expect(tasks[0]!.payload.metadata?.spotCheckVerdicts).toEqual([{ n: 2, verdict: 'bad' }]);
+    });
+
     it('does not stamp a message that is not a verdict', async () => {
       const { bus, tasks } = setup('principal');
       await bus.publish('channel', createInboundMessage({

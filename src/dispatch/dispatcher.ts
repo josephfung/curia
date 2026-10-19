@@ -1017,10 +1017,12 @@ export class Dispatcher {
     // inboundTurnGuidance applies to the spot-check-reply note (F1).
     const spotCheckText = spotCheckCandidateText(payload.channelId, payload.content);
     const spotCheckReply = looksLikeSpotCheckReply(spotCheckText);
-    // SECURITY (F2): the pairs the principal typed in this message. record-spot-check records
-    // only these, so injected text in quoted or forwarded mail or a tool result cannot steer
-    // the coordinator into grading other numbers during the principal's own turn. Stripped
-    // from untrusted metadata in mergeTaskMetadata; stamped only here.
+    // SECURITY (F2): the pairs in this message above any recognised quote or forward marker.
+    // record-spot-check records only these, so a tool result, or text below a recognised
+    // marker, cannot steer the coordinator into grading other numbers during the principal's
+    // own turn. Text above the marker (typed or pasted) can add pairs; the read-back of what
+    // was recorded is the check on that. Stripped from untrusted metadata in
+    // mergeTaskMetadata; stamped only here.
     const spotCheckVerdicts = liveTurn && spotCheckReply && emailMeta?.curiaRole !== 'cc'
       ? parseSpotCheckVerdicts(spotCheckText)
       : [];

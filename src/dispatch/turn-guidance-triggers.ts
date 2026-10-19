@@ -60,9 +60,12 @@ const SPOT_CHECK_PAIR = /(?<!\d)(\d{1,2})\s+(good|bad)\b/gi;
  * The number-and-verdict pairs in a spot-check reply, in the order typed, each pair once.
  *
  * SECURITY (F2): the dispatcher stamps these into trusted task metadata, and
- * record-spot-check records only pairs found here. Call it on spotCheckCandidateText (the
- * reply with any quoted mail cut off), so text the principal did not type, such as quoted
- * or forwarded mail, cannot add a pair. Both verdicts for one number are kept if typed
+ * record-spot-check records only pairs found here. Call it on spotCheckCandidateText, which
+ * cuts the text at the first recognised quote or forward marker (firstQuoteLine). Text below
+ * such a marker cannot add a pair. Text above it can, whether the principal typed or pasted
+ * it, and so can a forward whose marker firstQuoteLine does not recognise; the read-back of
+ * what was recorded (SPOT_CHECK_REPLY) is the check on those. A tool result never reaches
+ * this text, so it cannot add a pair. Both verdicts for one number are kept if typed
  * ("2 good, no wait 2 bad"); the coordinator still has to pick one, and either is the
  * principal's own.
  */
@@ -82,19 +85,29 @@ const EMAIL_SUBJECT_PREFIX = /^Subject:[^\n]*\n+/;
 
 // Where a mail client starts quoting the message being replied to. A reply on the digest's
 // thread quotes the whole digest (several hundred characters, htmlToText keeps it, nothing
-// in src/ strips it), which would blow the length gate. Heuristic on purpose: a marker we
-// miss only means the guidance does not fire for that reply, never that a score is wrong.
+// in src/ strips it), which would blow the length gate. Heuristic on purpose. A missed marker
+// on a long message only means the guidance does not fire. On a short message (under the
+// 400-char gate) the text below a missed marker stays in, and its "N good/bad" pairs are
+// stamped as typed (parseSpotCheckVerdicts), so add markers here as mail clients need them.
 const QUOTE_HEADER_ON_WROTE = /^On .+ wrote:$/i;
 const QUOTE_ORIGINAL_MESSAGE = /^-{2,}\s*Original Message\s*-{2,}$/i;
 // The line htmlToText renders for an <hr> (src/channels/email/html-to-text.ts).
 const OUTLOOK_HR_RULE = /^-{3,}$/;
+// Forward and separator markers. Text below them was written by someone else, so it must not
+// reach the length gate or parseSpotCheckVerdicts. Gmail: "---------- Forwarded message
+// ---------". Apple Mail: "Begin forwarded message:". Classic Outlook: a line of underscores
+// above its From:/Sent: block (ten or more, so a short run in the reply's own text is kept).
+const FORWARD_GMAIL = /^-{2,}\s*Forwarded message\s*-{2,}$/i;
+const FORWARD_APPLE = /^Begin forwarded message:?$/i;
+const SEPARATOR_UNDERSCORES = /^_{10,}$/;
 
-/** Index of the first line that starts quoted text, or -1 when the reply quotes nothing. */
+/** Index of the first line that starts quoted or forwarded text, or -1 when there is none. */
 function firstQuoteLine(lines: readonly string[]): number {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!.trim();
     if (line.startsWith('>')) return i;
     if (QUOTE_ORIGINAL_MESSAGE.test(line)) return i;
+    if (FORWARD_GMAIL.test(line) || FORWARD_APPLE.test(line) || SEPARATOR_UNDERSCORES.test(line)) return i;
     if (QUOTE_HEADER_ON_WROTE.test(line)) return i;
     // Gmail wraps a long "On ... <address> wrote:" header onto a second line.
     if (/^On /i.test(line) && i + 1 < lines.length && QUOTE_HEADER_ON_WROTE.test(`${line} ${lines[i + 1]!.trim()}`)) return i;
