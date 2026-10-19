@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { parseSensitivityRules, type SensitivityRule } from './memory/sensitivity.js';
 import { parseProxyConfig } from './browser/proxy-config.js';
+import { AUTONOMY_GATINGS, type AutonomyGating } from './autonomy/band-policy.js';
 
 // ---------------------------------------------------------------------------
 // Multi-account email config types
@@ -249,6 +250,11 @@ export function resolveReportFallbackConfig(yaml: YamlConfig['autonomy']): Repor
     checkIntervalHours:
       yaml?.report_fallback?.check_interval_hours ?? DEFAULT_REPORT_FALLBACK_CONFIG.checkIntervalHours,
   };
+}
+
+/** Resolve autonomy.gating. Ships as 'tier' (#2159); prod flips it, then the default changes. */
+export function resolveAutonomyGating(yaml: YamlConfig['autonomy']): AutonomyGating {
+  return yaml?.gating ?? 'tier';
 }
 
 /** Resolve the optional YAML tasks block to a fully-populated config with defaults. */
@@ -768,6 +774,8 @@ export interface YamlConfig {
     };
   };
   autonomy?: {
+    /** band: the score decides and the judge reviews sends; tier: the pre-#2159 contact-tier gates. Default tier. */
+    gating?: AutonomyGating;
     /**
      * Bypass-ladder thresholds (#1125) — raw autonomy scores governing how much LINEAGE
      * standing a heartbeat-woken task inherits. The live score can only ever DOWNGRADE
@@ -1415,6 +1423,12 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     }
     // Reaches setInterval as minutes × 60000; an overflowed delay would fire in a tight loop.
     assertFitsNodeTimer('autonomy.approval_expiry.sweep_interval_minutes', interval, 60_000, 'minutes');
+  }
+
+  // autonomy.gating (#2159): a typo must fail at boot, not silently keep the tier gates.
+  const gating = config.autonomy?.gating;
+  if (gating !== undefined && !AUTONOMY_GATINGS.includes(gating)) {
+    throw new Error(`autonomy.gating must be one of ${AUTONOMY_GATINGS.join(', ')}, got: ${String(gating)}`);
   }
 
   // Validate autonomy.report_fallback if present (#2159). Same guard: a mis-shaped block

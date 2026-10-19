@@ -532,6 +532,13 @@ tasks:
 #   >= derived_child   : same-task wake AND derived child keep lineage standing
 # See docs/specs/14-autonomy-engine.md (Effective standing / bypass ladder).
 autonomy:
+  # Which policy decides when Curia asks first (#2159, ADR-049).
+  #   tier — contact tier gates consequential actions (Gate C) and disclosures (Stage 2.5).
+  #   band — the autonomy band decides; the escalation judge reviews sends for an
+  #          outsider steering Curia, claims in the principal's voice, and grounding.
+  # Ships as tier. Flip to band in local.yaml; the default changes after a clean week.
+  gating: tier
+
   bypass_ladder:
     same_task: 70      # posture B floor — must not drop below 60
     derived_child: 90  # posture D floor
