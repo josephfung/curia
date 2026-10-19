@@ -3883,10 +3883,88 @@ describe('spot-check pool (#2159 Phase 3)', () => {
     vi.mocked(mocks.contactService.resolveByChannelIdentity).mockResolvedValue({
       contactId: 'contact-dana', displayName: 'Dana', role: null, tier: 'known', kind: 'person', kgNodeId: null, verified: true,
     } as unknown as Awaited<ReturnType<ContactService['resolveByChannelIdentity']>>);
+    // A long-standing contact: created a month ago.
+    (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn().mockResolvedValue({
+      id: 'contact-dana', createdAt: new Date(Date.now() - 30 * 86_400_000),
+    });
     const actionLogRepo = makeActionLogRepo();
     const gw = makePoolGateway({ actionLogRepo });
     await gw.send(danaReq, { taskEventId: 't1', exportContext: { toolName: 'email-reply' } });
     expect(sampledRows(actionLogRepo)).toEqual([expect.objectContaining({ toolName: 'email-reply', signals: {} })]);
+  });
+
+  // firstContact (#2159 Phase 3 review): send skills address recipients by contact UUID
+  // (ADR-047), so a first-time recipient already HAS a contact, created moments before by
+  // contact-create. The signal is "the contact is new", not "there is no contact".
+  describe('firstContact', () => {
+    const HOUR = 3_600_000;
+    function withContactCreated(msAgo: number) {
+      vi.mocked(mocks.contactService.resolveByChannelIdentity).mockResolvedValue({
+        contactId: 'contact-dana', displayName: 'Dana', role: null, tier: 'known', kind: 'person', kgNodeId: null, verified: true,
+      } as unknown as Awaited<ReturnType<ContactService['resolveByChannelIdentity']>>);
+      (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn().mockResolvedValue({
+        id: 'contact-dana', createdAt: new Date(Date.now() - msAgo),
+      });
+    }
+
+    it('is true for a contact created an hour ago', async () => {
+      withContactCreated(HOUR);
+      const actionLogRepo = makeActionLogRepo();
+      await makePoolGateway({ actionLogRepo }).send(danaReq, { taskEventId: 't1' });
+      expect(sampledRows(actionLogRepo)).toEqual([expect.objectContaining({ signals: { firstContact: true } })]);
+      expect((mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact).toHaveBeenCalledWith('contact-dana');
+    });
+
+    it('is false for a contact created ten days ago', async () => {
+      withContactCreated(10 * 24 * HOUR);
+      const actionLogRepo = makeActionLogRepo();
+      await makePoolGateway({ actionLogRepo }).send(danaReq, { taskEventId: 't1' });
+      expect(sampledRows(actionLogRepo)).toEqual([expect.objectContaining({ signals: {} })]);
+    });
+
+    it('is false for a Signal group, which no contact stands for', async () => {
+      const signalClient = { send: vi.fn().mockResolvedValue({ timestamp: 1 }), isConnected: () => true };
+      const actionLogRepo = makeActionLogRepo();
+      const gw = new OutboundGateway({
+        signalClient: signalClient as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient,
+        signalPhoneNumber: '+15555550000',
+        contactService: mocks.contactService, contentFilter: mocks.contentFilter, bus: mocks.bus, logger: mocks.logger,
+        actionLogRepo,
+      });
+      const result = await gw.send({ channel: 'signal', groupId: 'group-abc', message: 'Agenda attached.' }, { taskEventId: 't1' });
+      expect(result.success).toBe(true);
+      expect(sampledRows(actionLogRepo)).toEqual([expect.objectContaining({ signals: {} })]);
+    });
+
+    it('is false, with a warning, when the contact lookup throws', async () => {
+      const warn = vi.fn();
+      const child = { ...mocks.logger, warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      mocks.logger = { ...mocks.logger, child: () => child } as unknown as typeof mocks.logger;
+      withContactCreated(HOUR);
+      (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn().mockRejectedValue(new Error('db down'));
+      const actionLogRepo = makeActionLogRepo();
+      await makePoolGateway({ actionLogRepo }).send(danaReq, { taskEventId: 't1' });
+      expect(sampledRows(actionLogRepo)).toEqual([expect.objectContaining({ signals: {} })]);
+      expect(warn).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'contact-dana' }), expect.stringContaining('first contact'));
+    });
+
+    it('is false when resolving the recipient failed outright', async () => {
+      vi.mocked(mocks.contactService.resolveByChannelIdentity).mockRejectedValue(new Error('db down'));
+      const actionLogRepo = makeActionLogRepo();
+      await makePoolGateway({ actionLogRepo }).send(danaReq, { taskEventId: 't1' });
+      expect(sampledRows(actionLogRepo)).toEqual([expect.objectContaining({ signals: {} })]);
+    });
+
+    it('applies to a draft send too', async () => {
+      withContactCreated(HOUR);
+      (mocks.nylasClient as unknown as { sendDraft: ReturnType<typeof vi.fn> }).sendDraft = vi.fn().mockResolvedValue({ id: 'sent-1' });
+      const actionLogRepo = makeActionLogRepo();
+      await makePoolGateway({ actionLogRepo }).sendEmailDraft(
+        'd1', 'curia', { recipientEmail: 'dana@example.com', body: 'Hi Dana.', subject: 'Payment schedule' },
+        { humanApproved: true, principalDirected: false, taskEventId: 't1' },
+      );
+      expect(sampledRows(actionLogRepo)).toEqual([expect.objectContaining({ toolName: 'send-draft', signals: { firstContact: true } })]);
+    });
   });
 
   it('records nothing for system notices, approved, principal-directed, principal-only or queued sends', async () => {

@@ -521,6 +521,17 @@ export class UnknownEmailAccountError extends Error {
 const SENT_VERB: Record<OutboundSendRequest['channel'], string> = {
   email: 'Emailed', signal: 'Sent a Signal message to', sms: 'Texted', slack: 'Sent a Slack message to',
 };
+// A recipient whose contact is younger than this counts as a first contact (#2159 Phase 3).
+const FIRST_CONTACT_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** What the spot-check pool needs to know about a send's primary recipient. */
+interface FirstContactProbe {
+  /** A person (an address or a DM), not a group or channel id. */
+  person: boolean;
+  /** The contact Step 1 resolved, or undefined when none matched. */
+  contactId: string | undefined;
+  /** Step 1's contact lookup threw, so contactId says nothing. */
+  lookupFailed: boolean;
+}
 /** First line, at most 80 characters: enough to recognise the message on a phone. */
 function truncatePreview(text: string): string {
   const line = text.split('\n').find((l) => l.trim() !== '')?.trim() ?? '';
@@ -1285,7 +1296,13 @@ export class OutboundGateway {
       channel: request.channel,
       toolName: options?.exportContext?.toolName ?? `${request.channel}-send`,
       recipientLabel: this.personRecipients(request).join(', ') || recipientId,
-      firstContact: recipientContactId === undefined,
+      recipient: {
+        // A Signal group or Slack channel is never a first contact: no contact stands for it.
+        person: recipientId.length > 0
+          && this.personRecipients(request).some((id) => id.toLowerCase() === recipientId.toLowerCase()),
+        contactId: recipientContactId,
+        lookupFailed: recipientTierUnresolved,
+      },
       band: { report: bandReport, signals: bandSignals },
       options,
     };
@@ -1693,6 +1710,33 @@ export class OutboundGateway {
   }
 
   /**
+   * Whether a send went to someone Curia has not dealt with before, for the spot-check pool
+   * (#2159 Phase 3). Send skills address recipients by contact UUID (ADR-047), so a
+   * first-time recipient normally already has a contact, made moments earlier by
+   * contact-create. "First contact" therefore means a person recipient whose contact is
+   * under a day old, or who has no contact at all. A group or channel is never one, and
+   * neither is a recipient whose lookup failed: an outage is not evidence of novelty.
+   * Never throws.
+   */
+  private async isFirstContact(recipient: FirstContactProbe): Promise<boolean> {
+    if (!recipient.person || recipient.lookupFailed) return false;
+    if (recipient.contactId === undefined) return true;
+    try {
+      const contact = await this.contactService.getContact(recipient.contactId);
+      // Resolved a moment ago but gone now (merged or deleted): no contact exists, which
+      // is the no-contact case above.
+      if (!contact) return true;
+      return Date.now() - contact.createdAt.getTime() < FIRST_CONTACT_WINDOW_MS;
+    } catch (err) {
+      this.log.warn(
+        { err, contactId: recipient.contactId },
+        'outbound-gateway: could not read the recipient contact for the spot-check first contact signal — recording it as not a first contact',
+      );
+      return false;
+    }
+  }
+
+  /**
    * Put an autonomous send in the spot-check pool (#2159 Phase 3). Not for system notices,
    * principal-approved or principal-directed sends, or the principal alone: those are not
    * Curia acting on its own. Never throws; the send has already gone out.
@@ -1702,12 +1746,14 @@ export class OutboundGateway {
     toolName: string;
     recipientLabel: string;
     preview: string;
-    firstContact: boolean;
+    /** The send's primary recipient, as Step 1 resolved it; decides the firstContact signal. */
+    recipient: FirstContactProbe;
     band: { report?: BandReviewReport; signals?: BandReviewSignals } | undefined;
     options: { taskEventId?: string; parentEventId?: string; conversationId?: string | null } | undefined;
   }): Promise<void> {
     if (!this.actionLogRepo) return;
     const { band } = args;
+    const firstContact = await this.isFirstContact(args.recipient);
     // One review outcome per row, most telling first: a trim or an unreviewed send says
     // more than a bounce the drafter then fixed.
     const review = band?.report?.source === 'claim_trimmed' ? 'trimmed'
@@ -1721,7 +1767,7 @@ export class OutboundGateway {
         actionRisk: 'medium',
         summary: `${SENT_VERB[args.channel]} ${args.recipientLabel}: "${truncatePreview(args.preview)}"`,
         signals: {
-          ...(args.firstContact ? { firstContact: true } : {}),
+          ...(firstContact ? { firstContact: true } : {}),
           ...(band?.signals?.speaksAsPrincipal ? { speaksAsPrincipal: true } : {}),
           ...(review ? { review } : {}),
         },
@@ -3090,7 +3136,8 @@ export class OutboundGateway {
         toolName: 'send-draft',
         recipientLabel: draftEnvelope.join(', '),
         preview: draftMeta.subject || body,
-        firstContact: recipientContactIdForDraft === undefined,
+        // A draft's recipient is always an email address, so always a person.
+        recipient: { person: true, contactId: recipientContactIdForDraft, lookupFailed: recipientTierUnresolvedForDraft },
         band: { report: bandReport, signals: bandSignals },
         options,
       });
