@@ -75,7 +75,15 @@ export class RecordSpotCheckHandler implements ToolHandler {
       if (!parsed.ok) return { success: false, error: parsed.error };
 
       // Review Focus 1: checked before any read or write, so a refused call touches nothing.
-      if (!isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata)) {
+      //
+      // The wakeContext check mirrors the elevated-skill gate in src/skills/execution.ts (the
+      // `isWokenTurn` check there); keep the two in step. This tool is `normal` sensitivity, so
+      // that gate never runs for it and this is its only principal guard. A woken
+      // principal-lineage task can keep its principal originator through the bypass ladder
+      // (computeEffectiveTaskMetadata), so if `liveTurn` ever leaked onto a wake, the live-turn
+      // check alone would let a heartbeat-woken task grade its own sampled actions.
+      const isWokenTurn = ctx.taskMetadata?.['wakeContext'] !== undefined;
+      if (isWokenTurn || !isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata)) {
         ctx.log.warn(
           { channelId: ctx.channelId, conversationId: ctx.conversationId },
           'record-spot-check: refused outside a live principal turn',

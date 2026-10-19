@@ -91,6 +91,12 @@ describe('RecordSpotCheckHandler', () => {
     ['a non-principal turn', { taskMetadata: { originator: { systemRole: 'contact' } } }],
     ['principal lineage without a live turn', { liveTurn: undefined }],
     ['no task metadata', { taskMetadata: undefined }],
+    // Defence in depth: a woken principal-lineage task keeps its principal originator above the
+    // ladder threshold, so if liveTurn ever leaked onto a wake it could grade its own actions.
+    ['a woken task even with liveTurn and a principal originator', {
+      liveTurn: true,
+      taskMetadata: { ...PRINCIPAL, wakeContext: { derived: false, reason: 'heartbeat' } },
+    }],
   ] as const)('refuses %s and writes nothing', async (_label, over) => {
     const { ctx, recordPrincipalVerdict } = makeCtx(over as Partial<ToolContext>);
 
