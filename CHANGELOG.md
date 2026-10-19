@@ -40,7 +40,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Stored identities** — old tone settings become a written style on read; nothing is rewritten. (#2143)
 - **Setup wizard** — step 5 asks for an autonomy level instead of a decision posture. (#2143)
 - **Proactive analysis** — no longer implied by default; add "volunteer observations" to your style to keep it. (#2143)
-- **Haiku 5.5** — default fast tier and both judges move to `claude-haiku-5-5`, with thinking off and no temperature. (#2077)
+- **Haiku 5.5** — default fast tier and both judges move to `claude-haiku-5-5`, without thinking or temperature. (#2077)
 - **Judge token caps** — leak and escalation judge verdict caps raised for Haiku 5.5's longer verdicts. (#2077)
 
 ### Removed
