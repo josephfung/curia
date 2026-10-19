@@ -23,7 +23,9 @@ import type { ChannelIdentity } from '../contacts/types.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import { isPrincipalIdentity } from '../contacts/principal-recipient.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
-import type { SpotCheckSet, SpotCheckStore } from './spot-check-store.js';
+import { SpotCheckStore, type SpotCheckSet } from './spot-check-store.js';
+import { ConfigStore } from '../memory/config-store.js';
+import type { EntityMemory } from '../memory/entity-memory.js';
 import { SPOT_CHECK_HEADER } from './spot-check-sampler.js';
 
 export interface SpotCheckBinderDeps {
@@ -136,4 +138,52 @@ export class SpotCheckBinder {
       );
     }
   }
+}
+
+export interface RegisterSpotCheckBinderDeps {
+  bus: EventBus;
+  /** Backs the config store the spot-check sets live in. */
+  entityMemory: EntityMemory | undefined;
+  /** Reads a delivered email's thread id. */
+  outboundGateway: OutboundGateway | undefined;
+  /** Marks a bound set's rows sampled. */
+  actionLogRepo: ActionLogRepo | undefined;
+  /**
+   * The shared, hot-reloaded principal identity array (#1514). Passed by reference and read on
+   * every delivery, so it may be empty at boot: the principal can be set up later.
+   */
+  principalIdentities: readonly ChannelIdentity[];
+  logger: Logger;
+}
+
+/**
+ * Build and register the binder at boot, or warn naming what is missing. Registration does
+ * not depend on the principal's identities being known yet (the array is filled in later by
+ * the hot reload), the way ReactionApprovalMapper registers with the live array. Without the
+ * binder no digest is ever bound, so every spot-check number is unanswerable: hence the warn.
+ */
+export function registerSpotCheckBinder(deps: RegisterSpotCheckBinderDeps): SpotCheckBinder | undefined {
+  const { entityMemory, outboundGateway, actionLogRepo } = deps;
+  if (!entityMemory || !outboundGateway || !actionLogRepo) {
+    const missing = [
+      ...(entityMemory ? [] : ['entityMemory']),
+      ...(outboundGateway ? [] : ['outboundGateway']),
+      ...(actionLogRepo ? [] : ['actionLogRepo']),
+    ];
+    deps.logger.warn(
+      { missing },
+      'spot-check binder not registered: delivered digests will not be bound, so spot-check replies cannot be resolved',
+    );
+    return undefined;
+  }
+  const binder = new SpotCheckBinder({
+    bus: deps.bus,
+    store: new SpotCheckStore(new ConfigStore(entityMemory, deps.logger), deps.logger),
+    gateway: outboundGateway,
+    actionLogRepo,
+    principalIdentities: deps.principalIdentities,
+    logger: deps.logger,
+  });
+  binder.register();
+  return binder;
 }

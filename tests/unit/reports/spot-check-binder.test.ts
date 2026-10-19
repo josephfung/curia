@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SpotCheckBinder } from '../../../src/reports/spot-check-binder.js';
+import { registerSpotCheckBinder, SpotCheckBinder } from '../../../src/reports/spot-check-binder.js';
+import type { EntityMemory } from '../../../src/memory/entity-memory.js';
 import { SPOT_CHECK_HEADER } from '../../../src/reports/spot-check-sampler.js';
 import { createOutboundDelivered } from '../../../src/bus/events.js';
 import type { EventBus } from '../../../src/bus/bus.js';
@@ -256,5 +257,66 @@ describe('SpotCheckBinder', () => {
     }))).resolves.toBeUndefined();
 
     expect(error).toHaveBeenCalled();
+  });
+});
+
+// The principal's identities are hot-reloaded (#1514) into one shared array. The binder must be
+// registered whatever that array holds at boot, and read it live, or a principal set up after
+// boot would never have a digest bound.
+describe('SpotCheckBinder wiring', () => {
+  function deps() {
+    const logger = createSilentLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const bus = { subscribe: vi.fn(), publish: vi.fn() };
+    return {
+      warn,
+      bus,
+      base: {
+        bus: bus as unknown as EventBus,
+        entityMemory: {} as unknown as EntityMemory,
+        outboundGateway: { getEmailMessage: vi.fn() } as unknown as OutboundGateway,
+        actionLogRepo: { markSampled: vi.fn() } as unknown as ActionLogRepo,
+        principalIdentities: [] as ChannelIdentity[],
+        logger,
+      },
+    };
+  }
+
+  it('registers even when no principal identity is known yet', () => {
+    const { bus, base, warn } = deps();
+
+    expect(registerSpotCheckBinder(base)).toBeInstanceOf(SpotCheckBinder);
+    expect(bus.subscribe).toHaveBeenCalledWith('outbound.delivered', 'dispatch', expect.any(Function));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['entityMemory', 'outboundGateway', 'actionLogRepo'] as const)('does not register, and warns naming it, without %s', (missing) => {
+    const { bus, base, warn } = deps();
+
+    expect(registerSpotCheckBinder({ ...base, [missing]: undefined })).toBeUndefined();
+    expect(bus.subscribe).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ missing: [missing] }), expect.any(String));
+  });
+
+  it('binds for a principal identity added after it was built', async () => {
+    const identities: ChannelIdentity[] = [];
+    const bus = { subscribe: vi.fn(), publish: vi.fn() };
+    const store = { bindDelivery: vi.fn().mockResolvedValue({ kind: 'bound', set: BOUND_SET }) };
+    new SpotCheckBinder({
+      bus: bus as unknown as EventBus,
+      store: store as unknown as Pick<SpotCheckStore, 'bindDelivery'>,
+      gateway: { getEmailMessage: vi.fn() } as unknown as Pick<OutboundGateway, 'getEmailMessage'>,
+      actionLogRepo: { markSampled: vi.fn().mockResolvedValue(1) } as unknown as Pick<ActionLogRepo, 'markSampled'>,
+      principalIdentities: identities,
+      logger: createSilentLogger(),
+    }).register();
+    const handler = bus.subscribe.mock.calls[0]![2] as (event: unknown) => Promise<void>;
+
+    identities.push(makePrincipal('signal', '+15555550100'));
+    await handler(createOutboundDelivered({
+      channel: 'signal', recipientId: '+15555550100', content: DIGEST, conversationId: 'c1', messageId: 'm1',
+    }));
+
+    expect(store.bindDelivery).toHaveBeenCalled();
   });
 });
