@@ -58,6 +58,8 @@ tools:
   - async-offramp
   - file-parse
   - request-clarification
+  # Delegated sign-in verification (#2017): coordinator-only code-screen tracking.
+  - verification
   - drive-download-file
   - image-generate
   # Personal vault (agent-captured user.* secrets)

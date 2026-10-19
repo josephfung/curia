@@ -1,0 +1,39 @@
+{
+  "name": "verification",
+  "description": "Track a sign-in code (open|satisfy|abandon|list). Call open as soon as a sign-in shows a code screen, BEFORE asking the principal or delegating an inbox read. Choose email delivery when offered unless the masked address isn't the principal's; tick 'remember this device'. Call satisfy once the site accepts the code. Never pass a code here.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "allowed_callers": [
+    "coordinator"
+  ],
+  "capabilities": [
+    "verification",
+    "browserService"
+  ],
+  "inputs": {
+    "action": "string (open|satisfy|abandon|list)",
+    "delivery": "string? (email|sms|app)",
+    "site": "string? (e.g. aircanada.com)",
+    "browser_session_id": "string?",
+    "task_id": "string?",
+    "verification_id": "string?",
+    "expires_in_minutes": "number?"
+  },
+  "outputs": {
+    "verification_id": "string",
+    "site": "string",
+    "page_domain": "string",
+    "delivery": "string",
+    "status": "string",
+    "expires_at": "string (local time)",
+    "reused": "boolean? (open only: true = the site already had a pending verification)",
+    "ask_channel": "string? (open only: channel to ask the principal on, or null)",
+    "email_wait_seconds": "number? (open only)",
+    "displayTimezone": "string",
+    "verifications": "object[]? (list only)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000
+}

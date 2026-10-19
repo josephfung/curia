@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.26.1"
+version: "0.27.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -190,6 +190,8 @@ pinned_skills:
   # contact_id it returns, in one turn (#2041).
   - bullpen
   - delegate
+  # Opens a verification the moment a sign-in shows a code screen (#2017).
+  - verification
   - signal-send
   - sms-send
   - slack-send
