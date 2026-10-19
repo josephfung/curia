@@ -38,7 +38,7 @@ describe('parseJudgeResponse', () => {
 describe('formatJudgeInput', () => {
   const scenario: ScenarioCase = {
     name: 'paused', description: 'Delegate returns paused.', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
-    seed: { contacts: [], outboundContext: [], bullpen: [] },
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [] },
     inbound: { from: 'principal', content: 'How is the research going?' },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
   };
@@ -76,7 +76,7 @@ describe('formatJudgeInput', () => {
 describe('formatJudgeInput with an identity fixture (#2143)', () => {
   const scenario: ScenarioCase = {
     name: 'style', description: 'A brief reply.', tags: ['style'], agent: 'coordinator', delegation: 'stubbed', releaseGate: false, sourceFile: 'x.yaml',
-    seed: { contacts: [], outboundContext: [], bullpen: [] },
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [] },
     inbound: { from: 'principal', content: 'Did Dana confirm?' },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   };
@@ -102,7 +102,7 @@ describe('formatJudgeInput with an identity fixture (#2143)', () => {
 describe('formatJudgeInput with real delegation (#2027)', () => {
   const scenario: ScenarioCase = {
     name: 'real', description: 'Calendar really runs.', tags: [], agent: 'coordinator', delegation: 'real', releaseGate: true, sourceFile: 'x.yaml',
-    seed: { contacts: [], outboundContext: [], bullpen: [] },
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [] },
     inbound: { from: 'principal', content: "What's on tomorrow?" },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   };
@@ -147,7 +147,7 @@ describe('extractJsonObject', () => {
 describe('judgeRun', () => {
   const scenario = {
     name: 'x', description: '', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
-    seed: { contacts: [], outboundContext: [], bullpen: [] },
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [] },
     inbound: { from: 'principal', content: 'hi' },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   } as ScenarioCase;

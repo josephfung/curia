@@ -5,6 +5,7 @@
 // Behaviors are scored per run, either in code (`check`) or by the LLM judge (no `check`).
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import type { OfficeIdentityFixture } from '../../src/startup/test-mode-stack.js';
+import type { VerificationDelivery, VerificationStatus } from '../../src/verification/types.js';
 import type { LiveSearchTally } from '../shared/live-search.js';
 import type { ObservedToolCall } from '../shared/turn-capture.js';
 import type { UsageBreakdown } from '../shared/usage.js';
@@ -152,6 +153,37 @@ export interface SeedBullpenThread {
 }
 
 /**
+ * A sign-in verification (#2017): a site waiting on a code, as the coordinator's per-turn
+ * "## Sign-in verifications" block and the Dispatcher's code tracking read it. Referenced
+ * as `{{verification:<key>}}` (the row's id).
+ */
+export interface SeedVerification {
+  key: string;
+  /** The site the principal asked about (stored as its registrable domain). */
+  site: string;
+  /** The page showing the challenge, often an identity provider. */
+  pageDomain: string;
+  delivery: VerificationDelivery;
+  browserSessionId: string;
+  /** The backlog task the errand belongs to, a fixed UUID the case's task stubs match on. */
+  taskId?: string;
+  /** Default `pending`. A closed row is still in the block for its recent window. */
+  status: VerificationStatus;
+  /**
+   * Backdates the request; the expiry stays the configured 10 minutes after it, and a
+   * closed row closes at its expiry. Default 1 for a pending row, 15 for any other (so an
+   * `expired` one really is past its expiry).
+   */
+  requestedMinutesAgo: number;
+  /**
+   * Whether the block reads the browser session as alive. There is no browser in a run
+   * (`web-browser` is stubbed), so this is what the case says the stub honours. Default:
+   * alive while pending, gone otherwise.
+   */
+  sessionAlive: boolean;
+}
+
+/**
  * The message the case's agent receives.
  * `from: principal` resolves through the stack's principal (channel `cli` by default;
  * any other channel uses the principal's own identity on it). `from: <contact key>`
@@ -253,6 +285,7 @@ export interface ScenarioCase {
     contacts: SeedContact[];
     outboundContext: SeedOutboundEntry[];
     bullpen: SeedBullpenThread[];
+    verifications: SeedVerification[];
     /**
      * What is waiting on the principal on this run's principal turn (prompt trim PR 7):
      * the counts the Dispatcher's backlog line reports. Absent means nothing is waiting.

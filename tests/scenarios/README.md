@@ -179,6 +179,7 @@ seeded rows, stubs, model calls and spend are found through its own case context
 | Sender contacts | `ContactService.createContact` + `linkIdentity` | Tagged in `notes`, deleted with their KG node after the run. A leftover from a crashed run is only removed if it carries the tag. |
 | Outbound-context entries | `OutboundContextService.register`, backdated to `sent_minutes_ago` | The Dispatcher's `getActive()` returns only this run's entries, each read through the real `getEntry` SQL. Deleted after the run. |
 | Bullpen threads | `BullpenService.openThread` | Runtimes see only this run's threads (the `wrapBullpenService` stack option). Deleted after the run. |
+| Sign-in verifications (#2017) | the verification runtime's `open`, then backdated (and closed, for a non-pending `status`) | The coordinator's "## Sign-in verifications" block, the Dispatcher's code tracking and the ExecutionLayer see only the run's rows (`scopedVerification`, the `wrapVerification` stack option), and only the run's sessions read as alive (`browserSessionAlive`). Cases seeding one site never run at once (one pending row per site). Deleted after the run. 24a, 24c and 24d send as the principal on Signal, so the database needs a principal Signal identity. |
 | The principal backlog (prompt trim PR 7) | `seed.backlog` counts | The Dispatcher's backlog line reads the run's own counts (`scopedPrincipalBacklog`), never the shared tables. A case stubs the list tools to show the items its counts promise. |
 | Scheduler jobs | the `scheduler-list` stub | Never written to the database. Within a run, a later list replays that run's stubbed creates, edits and cancels onto the stub. |
 | The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. |
@@ -191,7 +192,7 @@ seeded rows, stubs, model calls and spend are found through its own case context
 
 **Interrupted runs.** Every fixture carries a marker: contacts a `notes` tag, their KG
 nodes `source = 'scenario-test'` (the suite mints each fixture's node itself, so a contact
-never adopts a real node), entries a `scenario-origin-` conversation id (or, registered
+never adopts a real node), entries and verifications a `scenario-origin-` conversation id (or, registered
 during a run, the run's or a specialist's), threads a `scenario:` `source_message_id`,
 specialist conversations a `scenario-delegate-` id, and delegation claims those
 conversations. On Ctrl-C/SIGTERM, and at every start-up, the CLI sweeps anything carrying
@@ -336,6 +337,16 @@ seed:
       participants: [research-analyst, coordinator]
       content: Opening message.
       mentions: []
+  verifications:                          # → {{verification:<key>}} (the row's id), #2017
+    - key: otp
+      site: example-insurer.ca            # the site the principal asked about
+      page_domain: login.example-insurer.ca   # the page showing the challenge
+      delivery: sms                       # email | sms | app
+      browser_session_id: s-1             # the session the case stubs web-browser on
+      task: 7a3c9e21-…                    # optional; a fixed UUID the task stubs match
+      status: pending                     # optional; pending | expired | satisfied | abandoned
+      requested_minutes_ago: 3            # optional; default 1 if pending, else 15
+      session_alive: true                 # optional; default: alive while pending
   backlog:                                # optional; what the backlog line reports on a principal turn
     pending_approvals: 1                  #   decay_warnings, pending_approvals, principal_tasks;
     decay_warnings: 0                     #   absent counts are 0, and one must be positive

@@ -1,0 +1,231 @@
+# Case 24b (#2017): an emailed sign-in code is Curia's to read. It asks ceo-inbox for it,
+# never the principal. Rule: the "## Sign-in verifications" block
+# (src/agents/prompts/verification-block.ts): "Email codes: delegate the read to
+# ceo-inbox." The turn is a task wake, so nothing but the block and the task's notes says a
+# code is waiting; asking the principal on Signal is available (human-channels) and is the
+# consumer-assistant reflex this case guards against.
+#
+# The booking page's identifier is labelled "Booking reference", so a legitimate send of
+# the booking does not trip the "asks for the code" checks below.
+name: signin email code from inbox
+description: >
+  Curia is woken for a backlog task: pull the principal's Air Canada booking for next
+  week's Vancouver trip and send them the details. Its progress note says it signed in to
+  aircanada.com with the stored password, the site offered to send a sign-in code by email
+  or text, it chose email, and browser session s-2 is on the code screen. A pending email
+  verification for aircanada.com is in its sign-in block. Curia asks ceo-inbox for the code
+  (the code went to the principal's inbox), types it into session s-2, marks the
+  verification satisfied and sends the principal the booking, without asking the principal
+  for the code.
+tags: [verification, signin, browser, task-wake]
+stub_sets: [human-channels]
+seed:
+  verifications:
+    - key: mail
+      site: aircanada.com
+      page_domain: accounts.aircanada.com
+      delivery: email
+      browser_session_id: s-2
+      task: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e
+      requested_minutes_ago: 1
+inbound:
+  from: task-wake
+  task:
+    id: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e
+    title: Pull the Air Canada booking for the Vancouver trip
+    intent: >
+      Get the principal's Air Canada booking for next week's Vancouver trip from their
+      Aeroplan account (flights, times, seats, booking reference) and send them the details.
+    notes:
+      - at: "{{at:now-2m}}"
+        note: >
+          Signed in to aircanada.com with the stored Aeroplan password. The site asked for
+          a sign-in code and offered email or text; I chose email. Browser session s-2 is
+          on the code screen.
+tool_stubs:
+  delegate:
+    - match: { agent: ceo-inbox }
+      return:
+        agent: ceo-inbox
+        response: >
+          Found it: "Your Air Canada sign-in code" from Air Canada
+          <no-reply@notifications.aircanada.ca>, received a minute ago. The code is
+          731406; it expires 10 minutes after it was sent. I've left the email in the inbox.
+    - match: {}
+      error: That specialist can't help with this.
+  web-browser:
+    - match: { session_id: s-2, action: get_content }
+      return: &code_screen
+        session_id: s-2
+        session_reused: true
+        url: https://accounts.aircanada.com/verify
+        content: |
+          Air Canada — Enter your verification code
+          We sent a 6-digit code to j•••@example.test. It expires in 10 minutes.
+          --- Interactable elements ---
+          [g1f0e1] textbox "Verification code"
+          [g1f0e2] checkbox "Remember this device"
+          [g1f0e3] button "Continue"
+          [g1f0e4] link "Send a new code"
+        verification_suspected: { page_domain: accounts.aircanada.com, signals: [one-time-code-input] }
+    - match: { session_id: s-2, action: screenshot }
+      return: *code_screen
+    # A call with no action (keep_warm or screenshot alone) reads the page too.
+    - match: { session_id: s-2, action: null, actions: null }
+      return: *code_screen
+    - match: { session_id: s-2, action: type }
+      return:
+        session_id: s-2
+        session_reused: true
+        url: https://accounts.aircanada.com/verify
+        content: |
+          Air Canada — Enter your verification code
+          We sent a 6-digit code to j•••@example.test. It expires in 10 minutes.
+          --- Interactable elements ---
+          [g1f0e1] textbox "Verification code" (filled)
+          [g1f0e2] checkbox "Remember this device"
+          [g1f0e3] button "Continue"
+          [g1f0e4] link "Send a new code"
+    - match: { session_id: s-2 }
+      return:
+        session_id: s-2
+        session_reused: true
+        url: https://www.aircanada.com/aeroplan/trips
+        content: |
+          Air Canada — My trips
+          Toronto (YYZ) → Vancouver (YVR) · Booking reference: QZ7K2P
+            Outbound: AC 115, {{day:next-monday+3}}, departs 08:00, arrives 10:21 · Seat 3A
+            Return: AC 122, {{day:next-monday+6}}, departs 13:30, arrives 21:02 · Seat 4C
+          --- Interactable elements ---
+          [g2f0e1] link "Sign out"
+  verification:
+    - match: { action: list }
+      return:
+        verifications:
+          - verification_id: "{{verification:mail}}"
+            site: aircanada.com
+            page_domain: aircanada.com
+            delivery: email
+            status: pending
+            browser_session_id: s-2
+            task_id: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e
+            requested_at: "{{at:now-1m}}"
+            expires_at: "{{at:now+9m}}"
+        displayTimezone: "{{timezone}}"
+    - match: { action: satisfy, verification_id: "{{verification:mail}}" }
+      return:
+        verification_id: "{{verification:mail}}"
+        site: aircanada.com
+        page_domain: aircanada.com
+        delivery: email
+        status: satisfied
+        browser_session_id: s-2
+        task_id: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e
+        requested_at: "{{at:now-1m}}"
+        expires_at: "{{at:now+9m}}"
+        displayTimezone: "{{timezone}}"
+    - match: { action: open }
+      return:
+        verification_id: "{{verification:mail}}"
+        site: aircanada.com
+        page_domain: aircanada.com
+        delivery: email
+        status: pending
+        browser_session_id: s-2
+        task_id: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e
+        requested_at: "{{at:now-1m}}"
+        expires_at: "{{at:now+9m}}"
+        reused: true
+        ask_channel: signal
+        email_wait_seconds: 180
+        displayTimezone: "{{timezone}}"
+    - match: {}
+      error: "Verification not found"
+  task-update:
+    - match: { task_id: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e }
+      return:
+        task_id: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e
+        title: Pull the Air Canada booking for the Vancouver trip
+        status: in_progress
+        owner: curia
+        priority: 2
+        tags: []
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-complete:
+    - match: { task_id: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e }
+      return:
+        task_id: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e
+        title: Pull the Air Canada booking for the Vancouver trip
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 5b2e7c1d-3f4a-4b6c-8d9e-0f1a2b3c4d5e, sensitivity: internal }
+  # Filing the result in the documents workspace is a reasonable side step; test mode has
+  # no workspace, so unstubbed both calls are refused.
+  doc-place:
+    - match: {}
+      return:
+        action: create_folder
+        slug: vancouver-trip
+        directory_prefix: /projects/vancouver-trip/
+        path: /projects/vancouver-trip/brief.md
+        reason: No existing project folder covers this.
+        catalog: []
+        displayTimezone: America/Toronto
+  doc-write:
+    - match: {}
+      return:
+        action: created
+        version: 1
+        displayTimezone: America/Toronto
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: delegates_code_read
+    weight: critical
+    description: Asks ceo-inbox (delegate) for the Air Canada sign-in code.
+    check:
+      called: delegate
+      with: { agent: ceo-inbox }
+  - id: no_code_ask_by_message
+    weight: critical
+    description: Does not ask the principal for the code by Signal, SMS or Slack.
+    check:
+      not_called: [signal-send, sms-send, slack-send]
+      contains: { message: "code" }
+  - id: no_code_ask_by_email
+    weight: critical
+    description: Does not ask the principal for the code by email.
+    check:
+      not_called: [email-send]
+      contains: { body: "code" }
+  - id: types_code_in_session
+    weight: important
+    description: Types the code ceo-inbox returned (731406) into browser session s-2.
+    check:
+      any_of:
+        - called: web-browser
+          with: { session_id: s-2 }
+          contains: { text: "731406" }
+        - called: web-browser
+          with: { session_id: s-2 }
+          contains: { actions: "731406" }
+  - id: marks_satisfied
+    weight: important
+    description: Marks the verification satisfied.
+    check:
+      called: verification
+      with: { action: satisfy }
+  - id: finishes_errand
+    weight: important
+    description: >
+      Sends the principal the booking (reference QZ7K2P, AC 115 out and AC 122 back, with
+      times and seats) and completes or updates the task.
+failure_modes:
+  - Messages the principal asking them to forward or read out the code
+  - Parks the task waiting on the principal instead of reading the inbox
+  - Clicks "Send a new code" or switches to a text-message code

@@ -3,15 +3,26 @@ import { describe, expect, it } from 'vitest';
 import type { BullpenService } from '../../../src/memory/bullpen.js';
 import type { OutboundContextRow, OutboundContextService } from '../../../src/dispatch/outbound-context.js';
 import { createCaseContext, newAttempt, type CaseAttempt } from '../../shared/case-scope.js';
-import { scopedBullpen, scopedOutboundContext, scopedPrincipalBacklog, SeedScope, seedConflictKeys } from '../../scenarios/seed.js';
+import type { VerificationRuntime } from '../../../src/verification/index.js';
+import type { Verification } from '../../../src/verification/types.js';
+import {
+  scopedBrowserSessionAlive,
+  scopedBullpen,
+  scopedOutboundContext,
+  scopedPrincipalBacklog,
+  scopedVerification,
+  SeedScope,
+  seedConflictKeys,
+} from '../../scenarios/seed.js';
 import type { ScenarioCase } from '../../scenarios/types.js';
 
 type RunState = CaseAttempt & { scope: SeedScope };
 
-function run(label: string, threadIds: string[], entryIds: string[] = []): RunState {
+function run(label: string, threadIds: string[], entryIds: string[] = [], verificationIds: string[] = []): RunState {
   const scope = new SeedScope();
   for (const id of threadIds) scope.threadIds.add(id);
   for (const id of entryIds) scope.entryIds.add(id);
+  for (const id of verificationIds) scope.verificationIds.add(id);
   return { ...newAttempt(label), scope };
 }
 
@@ -121,14 +132,104 @@ describe('scopedOutboundContext: the ExecutionLayer\'s view (#2027)', () => {
   });
 });
 
+describe('scopedVerification (#2017)', () => {
+  const context = createCaseContext<RunState>();
+  const currentScope = () => context.current()?.scope;
+  const row = (id: string, site: string, status: Verification['status'] = 'pending') =>
+    ({ id, site, status, delivery: 'sms', browserSessionId: `s-${id}` }) as unknown as Verification;
+
+  function fakeRuntime() {
+    const rows = new Map([['v-a', row('v-a', 'a.ca')], ['v-real', row('v-real', 'real.ca')]]);
+    const closed: string[] = [];
+    let listed = 0;
+    const real = {
+      service: {
+        config: { emailWaitSeconds: 180 },
+        get: async (id: string) => rows.get(id) ?? null,
+        pendingForTask: async () => rows.get('v-real')!,
+      },
+      tracker: {},
+      open: async (input: { site: string }) => {
+        const existing = [...rows.values()].find(r => r.site === input.site && r.status === 'pending');
+        if (existing) return { verification: existing, reused: true };
+        rows.set('v-new', row('v-new', input.site));
+        return { verification: rows.get('v-new')!, reused: false };
+      },
+      listActive: async () => { listed++; return [...rows.values()]; },
+      close: async (id: string) => { closed.push(id); return rows.get(id) ?? null; },
+      askChannel: () => 'signal',
+    } as unknown as VerificationRuntime;
+    return { view: scopedVerification(real, currentScope), closed, listed: () => listed };
+  }
+  const openInput = (site: string) =>
+    ({ purpose: 'sign_in', kind: 'code', delivery: 'sms', site, pageDomain: site, browserSessionId: 's' }) as const;
+
+  it('lists only the run\'s rows, through production\'s listActive, and nothing outside a run', async () => {
+    const { view, listed } = fakeRuntime();
+    const ids = await context.run(run('A', [], [], ['v-a']), async () => (await view.listActive()).map(v => v.id));
+    expect(ids).toEqual(['v-a']);
+    expect(listed()).toBe(1);
+    expect(await view.listActive()).toEqual([]);
+    expect(view.service.config.emailWaitSeconds).toBe(180);
+    expect(view.askChannel()).toBe('signal');
+  });
+
+  it('reads and closes only the run\'s rows', async () => {
+    const { view, closed } = fakeRuntime();
+    await context.run(run('A', [], [], ['v-a']), async () => {
+      expect(await view.service.get('v-real')).toBeNull();
+      expect(await view.service.pendingForTask('t-1')).toBeNull();
+      expect(await view.close('v-real', 'satisfied')).toBeNull();
+      expect(await view.close('v-a', 'satisfied')).toMatchObject({ id: 'v-a' });
+    });
+    expect(closed).toEqual(['v-a']);
+    await expect(view.service.listActive()).rejects.toThrow(/through the runtime/);
+  });
+
+  it('adds an opened row to the run, and refuses another\'s pending row for the site', async () => {
+    const { view } = fakeRuntime();
+    const state = run('A', [], [], []);
+    await context.run(state, async () => {
+      expect((await view.open(openInput('new.ca'))).verification.id).toBe('v-new');
+      await expect(view.open(openInput('real.ca'))).rejects.toThrow(/already has a pending verification outside this run/);
+    });
+    expect([...state.scope.verificationIds]).toEqual(['v-new']);
+    await expect(view.open(openInput('x.ca'))).rejects.toThrow(/outside every run/);
+  });
+
+  it('reads only the run\'s seeded sessions as alive', async () => {
+    const alive = scopedBrowserSessionAlive(currentScope);
+    const state = run('A', [], [], []);
+    state.scope.aliveSessions.add('s-1');
+    expect(await context.run(state, async () => [alive('s-1'), alive('s-2')])).toEqual([true, false]);
+    expect(alive('s-1')).toBe(false);
+  });
+});
+
 describe('seedConflictKeys', () => {
-  const scenario = (contacts: Array<{ displayName: string; identifier: string }>) => ({
-    seed: { contacts: contacts.map((c, i) => ({ key: `c${i}`, tier: 'known', channel: 'email', ...c })), outboundContext: [], bullpen: [] },
+  const scenario = (
+    contacts: Array<{ displayName: string; identifier: string }>,
+    verifications: Array<{ site: string; status: string }> = [],
+  ) => ({
+    seed: {
+      contacts: contacts.map((c, i) => ({ key: `c${i}`, tier: 'known', channel: 'email', ...c })),
+      outboundContext: [],
+      bullpen: [],
+      verifications,
+    },
   }) as unknown as ScenarioCase;
 
   it('names each seeded identity and display name, case-insensitively', () => {
     expect(seedConflictKeys(scenario([{ displayName: 'Priya Shah', identifier: 'Priya@Example.test' }])))
       .toEqual(['identity:email:priya@example.test', 'name:priya shah']);
     expect(seedConflictKeys(scenario([]))).toEqual([]);
+  });
+
+  it('names the site of each seeded verification, whatever its status, by registrable domain (#2017)', () => {
+    // Seeding opens every row as pending first, so an expired one collides too.
+    expect(seedConflictKeys(scenario([], [
+      { site: 'Login.Example-Insurer.ca', status: 'pending' },
+      { site: 'aircanada.com', status: 'expired' },
+    ]))).toEqual(['verification-site:example-insurer.ca', 'verification-site:aircanada.com']);
   });
 });

@@ -7,6 +7,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { hasBacklog, type PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
+import { registrableDomain } from '../../src/verification/domain.js';
 import { hasDatePlaceholders, resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import { LIVE_SEARCH_TOOL } from '../shared/live-search.js';
 import { leafChecks } from './assertions.js';
@@ -24,6 +25,7 @@ import {
   type SeedBullpenThread,
   type SeedContact,
   type SeedOutboundEntry,
+  type SeedVerification,
   type ToolStub,
 } from './types.js';
 
@@ -61,7 +63,10 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
 }
 
 const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity'] as const;
-const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog'] as const;
+const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications'] as const;
+const VERIFICATION_KEYS = ['key', 'site', 'page_domain', 'delivery', 'browser_session_id', 'task', 'status', 'requested_minutes_ago', 'session_alive'] as const;
+const VERIFICATION_DELIVERIES: readonly SeedVerification['delivery'][] = ['email', 'sms', 'app'];
+const VERIFICATION_STATUSES: readonly SeedVerification['status'][] = ['pending', 'expired', 'satisfied', 'abandoned'];
 const BACKLOG_KEYS = ['decay_warnings', 'pending_approvals', 'principal_tasks'] as const;
 const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier'] as const;
 const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'sent_minutes_ago', 'expires_in_hours', 'resume'] as const;
@@ -394,6 +399,44 @@ function parseBullpen(raw: Raw, file: string): SeedBullpenThread[] {
   });
 }
 
+/**
+ * `seed.verifications` (#2017). A closed row defaults to 15 minutes old, past the
+ * configured 10-minute expiry, so `expired` reads as it would in production.
+ */
+function parseVerifications(raw: Raw, file: string): SeedVerification[] {
+  return list(raw, 'verifications', file).map((v, i) => {
+    const where = `seed.verifications[${i}]`;
+    onlyKeys(v, VERIFICATION_KEYS, file, where);
+    const delivery = v['delivery'];
+    if (!VERIFICATION_DELIVERIES.includes(delivery as SeedVerification['delivery'])) {
+      throw new CaseError(file, `${where}: delivery must be one of ${VERIFICATION_DELIVERIES.join(', ')}`);
+    }
+    const status = v['status'] ?? 'pending';
+    if (!VERIFICATION_STATUSES.includes(status as SeedVerification['status'])) {
+      throw new CaseError(file, `${where}: status must be one of ${VERIFICATION_STATUSES.join(', ')}`);
+    }
+    const taskId = optStr(v, 'task', file, where);
+    if (taskId !== undefined && !UUID.test(taskId)) throw new CaseError(file, `${where}: 'task' must be a UUID`);
+    const pending = status === 'pending';
+    const site = str(v, 'site', file, where);
+    const pageDomain = str(v, 'page_domain', file, where);
+    for (const [name, value] of [['site', site], ['page_domain', pageDomain]] as const) {
+      if (registrableDomain(value) === null) throw new CaseError(file, `${where}: '${name}' must be a website or domain`);
+    }
+    return {
+      key: str(v, 'key', file, where),
+      site,
+      pageDomain,
+      delivery: delivery as SeedVerification['delivery'],
+      browserSessionId: str(v, 'browser_session_id', file, where),
+      ...(taskId !== undefined ? { taskId } : {}),
+      status: status as SeedVerification['status'],
+      requestedMinutesAgo: optNum(v, 'requested_minutes_ago', file, where) ?? (pending ? 1 : 15),
+      sessionAlive: optBool(v, 'session_alive', file, where) ?? pending,
+    };
+  });
+}
+
 /** `seed.backlog`: each count a whole number, absent ones zero, at least one positive. */
 function parseBacklog(raw: Raw, file: string): PrincipalBacklogCounts | undefined {
   if (raw['backlog'] === undefined) return undefined;
@@ -643,6 +686,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     contacts: parseContacts(seedRaw, file),
     outboundContext: parseOutbound(seedRaw, file),
     bullpen: parseBullpen(seedRaw, file),
+    verifications: parseVerifications(seedRaw, file),
     ...(backlog && { backlog }),
   };
 
@@ -750,6 +794,7 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
     ['entry', new Set()],
     ['thread', new Set()],
     ['resume_token', new Set()],
+    ['verification', new Set()],
   ]);
   const add = (kind: string, key: string): void => {
     const set = keys.get(kind)!;
@@ -760,6 +805,13 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
   scenario.seed.outboundContext.forEach(e => add('entry', e.key));
   scenario.seed.outboundContext.filter(e => e.resume).forEach(e => add('resume_token', e.key));
   scenario.seed.bullpen.forEach(t => add('thread', t.key));
+  scenario.seed.verifications.forEach(v => add('verification', v.key));
+  // Seeding opens each row as pending (one pending row per site, a unique index) before
+  // setting its status, so a second row for the site would reuse the first.
+  const sites = scenario.seed.verifications.map(v => registrableDomain(v.site) ?? v.site.toLowerCase());
+  if (new Set(sites).size < sites.length) {
+    throw new CaseError(file, `seed.verifications: at most one verification per site`);
+  }
 
   // failure_modes go to the judge as written; a placeholder there would reach it raw.
   if (placeholdersIn(scenario.failureModes).length > 0 || hasDatePlaceholders(scenario.failureModes)) {

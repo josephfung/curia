@@ -183,6 +183,80 @@ describe('loadScenarioCase', () => {
     expect(() => loadScenarioCase(write('bad-backlog.yaml', body))).toThrow(error);
   });
 
+  it('parses seed.verifications and resolves {{verification:key}} (#2017)', () => {
+    const body = VALID
+      .replace('seed:\n', [
+        'seed:',
+        '  verifications:',
+        '    - key: otp',
+        '      site: example-insurer.ca',
+        '      page_domain: login.example-insurer.ca',
+        '      delivery: sms',
+        '      browser_session_id: s-1',
+        `      task: ${WAKE_TASK_ID}`,
+        '      requested_minutes_ago: 3',
+        '    - key: old',
+        '      site: aircanada.com',
+        '      page_domain: aircanada.com',
+        '      delivery: email',
+        '      browser_session_id: s-9',
+        '      status: expired',
+        '',
+      ].join('\n'))
+      .replace('contains: { task: "{{entry:offsite}}" }', 'contains: { task: "{{entry:offsite}} {{verification:otp}}" }');
+    const c = loadScenarioCase(write('verif.yaml', body));
+    expect(c.seed.verifications).toEqual([
+      {
+        key: 'otp', site: 'example-insurer.ca', pageDomain: 'login.example-insurer.ca', delivery: 'sms',
+        browserSessionId: 's-1', taskId: WAKE_TASK_ID, status: 'pending', requestedMinutesAgo: 3, sessionAlive: true,
+      },
+      {
+        key: 'old', site: 'aircanada.com', pageDomain: 'aircanada.com', delivery: 'email',
+        browserSessionId: 's-9', status: 'expired', requestedMinutesAgo: 15, sessionAlive: false,
+      },
+    ]);
+    const resolved = resolvePlaceholders(c.expectedBehaviors[0]!.check, new Map([
+      ['entry:offsite', 'e-1'], ['verification:otp', 'v-1'],
+    ]));
+    expect(resolved).toMatchObject({ contains: { task: 'e-1 v-1' } });
+    // A case without the kind has none, and every other case keeps loading.
+    expect(loadScenarioCase(write('none.yaml', VALID)).seed.verifications).toEqual([]);
+  });
+
+  it.each([
+    ['an unknown delivery', 'delivery: voice', /delivery must be one of email, sms, app/],
+    ['an unknown status', 'status: waiting', /status must be one of pending, expired, satisfied, abandoned/],
+    ['a misspelled key', 'session: s-1', /unknown key\(s\) session/],
+    ['a task that is not a UUID', 'task: t-1', /'task' must be a UUID/],
+  ])('rejects a seeded verification with %s', (_label, extra, error) => {
+    const body = VALID.replace('seed:\n', [
+      'seed:',
+      '  verifications:',
+      '    - key: otp',
+      '      site: example.ca',
+      '      page_domain: example.ca',
+      '      browser_session_id: s-1',
+      ...(extra.startsWith('delivery') ? [] : ['      delivery: sms']),
+      `      ${extra}`,
+      '',
+    ].join('\n'));
+    expect(() => loadScenarioCase(write('bad-verif.yaml', body))).toThrow(error);
+  });
+
+  it('rejects two seeded verifications for one site', () => {
+    const row = (key: string, status: string) => [
+      `    - key: ${key}`, '      site: example.ca', '      page_domain: login.example.ca',
+      '      delivery: sms', `      browser_session_id: s-${key}`, `      status: ${status}`,
+    ];
+    const body = VALID.replace('seed:\n', ['seed:', '  verifications:', ...row('a', 'pending'), ...row('b', 'expired'), ''].join('\n'));
+    expect(() => loadScenarioCase(write('two.yaml', body))).toThrow(/at most one verification per site/);
+  });
+
+  it('rejects a placeholder for an unseeded verification', () => {
+    const body = VALID.replace('{{entry:offsite}}', '{{verification:missing}}');
+    expect(() => loadScenarioCase(write('bad-ref.yaml', body))).toThrow(/names no seeded verification/);
+  });
+
   it('requires a bullpen inbound to name a seeded thread', () => {
     const body = VALID.replace('from: principal', 'from: bullpen');
     expect(() => loadScenarioCase(write('b.yaml', body))).toThrow(/needs 'thread'/);

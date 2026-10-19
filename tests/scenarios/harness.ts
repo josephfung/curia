@@ -74,9 +74,11 @@ import {
   createOutboundContextService,
   deletePendingDelegations,
   resolveSender,
+  scopedBrowserSessionAlive,
   scopedBullpen,
   scopedOutboundContext,
   scopedPrincipalBacklog,
+  scopedVerification,
   SeedScope,
   describeError,
   seedRun,
@@ -282,6 +284,11 @@ export async function createScenarioHarness(
     // For real delegation (#2027): delegate links and settles the run's own entries, and
     // its dispatch claims are production's. Both only ever see this suite's rows.
     wrapOutboundContext: (service) => scopedOutboundContext(service, currentScope),
+    // Sign-in verifications (#2017): the block, the code tracking and the ExecutionLayer
+    // see only the run's seeded rows, and the run's seeded sessions read as alive (there
+    // is no browser; web-browser is stubbed).
+    wrapVerification: (runtime) => scopedVerification(runtime, currentScope),
+    browserSessionAlive: scopedBrowserSessionAlive(currentScope),
     delegationClaims: true,
     observeBus: (bus) => {
       delegationCapture = createDelegationCapture(
@@ -311,7 +318,8 @@ export async function createScenarioHarness(
   const outboundContext = createOutboundContextService(stack);
 
   // Production's Dispatcher, given an outbound-context service so it injects the
-  // block — narrowed to the run's own entries — and the run's own backlog counts.
+  // block — narrowed to the run's own entries — the run's own backlog counts, and the
+  // run's own verifications, so a principal's relayed code is tracked as in production.
   new Dispatcher({
     bus,
     logger,
@@ -319,6 +327,7 @@ export async function createScenarioHarness(
     channelPolicies: undefined,
     outboundContextService: scopedOutboundContext(outboundContext, currentScope),
     principalBacklog: scopedPrincipalBacklog(currentScope),
+    verification: stack.verification,
   }).register();
   // Bullpen mentions reach the coordinator the way they do in production.
   new BullpenDispatcher(bus, logger, stack.bullpenService, stack.agentRegistry).register();

@@ -55,7 +55,7 @@
 
 import * as path from 'node:path';
 import { loadConfig, loadYamlConfig, resolveLateDeliveryConfig, resolveTasksConfig, resolveVerificationConfig, type Config, type YamlConfig } from '../config.js';
-import { createVerificationRuntime } from '../verification/index.js';
+import { createVerificationRuntime, type VerificationRuntime } from '../verification/index.js';
 import { createLogger, type Logger } from '../logger.js';
 import { createPool, type DbPool } from '../db/connection.js';
 import { EventBus } from '../bus/bus.js';
@@ -215,6 +215,13 @@ export interface TestModeStackOptions {
    */
   wrapOutboundContext?: (service: OutboundContextService) => OutboundContextService;
   /**
+   * Narrow the sign-in verification runtime (#2017) before the ExecutionLayer and the agents
+   * receive it, and before `verification` on the stack exposes it. The scenario suite
+   * narrows it to the calling run's rows: production's listActive() spans the whole table,
+   * so every run would otherwise see every other run's seeded verifications.
+   */
+  wrapVerification?: (runtime: VerificationRuntime) => VerificationRuntime;
+  /**
    * Wire production's `delegate` dispatch claims (pending_delegations: the in-flight
    * refusal and the running claim, #1858 / #1893), as src/index.ts does when late
    * delivery is enabled. Off by default: the rows name the caller's conversations, and
@@ -302,6 +309,11 @@ export interface TestModeStack {
   autonomyService: AutonomyService;
   /** The real service. Agents only read it (see header); seed threads through it. */
   bullpenService: BullpenService;
+  /**
+   * The sign-in verification runtime the ExecutionLayer and agents use (#2017) — the wrapped
+   * one when wrapVerification was given. A caller that builds its own Dispatcher passes this.
+   */
+  verification: VerificationRuntime;
   agentContactId: string | undefined;
   principalContactId: string | undefined;
   /**
@@ -778,9 +790,10 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     // Delegated sign-in verification (#2017), wired like src/index.ts so the default-deny
     // scrub runs under test. No channel adapters start in this stack, so no channel is
     // enabled and askChannel() is always null; nothing here asks the principal anything.
-    const verification = createVerificationRuntime(
+    const baseVerification = createVerificationRuntime(
       pool, logger, resolveVerificationConfig(yamlConfig.verification), principalIdentities, new Set<string>(),
     );
+    const verification = options.wrapVerification ? options.wrapVerification(baseVerification) : baseVerification;
     const baseExecutionLayer = new ExecutionLayer(toolRegistry, logger, {
       bus,
       agentRegistry,
@@ -901,6 +914,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       officeIdentityService: identityService,
       autonomyService,
       bullpenService,
+      verification,
       agentContactId,
       principalContactId: principalContact?.id,
       llmProviders: providerRegistry,
