@@ -20,13 +20,26 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Weekly fallback digest** — sent when queued items go a week unreported. (#2159)
 - **`deliver-approval`** — sends a pending approval on one chosen channel; undelivered ones email after 15 minutes. (#2159)
 - **`approvalDelivery` capability** — new `ToolContext` field for tools that deliver approvals. (#2159)
+- **Autonomy gating setting** — `autonomy.gating: band | tier` chooses score-driven or contact-tier gates; ships as `tier`. (#2159)
+- **Judge brief** — escalation judge answers purpose, speaks-as-principal, grounding and necessity from the turn's lookups. (#2159)
+- **ADR-049** — band-driven autonomy replaces the tier escalation policy. (#2159)
 
 ### Changed
 
+- **Prompt tone directives** — "warm" and sample sentences removed; the office identity alone sets tone. (#2143)
+- **Specialist agents** — now get the office identity block, scoped so drafts in the principal's voice keep it. (#2143)
+- **`inspect-prompts.ts`** — snapshot gains `office_identity_writes_as_block` for curia-deploy's eval harness. (#2143)
 - **Detail setting** — now concrete per-channel length limits, repeated as a reminder on each reply. (#2143)
 - **Identity block** — tells Curia to say what is there, not what isn't, and skip narration. (#2143)
 - **Console Detail preview** — shows each channel's length limit at the current setting. (#2143)
 - **Principal notices** — notes, block notices and expired approvals go to the digest, not email. (#2159)
+- **`principal.report` (public API)** — three new sources; the execution layer may now publish it. (#2159)
+- **Band send review** — under `band`, sends are fact-checked; unverified claims bounce once, then trimmed or held. (#2159)
+- **Outbound filter** — under `band`, `contact-data-leak` and the tier disclosure table are off. (#2159)
+- **Relayed replies** — a held reply raises an approval on every channel, not only email. (#2159)
+- **`outbound.message` (public API)** — new `principalApproved` flag; approved relays are not held twice. (#2159)
+- **Gate C** — under `band`, the score decides; tier only matters when the judge sees steering. (#2159)
+- **Band descriptions** — under `band`, the injected autonomy guidance matches the new band table. (#2159)
 - **Approval delivery** — one message on the principal's preferred channel, not email, Signal and Slack. (#2159)
 - **One-channel standing preference** — fresh installs seed it: Signal, then SMS, then email. (#2159)
 - **Approval expiry sweep** — runs every 15 minutes, doubling as the approval-delivery safety net. (#2159)
@@ -35,6 +48,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Stored identities** — old tone settings become a written style on read; nothing is rewritten. (#2143)
 - **Setup wizard** — step 5 asks for an autonomy level instead of a decision posture. (#2143)
 - **Proactive analysis** — no longer implied by default; add "volunteer observations" to your style to keep it. (#2143)
+- **Haiku 5.5** — default fast tier and both judges move to `claude-haiku-5-5`, without thinking or temperature. (#2077)
+- **Judge token caps** — leak and escalation judge verdict caps raised for Haiku 5.5's longer verdicts. (#2077)
 
 ### Removed
 

@@ -184,19 +184,15 @@ When the meeting-debrief agent sends a prompt via Signal, the CEO's response arr
 
 ## 5. Prompt Delivery
 
-When a meeting passes both detection stages, the agent sends a conversational prompt via the CEO's configured channel.
+When a meeting passes both detection stages, the agent sends a prompt via the CEO's configured channel.
 
 **Channel-agnostic design:** The agent targets `debrief.channel` from config (e.g., `signal`). It uses the OutboundGateway with the appropriate channel ID. Changing the config value to `email` or a future channel like `slack` requires zero code changes.
 
-**Message style — conversational, brief, efficient:**
-
-> "You just wrapped up with Sarah Chen and David Park from Meridian. Any takeaways or follow-ups?"
-
-The prompt is:
-- Conversational, not formal — brief and efficient since the CEO is likely running to the next task
-- Names the attendees (enriched from contacts/KG)
-- Open-ended — doesn't assume what kind of follow-up is needed
-- Short — one or two sentences max
+**What the prompt says.** It names the attendees (enriched from contacts/KG) and asks for
+takeaways or follow-ups, open-ended, without assuming what kind of follow-up is needed. How
+it sounds and how long it runs come from the office identity block, which meeting-debrief
+gets in writes-as mode ([spec 13](13-office-identity.md)). The agent prompt names no tone
+and quotes no sample message, because the model copies a sample word for word.
 
 After sending, the agent:
 1. Writes the `prompted:<eventId>` guard to `config-store` (namespace `"debrief"`) with the Bullpen thread_id and timestamp
@@ -310,7 +306,7 @@ These are out of scope for this feature but identified during design:
 
 ### Manual testing
 - Run with real calendar data and Signal channel
-- Verify the prompt message is conversational, brief, and correctly names attendees
+- Verify the prompt message names the attendees and asks for takeaways or follow-ups
 - Verify draft emails appear in email drafts
 - Verify calendar events are created in the right time slots
 - Verify KG facts are stored correctly for commitments and preferences

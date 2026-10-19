@@ -135,7 +135,14 @@ export class SendDraftHandler implements ToolHandler {
       { recipientEmail: recipient, body: draft.body, subject: draft.subject, allRecipients },
       // principalDirected needs a live principal turn or explicit approval. The lineage check
       // above is not enough: a woken principal-lineage task passes it too (#1870).
-      { humanApproved: true, principalDirected: isPrincipalDirectedSend(ctx), conversationId: ctx.conversationId, taskEventId: ctx.taskEventId },
+      {
+        humanApproved: true,
+        principalDirected: isPrincipalDirectedSend(ctx),
+        conversationId: ctx.conversationId,
+        taskEventId: ctx.taskEventId,
+        // Used only if band review holds this draft (#2159): approval replays send-draft.
+        holdRecipe: { toolName: 'send-draft', partialPayload: ctx.input, description: `Send draft to ${recipient} — "${draft.subject}"` },
+      },
     );
 
     if (!sendResult.success) {

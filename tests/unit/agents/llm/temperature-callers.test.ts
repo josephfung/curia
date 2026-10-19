@@ -2,6 +2,10 @@
 // provider request body (#2038). Provider unit tests cover the builder knobs;
 // these wire each caller through AnthropicProvider so a regression that drops
 // options.temperature (or stops forwarding it) fails here.
+//
+// On claude-haiku-5-5, which 400s on any non-default sampling parameter, the
+// same callers must send no temperature, and the judges' own llm.call rows
+// must record temperature: null (#2077).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AnthropicProvider } from '../../../../src/agents/llm/anthropic.js';
@@ -34,6 +38,17 @@ function makeTextResponse(content: string) {
 function fakeBus(): EventBus {
   return { publish: vi.fn(async () => undefined) } as unknown as EventBus;
 }
+
+/** The temperature on each llm.call event the bus received. */
+function llmCallTemperatures(bus: EventBus): unknown[] {
+  const publish = bus.publish as unknown as ReturnType<typeof vi.fn>;
+  return publish.mock.calls
+    .map(([, event]) => event as { type: string; payload: { temperature?: unknown } })
+    .filter((event) => event.type === 'llm.call')
+    .map((event) => event.payload.temperature);
+}
+
+const SAMPLING_KEYS = ['temperature', 'top_p', 'top_k'] as const;
 
 describe('temperature:0 callers reach the provider request (#2038)', () => {
   const logger = createSilentLogger();
@@ -111,5 +126,85 @@ describe('temperature:0 callers reach the provider request (#2038)', () => {
     });
 
     expect(mockCreate.mock.calls[0]![0].temperature).toBe(0);
+  });
+});
+
+describe('temperature:0 callers on claude-haiku-5-5 send no sampling parameters (#2077)', () => {
+  const logger = createSilentLogger();
+  const registry = new ModelRegistry(logger);
+  const MODEL = 'claude-haiku-5-5';
+  const armin: FilterRecipient = { email: 'armin@external.com', isPrincipal: false };
+  const principal: FilterRecipient = { email: 'ceo@example.com', isPrincipal: true };
+
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  it('outbound judge omits temperature and its llm.call row records null', async () => {
+    mockCreate.mockResolvedValue({ ...makeTextResponse('{"leak": false, "reason": ""}'), model: MODEL });
+    const bus = fakeBus();
+    const judge = new OutboundLlmJudge(
+      new AnthropicProvider('test-key', logger, registry),
+      { enabled: true, model: MODEL, timeoutMs: 5000, failMode: 'split' },
+      bus,
+      logger,
+      registry,
+    );
+
+    await judge.review({
+      content: 'To the CEO: backend issues. Armin — Friday works.',
+      recipients: [armin, principal],
+      principalIncluded: true,
+      principalIsSoleRecipient: false,
+      conversationId: '',
+      channelId: 'email',
+    });
+
+    const request = mockCreate.mock.calls[0]![0];
+    for (const key of SAMPLING_KEYS) expect(request).not.toHaveProperty(key);
+    expect(llmCallTemperatures(bus)).toEqual([null]);
+  });
+
+  it('escalation judge omits temperature and its llm.call row records null', async () => {
+    mockCreate.mockResolvedValue({ ...makeTextResponse('{"class": "public", "reason": "fine"}'), model: MODEL });
+    const bus = fakeBus();
+    const judge = new EscalationJudge(
+      new AnthropicProvider('test-key', logger, registry),
+      { enabled: true, model: MODEL, timeoutMs: 5000 },
+      bus,
+      logger,
+      registry,
+    );
+
+    await judge.classifyDisclosure({
+      content: 'hello',
+      recipientTier: 'unknown',
+      conversationId: 'c1',
+    });
+
+    const request = mockCreate.mock.calls[0]![0];
+    for (const key of SAMPLING_KEYS) expect(request).not.toHaveProperty(key);
+    expect(llmCallTemperatures(bus)).toEqual([null]);
+  });
+
+  it('drift detector omits temperature', async () => {
+    mockCreate.mockResolvedValue({
+      ...makeTextResponse('{"drifted":false,"reason":"Aligned.","confidence":"high"}'),
+      model: MODEL,
+    });
+    const detector = new DriftDetector(
+      new AnthropicProvider('test-key', logger, registry),
+      { enabled: true, checkEveryNBursts: 1, minConfidenceToPause: 'high', model: MODEL },
+      logger,
+    );
+
+    await detector.check({
+      intentAnchor: 'Research AI safety weekly.',
+      taskPayload: { skill: 'web-search' },
+      lastRunSummary: null,
+    });
+
+    const request = mockCreate.mock.calls[0]![0];
+    for (const key of SAMPLING_KEYS) expect(request).not.toHaveProperty(key);
   });
 });

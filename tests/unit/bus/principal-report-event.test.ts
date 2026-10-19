@@ -40,12 +40,28 @@ describe('principal.report', () => {
     expect(sys.payload.actionShortRef).toBe('abcd1234');
   });
 
-  it('is published by dispatch and system, and read only by system', () => {
+  it('accepts the execution layer and the band-gating sources (#2159)', () => {
+    for (const source of ['gate_proceeded', 'sent_without_review', 'claim_trimmed'] as const) {
+      const ev = createPrincipalReport({
+        summary: 'Went ahead with email-send on a request from a known contact without asking first.',
+        urgency: 'digest',
+        source,
+        parentEventId: 'task-3',
+        sourceLayer: 'execution',
+      });
+      expect(ev.sourceLayer).toBe('execution');
+      expect(ev.payload.source).toBe(source);
+    }
+  });
+
+  it('is published by dispatch, system and execution, and read only by system', () => {
     expect(canPublish('dispatch', 'principal.report')).toBe(true);
     expect(canPublish('system', 'principal.report')).toBe(true);
+    // Gate C reports what it let through under band gating (#2159).
+    expect(canPublish('execution', 'principal.report')).toBe(true);
     expect(canPublish('agent', 'principal.report')).toBe(false);
     expect(canPublish('channel', 'principal.report')).toBe(false);
-    expect(canPublish('execution', 'principal.report')).toBe(false);
+    expect(canSubscribe('execution', 'principal.report')).toBe(false);
     // A report can carry what Curia did for the principal; no channel or agent may read it.
     expect(canSubscribe('system', 'principal.report')).toBe(true);
     expect(canSubscribe('channel', 'principal.report')).toBe(false);

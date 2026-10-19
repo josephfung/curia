@@ -365,6 +365,9 @@ describe('SignalAdapter', () => {
       expect.objectContaining({
         conversationId: 'signal:+14155551234',
         parentEventId: 'evt-1',
+        // A relayed reply: a band hold wakes the coordinator and replays via dispatcher-relay (#2159).
+        postTurn: true,
+        holdRecipe: expect.objectContaining({ toolName: 'dispatcher-relay' }),
       }),
     );
   });

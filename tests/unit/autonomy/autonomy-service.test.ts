@@ -73,6 +73,40 @@ describe('AutonomyService', () => {
 
   // -- getConfig --
 
+  describe('band gating descriptions (#2159)', () => {
+    it('describes spot-check as act-then-tell under band gating, and keeps the tier text by default', () => {
+      expect(AutonomyService.bandDescription('spot-check', 'band')).toContain('fact-checked');
+      expect(AutonomyService.bandDescription('spot-check')).toContain('No need to stop and ask');
+    });
+
+    it('injects the band-gating text when the config says band', () => {
+      const block = AutonomyService.formatPromptBlock({ score: 74, band: 'approval-required', updatedAt: new Date(), updatedBy: 't', gating: 'band' });
+      expect(block).toContain('Ask the principal first before you speak for them');
+    });
+
+    it('has band-gating text for every band', () => {
+      for (const band of ['full', 'spot-check', 'approval-required', 'draft-only', 'restricted'] as AutonomyBand[]) {
+        expect(AutonomyService.bandDescription(band, 'band').length).toBeGreaterThan(20);
+      }
+    });
+
+    it('stamps band gating on a set score too, so the console shows the band text', async () => {
+      const pool = mockPool();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const svc = new AutonomyService(pool as any, mockLogger() as any, { gating: 'band' });
+      pool.query.mockResolvedValueOnce({ rows: [{ previous_score: 70 }] });
+      expect((await svc.setScore(84, 'ceo')).gating).toBe('band');
+    });
+
+    it('stamps band gating on the config it reads, so the prompt block follows it', async () => {
+      const pool = mockPool();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const svc = new AutonomyService(pool as any, mockLogger() as any, { gating: 'band' });
+      pool.query.mockResolvedValueOnce({ rows: [{ score: 84, band: 'spot-check', updated_at: new Date(), updated_by: 'ceo' }] });
+      expect((await svc.getConfig())?.gating).toBe('band');
+    });
+  });
+
   describe('getConfig', () => {
     let pool: ReturnType<typeof mockPool>;
     let logger: ReturnType<typeof mockLogger>;

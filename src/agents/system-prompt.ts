@@ -96,13 +96,17 @@ export async function buildBaseSystemPrompt(
 
   // Build the fixed preamble — constraints first, most salient. Identity then
   // security are PREPENDED to the body (not substituted in-place), so the YAML
-  // carries no ${...} placeholders. Both are coordinator-only: the services /
-  // block are passed to AgentRuntime only for the coordinator (see agent-assembly.ts).
+  // carries no ${...} placeholders. Every agent gets the identity block (#2143): the
+  // coordinator as who it is, every other agent in writes-as mode, since its own YAML
+  // already says who it is (the same coordinator test the date guardrail uses). Security
+  // stays coordinator-only (see agent-assembly.ts).
   let prompt = sources.systemPrompt;
   const preambleParts: string[] = [];
   if (officeIdentityService) {
     try {
-      preambleParts.push(officeIdentityService.compileSystemPromptBlock());
+      preambleParts.push(agentId === 'coordinator'
+        ? officeIdentityService.compileSystemPromptBlock()
+        : officeIdentityService.compileWritesAsBlock());
     } catch (err) {
       // A compile failure must not abort the task. Log at error (operator signal)
       // and proceed without the identity block rather than emitting a literal

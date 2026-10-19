@@ -52,6 +52,10 @@ export class DispatcherRelayHandler implements ToolHandler {
       recipientId: to,
       taskEventId: ctx.taskEventId,
       parentEventId: ctx.taskEventId,
+      // The principal approved this exact text (#2159). Derived from the verified context
+      // flag, not assumed: allowed_callers keeps agents out, and this keeps a system caller
+      // without an approval from marking a relay approved.
+      ...(ctx.humanApproved === true ? { principalApproved: true } : {}),
     });
 
     try {

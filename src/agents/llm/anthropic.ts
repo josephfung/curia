@@ -148,9 +148,25 @@ export class AnthropicProvider implements LLMProvider {
 
     // Forward a finite caller temperature; omit the key otherwise so the
     // upstream model keeps its default (judges pass 0 for stable verdicts).
+    // Models flagged rejectsSamplingParams 400 on any non-default value, so the
+    // key is never sent to them; llm.call publishers apply the same rule via
+    // sentTemperature() (#2077). Curia sends no top_p or top_k to any model.
     const temperature = resolveTemperature(options, this.logger);
     if (temperature !== undefined) {
-      createParams.temperature = temperature;
+      if (this.modelRegistry.rejectsSamplingParams(model)) {
+        this.logger.debug({ model, temperature }, 'Omitting temperature — model rejects sampling parameters');
+      } else {
+        createParams.temperature = temperature;
+      }
+    }
+
+    // Models that think by default (Haiku 5.5) would otherwise spend max_tokens
+    // on a thinking block — a 10-token classifier cap can then return no text —
+    // and emit thinking blocks this provider does not carry back through tool
+    // loops. Curia never enabled thinking on Haiku 4.5, so keep it off here
+    // until the reasoning policy is decided (#2044, #2077).
+    if (this.modelRegistry.thinksByDefault(model)) {
+      createParams.thinking = { type: 'disabled' };
     }
 
     // Only attach the tools array when tools are provided — the API rejects

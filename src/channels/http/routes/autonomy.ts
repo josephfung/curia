@@ -56,7 +56,7 @@ export async function autonomyRoutes(
           score: config.score,
           band: config.band,
           // Include the human-readable behavioral description for the UI to display.
-          bandDescription: AutonomyService.bandDescription(config.band),
+          bandDescription: AutonomyService.bandDescription(config.band, config.gating),
           updatedAt: config.updatedAt,
           updatedBy: config.updatedBy,
         },
@@ -96,7 +96,7 @@ export async function autonomyRoutes(
         autonomy: {
           score: result.score,
           band: result.band,
-          bandDescription: AutonomyService.bandDescription(result.band),
+          bandDescription: AutonomyService.bandDescription(result.band, result.gating),
           updatedAt: result.updatedAt,
           updatedBy: result.updatedBy,
         },

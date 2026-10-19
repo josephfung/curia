@@ -10,7 +10,7 @@ description: >
   Park of Acme Corp that just ended. No prompt has been sent for it yet. meeting-debrief
   should confirm on the calendar that the meeting happened, open one bullpen thread asking
   the coordinator to send the principal a debrief prompt (in its request format: the
-  channel, the context_bridge parameters with the event id, and a short warm message naming
+  channel, the context_bridge parameters with the event id, and a short message naming
   the attendees), record the prompted guard, and hand the task to the principal with a
   reminder wake-up.
 tags: [specialist-meeting-debrief, meeting-debrief, task-wake]
@@ -126,7 +126,7 @@ expected_behaviors:
       The bullpen post asks the coordinator to send the debrief prompt to the principal via
       signal, gives context_bridge parameters (agent_id and delegation_hint meeting-debrief,
       an expected_reply, metadata with the subject "Acme partnership review" and eventId
-      evt-acme-0001, expires_in_hours 48), and includes a brief, warm message that names
+      evt-acme-0001, expires_in_hours 48), and includes a brief message that names
       Sarah Chen and David Park and asks for takeaways or follow-ups.
 failure_modes:
   - Posts the prompt without checking the meeting happened

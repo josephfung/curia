@@ -56,6 +56,11 @@ export interface PromptInputsSnapshot {
   curia: { version: string };
   timezone: string;
   office_identity_block: string;
+  /**
+   * The block every other agent gets (#2143): the same contract in writes-as mode. The
+   * harness's identity stub serves it from compileWritesAsBlock().
+   */
+  office_identity_writes_as_block: string;
   security_context_block: string;
   available_specialists: string;
   /** null when autonomy_config has no row (pre-migration) — production omits the block too. */
@@ -111,6 +116,7 @@ export async function buildPromptInputsSnapshot(
     curia: { version: curiaVersion },
     timezone,
     office_identity_block: rc.officeIdentityService.compileSystemPromptBlock(),
+    office_identity_writes_as_block: rc.officeIdentityService.compileWritesAsBlock(),
     security_context_block: rc.securityContextBlock,
     available_specialists: rc.availableSpecialists,
     autonomy: autonomy ? { score: autonomy.score, band: autonomy.band } : null,

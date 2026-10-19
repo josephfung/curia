@@ -55,11 +55,27 @@ describe('sms-send handler', () => {
       }));
       expect(result.success).toBe(true);
       expect(resolveRecipientReference).toHaveBeenCalledWith('sms', 'principal', { field: 'recipient' });
-      expect(send).toHaveBeenCalledWith({ channel: 'sms', recipient: '+15195550100', message: 'Hello' }, expect.any(Object));
+      expect(send).toHaveBeenCalledWith(
+        { channel: 'sms', recipient: '+15195550100', message: 'Hello' },
+        // Replayed on approval if band review holds the send (#2159).
+        expect.objectContaining({
+          holdRecipe: { toolName: 'sms-send', partialPayload: { recipient: 'principal', message: 'Hello' }, description: expect.stringMatching(/^SMS to /) },
+        }),
+      );
       if (result.success) {
         expect(result.data).toMatchObject({ delivered_to: '+15195550100' });
         expect(result.data).not.toHaveProperty('contact_id');
       }
+    });
+
+    it('passes an approved replay on as humanApproved, so band review does not hold it again (#2159)', async () => {
+      const send = vi.fn().mockResolvedValue({ success: true, messageId: 'm3' });
+      await new SmsSendHandler().execute(makeCtx({
+        input: { recipient: 'principal', message: 'Hello' },
+        outboundGateway: { send, resolveRecipientReference } as never,
+        humanApproved: true,
+      }));
+      expect(send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ humanApproved: true }));
     });
 
     it('sends nothing when the reference does not resolve', async () => {

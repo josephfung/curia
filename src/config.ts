@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { parseSensitivityRules, type SensitivityRule } from './memory/sensitivity.js';
 import { parseProxyConfig } from './browser/proxy-config.js';
+import { AUTONOMY_GATINGS, type AutonomyGating } from './autonomy/band-policy.js';
 
 // ---------------------------------------------------------------------------
 // Multi-account email config types
@@ -249,6 +250,11 @@ export function resolveReportFallbackConfig(yaml: YamlConfig['autonomy']): Repor
     checkIntervalHours:
       yaml?.report_fallback?.check_interval_hours ?? DEFAULT_REPORT_FALLBACK_CONFIG.checkIntervalHours,
   };
+}
+
+/** Resolve autonomy.gating. Ships as 'tier' (#2159); prod flips it, then the default changes. */
+export function resolveAutonomyGating(yaml: YamlConfig['autonomy']): AutonomyGating {
+  return yaml?.gating ?? 'tier';
 }
 
 /** Resolve the optional YAML tasks block to a fully-populated config with defaults. */
@@ -520,7 +526,7 @@ export interface YamlConfig {
       /**
        * Model the judge runs on. A dedicated model string (NOT a tier reference)
        * so the judge can use a different vendor independently of the agent tiers.
-       * Validated against the model registry at startup. Default: 'claude-haiku-4-5'.
+       * Validated against the model registry at startup. Default: 'claude-haiku-5-5'.
        */
       model?: string;
       /** Hard timeout for the judge call in ms. Default: 5000. */
@@ -574,11 +580,13 @@ export interface YamlConfig {
       /**
        * Model for the judge. A dedicated string (NOT a tier reference) so it can
        * differ from the coordinator model. Validated against the registry at startup.
-       * Default: 'claude-haiku-4-5'.
+       * Default: 'claude-haiku-5-5'.
        */
       model?: string;
       /** Hard timeout per call in ms. Default: 5000. */
       timeout_ms?: number;
+      /** Timeout for the band brief (#2159), which reads the drafting turn's evidence. Default: 15000. */
+      review_timeout_ms?: number;
       // No failMode — EscalationJudge is hard-coded fail-closed. A local.yaml
       // `failMode` key is deep-merged into the object but ignored by the type and
       // constructor (see #1911). Do not add it here.
@@ -768,6 +776,8 @@ export interface YamlConfig {
     };
   };
   autonomy?: {
+    /** band: the score decides and the judge reviews sends; tier: the pre-#2159 contact-tier gates. Default tier. */
+    gating?: AutonomyGating;
     /**
      * Bypass-ladder thresholds (#1125) — raw autonomy scores governing how much LINEAGE
      * standing a heartbeat-woken task inherits. The live score can only ever DOWNGRADE
@@ -1415,6 +1425,18 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     }
     // Reaches setInterval as minutes × 60000; an overflowed delay would fire in a tight loop.
     assertFitsNodeTimer('autonomy.approval_expiry.sweep_interval_minutes', interval, 60_000, 'minutes');
+  }
+
+  // autonomy.gating (#2159): a typo must fail at boot, not silently keep the tier gates.
+  const gating = config.autonomy?.gating;
+  if (gating !== undefined && !AUTONOMY_GATINGS.includes(gating)) {
+    throw new Error(`autonomy.gating must be one of ${AUTONOMY_GATINGS.join(', ')}, got: ${String(gating)}`);
+  }
+  // Band gating reviews every send with the escalation judge. With the judge off, every
+  // review is a failure: up to 5 unreviewed sends an hour at 80+, every send held below.
+  // That is never what an operator means, so refuse the combination at boot.
+  if (gating === 'band' && config.escalation?.judge?.enabled === false) {
+    throw new Error('autonomy.gating: band needs the escalation judge — set escalation.judge.enabled: true, or use autonomy.gating: tier');
   }
 
   // Validate autonomy.report_fallback if present (#2159). Same guard: a mis-shaped block

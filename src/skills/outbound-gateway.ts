@@ -55,6 +55,8 @@ import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import { approvalAdvisory, buildApprovalDeliveryWake, generateShortRef } from '../autonomy/approval-trigger.js';
 import { enrichGatewayApprovalPayload } from '../autonomy/approval-notification.js';
 import type { ApprovalDelivery } from '../autonomy/approval-delivery.js';
+import type { AutonomyGating } from '../autonomy/band-policy.js';
+import { BAND_RULES, type BandReviewReport, type BandSendReview } from '../dispatch/band-send-review.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText, stripModelSignOff } from '../channels/email/signature.js';
@@ -327,6 +329,22 @@ export interface OutboundGatewayConfig {
    * (or the underlying client). Absent channels are never auto-queued.
    */
   outboundQueueReadiness?: ReadonlyMap<string, () => boolean>;
+
+  /**
+   * Which policy reviews sends (#2159). Under 'band', a send that passes the content
+   * filter is reviewed by `bandReview` (the escalation judge's brief) before dispatch.
+   * Default 'tier': no band review, today's behavior.
+   */
+  gating?: AutonomyGating;
+  /** The band review (#2159). Used only when gating is 'band'. */
+  bandReview?: Pick<BandSendReview, 'review'>;
+}
+
+/** What a band hold replays on approval: the same shape as reExecRecipe (#2159). */
+interface SendRecipe {
+  toolName: string;
+  partialPayload?: Record<string, unknown>;
+  description: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +396,15 @@ function buildBlockReasonSummary(findings: Array<{ rule: string; detail: string 
   return findings
     .map((f) => {
       // principal-note-markup's detail is fixed text that tells the agent where the note goes.
-      const showDetail = (f.rule.startsWith('llm-judge-') || f.rule === 'disclosure-tier-gate' || f.rule === 'principal-note-markup') && f.detail;
+      // A band bounce's detail quotes the agent's own sentences, which it needs to fix the
+      // message (#2159); it never carries a matched secret or a third party's data.
+      const showDetail = (
+        f.rule.startsWith('llm-judge-')
+        || f.rule === 'disclosure-tier-gate'
+        || f.rule === 'principal-note-markup'
+        || f.rule === BAND_RULES.ungrounded
+        || f.rule === BAND_RULES.unneeded
+      ) && f.detail;
       return showDetail ? `${f.rule}: ${f.detail}` : f.rule;
     })
     .join('\n');
@@ -525,6 +551,8 @@ export class OutboundGateway {
   private readonly exportControlService?: ExportControlService;
   private readonly outboundQueue?: OutboundQueueRepo;
   private readonly outboundQueueReadiness: Map<string, () => boolean>;
+  private readonly gating: AutonomyGating;
+  private readonly bandReview?: Pick<BandSendReview, 'review'>;
   private flushInFlight = new Set<string>();
   /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
   private flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -552,6 +580,13 @@ export class OutboundGateway {
     this.exportControlService = config.exportControlService;
     this.outboundQueue = config.outboundQueue;
     this.outboundQueueReadiness = new Map(config.outboundQueueReadiness ?? []);
+    this.gating = config.gating ?? 'tier';
+    this.bandReview = config.bandReview;
+    if (this.gating === 'band' && !this.bandReview) {
+      // The filter turns contact-data-leak and Stage 2.5 off under band; without the review
+      // that replaces them, sends would go out with no disclosure review at all.
+      this.log.error({ gating: this.gating }, 'outbound-gateway: band gating without a band review — sends get no disclosure review');
+    }
   }
 
   /**
@@ -677,8 +712,15 @@ export class OutboundGateway {
        * The principal directed this send. Send skills compute it with
        * isPrincipalDirectedSend(). It lifts only the Stage 2.5 disclosure gate;
        * every other check still runs. Omitted means the gate applies (#1870).
+       * Under band gating it narrows the band review to grounding (#2159).
        */
       principalDirected?: boolean;
+      /**
+       * What to replay on approval if band review holds this send (#2159). Same shape as
+       * reExecRecipe; used only by the band hold, so tier gating never writes approval rows
+       * for it. Falls back to reExecRecipe when absent.
+       */
+      holdRecipe?: SendRecipe;
     },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
@@ -750,66 +792,13 @@ export class OutboundGateway {
         // correct skill on principal approval. DB failure must NOT cause fail-open — the send
         // stays blocked even if the row can't be written (actionRef will be absent).
         let actionRef: string | undefined;
-        const actionLogRepo = this.actionLogRepo;
-        if (actionLogRepo && options?.taskEventId && options?.reExecRecipe) {
-          const recipe = options.reExecRecipe;
-
-          // Hoist expiresAt so both the insert row and the notification body use the
-          // same value — if the 48h window ever changes, only one line needs updating.
-          const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-          // Hoist candidateRef before the try block so the notification body can
-          // reference it directly — avoiding a fragile dependency on the outer-scope
-          // actionRef variable which is only set after insert() confirms success.
-          const candidateRef = generateShortRef();
-          let rowId: number | undefined;
-          try {
-            // Only assign actionRef after insert confirms the DB row exists to
-            // prevent phantom refs if insert throws.
-            rowId = await actionLogRepo.insert({
-              taskId: options.taskEventId,
-              conversationId: options.conversationId ?? undefined,
-              toolName: recipe.toolName,
-              actionRisk: 'medium',
-              outcome: 'pending_approval',
-              shortRef: candidateRef,
-              description: recipe.description,
-              payload: recipe.partialPayload ?? {},
-              expiresAt,
-            });
-            // Only commit actionRef now that the row actually exists in the DB
-            actionRef = candidateRef;
-          } catch (err) {
-            this.log.error(
-              { err, channel: request.channel, taskEventId: options.taskEventId },
-              'outbound-gateway: failed to write action_log row during gate — send is still blocked, actionRef will be absent',
-            );
-            // actionRef remains undefined — send is still blocked below
-          }
-
-          // Nobody is notified here (#2159): the agent that tried this send delivers the
-          // approval on one channel with deliver-approval. Register what the principal will
-          // be shown — the resolved recipients, not the stored contact references (#2033) —
-          // and queue the request's one digest mention.
-          if (rowId !== undefined) {
-            const displayPayload = enrichGatewayApprovalPayload(
-              withoutRecipientReferences(recipe.partialPayload ?? {}),
-              request.channel === 'email'
-                ? { to: request.to, cc: request.cc?.join(', '), subject: request.subject, body: request.body }
-                : request.channel === 'slack'
-                  // `recipient` is the field the approval renderer shows (#2033).
-                  ? { slackChannelId: request.slackChannelId, recipient: request.slackUserId ?? request.slackChannelId, message: request.message }
-                  : { recipient: request.recipient, message: request.message },
-            );
-            this.approvalDelivery?.registerDisplay(candidateRef, {
-              preamble: recipe.description,
-              payload: displayPayload,
-              extraLines: [`Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`],
-            });
-            await this.queueApprovalMention(candidateRef, recipe.description, options.taskEventId, options.conversationId ?? undefined);
-            if (options.postTurn) {
-              await this.wakeCoordinatorToDeliver(candidateRef, recipe.description, options.taskEventId);
-            }
-          }
+        if (options?.taskEventId && options?.reExecRecipe) {
+          actionRef = await this.raiseSendApproval(
+            request,
+            options.reExecRecipe,
+            { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn },
+            [`Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`],
+          );
         }
 
         if (actionRef) {
@@ -1254,6 +1243,29 @@ export class OutboundGateway {
     }
 
     // ------------------------------------------------------------------
+    // Step 2.5: Band review (#2159) — under band gating, the judge's brief replaces Stage 2.5.
+    // ------------------------------------------------------------------
+    // Skipped for system notifications, for sends the principal approved (they read this
+    // exact message), and for the principal alone (nobody else reads it).
+    let bandReport: BandReviewReport | undefined;
+    if (
+      this.gating === 'band' && this.bandReview
+      && !options?.isSystemNotification && !options?.humanApproved && !principalIsSoleRecipient
+    ) {
+      const people = this.personRecipients(request);
+      const outcome = await this.runBandReview({
+        request,
+        content: redactedBody,
+        recipients: people.length > 0 ? people : [recipientId],
+        editable: true,
+        options,
+      });
+      if (outcome.result) return outcome.result;
+      redactedBody = outcome.content;
+      bandReport = outcome.report;
+    }
+
+    // ------------------------------------------------------------------
     // Step 3: Channel dispatch + contact promotion
     // ------------------------------------------------------------------
     // After a successful send, promote the recipient contact from provisional →
@@ -1307,6 +1319,7 @@ export class OutboundGateway {
             : {}),
         });
       }
+      if (bandReport && result.success) await this.publishBandReport(bandReport, options);
       return result;
     }
 
@@ -1327,6 +1340,7 @@ export class OutboundGateway {
           parentEventId: options?.parentEventId,
         });
       }
+      if (bandReport && result.success) await this.publishBandReport(bandReport, options);
       return result;
     }
 
@@ -1346,6 +1360,7 @@ export class OutboundGateway {
           parentEventId: options?.parentEventId,
         });
       }
+      if (bandReport && result.success) await this.publishBandReport(bandReport, options);
       return result;
     }
 
@@ -1372,6 +1387,7 @@ export class OutboundGateway {
           parentEventId: options?.parentEventId,
         });
       }
+      if (bandReport && result.success) await this.publishBandReport(bandReport, options);
       return result;
     }
   }
@@ -1584,6 +1600,251 @@ export class OutboundGateway {
    */
   setApprovalDelivery(approvalDelivery: Pick<ApprovalDelivery, 'registerDisplay'>): void {
     this.approvalDelivery = approvalDelivery;
+  }
+
+  /**
+   * Write a pending_approval row for a held send, register what the principal will be shown,
+   * queue its one digest mention, and wake the coordinator for a relayed reply (#2159).
+   * Nobody is notified here: the agent that tried the send delivers the approval on one
+   * channel with deliver-approval. Returns the short ref, or undefined when there is no
+   * action log or the row could not be written (the send stays held either way).
+   */
+  private async raiseSendApproval(
+    request: OutboundSendRequest,
+    recipe: SendRecipe,
+    ctx: { taskEventId: string; conversationId?: string | null; postTurn?: boolean },
+    extraLines: string[],
+  ): Promise<string | undefined> {
+    const actionLogRepo = this.actionLogRepo;
+    if (!actionLogRepo) {
+      this.log.warn({ channel: request.channel }, 'outbound-gateway: no action log wired — a held send cannot raise an approval');
+      return undefined;
+    }
+    // Hoist candidateRef so the display registration names the row the insert wrote.
+    const candidateRef = generateShortRef();
+    try {
+      await actionLogRepo.insert({
+        taskId: ctx.taskEventId,
+        conversationId: ctx.conversationId ?? undefined,
+        toolName: recipe.toolName,
+        actionRisk: 'medium',
+        outcome: 'pending_approval',
+        shortRef: candidateRef,
+        description: recipe.description,
+        payload: recipe.partialPayload ?? {},
+        expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+      });
+    } catch (err) {
+      this.log.error(
+        { err, channel: request.channel, taskEventId: ctx.taskEventId },
+        'outbound-gateway: failed to write action_log row for a held send — send is still blocked, actionRef will be absent',
+      );
+      return undefined;
+    }
+    // Show the principal the resolved recipients, not the stored contact references (#2033).
+    const displayPayload = enrichGatewayApprovalPayload(
+      withoutRecipientReferences(recipe.partialPayload ?? {}),
+      request.channel === 'email'
+        ? { to: request.to, cc: request.cc?.join(', '), subject: request.subject, body: request.body }
+        : request.channel === 'slack'
+          // `recipient` is the field the approval renderer shows (#2033).
+          ? { slackChannelId: request.slackChannelId, recipient: request.slackUserId ?? request.slackChannelId, message: request.message }
+          : { recipient: request.recipient, message: request.message },
+    );
+    this.approvalDelivery?.registerDisplay(candidateRef, {
+      preamble: recipe.description,
+      payload: displayPayload,
+      extraLines,
+    });
+    await this.queueApprovalMention(candidateRef, recipe.description, ctx.taskEventId, ctx.conversationId ?? undefined);
+    if (ctx.postTurn) {
+      await this.wakeCoordinatorToDeliver(candidateRef, recipe.description, ctx.taskEventId);
+    }
+    return candidateRef;
+  }
+
+  /**
+   * Step 2.5 under band gating (#2159): ask the band review, and act on its decision.
+   * Returns `result` when the send must not go out (bounce or hold), otherwise the content
+   * to send — trimmed when the review cut unverified statements — and any report item to
+   * publish once it is delivered. `editable` is false for a stored draft, which cannot be
+   * trimmed: a trimmed decision holds it instead.
+   */
+  private async runBandReview(args: {
+    request: OutboundSendRequest;
+    content: string;
+    recipients: readonly string[];
+    editable: boolean;
+    options: {
+      taskEventId?: string;
+      conversationId?: string | null;
+      parentEventId?: string;
+      postTurn?: boolean;
+      principalDirected?: boolean;
+      holdRecipe?: SendRecipe;
+      reExecRecipe?: SendRecipe;
+    } | undefined;
+  }): Promise<{ result?: OutboundSendResult; content: string; report?: BandReviewReport }> {
+    const { request, content, recipients, editable, options } = args;
+    const score = await this.bandScore();
+    let decision: Awaited<ReturnType<BandSendReview['review']>>;
+    try {
+      decision = await this.bandReview!.review({
+        content,
+        channel: request.channel,
+        recipients,
+        score,
+        ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
+        ...(options?.taskEventId ? { taskEventId: options.taskEventId } : {}),
+        principalDirected: options?.principalDirected === true,
+        postTurn: options?.postTurn === true,
+      });
+    } catch (err) {
+      // BandSendReview is not meant to throw; if it does, the send was not reviewed. Hold.
+      this.log.error({ err, channel: request.channel }, 'outbound-gateway: band review threw — holding the send');
+      const reason = 'Held for the principal: the send review failed.';
+      decision = { kind: 'hold', reason, findings: [{ rule: BAND_RULES.unreviewed, detail: reason }] };
+    }
+
+    if (decision.kind === 'send' && !editable && decision.content !== content) {
+      const reason = 'Held for the principal: the draft states things about the principal that nothing looked up supports, and a saved draft cannot be trimmed.';
+      decision = { kind: 'hold', reason, findings: [{ rule: BAND_RULES.ungrounded, detail: reason }] };
+    }
+
+    if (decision.kind === 'send') {
+      return { content: decision.content, ...(decision.report ? { report: decision.report } : {}) };
+    }
+
+    if (decision.kind === 'bounce') {
+      // Published so the dispatcher's relay rewrite (#1355) sees it, and for audit. No block
+      // report: a bounce is between Curia and its own drafter.
+      const blockId = `block_${randomUUID()}`;
+      try {
+        await this.bus.publish('dispatch', createOutboundBlocked({
+          blockId,
+          conversationId: options?.conversationId ?? '',
+          channelId: request.channel,
+          content,
+          recipientId: recipients[0] ?? '',
+          reason: decision.findings.map((f) => `${f.rule}: ${f.detail}`).join('; '),
+          findings: decision.findings,
+          parentEventId: options?.parentEventId ?? '',
+        }));
+      } catch (err) {
+        this.log.warn({ err, blockId }, 'outbound-gateway: failed to publish outbound.blocked for a band bounce — the send is still bounced');
+      }
+      return {
+        content,
+        result: {
+          success: false,
+          blockedReason: buildBlockReasonSummary(decision.findings),
+          blockedRules: decision.findings.map((f) => f.rule),
+        },
+      };
+    }
+
+    // Hold. Never publish outbound.blocked here: on a relay it would start the #1355
+    // rewrite loop, and this message needs the principal, not a rewrite.
+    const rule = decision.findings[0]?.rule ?? BAND_RULES.unreviewed;
+    const recipe = options?.holdRecipe ?? options?.reExecRecipe;
+    this.log.info({ channel: request.channel, rule, hasRecipe: recipe !== undefined }, 'outbound-gateway: band review held the send');
+    // A hold with no approval behind it reaches nobody unless it is reported: the agent may
+    // be gone (a relayed reply), and nothing else records it. The digest gets it then.
+    const reportUnapprovedHold = async (why: string): Promise<void> => {
+      this.log.warn({ channel: request.channel, rule, why }, 'outbound-gateway: band hold raised no approval — reporting it to the digest');
+      await this.queueBlockReport(
+        [
+          `Outbound ${request.channel} message to ${recipients.join(', ')} was held by the send review, and no approval request could be raised (${why}).`,
+          `Reason: ${decision.reason}`,
+        ].join('\n'),
+        options?.conversationId ?? undefined,
+        options?.taskEventId ?? options?.parentEventId ?? 'system',
+      );
+    };
+    if (recipe && options?.taskEventId) {
+      const actionRef = await this.raiseSendApproval(
+        request,
+        recipe,
+        { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn },
+        [`Held by the send review: ${decision.reason}`],
+      );
+      if (!actionRef) await reportUnapprovedHold('the approval row could not be written');
+      return {
+        content,
+        result: {
+          success: false,
+          gated: true,
+          ...(actionRef ? { actionRef } : {}),
+          blockedReason: actionRef
+            ? `${decision.reason} ${approvalAdvisory(actionRef)}`
+            : `${decision.reason} No approval request could be recorded — ask the principal before sending it.`,
+        },
+      };
+    }
+    await reportUnapprovedHold(recipe ? 'the send has no task to attach it to' : 'this send has no way to replay it');
+    return {
+      content,
+      result: { success: false, blockedReason: `${decision.reason} Ask the principal before sending it.`, blockedRules: [rule] },
+    };
+  }
+
+  /** The live score for band review. Unreadable counts as 0: below 80, failures hold. */
+  private async bandScore(): Promise<number> {
+    if (!this.autonomyService) return 0;
+    try {
+      const config = await this.autonomyService.getConfig();
+      if (config === null) {
+        this.log.warn('outbound-gateway: no autonomy score for band review — reviewing as score 0');
+        return 0;
+      }
+      return config.score;
+    } catch (err) {
+      this.log.warn({ err }, 'outbound-gateway: autonomy score unreadable for band review — reviewing as score 0');
+      return 0;
+    }
+  }
+
+  /**
+   * Publish a band report item once its send is delivered (#2159). A "sent without review"
+   * item is then the only record that nothing checked the message, so if it cannot be
+   * recorded the principal is emailed directly.
+   */
+  private async publishBandReport(
+    report: BandReviewReport,
+    options: { taskEventId?: string; parentEventId?: string; conversationId?: string | null } | undefined,
+  ): Promise<void> {
+    try {
+      await this.bus.publish('dispatch', createPrincipalReport({
+        summary: report.summary,
+        urgency: 'digest',
+        source: report.source,
+        ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
+        parentEventId: options?.taskEventId ?? options?.parentEventId ?? 'system',
+        sourceLayer: 'dispatch',
+      }));
+    } catch (err) {
+      this.log.error({ err, source: report.source }, 'outbound-gateway: failed to record a band report item');
+      if (report.source === 'sent_without_review') {
+        await this.emailPrincipal('Curia: a message went out without review', report.summary);
+      }
+    }
+  }
+
+  /** Email the principal directly, as a system notification. Never throws. */
+  private async emailPrincipal(subject: string, body: string): Promise<void> {
+    const to = this.principalIdentities.find((i) => i.channel === 'email' && i.verified && i.status === 'active')?.channelIdentifier;
+    if (!to) {
+      this.log.error({ subject }, 'outbound-gateway: no verified principal email to notify — the notice is only in this log');
+      return;
+    }
+    try {
+      const result = await this.send({ channel: 'email', to, subject, body }, { isSystemNotification: true, skipNotificationOnBlock: true });
+      if (!result.success) {
+        this.log.error({ subject, reason: result.blockedReason }, 'outbound-gateway: principal notice was not delivered');
+      }
+    } catch (err) {
+      this.log.error({ err, subject }, 'outbound-gateway: principal notice threw');
+    }
   }
 
   /** Wake the coordinator to deliver an approval nobody is there to deliver (#2159). Never throws. */
@@ -2460,7 +2721,15 @@ export class OutboundGateway {
     draftId: string,
     accountId: string | undefined,
     draftMeta: { recipientEmail: string; body: string; subject: string; allRecipients?: string[] },
-    options?: { humanApproved?: boolean; principalDirected?: boolean; conversationId?: string; taskEventId?: string; parentEventId?: string },
+    options?: {
+      humanApproved?: boolean;
+      principalDirected?: boolean;
+      conversationId?: string;
+      taskEventId?: string;
+      parentEventId?: string;
+      /** What to replay on approval if band review holds this draft (#2159). */
+      holdRecipe?: SendRecipe;
+    },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
     // Step 0: Autonomy gate
@@ -2669,6 +2938,33 @@ export class OutboundGateway {
     }
 
     // ------------------------------------------------------------------
+    // Step 2.5: Band review (#2159) — as in send(). A stored draft cannot be trimmed, so a
+    // review that would cut statements holds it instead.
+    // ------------------------------------------------------------------
+    // Keyed on principalDirected, not humanApproved: send-draft sets humanApproved on every
+    // call (its task-origin check is its gate), so it does not mean the principal read this
+    // draft. A live principal turn or an explicit approval did; a woken task did not. This
+    // is also when tier gating skips Stage 2.5.
+    let bandReport: BandReviewReport | undefined;
+    if (this.gating === 'band' && this.bandReview && !options?.principalDirected && !draftPrincipalSole) {
+      const outcome = await this.runBandReview({
+        request: {
+          channel: 'email',
+          to: recipientEmail,
+          subject: draftMeta.subject,
+          body,
+          ...(draftEnvelope.length > 1 ? { cc: draftEnvelope.filter((r) => r !== recipientEmail) } : {}),
+        },
+        content: body,
+        recipients: draftEnvelope,
+        editable: false,
+        options,
+      });
+      if (outcome.result) return outcome.result;
+      bandReport = outcome.report;
+    }
+
+    // ------------------------------------------------------------------
     // Step 3: Dispatch via Nylas drafts.send() — sends the actual draft
     // ------------------------------------------------------------------
     const nylasClient = this.getNylasClient(accountId);
@@ -2712,6 +3008,7 @@ export class OutboundGateway {
       taskEventId: options?.taskEventId,
       parentEventId: options?.parentEventId,
     });
+    if (bandReport) await this.publishBandReport(bandReport, options);
 
     return { success: true, messageId: sentMessage.id };
   }

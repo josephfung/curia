@@ -41,7 +41,13 @@ export function summarizeBlockFindings(findings: Array<{ rule: string; detail: s
   if (findings.length === 0) return 'Content filter (no rule detail available)';
   return findings
     .map((f) => {
-      const showDetail = (f.rule.startsWith('llm-judge-') || f.rule === 'disclosure-tier-gate') && f.detail;
+      // A band bounce quotes the agent's own sentences, which it needs to fix the reply (#2159).
+      const showDetail = (
+        f.rule.startsWith('llm-judge-')
+        || f.rule === 'disclosure-tier-gate'
+        || f.rule === 'ungrounded-claim'
+        || f.rule === 'unneeded-disclosure'
+      ) && f.detail;
       return showDetail ? `${f.rule}: ${f.detail}` : f.rule;
     })
     .join('\n');

@@ -388,6 +388,79 @@ describe('AnthropicProvider — temperature', () => {
   });
 });
 
+// Haiku 5.5 400s on non-default sampling parameters and thinks by default (#2077).
+describe('AnthropicProvider — claude-haiku-5-5 request shape', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+    mockStream.mockReset();
+    mockCreate.mockResolvedValue(makeTextResponse());
+  });
+
+  it.each([0, 0.7, 1])('omits temperature %s on chat', async (temperature) => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      model: 'claude-haiku-5-5',
+      messages: [{ role: 'user', content: 'Hello' }],
+      options: { temperature },
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params).not.toHaveProperty('temperature');
+    expect(params).not.toHaveProperty('top_p');
+    expect(params).not.toHaveProperty('top_k');
+  });
+
+  it('omits temperature on the streaming path', async () => {
+    mockStream.mockReturnValue(makeStream([
+      { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } },
+    ], makeTextResponse()));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await collectStream(provider.stream({
+      model: 'claude-haiku-5-5',
+      messages: [{ role: 'user', content: 'Hello' }],
+      options: { temperature: 0 },
+    }));
+
+    expect(mockStream.mock.calls[0]![0]).not.toHaveProperty('temperature');
+  });
+
+  it('sends thinking disabled on chat and stream', async () => {
+    mockStream.mockReturnValue(makeStream([
+      { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } },
+    ], makeTextResponse()));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hello' }] });
+    await collectStream(provider.stream({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hello' }] }));
+
+    expect(mockCreate.mock.calls[0]![0].thinking).toEqual({ type: 'disabled' });
+    expect(mockStream.mock.calls[0]![0].thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('keeps the caller max_tokens cap (classify sends 10)', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      model: 'claude-haiku-5-5',
+      messages: [{ role: 'user', content: 'yes or no?' }],
+      options: { max_tokens: 10 },
+    });
+
+    expect(mockCreate.mock.calls[0]![0].max_tokens).toBe(10);
+  });
+
+  it('leaves claude-haiku-4-5 requests unchanged: temperature sent, no thinking key', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      model: 'claude-haiku-4-5',
+      messages: [{ role: 'user', content: 'Hello' }],
+      options: { temperature: 0 },
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params.temperature).toBe(0);
+    expect(params).not.toHaveProperty('thinking');
+  });
+});
+
 describe('AnthropicProvider — stream', () => {
   beforeEach(() => {
     mockCreate.mockReset();

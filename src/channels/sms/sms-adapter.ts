@@ -10,6 +10,7 @@ import type { Logger } from '../../logger.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { OutboundMessageEvent } from '../../bus/events.js';
+import { relaySendOptions } from '../../dispatch/relay-gate-c.js';
 import { createInboundMessage, createChannelDisconnected, createChannelReconnect } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
@@ -215,6 +216,8 @@ export class SmsAdapter implements Channel {
         taskEventId: outbound.payload.taskEventId,
         conversationId,
         parentEventId: outbound.id,
+        // A relayed reply: postTurn, the dispatcher-relay hold recipe, and approval (#2159).
+        ...relaySendOptions(outbound, outbound.payload.recipientId ?? recipient),
       },
     );
 

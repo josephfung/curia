@@ -10,7 +10,7 @@ import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
 import type { ModelRegistry } from './llm/model-registry.js';
-import { parseTemperature } from './llm/sampling-options.js';
+import { sentTemperature } from './llm/sampling-options.js';
 import { createHash } from 'node:crypto';
 import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import type { Logger } from '../logger.js';
@@ -3091,8 +3091,10 @@ export class AgentRuntime {
 
       // Pure parse (no warn) — the provider already warned on invalid values.
       // null means the request omitted temperature (agent calls today always do).
-      const parsed = parseTemperature(params.options);
-      const temperature = parsed.kind === 'set' ? parsed.value : null;
+      const temperature = sentTemperature(
+        params.options,
+        this.config.modelRegistry?.rejectsSamplingParams(response.provenance.requestedModel) ?? false,
+      );
 
       const event = createLlmCall({
         agentId,
