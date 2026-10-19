@@ -66,7 +66,7 @@ const DIMENSION_WEIGHTS = {
 } as const;
 
 // Multiplier on the time-decay weight of a principal-scored row. A spot-check verdict
-// from the principal outweighs three judge verdicts of the same age.
+// from the principal counts as much as three judge verdicts of the same age.
 const PRINCIPAL_VERDICT_WEIGHT = 3;
 
 export class AutonomyScoringPass {
