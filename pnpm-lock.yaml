@@ -103,8 +103,8 @@ importers:
         specifier: ^2.0.1
         version: 2.0.1
       libphonenumber-js:
-        specifier: ^1.13.14
-        version: 1.13.14
+        specifier: ^1.13.15
+        version: 1.13.15
       livekit-server-sdk:
         specifier: ^2.19.1
         version: 2.19.1
@@ -4011,8 +4011,8 @@ packages:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
     engines: {node: '>= 0.8.0'}
 
-  libphonenumber-js@1.13.14:
-    resolution: {integrity: sha512-llihgCcx0BFLksecLP+x1J+6JDE1GsXS1RN/LoPF6qcwpeQcnjj0lcvZxY8AzbEpYwyZWPZW/nDuqkqzm3amiw==}
+  libphonenumber-js@1.13.15:
+    resolution: {integrity: sha512-AHdhEQeDFEJ4GKDAQ9AwxChy+v2kUILUB3TGQRpkXMkWePjXTU/WQEzWVQoIx/Gz8fE73Wr5SEuZCy2vk8jrMQ==}
 
   libsql@0.5.29:
     resolution: {integrity: sha512-8lMP8iMgiBzzoNbAPQ59qdVcj6UaE/Vnm+fiwX4doX4Narook0a4GPKWBEv+CR8a1OwbfkgL18uBfBjWdF0Fzg==}
@@ -5322,8 +5322,8 @@ packages:
   strnum@2.4.2:
     resolution: {integrity: sha512-rDG3Ah4TV0k1hWvLSzkZtMmLN9+eS+h3knq4MP6A42Y3Yh5qGNnOUs1jJkoSr8FG5dsL28c7KgkIBzSEykqtuw==}
 
-  strtok3@10.5.0:
-    resolution: {integrity: sha512-PgAsgIuizbZN/r4+g4UNvbVCTpJWdoIdI71kIWwKmdIH0vJ0q7ylMVGU8PWj2s9O98y4MtFWiDTIrtNukZMMgQ==}
+  strtok3@10.6.1:
+    resolution: {integrity: sha512-p8ynRS8lXnvA3tsdcUYFjbzwh2MsdBZgxrFT2G+Yb7vNvUfPF+GgHCt/0jkayfsRXA1TwtZstf+JA0V+iQXdHA==}
     engines: {node: '>=18'}
 
   sucrase@3.35.1:
@@ -9145,7 +9145,7 @@ snapshots:
   file-type@21.3.4:
     dependencies:
       '@tokenizer/inflate': 0.4.1
-      strtok3: 10.5.0
+      strtok3: 10.6.1
       token-types: 6.1.2
       uint8array-extras: 1.6.0
     transitivePeerDependencies:
@@ -9707,7 +9707,7 @@ snapshots:
       prelude-ls: 1.2.1
       type-check: 0.4.0
 
-  libphonenumber-js@1.13.14: {}
+  libphonenumber-js@1.13.15: {}
 
   libsql@0.5.29:
     dependencies:
@@ -11274,7 +11274,7 @@ snapshots:
     dependencies:
       anynum: 1.0.1
 
-  strtok3@10.5.0:
+  strtok3@10.6.1:
     dependencies:
       '@tokenizer/token': 0.3.0
     optional: true
