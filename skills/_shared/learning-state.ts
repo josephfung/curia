@@ -347,7 +347,9 @@ export async function writeIdSet(store: ConfigStore, key: string, ids: Set<strin
  * a task id (#2159 Phase 3). Pure: returns a new map, the input is untouched.
  *
  * - An item that already has a valid number keeps it, so resolving one item never shifts the others.
- * - An unnumbered item takes the lowest free positive integer, so a freed number is reused.
+ * - An unnumbered item takes max(live numbers) + 1, never a gap left by a resolved item: a stale
+ *   "confirm 2" from an older notification must not land on a newer item 2 and act on the wrong
+ *   task. Numbers restart at 1 only when no numbered item remains in the map.
  * - Unnumbered items are numbered in `createdAt` order (no usable clock sorts last), then by key,
  *   so the legacy backlog numbers deterministically: the writer, `list-learning-digest` and
  *   `resolve-learning-digest` all derive the same numbers from the same map until a write persists them.
@@ -375,12 +377,11 @@ export function assignDigestNumbers(map: CompletionDigestMap): CompletionDigestM
       taken.add(item.n);
     }
   }
-  let next = 1;
+  let next = Math.max(0, ...taken) + 1;
   for (const [key] of ordered) {
     if (numberOf.has(key)) continue;
-    while (taken.has(next)) next += 1;
     numberOf.set(key, next);
-    taken.add(next);
+    next += 1;
   }
 
   // Rebuild in the input's key order: digestMapToItems preserves insertion order for rendering.

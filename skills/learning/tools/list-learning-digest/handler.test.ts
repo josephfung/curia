@@ -91,7 +91,7 @@ describe('ListLearningDigestHandler', () => {
     expect(data.sections_markdown).toContain('1. Marked done. Undo? Reply `undo 1` or `dismiss 1`.');
   });
 
-  it('returns n for each completion item, keeping stored numbers and numbering legacy ones', async () => {
+  it('returns n for each completion item, keeping stored numbers and numbering legacy ones above them', async () => {
     const mem = makeMem();
     const digestMap: CompletionDigestMap = {
       a: { kind: 'confirm', taskId: 'a', taskTitle: 'A', note: 'Did A?', n: 3, createdAt: new Date(Date.now() - 3 * 86_400_000).toISOString() },
@@ -104,7 +104,7 @@ describe('ListLearningDigestHandler', () => {
     } as unknown as ToolContext;
     const result = await new ListLearningDigestHandler().execute(ctx);
     const data = (result as { data: { completion_items: Array<{ taskId: string; n: number }> } }).data;
-    expect(data.completion_items.map((i) => [i.taskId, i.n])).toEqual([['a', 3], ['b', 1]]);
+    expect(data.completion_items.map((i) => [i.taskId, i.n])).toEqual([['a', 3], ['b', 4]]);
     // A read does not write: the legacy number is derived, not persisted, until the next write.
     expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual(digestMap);
   });

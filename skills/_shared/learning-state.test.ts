@@ -384,11 +384,11 @@ describe('learning-state config accessors', () => {
       ...extra,
     });
 
-    it('gives an unnumbered entry the lowest free number and keeps existing numbers', () => {
+    it('gives an unnumbered entry max+1 (never a gap number) and keeps existing numbers', () => {
       const map: CompletionDigestMap = { a: item('a', { n: 1 }), b: item('b'), c: item('c', { n: 3 }) };
       const out = assignDigestNumbers(map);
       expect(out.a!.n).toBe(1);
-      expect(out.b!.n).toBe(2);
+      expect(out.b!.n).toBe(4);
       expect(out.c!.n).toBe(3);
     });
 
@@ -404,7 +404,7 @@ describe('learning-state config accessors', () => {
       expect([out.z!.n, out.a!.n, out.b!.n, out.m!.n]).toEqual([1, 2, 3, 4]);
     });
 
-    it('is stable: a resolved number is reused by the next new entry while the others keep theirs', () => {
+    it('is stable: a resolved number is not reused while items are live, the others keep theirs', () => {
       const map: CompletionDigestMap = assignDigestNumbers({
         a: item('a', { n: 1 }),
         c: item('c', { n: 3 }),
@@ -413,9 +413,14 @@ describe('learning-state config accessors', () => {
       const { a: _resolved, ...rest } = map;
       void _resolved;
       const out = assignDigestNumbers({ ...rest, d: item('d') });
-      expect(out.d!.n).toBe(1);
+      // A stale "confirm 1" must not hit the new item, so d goes above the live max.
+      expect(out.d!.n).toBe(4);
       expect(out.b!.n).toBe(2);
       expect(out.c!.n).toBe(3);
+    });
+
+    it('restarts at 1 only when no numbered item remains', () => {
+      expect(assignDigestNumbers({ d: item('d') }).d!.n).toBe(1);
     });
 
     it('is pure and idempotent', () => {
@@ -435,6 +440,9 @@ describe('learning-state config accessors', () => {
       const numbers = Object.values(out).map((i) => i.n);
       expect(new Set(numbers).size).toBe(3);
       expect(out.a!.n).toBe(1);
+      // Repairs are deterministic and above the live max (createdAt order, no clock last).
+      expect(out.b!.n).toBe(2);
+      expect(out.c!.n).toBe(3);
     });
 
     it('readCompletionDigest keeps a stored n and drops a non-positive-integer one', async () => {

@@ -213,6 +213,10 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
         ctx.log,
       );
       const nowIso = new Date().toISOString();
+      // New items are numbered here, above every live number and in processing order. They share
+      // `nowIso`, so leaving this to assignDigestNumbers would order them by task id and the
+      // notification would read "3, 2". The map is already numbered, so the max is the live max.
+      let nextN = Math.max(0, ...Object.values(digestMap).map((i) => i.n ?? 0)) + 1;
       for (const item of digestAdds) {
         // Keep a usable original clock when this task is already on the digest (a retry
         // overwrites the note identically). A missing clock, or one that is not a
@@ -220,10 +224,9 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
         // This does not retrofit the pre-#1936 backlog: a task that is already done is
         // skipped above and never reaches this write. dismiss_completion clears those.
         const createdAt = usableCompletionDigestCreatedAt(digestMap[item.taskId]?.createdAt) ?? nowIso;
-        // A retried item keeps its number (the principal may already hold it); a new one is
-        // numbered by assignDigestNumbers below.
-        const existingN = digestMap[item.taskId]?.n;
-        digestMap[item.taskId] = { ...item, createdAt, ...(existingN !== undefined ? { n: existingN } : {}) };
+        // A retried item keeps its number (the principal may already hold it).
+        const n = digestMap[item.taskId]?.n ?? nextN++;
+        digestMap[item.taskId] = { ...item, createdAt, n };
       }
       numberedDigest = assignDigestNumbers(digestMap);
       digestStored = await writeCompletionDigest(store, numberedDigest);
@@ -239,7 +242,7 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     // it safe to actually complete the tasks.
     // Track which auto-completes actually landed this run so the notification below only tells the
     // principal to "undo" tasks that were really marked done — a completeTask that threw leaves the task
-    // active, and an "undo completion <id>" line for it would be a lie (the principal reply path would
+    // active, and an "undo <n>" line for it would be a lie (the principal reply path would
     // then find a non-done task and either fail loud or falsely report "already reopened").
     const completedTaskIds = new Set<string>();
     if (digestStored) {

@@ -237,6 +237,31 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(ctx.__sendNotification.mock.calls[0]![0].body).toContain('`confirm 3`');
   });
 
+  it('numbers new items above the live max, in processing order, so a stale number never hits a new item', async () => {
+    const ctx = makeCtx();
+    const a = '33333333-3333-4333-8333-333333333333';
+    const b = '22222222-2222-4222-8222-222222222222';
+    // 3333 is queued first, so it must be numbered (and listed) first even though its key sorts later.
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({ [a]: CANDIDATE_MAP[a]!, [b]: CANDIDATE_MAP[b]! }),
+    );
+    ctx.__mem.__values.set(
+      COMPLETION_DIGEST_KEY,
+      JSON.stringify({
+        keep: { kind: 'confirm', taskId: 'keep', taskTitle: 'K', note: 'n', n: 1, createdAt: new Date().toISOString() },
+        other: { kind: 'confirm', taskId: 'other', taskTitle: 'O', note: 'n', n: 5, createdAt: new Date().toISOString() },
+      }),
+    );
+    expect((await handler.execute(ctx)).success).toBe(true);
+    const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest[a].n).toBe(6);
+    expect(digest[b].n).toBe(7);
+    const body = ctx.__sendNotification.mock.calls[0]![0].body as string;
+    expect(body.indexOf('6. ')).toBeGreaterThan(-1);
+    expect(body.indexOf('6. ')).toBeLessThan(body.indexOf('7. '));
+  });
+
   it('keeps an existing digest createdAt when the same task is written again', async () => {
     const ctx = makeCtx();
     const taskId = '33333333-3333-4333-8333-333333333333';

@@ -57,7 +57,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Judge token caps** — leak and escalation judge verdict caps raised for Haiku 5.5's longer verdicts. (#2077)
 - **Autonomy scoring** — principal verdicts weigh triple; expired approvals no longer count against the score. (#2159)
 - **`ceo-inbox-archive` / `ceo-inbox-label`** — results now include the email's subject and sender. (#2159)
-- **Task-completion items** — numbered; reply "confirm 2". `resolve-learning-digest` gains `number`; `list-learning-digest` returns `n`. (#2159)
+- **Task-completion items** — numbered, never reused while live; reply "confirm 2". `resolve-learning-digest` gains `number`; `list-learning-digest` returns `n`. (#2159)
 
 ### Removed
 
