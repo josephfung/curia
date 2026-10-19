@@ -1,7 +1,7 @@
 // outbound-filter-wiring.test.ts — escalation.judge config parsing (#2159: review_timeout_ms).
 
 import { describe, expect, it, vi } from 'vitest';
-import { buildEscalationJudge, EscalationJudgeConfigError } from '../../../src/dispatch/outbound-filter-wiring.js';
+import { buildEscalationJudge, buildOutboundContentFilter, EscalationJudgeConfigError } from '../../../src/dispatch/outbound-filter-wiring.js';
 import { ModelRegistry } from '../../../src/agents/llm/model-registry.js';
 import type { LLMProvider, LLMResponse } from '../../../src/agents/llm/provider.js';
 import type { EventBus } from '../../../src/bus/bus.js';
@@ -47,5 +47,16 @@ describe('buildEscalationJudge — review_timeout_ms (#2159)', () => {
   it('rejects a review_timeout_ms below 250', () => {
     expect(() => buildEscalationJudge(deps({ review_timeout_ms: 10 }))).toThrow(EscalationJudgeConfigError);
     expect(() => buildEscalationJudge(deps({ review_timeout_ms: 10 }))).toThrow(/review_timeout_ms must be an integer >= 250/);
+  });
+});
+
+describe('buildOutboundContentFilter — band gating boot log (#2159)', () => {
+  it('logs band review at info, not as an inactive gate', () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+    const log = { ...createSilentLogger(), info, warn } as unknown as ReturnType<typeof createSilentLogger>;
+    buildOutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '', escalationJudge: undefined, gating: 'band', logger: log });
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(expect.objectContaining({ disclosureGate: 'band-review' }), expect.stringContaining('band gating'));
   });
 });

@@ -105,7 +105,12 @@ export function buildOutboundContentFilter(
 ): OutboundContentFilter {
   const filter = new OutboundContentFilter(config);
   const disclosureGate = filter.disclosureGateStatus();
-  if (disclosureGate === 'active') {
+  if (disclosureGate === 'band-review') {
+    config.logger.info(
+      { markerCount: config.systemPromptMarkers.length, disclosureGate },
+      'Outbound content filter initialized — band gating: Stage 2.5 and contact-data-leak off; sends reviewed by BandSendReview',
+    );
+  } else if (disclosureGate === 'active') {
     config.logger.info(
       { markerCount: config.systemPromptMarkers.length, disclosureGate },
       'Outbound content filter initialized — Stage 2.5 disclosure gate active',

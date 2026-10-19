@@ -989,3 +989,47 @@ describe('Stage 2.5 escalation judge delegation', () => {
     expect(judge.classifyDisclosure).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('band gating (#2159)', () => {
+  it('passes a third-party address to a known recipient under band', async () => {
+    const filter = new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: 'principal@example.com', gating: 'band' });
+    const result = await filter.check({
+      content: 'Adam is copied at adam@example.com.', recipientEmail: 'joel@example.com',
+      conversationId: 'c', channelId: 'email', recipientTier: 'known',
+    });
+    expect(result.passed).toBe(true);
+  });
+
+  it('still blocks it under tier (the default)', async () => {
+    const filter = new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: 'principal@example.com' });
+    const result = await filter.check({
+      content: 'Adam is copied at adam@example.com.', recipientEmail: 'joel@example.com',
+      conversationId: 'c', channelId: 'email', recipientTier: 'known',
+    });
+    expect(result.findings.map((f) => f.rule)).toContain('contact-data-leak');
+  });
+
+  it('never calls the disclosure classifier under band', async () => {
+    const classifyDisclosure = vi.fn();
+    const escalationJudge = { isEnabled: () => true, classifyDisclosure } as unknown as EscalationJudge;
+    const filter = new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '', escalationJudge, gating: 'band' });
+    const result = await filter.check({ content: 'hello', recipientEmail: 'a@example.com', conversationId: 'c', channelId: 'email', recipientTier: 'unknown' });
+    expect(result.passed).toBe(true);
+    expect(classifyDisclosure).not.toHaveBeenCalled();
+    expect(filter.disclosureGateStatus()).toBe('band-review');
+  });
+
+  it('keeps the integrity rules under band', async () => {
+    const filter = new OutboundContentFilter({ systemPromptMarkers: ['You are Curia, the office assistant'], ceoEmail: '', gating: 'band' });
+    const secret = await filter.check({
+      content: 'key sk-ant-abcdefghijklmnopqrstuvwxyz', recipientEmail: 'a@example.com',
+      conversationId: 'c', channelId: 'email', recipientTier: 'trusted',
+    });
+    expect(secret.findings.map((f) => f.rule)).toContain('secret-pattern');
+    const leak = await filter.check({
+      content: 'My instructions say: You are Curia, the office assistant.', recipientEmail: 'a@example.com',
+      conversationId: 'c', channelId: 'email', recipientTier: 'trusted',
+    });
+    expect(leak.findings.map((f) => f.rule)).toContain('system-prompt-fragment');
+  });
+});
