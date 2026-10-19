@@ -118,12 +118,13 @@ Branch `feat/band-sampling-a` from `main`.
   export interface SampledActionInsert {
     taskId: string; conversationId?: string; toolName: string;
     actionRisk: string; summary: string; signals: SampleSignals;
+    input?: Record<string, unknown>;   // kept on the row when its JSON is at most 2000 chars
   }
   export function isSampledTool(toolName: string, actionRisk: string | number): boolean;
   // ActionLogRepo
   insertSampled(row: SampledActionInsert): Promise<number>;
   findSampleCandidates(since: Date, limit: number): Promise<ActionLogRow[]>;
-  markSampled(ids: readonly number[], at: Date): Promise<void>;
+  markSampled(ids: readonly number[], at: Date): Promise<number>;   // pool rows only; returns the count stamped
   recordPrincipalVerdict(id: number, good: boolean, reason: string | null): Promise<boolean>;
   ```
 
@@ -204,6 +205,8 @@ export interface SampledActionInsert {
   /** What the principal reads in the spot check, e.g. 'Emailed dana@example.com: "Re: Payment schedule"'. */
   summary: string;
   signals: SampleSignals;
+  /** The tool's input, kept on the row when its JSON is at most 2000 characters. */
+  input?: Record<string, unknown>;
 }
 
 /** Whether the execution layer records a successful autonomous call of this tool in the pool. */
@@ -236,6 +239,16 @@ describe('sample pool (#2159 Phase 3)', () => {
     expect(params[11]).toBeNull();                         // competence_flag
     expect(params[14]).toBe('sample-pool');                // scored_by
     expect(JSON.parse(params[6] as string)).toEqual({ sample: { signals: { firstContact: true } } });
+  });
+
+  it('insertSampled keeps a tool input up to 2000 characters of JSON and drops a longer one', async () => {
+    const { pool, calls } = makePool([{ id: '43' }]);
+    const repo = new ActionLogRepo(pool, createSilentLogger());
+    const base = { taskId: 't1', toolName: 'ceo-inbox-archive', actionRisk: 'low', summary: 'Archived', signals: {} };
+    await repo.insertSampled({ ...base, input: { message_id: 'm-1' } });
+    await repo.insertSampled({ ...base, input: { note: 'x'.repeat(2001) } });
+    expect(JSON.parse(calls[0]!.params[6] as string)).toEqual({ sample: { signals: {}, input: { message_id: 'm-1' } } });
+    expect(JSON.parse(calls[1]!.params[6] as string)).toEqual({ sample: { signals: {} } });
   });
 
   it('findSampleCandidates reads unsampled pool rows since a date', async () => {
@@ -290,10 +303,17 @@ describe('sample pool (#2159 Phase 3)', () => {
       actionRisk: row.actionRisk,
       outcome: 'success',
       description: row.summary,
-      payload: { sample: { signals: row.signals } },
+      payload: { sample: { signals: row.signals, ...sampleInput(row.input) } },
       scoredBy: SAMPLE_POOL_SCORED_BY,
     });
   }
+
+// Module scope, beside mapRow:
+const SAMPLE_INPUT_MAX_CHARS = 2000;
+function sampleInput(input: Record<string, unknown> | undefined): { input?: Record<string, unknown> } {
+  if (!input) return {};
+  return JSON.stringify(input).length <= SAMPLE_INPUT_MAX_CHARS ? { input } : {};
+}
 
   /** Pool rows not yet shown in a spot check, newest first. */
   async findSampleCandidates(since: Date, limit: number): Promise<ActionLogRow[]> {
@@ -310,15 +330,26 @@ describe('sample pool (#2159 Phase 3)', () => {
     return result.rows.map(mapRow);
   }
 
-  /** Mark pool rows as shown, so the next digest draws different ones. */
-  async markSampled(ids: readonly number[], at: Date): Promise<void> {
-    if (ids.length === 0) return;
-    await this.pool.query(
+  /**
+   * Mark pool rows as shown, so the next digest draws different ones. Returns the number
+   * stamped and warns when it is short. The pool predicate matches recordPrincipalVerdict's,
+   * so a non-pool id is neither counted nor touched.
+   */
+  async markSampled(ids: readonly number[], at: Date): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await this.pool.query(
       `UPDATE autonomy_action_log
        SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{sample,sampledAt}', to_jsonb($2::text), true)
-       WHERE id = ANY($1::bigint[])`,
+       WHERE id = ANY($1::bigint[])
+         AND outcome = 'success'
+         AND scored_by IN ('sample-pool', 'principal')`,
       [ids, at.toISOString()],
     );
+    const updated = result.rowCount ?? 0;
+    if (updated !== ids.length) {
+      this.logger.warn({ requested: ids.length, updated, ids }, 'action-log: markSampled stamped fewer rows than requested');
+    }
+    return updated;
   }
 
   /**
