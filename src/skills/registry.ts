@@ -192,6 +192,15 @@ export class ToolRegistry {
     return this.tools.get(name);
   }
 
+  /**
+   * Whether the named tool was loaded from an MCP server. Only the MCP loader
+   * (registerMcpServerTools) passes `mcpInputSchema` to register(), and it always does
+   * (the SDK's tools/list schema requires inputSchema), so its presence is the marker.
+   */
+  isMcpSourced(name: string): boolean {
+    return this.tools.get(name)?.mcpInputSchema !== undefined;
+  }
+
   /** List all registered skills. */
   list(): RegisteredTool[] {
     return Array.from(this.tools.values());

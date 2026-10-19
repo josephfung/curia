@@ -1530,6 +1530,11 @@ export class ExecutionLayer {
   ): Promise<void> {
     if (!this.actionLogRepo) return;
     if (options?.humanApproved || isLivePrincipalTurn(options?.liveTurn, options?.taskMetadata)) return;
+    // Tools loaded from an MCP server are never sampled. Their manifest inherits the server's
+    // one action_risk (mcp-loader), so on a medium-risk server every call, reads included,
+    // would qualify; a read cannot be told from a write by name; and the generic "Run <tool>"
+    // summary gives the principal nothing to grade.
+    if (this.registry.isMcpSourced(toolName)) return;
     try {
       // Inside the try: isSampledTool → minScoreForActionRisk throws on an unknown risk label,
       // and invoke()'s outer catch would turn the action's success into a failure. The action

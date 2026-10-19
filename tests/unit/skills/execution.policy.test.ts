@@ -30,6 +30,7 @@ import { emailAccountIdFromInput, replyToMessageIdFromInput } from '../../../src
 import { UnknownEmailAccountError } from '../../../src/skills/outbound-gateway.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 import { buildDescription } from '../../../src/autonomy/approval-trigger.js';
+import { registerMcpServerTools, type McpToolSession } from '../../../src/skills/mcp-loader.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -4728,6 +4729,30 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
       // The repo keeps it when small, so a later spot check can say what the action touched.
       input,
     }]]);
+  });
+
+  it('never records a tool loaded from an MCP server, while a native tool at the same risk is recorded', async () => {
+    // An MCP tool inherits its server's action_risk, so a read on a medium-risk server would
+    // otherwise land in the pool as "Run <tool>". Registered through the real MCP loader path.
+    const { registry, layer, actionLogRepo } = makePoolLayer();
+    const session = {
+      serverId: 'docs-server',
+      client: { callTool: vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'doc body' }] }) },
+    };
+    registerMcpServerTools({
+      serverEntry: { name: 'docs-server', transport: 'sse', url: 'https://mcp.example.com', action_risk: 'medium' },
+      session: session as unknown as McpToolSession,
+      tools: [{ name: 'get_doc_content', inputSchema: { type: 'object', properties: {} } }],
+      resolvedFixedInputs: {},
+      registry,
+      logger,
+    });
+    registry.register(makeRiskyManifest('executive-profile-update', 'medium'), makeHandler({ ok: true }));
+
+    expect((await layer.invoke('get_doc_content', {}, undefined, agentTurn)).success).toBe(true);
+    expect(session.client.callTool).toHaveBeenCalled();
+    expect((await layer.invoke('executive-profile-update', { field: 'title' }, undefined, agentTurn)).success).toBe(true);
+    expect(vi.mocked(actionLogRepo.insertSampled).mock.calls.map(([row]) => row.toolName)).toEqual(['executive-profile-update']);
   });
 
   it('marks mail triage, which is sampled at low risk', async () => {
