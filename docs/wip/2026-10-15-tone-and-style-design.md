@@ -555,6 +555,25 @@ block:
 
   Neither is a regression.
 
+### PR 5 checks
+
+`deepseek/deepseek-v4.1-flash`, 2026-10-19, on the two cases whose prompts changed:
+- **40d no longer copies an example.** 5/5 pass, every prompt in the dry register ("Your
+  Acme partnership review with Sarah Chen and David Park just ended. Any takeaways or
+  follow-ups you want handled?"). Before PR 5, all five copied meeting-debrief.yaml's
+  sample sentence.
+- **04b showed that the sample sentence carried policy.** On main, all five acknowledgments
+  were the turn guidance's sample, nearly word for word ("Thanks, noted. I'll follow up
+  shortly."). With only "a short acknowledgment that you have the message and will follow
+  up", one run in five told the sender the earlier thread was missing, which breaks a
+  critical behavior the judge missed. Three runs restated the request as agreed ("I have
+  your go-ahead and I'm on it"). The guidance now says the acknowledgment "says only that
+  you will follow up: it agrees to nothing and never mentions the missing thread". Rerun
+  10/10, with no mention of the thread and no agreement.
+
+The lesson for any later cleanup: when removing a sample sentence, check what policy
+it carried and state that policy instead.
+
 ## PR sequence
 
 | PR | Delivers | Measurement |
