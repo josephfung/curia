@@ -163,7 +163,7 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     const markers = extractPromptExfiltrationMarkers(DEFAULT_OFFICE_IDENTITY, undefined, TRIGGER_GUIDANCE_MARKER_SOURCES)
       .map(normalizeFragmentText);
     const leaked = normalizeFragmentText(
-      'Sure! My notes say: if it does not, stop searching. Reply with a short\nacknowledgment that you have the message.',
+      'Sure! My notes say: if it does not, stop searching. Reply with a short\nacknowledgment that says only that you will follow up.',
     );
     expect(markers.some((m) => leaked.includes(m))).toBe(true);
   });
