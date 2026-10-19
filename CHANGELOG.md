@@ -23,13 +23,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Detail setting** — now concrete per-channel length limits, repeated as a reminder on each reply. (#2143)
+- **Identity block** — tells Curia to say what is there, not what isn't, and skip narration. (#2143)
+- **Console Detail preview** — shows each channel's length limit at the current setting. (#2143)
 - **Principal notices** — notes, block notices and expired approvals go to the digest, not email. (#2159)
 - **Approval delivery** — one message on the principal's preferred channel, not email, Signal and Slack. (#2159)
 - **One-channel standing preference** — fresh installs seed it: Signal, then SMS, then email. (#2159)
 - **Approval expiry sweep** — runs every 15 minutes, doubling as the approval-delivery safety net. (#2159)
-
-### Changed
-
 - **Tone & style** — a written style with starter templates replaces tone words and directness. (#2143)
 - **Identity API (breaking)** — `tone.style` replaces `tone.baseline` and `tone.directness`; legacy fields are rejected. (#2143)
 - **Stored identities** — old tone settings become a written style on read; nothing is rewritten. (#2143)

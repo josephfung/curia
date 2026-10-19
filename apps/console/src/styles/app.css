@@ -2212,3 +2212,9 @@ table.records-table tbody tr.active td { background: transparent; }
 @media (min-width: 769px) {
   .kg-mobile-search { display: none; }
 }
+
+/* The Detail slider's per-channel limits (#2143). */
+.detail-limits {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}

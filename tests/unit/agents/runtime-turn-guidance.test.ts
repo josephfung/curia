@@ -13,6 +13,8 @@ import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask } from '../../../src/bus/events.js';
 import { createLogger } from '../../../src/logger.js';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
+import type { OfficeIdentityService } from '../../../src/identity/service.js';
+import { turnLengthReminder } from '../../../src/identity/length.js';
 
 const PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock' } as const;
 
@@ -34,6 +36,8 @@ async function runTurn(payload: {
   principalBacklog?: unknown;
   channelId?: string;
   toolAllowlist?: string[];
+  /** The office identity's Detail setting; absent means the agent has no identity service. */
+  verbosity?: number;
 }) {
   const logger = createLogger('error');
   const bus = new EventBus(logger);
@@ -48,6 +52,11 @@ async function runTurn(payload: {
     bus,
     logger,
     memory,
+    ...(payload.verbosity !== undefined && {
+      officeIdentityService: {
+        get: () => ({ tone: { style: 'Dry.', verbosity: payload.verbosity } }),
+      } as unknown as OfficeIdentityService,
+    }),
   }).register();
   await bus.publish('dispatch', createAgentTask({
     agentId: 'coordinator',
@@ -124,5 +133,29 @@ describe('AgentRuntime turn guidance (#1959)', () => {
   it('skips the scheduler delivery guidance on a tool-allowlisted turn', async () => {
     const { messages } = await runTurn({ content: 'Dispose of the task.', channelId: 'scheduler', toolAllowlist: ['task-complete'] });
     expect(messages[messages.length - 1]!.content).toBe('Dispose of the task.');
+  });
+});
+
+describe('AgentRuntime length reminder (#2143)', () => {
+  it('closes the guidance with the reply channel\'s limit', async () => {
+    const { messages, history } = await runTurn({ content: 'Did Dana confirm?', channelId: 'signal', verbosity: 15 });
+    const reminder = turnLengthReminder('signal', 15)!;
+    expect(messages[messages.length - 1]!.content).toBe(`${renderTurnGuidance([], null, reminder)}\n\nDid Dana confirm?`);
+    // Like all guidance, it stays out of working memory and the system string.
+    expect(history[0]).toEqual({ role: 'user', content: 'Did Dana confirm?' });
+    for (const m of messages.filter((msg) => msg.role === 'system')) expect(m.content).not.toContain(reminder);
+  });
+
+  it('follows the trigger guidance', async () => {
+    const { messages } = await runTurn({ content: 'Go ahead', channelId: 'email', verbosity: 60, turnGuidance: ['principal-reply-shaped'] });
+    expect(messages[messages.length - 1]!.content)
+      .toBe(`${renderTurnGuidance(['principal-reply-shaped'], null, turnLengthReminder('email', 60))}\n\nGo ahead`);
+  });
+
+  it('adds nothing on a channel with no length row, a scheduler turn, or an agent without the identity', async () => {
+    expect((await runTurn({ content: 'Hello', channelId: 'http', verbosity: 15 })).messages.at(-1)!.content).toBe('Hello');
+    expect((await runTurn({ content: 'Hello', channelId: 'signal' })).messages.at(-1)!.content).toBe('Hello');
+    const scheduled = (await runTurn({ content: 'Check on Sam.', channelId: 'scheduler', verbosity: 15 })).messages.at(-1)!.content;
+    expect(scheduled).toBe(`${renderTurnGuidance(['scheduler-delivery'])}\n\nCheck on Sam.`);
   });
 });

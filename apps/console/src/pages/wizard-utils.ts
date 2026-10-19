@@ -147,12 +147,25 @@ export function validateToneStyle(text: string): string | null {
   return null;
 }
 
-// Live preview sentence shown under the verbosity slider.
-export function verbosityBand(v: number): string {
-  if (v <= 25) return '"Here\'s the short answer."';
-  if (v <= 50) return '"Happy to help — let me know if you\'d like more detail."';
-  if (v <= 75) return '"Here\'s what you need to know, plus a bit of context."';
-  return '"Let me walk you through this thoroughly."';
+// The Detail slider's per-channel length limits, as GET /api/identity returns them
+// (LENGTH_LIMITS_RESPONSE in src/channels/http/routes/identity.ts): the table the identity
+// block renders, so the preview never drifts from what Curia is told.
+export interface LengthLimits {
+  rows: ReadonlyArray<{ id: string; label: string }>;
+  bands: ReadonlyArray<{ maxVerbosity: number; label: string; limits: Readonly<Record<string, string>> }>;
+}
+
+// The preview under the Detail slider: the band's name and each channel's limit.
+export function lengthPreview(
+  table: LengthLimits,
+  verbosity: number,
+): { band: string; lines: Array<{ label: string; limit: string }> } | null {
+  const band = table.bands.find(b => verbosity <= b.maxVerbosity) ?? table.bands[table.bands.length - 1];
+  if (!band) return null;
+  return {
+    band: band.label,
+    lines: table.rows.map(r => ({ label: r.label, limit: band.limits[r.id] ?? '' })),
+  };
 }
 
 // The review card's one-line summary of a tone & style text: its first line, cut short.

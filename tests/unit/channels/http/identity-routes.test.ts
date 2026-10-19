@@ -57,6 +57,10 @@ describe('GET /api/identity — configured flag', () => {
     const body = res.json();
     expect(body.configured).toBe(false);
     expect(body.identity.assistant.name).toBe('Alex Curia');
+    // The Detail preview's table is the one the identity block renders (#2143).
+    expect(body.lengthLimits.rows.map((r: { id: string }) => r.id)).toEqual(['message', 'email', 'voice']);
+    expect(body.lengthLimits.bands[0]).toMatchObject({ maxVerbosity: 25, label: 'Brief' });
+    expect(body.lengthLimits.bands[0].limits.message).toBe('1–2 sentences. The answer or outcome only.');
 
     await app.close();
   });

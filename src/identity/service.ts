@@ -21,20 +21,12 @@ import { createConfigChange } from '../bus/events.js';
 import { type OfficeIdentity, type OfficeIdentityVersion, TONE_STYLE_MAX_LENGTH } from './types.js';
 import { DEFAULT_OFFICE_IDENTITY } from './defaults.js';
 import { LEGACY_TONE_KEYS, LEGACY_TOP_LEVEL_KEYS, normalizeIdentity } from './normalize.js';
-
-// Map verbosity score to prose guidance.
-// Bands are approximate — these are guidelines, not hard cutoffs.
-function verbosityGuidance(score: number): string {
-  if (score <= 25) return 'Keep responses as brief as possible; omit context unless asked.';
-  if (score <= 50) return 'Default to concise responses; expand when detail is clearly needed.';
-  if (score <= 75) return 'Adapt response length to what the situation calls for.';
-  return 'Default to thorough explanations; err toward more context.';
-}
+import { lengthSectionLines } from './length.js';
 
 /**
  * Fixed, code-owned lines of the identity block. No style text can talk the model out of
- * them. Exported for tests now, and for the prompt-exfiltration marker sources in tone &
- * style PR 3 (#2143).
+ * them. They are prompt-exfiltration marker sources (TRIGGER_GUIDANCE_MARKER_SOURCES), as
+ * are the length section's fixed lines in length.ts (#2143).
  */
 export const REGISTER_LINE = 'Match the register of any example lines above, not their content.';
 export const HONESTY_LINE = "Whatever your tone, say plainly when you are unsure or don't know something.";
@@ -284,7 +276,8 @@ export class OfficeIdentityService {
    *   1. Hard constraints (labeled section, placed first)
    *   2. Identity header (name, title)
    *   3. How you sound: the operator's style text, then the fixed register line
-   *   4. Length: the Detail band's guidance
+   *   4. Length: the Detail band's limit per channel (length.ts), its exception, and the
+   *      fixed content line
    *   5. The fixed honesty line
    *   6. Standing preferences (ordered list)
    *
@@ -318,7 +311,7 @@ export class OfficeIdentityService {
       lines.push(id.tone.style.trim());
       lines.push(REGISTER_LINE);
       lines.push('');
-      lines.push(`**Length:** ${verbosityGuidance(id.tone.verbosity)}`);
+      lines.push(...lengthSectionLines(id.tone.verbosity));
     } else {
       this.logger.error(
         { tone: id.tone },

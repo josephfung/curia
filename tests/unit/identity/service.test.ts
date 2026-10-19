@@ -5,6 +5,7 @@ import { DEFAULT_OFFICE_IDENTITY } from '../../../src/identity/defaults.js';
 import { HONESTY_LINE, OfficeIdentityService, REGISTER_LINE } from '../../../src/identity/service.js';
 import type { OfficeIdentity } from '../../../src/identity/types.js';
 import type { Logger } from '../../../src/logger.js';
+import { CONTENT_LINE, LENGTH_EXCEPTION } from '../../../src/identity/length.js';
 
 function logger(): Logger {
   return { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as unknown as Logger;
@@ -47,7 +48,11 @@ describe('OfficeIdentityService.compileSystemPromptBlock (#2143)', () => {
       '**How you sound:**',
       STYLE,
       REGISTER_LINE,
-      '**Length:** Keep responses as brief as possible; omit context unless asked.',
+      '**Length (Detail: Brief):**',
+      '- Signal, SMS and Slack: 1–2 sentences. The answer or outcome only.',
+      '- Email: Under ~80 words. No warm-up line, no closing summary.',
+      LENGTH_EXCEPTION,
+      CONTENT_LINE,
       HONESTY_LINE,
       '**Standing preferences:**',
       '- Call me Joe',
@@ -86,7 +91,7 @@ describe('OfficeIdentityService.compileSystemPromptBlock (#2143)', () => {
       const block = service.compileSystemPromptBlock();
       expect(block).not.toContain('undefined');
       expect(block).not.toContain('**How you sound:**');
-      expect(block).not.toContain('**Length:**');
+      expect(block).not.toContain('**Length');
       expect(block).toContain('- Never impersonate the principal');
       expect(block).toContain('- Call me Joe');
       expect(block).toContain(HONESTY_LINE);

@@ -183,6 +183,11 @@ const SCHEDULER_DELIVERY = [
   'yourself with a send skill and `principal` as the recipient, one message. Otherwise send',
   'nothing: background and maintenance work is recorded, not reported. Either way, end with',
   'exactly NO_REPLY.',
+  // The reply-channel reminder never fires here (the reply goes nowhere), so a scheduled
+  // message gets its content rule at the point of writing instead (#2143).
+  'A message you send keeps to the Length section of your identity block for its channel.',
+  'Say what is there, not what isn\'t: leave out empty results, things that did not happen and',
+  'what you will do next, and do not repeat the task\'s instructions back.',
 ];
 
 const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
@@ -231,9 +236,15 @@ export function parseTurnGuidanceKeys(raw: unknown): TurnGuidanceKey[] {
 /**
  * The guidance block for these keys, in TURN_GUIDANCE_ORDER whatever order they were
  * given in, each at most once. The backlog line (src/agents/prompts/backlog-line.ts), when
- * given, closes the block. Null when there is nothing to render.
+ * given, follows them; the reply's length reminder (src/identity/length.ts,
+ * turnLengthReminder), when given, closes the block, nearest the message it applies to.
+ * Null when there is nothing to render.
  */
-export function renderTurnGuidance(keys: readonly TurnGuidanceKey[], backlogLine?: string | null): string | null {
+export function renderTurnGuidance(
+  keys: readonly TurnGuidanceKey[],
+  backlogLine?: string | null,
+  lengthReminder?: string | null,
+): string | null {
   const wanted = new Set(keys);
   let out = TURN_GUIDANCE_HEADER;
   let previous: TurnGuidanceKey | undefined;
@@ -245,8 +256,9 @@ export function renderTurnGuidance(keys: readonly TurnGuidanceKey[], backlogLine
     out += (continuesList ? '\n' : '\n\n') + TURN_GUIDANCE[key].join('\n');
     previous = key;
   }
-  if (backlogLine) return `${out}\n\n${backlogLine}`;
-  return previous === undefined ? null : out;
+  const closing = [backlogLine, lengthReminder].filter((line): line is string => typeof line === 'string' && line !== '');
+  if (previous === undefined && closing.length === 0) return null;
+  return closing.reduce((text, line) => `${text}\n\n${line}`, out);
 }
 
 /** Every turn-guidance block, for prompt-exfiltration marker extraction. */

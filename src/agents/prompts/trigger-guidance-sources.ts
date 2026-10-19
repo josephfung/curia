@@ -19,6 +19,8 @@ import {
   PAUSED_NEXT_STEP_LINES,
 } from './delegate-result-guidance.js';
 import { TURN_GUIDANCE_TEXTS } from './turn-guidance.js';
+import { HONESTY_LINE, REGISTER_LINE } from '../../identity/service.js';
+import { CONTENT_LINE, LENGTH_EXCEPTION, TURN_LENGTH_REMINDER_TEXTS } from '../../identity/length.js';
 
 /** Newline-joined guidance texts, one marker per line once extracted. */
 export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
@@ -38,4 +40,10 @@ export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
   // Empty-handed lookups: tool-registry's next_step and web-fetch's 404 (#2149).
   NO_MATCHING_TOOL_NEXT_STEP_LINES.join('\n'),
   WEB_FETCH_NOT_FOUND_LINES.join('\n'),
+  // The identity block's fixed lines, and the per-turn length reminders (#2143). The block
+  // is injected at runtime, so its text is not in any agent's prompt template. The
+  // operator's tone.style is deliberately not a source: it holds example lines Curia is
+  // meant to imitate. Band texts shorter than the marker floor are skipped by extraction.
+  [REGISTER_LINE, HONESTY_LINE, LENGTH_EXCEPTION, CONTENT_LINE].join('\n'),
+  ...TURN_LENGTH_REMINDER_TEXTS,
 ];

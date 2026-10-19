@@ -1,10 +1,11 @@
-import { useState, type CSSProperties } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import {
   STYLE_TEMPLATES,
   TONE_STYLE_MAX_LENGTH,
   validateToneStyle,
-  verbosityBand,
   formalityBand,
+  lengthPreview,
+  type LengthLimits,
 } from '../../pages/wizard-utils';
 
 interface ToneStyleFieldProps {
@@ -94,7 +95,7 @@ interface ScaleSliderProps {
   onChange: (value: number) => void;
   leftLabel: string;
   rightLabel: string;
-  sample: string;
+  sample: ReactNode;
 }
 
 function ScaleSlider({ id, label, value, onChange, leftLabel, rightLabel, sample }: ScaleSliderProps) {
@@ -119,11 +120,17 @@ function ScaleSlider({ id, label, value, onChange, leftLabel, rightLabel, sample
 interface DetailSliderProps {
   verbosity: number;
   onChange: (v: number) => void;
+  /** The per-channel limits from GET /api/identity; null until it loads. */
+  lengthLimits: LengthLimits | null;
   idPrefix?: string;
 }
 
-/** The Detail slider: how much the assistant says, from Brief to Thorough. */
-export function DetailSlider({ verbosity, onChange, idPrefix = 'asst' }: DetailSliderProps) {
+/**
+ * The Detail slider: how much the assistant says, from Brief to Thorough. The preview shows
+ * the limit Curia is given on each channel at the current setting.
+ */
+export function DetailSlider({ verbosity, onChange, lengthLimits, idPrefix = 'asst' }: DetailSliderProps) {
+  const preview = lengthLimits ? lengthPreview(lengthLimits, verbosity) : null;
   return (
     <ScaleSlider
       id={`${idPrefix}-verbosity`}
@@ -132,7 +139,14 @@ export function DetailSlider({ verbosity, onChange, idPrefix = 'asst' }: DetailS
       onChange={onChange}
       leftLabel="Brief"
       rightLabel="Thorough"
-      sample={verbosityBand(verbosity)}
+      sample={preview && (
+        <>
+          <strong>{preview.band}</strong>
+          <ul className="detail-limits">
+            {preview.lines.map(line => <li key={line.label}>{line.label}: {line.limit}</li>)}
+          </ul>
+        </>
+      )}
     />
   );
 }

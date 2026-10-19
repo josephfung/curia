@@ -179,7 +179,9 @@ This method produces the block injected into the coordinator's system prompt on 
 3. **How you sound:** the operator's `tone.style`, then a fixed register line ("Match the
    register of any example lines above, not their content."), which stops the model
    reusing a template's example sentence word for word
-4. **Length:** the Detail band's guidance (below)
+4. **Length:** the Detail band's limit per channel (below), an exception for content that
+   needs the space, and a fixed content line: "Say what is there, not what isn't, and don't
+   explain your own next steps or repeat your instructions." (#2143)
 5. A fixed honesty line: "Whatever your tone, say plainly when you are unsure or don't know
    something." Code-owned, so no style text can talk the model out of calibrated
    uncertainty
@@ -192,15 +194,30 @@ Tone data that cannot be rendered (a non-string or empty style, or a verbosity o
 are left out. Everything else still renders: throwing would drop the whole block,
 hard constraints included.
 
-`tone.verbosity` maps to length guidance using approximate bands — guidelines, not hard
-cutoffs:
+`tone.verbosity` (the Detail slider) maps to a limit per channel. One table in
+`src/identity/length.ts` serves the block, the per-turn reminder below, and the console's
+Detail preview (`GET /api/identity` returns it as `lengthLimits`):
 
-| Score | Length guidance |
-|-------|-----------------|
-| 0–25 | Keep responses as brief as possible; omit context unless asked |
-| 26–50 | Default to concise responses; expand when detail is clearly needed |
-| 51–75 | Adapt response length to what the situation calls for |
-| 76–100 | Default to thorough explanations; err toward more context |
+| Band (verbosity) | Signal, SMS and Slack | Email | Voice calls |
+|---|---|---|---|
+| Brief (0–25) | 1–2 sentences. The answer or outcome only. | Under ~80 words. No warm-up line, no closing summary. | One sentence. |
+| Concise (26–50) | 1–3 sentences. | Under ~150 words. | 1–2 sentences. |
+| Adaptive (51–75) | Short paragraphs, as the situation needs. | Under ~250 words. | 2–3 sentences. |
+| Thorough (76–100) | Thorough; context included. | Thorough; context included. | A few sentences, then offer more. |
+
+Every band ends with "Go longer only when you are asked for detail or the content itself
+needs the space (six meetings are six lines).", so brevity never drops required content.
+
+**Per-turn reminder.** The runtime closes a reply turn's guidance with the reply channel's
+limit ("This reply goes out on Signal: 1–2 sentences. The answer or outcome only."), the
+most salient position available, in the user message so the cached system prefix is not
+split. The channel-to-row map is explicit: a channel with no row (console chat, `cli`,
+internal and scheduler turns) gets no reminder, never a guessed limit. A scheduled run's
+reply goes nowhere, so its delivery guidance carries the content rule instead.
+
+**Markers.** The block's fixed lines (register, honesty, length exception, content line)
+and every reminder are prompt-exfiltration marker sources (`TRIGGER_GUIDANCE_MARKER_SOURCES`).
+The operator's `tone.style` is not: it holds example lines Curia is meant to imitate.
 
 Example output (default config — the "Warm & personable" template, verbosity `50`):
 
@@ -219,7 +236,12 @@ Warm and personable, but brief. Friendly in a few words, never gushing; the poin
 Sounds like: "All set: Thursday's call is now at 3. Enjoy the long weekend."
 Match the register of any example lines above, not their content.
 
-**Length:** Default to concise responses; expand when detail is clearly needed.
+**Length (Detail: Concise):**
+- Signal, SMS and Slack: 1–3 sentences.
+- Email: Under ~150 words.
+- Voice calls: 1–2 sentences.
+Go longer only when you are asked for detail or the content itself needs the space (six meetings are six lines).
+Say what is there, not what isn't, and don't explain your own next steps or repeat your instructions.
 Whatever your tone, say plainly when you are unsure or don't know something.
 
 **Standing preferences:**

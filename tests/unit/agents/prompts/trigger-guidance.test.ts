@@ -25,6 +25,8 @@ import {
 } from '../../../../src/agents/prompts/debrief-recap-instruction.js';
 import { NO_MATCHING_TOOL_NEXT_STEP_LINES, WEB_FETCH_NOT_FOUND_LINES } from '../../../../src/agents/prompts/dead-end-guidance.js';
 import { TRIGGER_GUIDANCE_MARKER_SOURCES } from '../../../../src/agents/prompts/trigger-guidance-sources.js';
+import { HONESTY_LINE, REGISTER_LINE } from '../../../../src/identity/service.js';
+import { CONTENT_LINE, LENGTH_EXCEPTION, turnLengthReminder } from '../../../../src/identity/length.js';
 import {
   extractPromptExfiltrationMarkers,
   extractSystemPromptLineMarkers,
@@ -134,6 +136,8 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     ['weekly debrief recap', WEEKLY_DEBRIEF_RECAP_LINES.join('\n')],
     ['tool-registry no-match next_step', NO_MATCHING_TOOL_NEXT_STEP_LINES.join('\n')],
     ['web-fetch 404', WEB_FETCH_NOT_FOUND_LINES.join('\n')],
+    ['identity block fixed lines (#2143)', [REGISTER_LINE, HONESTY_LINE, LENGTH_EXCEPTION, CONTENT_LINE].join('\n')],
+    ['length reminder, Signal brief (#2143)', turnLengthReminder('signal', 15)!],
   ];
 
   it.each(sources)('%s is a marker source', (_name, text) => {
@@ -164,3 +168,21 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     expect(markers.some((m) => leaked.includes(m))).toBe(true);
   });
 });
+
+describe('the length reminder closes the turn guidance (#2143)', () => {
+  it('renders alone, after the backlog line, and never as an empty block', () => {
+    const reminder = 'This reply goes out on Signal: 1–2 sentences. The answer or outcome only.';
+    expect(renderTurnGuidance([], null, reminder)).toBe(`${TURN_GUIDANCE_HEADER}\n\n${reminder}`);
+    const out = renderTurnGuidance(['principal-reply-shaped'], 'Backlog line.', reminder)!;
+    expect(out.indexOf('Backlog line.')).toBeLessThan(out.indexOf(reminder));
+    expect(out.endsWith(reminder)).toBe(true);
+    expect(renderTurnGuidance([], null, null)).toBeNull();
+    expect(renderTurnGuidance([], '', '')).toBeNull();
+  });
+
+  it('keeps the operator\'s tone.style out of the marker sources', () => {
+    // It holds example lines Curia is meant to imitate.
+    expect(TRIGGER_GUIDANCE_MARKER_SOURCES.join('\n')).not.toContain('Sounds like:');
+  });
+});
+

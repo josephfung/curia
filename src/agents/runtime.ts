@@ -33,6 +33,7 @@ import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { splitRelayNote } from './principal-note.js';
 import { stripOutboundContextPreamble } from '../dispatch/outbound-context.js';
 import { parseTurnGuidanceKeys, renderTurnGuidance } from './prompts/turn-guidance.js';
+import { turnLengthReminder } from '../identity/length.js';
 import { parsePrincipalBacklog, renderBacklogLine } from './prompts/backlog-line.js';
 import { renderSenderLine, UNRESOLVED_SENDER_HEAD } from './prompts/sender-line.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
@@ -445,6 +446,27 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * The reply's length limit for this turn's channel (#2143), from the Detail setting: the
+   * one line of style guidance placed next to generation. Only an agent that renders the
+   * identity block has the service. A channel with no length row (console chat, cli,
+   * internal) gets none, and so does a scheduler turn: its reply goes nowhere, and a send
+   * it makes follows the block's per-channel table. Never fatal: a bad identity loses the
+   * reminder, not the turn.
+   */
+  private lengthReminder(taskEvent: AgentTaskEvent): string | null {
+    const identity = this.config.officeIdentityService;
+    if (!identity) return null;
+    try {
+      const { verbosity } = identity.get().tone;
+      if (typeof verbosity !== 'number' || !Number.isFinite(verbosity)) return null;
+      return turnLengthReminder(taskEvent.payload.channelId, verbosity);
+    } catch (err) {
+      this.config.logger.error({ err, agentId: this.config.agentId }, 'Length reminder failed — turn continues without it');
+      return null;
+    }
+  }
+
   private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
     const { agentId, provider, bus, logger, memory, executionLayer, skillToolDefs } = this.config;
     const originalContent = taskEvent.payload.content;
@@ -458,9 +480,13 @@ export class AgentRuntime {
     if (taskEvent.payload.channelId === 'scheduler' && !taskEvent.payload.toolAllowlist?.length) {
       turnGuidanceKeys.push('scheduler-delivery');
     }
-    // The backlog line (prompt trim PR 7) closes the guidance; re-validated like the keys.
+    // The backlog line (prompt trim PR 7) follows the guidance; re-validated like the keys.
     const backlog = parsePrincipalBacklog(taskEvent.payload.principalBacklog);
-    const turnGuidance = renderTurnGuidance(turnGuidanceKeys, backlog ? renderBacklogLine(backlog) : null);
+    const turnGuidance = renderTurnGuidance(
+      turnGuidanceKeys,
+      backlog ? renderBacklogLine(backlog) : null,
+      this.lengthReminder(taskEvent),
+    );
     let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
     const { conversationId } = taskEvent.payload;
 

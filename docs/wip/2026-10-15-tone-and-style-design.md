@@ -498,6 +498,46 @@ What it shows:
   task and a "will follow up" note into the email to Priya. Both arms of an A/B share
   that kind of miss.
 
+### A/B (PR 3)
+
+`deepseek/deepseek-v4.1-flash`, 2026-10-19, under `style-brief-dry`, each arm on its own copy
+of the scenario database. "main" is PR 2 (`d53d427f`); "PR 3" is this branch. Run counts are
+in brackets; the PR 1 baseline (pre-PR 2) is repeated for reference. 40c, 40f and 40g are
+scheduler turns, measured with the content rule in the scheduled-run guidance (below).
+
+| Case | Behavior | PR 1 baseline | main (PR 2) | PR 3 |
+|---|---|---|---|---|
+| 40a Signal reply | within 40 words | 40% (5) | 80% (5) | **100%** (5), 24–34 words |
+| | register | 80% | 70% | 70% |
+| 40b email, third party | content kept | 100% (5) | 100% (10) | 95% (10) |
+| 40c scheduled recap | within 60 words | 80% (5) | 100% (5) | 100% (10), 28–44 words |
+| | register | 40% | 70% | 65% |
+| 40f request email | no narration | 0% (5) | 0% (5) | **40%** (10) |
+| | register | 0% | 50% | 45% |
+| 40g morning brief | within 90 words | 0% (5) | 60% (5) | **100%** (10) |
+| | no absences | 0% | 0% | 20% |
+| | register | 0% | 20% | 20% |
+
+Content kept was 100% in every other case and arm, apart from judge parse errors. 40d and
+40e did not change (100%).
+
+What it shows:
+- **Length is fixed where it was broken.** Signal replies to the principal and the morning
+  brief now always fit, with no band number changed: Brief already gives 24–34 words on
+  Signal against a 40-word cap. The band numbers stand as written.
+- **One fact lost to brevity in 10 email runs.** One 40b reply dropped the meeting time
+  (rated PARTIAL). The exception line covers it in principle; it is worth watching, not
+  yet a pattern.
+- **The content line needs its trigger.** In the system prompt alone it barely moved the
+  scheduled emails: no narration 10% (10 runs), no absences 0% (10 runs). Repeated in the
+  scheduled-run guidance (`SCHEDULER_DELIVERY`), next to the moment of writing, it gave
+  the numbers above. Absences are still the majority, almost all of them "no conflicts"
+  relayed from the calendar specialist's answer.
+- **A deployment's own job text competes with the style.** 40f's job text (curia-deploy's
+  expense-tracker cron) says "Use a friendly, concise tone", which pulls against the dry
+  style; the judge marks the register down for it. PR 5 removes such directives from core
+  prompts; a deployment's job payloads are its own to change.
+
 ## PR sequence
 
 | PR | Delivers | Measurement |

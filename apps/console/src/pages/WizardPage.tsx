@@ -23,6 +23,7 @@ import {
   type WizardState,
   type WizardWorkingHours,
   type LocalIdentity,
+  type LengthLimits,
   WIZARD_TOTAL_STEPS,
   clampWizardStep,
 } from './wizard-utils.js';
@@ -55,6 +56,7 @@ const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'] as const;
 interface IdentityResponse {
   identity: LocalIdentity;
   configured: boolean;
+  lengthLimits?: LengthLimits;
 }
 
 // GET /api/autonomy. `autonomy` is null before the autonomy migration has run.
@@ -133,6 +135,7 @@ export default function WizardPage() {
   // The saved autonomy score, from the required GET /api/autonomy. Step 5 pre-selects its
   // band, and submit compares against it to skip an unchanged band.
   const [autonomyScore, setAutonomyScore] = useState<number | null>(null);
+  const [lengthLimits, setLengthLimits] = useState<LengthLimits | null>(null);
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [restartState, setRestartState] = useState<RestartState>({ kind: 'idle' });
@@ -173,6 +176,7 @@ export default function WizardPage() {
         const autonomy = (await autonomyRes.json() as AutonomyResponse).autonomy;
         if (!autonomy) throw new Error('Autonomy settings have not been initialized on this instance.');
         setAutonomyScore(autonomy.score);
+        setLengthLimits(data.lengthLimits ?? null);
         const id = data.identity;
         setExistingIdentity(id);
         setPrincipalExists(status.principalExists);
@@ -953,6 +957,7 @@ export default function WizardPage() {
       />
       <DetailSlider
         verbosity={state.verbosity}
+        lengthLimits={lengthLimits}
         onChange={verbosity => setState(s => ({ ...s, verbosity }))}
         idPrefix="w"
       />

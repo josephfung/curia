@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 // The seed a fresh install loads, imported so the warm template cannot drift from it.
 import { DEFAULT_OFFICE_IDENTITY } from '../../../../src/identity/defaults.js';
 import { TONE_STYLE_MAX_LENGTH as SERVER_TONE_STYLE_MAX_LENGTH } from '../../../../src/identity/types.js';
+import { DETAIL_BANDS, LENGTH_ROWS, LENGTH_ROW_LABELS, detailBand } from '../../../../src/identity/length.js';
 import {
-  verbosityBand,
+  lengthPreview,
   verbosityReviewDesc,
   formalityBand,
   STYLE_TEMPLATES,
@@ -51,27 +52,26 @@ describe('defaultSignature', () => {
 
 // ── toggleToneSelection ───────────────────────────────────────────────────────
 
-describe('verbosityBand', () => {
-  it('returns brief copy at 0', () => {
-    expect(verbosityBand(0)).toBe('"Here\'s the short answer."');
+describe('lengthPreview (#2143)', () => {
+  // The server's own table, shaped as GET /api/identity returns it.
+  const table = {
+    rows: LENGTH_ROWS.map(id => ({ id, label: LENGTH_ROW_LABELS[id] })),
+    bands: DETAIL_BANDS,
+  };
+
+  it('shows the band and each channel limit the identity block gives at that setting', () => {
+    for (const verbosity of [0, 25, 26, 50, 51, 75, 76, 100]) {
+      const preview = lengthPreview(table, verbosity)!;
+      const band = detailBand(verbosity);
+      expect(preview.band).toBe(band.label);
+      expect(preview.lines).toEqual(LENGTH_ROWS.map(row => ({ label: LENGTH_ROW_LABELS[row], limit: band.limits[row] })));
+    }
   });
 
-  it('returns brief copy at 25', () => {
-    expect(verbosityBand(25)).toBe('"Here\'s the short answer."');
-  });
-
-  it('returns concise copy at 26', () => {
-    expect(verbosityBand(26)).toBe(
-      '"Happy to help — let me know if you\'d like more detail."',
-    );
-  });
-
-  it('returns thorough copy at 100', () => {
-    expect(verbosityBand(100)).toBe('"Let me walk you through this thoroughly."');
+  it('has nothing to show for an empty table', () => {
+    expect(lengthPreview({ rows: [], bands: [] }, 50)).toBeNull();
   });
 });
-
-// ── directnessBand ────────────────────────────────────────────────────────────
 
 describe('verbosityReviewDesc', () => {
   it('returns concise description at 50', () => {

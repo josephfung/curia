@@ -9,7 +9,7 @@ import {
   type ConfigHistoryEntry,
 } from '../components/settings/ConfigHistory';
 import type { LocalIdentity } from './wizard-utils';
-import { validateNonEmptyName, validateToneStyle } from './wizard-utils';
+import { validateNonEmptyName, validateToneStyle, type LengthLimits } from './wizard-utils';
 
 interface VersionMeta {
   version: number;
@@ -31,6 +31,7 @@ function PersonalitySection() {
   const [identityHistoryError, setIdentityHistoryError] = useState<string | null>(null);
   const [nameError, setNameError] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [lengthLimits, setLengthLimits] = useState<LengthLimits | null>(null);
 
   const loadIdentityHistory = useCallback(async () => {
     setIdentityHistoryError(null);
@@ -72,9 +73,10 @@ function PersonalitySection() {
       try {
         const res = await apiFetch('/api/identity');
         if (!res.ok) throw new Error(await errorMessage(res));
-        const data = await res.json() as { identity: LocalIdentity };
+        const data = await res.json() as { identity: LocalIdentity; lengthLimits?: LengthLimits };
         setIdentity(data.identity);
         setSavedIdentity(data.identity);
+        setLengthLimits(data.lengthLimits ?? null);
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : 'Failed to load personality settings');
       }
@@ -226,6 +228,7 @@ function PersonalitySection() {
           )}
           <DetailSlider
             verbosity={identity.tone.verbosity}
+            lengthLimits={lengthLimits}
             onChange={verbosity => setIdentity({
               ...identity,
               tone: { ...identity.tone, verbosity },

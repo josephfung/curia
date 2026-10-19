@@ -5,7 +5,8 @@
 // is configured.
 //
 // Endpoints:
-//   GET  /api/identity         — return the current active identity config + configured flag
+//   GET  /api/identity         — the current identity config, configured flag, and the
+//                                 Detail slider's per-channel length limits
 //   PUT  /api/identity         — save a new version and trigger hot reload
 //   GET  /api/identity/history — return all versions, newest first
 //   POST /api/identity/reload  — force a reload from DB (used post-wizard)
@@ -14,6 +15,16 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { OfficeIdentityService } from '../../../identity/service.js';
 import type { OfficeIdentity } from '../../../identity/types.js';
+import { DETAIL_BANDS, LENGTH_ROWS, LENGTH_ROW_LABELS } from '../../../identity/length.js';
+
+/**
+ * The Detail slider's per-channel limits, for the console's preview (#2143). The same
+ * table the identity block renders, so a calibration changes one place.
+ */
+export const LENGTH_LIMITS_RESPONSE = {
+  rows: LENGTH_ROWS.map(id => ({ id, label: LENGTH_ROW_LABELS[id] })),
+  bands: DETAIL_BANDS,
+};
 import { assertSecret, type SessionStore } from '../session-auth.js';
 
 /**
@@ -72,7 +83,7 @@ export async function identityRoutes(
       // which triggers the first-run wizard in the browser.
       const configured = await isIdentityConfigured(pool);
 
-      return reply.send({ identity, configured });
+      return reply.send({ identity, configured, lengthLimits: LENGTH_LIMITS_RESPONSE });
     } catch (err) {
       request.log.error({ err }, 'GET /api/identity: failed to query configured flag or get identity');
       return reply.status(500).send({ error: 'Failed to get identity. Check server logs.' });
