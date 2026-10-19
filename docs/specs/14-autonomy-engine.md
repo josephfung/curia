@@ -331,6 +331,48 @@ A bounce publishes `outbound.blocked`, so a relayed reply goes through the dispa
 
 Relayed replies skip the dispatcher's tier Gate C (except #1059's missing-tier escalate) and get all four questions at the gateway.
 
+### Sampling and feedback (`src/autonomy/sample-pool.ts`, `src/reports/`)
+
+Sampling runs at every band and is independent of the gating policy. Autonomous actions that went out without the principal seeing them are logged in a pool; a few at a time are shown in the digest; the principal's verdict on them is the strongest evidence the Phase 3 scorer gets. The LLM judge never grades a pooled action.
+
+**The pool.** A pool row is an ordinary `autonomy_action_log` row with `outcome = 'success'`, `scored_by = 'sample-pool'` and all three flags null. `findUnscoredTerminal` skips it (it is already "scored") and `countScored` / `findAllScored` skip it (no flags) until a verdict arrives. The row keeps the tool input when its JSON is 2,000 characters or fewer, plus the signals below, under `payload.sample`. A triage row also keeps the email's subject and sender when the tool's result carried them (`ceo-inbox-archive` and `ceo-inbox-label` return both).
+
+| Written by | Rows |
+|---|---|
+| Outbound gateway (`HUMAN_SEND_SKILLS` and `dispatcher-relay`) | Every send to anyone but the principal alone, with the band review's signals |
+| Execution layer (`isSampledTool`) | Triage tools (`ceo-inbox-archive`, `ceo-inbox-label`, `email-archive`, `email-label`) at any risk, and every tool at medium risk or above except `file-parse`, `web-browser` and `voice-learn` |
+
+Left out: live principal turns, approved re-runs and system notices. The execution layer does not log sends a second time, since the gateway already did. `ceo-inbox-update-folders` is not sampled, because triage pairs it with an archive per message and sampling both would count one decision twice.
+
+**Weights.** A candidate weighs 3 when it speaks as the principal, goes to a first contact (no contact record yet, or one under 24 hours old), was bounced, trimmed or sent unreviewed by the band review, got through Gate C where the tier would have asked (`gateProceeded`), or is triage. Everything else weighs 1. Weights are relative and never zero, so routine actions stay drawable.
+
+**The digest block.** `SpotCheckSampler` draws up to 3 samples per digest, by weighted random selection without replacement, from unsampled pool rows 7 days old or newer. The block is numbers and summaries only, with this header verbatim; row ids are never shown:
+
+```
+Spot check (optional, reply with a number):
+1. <summary>
+```
+
+Email subjects and senders are written by outsiders, so they are cleaned before they reach a summary or a stored row: text is sanitized to a fixed point (entities decoded until stable), links and tags are neutralized, secrets are redacted, and a summary is one line of at most 120 characters. A triage line with no readable subject ends "(details unavailable)".
+
+Two paths draw: the meeting-debrief recap (step 3 calls `list-spot-checks`) and the weekly fallback digest (`src/reports/report-fallback-digest.ts`).
+
+**The number-to-action map.** Each draw stores `{ id, createdAt, conversationId, items: [{ n, actionLogId, summary }], deliveries }` in the config store under `reports` / `spot_checks`. Every write prunes sets older than 14 days and keeps at most 30. Writes are read-modify-write on one value, so they run one at a time through a process-wide queue (held on `globalThis`, because the bundled app and skill handlers load separate copies of the module).
+
+`SpotCheckBinder` listens for `outbound.delivered`. When the delivered content carries the header, it binds that delivery (channel, message id, and for email the thread id) to the set drawn in the same conversation. Only then are the set's rows marked sampled (`payload.sample.sampledAt`) and kept out of later draws. A digest that never went out, or lost the block, binds nothing; its rows return to the pool and the unbound set ages out.
+
+**Replies.** A live principal message that starts with a number then `good` or `bad` ("2 bad, that was a renewal notice") gets the `spot-check-reply` turn guidance (`looksLikeSpotCheckReply`, `src/dispatch/turn-guidance-triggers.ts`). The match is anchored to the start of the message and limited to 400 characters; for email the Subject line and quoted text are cut first (`spotCheckCandidateText`). The guidance replaces `principal-reply-shaped` (which says to ask what is being replied to) and points the coordinator at `record-spot-check`. When an outbound-context block was injected, its own keys stay and `spot-check-reply` is added beside them.
+
+`record-spot-check` (in the `reports` bundle, `action_risk: none` so the principal can answer at any band) takes `verdicts: [{ n, verdict: good | bad, reason? }]`:
+
+- **Which digest:** an email reply resolves against the set delivered on its own thread, with no time limit. Anything else resolves against the most recent delivered set within 24 hours. No match, or a number the set does not have, returns an error telling the coordinator to ask the principal. It never guesses.
+- **All or nothing:** every number is checked before the first write. One number given two different verdicts fails the call. Silence records nothing.
+- **Who:** live principal turns only. A non-principal "2 good", and any woken task, is refused before anything is read.
+
+**Scoring.** `recordPrincipalVerdict` sets `competence_flag` (good = 1, bad = 0), `scored_by = 'principal'` and `payload.sample.verdict = { good, reason }`. `commitment_flag` and `compatibility` stay null. The scorer weighs a principal-scored row 3× in the time-decayed average. A second verdict on the same row replaces the first.
+
+See [ADR-049](../adr/049-band-driven-autonomy.md).
+
 ## Phase 3: Automatic Score Adjustment
 
 Phase 3 implements automatic score adjustment based on `autonomy_action_log`, using a composite formula:
@@ -348,8 +390,12 @@ Key constraints:
 - Score cannot increase if competence error rate exceeds the configured threshold (default 20%)
 - CEO cooldown: no auto-adjustment for 7 days after a manual CEO `set-autonomy`
 - Unparseable LLM-judge replies retry until `unparseableAfterDays` (default 3), then persist null flags with `scored_by: 'llm-judge-unparseable'` so they leave the queue without biasing the capability score
+- `expired` approvals carry no signal: new rows are scored with every flag null, and `computeCapabilityScore` skips old `expired` rows that still carry flags. The former `weakExpiredWeight` setting is gone.
+- A principal's spot-check verdict weighs 3× a judged row of the same age (see Sampling and feedback)
 - All automatic adjustments write to `autonomy_history` with `changed_by: "system"`
 - Delta capped at ±5 per daily pass; `get-autonomy` surfaces trend and scored action count
+
+The scorer reads rows with `scored_by` set and at least one non-null flag, and `outcome <> 'expired'`: `findAllScored` filters in SQL, and `countScored` applies the same evidence filter. That leaves out sampled-pool rows until the principal grades them, coordinator-resolved rows and dead-lettered judge replies (all flags null).
 
 See `src/autonomy/scoring-pass.ts`, `src/autonomy/action-log-repo.ts`, and ADR-018.
 
