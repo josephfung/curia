@@ -195,6 +195,8 @@ import { ApprovalExpirySweep } from './autonomy/approval-expiry-sweep.js';
 import { ReportQueue } from './reports/report-queue.js';
 import { ReportFallbackDigest } from './reports/report-fallback-digest.js';
 import { SpotCheckBinder } from './reports/spot-check-binder.js';
+import { SpotCheckSampler } from './reports/spot-check-sampler.js';
+import { describeEmailVia } from './reports/describe-email.js';
 import { SpotCheckStore } from './reports/spot-check-store.js';
 import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
 import {
@@ -3031,6 +3033,14 @@ async function main(): Promise<void> {
       maxAgeDays: reportFallbackConfig.maxAgeDays,
       checkIntervalHours: reportFallbackConfig.checkIntervalHours,
       timezone: config.timezone,
+      // Same sampler wiring as the list-spot-checks tool; the binder above ties the delivered
+      // summary back to the set it draws.
+      spotChecks: new SpotCheckSampler({
+        actionLogRepo,
+        store: new SpotCheckStore(new ConfigStore(entityMemory, logger), logger),
+        logger,
+        ...(outboundGateway ? { describeEmail: describeEmailVia(outboundGateway) } : {}),
+      }),
     })
     : undefined;
   if (reportFallbackDigest) {

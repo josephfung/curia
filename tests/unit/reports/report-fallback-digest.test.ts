@@ -1,5 +1,5 @@
 // ReportFallbackDigest — the weekly summary for installs with no digest job (#2159).
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest';
 import { ReportFallbackDigest } from '../../../src/reports/report-fallback-digest.js';
 import { ReportQueue, type ReportBatch, type ReportItem } from '../../../src/reports/report-queue.js';
 import type { AuditLogRow } from '../../../src/audit/audit-log-repo.js';
@@ -21,6 +21,7 @@ function makeDigest(opts: {
   sendResult?: boolean;
   ceoEmail?: string;
   withoutGateway?: boolean;
+  spotChecks?: { draw: Mock<(conversationId: string) => Promise<{ block: string; count: number } | null>> };
 } = {}) {
   const batches = [...(opts.batches ?? [])];
   const queue = {
@@ -42,6 +43,7 @@ function makeDigest(opts: {
     checkIntervalHours: 24,
     timezone: 'America/Toronto',
     now: () => NOW,
+    ...(opts.spotChecks ? { spotChecks: opts.spotChecks } : {}),
   });
   return { digest, queue, send, logger };
 }
@@ -79,7 +81,7 @@ describe('ReportFallbackDigest.tick', () => {
     const [payload, sendOpts] = send.mock.calls[0]!;
     expect(payload).toMatchObject({ channel: 'email', to: 'principal@example.com', subject: 'Curia: weekly summary' });
     // Delivered even below the send threshold; a blocked summary must not report itself.
-    expect(sendOpts).toEqual({ isSystemNotification: true, skipNotificationOnBlock: true });
+    expect(sendOpts).toEqual({ isSystemNotification: true, skipNotificationOnBlock: true, conversationId: `report-fallback:${NOW.toISOString()}` });
     expect(payload.body).toMatch(/^1\. Replied to Dana\./m);
     expect(payload.body).toMatch(/^2\. Block notice\. \(Oct 10\)$/m);
     // A multi-line item stays under its number.
@@ -175,6 +177,49 @@ describe('ReportFallbackDigest.tick', () => {
     const noGateway = makeDigest({ oldest: new Date(NOW.getTime() - 8 * DAY), withoutGateway: true });
     await expect(noGateway.digest.tick()).resolves.toEqual({ sent: false, items: 0 });
     expect(noGateway.logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('ReportFallbackDigest spot checks', () => {
+  const cursor = 'c1';
+  const waiting = () => ({
+    oldest: new Date(NOW.getTime() - 8 * DAY),
+    batches: [{ items: [item(1, 'Replied to Dana.')], cursor, hasMore: false }],
+  });
+  const block = 'Spot check (optional, reply with a number):\n1. Sent a reply to Priya\n2. Archived a newsletter';
+
+  it('appends the block after a blank line and sends under the fallback conversation id', async () => {
+    const draw = vi.fn<(conversationId: string) => Promise<{ block: string; count: number } | null>>().mockResolvedValue({ block, count: 2 });
+    const { digest, send } = makeDigest({ ...waiting(), spotChecks: { draw } });
+
+    await expect(digest.tick()).resolves.toEqual({ sent: true, items: 1 });
+
+    const conversationId = `report-fallback:${NOW.toISOString()}`;
+    expect(draw).toHaveBeenCalledWith(conversationId);
+    const [payload, sendOpts] = send.mock.calls[0]!;
+    expect(payload.body.endsWith(`\n\n${block}`)).toBe(true);
+    // The binder matches the delivered event to the stored set by this id.
+    expect(sendOpts).toEqual({ isSystemNotification: true, skipNotificationOnBlock: true, conversationId });
+  });
+
+  it('leaves the body unchanged when nothing was drawn', async () => {
+    const draw = vi.fn<(conversationId: string) => Promise<{ block: string; count: number } | null>>().mockResolvedValue(null);
+    const withDraw = makeDigest({ ...waiting(), spotChecks: { draw } });
+    const without = makeDigest(waiting());
+
+    await withDraw.digest.tick();
+    await without.digest.tick();
+
+    expect(withDraw.send.mock.calls[0]![0].body).toBe(without.send.mock.calls[0]![0].body);
+    expect(withDraw.send.mock.calls[0]![0].body).not.toContain('Spot check');
+  });
+
+  it('sends the plain body with no spot-check dependency wired', async () => {
+    const { digest, send } = makeDigest(waiting());
+
+    await digest.tick();
+
+    expect(send.mock.calls[0]![0].body).not.toContain('Spot check');
   });
 });
 

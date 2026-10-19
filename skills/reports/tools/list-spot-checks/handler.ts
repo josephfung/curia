@@ -10,20 +10,10 @@
 // samples keep their stored summaries.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
-import { SpotCheckSampler, type DescribeEmail } from '../../../../src/reports/spot-check-sampler.js';
+import { SpotCheckSampler } from '../../../../src/reports/spot-check-sampler.js';
+import { describeEmailVia } from '../../../../src/reports/describe-email.js';
 import { SpotCheckStore } from '../../../../src/reports/spot-check-store.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
-
-/** Subject and sender ("Name <email>", or the bare email) of a message, read through the gateway. */
-function describeEmailVia(gateway: OutboundGateway): DescribeEmail {
-  return async (messageId, account) => {
-    const msg = await gateway.getEmailMessage(messageId, account);
-    const sender = msg.from[0];
-    const from = sender ? (sender.name ? `${sender.name} <${sender.email}>` : sender.email) : undefined;
-    return { subject: msg.subject || undefined, from: from || undefined };
-  };
-}
 
 export class ListSpotChecksHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {

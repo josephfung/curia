@@ -22,6 +22,7 @@ import type { Logger } from '../logger.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 import { resolvePrincipalEmail, type PrincipalEmailRef } from '../contacts/types.js';
 import type { ReportItem, ReportQueue } from './report-queue.js';
+import type { SpotCheckSampler } from './spot-check-sampler.js';
 
 export interface ReportFallbackDigestOptions {
   queue: Pick<ReportQueue, 'oldestUnreported' | 'list' | 'ack'>;
@@ -39,6 +40,11 @@ export interface ReportFallbackDigestOptions {
   checkIntervalHours: number;
   /** IANA zone for the dates shown beside each item. */
   timezone?: string;
+  /**
+   * Draws the "Spot check" block appended to the summary. Optional: without it (or when it
+   * draws nothing) the summary goes out unchanged. draw() never throws.
+   */
+  spotChecks?: Pick<SpotCheckSampler, 'draw'>;
   /** Injectable clock for tests. */
   now?: () => Date;
 }
@@ -146,11 +152,18 @@ export class ReportFallbackDigest {
       return { sent: false, items: 0 };
     }
 
+    // The spot-check set is stored against this id by draw(); the same id goes to the gateway
+    // so the binder can match the delivered email back to the set (a reply of "2 good" then
+    // resolves against this summary).
+    const conversationId = `report-fallback:${this.now().toISOString()}`;
+    const drawn = await this.opts.spotChecks?.draw(conversationId);
+    const body = drawn ? `${this.renderBody(items)}\n\n${drawn.block}` : this.renderBody(items);
+
     // isSystemNotification: the principal must hear this even when the score is below the
     // send threshold. skipNotificationOnBlock: a blocked summary must not report itself.
     const result = await this.opts.outboundGateway.send(
-      { channel: 'email', to: ceoEmail, subject: 'Curia: weekly summary', body: this.renderBody(items) },
-      { isSystemNotification: true, skipNotificationOnBlock: true },
+      { channel: 'email', to: ceoEmail, subject: 'Curia: weekly summary', body },
+      { isSystemNotification: true, skipNotificationOnBlock: true, conversationId },
     );
     if (!result.success) {
       // Not acknowledged, so the same items go out with tomorrow's check.
