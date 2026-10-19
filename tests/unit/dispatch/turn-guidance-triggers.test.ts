@@ -110,6 +110,20 @@ describe('inboundTurnGuidance', () => {
     });
 
     // Review Focus 1: only a live principal turn may record a verdict.
+    it('replaces principal-reply-shaped: a live verdict with no outbound block gets only spot-check-reply', () => {
+      const keys = inboundTurnGuidance(facts({ spotCheckReply: true }));
+      expect(keys).toEqual(['spot-check-reply']);
+      expect(keys).not.toContain('principal-reply-shaped');
+    });
+
+    it('keeps the outbound-context keys and adds spot-check-reply alongside them', () => {
+      expect(inboundTurnGuidance(facts({ spotCheckReply: true, injectedEntryMetadata: [TASK_WAKE] }))).toEqual([
+        'outbound-context',
+        'outbound-context-task-wake',
+        'spot-check-reply',
+      ]);
+    });
+
     it('never adds spot-check-reply when the turn is not live, even if the text matches', () => {
       expect(inboundTurnGuidance(facts({ liveTurn: false, spotCheckReply: true }))).not.toContain('spot-check-reply');
       expect(

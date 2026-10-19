@@ -69,7 +69,11 @@ export function inboundTurnGuidance(facts: InboundGuidanceFacts): TurnGuidanceKe
   if (!facts.liveTurn) {
     keys.push('non-principal-reply-shaped');
   } else if (entries.length === 0) {
-    keys.push('principal-reply-shaped');
+    // A spot-check verdict ("2 bad") is reply-shaped but not ambiguous: the reply-shaped note
+    // says to ask what the principal is replying to, spot-check-reply says to act. They give
+    // conflicting advice, so the verdict key replaces the note. With an outbound block the
+    // block's keys stay and spot-check-reply is added alongside them (below).
+    if (!facts.spotCheckReply) keys.push('principal-reply-shaped');
   } else {
     keys.push('outbound-context');
     if (entries.some((m) => isTaskWakeReplyBinding(m))) keys.push('outbound-context-task-wake');

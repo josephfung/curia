@@ -76,7 +76,9 @@ describe('renderTurnGuidance', () => {
     // also carry the backlog line (PR 7), so the bound includes its longest form, with
     // the lines on answering a specialist's task (#2129, ~280 chars: 4.4KB → 4.7KB). The
     // spot-check verdict block (~330 chars) can ride along with any principal turn, so the
-    // worst case is now 5,031 chars (4.7KB → 5.0KB).
+    // worst case is now 5,031 chars (4.7KB → 5.0KB). spot-check-reply replaces the
+    // reply-shaped note but stays beside the outbound-context keys, and the worst turn has those,
+    // so the measured worst is unchanged; the bound keeps a small margin over it.
     const backlogLine = renderBacklogLine({ decayWarnings: 99, pendingApprovals: 99, principalTasks: 99 });
     const fullEntry = { bind_reply: true, task_id: 't', resume_token: 'r', subject: 'Board prep' };
     let worst = 0;
