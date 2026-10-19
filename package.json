@@ -83,7 +83,7 @@
     "pg": "^8.23.1",
     "pgvector": "^0.3.0",
     "pino": "^10.4.0",
-    "playwright": "1.63.0",
+    "playwright": "1.64.0",
     "sanitize-html": "^2.18.0"
   },
   "devDependencies": {
