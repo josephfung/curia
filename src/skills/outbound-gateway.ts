@@ -56,7 +56,7 @@ import { approvalAdvisory, buildApprovalDeliveryWake, generateShortRef } from '.
 import { enrichGatewayApprovalPayload } from '../autonomy/approval-notification.js';
 import type { ApprovalDelivery } from '../autonomy/approval-delivery.js';
 import type { AutonomyGating } from '../autonomy/band-policy.js';
-import { BAND_RULES, type BandReviewReport, type BandSendReview } from '../dispatch/band-send-review.js';
+import { BAND_RULES, type BandReviewReport, type BandReviewSignals, type BandSendReview } from '../dispatch/band-send-review.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText, stripModelSignOff } from '../channels/email/signature.js';
@@ -515,6 +515,16 @@ export class UnknownEmailAccountError extends Error {
     this.name = 'UnknownEmailAccountError';
     this.accountId = accountId;
   }
+}
+
+// How a spot-check summary names each kind of send (#2159 Phase 3), e.g. 'Emailed dana@example.com'.
+const SENT_VERB: Record<OutboundSendRequest['channel'], string> = {
+  email: 'Emailed', signal: 'Sent a Signal message to', sms: 'Texted', slack: 'Sent a Slack message to',
+};
+/** First line, at most 80 characters: enough to recognise the message on a phone. */
+function truncatePreview(text: string): string {
+  const line = text.split('\n').find((l) => l.trim() !== '')?.trim() ?? '';
+  return line.length > 80 ? `${line.slice(0, 77)}...` : line;
 }
 
 // ---------------------------------------------------------------------------
@@ -1248,6 +1258,7 @@ export class OutboundGateway {
     // Skipped for system notifications, for sends the principal approved (they read this
     // exact message), and for the principal alone (nobody else reads it).
     let bandReport: BandReviewReport | undefined;
+    let bandSignals: BandReviewSignals | undefined;
     if (
       this.gating === 'band' && this.bandReview
       && !options?.isSystemNotification && !options?.humanApproved && !principalIsSoleRecipient
@@ -1263,7 +1274,21 @@ export class OutboundGateway {
       if (outcome.result) return outcome.result;
       redactedBody = outcome.content;
       bandReport = outcome.report;
+      bandSignals = outcome.signals;
     }
+
+    // Spot-check pool (#2159 Phase 3): a send Curia made on its own. Not a system notice, a
+    // send the principal approved or directed, or a message to the principal alone.
+    const sampled = !options?.isSystemNotification && !options?.humanApproved
+      && options?.principalDirected !== true && !principalIsSoleRecipient;
+    const sampleArgs = {
+      channel: request.channel,
+      toolName: options?.exportContext?.toolName ?? `${request.channel}-send`,
+      recipientLabel: this.personRecipients(request).join(', ') || recipientId,
+      firstContact: recipientContactId === undefined,
+      band: { report: bandReport, signals: bandSignals },
+      options,
+    };
 
     // ------------------------------------------------------------------
     // Step 3: Channel dispatch + contact promotion
@@ -1318,6 +1343,7 @@ export class OutboundGateway {
             }
             : {}),
         });
+        if (sampled) await this.recordSentAction({ ...sampleArgs, preview: toSend.subject || toSend.body });
       }
       if (bandReport && result.success) await this.publishBandReport(bandReport, options);
       return result;
@@ -1339,6 +1365,7 @@ export class OutboundGateway {
           messageId: result.messageId,
           parentEventId: options?.parentEventId,
         });
+        if (sampled) await this.recordSentAction({ ...sampleArgs, preview: redactedBody });
       }
       if (bandReport && result.success) await this.publishBandReport(bandReport, options);
       return result;
@@ -1359,6 +1386,7 @@ export class OutboundGateway {
           messageId: result.messageId,
           parentEventId: options?.parentEventId,
         });
+        if (sampled) await this.recordSentAction({ ...sampleArgs, preview: redactedBody });
       }
       if (bandReport && result.success) await this.publishBandReport(bandReport, options);
       return result;
@@ -1386,6 +1414,7 @@ export class OutboundGateway {
           messageId: result.messageId,
           parentEventId: options?.parentEventId,
         });
+        if (sampled) await this.recordSentAction({ ...sampleArgs, preview: redactedBody });
       }
       if (bandReport && result.success) await this.publishBandReport(bandReport, options);
       return result;
@@ -1664,6 +1693,45 @@ export class OutboundGateway {
   }
 
   /**
+   * Put an autonomous send in the spot-check pool (#2159 Phase 3). Not for system notices,
+   * principal-approved or principal-directed sends, or the principal alone: those are not
+   * Curia acting on its own. Never throws; the send has already gone out.
+   */
+  private async recordSentAction(args: {
+    channel: OutboundSendRequest['channel'];
+    toolName: string;
+    recipientLabel: string;
+    preview: string;
+    firstContact: boolean;
+    band: { report?: BandReviewReport; signals?: BandReviewSignals } | undefined;
+    options: { taskEventId?: string; parentEventId?: string; conversationId?: string | null } | undefined;
+  }): Promise<void> {
+    if (!this.actionLogRepo) return;
+    const { band } = args;
+    // One review outcome per row, most telling first: a trim or an unreviewed send says
+    // more than a bounce the drafter then fixed.
+    const review = band?.report?.source === 'claim_trimmed' ? 'trimmed'
+      : band?.report?.source === 'sent_without_review' ? 'unreviewed'
+        : band?.signals?.bounced ? 'bounced' : undefined;
+    try {
+      await this.actionLogRepo.insertSampled({
+        taskId: args.options?.taskEventId ?? args.options?.parentEventId ?? 'system',
+        ...(args.options?.conversationId ? { conversationId: args.options.conversationId } : {}),
+        toolName: args.toolName,
+        actionRisk: 'medium',
+        summary: `${SENT_VERB[args.channel]} ${args.recipientLabel}: "${truncatePreview(args.preview)}"`,
+        signals: {
+          ...(args.firstContact ? { firstContact: true } : {}),
+          ...(band?.signals?.speaksAsPrincipal ? { speaksAsPrincipal: true } : {}),
+          ...(review ? { review } : {}),
+        },
+      });
+    } catch (err) {
+      this.log.warn({ err, channel: args.channel }, 'outbound-gateway: could not record the send for spot checks — it went out, but will not be sampled');
+    }
+  }
+
+  /**
    * Step 2.5 under band gating (#2159): ask the band review, and act on its decision.
    * Returns `result` when the send must not go out (bounce or hold), otherwise the content
    * to send — trimmed when the review cut unverified statements — and any report item to
@@ -1684,7 +1752,7 @@ export class OutboundGateway {
       holdRecipe?: SendRecipe;
       reExecRecipe?: SendRecipe;
     } | undefined;
-  }): Promise<{ result?: OutboundSendResult; content: string; report?: BandReviewReport }> {
+  }): Promise<{ result?: OutboundSendResult; content: string; report?: BandReviewReport; signals?: BandReviewSignals }> {
     const { request, content, recipients, editable, options } = args;
     const score = await this.bandScore();
     let decision: Awaited<ReturnType<BandSendReview['review']>>;
@@ -1712,7 +1780,11 @@ export class OutboundGateway {
     }
 
     if (decision.kind === 'send') {
-      return { content: decision.content, ...(decision.report ? { report: decision.report } : {}) };
+      return {
+        content: decision.content,
+        ...(decision.report ? { report: decision.report } : {}),
+        ...(decision.signals ? { signals: decision.signals } : {}),
+      };
     }
 
     if (decision.kind === 'bounce') {
@@ -2946,6 +3018,7 @@ export class OutboundGateway {
     // draft. A live principal turn or an explicit approval did; a woken task did not. This
     // is also when tier gating skips Stage 2.5.
     let bandReport: BandReviewReport | undefined;
+    let bandSignals: BandReviewSignals | undefined;
     if (this.gating === 'band' && this.bandReview && !options?.principalDirected && !draftPrincipalSole) {
       const outcome = await this.runBandReview({
         request: {
@@ -2962,6 +3035,7 @@ export class OutboundGateway {
       });
       if (outcome.result) return outcome.result;
       bandReport = outcome.report;
+      bandSignals = outcome.signals;
     }
 
     // ------------------------------------------------------------------
@@ -3008,6 +3082,19 @@ export class OutboundGateway {
       taskEventId: options?.taskEventId,
       parentEventId: options?.parentEventId,
     });
+    // Spot-check pool (#2159 Phase 3). Keyed on principalDirected, not humanApproved, for
+    // the reason given at the band review above: send-draft sets humanApproved on every call.
+    if (options?.principalDirected !== true && !draftPrincipalSole) {
+      await this.recordSentAction({
+        channel: 'email',
+        toolName: 'send-draft',
+        recipientLabel: draftEnvelope.join(', '),
+        preview: draftMeta.subject || body,
+        firstContact: recipientContactIdForDraft === undefined,
+        band: { report: bandReport, signals: bandSignals },
+        options,
+      });
+    }
     if (bandReport) await this.publishBandReport(bandReport, options);
 
     return { success: true, messageId: sentMessage.id };

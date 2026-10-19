@@ -10,6 +10,7 @@ import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/auto
 import type { PiiRedactor } from '../../../src/dispatch/pii-redactor.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 import type { BandSendReview } from '../../../src/dispatch/band-send-review.js';
+import type { OutboundQueueRepo } from '../../../src/skills/outbound-queue-repo.js';
 import { readFile, realpath } from 'node:fs/promises';
 
 vi.mock('node:fs/promises', () => ({
@@ -2653,6 +2654,7 @@ function makeActionLogRepo() {
     bindDeliveryMessage: vi.fn().mockResolvedValue(true),
     findPendingByDeliveryMessage: vi.fn().mockResolvedValue(null),
     findPendingByShortRef: vi.fn().mockResolvedValue(null),
+    insertSampled: vi.fn().mockResolvedValue(1),
   } as unknown as ActionLogRepo;
 }
 
@@ -3823,6 +3825,158 @@ describe('band review (#2159)', () => {
       const gw = makeBandGateway({ review, score: 84 });
       await gw.sendEmailDraft('d1', 'curia', draftMeta, { humanApproved: true, principalDirected: false, taskEventId: 't1' });
       expect(review).toHaveBeenCalledWith(expect.objectContaining({ principalDirected: false }));
+    });
+  });
+});
+
+describe('spot-check pool (#2159 Phase 3)', () => {
+  let mocks: ReturnType<typeof createMocks>;
+  beforeEach(() => {
+    mocks = createMocks();
+  });
+
+  const danaReq = { channel: 'email' as const, to: 'dana@example.com', subject: 'Payment schedule', body: 'Hi Dana. The schedule is attached.' };
+
+  function makePoolGateway(opts: {
+    actionLogRepo?: ActionLogRepo;
+    review?: ReturnType<typeof vi.fn>;
+    outboundQueue?: OutboundQueueRepo;
+  } = {}) {
+    return new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('principal@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(85),
+      actionLogRepo: opts.actionLogRepo ?? makeActionLogRepo(),
+      ...(opts.review
+        ? { gating: 'band' as const, bandReview: { review: opts.review as unknown as BandSendReview['review'] } }
+        : {}),
+      ...(opts.outboundQueue
+        ? { outboundQueue: opts.outboundQueue, outboundQueueReadiness: new Map([['email', () => false]]) }
+        : {}),
+    });
+  }
+
+  function sampledRows(repo: ActionLogRepo): Array<Record<string, unknown>> {
+    return vi.mocked(repo.insertSampled).mock.calls.map((c) => c[0] as unknown as Record<string, unknown>);
+  }
+
+  it('records an autonomous email send to a first contact', async () => {
+    const actionLogRepo = makeActionLogRepo();
+    const gw = makePoolGateway({ actionLogRepo });
+    const result = await gw.send(danaReq, { taskEventId: 't1', conversationId: 'c1' });
+    expect(result.success).toBe(true);
+    expect(sampledRows(actionLogRepo)).toEqual([{
+      taskId: 't1',
+      conversationId: 'c1',
+      toolName: 'email-send',
+      actionRisk: 'medium',
+      summary: 'Emailed dana@example.com: "Payment schedule"',
+      signals: { firstContact: true },
+    }]);
+  });
+
+  it('uses the calling skill as the tool name, and no firstContact for a known contact', async () => {
+    vi.mocked(mocks.contactService.resolveByChannelIdentity).mockResolvedValue({
+      contactId: 'contact-dana', displayName: 'Dana', role: null, tier: 'known', kind: 'person', kgNodeId: null, verified: true,
+    } as unknown as Awaited<ReturnType<ContactService['resolveByChannelIdentity']>>);
+    const actionLogRepo = makeActionLogRepo();
+    const gw = makePoolGateway({ actionLogRepo });
+    await gw.send(danaReq, { taskEventId: 't1', exportContext: { toolName: 'email-reply' } });
+    expect(sampledRows(actionLogRepo)).toEqual([expect.objectContaining({ toolName: 'email-reply', signals: {} })]);
+  });
+
+  it('records nothing for system notices, approved, principal-directed, principal-only or queued sends', async () => {
+    const actionLogRepo = makeActionLogRepo();
+    const gw = makePoolGateway({ actionLogRepo });
+    await gw.send(danaReq, { taskEventId: 't1', isSystemNotification: true });
+    await gw.send(danaReq, { taskEventId: 't1', humanApproved: true });
+    await gw.send(danaReq, { taskEventId: 't1', principalDirected: true });
+    await gw.send({ ...danaReq, to: 'principal@example.com' }, { taskEventId: 't1' });
+    expect(actionLogRepo.insertSampled).not.toHaveBeenCalled();
+
+    const outboundQueue = {
+      enqueue: vi.fn().mockResolvedValue({ id: 'q-1' }),
+      listPending: vi.fn(), deleteByIds: vi.fn(), deleteExpired: vi.fn(), countPending: vi.fn(),
+    } as unknown as OutboundQueueRepo;
+    const queuedRepo = makeActionLogRepo();
+    const queuedGw = makePoolGateway({ actionLogRepo: queuedRepo, outboundQueue });
+    const queued = await queuedGw.send(danaReq, { taskEventId: 't1' });
+    expect(queued.queued).toBe(true);
+    expect(queuedRepo.insertSampled).not.toHaveBeenCalled();
+  });
+
+  it('records the band review outcome: trimmed, unreviewed, speaks as principal', async () => {
+    const cases: Array<[Record<string, unknown>, Record<string, unknown>]> = [
+      [{ kind: 'send', content: 'Hi Dana.', report: { source: 'claim_trimmed', summary: 'Removed 1' }, signals: { bounced: true } }, { review: 'trimmed' }],
+      [{ kind: 'send', content: danaReq.body, report: { source: 'sent_without_review', summary: 'Sent unreviewed' } }, { review: 'unreviewed' }],
+      [{ kind: 'send', content: danaReq.body, signals: { speaksAsPrincipal: true } }, { speaksAsPrincipal: true }],
+      [{ kind: 'send', content: danaReq.body, signals: { bounced: true } }, { review: 'bounced' }],
+    ];
+    for (const [decision, expected] of cases) {
+      const actionLogRepo = makeActionLogRepo();
+      const gw = makePoolGateway({ actionLogRepo, review: vi.fn().mockResolvedValue(decision) });
+      await gw.send(danaReq, { taskEventId: 't1' });
+      expect(sampledRows(actionLogRepo)).toEqual([
+        expect.objectContaining({ signals: { firstContact: true, ...expected } }),
+      ]);
+    }
+  });
+
+  it('still reports success, and warns, when the pool row cannot be written', async () => {
+    const warn = vi.fn();
+    const child = { ...mocks.logger, warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    mocks.logger = { ...mocks.logger, child: () => child } as unknown as typeof mocks.logger;
+    const actionLogRepo = makeActionLogRepo();
+    vi.mocked(actionLogRepo.insertSampled).mockRejectedValue(new Error('db down'));
+    const gw = makePoolGateway({ actionLogRepo });
+    const result = await gw.send(danaReq, { taskEventId: 't1' });
+    expect(result.success).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ channel: 'email' }), expect.stringContaining('spot checks'));
+  });
+
+  it('labels chat sends by channel with the first line of the message', async () => {
+    const signalClient = { send: vi.fn().mockResolvedValue({ timestamp: 1 }), isConnected: () => true };
+    const actionLogRepo = makeActionLogRepo();
+    const gw = new OutboundGateway({
+      signalClient: signalClient as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient,
+      signalPhoneNumber: '+15555550000',
+      contactService: mocks.contactService, contentFilter: mocks.contentFilter, bus: mocks.bus, logger: mocks.logger,
+      actionLogRepo,
+    });
+    await gw.send({ channel: 'signal', recipient: '+15555550100', message: '\nRunning ten minutes late.\nSee you soon.' }, { taskEventId: 't1' });
+    expect(sampledRows(actionLogRepo)).toEqual([
+      expect.objectContaining({ toolName: 'signal-send', summary: 'Sent a Signal message to +15555550100: "Running ten minutes late."' }),
+    ]);
+  });
+
+  describe('sendEmailDraft', () => {
+    const draftMeta = { recipientEmail: 'dana@example.com', body: 'Hi Dana. The schedule is attached.', subject: 'Payment schedule' };
+    function withDraftClient() {
+      (mocks.nylasClient as unknown as { sendDraft: ReturnType<typeof vi.fn> }).sendDraft = vi.fn().mockResolvedValue({ id: 'sent-1' });
+    }
+
+    it('records an autonomous draft send as send-draft', async () => {
+      withDraftClient();
+      const actionLogRepo = makeActionLogRepo();
+      const gw = makePoolGateway({ actionLogRepo });
+      // send-draft passes humanApproved on every call; it does not mean the principal read it.
+      const result = await gw.sendEmailDraft('d1', 'curia', draftMeta, { humanApproved: true, principalDirected: false, taskEventId: 't1' });
+      expect(result.success).toBe(true);
+      expect(sampledRows(actionLogRepo)).toEqual([expect.objectContaining({
+        taskId: 't1', toolName: 'send-draft', summary: 'Emailed dana@example.com: "Payment schedule"', signals: { firstContact: true },
+      })]);
+    });
+
+    it('records nothing for a principal-directed draft send', async () => {
+      withDraftClient();
+      const actionLogRepo = makeActionLogRepo();
+      const gw = makePoolGateway({ actionLogRepo });
+      await gw.sendEmailDraft('d1', 'curia', draftMeta, { humanApproved: true, principalDirected: true, taskEventId: 't1' });
+      expect(actionLogRepo.insertSampled).not.toHaveBeenCalled();
     });
   });
 });

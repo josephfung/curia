@@ -61,8 +61,14 @@ export interface BandReviewInput {
 
 export type BandReviewReport = { source: 'sent_without_review' | 'claim_trimmed'; summary: string };
 
+/**
+ * What the review learned about a send it let through, for the spot-check pool (#2159
+ * Phase 3): the gateway records them on the pool row so riskier sends are sampled more.
+ */
+export type BandReviewSignals = { speaksAsPrincipal?: boolean; bounced?: boolean };
+
 export type BandReviewDecision =
-  | { kind: 'send'; content: string; report?: BandReviewReport }
+  | { kind: 'send'; content: string; report?: BandReviewReport; signals?: BandReviewSignals }
   | { kind: 'bounce'; findings: FilterFinding[] }
   | { kind: 'hold'; reason: string; findings: FilterFinding[] };
 
@@ -142,7 +148,7 @@ export class BandSendReview {
         this.deps.logger.info({ conversationId: input.conversationId, outcome: 'resolved_by_lookup' }, 'band review: bounced send passed on recheck');
       }
       this.bounced.delete(key);
-      return { kind: 'send', content: input.content };
+      return { kind: 'send', content: input.content, signals: { ...(verdict.speaksAsPrincipal === true ? { speaksAsPrincipal: true } : {}), ...(prior ? { bounced: true } : {}) } };
     }
 
     if (!prior) {
@@ -176,6 +182,8 @@ export class BandSendReview {
         source: 'claim_trimmed',
         summary: `Removed ${n} unverified statement${n === 1 ? '' : 's'} from a ${input.channel} message to ${input.recipients.join(', ')} before sending it.`,
       },
+      // A trim only follows a bounce, so a trimmed send always bounced first.
+      signals: { bounced: true, ...(verdict.speaksAsPrincipal === true ? { speaksAsPrincipal: true } : {}) },
     };
   }
 

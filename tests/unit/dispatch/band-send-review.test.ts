@@ -44,7 +44,7 @@ describe('removeQuoted', () => {
 describe('BandSendReview', () => {
   it('sends a clean message at 84 with one judge call and all four questions', async () => {
     const { svc, review } = make([clean]);
-    await expect(svc.review(base)).resolves.toEqual({ kind: 'send', content: base.content });
+    await expect(svc.review(base)).resolves.toEqual({ kind: 'send', content: base.content, signals: {} });
     expect(review).toHaveBeenCalledTimes(1);
     expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'speaks-as-principal', 'grounding', 'necessity']);
     expect(review.mock.calls[0]![0].band).toBe('spot-check');
@@ -56,6 +56,37 @@ describe('BandSendReview', () => {
       const d = await svc.review({ ...base, score });
       expect(d.kind).toBe('hold');
       if (d.kind === 'hold') expect(d.findings[0]!.rule).toBe('steered');
+    }
+  });
+
+  // Spot-check signals (#2159 Phase 3): the gateway records them with the pool row.
+  it('reports speaks-as-principal as a signal on a send at 85', async () => {
+    const { svc } = make([{ ...clean, speaksAsPrincipal: true }]);
+    await expect(svc.review({ ...base, score: 85 })).resolves.toEqual({
+      kind: 'send', content: base.content, signals: { speaksAsPrincipal: true },
+    });
+  });
+
+  it('reports bounced when a draft that bounced once passes on the recheck', async () => {
+    const { svc } = make([{ ...clean, unsupportedClaims: [CLAIM] }, clean]);
+    await svc.review(base);
+    const d = await svc.review({ ...base, content: 'Hi Joel. Adam has the forms.' });
+    expect(d.kind).toBe('send');
+    if (d.kind === 'send') expect(d.signals?.bounced).toBe(true);
+  });
+
+  it('reports bounced alongside the claim_trimmed report on a trimmed send', async () => {
+    const { svc } = make([
+      { ...clean, unsupportedClaims: [CLAIM] },
+      { ...clean, unsupportedClaims: [CLAIM] },
+      { ok: true, unsupportedClaims: [], reason: 'ok' },
+    ]);
+    await svc.review(base);
+    const d = await svc.review(base);
+    expect(d.kind).toBe('send');
+    if (d.kind === 'send') {
+      expect(d.report?.source).toBe('claim_trimmed');
+      expect(d.signals?.bounced).toBe(true);
     }
   });
 
@@ -95,6 +126,7 @@ describe('BandSendReview', () => {
     expect(second).toEqual({
       kind: 'send', content: 'Hi Joel. Adam has the forms.',
       report: { source: 'claim_trimmed', summary: expect.stringContaining('1 unverified statement') },
+      signals: { bounced: true },
     });
     // The recheck asks grounding only, of the trimmed text.
     expect(review.mock.calls[2]![0]).toMatchObject({ questions: ['grounding'], message: 'Hi Joel. Adam has the forms.' });

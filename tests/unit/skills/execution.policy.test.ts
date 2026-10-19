@@ -27,6 +27,8 @@ import type { ContactService } from '../../../src/contacts/contact-service.js';
 import { SensitivityClassifier } from '../../../src/memory/sensitivity.js';
 import { emailAccountIdFromInput, replyToMessageIdFromInput } from '../../../src/channels/email/account-id.js';
 import { UnknownEmailAccountError } from '../../../src/skills/outbound-gateway.js';
+import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
+import { buildDescription } from '../../../src/autonomy/approval-trigger.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -4651,5 +4653,116 @@ describe('Gate C — band gating (#2159)', () => {
     const result = await layer.invoke('email-send', {}, undefined, bandOriginator('unknown'));
     expect(result.success).toBe(false);
     expect(review).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spot-check pool (#2159 Phase 3): successful autonomous non-send actions are recorded.
+// ---------------------------------------------------------------------------
+
+describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
+  const agentTurn = {
+    taskEventId: 'task-1',
+    conversationId: 'conv-1',
+    taskMetadata: {
+      originator: { contactId: 'agent-calendar', systemRole: 'agent' as const, channel: 'internal', initiatedAt: new Date().toISOString() },
+    },
+  };
+
+  function makeSampleRepo() {
+    return { insertSampled: vi.fn().mockResolvedValue(1) } as unknown as ActionLogRepo;
+  }
+
+  function makePoolLayer(opts: { score?: number; band?: boolean; review?: ReturnType<typeof vi.fn>; bus?: EventBus } = {}) {
+    const registry = new ToolRegistry();
+    const actionLogRepo = makeSampleRepo();
+    const bus = opts.bus ?? makeBus();
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(opts.score ?? 85),
+      bus,
+      actionLogRepo,
+      ...(opts.band
+        ? {
+          gating: 'band' as const,
+          escalationJudge: { isEnabled: () => true, review: opts.review ?? vi.fn(), classifyAction: vi.fn() } as unknown as EscalationJudge,
+          sendEvidence: { collect: vi.fn().mockResolvedValue({ unavailable: false, toolResults: [] }) },
+        }
+        : {}),
+    });
+    return { registry, layer, actionLogRepo, bus };
+  }
+
+  it('records a successful high-risk action on an agent turn', async () => {
+    const { registry, layer, actionLogRepo } = makePoolLayer();
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), makeHandler({ ok: true }));
+    const input = { title: 'Board prep with Priya' };
+    const result = await layer.invoke('calendar-create-event', input, undefined, agentTurn);
+    expect(result.success).toBe(true);
+    expect(vi.mocked(actionLogRepo.insertSampled).mock.calls).toEqual([[{
+      taskId: 'task-1',
+      conversationId: 'conv-1',
+      toolName: 'calendar-create-event',
+      actionRisk: 'high',
+      summary: buildDescription('calendar-create-event', input),
+      signals: {},
+    }]]);
+  });
+
+  it('marks mail triage, which is sampled at low risk', async () => {
+    const { registry, layer, actionLogRepo } = makePoolLayer();
+    registry.register(makeRiskyManifest('ceo-inbox-archive', 'low'), makeHandler({ ok: true }));
+    await layer.invoke('ceo-inbox-archive', { message_id: 'm1' }, undefined, agentTurn);
+    expect(vi.mocked(actionLogRepo.insertSampled).mock.calls[0]![0]).toMatchObject({ toolName: 'ceo-inbox-archive', actionRisk: 'low', signals: { triage: true } });
+  });
+
+  it('records nothing for a low-risk write, a failure, an approved re-run, a live principal turn or a send', async () => {
+    const { registry, layer, actionLogRepo } = makePoolLayer();
+    registry.register(makeRiskyManifest('contact-update', 'low'), makeHandler({ ok: true }));
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), makeHandler({ ok: true }));
+    registry.register(makeRiskyManifest('calendar-delete-event', 'high'), {
+      execute: vi.fn().mockResolvedValue({ success: false, error: 'not found' }),
+    });
+    registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler({ sent: true }));
+
+    expect((await layer.invoke('contact-update', {}, undefined, agentTurn)).success).toBe(true);
+    expect((await layer.invoke('calendar-delete-event', {}, undefined, agentTurn)).success).toBe(false);
+    expect((await layer.invoke('calendar-create-event', {}, undefined, { ...agentTurn, humanApproved: true })).success).toBe(true);
+    expect((await layer.invoke('calendar-create-event', {}, undefined, {
+      taskEventId: 'task-2',
+      liveTurn: true,
+      taskMetadata: {
+        originator: { contactId: 'primary-user', systemRole: 'principal' as const, channel: 'cli', initiatedAt: new Date().toISOString() },
+      },
+    })).success).toBe(true);
+    expect((await layer.invoke('email-send', {}, undefined, agentTurn)).success).toBe(true);
+    expect(actionLogRepo.insertSampled).not.toHaveBeenCalled();
+  });
+
+  it('marks an action band gating let through where the tier would have asked', async () => {
+    // A known contact is below trusted, so band Gate C asks purpose; the judge says serving.
+    const review = vi.fn().mockResolvedValue({ ok: true, purpose: 'serving', reason: 'x' });
+    const { registry, layer, actionLogRepo, bus } = makePoolLayer({ band: true, score: 85, review });
+    registry.register(makeRiskyManifest('executive-profile-update', 'medium'), makeHandler({ ok: true }));
+    const result = await layer.invoke('executive-profile-update', { field: 'title' }, undefined, {
+      taskEventId: 'task-1',
+      taskMetadata: {
+        originator: { contactId: 'contact-sam', systemRole: null, channel: 'email', initiatedAt: new Date().toISOString(), tier: 'known' as const },
+      },
+    });
+    expect(result.success).toBe(true);
+    // The digest item and the pool signal come from the same decision.
+    const sources = vi.mocked(bus.publish).mock.calls.map(([, e]) => (e as unknown as { payload: { source?: string } }).payload.source);
+    expect(sources).toContain('gate_proceeded');
+    expect(vi.mocked(actionLogRepo.insertSampled).mock.calls[0]![0]).toMatchObject({
+      toolName: 'executive-profile-update', signals: { gateProceeded: true },
+    });
+  });
+
+  it('still returns the tool result when the pool row cannot be written', async () => {
+    const { registry, layer, actionLogRepo } = makePoolLayer();
+    vi.mocked(actionLogRepo.insertSampled).mockRejectedValue(new Error('db down'));
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), makeHandler({ ok: true }));
+    const result = await layer.invoke('calendar-create-event', {}, undefined, agentTurn);
+    expect(result).toEqual({ success: true, data: { ok: true } });
   });
 });

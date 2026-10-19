@@ -17,7 +17,7 @@
 // before invoking the handler. The handler receives ctx.entityContext[] and
 // never needs to call entity-context itself.
 
-import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest } from './types.js';
+import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
@@ -101,7 +101,8 @@ import { computeEffectiveTaskMetadata, DEFAULT_BYPASS_LADDER } from '../autonomy
 import type { BypassLadderConfig } from '../autonomy/effective-standing.js';
 import type { BrowserService } from '../browser/browser-service.js';
 import { formatAuthorizationSubjectSummary } from '../contacts/authorization.js';
-import { approvalAdvisory, type ApprovalTriggerService } from '../autonomy/approval-trigger.js';
+import { approvalAdvisory, buildDescription, type ApprovalTriggerService } from '../autonomy/approval-trigger.js';
+import { isSampledTool, TRIAGE_SKILLS } from '../autonomy/sample-pool.js';
 import { TempFileStore } from './temp-file-store.js';
 import type { InfraLlmService } from './infra-llm.js';
 import { OutboundContextService, ScopedOutboundContext } from '../dispatch/outbound-context.js';
@@ -1338,8 +1339,10 @@ export class ExecutionLayer {
 
   /**
    * Gate C under band gating (#2159, spec "Phase 2 → Gate C"). Runs after Gates A and B, for
-   * a consequential action that is not principal-originated. Returns null to proceed, or a
-   * failed ToolResult that escalates (an approval request, as Gate C's tier escalation does).
+   * a consequential action that is not principal-originated. Returns `{ blocked: null }` to
+   * proceed, or `{ blocked }` with a failed ToolResult that escalates (an approval request, as
+   * Gate C's tier escalation does). On proceed, `gateProceeded` says whether band gating let
+   * through what the tier policy would have held, which the spot-check pool records.
    *
    *   a send, any band              → proceed. The gateway's band review asks all four
    *                                   questions with the whole message and its resolved
@@ -1366,7 +1369,7 @@ export class ExecutionLayer {
     currentScore: number;
     initiatingTier: ContactTier | null;
     sendPins: readonly SendRecipientPin[] | undefined;
-  }): Promise<ToolResult | null> {
+  }): Promise<{ blocked: ToolResult } | { blocked: null; gateProceeded: boolean }> {
     const { toolName, manifest, input, options, skillLogger, currentScore, initiatingTier } = args;
     const isSend = HUMAN_SEND_SKILLS.has(toolName);
     // An outsider: someone outside the principal's trusted circle initiated this.
@@ -1387,21 +1390,21 @@ export class ExecutionLayer {
       const verdict = await this.askBandGateC(questions, toolName, manifest, input, options, currentScore);
       if (!verdict.ok) {
         skillLogger.warn({ toolName, failure: verdict.failure, currentScore }, 'autonomy gate: Gate C band review unavailable — escalating');
-        return this.escalateBandGateC(args, 'the reviewer was unavailable to check it');
+        return { blocked: await this.escalateBandGateC(args, 'the reviewer was unavailable to check it') };
       }
       if (verdict.purpose === 'steered') {
         skillLogger.info({ toolName, reason: verdict.reason }, 'autonomy gate: Gate C band review — steered by an outsider');
-        return this.escalateBandGateC(args, 'it looks steered by someone outside the principal\'s business');
+        return { blocked: await this.escalateBandGateC(args, 'it looks steered by someone outside the principal\'s business') };
       }
       if (verdict.speaksAsPrincipal === true) {
         skillLogger.info({ toolName, reason: verdict.reason, currentScore }, 'autonomy gate: Gate C band review — speaks for the principal below 80');
-        return this.escalateBandGateC(args, 'it speaks for or commits the principal, and this autonomy band asks first for that');
+        return { blocked: await this.escalateBandGateC(args, 'it speaks for or commits the principal, and this autonomy band asks first for that') };
       }
     }
 
     if (initiatingTier !== null) {
       const auditFail = await this.publishGateCDecision('allow', toolName, initiatingTier, options, skillLogger);
-      if (auditFail) return auditFail;
+      if (auditFail) return { blocked: auditFail };
     } else {
       // authorization.decision carries a contact tier; system and agent originators have none.
       skillLogger.info({ toolName, currentScore }, 'autonomy gate: Gate C band — allowed (system or agent originator)');
@@ -1409,12 +1412,14 @@ export class ExecutionLayer {
 
     // What band gating let through that the tier policy would have held, for the digest.
     // Not for sends: the gateway has not reviewed them yet, and it reports its own outcome.
+    let gateProceeded = false;
     if (highBand && !isSend && initiatingTier !== null && applyActionPolicy(
       initiatingTier, mapActionRiskToConsequenceClass(manifest.action_risk), true,
     ) === 'escalate') {
       await this.publishGateProceeded(toolName, initiatingTier, options, skillLogger);
+      gateProceeded = true;
     }
-    return null;
+    return { blocked: null, gateProceeded };
   }
 
   /** Ask the escalation judge Gate C's band questions about a proposed action. Never throws. */
@@ -1501,6 +1506,39 @@ export class ExecutionLayer {
     } catch (err) {
       // The action was allowed after a successful review; only its digest line is lost.
       skillLogger.error({ err, toolName }, 'autonomy gate: failed to queue the gate_proceeded report item');
+    }
+  }
+
+  /**
+   * Put a successful autonomous action in the spot-check pool (#2159 Phase 3). Sends are
+   * recorded by the gateway. Not for principal-approved re-executions (they have their own
+   * approved row) or live principal turns (the principal asked for it). Never throws.
+   */
+  private async recordSampledAction(
+    toolName: string,
+    actionRisk: ActionRisk,
+    input: Record<string, unknown>,
+    options: InvokeOptions | undefined,
+    gateProceeded: boolean,
+    skillLogger: Logger,
+  ): Promise<void> {
+    if (!this.actionLogRepo || !isSampledTool(toolName, actionRisk)) return;
+    if (options?.humanApproved || isLivePrincipalTurn(options?.liveTurn, options?.taskMetadata)) return;
+    try {
+      await this.actionLogRepo.insertSampled({
+        taskId: options?.taskEventId ?? options?.parentEventId ?? 'system',
+        ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
+        toolName,
+        actionRisk: String(actionRisk),
+        summary: buildDescription(toolName, input),
+        signals: {
+          ...(TRIAGE_SKILLS.has(toolName) ? { triage: true } : {}),
+          ...(gateProceeded ? { gateProceeded: true } : {}),
+        },
+      });
+    } catch (err) {
+      // The action already ran; only its chance of being spot-checked is lost.
+      skillLogger.warn({ err, toolName }, 'execution: could not record the action for spot checks — it ran, but will not be sampled');
     }
   }
 
@@ -1804,6 +1842,10 @@ export class ExecutionLayer {
     // be reachable even when the service is absent, so a woken task fails closed regardless of WHY
     // the score is unavailable (unwired service vs. null config) — otherwise the metadata downgrade
     // would be decorative for an autonomous execution with no human in the loop (#1125).
+    //
+    // gateProceeded: band Gate C let this through where the tier policy would have asked. The
+    // spot-check pool row records it after the handler succeeds (#2159 Phase 3).
+    let gateProceeded = false;
     if (manifest.sensitivity !== 'elevated' && !options?.humanApproved) {
       if (this.autonomyService && autonomyConfig !== null) {
         const currentScore = autonomyConfig.score;
@@ -1918,10 +1960,11 @@ export class ExecutionLayer {
             if (this.gating === 'band') {
               // Band gating (#2159): the score decides; the judge flags steering and speaking
               // for the principal. The #1290 KG-write block above still applies.
-              const blocked = await this.runBandGateC({
+              const gate = await this.runBandGateC({
                 toolName, manifest, input, options, skillLogger, currentScore, initiatingTier, sendPins,
               });
-              if (blocked) return blocked;
+              if (gate.blocked) return gate.blocked;
+              gateProceeded = gate.gateProceeded;
             } else {
               const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
               const foundCarveout = findCarveoutSkill(toolName);
@@ -2158,10 +2201,11 @@ export class ExecutionLayer {
           } else if (this.gating === 'band' && manifest.action_risk !== 'none') {
             // System and agent originators (#2159): tier gating skipped them, but the band
             // table is about what Curia does, not who asked.
-            const blocked = await this.runBandGateC({
+            const gate = await this.runBandGateC({
               toolName, manifest, input, options, skillLogger, currentScore, initiatingTier: null, sendPins,
             });
-            if (blocked) return blocked;
+            if (gate.blocked) return gate.blocked;
+            gateProceeded = gate.gateProceeded;
           }
         }
       } else {
@@ -2786,6 +2830,10 @@ export class ExecutionLayer {
         handler.execute(ctx),
         timeoutPromise,
       ]);
+
+      if (result.success) {
+        await this.recordSampledAction(toolName, manifest.action_risk, input, options, gateProceeded, skillLogger);
+      }
 
       // MCP export audit trail (#201) — reuse items resolved at gate time.
       if (result.success && resolvedMcpExportAudit && this.bus) {
