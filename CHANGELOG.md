@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`list-spot-checks`** — returns the digest's spot-check block and remembers which number means which action. (#2159)
 - **`record-spot-check`** — the principal answers spot checks by number; verdicts feed the autonomy score. (#2159)
 - **Spot-check verdict trigger** — a principal reply starting "2 bad" points the coordinator at record-spot-check. (#2159)
+- **`approval_number`** — new nullable column on `autonomy_action_log` (migration 098). (#2159)
 
 ### Changed
 
@@ -57,12 +58,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Judge token caps** — leak and escalation judge verdict caps raised for Haiku 5.5's longer verdicts. (#2077)
 - **Autonomy scoring** — principal verdicts weigh triple; expired approvals no longer count against the score. (#2159)
 - **`ceo-inbox-archive` / `ceo-inbox-label`** — results now include the email's subject and sender. (#2159)
-- **Task-completion items** — numbered, never reused while live; reply "confirm 2". `resolve-learning-digest` gains `number`; `list-learning-digest` returns `n`. (#2159)
+- **Approvals and learning items** — answered by short numbers ("approve 3", "confirm 2"), not IDs. (#2159)
+- **Approval tools** — `short_ref` accepts the approval number; `list-pending-actions` and `list-learning-digest` return numbers. (#2159)
 
 ### Removed
 
 - **Decision posture** — gone from identity, wizard and console; the autonomy level decides act-vs-ask. (#2143)
 - **`weakExpiredWeight`** — scoring setting retired and ignored if set; safe to delete from configs. (#2159)
+
+### Security
+
+- **Approval reactions** — a 👍 binds only to a principal-bound approval notification, never to other messages. (#2159)
 
 ### Fixed
 
