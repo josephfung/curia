@@ -35,9 +35,15 @@ export class ListSpotChecksHandler implements ToolHandler {
       ...(ctx.outboundGateway ? { describeEmail: describeEmailVia(ctx.outboundGateway) } : {}),
     });
 
-    // draw() never throws: on any failure it logs and returns null, so the digest goes out
-    // without a spot-check block rather than failing.
+    // draw() never throws: on any failure it logs and returns `unavailable`, so the digest goes
+    // out without a spot-check block rather than failing. `reason` tells the agent (and anyone
+    // reading the tool result) whether there was nothing to check or the draw broke. The setId
+    // stays internal: the agent has no use for it.
     const drawn = await sampler.draw(ctx.conversationId);
-    return { success: true, data: { block: drawn?.block ?? null, count: drawn?.count ?? 0 } };
+    if (drawn.kind === 'drawn') {
+      return { success: true, data: { block: drawn.block, count: drawn.count } };
+    }
+    const reason = drawn.kind === 'empty' ? 'empty' : drawn.reason;
+    return { success: true, data: { block: null, count: 0, reason } };
   }
 }

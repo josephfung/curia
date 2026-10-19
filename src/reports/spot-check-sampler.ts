@@ -13,8 +13,10 @@
 // stay in the pool and a later digest may offer them again; an unbound set is pruned by age.
 //
 // Failure policy: draw() never throws. A digest must go out without samples rather than fail,
-// so every error returns null with a log line. The map is stored before the block is returned:
-// a block whose numbers could not be resolved is never shown.
+// so every failure returns `unavailable` with a log line (error for a throw, warn for a
+// soft-rejected store), distinct from `empty` (nothing to check), so a broken pipeline does
+// not pass for a quiet pool. The map is stored before the block is returned: a block whose
+// numbers could not be resolved is never shown.
 
 import { randomUUID } from 'node:crypto';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
@@ -40,6 +42,15 @@ const DESCRIBE_TIMEOUT_MS = 3_000;
  * "Archive an email". Returns null when the message cannot be described.
  */
 export type DescribeEmail = (messageId: string, account?: string) => Promise<{ subject?: string; from?: string } | null>;
+
+/**
+ * What draw() produced. `drawn` carries the block for the digest; `empty` means the pool had
+ * nothing to check; `unavailable` means it could not draw (the map was not stored, or an error).
+ */
+export type DrawResult =
+  | { kind: 'drawn'; block: string; count: number; setId: string }
+  | { kind: 'empty' }
+  | { kind: 'unavailable'; reason: 'store_rejected' | 'error' };
 
 export interface SpotCheckSamplerDeps {
   actionLogRepo: Pick<ActionLogRepo, 'findSampleCandidates'>;
@@ -82,12 +93,12 @@ export class SpotCheckSampler {
     this.now = deps.now ?? Date.now;
   }
 
-  /** The block to put in a digest, or null when there is nothing to check or the map could not be stored. */
-  async draw(conversationId: string): Promise<{ block: string; count: number } | null> {
+  /** The block to put in a digest, or why there is none. Never throws. */
+  async draw(conversationId: string): Promise<DrawResult> {
     try {
       const now = this.now();
       const rows = await this.deps.actionLogRepo.findSampleCandidates(new Date(now - CANDIDATE_WINDOW_MS), CANDIDATE_LIMIT);
-      if (rows.length === 0) return null;
+      if (rows.length === 0) return { kind: 'empty' };
 
       const picked = selectSamples(rows, (r) => sampleWeight(readSignals(r.payload)), MAX_SAMPLES, this.random);
       // Lookups run in parallel and each one settles on its own (see summarize), so a
@@ -95,8 +106,9 @@ export class SpotCheckSampler {
       const summaries = await Promise.all(picked.map((r) => this.summarize(r)));
       const items: SpotCheckItem[] = picked.map((r, i) => ({ n: i + 1, actionLogId: r.id, summary: summaries[i]! }));
 
+      const setId = randomUUID();
       const stored = await this.deps.store.add({
-        id: randomUUID(),
+        id: setId,
         createdAt: new Date(now).toISOString(),
         conversationId,
         items,
@@ -104,17 +116,21 @@ export class SpotCheckSampler {
       });
       if (!stored) {
         // The rows were never shown, so a later digest can offer them again.
-        this.deps.logger.warn({ conversationId, count: items.length }, 'spot-check sampler: the map could not be stored; digest goes out without samples');
-        return null;
+        this.deps.logger.warn({ conversationId, count: items.length }, 'spot-check sampler: the config store rejected the spot-check map; digest goes out without samples');
+        return { kind: 'unavailable', reason: 'store_rejected' };
       }
 
+      const actionLogIds = items.map((i) => i.actionLogId);
+      this.deps.logger.info({ conversationId, setId, count: items.length, actionLogIds }, 'spot-check sampler: drew a spot-check set');
       return {
+        kind: 'drawn',
         block: [SPOT_CHECK_HEADER, ...items.map((i) => `${i.n}. ${i.summary}`)].join('\n'),
         count: items.length,
+        setId,
       };
     } catch (err) {
       this.deps.logger.error({ err, conversationId }, 'spot-check sampler: draw failed; digest goes out without samples');
-      return null;
+      return { kind: 'unavailable', reason: 'error' };
     }
   }
 

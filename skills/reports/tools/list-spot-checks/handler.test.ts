@@ -3,13 +3,13 @@ import type { ToolContext } from '../../../../src/skills/types.js';
 import type { ActionLogRepo } from '../../../../src/autonomy/action-log-repo.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
-import type { SpotCheckSamplerDeps } from '../../../../src/reports/spot-check-sampler.js';
+import type { DrawResult, SpotCheckSamplerDeps } from '../../../../src/reports/spot-check-sampler.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import { sanitizeObjectOutput } from '../../../../src/skills/sanitize.js';
 
 // The sampler has its own unit tests; here it is stubbed so the handler's wiring is what is tested.
 const sampler = vi.hoisted(() => ({
-  draw: vi.fn<(conversationId: string) => Promise<{ block: string; count: number } | null>>(),
+  draw: vi.fn<(conversationId: string) => Promise<DrawResult>>(),
   deps: [] as unknown[],
 }));
 vi.mock('../../../../src/reports/spot-check-sampler.js', () => ({
@@ -41,20 +41,26 @@ beforeEach(() => {
 describe('ListSpotChecksHandler', () => {
   it('passes the drawn block through, drawn for this conversation', async () => {
     const block = 'Spot check (optional, reply with a number):\n1. Archive an email';
-    sampler.draw.mockResolvedValue({ block, count: 1 });
+    sampler.draw.mockResolvedValue({ kind: 'drawn', block, count: 1, setId: 'set-1' });
 
     const result = await new ListSpotChecksHandler().execute(makeCtx());
 
+    // No setId and no action ids: the agent sees the block and its size only.
     expect(result).toEqual({ success: true, data: { block, count: 1 } });
     expect(sampler.draw).toHaveBeenCalledWith('scheduler:job1:run1');
   });
 
-  it('returns a null block and a zero count when there is nothing to check', async () => {
-    sampler.draw.mockResolvedValue(null);
+  // The reason tells "nothing to check" apart from "the spot-check pipeline is broken".
+  it.each([
+    [{ kind: 'empty' }, 'empty'],
+    [{ kind: 'unavailable', reason: 'store_rejected' }, 'store_rejected'],
+    [{ kind: 'unavailable', reason: 'error' }, 'error'],
+  ] as const)('returns a null block, a zero count and the reason when nothing was drawn (%o)', async (drawn, reason) => {
+    sampler.draw.mockResolvedValue(drawn);
 
     const result = await new ListSpotChecksHandler().execute(makeCtx());
 
-    expect(result).toEqual({ success: true, data: { block: null, count: 0 } });
+    expect(result).toEqual({ success: true, data: { block: null, count: 0, reason } });
   });
 
   it.each([
@@ -70,7 +76,7 @@ describe('ListSpotChecksHandler', () => {
   });
 
   it('wires no email lookup when there is no outbound gateway', async () => {
-    sampler.draw.mockResolvedValue(null);
+    sampler.draw.mockResolvedValue({ kind: 'empty' });
 
     await new ListSpotChecksHandler().execute(makeCtx());
 
@@ -78,7 +84,7 @@ describe('ListSpotChecksHandler', () => {
   });
 
   it('describes a triage email from the outbound gateway as subject and "Name (email)"', async () => {
-    sampler.draw.mockResolvedValue(null);
+    sampler.draw.mockResolvedValue({ kind: 'empty' });
     const getEmailMessage = vi.fn()
       .mockResolvedValueOnce({ subject: 'Q4 board deck', from: [{ name: 'Priya Shah', email: 'priya@example.com' }] })
       .mockResolvedValueOnce({ subject: '', from: [{ email: 'sam@example.com' }] })

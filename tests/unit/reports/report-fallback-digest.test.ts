@@ -1,6 +1,7 @@
 // ReportFallbackDigest — the weekly summary for installs with no digest job (#2159).
 import { describe, it, expect, vi, afterEach, type Mock } from 'vitest';
 import { ReportFallbackDigest } from '../../../src/reports/report-fallback-digest.js';
+import type { DrawResult } from '../../../src/reports/spot-check-sampler.js';
 import { ReportQueue, type ReportBatch, type ReportItem } from '../../../src/reports/report-queue.js';
 import type { AuditLogRow } from '../../../src/audit/audit-log-repo.js';
 import { createSilentLogger } from '../../../src/logger.js';
@@ -21,7 +22,7 @@ function makeDigest(opts: {
   sendResult?: boolean;
   ceoEmail?: string;
   withoutGateway?: boolean;
-  spotChecks?: { draw: Mock<(conversationId: string) => Promise<{ block: string; count: number } | null>> };
+  spotChecks?: { draw: Mock<(conversationId: string) => Promise<DrawResult>> };
 } = {}) {
   const batches = [...(opts.batches ?? [])];
   const queue = {
@@ -189,7 +190,7 @@ describe('ReportFallbackDigest spot checks', () => {
   const block = 'Spot check (optional, reply with a number):\n1. Sent a reply to Priya\n2. Archived a newsletter';
 
   it('appends the block after a blank line and sends under the fallback conversation id', async () => {
-    const draw = vi.fn<(conversationId: string) => Promise<{ block: string; count: number } | null>>().mockResolvedValue({ block, count: 2 });
+    const draw = vi.fn<(conversationId: string) => Promise<DrawResult>>().mockResolvedValue({ kind: 'drawn', block, count: 2, setId: 'set-1' });
     const { digest, send } = makeDigest({ ...waiting(), spotChecks: { draw } });
 
     await expect(digest.tick()).resolves.toEqual({ sent: true, items: 1 });
@@ -202,8 +203,12 @@ describe('ReportFallbackDigest spot checks', () => {
     expect(sendOpts).toEqual({ isSystemNotification: true, skipNotificationOnBlock: true, conversationId });
   });
 
-  it('leaves the body unchanged when nothing was drawn', async () => {
-    const draw = vi.fn<(conversationId: string) => Promise<{ block: string; count: number } | null>>().mockResolvedValue(null);
+  it.each([
+    { kind: 'empty' },
+    { kind: 'unavailable', reason: 'store_rejected' },
+    { kind: 'unavailable', reason: 'error' },
+  ] as const)('leaves the body unchanged when nothing was drawn (%o)', async (result) => {
+    const draw = vi.fn<(conversationId: string) => Promise<DrawResult>>().mockResolvedValue(result);
     const withDraw = makeDigest({ ...waiting(), spotChecks: { draw } });
     const without = makeDigest(waiting());
 

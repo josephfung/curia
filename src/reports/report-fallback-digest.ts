@@ -156,8 +156,10 @@ export class ReportFallbackDigest {
     // so the binder can match the delivered email back to the set (a reply of "2 good" then
     // resolves against this summary).
     const conversationId = `report-fallback:${this.now().toISOString()}`;
+    // Anything but a drawn block (empty pool, or a draw that failed and logged why) sends the
+    // summary unchanged.
     const drawn = await this.opts.spotChecks?.draw(conversationId);
-    const body = drawn ? `${this.renderBody(items)}\n\n${drawn.block}` : this.renderBody(items);
+    const body = drawn?.kind === 'drawn' ? `${this.renderBody(items)}\n\n${drawn.block}` : this.renderBody(items);
 
     // isSystemNotification: the principal must hear this even when the score is below the
     // send threshold. skipNotificationOnBlock: a blocked summary must not report itself.
