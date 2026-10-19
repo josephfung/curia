@@ -665,13 +665,23 @@ describe('ActionLogRepo', () => {
       expect(queries[0]!.params).toEqual([since, 200]);
     });
 
-    it('markSampled stamps the ids, and does nothing for an empty list', async () => {
-      const { pool, queries } = makePool([]);
+    it('markSampled stamps the ids and returns the count, and does nothing for an empty list', async () => {
+      const { pool, queries } = makePool([], 2);
       const repo = new ActionLogRepo(pool, createSilentLogger());
-      await repo.markSampled([], new Date('2026-10-19T12:00:00Z'));
+      expect(await repo.markSampled([], new Date('2026-10-19T12:00:00Z'))).toBe(0);
       expect(queries).toHaveLength(0);
-      await repo.markSampled([3, 4], new Date('2026-10-19T12:00:00Z'));
+      expect(await repo.markSampled([3, 4], new Date('2026-10-19T12:00:00Z'))).toBe(2);
       expect(queries[0]!.params).toEqual([[3, 4], '2026-10-19T12:00:00.000Z']);
+    });
+
+    it('markSampled warns when fewer rows were stamped than asked for', async () => {
+      const { pool } = makePool([], 1);
+      const logger = createSilentLogger();
+      const warn = vi.spyOn(logger, 'warn');
+      const repo = new ActionLogRepo(pool, logger);
+      expect(await repo.markSampled([3, 4], new Date('2026-10-19T12:00:00Z'))).toBe(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toMatchObject({ requested: 2, updated: 1 });
     });
 
     it('recordPrincipalVerdict sets competence only, and only on pool rows', async () => {

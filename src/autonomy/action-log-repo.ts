@@ -224,15 +224,24 @@ export class ActionLogRepo {
     return result.rows.map(mapRow);
   }
 
-  /** Mark pool rows as shown, so the next digest draws different ones. */
-  async markSampled(ids: readonly number[], at: Date): Promise<void> {
-    if (ids.length === 0) return;
-    await this.pool.query(
+  /**
+   * Mark pool rows as shown, so the next digest draws different ones. Returns the number of
+   * rows stamped; fewer than `ids.length` means some ids no longer exist (or were never pool
+   * rows), which the caller may want to know about, so it is logged here too.
+   */
+  async markSampled(ids: readonly number[], at: Date): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await this.pool.query(
       `UPDATE autonomy_action_log
        SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{sample,sampledAt}', to_jsonb($2::text), true)
        WHERE id = ANY($1::bigint[])`,
       [ids, at.toISOString()],
     );
+    const updated = result.rowCount ?? 0;
+    if (updated !== ids.length) {
+      this.logger.warn({ requested: ids.length, updated, ids }, 'action-log: markSampled stamped fewer rows than requested — some spot-check rows were not found');
+    }
+    return updated;
   }
 
   /**
