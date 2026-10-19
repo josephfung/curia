@@ -1017,7 +1017,21 @@ describe('ActionLogRepo', () => {
       await repo.findSampleCandidates(since, 200);
       expect(queries[0]!.sql).toContain("scored_by = 'sample-pool'");
       expect(queries[0]!.sql).toContain("payload->'sample'->>'sampledAt' IS NULL");
-      expect(queries[0]!.params).toEqual([since, 200]);
+      // No class filter: the class parameter is null.
+      expect(queries[0]!.params).toEqual([since, 200, null]);
+    });
+
+    it('findSampleCandidates reads one class (triage or not) when asked', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const since = new Date('2026-10-12T00:00:00Z');
+      await repo.findSampleCandidates(since, 200, { triage: true });
+      await repo.findSampleCandidates(since, 200, { triage: false });
+      expect(queries[0]!.sql).toContain("payload->'sample'->'signals'->>'triage'");
+      // The class is a bound parameter, never spliced into the SQL.
+      expect(queries[0]!.sql).toBe(queries[1]!.sql);
+      expect(queries[0]!.params).toEqual([since, 200, true]);
+      expect(queries[1]!.params).toEqual([since, 200, false]);
     });
 
     it('insertSampled persists a small tool input on the row', async () => {

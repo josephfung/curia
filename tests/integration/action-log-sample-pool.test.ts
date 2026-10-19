@@ -57,6 +57,25 @@ describeIf('action-log sample pool (#2159 Phase 3)', () => {
     expect(row!.description).toBe('Created "Sync with Dana" on Tuesday');
   });
 
+  it('reads triage and non-triage candidates as separate classes', async () => {
+    const sendId = await seedPoolRow('class-send');
+    const triageId = await repo.insertSampled({
+      taskId: `${TASK_PREFIX}class-triage`,
+      toolName: 'ceo-inbox-archive',
+      actionRisk: 'low',
+      summary: 'Archive an email',
+      signals: { triage: true },
+    });
+    const since = new Date(Date.now() - 60_000);
+
+    const triage = (await repo.findSampleCandidates(since, 1000, { triage: true })).map((r) => r.id);
+    const other = (await repo.findSampleCandidates(since, 1000, { triage: false })).map((r) => r.id);
+    expect(triage).toContain(triageId);
+    expect(triage).not.toContain(sendId);
+    expect(other).toContain(sendId);
+    expect(other).not.toContain(triageId);
+  });
+
   it('stops offering a row once it has been shown', async () => {
     const id = await seedPoolRow('shown');
     await repo.markSampled([id], new Date());

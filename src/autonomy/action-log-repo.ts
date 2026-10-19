@@ -306,17 +306,23 @@ export class ActionLogRepo {
     });
   }
 
-  /** Pool rows not yet shown in a spot check, newest first. */
-  async findSampleCandidates(since: Date, limit: number): Promise<ActionLogRow[]> {
+  /**
+   * Pool rows not yet shown in a spot check, newest first. With `filter`, only one class:
+   * triage rows (signals.triage true) or the rest. The sampler reads each class on its own so
+   * a day of mail triage cannot fill the whole limit and push every send out of the draw.
+   */
+  async findSampleCandidates(since: Date, limit: number, filter?: { triage: boolean }): Promise<ActionLogRow[]> {
     const result = await this.pool.query(
       `SELECT * FROM autonomy_action_log
        WHERE outcome = 'success'
          AND scored_by = 'sample-pool'
          AND created_at >= $1
          AND payload->'sample'->>'sampledAt' IS NULL
+         AND ($3::boolean IS NULL
+              OR (COALESCE(payload->'sample'->'signals'->>'triage', 'false') = 'true') = $3::boolean)
        ORDER BY created_at DESC
        LIMIT $2`,
-      [since, limit],
+      [since, limit, filter ? filter.triage : null],
     );
     return result.rows.map(mapRow);
   }

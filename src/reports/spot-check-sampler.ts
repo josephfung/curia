@@ -30,7 +30,11 @@ export const SPOT_CHECK_HEADER = 'Spot check (optional, reply with a number):';
 const MS_PER_DAY = 86_400_000;
 /** How far back a candidate may be. Older actions are stale to ask about. */
 const CANDIDATE_WINDOW_MS = 7 * MS_PER_DAY;
-/** Rows read per draw. The pool is small; this only bounds a pathological backlog. */
+/**
+ * Rows read per class (triage, and everything else) per draw. Mail triage can add hundreds of
+ * rows a week, so one shared limit would be filled by triage alone; reading each class on its
+ * own keeps sends and other actions in the draw however busy the inbox is.
+ */
 const CANDIDATE_LIMIT = 200;
 /** At most three samples per digest (spec). */
 const MAX_SAMPLES = 3;
@@ -99,10 +103,14 @@ export class SpotCheckSampler {
   async draw(conversationId: string): Promise<DrawResult> {
     try {
       const now = this.now();
-      const rows = await this.deps.actionLogRepo.findSampleCandidates(new Date(now - CANDIDATE_WINDOW_MS), CANDIDATE_LIMIT);
-      if (rows.length === 0) return { kind: 'empty' };
+      const since = new Date(now - CANDIDATE_WINDOW_MS);
+      const [other, triage] = await Promise.all([
+        this.deps.actionLogRepo.findSampleCandidates(since, CANDIDATE_LIMIT, { triage: false }),
+        this.deps.actionLogRepo.findSampleCandidates(since, CANDIDATE_LIMIT, { triage: true }),
+      ]);
+      if (other.length === 0 && triage.length === 0) return { kind: 'empty' };
 
-      const picked = selectSamples(rows, (r) => sampleWeight(readSignals(r.payload)), MAX_SAMPLES, this.random);
+      const picked = this.pick(other, triage);
       // Lookups run in parallel and each one settles on its own (see summarize), so a
       // failed or slow lookup costs at most one timeout and never drops a sample.
       const summaries = await Promise.all(picked.map((r) => this.summarize(r)));
@@ -134,6 +142,19 @@ export class SpotCheckSampler {
       this.deps.logger.error({ err, conversationId }, 'spot-check sampler: draw failed; digest goes out without samples');
       return { kind: 'unavailable', reason: 'error' };
     }
+  }
+
+  /**
+   * Up to MAX_SAMPLES rows, by weight. Triage weighs as much as a send that speaks for the
+   * principal and usually far outnumbers everything else, so a plain weighted draw would hand
+   * every slot to triage. One slot therefore goes to a non-triage row whenever there is one,
+   * chosen by weight from that class; the rest are drawn by weight from everything left.
+   */
+  private pick(other: readonly ActionLogRow[], triage: readonly ActionLogRow[]): ActionLogRow[] {
+    const weightOf = (r: ActionLogRow): number => sampleWeight(readSignals(r.payload));
+    const first = selectSamples(other, weightOf, 1, this.random);
+    const rest = [...other.filter((r) => !first.includes(r)), ...triage];
+    return [...first, ...selectSamples(rest, weightOf, MAX_SAMPLES - first.length, this.random)];
   }
 
   /**

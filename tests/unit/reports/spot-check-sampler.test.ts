@@ -20,6 +20,16 @@ function row(id: number, over: Partial<ActionLogRow> = {}): ActionLogRow {
   };
 }
 
+/** What the repo's per-class query returns: rows whose signals mark them triage, or the rest. */
+function byClass(rows: readonly ActionLogRow[], filter?: { triage: boolean }): ActionLogRow[] {
+  if (!filter) return [...rows];
+  const isTriage = (r: ActionLogRow): boolean => {
+    const sample = r.payload?.['sample'] as { signals?: { triage?: unknown } } | undefined;
+    return typeof sample === 'object' && sample !== null && sample.signals?.triage === true;
+  };
+  return rows.filter((r) => isTriage(r) === filter.triage);
+}
+
 function makeDeps(opts: {
   rows?: ActionLogRow[];
   addResult?: boolean;
@@ -30,9 +40,9 @@ function makeDeps(opts: {
   const warn = vi.spyOn(logger, 'warn');
   const error = vi.spyOn(logger, 'error');
   const info = vi.spyOn(logger, 'info');
-  const findSampleCandidates = vi.fn(async () => {
+  const findSampleCandidates = vi.fn(async (_since: Date, _limit: number, filter?: { triage: boolean }) => {
     if (opts.findError) throw opts.findError;
-    return opts.rows ?? [];
+    return byClass(opts.rows ?? [], filter);
   });
   // markSampled is on the fake only to prove draw() never calls it: rows are marked when the
   // digest is delivered and bound (SpotCheckBinder), not when it is drawn.
@@ -157,7 +167,41 @@ describe('SpotCheckSampler.draw', () => {
 
     await sampler.draw('conv-1');
 
-    expect(findSampleCandidates).toHaveBeenCalledWith(new Date(NOW - 7 * DAY), 200);
+    // Each class is read on its own, up to 200 rows each, so a triage backlog cannot crowd
+    // every send out of the candidate list.
+    expect(findSampleCandidates).toHaveBeenCalledTimes(2);
+    expect(findSampleCandidates).toHaveBeenCalledWith(new Date(NOW - 7 * DAY), 200, { triage: false });
+    expect(findSampleCandidates).toHaveBeenCalledWith(new Date(NOW - 7 * DAY), 200, { triage: true });
+  });
+
+  it('gives a non-triage action at least one slot whenever one exists, however much triage there is', async () => {
+    const triage = Array.from({ length: 150 }, (_, i) => triageRow(i + 1, { message_id: `msg-${i + 1}` }));
+    const sends = [row(1001), row(1002), row(1003)];
+    const rows = [...triage, ...sends];
+    // Fixed draws at both ends of the range, plus a spread of pseudo-random ones.
+    let seed = 7;
+    const lcg = (): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    const randoms: Array<() => number> = [() => 0, () => 0.5, () => 0.999999, ...Array.from({ length: 40 }, () => lcg)];
+    for (const random of randoms) {
+      const add = vi.fn(async (_set: SpotCheckSet) => true);
+      const sampler = new SpotCheckSampler({
+        actionLogRepo: { findSampleCandidates: vi.fn(async (_s: Date, _l: number, f?: { triage: boolean }) => byClass(rows, f)) },
+        store: { add },
+        logger: createSilentLogger(),
+        random,
+        now: () => NOW,
+      });
+      const drawn = drawnOf(await sampler.draw('conv-1'));
+      expect(drawn.count).toBe(3);
+      const ids = add.mock.calls[0]![0].items.map((i) => i.actionLogId);
+      expect(ids.some((id) => id > 1000)).toBe(true);
+    }
+  });
+
+  it('still draws three from a pool that holds only triage', async () => {
+    const { sampler } = makeDeps({ rows: [1, 2, 3, 4].map((id) => triageRow(id, { message_id: `msg-${id}` })) });
+
+    expect(drawnOf(await sampler.draw('conv-1')).count).toBe(3);
   });
 
   it('weights a high-signal row above a malformed-payload row', async () => {
@@ -167,10 +211,10 @@ describe('SpotCheckSampler.draw', () => {
     const add = vi.fn(async (_set: SpotCheckSet) => true);
     const sampler = new SpotCheckSampler({
       actionLogRepo: {
-        findSampleCandidates: vi.fn(async () => [
+        findSampleCandidates: vi.fn(async (_s: Date, _l: number, f?: { triage: boolean }) => byClass([
           row(1, { payload: { sample: 'not an object' } }),
           row(2, { payload: { sample: { signals: { firstContact: true } } } }),
-        ]),
+        ], f)),
       },
       store: { add },
       logger,
@@ -230,10 +274,11 @@ describe('SpotCheckSampler.draw', () => {
       const drawn = await sampler.draw('conv-1');
 
       expect(drawnOf(drawn).count).toBe(2);
-      expect(drawnOf(drawn).block.split('\n')[1]).toBe('1. Archive an email (details unavailable)');
+      // The non-triage row takes the first slot (see the slot rule), so the triage row is 2.
+      expect(drawnOf(drawn).block.split('\n')[2]).toBe('2. Archive an email (details unavailable)');
       expect(warn).toHaveBeenCalled();
       expect(add).toHaveBeenCalledTimes(1);
-      expect(add.mock.calls[0]![0].items.map((i) => i.actionLogId)).toEqual([1, 2]);
+      expect(add.mock.calls[0]![0].items.map((i) => i.actionLogId)).toEqual([2, 1]);
       expect(markSampled).not.toHaveBeenCalled();
     });
 
