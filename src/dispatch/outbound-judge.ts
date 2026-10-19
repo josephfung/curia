@@ -28,6 +28,7 @@ import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall, createOutboundJudge } from '../bus/events.js';
 import type { OutboundJudgeOutcome, OutboundJudgeReasonCode } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
+import { sentTemperature } from '../agents/llm/sampling-options.js';
 import type { FilterFinding, FilterRecipient } from './outbound-filter.js';
 import { JUDGE_SYSTEM_PROMPT, buildJudgeUserPrompt } from './outbound-judge-prompt.js';
 
@@ -125,11 +126,12 @@ export class OutboundLlmJudge implements OutboundJudge {
           { role: 'system', content: JUDGE_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },
         ],
-        // Deterministic, short verdict. 100 tokens is ample for {"leak":..,"reason":".."}.
-        // If a model ever emits a verbose reason that gets truncated, parseVerdict treats
-        // the cut-off JSON as malformed — which fails toward blocking (split/closed), the
-        // safe direction for a security boundary.
-        options: { temperature: JUDGE_TEMPERATURE, max_tokens: 100, signal: controller.signal },
+        // Deterministic, short verdict. If a model emits a verbose reason that gets
+        // truncated, parseVerdict treats the cut-off JSON as malformed — which fails
+        // toward blocking (split/closed), the safe direction for a security boundary,
+        // but a wrongly blocked send all the same. Haiku 5.5 verdicts measured up to
+        // 57 tokens (Haiku 4.5: 35), so 200 keeps the ~3x headroom 100 used to give (#2077).
+        options: { temperature: JUDGE_TEMPERATURE, max_tokens: 200, signal: controller.signal },
       });
       // Once we stop awaiting chatPromise (on timeout/abort), a late rejection would be
       // unhandled. LLMProvider.chat() is non-throwing by contract, but guard anyway.
@@ -269,7 +271,12 @@ export class OutboundLlmJudge implements OutboundJudge {
         providerRequestId: provenance.providerRequestId,
         promptHash,
         responseHash,
-        temperature: JUDGE_TEMPERATURE,
+        // What the request carried, not the constant: a model that rejects
+        // sampling parameters is sent no temperature at all (#2077).
+        temperature: sentTemperature(
+          { temperature: JUDGE_TEMPERATURE },
+          this.modelRegistry.rejectsSamplingParams(provenance.requestedModel),
+        ),
         parentEventId: 'system',
         archive: {
           prompt: {

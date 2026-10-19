@@ -106,6 +106,13 @@ describe('EmailReplyHandler', () => {
       expect.objectContaining({ to: 'alice@example.com', replyToMessageId: 'nylas-msg-1' }),
       expect.not.objectContaining({ recipientSource: 'email_participant' }),
     );
+    // Replayed on approval if band review holds the send (#2159).
+    expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        holdRecipe: { toolName: 'email-reply', partialPayload: ctx.input, description: 'Email reply to alice@example.com — "Re: Project update"' },
+      }),
+    );
   });
 
   it('passes email_participant when auth passes and the sender is not an owned mailbox (#2071)', async () => {

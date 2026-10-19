@@ -1,5 +1,5 @@
 # Style case 40e (#2143), a guard: ceo-inbox drafts in the principal's voice from
-# executive-profile-get, never in the office's. Tone & style PR 4 gives every agent the
+# executive-profile-get, never in the office's. Since tone & style PR 4 every agent gets the
 # identity block, with its hard constraints first ("Never impersonate the principal") and a
 # scoping line for text written in the principal's name. This case pins that a draft is
 # still produced, not refused or escalated, and still follows the voice profile. Rules:

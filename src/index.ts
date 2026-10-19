@@ -20,7 +20,7 @@
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
@@ -104,6 +104,11 @@ import { TRIGGER_GUIDANCE_MARKER_SOURCES } from './agents/prompts/trigger-guidan
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
 import type { JudgeConfig } from './dispatch/outbound-judge.js';
 import type { EscalationJudge } from './autonomy/escalation-judge.js';
+import { FailOpenLimiter } from './autonomy/band-policy.js';
+import { checkBandGatingReady } from './autonomy/band-wiring.js';
+import { SendEvidenceCollector } from './autonomy/send-evidence.js';
+import { BandSendReview } from './dispatch/band-send-review.js';
+import { formatWhoYouServeBlock } from './agents/principal-contact-block.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { OutboundQueueRepo } from './skills/outbound-queue-repo.js';
 import { ExportControlService, resolveExportControls } from './security/export-controls.js';
@@ -338,7 +343,10 @@ async function main(): Promise<void> {
 
   // Autonomy service — manages the global autonomy score (0–100).
   // Instantiated early (right after DB connect) so it's ready before agents start.
-  const autonomyService = new AutonomyService(pool, logger);
+  // Which policy decides when Curia asks first (#2159, ADR-049). Ships as 'tier'. Resolved here
+  // because the autonomy service stamps it on the config the prompt block reads.
+  const autonomyGating = resolveAutonomyGating(yamlConfig.autonomy);
+  const autonomyService = new AutonomyService(pool, logger, { gating: autonomyGating });
 
   // Run pending migrations so the schema is always current when the process starts.
   // Uses node-pg-migrate's programmatic runner with the same DATABASE_URL.
@@ -1380,6 +1388,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Logged at boot so the live policy is visible; band with no working judge is logged at error.
+  checkBandGatingReady(autonomyGating, escalationJudge, logger);
+
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
     // Extract exfiltration markers from BOTH the office identity (name, constraints,
@@ -1422,7 +1433,7 @@ async function main(): Promise<void> {
     if (judgeEnabled) {
       const judgeConfig: JudgeConfig = {
         enabled: true,
-        model: judgeYaml?.model ?? 'claude-haiku-4-5',
+        model: judgeYaml?.model ?? 'claude-haiku-5-5',
         timeoutMs: judgeYaml?.timeout_ms ?? 5000,
         failMode: judgeYaml?.failMode ?? 'split',
       };
@@ -1469,6 +1480,7 @@ async function main(): Promise<void> {
       judge: outboundJudge,
       escalationJudge,
       logger,
+      gating: autonomyGating,
     });
   }
   // PII scrubbing for LLM-facing error strings — loads extra patterns from
@@ -1709,6 +1721,44 @@ async function main(): Promise<void> {
     .filter((name): name is string => typeof name === 'string' && name.trim() !== '');
   const conversationEntities = ConversationEntityState.createWithPostgres(pool, logger, principalNames);
 
+  // Band gating's send review (#2159). The evidence is what the drafting turn looked up.
+  const sendEvidence = new SendEvidenceCollector({
+    auditLogRepo,
+    // Read per call: principal identities hot-reload in place (#1514).
+    principalBlock: () => formatWhoYouServeBlock(principalIdentities, principalPrimaryEmail.current),
+    logger,
+  });
+  const bandReview = autonomyGating === 'band'
+    ? new BandSendReview({
+      judge: escalationJudge,
+      evidence: sendEvidence,
+      limiter: new FailOpenLimiter(),
+      // Once, when unreviewed sends pass the hourly cap: sends now hold until the reviewer
+      // answers again. Never throws — the review holds the send either way.
+      onLimiterTripped: async () => {
+        const to = principalEmail.current;
+        if (!outboundGateway || !to) {
+          logger.error('band review: fail-open cap tripped, and there is no gateway or principal email to tell — sends are holding');
+          return;
+        }
+        try {
+          const result = await outboundGateway.send({
+            channel: 'email',
+            to,
+            subject: 'Curia: sends are waiting for review',
+            body: 'The message reviewer failed on more than 5 sends in the last hour, so Curia is holding sends for your approval until it recovers.',
+          }, { isSystemNotification: true, skipNotificationOnBlock: true });
+          if (!result.success) {
+            logger.error({ reason: result.blockedReason }, 'band review: could not tell the principal that sends are holding');
+          }
+        } catch (err) {
+          logger.error({ err }, 'band review: could not tell the principal that sends are holding');
+        }
+      },
+      logger,
+    })
+    : undefined;
+
   if (hasAnyOutboundClient && outboundFilter && !setupRequiredAtBoot) {
     const outboundQueue = new OutboundQueueRepo(pool);
     // Channels that implement Channel.supportsOutboundQueue register readiness
@@ -1753,6 +1803,8 @@ async function main(): Promise<void> {
       exportControlService,
       outboundQueue,
       outboundQueueReadiness,
+      gating: autonomyGating,
+      ...(bandReview ? { bandReview } : {}),
     });
     outboundGateway.start();
     logger.info({
@@ -2364,7 +2416,7 @@ async function main(): Promise<void> {
   // the subscriber and sweep below. Wiring the lookup while those are off would let a
   // pending row block that agent in that conversation with nothing left to resolve it.
   const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>
@@ -2839,6 +2891,7 @@ async function main(): Promise<void> {
     outboundContextService,
     approvalTrigger,
     escalationJudge,
+    gating: autonomyGating,
     bullpenService,
     principalIdentities,
     principalBacklog: createPrincipalBacklogSource(pool),

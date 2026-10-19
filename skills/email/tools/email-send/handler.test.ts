@@ -92,7 +92,11 @@ describe('EmailSendHandler', () => {
     }
     expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'email', to: 'alice@example.com', subject: 'Hello', body: 'Hi there' }),
-      { taskEventId: undefined, conversationId: undefined, principalDirected: false },
+      {
+        taskEventId: undefined, conversationId: undefined, principalDirected: false,
+        // Replayed on approval if band review holds the send (#2159).
+        holdRecipe: { toolName: 'email-send', partialPayload: ctx.input, description: 'Email to alice@example.com — "Hello"' },
+      },
     );
   });
 

@@ -5,7 +5,7 @@
 model_routing:
   tiers:
     fast:
-      model: claude-haiku-4-5
+      model: claude-haiku-5-5
     standard:
       model: claude-sonnet-4-6
     powerful:
@@ -293,7 +293,7 @@ filter:
     enabled: true
     # Recommended: use a different vendor/family than the agent tiers for model diversity
     # (an attack tuned for the coordinator should not also fool the reviewer).
-    model: claude-haiku-4-5
+    model: claude-haiku-5-5
     timeout_ms: 5000
     failMode: split   # split (default) | open | closed — see src/config.ts
   # Identity gate (#1818). A non-principal send is checked for an unconfirmed-name
@@ -311,8 +311,10 @@ filter:
 escalation:
   judge:
     enabled: true
-    model: claude-haiku-4-5
+    model: claude-haiku-5-5
     timeout_ms: 5000
+    # The band brief (#2159) reads the drafting turn's evidence; it needs longer than a one-word classification.
+    review_timeout_ms: 15000
 
 # Audit log hardening (spec 10 / #1383).
 # llm_call_archive stores redacted full prompts/responses keyed to llm.call rows.
@@ -532,6 +534,13 @@ tasks:
 #   >= derived_child   : same-task wake AND derived child keep lineage standing
 # See docs/specs/14-autonomy-engine.md (Effective standing / bypass ladder).
 autonomy:
+  # Which policy decides when Curia asks first (#2159, ADR-049).
+  #   tier — contact tier gates consequential actions (Gate C) and disclosures (Stage 2.5).
+  #   band — the autonomy band decides; the escalation judge reviews sends for an
+  #          outsider steering Curia, claims in the principal's voice, and grounding.
+  # Ships as tier. Flip to band in local.yaml; the default changes after a clean week.
+  gating: tier
+
   bypass_ladder:
     same_task: 70      # posture B floor — must not drop below 60
     derived_child: 90  # posture D floor

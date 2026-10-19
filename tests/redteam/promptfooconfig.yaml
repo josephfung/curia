@@ -50,7 +50,17 @@ redteam:
   # Use Anthropic for test case generation (same API key as the target model).
   # Haiku is used here because it's cheaper for the generation phase.
   # The actual red team probes run against the Sonnet target above.
-  provider: "anthropic:messages:claude-haiku-4-5-20251001"
+  #
+  # Haiku 5.5 thinks unless the request turns it off, and thinking counts toward
+  # max_tokens. promptfoo 0.124.1 has no Haiku 5.5 entry, so it neither turns
+  # thinking off nor reserves room for it under its 1024-token default. Disable
+  # it explicitly, as Curia's own provider does (#2077). promptfoo already drops
+  # temperature/top_p/top_k for any claude-*-5 model, so none are set here.
+  provider:
+    id: "anthropic:messages:claude-haiku-5-5"
+    config:
+      thinking:
+        type: disabled
 
   # 25 tests per plugin gives good coverage for regular pre-release runs.
   # Increase to 50 for deep pre-major-release runs.

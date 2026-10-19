@@ -11,6 +11,7 @@
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
 import type { ActionRisk } from '../skills/types.js';
+import type { AutonomyGating } from './band-policy.js';
 
 export type AutonomyBand =
   | 'full'
@@ -24,6 +25,8 @@ export interface AutonomyConfig {
   band: AutonomyBand;
   updatedAt: Date;
   updatedBy: string;
+  /** Set to 'band' when band gating is live (#2159): the prompt block then describes the band table. */
+  gating?: AutonomyGating;
 }
 
 export interface AutonomyHistoryEntry {
@@ -64,6 +67,27 @@ const BAND_DESCRIPTIONS: Record<AutonomyBand, string> = {
     'Every step that would have an external effect requires explicit principal instruction.',
 };
 
+// The same bands under `autonomy.gating: band` (#2159, ADR-049), matching the spec's
+// "Behavior by band" table. Injected instead of the descriptions above when band gating is
+// live, so the agent's guidance matches what the gates actually do.
+const BAND_DESCRIPTIONS_BAND_GATING: Record<AutonomyBand, string> = {
+  'full':
+    'Act on the principal\'s behalf, including speaking and committing for them. Put notable ' +
+    'actions in the digest. Ask first only when an outsider seems to be steering you.',
+  'spot-check':
+    'Take on work, coordinate, and speak or commit for the principal without asking. Every ' +
+    'claim about the principal is fact-checked against what you looked up before it is sent, so ' +
+    'look things up rather than recall them. Report what you did in the digest.',
+  'approval-required':
+    'Take on work and coordinate (logistics, confirmations, replies, bringing people in) without ' +
+    'asking. Ask the principal first before you speak for them or commit them to anything.',
+  'draft-only':
+    'Draft rather than send. The principal confirms new work with one tap; internal logistics ' +
+    'within confirmed work can proceed. Surface drafts and asks in the digest.',
+  'restricted':
+    'Propose and draft only. Take no action with an external effect.',
+};
+
 // Human-readable band labels for display.
 const BAND_LABELS: Record<AutonomyBand, string> = {
   'full': 'Full',
@@ -77,6 +101,8 @@ export class AutonomyService {
   constructor(
     private readonly pool: Pool,
     private readonly logger: Logger,
+    /** Band gating (#2159): stamped on every config read so the prompt block follows it. Default tier. */
+    private readonly opts: { gating?: AutonomyGating } = {},
   ) {}
 
   /**
@@ -110,9 +136,9 @@ export class AutonomyService {
     return 'restricted';
   }
 
-  /** Return the behavioral description for a band. */
-  static bandDescription(band: AutonomyBand): string {
-    return BAND_DESCRIPTIONS[band];
+  /** Return the behavioral description for a band, under the given gating (default tier). */
+  static bandDescription(band: AutonomyBand, gating: AutonomyGating = 'tier'): string {
+    return gating === 'band' ? BAND_DESCRIPTIONS_BAND_GATING[band] : BAND_DESCRIPTIONS[band];
   }
 
   /**
@@ -131,7 +157,7 @@ export class AutonomyService {
    */
   static formatPromptBlock(config: AutonomyConfig): string {
     const label = BAND_LABELS[config.band];
-    const description = BAND_DESCRIPTIONS[config.band];
+    const description = AutonomyService.bandDescription(config.band, config.gating);
     if (!label || !description) {
       // Unknown band — fail safe rather than injecting 'undefined' into the system prompt.
       throw new Error(`Unknown autonomy band: '${config.band}'`);
@@ -163,6 +189,8 @@ export class AutonomyService {
         band: row.band as AutonomyBand,
         updatedAt: row.updated_at,
         updatedBy: row.updated_by,
+        // Only under band, so a tier config reads exactly as it did before #2159.
+        ...(this.opts.gating === 'band' ? { gating: 'band' as const } : {}),
       };
     } catch (err) {
       // Only swallow missing-table errors (pg code 42P01) — the expected pre-migration state.
@@ -227,7 +255,10 @@ export class AutonomyService {
 
     this.logger.info({ score, band, changedBy, previousScore }, 'Autonomy score updated');
 
-    return { score, band, updatedAt: new Date(), updatedBy: changedBy, previousScore };
+    return {
+      score, band, updatedAt: new Date(), updatedBy: changedBy, previousScore,
+      ...(this.opts.gating === 'band' ? { gating: 'band' as const } : {}),
+    };
   }
 
   /** Return the most recent history entries, newest first. */

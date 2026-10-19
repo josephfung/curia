@@ -259,9 +259,11 @@ export function resolveSystemPromptSources(
     // All agents receive the per-turn time block. Specialists need a reliable "now"
     // too — scheduled agents make time-sensitive decisions (backoff gates, date math).
     timezone: ctx.timezone,
-    // Coordinator-only: the identity block is prepended per turn, so identity
-    // hot-reloads (file watcher or API PUT) apply on the next turn without a restart.
-    officeIdentityService: isCoordinator ? ctx.officeIdentityService : undefined,
+    // Every agent (#2143): the office has one voice, and every agent that writes outward
+    // uses it. The coordinator gets the identity block, every other agent the writes-as
+    // block (buildBaseSystemPrompt). Prepended per turn, so identity edits apply on the
+    // next turn without a restart.
+    officeIdentityService: ctx.officeIdentityService,
     // Coordinator-only: specialists operate in a trust-elevated context (tasks arrive
     // from the coordinator after the security layer has evaluated the sender). The
     // runtime states that contract on delegated tasks (#1871); withholding this

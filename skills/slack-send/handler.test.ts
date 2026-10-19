@@ -71,7 +71,10 @@ describe('slack-send handler', () => {
       expect(resolveRecipientReference).toHaveBeenCalledWith('slack', 'principal', { field: 'recipient' });
       expect(send).toHaveBeenCalledWith(
         { channel: 'slack', slackChannelId: 'U0PRINCIPAL', slackUserId: 'U0PRINCIPAL', message: 'Hello' },
-        expect.any(Object),
+        // Replayed on approval if band review holds the send (#2159).
+        expect.objectContaining({
+          holdRecipe: { toolName: 'slack-send', partialPayload: { recipient: 'principal', message: 'Hello' }, description: expect.stringMatching(/^Slack message to /) },
+        }),
       );
       if (result.success) {
         expect(result.data).toMatchObject({ delivered_to: 'U0PRINCIPAL' });
@@ -96,6 +99,16 @@ describe('slack-send handler', () => {
         expect(send).not.toHaveBeenCalled();
       },
     );
+
+    it('passes an approved replay on as humanApproved, so band review does not hold it again (#2159)', async () => {
+      const send = vi.fn().mockResolvedValue({ success: true, messageId: '1.2' });
+      await new SlackSendHandler().execute(makeCtx({
+        input: { recipient: 'principal', message: 'Hello' },
+        outboundGateway: { send, resolveRecipientReference } as never,
+        humanApproved: true,
+      }));
+      expect(send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ humanApproved: true }));
+    });
 
     it('sends nothing when the reference does not resolve', async () => {
       const send = vi.fn();

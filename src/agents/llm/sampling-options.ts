@@ -58,3 +58,24 @@ export function resolveTemperature(
   );
   return undefined;
 }
+
+/**
+ * The temperature a provider request actually carries, for `llm.call` audit
+ * rows. `null` when the request omits it: the caller left it unset or passed
+ * an invalid value, or the model rejects sampling parameters, in which case
+ * the provider drops it whatever the caller passed (#2077).
+ *
+ * `rejectsSamplingParams` must come from the same registry lookup the provider
+ * makes (`ModelRegistry.rejectsSamplingParams(requestedModel)`) so the audit
+ * row cannot claim a temperature that was never sent (#2038).
+ */
+export function sentTemperature(
+  options: Record<string, unknown> | undefined,
+  rejectsSamplingParams: boolean,
+): number | null {
+  if (rejectsSamplingParams) {
+    return null;
+  }
+  const parsed = parseTemperature(options);
+  return parsed.kind === 'set' ? parsed.value : null;
+}

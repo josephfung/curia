@@ -814,6 +814,8 @@ export class EmailAdapter implements Channel {
         parentEventId: outbound.id,   // link the outbound.delivered row back to the outbound.message event
         ...(provenance ? { recipientSource: provenance } : {}),
         ...(fromName ? { recipientDisplayName: fromName } : {}),
+        // The principal approved this text (dispatcher-relay): do not hold it for review again (#2159).
+        ...(outbound.payload.principalApproved === true ? { humanApproved: true } : {}),
       });
     } catch (err) {
       logger.error({ err, threadId }, 'Failed to send email reply');
@@ -834,6 +836,8 @@ export class EmailAdapter implements Channel {
       parentEventId?: string;
       recipientSource?: 'email_participant';
       recipientDisplayName?: string;
+      /** The principal approved this exact text (#2159). */
+      humanApproved?: boolean;
     },
   ): Promise<void> {
     const { outboundGateway, logger, accountId } = this.config;
@@ -852,6 +856,7 @@ export class EmailAdapter implements Channel {
       parentEventId: context.parentEventId,
       // A relayed reply: the agent's turn is over, so a held approval wakes the coordinator (#2159).
       postTurn: true,
+      ...(context.humanApproved ? { humanApproved: true } : {}),
       ...(context.recipientSource ? { recipientSource: context.recipientSource } : {}),
       ...(context.recipientDisplayName ? { recipientDisplayName: context.recipientDisplayName } : {}),
       reExecRecipe: {

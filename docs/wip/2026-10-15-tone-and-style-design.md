@@ -538,6 +538,42 @@ What it shows:
   style; the judge marks the register down for it. PR 5 removes such directives from core
   prompts; a deployment's job payloads are its own to change.
 
+### PR 4 checks
+
+`deepseek/deepseek-v4.1-flash`, 2026-10-19, 5 runs each, with every agent on the identity
+block:
+- **40e (guard) holds:** 5/5 drafts produced, all in the principal's voice ("Marcus —",
+  "Cheers, Avery"); no refusal under the "Never impersonate the principal" constraint.
+- **40d is unchanged:** every prompt still copies meeting-debrief.yaml's example sentence.
+  PR 5 removes it.
+- **Specialist cases:** a 3-run screen of every `specialist-*` case (46 cases, about
+  $1.17) passed all but two. Both were rerun on main and on this branch:
+  - 31e's `both_timezones` (a draft to London giving both time zones): branch 10/10,
+    main 9.5/10.
+  - 30d's verbatim slot strings: 5/5 on both arms. Its screen miss was a run that drafted
+    nothing at all, the case's known flakiness.
+
+  Neither is a regression.
+
+### PR 5 checks
+
+`deepseek/deepseek-v4.1-flash`, 2026-10-19, on the two cases whose prompts changed:
+- **40d no longer copies an example.** 5/5 pass, every prompt in the dry register ("Your
+  Acme partnership review with Sarah Chen and David Park just ended. Any takeaways or
+  follow-ups you want handled?"). Before PR 5, all five copied meeting-debrief.yaml's
+  sample sentence.
+- **04b showed that the sample sentence carried policy.** On main, all five acknowledgments
+  were the turn guidance's sample, nearly word for word ("Thanks, noted. I'll follow up
+  shortly."). With only "a short acknowledgment that you have the message and will follow
+  up", one run in five told the sender the earlier thread was missing, which breaks a
+  critical behavior the judge missed. Three runs restated the request as agreed ("I have
+  your go-ahead and I'm on it"). The guidance now says the acknowledgment "says only that
+  you will follow up: it agrees to nothing and never mentions the missing thread". Rerun
+  10/10, with no mention of the thread and no agreement.
+
+The lesson for any later cleanup: when removing a sample sentence, check what policy
+it carried and state that policy instead.
+
 ## PR sequence
 
 | PR | Delivers | Measurement |

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
 import pino from 'pino';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
+import type { ApprovalTriggerService } from '../../../src/autonomy/approval-trigger.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { createInboundMessage, createAgentError, createAgentTask, createAgentResponse, createOutboundBlocked, createAutonomySendBlocked, createToolResult, type OutboundMessageEvent, type OutboundNoReplyEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
@@ -2428,6 +2429,83 @@ describe('Dispatcher content-block relay (#1355)', () => {
     const salvage = outboundMessages.find((m) => m.payload.contentBlockSalvage);
     expect(salvage).toBeDefined();
     expect(salvage!.payload.content).toContain(`Rewritten attempt ${CONTENT_BLOCK_MAX_RETRIES}`);
+  });
+
+  // The reason becomes the approval's preamble, so it must name the problem the judge found.
+  it.each([
+    {
+      label: 'an unsupported claim',
+      lastFindings: [{ rule: 'ungrounded-claim', detail: 'These claims… "I am away."' }],
+      says: ['nothing it looked up supports'],
+      doesNotSay: ['its purpose does not need'],
+    },
+    {
+      label: 'an unneeded disclosure',
+      lastFindings: [{ rule: 'unneeded-disclosure', detail: 'Shares details… "account 4417".' }],
+      says: ['its purpose does not need'],
+      doesNotSay: ['nothing it looked up supports'],
+    },
+    {
+      label: 'both',
+      lastFindings: [
+        { rule: 'ungrounded-claim', detail: 'These claims… "I am away."' },
+        { rule: 'unneeded-disclosure', detail: 'Shares details… "account 4417".' },
+      ],
+      says: ['nothing it looked up supports', 'its purpose does not need'],
+      doesNotSay: [],
+    },
+  ])('asks the principal, naming $label, when a band bounce comes after the last retry (#2159)', async ({ lastFindings, says, doesNotSay }) => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const outboundMessages: OutboundMessageEvent[] = [];
+    const agentTasks: AgentTaskEvent[] = [];
+    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'abcd1234' });
+    const dispatcher = new Dispatcher({ bus, logger, approvalTrigger: { request } as unknown as ApprovalTriggerService });
+    dispatcher.register();
+    bus.subscribe('outbound.message', 'channel', (event) => { outboundMessages.push(event as OutboundMessageEvent); });
+    bus.subscribe('agent.task', 'system', (event) => { agentTasks.push(event as AgentTaskEvent); });
+
+    const inboundTask = createAgentTask({
+      agentId: 'coordinator', conversationId: 'signal:+14155551234', channelId: 'signal',
+      senderId: '+14155551234', content: 'inbound', parentEventId: 'inbound-9',
+    });
+    dispatcher.registerExternalTaskRouting(inboundTask.id, {
+      channelId: 'signal', conversationId: 'signal:+14155551234', senderId: '+14155551234',
+      originator: { contactId: 'principal-1', systemRole: 'principal', channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'principal' },
+    });
+    await bus.publish('system', createAgentResponse({
+      agentId: 'coordinator', conversationId: 'signal:+14155551234', content: 'First draft.', parentEventId: inboundTask.id,
+    }));
+
+    let currentOutbound = outboundMessages[0]!;
+    for (let attempt = 0; attempt <= CONTENT_BLOCK_MAX_RETRIES; attempt++) {
+      // Stage 2 blocks the early attempts; band review bounces the last one.
+      const last = attempt === CONTENT_BLOCK_MAX_RETRIES;
+      const findings = last
+        ? lastFindings
+        : [{ rule: 'llm-judge-audience-leak', detail: 'named internal agent' }];
+      await bus.publish('dispatch', createOutboundBlocked({
+        blockId: `block_${attempt}`, conversationId: 'signal:+14155551234', channelId: 'signal',
+        content: currentOutbound.payload.content, recipientId: '+14155551234',
+        reason: findings[0]!.rule, findings, parentEventId: currentOutbound.id,
+      }));
+      if (!last) {
+        await bus.publish('system', createAgentResponse({
+          agentId: 'coordinator', conversationId: 'signal:+14155551234',
+          content: `Rewritten attempt ${attempt + 1}`, parentEventId: agentTasks[agentTasks.length - 1]!.id,
+        }));
+        currentOutbound = outboundMessages[outboundMessages.length - 1]!;
+      }
+    }
+
+    expect(outboundMessages.find((m) => m.payload.contentBlockSalvage)).toBeUndefined();
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'dispatcher-relay',
+      input: expect.objectContaining({ channelId: 'signal', to: '+14155551234', body: `Rewritten attempt ${CONTENT_BLOCK_MAX_RETRIES}` }),
+    }));
+    const reason = (request.mock.calls[0]![0] as { reason: string }).reason;
+    for (const phrase of says) expect(reason).toContain(phrase);
+    for (const phrase of doesNotSay) expect(reason).not.toContain(phrase);
   });
 
   it('clears relayOutbound when autonomy.send_blocked carries the outbound message id', async () => {

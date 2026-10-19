@@ -44,6 +44,20 @@ export interface ModelMetadata {
    * "checked, none published" instead of "nobody looked" (#1804).
    */
   cacheReadPricingUnavailable?: string;
+  /**
+   * The provider returns a 400 for any non-default `temperature`, `top_p` or
+   * `top_k`. Providers omit all three for such a model, and `llm.call`
+   * publishers record `temperature: null` via `sentTemperature()` so the audit
+   * row matches the request (#2077, #2038).
+   */
+  rejectsSamplingParams?: boolean;
+  /**
+   * The model runs adaptive thinking when a request leaves `thinking` unset.
+   * Curia has never enabled thinking on Anthropic models, so AnthropicProvider
+   * sends `thinking: {type: "disabled"}` for these until #2044 decides the
+   * reasoning policy (#2077).
+   */
+  thinksByDefault?: boolean;
 }
 
 // Keyed by model name prefix. OpenRouter models added by #379.
@@ -83,6 +97,28 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheReadPerMToken: 0.08,
     },
     capabilities: ['vision', 'coding', 'streaming', 'tools'],
+  },
+  // Released 2026-10-07; replaces claude-haiku-4-5 as the default fast tier and
+  // judge model (#2077). The 4.5 entry above stays for audit log provenance.
+  //
+  // Prices are the rates for prompts of 100K tokens or fewer; longer prompts
+  // bill at $0.50 / $2.50, which `ModelPricing` cannot represent (#1814).
+  // maxOutputTokens is left at the 4096 default Haiku 4.5 runs at: the model
+  // allows 128K, but a larger cap raises max_tokens on every call that sets none.
+  'claude-haiku-5-5': {
+    provider: 'anthropic',
+    contextWindow: 1_000_000,
+    pricing: {
+      inputPerMToken: 0.10,
+      outputPerMToken: 0.50,
+      cacheCreationPerMToken: 0.125,
+      cacheReadPerMToken: 0.01,
+    },
+    // No 'reasoning': Curia sends thinking disabled on this model (see
+    // thinksByDefault), so it runs with the same capabilities as Haiku 4.5.
+    capabilities: ['vision', 'coding', 'streaming', 'tools'],
+    rejectsSamplingParams: true,
+    thinksByDefault: true,
   },
 
   // OpenRouter models — non-Claude models routed via OpenRouter's OpenAI-compatible API.
@@ -310,6 +346,16 @@ export class ModelRegistry {
   /** Returns the provider identifier for a model. Returns undefined for unknown models. */
   getProvider(modelId: string): string | undefined {
     return this.getModel(modelId)?.provider;
+  }
+
+  /** True when the model 400s on non-default sampling parameters. False for unknown models. */
+  rejectsSamplingParams(modelId: string): boolean {
+    return this.getModel(modelId)?.rejectsSamplingParams === true;
+  }
+
+  /** True when the model thinks unless the request disables it. False for unknown models. */
+  thinksByDefault(modelId: string): boolean {
+    return this.getModel(modelId)?.thinksByDefault === true;
   }
 
   /** Returns true if the model is in the registry (prefix match). */

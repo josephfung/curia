@@ -48,6 +48,33 @@ describe('TelemetryLlmProvider — llm.call temperature', () => {
     });
     expect(publish.mock.calls[0]![1].payload.temperature).toBeNull();
   });
+
+  it('records null for a model that rejects sampling parameters, even when the caller set 0 (#2077)', async () => {
+    const inner: LLMProvider = {
+      id: 'anthropic',
+      chat: vi.fn(async () => ({
+        type: 'text' as const,
+        content: 'ok',
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'claude-haiku-5-5', actualModel: 'claude-haiku-5-5', providerRequestId: 'r' },
+      })),
+    };
+    const publish = vi.fn();
+    const provider = new TelemetryLlmProvider(
+      inner,
+      { publish } as unknown as EventBus,
+      createSilentLogger(),
+      'drift-detector',
+      new ModelRegistry(createSilentLogger()),
+    );
+
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-5-5',
+      options: { temperature: 0 },
+    });
+    expect(publish.mock.calls[0]![1].payload.temperature).toBeNull();
+  });
 });
 
 describe('TelemetryLlmProvider — stream cleanup propagation', () => {

@@ -47,14 +47,26 @@ export function buildEscalationJudge(deps: {
 
   const config: EscalationJudgeConfig = {
     enabled: true,
-    model: yaml?.model ?? 'claude-haiku-4-5',
+    model: yaml?.model ?? 'claude-haiku-5-5',
     timeoutMs: yaml?.timeout_ms ?? 5000,
+    reviewTimeoutMs: yaml?.review_timeout_ms ?? 15000,
   };
   // local.yaml overrides are deep-merged but not schema-checked, so validate here.
   if (!Number.isInteger(config.timeoutMs) || config.timeoutMs < 250) {
     throw new EscalationJudgeConfigError(
       'escalation.judge.timeout_ms must be an integer >= 250 (ms) — fix config (default.yaml or local.yaml)',
       { timeoutMs: config.timeoutMs },
+    );
+  }
+  // The band brief's own timeout (#2159). Same floor: a typo'd tiny value would time out
+  // every review, which under band gating fails sends open at 80+.
+  // The ceiling is Node's timer limit: setTimeout fires a larger delay after 1 ms, which
+  // would time out every review.
+  const reviewTimeoutMs = config.reviewTimeoutMs ?? 0;
+  if (!Number.isInteger(reviewTimeoutMs) || reviewTimeoutMs < 250 || reviewTimeoutMs > 2_147_483_647) {
+    throw new EscalationJudgeConfigError(
+      'escalation.judge.review_timeout_ms must be an integer >= 250 and <= 2147483647 (ms) — fix config (default.yaml or local.yaml)',
+      { reviewTimeoutMs: config.reviewTimeoutMs },
     );
   }
   if (!modelRegistry.isKnownModel(config.model)) {
@@ -93,7 +105,12 @@ export function buildOutboundContentFilter(
 ): OutboundContentFilter {
   const filter = new OutboundContentFilter(config);
   const disclosureGate = filter.disclosureGateStatus();
-  if (disclosureGate === 'active') {
+  if (disclosureGate === 'band-review') {
+    config.logger.info(
+      { markerCount: config.systemPromptMarkers.length, disclosureGate },
+      'Outbound content filter initialized — band gating: Stage 2.5 and contact-data-leak off; sends reviewed by BandSendReview',
+    );
+  } else if (disclosureGate === 'active') {
     config.logger.info(
       { markerCount: config.systemPromptMarkers.length, disclosureGate },
       'Outbound content filter initialized — Stage 2.5 disclosure gate active',

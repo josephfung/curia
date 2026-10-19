@@ -7,6 +7,15 @@ import {
 } from '../../../src/dispatch/content-block-relay.js';
 
 describe('content-block-relay', () => {
+  it('shows the quoted claims of a band bounce to the rewriting agent (#2159)', () => {
+    const summary = summarizeBlockFindings([
+      { rule: 'ungrounded-claim', detail: 'These claims about the principal are not backed: "I am away."' },
+      { rule: 'unneeded-disclosure', detail: 'This message shares details its purpose does not need: "account 4417".' },
+    ]);
+    expect(summary).toContain('I am away.');
+    expect(summary).toContain('account 4417');
+  });
+
   it('treats content-filter findings as rewriteable', () => {
     expect(isContentFilterRewriteable([{ rule: 'llm-judge-audience-leak', detail: 'named internal agent' }])).toBe(true);
   });

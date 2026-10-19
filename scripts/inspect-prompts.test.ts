@@ -15,7 +15,10 @@ function coordinatorConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     agentId: 'coordinator',
     systemPrompt: 'body',
-    officeIdentityService: { compileSystemPromptBlock: () => '## Identity\nYou are Curia.' },
+    officeIdentityService: {
+      compileSystemPromptBlock: () => '## Identity\nYou are Curia.',
+      compileWritesAsBlock: () => '## Identity\nYou write as Curia.',
+    },
     securityContextBlock: '## Security\nPolicy.',
     availableSpecialists: '- @researcher: Looks things up',
     autonomyService: {
@@ -55,6 +58,8 @@ describe('buildPromptInputsSnapshot', () => {
       curia: { version: '0.44.0' },
       timezone: 'America/Toronto',
       office_identity_block: '## Identity\nYou are Curia.',
+      // Every other agent's block (#2143).
+      office_identity_writes_as_block: '## Identity\nYou write as Curia.',
       security_context_block: '## Security\nPolicy.',
       available_specialists: '- @researcher: Looks things up',
       autonomy: { score: 82, band: 'spot-check' },

@@ -502,7 +502,7 @@ export function readOnlyView<T extends object>(target: T, readMethods: readonly 
 }
 
 const AUTONOMY_READS = ['getConfig', 'getHistory', 'getHistoryPaginated', 'getScoredActionCount'] as const;
-const OFFICE_IDENTITY_READS = ['get', 'compileSystemPromptBlock', 'history'] as const;
+const OFFICE_IDENTITY_READS = ['get', 'compileSystemPromptBlock', 'compileWritesAsBlock', 'history'] as const;
 
 /** Methods AgentRuntime calls on its ExecutionLayer. A wrapper must keep all of them. */
 const EXECUTION_LAYER_METHODS = [

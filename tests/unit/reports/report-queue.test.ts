@@ -69,6 +69,35 @@ describe('ReportQueue.list', () => {
     expect(batch.hasMore).toBe(false);
   });
 
+  it('lists items from the band-gating sources (#2159)', async () => {
+    const { queue, warn } = makeQueue({
+      pages: [{
+        rows: [
+          { seq: '20', row: row('c', '2026-10-18T11:00:00.000Z', { summary: 'Went ahead.', urgency: 'digest', source: 'gate_proceeded' }) },
+          { seq: '21', row: row('d', '2026-10-18T11:01:00.000Z', { summary: 'Sent unreviewed.', urgency: 'digest', source: 'sent_without_review' }) },
+          { seq: '22', row: row('e', '2026-10-18T11:02:00.000Z', { summary: 'Removed 1.', urgency: 'digest', source: 'claim_trimmed' }) },
+        ],
+        hasMore: false,
+      }],
+    });
+
+    const batch = await queue.list();
+
+    expect(batch.items.map((i) => i.source)).toEqual(['gate_proceeded', 'sent_without_review', 'claim_trimmed']);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('keeps an item with an unknown source as an agent item, with a warning', async () => {
+    const { queue, warn } = makeQueue({
+      pages: [{ rows: [{ seq: '30', row: row('f', '2026-10-18T12:00:00.000Z', { summary: 'From a newer build.', urgency: 'digest', source: 'future_source' }) }], hasMore: false }],
+    });
+
+    const batch = await queue.list();
+
+    expect(batch.items.map((i) => [i.summary, i.source])).toEqual([['From a newer build.', 'agent']]);
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ source: 'future_source' }), expect.any(String));
+  });
+
   it('starts after the acknowledged marker', async () => {
     const { queue, findByEventTypeAfterSeq } = makeQueue({ stored: '42' });
 
