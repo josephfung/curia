@@ -310,7 +310,7 @@ export class WebBrowserHandler implements ToolHandler {
       }
 
       // A navigate URL can carry a tracked sign-in code (#2017): never log one.
-      const logUrl = typeof step.url === 'string' ? scrubTrackedCodes(ctx, step.url) : step.url;
+      const logUrl = typeof step.url === 'string' ? logSafeUrl(ctx, step.url) : step.url;
       ctx.log.info({ action: stepAction, sessionId, url: logUrl, selector: step.selector, batchIndex: isBatch ? i : undefined }, 'Executing browser action');
 
       try {
@@ -488,7 +488,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       try {
         parsedUrl = new URL(url);
       } catch {
-        return { ok: false, error: `Invalid URL: "${scrubTrackedCodes(ctx, url)}"` };
+        return { ok: false, error: `Invalid URL: "${logSafeUrl(ctx, url)}"` };
       }
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
         return { ok: false, error: `Only http: and https: are allowed, got: ${parsedUrl.protocol}` };
@@ -503,7 +503,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       }
       // A tracked sign-in code in the URL may only travel to its own page domain (#2017).
       // Check the decoded forms too, so percent-encoding can't smuggle one past the matcher.
-      if (urlVariants(url).some((variant) => !trackedCodeAllowedOn(ctx, variant, parsedUrl.toString()))) {
+      if (urlVariants(url, ctx.log).some((variant) => !trackedCodeAllowedOn(ctx, variant, parsedUrl.toString()))) {
         return { ok: false, error: TRACKED_CODE_REFUSAL };
       }
       const response = await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
@@ -536,7 +536,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // longer be representative after the recovery attempt). (#1053)
       let reloadResponse: Awaited<ReturnType<typeof page.reload>> | undefined;
       if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
-        ctx.log.info({ sessionId, url: scrubTrackedCodes(ctx, parsedUrl.toString()), pageTitle }, 'Soft block suspected — dwelling and reloading once');
+        ctx.log.info({ sessionId, url: logSafeUrl(ctx, parsedUrl.toString()), pageTitle }, 'Soft block suspected — dwelling and reloading once');
         await jitteredDelay(1500, 3000);
         reloadResponse = await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch((err) => {
           ctx.log.debug({ err, sessionId }, 'Reload during soft-block recovery failed — proceeding with current DOM');
@@ -555,7 +555,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // Use the reload response status when available — it reflects the post-recovery state.
       const status = reloadResponse?.status() ?? response?.status();
       if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
-        ctx.log.warn({ sessionId, url: scrubTrackedCodes(ctx, parsedUrl.toString()), status, pageTitle }, 'Navigation hit a hard edge block');
+        ctx.log.warn({ sessionId, url: logSafeUrl(ctx, parsedUrl.toString()), status, pageTitle }, 'Navigation hit a hard edge block');
         return {
           ok: false,
           error: `Site blocked automated access (HTTP ${status ?? '?'}${pageTitle ? `, "${pageTitle}"` : ''}). This site can't be driven from the server — hand off to the principal or draft the request instead.`,
@@ -741,15 +741,38 @@ function trackedCodeAllowedOn(ctx: ToolContext, value: string, destinationUrl: s
   return false;
 }
 
+/** Stands in for a URL whose sign-in code could not be scrubbed out of every form. */
+const URL_WITHHELD = '[url withheld: contains a sign-in code]';
+
+/**
+ * A URL safe to log or echo (#2017): unchanged when no form of it (raw, form-decoded,
+ * percent-decoded) holds a tracked code; otherwise the first form that scrubs clean in
+ * every one of its own forms (in practice the decoded one with the code replaced), or a
+ * fixed placeholder. A plain scrub of the raw URL is not enough: `482%20913` and
+ * `%34%38%32%39%31%33` only match once decoded, and URL.toString() percent-encodes.
+ */
+function logSafeUrl(ctx: ToolContext, url: string): string {
+  const tracker = ctx.verification?.tracker;
+  if (!tracker) return url;
+  const holdsCode = (u: string): boolean => urlVariants(u, ctx.log).some((v) => tracker.allowedDomainsFor(v) !== null);
+  if (!holdsCode(url)) return url;
+  for (const variant of urlVariants(url, ctx.log)) {
+    const scrubbed = tracker.scrubText(variant);
+    if (!holdsCode(scrubbed)) return scrubbed;
+  }
+  return URL_WITHHELD;
+}
+
 /** A URL plus its percent-decoded and form-decoded forms, for the destination guard. */
-function urlVariants(url: string): string[] {
+function urlVariants(url: string, log: ToolContext['log']): string[] {
   const variants = new Set([url, url.replace(/\+/g, ' ')]);
   for (const v of [...variants]) {
     try {
       variants.add(decodeURIComponent(v));
-    } catch {
+    } catch (err) {
       // Malformed percent-encoding: the raw form is still checked, and new URL() accepted it.
-      continue;
+      // Log the error kind only: the message would quote the URL, which may hold a code.
+      log.debug({ errName: err instanceof Error ? err.name : typeof err }, 'URL has malformed percent-encoding; checking its raw form only');
     }
   }
   return [...variants];

