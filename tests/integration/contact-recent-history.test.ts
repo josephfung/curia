@@ -466,11 +466,11 @@ describeIf('contact recent history SQL (#1599)', () => {
 
   it('plans the widest window on idx_wm_sender_active with a created_at bound', async () => {
     const widest = Math.max(...Object.values(CHANNEL_RECENT_HISTORY_HOURS));
-    // Hold the contact row until EXPLAIN finishes. contacts.test.ts and
-    // knowledge-graph.test.ts DELETE FROM contacts with no prefix in afterAll,
-    // and vitest runs files in parallel. A committed contact can vanish during
+    // Hold the contact row until EXPLAIN finishes. Until #2183, contacts.test.ts
+    // and knowledge-graph.test.ts ran an unscoped DELETE FROM contacts in afterAll,
+    // and vitest runs files in parallel. A committed contact could vanish during
     // this insert: RI checks the current row, so a later tuple in the same
-    // statement fails the FK (#1892).
+    // statement fails the FK (#1892). The hold stays as cheap insurance.
     const client = await pool.connect();
     let committed = false;
     try {

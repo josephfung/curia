@@ -29,16 +29,23 @@ describeIf('Knowledge Graph Integration', () => {
     await pool.query('SELECT 1 FROM kg_nodes LIMIT 0');
   });
 
+  // Integration files share one database and run in parallel, so teardown deletes only
+  // the nodes this file created (#2183). Edges cascade from their nodes, but are deleted
+  // explicitly to keep the FK order visible. This file creates no contacts.
+  const createdKgNodeIds: string[] = [];
+
   afterAll(async () => {
-    // Clean up test data in FK-safe order.
-    // Contacts (from the contacts integration test running concurrently) may reference
-    // kg_nodes, so we must clear contacts first to avoid a FK violation on DELETE FROM kg_nodes.
-    await pool.query('DELETE FROM contact_auth_overrides');
-    await pool.query('DELETE FROM contact_channel_identities');
-    await pool.query('DELETE FROM contacts');
-    await pool.query('DELETE FROM kg_edges');
-    await pool.query('DELETE FROM kg_nodes');
-    await pool.end();
+    try {
+      if (createdKgNodeIds.length > 0) {
+        await pool.query(
+          'DELETE FROM kg_edges WHERE source_node_id = ANY($1) OR target_node_id = ANY($1)',
+          [createdKgNodeIds],
+        );
+        await pool.query('DELETE FROM kg_nodes WHERE id = ANY($1)', [createdKgNodeIds]);
+      }
+    } finally {
+      await pool.end();
+    }
   });
 
   it('creates and retrieves a node from Postgres', async () => {
@@ -48,6 +55,7 @@ describeIf('Knowledge Graph Integration', () => {
       properties: { test: true },
       source: 'integration-test',
     });
+    createdKgNodeIds.push(node.id);
 
     const retrieved = await store.getNode(node.id);
     expect(retrieved).toBeDefined();
@@ -57,12 +65,13 @@ describeIf('Knowledge Graph Integration', () => {
   });
 
   it('performs semantic search via pgvector', async () => {
-    await store.createNode({
+    const node = await store.createNode({
       type: 'concept',
       label: 'quarterly revenue targets',
       properties: {},
       source: 'integration-test',
     });
+    createdKgNodeIds.push(node.id);
 
     const results = await store.semanticSearch('financial goals');
     expect(results.length).toBeGreaterThan(0);
@@ -72,6 +81,7 @@ describeIf('Knowledge Graph Integration', () => {
   it('traverses graph relationships in Postgres', async () => {
     const a = await store.createNode({ type: 'person', label: 'Traverse-A', properties: {}, source: 'test' });
     const b = await store.createNode({ type: 'project', label: 'Traverse-B', properties: {}, source: 'test' });
+    createdKgNodeIds.push(a.id, b.id);
     await store.createEdge({ sourceNodeId: a.id, targetNodeId: b.id, type: 'works_on', properties: {}, source: 'test' });
 
     const result = await store.traverse(a.id, { maxDepth: 1 });
@@ -80,18 +90,21 @@ describeIf('Knowledge Graph Integration', () => {
   });
 
   it('stores and retrieves entity facts via EntityMemory', async () => {
-    const { entity } = await entityMemory.createEntity({
+    const { entity, created } = await entityMemory.createEntity({
       type: 'person',
       label: 'Integration Person',
       properties: {},
       source: 'test',
     });
+    // createEntity upserts by label: only delete the node if this call minted it.
+    if (created) createdKgNodeIds.push(entity.id);
 
-    await entityMemory.storeFact({
+    const fact = await entityMemory.storeFact({
       entityNodeId: entity.id,
       label: 'Integration Person is a test entity',
       source: 'test',
     });
+    if (fact.nodeId) createdKgNodeIds.push(fact.nodeId);
 
     const facts = await entityMemory.getFacts(entity.id);
     expect(facts.length).toBeGreaterThanOrEqual(1);

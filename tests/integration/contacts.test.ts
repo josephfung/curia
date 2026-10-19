@@ -15,6 +15,7 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { createLogger, createSilentLogger } from '../../src/logger.js';
 import type { Logger } from '../../src/logger.js';
 import { DedupService } from '../../src/contacts/dedup-service.js';
+import type { Contact, CreateContactOptions } from '../../src/contacts/types.js';
 
 const { Pool } = pg;
 
@@ -44,20 +45,46 @@ describeIf('Contacts Integration', () => {
     await pool.query('SELECT 1 FROM contacts LIMIT 0');
   });
 
+  // Integration files share one database and run in parallel, so teardown deletes only
+  // the rows this file created (#2183). A blanket DELETE FROM kg_nodes fails whenever
+  // another file inserts a contact between our contacts and kg_nodes deletes.
+  const createdContactIds: string[] = [];
+  const createdKgNodeIds: string[] = [];
+
+  // Tracks the contact, and its KG node only when this call minted it. An adopted node
+  // pre-dates the contact and may belong to another file's fixtures.
+  async function createTrackedContact(
+    options: CreateContactOptions,
+    svc: ContactService = contactService,
+  ): Promise<Contact> {
+    const { contact, kgNodeCreated } = await svc.createContactWithKgOutcome(options);
+    createdContactIds.push(contact.id);
+    if (kgNodeCreated && contact.kgNodeId) createdKgNodeIds.push(contact.kgNodeId);
+    return contact;
+  }
+
   afterAll(async () => {
-    // Clean up test data in dependency order (FK constraints: identities before contacts,
-    // auth overrides before contacts, KG edges before KG nodes)
-    await pool.query('DELETE FROM contact_auth_overrides');
-    await pool.query('DELETE FROM contact_channel_identities');
-    await pool.query('DELETE FROM contacts');
-    // Clean up KG nodes created by auto-linking during contact creation
-    await pool.query('DELETE FROM kg_edges');
-    await pool.query('DELETE FROM kg_nodes');
-    await pool.end();
+    try {
+      // FK order: identities / overrides → contacts → KG edges → KG nodes.
+      if (createdContactIds.length > 0) {
+        await pool.query('DELETE FROM contact_auth_overrides WHERE contact_id = ANY($1)', [createdContactIds]);
+        await pool.query('DELETE FROM contact_channel_identities WHERE contact_id = ANY($1)', [createdContactIds]);
+        await pool.query('DELETE FROM contacts WHERE id = ANY($1)', [createdContactIds]);
+      }
+      if (createdKgNodeIds.length > 0) {
+        await pool.query(
+          'DELETE FROM kg_edges WHERE source_node_id = ANY($1) OR target_node_id = ANY($1)',
+          [createdKgNodeIds],
+        );
+        await pool.query('DELETE FROM kg_nodes WHERE id = ANY($1)', [createdKgNodeIds]);
+      }
+    } finally {
+      await pool.end();
+    }
   });
 
   it('creates a contact with auto-linked KG node', async () => {
-    const contact = await contactService.createContact({
+    const contact = await createTrackedContact({
       // Unique name: avoids collision with knowledge-graph.test.ts which also creates
       // "Integration Test Person" — upsertNode would share the node, breaking cleanup.
       displayName: 'Contacts-Only Test Person',
@@ -72,7 +99,7 @@ describeIf('Contacts Integration', () => {
   });
 
   it('links a channel identity and resolves it', async () => {
-    const contact = await contactService.createContact({
+    const contact = await createTrackedContact({
       displayName: 'Resolver Test',
       role: 'CTO',
       source: 'integration-test',
@@ -93,7 +120,7 @@ describeIf('Contacts Integration', () => {
   });
 
   it('finds contacts by name case-insensitively', async () => {
-    await contactService.createContact({
+    await createTrackedContact({
       displayName: 'Case Test Person',
       source: 'integration-test',
     });
@@ -109,7 +136,7 @@ describeIf('Contacts Integration', () => {
   });
 
   it('full flow: create → link → resolve with KG enrichment', async () => {
-    const contact = await contactService.createContact({
+    const contact = await createTrackedContact({
       displayName: 'Full Flow Test',
       role: 'CFO',
       source: 'integration-test',
@@ -123,11 +150,12 @@ describeIf('Contacts Integration', () => {
 
     // Store a KG fact on the auto-created person node so we can verify enrichment
     if (contact.kgNodeId) {
-      await entityMemory.storeFact({
+      const fact = await entityMemory.storeFact({
         entityNodeId: contact.kgNodeId,
         label: 'Full Flow Test manages the annual budget',
         source: 'integration-test',
       });
+      if (fact.nodeId) createdKgNodeIds.push(fact.nodeId);
     }
 
     // ContactResolver.resolve does DB lookup + KG enrichment in one call
@@ -144,13 +172,13 @@ describeIf('Contacts Integration', () => {
 
   describe('contact merge', () => {
     it('merges two contacts: secondary deleted, primary has union of identities', async () => {
-      const primary = await contactService.createContact({
+      const primary = await createTrackedContact({
         displayName: 'Jenna Torres',
         role: 'CFO',
         source: 'ceo_stated',
         tier: 'known',
       });
-      const secondary = await contactService.createContact({
+      const secondary = await createTrackedContact({
         displayName: 'J. Torres',
         role: undefined,
         source: 'email_participant',
@@ -194,13 +222,13 @@ describeIf('Contacts Integration', () => {
     });
 
     it('dry_run does not modify any contacts', async () => {
-      const primary = await contactService.createContact({
+      const primary = await createTrackedContact({
         displayName: 'Alice Smith',
         role: 'CTO',
         source: 'ceo_stated',
         tier: 'known',
       });
-      const secondary = await contactService.createContact({
+      const secondary = await createTrackedContact({
         displayName: 'Alice Smith',
         role: undefined,
         source: 'email_participant',
@@ -220,12 +248,12 @@ describeIf('Contacts Integration', () => {
     });
 
     it('auth overrides are consolidated (primary wins on conflict)', async () => {
-      const primary = await contactService.createContact({
+      const primary = await createTrackedContact({
         displayName: 'Bob',
         source: 'ceo_stated',
         tier: 'known',
       });
-      const secondary = await contactService.createContact({
+      const secondary = await createTrackedContact({
         displayName: 'Bob Smith',
         source: 'email_participant',
         tier: 'known',
@@ -249,7 +277,7 @@ describeIf('Contacts Integration', () => {
     });
 
     it('re-grant after revoke preserves revoked row history (#45)', async () => {
-      const contact = await contactService.createContact({
+      const contact = await createTrackedContact({
         displayName: 'History Keeper',
         source: 'ceo_stated',
         tier: 'known',
@@ -283,16 +311,16 @@ describeIf('Contacts Integration', () => {
       // (Linking the same email to two contacts would violate the unique constraint
       // on contact_channel_identities, so channel-overlap dedup is tested at the
       // DedupService unit level rather than here.)
-      const a = await svc.createContact({
+      const a = await createTrackedContact({
         displayName: 'Carol White',
         source: 'ceo_stated',
         tier: 'known',
-      });
-      const b = await svc.createContact({
+      }, svc);
+      const b = await createTrackedContact({
         displayName: 'C. White',
         source: 'email_participant',
         tier: 'unknown',
-      });
+      }, svc);
 
       const pairs = await svc.findDuplicates();
       // Find the pair that contains both contacts we just created
@@ -307,7 +335,7 @@ describeIf('Contacts Integration', () => {
 
   describe('canonical fields — service layer', () => {
     it('createContact stores and retrieves canonical fields', async () => {
-      const contact = await contactService.createContact({
+      const contact = await createTrackedContact({
         displayName: 'Integration Canonical',
         source: 'integration-test',
         title: 'Principal Engineer',
@@ -325,7 +353,7 @@ describeIf('Contacts Integration', () => {
     });
 
     it('updateContactFields round-trips through Postgres', async () => {
-      const contact = await contactService.createContact({
+      const contact = await createTrackedContact({
         displayName: 'Update Integration',
         source: 'integration-test',
       });
@@ -343,7 +371,7 @@ describeIf('Contacts Integration', () => {
     });
 
     it('listContacts returns canonical fields for all contacts', async () => {
-      const contact = await contactService.createContact({
+      const contact = await createTrackedContact({
         displayName: 'List Canonical',
         source: 'integration-test',
         organization: 'TestOrg',
@@ -358,7 +386,7 @@ describeIf('Contacts Integration', () => {
     });
 
     it('updateContactFields primaryEmail validation rejects unknown email', async () => {
-      const contact = await contactService.createContact({
+      const contact = await createTrackedContact({
         displayName: 'Email Reject',
         source: 'integration-test',
       });
@@ -368,7 +396,7 @@ describeIf('Contacts Integration', () => {
     });
 
     it('updateContactFields primaryEmail accepts email that exists in CCI', async () => {
-      const contact = await contactService.createContact({
+      const contact = await createTrackedContact({
         displayName: 'Email Accept',
         source: 'integration-test',
       });
@@ -387,7 +415,7 @@ describeIf('Contacts Integration', () => {
   });
 
   it('findLikelyDuplicates reads identities across channels from Postgres (#2041)', async () => {
-    const holder = await contactService.createContact({ displayName: 'Dup Check Holder', source: 'integration-test' });
+    const holder = await createTrackedContact({ displayName: 'Dup Check Holder', source: 'integration-test' });
     await contactService.linkIdentity({
       contactId: holder.id, channel: 'email', channelIdentifier: 'dup.check.holder@example.test', source: 'ceo_stated',
     });
