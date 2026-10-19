@@ -56,9 +56,9 @@ function maskNonCodes(text: string): string {
 
 interface Token {
   text: string;
-  /** Characters between the previous token and this one. */
+  /** Characters between the previous token and this one ('\n' at the start of the text). */
   before: string;
-  /** Characters between this token and the next one (or end of text). */
+  /** Characters between this token and the next one ('\n' at the end of the text). */
   after: string;
 }
 
@@ -73,9 +73,11 @@ function tokenize(text: string): Token[] {
   return matches.map((m, i) => {
     const start = m.index;
     const end = start + m[0].length;
-    const prevEnd = i > 0 ? matches[i - 1]!.index + matches[i - 1]![0].length : 0;
-    const nextStart = i + 1 < matches.length ? matches[i + 1]!.index : text.length;
-    return { text: m[0], before: text.slice(prevEnd, start), after: text.slice(end, nextStart) };
+    // At the start or end of the text there is no neighbouring run to glue to,
+    // so sentence punctuation ("... 482913.") must not read as a glue char.
+    const before = i > 0 ? text.slice(matches[i - 1]!.index + matches[i - 1]![0].length, start) : '\n';
+    const after = i + 1 < matches.length ? text.slice(end, matches[i + 1]!.index) : '\n';
+    return { text: m[0], before, after };
   });
 }
 

@@ -84,6 +84,24 @@ describe('extractCodeCandidates', () => {
     expect(extractCodeCandidates('482913 then 111 222 then 482913')).toEqual(['482913', '111222']);
   });
 
+  it('accepts a code followed by end-of-text punctuation', () => {
+    expect(extractCodeCandidates('The code is 482913.')).toEqual(['482913']);
+    expect(extractCodeCandidates('use 482913.')).toEqual(['482913']);
+    expect(extractCodeCandidates('it is 482913/')).toEqual(['482913']);
+    expect(extractCodeCandidates('code 482913,')).toEqual(['482913']);
+    expect(extractCodeCandidates('(code 482913)')).toEqual(['482913']);
+    expect(extractCodeCandidates('here it is: 482913!')).toEqual(['482913']);
+  });
+
+  it('accepts a split code followed by a trailing period', () => {
+    expect(extractCodeCandidates('your code: 123 456.')).toEqual(['123456']);
+    expect(extractCodeCandidates('G-482913.')).toEqual(['G482913']);
+  });
+
+  it('accepts a code preceded by start-of-text punctuation', () => {
+    expect(extractCodeCandidates('.482913')).toEqual(['482913']);
+  });
+
   it('returns an empty list for empty text', () => {
     expect(extractCodeCandidates('')).toEqual([]);
   });
