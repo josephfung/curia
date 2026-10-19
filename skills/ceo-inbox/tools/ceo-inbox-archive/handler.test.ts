@@ -61,6 +61,49 @@ describe('CeoInboxArchiveHandler', () => {
     expect(putBody).toEqual({ folders: ['Label_3'] });
   });
 
+  // The spot-check pool (#2159) reads these so a triage sample is gradable; the message is
+  // already fetched, so they cost no extra call.
+  it('returns the subject and sender of the message it archived', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'm1', folders: ['INBOX'], subject: 'Statement ready',
+        from: [{ name: 'Billing', email: 'billing@example.com' }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: [] }));
+
+    const result = await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: '19a2b3c4d5e6f708' }));
+
+    expect(result).toEqual({
+      success: true,
+      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'Billing <billing@example.com>' },
+    });
+  });
+
+  it('returns the subject and sender when the message was already archived', async () => {
+    fetchSpy.mockResolvedValueOnce(jsonResponse({
+      id: 'm1', folders: ['Label_3'], subject: 'Statement ready',
+      from: [{ email: 'billing@example.com' }],
+    }));
+
+    const result = await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: '19a2b3c4d5e6f708' }));
+
+    expect(result).toEqual({
+      success: true,
+      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'billing@example.com' },
+    });
+    expect(calls(fetchSpy)).toEqual(['GET /messages/19a2b3c4d5e6f708']);
+  });
+
+  it('omits a subject or sender the message does not have', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX'] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: [] }));
+
+    const result = await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: '19a2b3c4d5e6f708' }));
+
+    expect(result).toEqual({ success: true, data: { message_id: '19a2b3c4d5e6f708' } });
+  });
+
   // The two malformed IDs from the prod audit_log behind #2083.
   it.each([
     ['9b359f65-placeholder', /placeholder text/],

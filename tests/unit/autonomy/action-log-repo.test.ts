@@ -677,6 +677,19 @@ describe('ActionLogRepo', () => {
       });
     });
 
+    it('insertSampled stores the email subject and sender under payload.sample.email', async () => {
+      const { pool, queries } = makePool([{ id: '45' }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.insertSampled({
+        taskId: 't1', toolName: 'ceo-inbox-archive', actionRisk: 'low',
+        summary: 'Archive an email: "Statement ready"', signals: { triage: true },
+        email: { subject: 'Statement ready', from: 'Billing <billing@example.com>' },
+      });
+      expect(JSON.parse(queries[0]!.params[6] as string)).toEqual({
+        sample: { signals: { triage: true }, email: { subject: 'Statement ready', from: 'Billing <billing@example.com>' } },
+      });
+    });
+
     it('insertSampled omits a tool input over 2000 characters of JSON', async () => {
       const { pool, queries } = makePool([{ id: '44' }]);
       const repo = new ActionLogRepo(pool, createSilentLogger());

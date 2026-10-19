@@ -202,7 +202,7 @@ export class ActionLogRepo {
       actionRisk: row.actionRisk,
       outcome: 'success',
       description: row.summary,
-      payload: { sample: { signals: row.signals, ...sampleInput(row.input) } },
+      payload: { sample: { signals: row.signals, ...sampleInput(row.input), ...(row.email ? { email: row.email } : {}) } },
       // scored_by set + every flag null: findUnscoredTerminal skips the row and the scorer
       // ignores it until the principal gives a verdict.
       scoredBy: SAMPLE_POOL_SCORED_BY,

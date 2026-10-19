@@ -102,7 +102,7 @@ import type { BypassLadderConfig } from '../autonomy/effective-standing.js';
 import type { BrowserService } from '../browser/browser-service.js';
 import { formatAuthorizationSubjectSummary } from '../contacts/authorization.js';
 import { approvalAdvisory, buildDescription, type ApprovalTriggerService } from '../autonomy/approval-trigger.js';
-import { isSampledTool, TRIAGE_SKILLS } from '../autonomy/sample-pool.js';
+import { formatEmailSummary, isSampledTool, sampleEmailFromResult, TRIAGE_SKILLS } from '../autonomy/sample-pool.js';
 import { TempFileStore } from './temp-file-store.js';
 import type { InfraLlmService } from './infra-llm.js';
 import { OutboundContextService, ScopedOutboundContext } from '../dispatch/outbound-context.js';
@@ -1526,6 +1526,7 @@ export class ExecutionLayer {
     options: InvokeOptions | undefined,
     gateProceeded: boolean,
     skillLogger: Logger,
+    resultData?: unknown,
   ): Promise<void> {
     if (!this.actionLogRepo) return;
     if (options?.humanApproved || isLivePrincipalTurn(options?.liveTurn, options?.taskMetadata)) return;
@@ -1534,12 +1535,18 @@ export class ExecutionLayer {
       // and invoke()'s outer catch would turn the action's success into a failure. The action
       // has already run, so a throw here may cost only its spot-check row.
       if (!isSampledTool(toolName, actionRisk)) return;
+      // A triage tool that already read the message returns its subject and sender; naming
+      // them makes the sample gradable ("Archive an email" alone is not). Only triage tools
+      // are read this way, so another tool's `subject` output is never mistaken for an email's.
+      const email = TRIAGE_SKILLS.has(toolName) ? sampleEmailFromResult(resultData) : undefined;
+      const base = buildDescription(toolName, input);
       await this.actionLogRepo.insertSampled({
         taskId: options?.taskEventId ?? options?.parentEventId ?? 'system',
         ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
         toolName,
         actionRisk: String(actionRisk),
-        summary: buildDescription(toolName, input),
+        summary: email ? formatEmailSummary(base, email.subject, email.from) : base,
+        ...(email ? { email } : {}),
         // Kept on the row when small (the repo decides), so the spot check can later name
         // what a triage action touched; triage tools carry only a message id.
         input,
@@ -2850,7 +2857,7 @@ export class ExecutionLayer {
       ]);
 
       if (result.success) {
-        await this.recordSampledAction(toolName, manifest.action_risk, input, options, gateProceeded, skillLogger);
+        await this.recordSampledAction(toolName, manifest.action_risk, input, options, gateProceeded, skillLogger, result.data);
       }
 
       // MCP export audit trail (#201) — reuse items resolved at gate time.

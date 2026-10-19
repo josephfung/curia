@@ -4718,6 +4718,28 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
     expect(vi.mocked(actionLogRepo.insertSampled).mock.calls[0]![0]).toMatchObject({ toolName: 'ceo-inbox-archive', actionRisk: 'low', signals: { triage: true } });
   });
 
+  it('names the email a triage tool touched, from the subject and sender in its result', async () => {
+    const { registry, layer, actionLogRepo } = makePoolLayer();
+    registry.register(
+      makeRiskyManifest('ceo-inbox-archive', 'low'),
+      makeHandler({ message_id: 'm1', subject: 'Statement ready', from: 'Billing <billing@example.com>' }),
+    );
+    await layer.invoke('ceo-inbox-archive', { message_id: 'm1' }, undefined, agentTurn);
+    expect(vi.mocked(actionLogRepo.insertSampled).mock.calls[0]![0]).toMatchObject({
+      summary: 'Archive an email: "Statement ready" from Billing <billing@example.com>',
+      email: { subject: 'Statement ready', from: 'Billing <billing@example.com>' },
+    });
+  });
+
+  it('keeps the plain triage summary when the result has no subject', async () => {
+    const { registry, layer, actionLogRepo } = makePoolLayer();
+    registry.register(makeRiskyManifest('ceo-inbox-archive', 'low'), makeHandler({ message_id: 'm1' }));
+    await layer.invoke('ceo-inbox-archive', { message_id: 'm1' }, undefined, agentTurn);
+    const recorded = vi.mocked(actionLogRepo.insertSampled).mock.calls[0]![0];
+    expect(recorded.summary).toBe('Archive an email');
+    expect(recorded).not.toHaveProperty('email');
+  });
+
   it('records nothing for a low-risk write, a failure, an approved re-run, a live principal turn or a send', async () => {
     const { registry, layer, actionLogRepo } = makePoolLayer();
     registry.register(makeRiskyManifest('contact-update', 'low'), makeHandler({ ok: true }));

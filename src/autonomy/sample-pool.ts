@@ -60,6 +60,66 @@ export interface SampledActionInsert {
   signals: SampleSignals;
   /** The tool's input, kept on the row when its JSON is at most 2000 characters. */
   input?: Record<string, unknown>;
+  /**
+   * Subject and sender of the email a triage action touched, when the tool's result carried
+   * them. Stored under payload.sample.email so the sampler knows the row is already readable
+   * and skips its mail lookup.
+   */
+  email?: SampleEmail;
+}
+
+/** The part of an email a principal needs to grade a triage action. */
+export interface SampleEmail {
+  subject?: string;
+  from?: string;
+}
+
+/** An enriched triage summary stays short enough to read on a phone. */
+export const ENRICHED_SUMMARY_MAX = 120;
+/** Each stored email field is bounded so a hostile or huge subject cannot bloat the row. */
+const SAMPLE_EMAIL_FIELD_MAX = 200;
+
+/** Collapse any run of whitespace (line breaks included) to one space: each sample is one numbered line. */
+function oneLine(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+function capText(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
+}
+
+/**
+ * The summary line for a triage sample once the email is known:
+ * `Archive an email: "Statement ready" from Billing <billing@example.com>`.
+ *
+ * Returns the base (as one line) when there is no subject or sender to add. One helper for
+ * the execution layer (write time) and the sampler (draw-time lookup) so the two cannot drift.
+ */
+export function formatEmailSummary(base: string, subject?: string, from?: string): string {
+  const cleanBase = oneLine(base);
+  const s = subject ? oneLine(subject) : '';
+  const f = from ? oneLine(from) : '';
+  if (!s && !f) return cleanBase;
+  const detail = [s ? `"${s}"` : '', f ? `from ${f}` : ''].filter(Boolean).join(' ');
+  return capText(`${cleanBase}: ${detail}`, ENRICHED_SUMMARY_MAX);
+}
+
+/**
+ * Pull the subject/sender out of a tool result's data, or undefined when it has neither.
+ * Anything that is not a non-empty string is ignored: tool output is untyped.
+ */
+export function sampleEmailFromResult(data: unknown): SampleEmail | undefined {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return undefined;
+  const rec = data as Record<string, unknown>;
+  const field = (v: unknown): string | undefined => {
+    if (typeof v !== 'string') return undefined;
+    const t = oneLine(v);
+    return t ? capText(t, SAMPLE_EMAIL_FIELD_MAX) : undefined;
+  };
+  const subject = field(rec['subject']);
+  const from = field(rec['from']);
+  if (!subject && !from) return undefined;
+  return { ...(subject ? { subject } : {}), ...(from ? { from } : {}) };
 }
 
 /** Whether the execution layer records a successful autonomous call of this tool in the pool. */

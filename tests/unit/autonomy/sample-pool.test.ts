@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isSampledTool, sampleWeight, selectSamples, TRIAGE_SKILLS } from '../../../src/autonomy/sample-pool.js';
+import { formatEmailSummary, isSampledTool, sampleWeight, selectSamples, TRIAGE_SKILLS } from '../../../src/autonomy/sample-pool.js';
 
 describe('isSampledTool', () => {
   it('leaves sends to the gateway, which records them itself', () => {
@@ -63,5 +63,27 @@ describe('selectSamples', () => {
     }
     expect(heavy / 2000).toBeGreaterThan(0.7);
     expect(heavy / 2000).toBeLessThan(0.8);
+  });
+});
+
+describe('formatEmailSummary', () => {
+  it('adds the subject and sender to the base summary', () => {
+    expect(formatEmailSummary('Archive an email', 'Statement ready', 'Billing <billing@example.com>'))
+      .toBe('Archive an email: "Statement ready" from Billing <billing@example.com>');
+  });
+  it('drops a missing part', () => {
+    expect(formatEmailSummary('Archive an email', 'Statement ready')).toBe('Archive an email: "Statement ready"');
+    expect(formatEmailSummary('Archive an email', undefined, 'sam@example.com')).toBe('Archive an email: from sam@example.com');
+  });
+  it('returns the base unchanged when there is nothing to add', () => {
+    expect(formatEmailSummary('Archive an email')).toBe('Archive an email');
+    expect(formatEmailSummary('Archive an email', '  ', '')).toBe('Archive an email');
+  });
+  it('collapses line breaks and caps the length', () => {
+    const out = formatEmailSummary('Archive an email', `Re:\n${'very long subject '.repeat(20)}`, 'sam@example.com');
+    expect(out.startsWith('Archive an email: "Re: very long subject')).toBe(true);
+    expect(out).not.toContain('\n');
+    expect(out.length).toBeLessThanOrEqual(120);
+    expect(out.endsWith('…')).toBe(true);
   });
 });

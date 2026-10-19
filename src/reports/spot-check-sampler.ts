@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import type { ActionLogRow } from '../autonomy/action-log-types.js';
-import { sampleWeight, selectSamples, TRIAGE_SKILLS, type SampleSignals } from '../autonomy/sample-pool.js';
+import { formatEmailSummary, sampleWeight, selectSamples, TRIAGE_SKILLS, type SampleSignals } from '../autonomy/sample-pool.js';
 import type { SpotCheckItem, SpotCheckStore } from './spot-check-store.js';
 import type { Logger } from '../logger.js';
 
@@ -30,8 +30,6 @@ const CANDIDATE_LIMIT = 200;
 const MAX_SAMPLES = 3;
 /** One slow mail lookup must not hold up the digest. */
 const DESCRIBE_TIMEOUT_MS = 3_000;
-/** An enriched triage summary stays short enough to read on a phone. */
-const ENRICHED_SUMMARY_MAX = 120;
 
 /**
  * Looks up the subject and sender of an email so a triage sample reads as more than
@@ -69,10 +67,6 @@ function readSignals(payload: Record<string, unknown> | null): SampleSignals {
 /** Collapse any run of whitespace (line breaks included) to one space: each sample is one numbered line. */
 function oneLine(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
-}
-
-function cap(s: string, max: number): string {
-  return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
 }
 
 export class SpotCheckSampler {
@@ -131,6 +125,10 @@ export class SpotCheckSampler {
     const base = oneLine(row.description ?? row.toolName);
     const describeEmail = this.deps.describeEmail;
     if (!describeEmail || !TRIAGE_SKILLS.has(row.toolName)) return base;
+    // The tool returned the subject when it ran (ceo-inbox-*, whose mail the gateway lookup
+    // cannot reach), so the stored summary already names the email: no lookup, no warning.
+    const stored = readSample(row.payload)?.['email'];
+    if (isPlainObject(stored) && typeof stored['subject'] === 'string' && stored['subject'].trim()) return base;
 
     const input = readSample(row.payload)?.['input'];
     if (!isPlainObject(input) || typeof input['message_id'] !== 'string') return base;
@@ -147,14 +145,11 @@ export class SpotCheckSampler {
         this.deps.logger.warn({ actionLogId: row.id, toolName: row.toolName }, 'spot-check sampler: email lookup timed out; keeping the stored summary');
         return base;
       }
-      const subject = described?.subject ? oneLine(described.subject) : '';
-      const from = described?.from ? oneLine(described.from) : '';
-      if (!subject && !from) {
+      const enriched = formatEmailSummary(base, described?.subject, described?.from);
+      if (enriched === base) {
         this.deps.logger.warn({ actionLogId: row.id, toolName: row.toolName }, 'spot-check sampler: email lookup found nothing to add; keeping the stored summary');
-        return base;
       }
-      const detail = [subject ? `"${subject}"` : '', from ? `from ${from}` : ''].filter(Boolean).join(' ');
-      return cap(`${base}: ${detail}`, ENRICHED_SUMMARY_MAX);
+      return enriched;
     } catch (err) {
       this.deps.logger.warn({ err, actionLogId: row.id, toolName: row.toolName }, 'spot-check sampler: email lookup failed; keeping the stored summary');
       return base;

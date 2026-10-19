@@ -1,5 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
+import { CeoNylasClient, describeMessage } from '../../../_shared/ceo-nylas-client.js';
 import type { NylasFolder } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
@@ -102,6 +102,9 @@ export class CeoInboxLabelHandler implements ToolHandler {
           applied: labels,
           created,
           folders: finalFolders,
+          // From the read in step 3, so no extra call. The spot-check pool shows the
+          // email to the principal; "Label an email" alone cannot be graded.
+          ...describeMessage(msg),
         },
       };
     } catch (err) {

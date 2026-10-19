@@ -1,5 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
+import { CeoNylasClient, describeMessage } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxArchiveHandler implements ToolHandler {
@@ -28,6 +28,9 @@ export class CeoInboxArchiveHandler implements ToolHandler {
     try {
       // Fetch current folders, then remove INBOX
       const msg = await client.getMessage(messageId);
+      // Already fetched, so naming the email costs no extra call. The spot-check pool shows
+      // it to the principal; "Archive an email" alone cannot be graded.
+      const described = describeMessage(msg);
       const currentFolders = msg.folders ?? [];
       const withoutInbox = currentFolders.filter(
         (f) => f.toUpperCase() !== 'INBOX',
@@ -36,13 +39,13 @@ export class CeoInboxArchiveHandler implements ToolHandler {
       if (withoutInbox.length === currentFolders.length) {
         // INBOX label not present — already archived
         ctx.log.info({ messageId }, 'ceo-inbox-archive: already archived');
-        return { success: true, data: { message_id: messageId } };
+        return { success: true, data: { message_id: messageId, ...described } };
       }
 
       await client.updateMessageFolders(messageId, withoutInbox);
 
       ctx.log.info({ messageId }, 'ceo-inbox-archive: archived successfully');
-      return { success: true, data: { message_id: messageId } };
+      return { success: true, data: { message_id: messageId, ...described } };
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-archive: failed to archive');
       return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to archive principal inbox message') };

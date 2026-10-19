@@ -235,6 +235,35 @@ describe('SpotCheckSampler.draw', () => {
       expect(warn).toHaveBeenCalled();
     });
 
+    it('does not look up a row that already carries the email subject', async () => {
+      const describeEmail = vi.fn(async () => ({ subject: 'should not be used' }));
+      const stored = row(1, {
+        toolName: 'ceo-inbox-archive', actionRisk: 'low',
+        description: 'Archive an email: "Statement ready" from Billing <billing@example.com>',
+        payload: { sample: { signals: { triage: true }, input: { message_id: 'msg-1' }, email: { subject: 'Statement ready', from: 'Billing <billing@example.com>' } } },
+      });
+      const { sampler, warn } = makeDeps({ rows: [stored], describeEmail });
+
+      const drawn = await sampler.draw('conv-1');
+
+      expect(describeEmail).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(drawn!.block.split('\n')[1]).toBe('1. Archive an email: "Statement ready" from Billing <billing@example.com>');
+    });
+
+    it('still looks up a triage row whose email has no subject', async () => {
+      const describeEmail = vi.fn(async () => ({ subject: 'Looked up' }));
+      const partial = row(1, {
+        toolName: 'email-archive', actionRisk: 'low', description: 'Archive an email',
+        payload: { sample: { signals: { triage: true }, input: { message_id: 'msg-1' }, email: { from: 'sam@example.com' } } },
+      });
+      const { sampler } = makeDeps({ rows: [partial], describeEmail });
+
+      await sampler.draw('conv-1');
+
+      expect(describeEmail).toHaveBeenCalledWith('msg-1', undefined);
+    });
+
     it('never looks up a non-triage row, or a triage row without a message id', async () => {
       const describeEmail = vi.fn(async () => ({ subject: 'x' }));
       const { sampler } = makeDeps({
