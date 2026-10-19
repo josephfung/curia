@@ -146,6 +146,12 @@ export class CodeTracker {
     return domains;
   }
 
+  /** Ids of the verifications that still hold tracked values (pruned first). */
+  trackedIds(): string[] {
+    this.prune();
+    return [...this.byVerification.keys()];
+  }
+
   /** Number of tracked values across all live verifications. */
   size(): number {
     this.prune();

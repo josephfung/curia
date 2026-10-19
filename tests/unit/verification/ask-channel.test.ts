@@ -99,11 +99,39 @@ describe('VerificationRuntime tracker aging (cross-task ruling)', () => {
 
   it('listActive starts the TTL clock for every non-pending row and not for pending ones', async () => {
     const rt = runtimeFor([], []);
+    for (const id of ['a', 'b', 'c']) rt.tracker.register(id, 'accounts.example.com', `${id.charCodeAt(0)}12345`);
     const closed = vi.spyOn(rt.tracker, 'closed');
     vi.spyOn(rt.service, 'listActive').mockResolvedValue([row('a', 'pending'), row('b', 'expired'), row('c', 'satisfied')]);
     const rows = await rt.listActive();
     expect(rows.map(r => r.id)).toEqual(['a', 'b', 'c']);
     expect(closed.mock.calls.map(c => c[0])).toEqual(['b', 'c']);
+  });
+
+  it('a verification expired outside the recent window still starts the TTL clock', async () => {
+    const rt = runtimeFor([], []);
+    rt.tracker.register('old', 'accounts.example.com', '482913');
+    rt.tracker.register('live', 'accounts.example.com', '777111');
+    const closed = vi.spyOn(rt.tracker, 'closed');
+    // The service expired 'old' lazily but, being past the window, did not return it.
+    vi.spyOn(rt.service, 'listActive').mockResolvedValue([row('live', 'pending')]);
+    await rt.listActive();
+    expect(closed.mock.calls.map(c => c[0])).toEqual(['old']);
+  });
+
+  it('open() on the same site ages out the stale verification\'s values', async () => {
+    const rt = runtimeFor([], []);
+    rt.tracker.register('stale', 'accounts.example.com', '482913');
+    const closed = vi.spyOn(rt.tracker, 'closed');
+    const fresh = row('fresh', 'pending');
+    // service.open expired 'stale' silently; only the new row is pending afterwards.
+    vi.spyOn(rt.service, 'open').mockResolvedValue({ verification: fresh, reused: false });
+    vi.spyOn(rt.service, 'listActive').mockResolvedValue([fresh]);
+    const result = await rt.open({
+      purpose: 'sign_in', kind: 'code', delivery: 'sms', site: 'example.com',
+      pageDomain: 'accounts.example.com', browserSessionId: 's',
+    });
+    expect(result.verification.id).toBe('fresh');
+    expect(closed.mock.calls.map(c => c[0])).toEqual(['stale']);
   });
 
   it('close() marks the tracker closed', async () => {

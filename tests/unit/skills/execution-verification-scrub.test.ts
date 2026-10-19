@@ -80,6 +80,22 @@ describe('execution layer sign-in code scrub (#2017)', () => {
     expect(handler.seen?.progress_note).toBe('Principal replied 482913');
   });
 
+  it('a tracked code in an unparseable timestamp never reaches the log or the error', async () => {
+    const lines: string[] = [];
+    const capturing = pino({ level: 'debug' }, { write: (line: string) => { lines.push(line); } });
+    const registry = new ToolRegistry();
+    registry.register(manifest('cal-write', { when: 'timestamp' }), new CapturingHandler());
+    const layer = new ExecutionLayer(registry, capturing, { verification: runtime(trackerWithCode()) });
+    const result = await layer.invoke('cal-write', { when: '482913' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).not.toContain('482913');
+      expect(result.error).toContain('[sign-in code]');
+    }
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.join('\n')).not.toContain('482913');
+  });
+
   it('does not touch the caller\'s input object', async () => {
     const { layer } = setup('task-update', { progress_note: 'string?' }, trackerWithCode());
     const input = { progress_note: 'code 482913' };

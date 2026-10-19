@@ -389,6 +389,21 @@
         }
       }
     },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "askChannelOrder": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["signal", "sms", "slack", "email"] },
+          "uniqueItems": true
+        },
+        "defaultExpiryMinutes": { "type": "integer", "minimum": 1 },
+        "recentWindowMinutes": { "type": "integer", "minimum": 1 },
+        "codeTtlMinutesAfterClose": { "type": "integer", "minimum": 1 },
+        "emailWaitSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
     "debrief": {
       "type": "object",
       "additionalProperties": false,

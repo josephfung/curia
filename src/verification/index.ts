@@ -9,7 +9,7 @@ import type { Logger } from '../logger.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import { CodeTracker } from './code-tracker.js';
 import { VerificationService } from './verification-service.js';
-import type { Verification, VerificationConfig } from './types.js';
+import type { OpenVerificationInput, Verification, VerificationConfig } from './types.js';
 
 /**
  * Identity channels that can reach the principal on a given ask channel. An `sms` ask
@@ -22,16 +22,23 @@ const IDENTITY_CHANNELS_FOR: Readonly<Record<string, readonly string[]>> = {
 
 export interface VerificationRuntime {
   /**
-   * The table-owning service. Use it for `open`, `get` and `pendingForTask`. Do NOT
-   * call its `listActive` or `close` directly: use the passthroughs below, which keep
+   * The table-owning service. Use it for `get` and `pendingForTask`. Do NOT call its
+   * `open`, `listActive` or `close` directly: use the passthroughs below, which keep
    * the tracker's value TTL in step with the table.
    */
   readonly service: VerificationService;
   readonly tracker: CodeTracker;
   /**
-   * Pending plus recently closed verifications. Every row that is not `pending`
-   * (including ones the service just expired lazily) starts its tracked values' TTL
-   * clock, so values age out even when nobody closed the verification explicitly.
+   * Open a verification (or reuse the pending one for the site). The service expires a
+   * site's stale pending row silently on the way in; this then starts the TTL clock for
+   * any tracked values whose verification is no longer pending.
+   */
+  open(input: OpenVerificationInput): Promise<{ verification: Verification; reused: boolean }>;
+  /**
+   * Pending plus recently closed verifications. Every tracked verification that is not
+   * a returned `pending` row (closed, lazily expired, or aged out of the recent window
+   * and so not returned at all) starts its tracked values' TTL clock, so values age
+   * out even when nobody closed the verification explicitly.
    */
   listActive(now?: Date): Promise<Verification[]>;
   /** Close a verification and start its tracked values' TTL clock. */
@@ -60,16 +67,30 @@ export function createVerificationRuntime(
   const service = new VerificationService(pool, logger, config);
   const tracker = new CodeTracker({ ttlMinutesAfterClose: config.codeTtlMinutesAfterClose });
 
+  /** Start the TTL clock for every tracked verification that is not among `pendingIds`. */
+  function closeUnlessPending(pendingIds: ReadonlySet<string>): void {
+    for (const id of tracker.trackedIds()) {
+      if (!pendingIds.has(id)) tracker.closed(id);
+    }
+  }
+
+  async function reconcile(now?: Date): Promise<Verification[]> {
+    const rows = await service.listActive(now);
+    closeUnlessPending(new Set(rows.filter((r) => r.status === 'pending').map((r) => r.id)));
+    return rows;
+  }
+
   return {
     service,
     tracker,
-    async listActive(now) {
-      const rows = await service.listActive(now);
-      for (const row of rows) {
-        if (row.status !== 'pending') tracker.closed(row.id);
-      }
-      return rows;
+    async open(input) {
+      const result = await service.open(input);
+      // The pending set after open is the (possibly new) row alone for this site, but
+      // other sites may have pending rows too, so ask the table rather than guess.
+      await reconcile();
+      return result;
     },
+    listActive: reconcile,
     async close(id, status) {
       const row = await service.close(id, status);
       tracker.closed(id);

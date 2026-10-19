@@ -1684,10 +1684,16 @@ export class ExecutionLayer {
         // would silently create events at the wrong time (the server runs UTC, so an
         // offset-less string passed to new Date() is interpreted as UTC, not local time).
         // Return a skill error so the LLM can re-emit the value with an explicit offset.
-        skillLogger.error({ err, key, raw }, 'timestamp normalization failed; refusing to invoke handler with unnormalized value');
+        // The default-deny scrub below has not run yet, and the value (and the parser's
+        // error message, which quotes it) can be a tracked sign-in code (#2017): scrub
+        // both before they reach the log line or the error the model reads back.
+        const tracker = this.verification?.tracker;
+        const safeRaw = tracker ? tracker.scrubText(raw) : raw;
+        const safeErr = tracker && err instanceof Error ? new Error(tracker.scrubText(err.message)) : err;
+        skillLogger.error({ err: safeErr, key, raw: safeRaw }, 'timestamp normalization failed; refusing to invoke handler with unnormalized value');
         return {
           success: false,
-          error: this.wrapSkillError(`Input '${key}' could not be parsed as a valid datetime: "${raw}". Please provide an ISO 8601 string with a UTC offset (e.g. "2026-04-06T08:00:00-04:00").`),
+          error: this.wrapSkillError(`Input '${key}' could not be parsed as a valid datetime: "${safeRaw}". Please provide an ISO 8601 string with a UTC offset (e.g. "2026-04-06T08:00:00-04:00").`),
         };
       }
     }
