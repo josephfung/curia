@@ -131,6 +131,14 @@ describe('inboundTurnGuidance', () => {
       ).not.toContain('spot-check-reply');
     });
 
+    // F1: a principal email where Curia is only CC'd ("2 good candidates came through") is
+    // written to someone else, so it is never a verdict on Curia's digest.
+    it("does not add it when Curia was only CC'd, and the reply-shaped note stays", () => {
+      const keys = inboundTurnGuidance(facts({ channelId: 'email', curiaCc: true, spotCheckReply: true }));
+      expect(keys).not.toContain('spot-check-reply');
+      expect(keys).toEqual(['principal-reply-shaped', 'email-cc-principal', 'email-cc-reply', 'email-etiquette']);
+    });
+
     it('does not add it when the text does not look like a verdict', () => {
       expect(inboundTurnGuidance(facts({ spotCheckReply: false }))).not.toContain('spot-check-reply');
     });

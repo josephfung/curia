@@ -75,10 +75,11 @@ describe('renderTurnGuidance', () => {
     // that cannot happen). The worst real turn was ~4.0KB at PR 4. A principal turn can
     // also carry the backlog line (PR 7), so the bound includes its longest form, with
     // the lines on answering a specialist's task (#2129, ~280 chars: 4.4KB → 4.7KB). The
-    // spot-check verdict block (~330 chars) can ride along with any principal turn, so the
-    // worst case is now 5,031 chars (4.7KB → 5.0KB). spot-check-reply replaces the
-    // reply-shaped note but stays beside the outbound-context keys, and the worst turn has those,
-    // so the measured worst is unchanged; the bound keeps a small margin over it.
+    // spot-check verdict block (~470 chars since F1 made it conditional) rides along with a
+    // principal turn, but never with a CC'd one: a CC is written to someone else, so it is not
+    // a verdict on Curia's digest. The worst real turn is therefore the CC'd principal turn
+    // with the full outbound block, 4,689 chars measured; the worst spot-check turn (direct
+    // email, full outbound block) is 4,531. The bound keeps a small margin over the worst.
     const backlogLine = renderBacklogLine({ decayWarnings: 99, pendingApprovals: 99, principalTasks: 99 });
     const fullEntry = { bind_reply: true, task_id: 't', resume_token: 'r', subject: 'Board prep' };
     let worst = 0;
@@ -96,12 +97,14 @@ describe('renderTurnGuidance', () => {
         }
       }
     }
-    expect(worst).toBeLessThan(5_100);
+    expect(worst).toBeLessThan(4_800);
   });
 });
 
 describe('spot-check-reply guidance', () => {
   const text = renderTurnGuidance(['spot-check-reply'])!;
+  // The block is hard-wrapped, so phrase checks run on the text with line breaks folded.
+  const flat = text.replace(/\s+/g, ' ');
 
   it('points the coordinator at skill-activate reports, then record-spot-check', () => {
     expect(text).toContain('skill-activate');
@@ -110,14 +113,27 @@ describe('spot-check-reply guidance', () => {
   });
 
   it('says to ask rather than guess', () => {
-    expect(text).toContain('ask the principal');
+    expect(flat).toContain('ask which action they meant');
     expect(text).toContain('Never guess.');
+  });
+
+  // F1: the trigger is a text heuristic, so "2 good" answering one of Curia's own numbered
+  // questions also fires it. The block is conditional and tells the coordinator to ignore it then.
+  it('is conditional on the principal grading a spot check, and says to ignore it otherwise', () => {
+    expect(flat).toContain("If the principal is grading a digest's spot check");
+    expect(flat).toContain('If the number refers to something else, ignore this note.');
+  });
+
+  // F1(c): the principal sees what was recorded, so a wrong match is visible to them.
+  it('says to read back what was recorded and any numbers skipped', () => {
+    expect(flat).toContain('Tell the principal what was recorded');
+    expect(flat).toContain('any numbers it skipped');
   });
 
   it('renders right after the reply-shaped keys, before the outbound-context block', () => {
     const out = renderTurnGuidance(['outbound-context', 'spot-check-reply', 'principal-reply-shaped'])!;
-    expect(out.indexOf('No [ACTIVE OUTBOUND CONTEXT] block')).toBeLessThan(out.indexOf('spot-check verdict'));
-    expect(out.indexOf('spot-check verdict')).toBeLessThan(out.indexOf('[ACTIVE OUTBOUND CONTEXT] block lists'));
+    expect(out.indexOf('No [ACTIVE OUTBOUND CONTEXT] block')).toBeLessThan(out.indexOf("digest's spot check"));
+    expect(out.indexOf("digest's spot check")).toBeLessThan(out.indexOf('[ACTIVE OUTBOUND CONTEXT] block lists'));
   });
 });
 

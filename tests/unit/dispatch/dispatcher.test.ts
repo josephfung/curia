@@ -2711,6 +2711,20 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
     expect(tasks[0]!.payload.turnGuidance).not.toContain('spot-check-reply');
   });
 
+  it("does not add it for a principal email that only CC'd Curia (F1)", async () => {
+    const { bus, tasks } = setup('principal');
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-hiring-1',
+      channelId: 'email',
+      senderId: 'dana@example.com',
+      content: 'Subject: Candidates\n\n2 good candidates came through this week',
+      metadata: { curiaRole: 'cc', primaryRecipientEmails: ['sam@example.com'] },
+    }));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.liveTurn).toBe(true);
+    expect(tasks[0]!.payload.turnGuidance).not.toContain('spot-check-reply');
+  });
+
   it('never adds it for a non-principal sender, even with the same text', async () => {
     const { bus, tasks } = setup(null);
     await bus.publish('channel', createInboundMessage({
