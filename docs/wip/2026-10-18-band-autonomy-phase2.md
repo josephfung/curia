@@ -1919,3 +1919,55 @@ Each has a cost if wrong. The executor may revisit any of them with a ledgered r
 8. **`holdRecipe` is separate from `reExecRecipe`,** so tier-mode Step 0 never starts writing approval rows for skill sends. *If wrong:* one more option name.
 9. **Gate C keeps its #1059 and #1290 rules ahead of the band logic,** and keeps `authorization.decision` for originators that have a tier. System and agent originators are logged instead. *If wrong:* band escalations on scheduler turns are missing from the authorization audit. They are still in the action log as approvals.
 10. **Scenarios get a separate plan** (see Out of scope). *If wrong:* the release-gate acceptance criterion waits on one more PR.
+
+---
+
+## Execution notes (2026-10-18)
+
+Each of PRs A, B and C went through three reviews: the code reviewer, the silent-failure hunter and a security review. The final code reviewer also checked the Review Focus items above across the whole branch.
+
+### Where the build departs from the plan
+
+- **Evidence reads two levels.** A `tool.result` is the child of its `tool.invoke`, not of the task. The new `AuditLogRepo.findToolResultsForTasks` walks task → invoke → result, newest first. Credentials are redacted before evidence reaches the judge's provider. A missing task row counts as unavailable evidence.
+- **`FailOpenLimiter`.** A judge success resets the count only after a trip, so a judge that fails intermittently still trips the cap.
+- **Config and schema.** `band` with `escalation.judge.enabled: false` is refused at load. `review_timeout_ms` is capped at the Node timer limit. Both new keys are in `schemas/default-config.schema.json`.
+- **`ReportQueue`'s source table** is exhaustive over the union. Before, an unknown source was relabelled `agent`.
+- **The draft path is reviewed too.** `sendEmailDraft` gets the band review, keyed on `principalDirected`, because `send-draft` sets `humanApproved` on every call. A stored draft cannot be trimmed, so a draft the review would trim is held.
+- **Relays on every channel.** Signal, Slack and SMS relays pass `postTurn` and a `dispatcher-relay` hold recipe (`relaySendOptions`). `outbound.message` gains `principalApproved`, set by `dispatcher-relay` only when `ctx.humanApproved`. Adapters forward it as `humanApproved`, so an approved relay is not held twice.
+- **Approved skill replays.** `signal-send`, `slack-send` and `sms-send` forward `humanApproved`, as `email-send` already did.
+- **Holds that raise no approval** queue a digest item.
+- **A judge failure on a recheck holds.** It does not fail open after a bounce.
+- **A band bounce after a relay's last rewrite** raises the relay approval.
+- **Bounce findings** show only text quoted verbatim from the message. Trimming refuses quotes under 12 characters.
+- **Gate C leaves sends to the gateway at every band.** The plan had Gate C ask *purpose* and *speaks as principal* below 80. But Gate C saw only a description truncated at 1,000 characters, with contact references instead of addresses, and its "reviewed" mark then stopped the gateway asking again. The gateway sees the whole message and its resolved recipients, and a hold there raises the same approval. `GateCReviews` was removed.
+- **Gate C fails closed on non-send actions.** It escalates on a judge or evidence failure at every band, because *purpose* is an outsider's only check there. `gate_proceeded` is reported for non-sends only.
+
+### Changes under tier
+
+- An approved relay, and an approved Signal, Slack or SMS replay, now skip the gateway's score gate (Step 0). Before, an approval at a score below 70 could be blocked again.
+- The execution layer may publish `principal.report`.
+
+### For the principal to decide
+
+- **Principal-directed sends.** A send the principal directs in a live turn is asked only *grounding*, per the spec. A live-turn `send-draft` is not reviewed. Under band this removes the `contact-data-leak` backstop if a prompt injection steers a principal-directed send. Asking *purpose* as well when the recipient is below trusted is a one-line change.
+- **Trusted contacts.** Under band, a trusted contact's critical action at 90+ gets no Gate C check, because *purpose* is asked for outsiders only. Tier escalated every irreversible action from anyone below principal.
+
+### Deferred minors
+
+- Band hold rows carry no recipient pins (`sendResolution`). A label-hinted reference re-resolved at approval could reach a changed address (#2047 parity).
+- A stale bounce entry, left when a drafter abandons, makes the next send in that conversation within 30 minutes count as the recheck.
+- Missing evidence is reported as a reviewer outage and spends the fail-open budget. There is no distinct `no_evidence` failure.
+- A trimmed send returns plain success. The agent is not told that statements were cut.
+- An email relay hold raises its approval and wakes the coordinator before the adapter creates and links the draft. This is the existing Step 0 pattern.
+- Logging gaps:
+  - the draft path logs "trimmed and sent" before the gateway turns it into a hold;
+  - the reason a recheck failed is not logged;
+  - recovery from a tripped limiter is not logged;
+  - the trip notice goes by email only.
+- `relaySendOptions` skips the `RELAY_BODY_MAX_LENGTH` guard.
+- A band hold on a relay never clears the dispatcher's `relayOutbound` entry.
+- `removeQuoted` normalizes whitespace across the whole message, not only around the cut.
+- `extractFirstJsonObject` takes the first `{…}` in a judge response.
+- Limiter state and bounce entries are in memory, and bounce entries for abandoned drafts are never pruned.
+- Band Gate C escalations for system and agent originators publish no `authorization.decision`.
+- The behavior scenarios need their own plan, with harness support for seeding the score and setting `autonomy.gating`.
