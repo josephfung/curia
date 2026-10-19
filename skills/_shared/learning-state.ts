@@ -66,7 +66,7 @@ export interface CompletionDigestItem {
   note: string;
   /** `Date.toISOString()` instant the item was added. Absent on pre-#1936 entries. */
   createdAt?: string;
-  /** The item's number in the notification ("confirm 2"). Assigned by `assignDigestNumbers`, then
+  /** The item's number in the notification ("confirm task 2"). Assigned by `assignDigestNumbers`, then
    *  stable for the item's life: resolving another item never renumbers it. Positive integer.
    *  Absent on entries written before numbering (#2159 Phase 3); readers number those on the fly. */
   n?: number;
@@ -343,12 +343,12 @@ export async function writeIdSet(store: ConfigStore, key: string, ids: Set<strin
 }
 
 /**
- * Give every digest item a stable number so the principal can reply "confirm 2" instead of quoting
+ * Give every digest item a stable number so the principal can reply "confirm task 2" instead of quoting
  * a task id (#2159 Phase 3). Pure: returns a new map, the input is untouched.
  *
  * - An item that already has a valid number keeps it, so resolving one item never shifts the others.
  * - An unnumbered item takes max(live numbers) + 1, never a gap left by a resolved item: a stale
- *   "confirm 2" from an older notification must not land on a newer item 2 and act on the wrong
+ *   "confirm task 2" from an older notification must not land on a newer item 2 and act on the wrong
  *   task. Numbers restart at 1 only when no numbered item remains in the map.
  * - Unnumbered items are numbered in `createdAt` order (no usable clock sorts last), then by key,
  *   so the legacy backlog numbers deterministically: the writer, `list-learning-digest` and

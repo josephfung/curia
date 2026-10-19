@@ -414,7 +414,7 @@ describe('ResolveLearningDigestHandler', () => {
     expect(result.success).toBe(true);
     const data = (result as { data: { detail: string; kind: string } }).data;
     expect(data.kind).toBe('undo');
-    expect(data.detail).toBe('Left task t1 marked done; dropped the undo prompt');
+    expect(data.detail).toBe('Left "Follow up" marked done; dropped the undo prompt');
     expect(getTask).not.toHaveBeenCalled();
     expect(completeTask).not.toHaveBeenCalled();
     expect(reopenTask).not.toHaveBeenCalled();
@@ -600,7 +600,7 @@ describe('ResolveLearningDigestHandler', () => {
     expect(result.success).toBe(true);
     const data = (result as { data: { detail: string; kind: string } }).data;
     expect(data.kind).toBe('confirm');
-    expect(data.detail).toBe('Dismissed the confirm prompt for task t1; the task was not completed');
+    expect(data.detail).toBe('Dismissed the confirm prompt for "Follow up"; the task was not completed');
     expect(getTask).not.toHaveBeenCalled();
     expect(completeTask).not.toHaveBeenCalled();
     expect(reopenTask).not.toHaveBeenCalled();
@@ -743,6 +743,47 @@ describe('ResolveLearningDigestHandler', () => {
       // The write persists the derived numbering for the survivor.
       const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
       expect(updated['task-x']!.n).toBe(1);
+    });
+
+    // Review fix F3 (#2159 Phase 3): the detail names the item acted on, so the coordinator reads
+    // back WHICH task a "confirm task 2" confirmed rather than reporting success with only an id.
+    it('confirm_completion detail names the confirmed task', async () => {
+      const mem = makeMem();
+      seed(mem);
+      const { ctx } = numberedCtx(mem, { action: 'confirm_completion', number: 2 });
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect((result as { data: { detail: string } }).data.detail).toBe('Confirmed completion of "B"');
+    });
+
+    it('dismiss_completion detail names the dismissed task', async () => {
+      const mem = makeMem();
+      seed(mem);
+      const { ctx } = numberedCtx(mem, { action: 'dismiss_completion', number: 4 });
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect((result as { data: { detail: string } }).data.detail).toBe('Dismissed the confirm prompt for "C"; the task was not completed');
+    });
+
+    it('undo_completion detail names the reopened task', async () => {
+      const mem = makeMem();
+      const map: CompletionDigestMap = {
+        'task-u': { kind: 'undo', taskId: 'task-u', taskTitle: 'Send Priya the deck', note: 'Undo?', n: 1 },
+      };
+      mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(map));
+      const { ctx } = numberedCtx(mem, { action: 'undo_completion', number: 1 });
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect(result.success).toBe(true);
+      expect((result as { data: { detail: string } }).data.detail).toBe('Reopened "Send Priya the deck"');
+    });
+
+    it('falls back to the note when an item has no title', async () => {
+      const mem = makeMem();
+      const map: CompletionDigestMap = {
+        'task-n': { kind: 'confirm', taskId: 'task-n', taskTitle: '  ', note: 'Did emailing Sam finish the budget?', n: 1 },
+      };
+      mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(map));
+      const { ctx } = numberedCtx(mem, { action: 'confirm_completion', number: 1 });
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect((result as { data: { detail: string } }).data.detail).toBe('Confirmed completion of "Did emailing Sam finish the budget?"');
     });
 
     it('fails with neither number nor task_id', async () => {

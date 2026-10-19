@@ -242,7 +242,7 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     // it safe to actually complete the tasks.
     // Track which auto-completes actually landed this run so the notification below only tells the
     // principal to "undo" tasks that were really marked done — a completeTask that threw leaves the task
-    // active, and an "undo <n>" line for it would be a lie (the principal reply path would
+    // active, and an "undo task <n>" line for it would be a lie (the principal reply path would
     // then find a non-done task and either fail loud or falsely report "already reopened").
     const completedTaskIds = new Set<string>();
     if (digestStored) {

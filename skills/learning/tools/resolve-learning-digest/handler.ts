@@ -8,6 +8,7 @@ import {
   writeCompletionDigest,
   pruneExpiredCompletionDigest,
   assignDigestNumbers,
+  type CompletionDigestItem,
   type CompletionDigestMap,
 } from '../../../_shared/learning-state.js';
 
@@ -60,7 +61,7 @@ export function resolveDigestTaskId(
 }
 
 /**
- * Resolve a completion-digest item by the number the principal replied with ("confirm 2").
+ * Resolve a completion-digest item by the number the principal replied with ("confirm task 2").
  * `digestMap` must already be numbered (assignDigestNumbers). An unknown number fails closed and
  * names the valid ones, so the coordinator can ask the principal instead of guessing.
  */
@@ -81,6 +82,16 @@ export function resolveDigestNumber(
         ? `No digest item is numbered ${n}. Valid numbers: ${valid.join(', ')}. Ask the principal which one they meant.`
         : `No digest item is numbered ${n}: no completion items are pending. Ask the principal what they meant.`,
   };
+}
+
+/**
+ * How a success `detail` names the item acted on: its task title, or the note when the title is
+ * blank. Numbers are reused once the digest empties, so a stale "confirm task 2" can land on a newer
+ * item 2; naming it lets the coordinator read back WHICH task it acted on (review fix F3, #2159).
+ */
+function itemName(item: CompletionDigestItem): string {
+  const title = typeof item.taskTitle === 'string' ? item.taskTitle.trim() : '';
+  return `"${title || item.note.trim()}"`;
 }
 
 /** The `number` input as a positive integer. Accepts a digit string because models relay "2" as text. */
@@ -243,8 +254,8 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       // completion" string reads as "the task was un-completed" on an undo item.
       const detail =
         item.kind === 'undo'
-          ? `Left task ${taskId} marked done; dropped the undo prompt`
-          : `Dismissed the confirm prompt for task ${taskId}; the task was not completed`;
+          ? `Left ${itemName(item)} marked done; dropped the undo prompt`
+          : `Dismissed the confirm prompt for ${itemName(item)}; the task was not completed`;
       return { success: true, data: { resolved: true, kind: item.kind, detail } };
     }
 
@@ -308,7 +319,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
           error: `Task ${taskId} was reopened, but the digest item could not be cleared (transient) and may reappear — retry to clear it.`,
         };
       }
-      return { success: true, data: { resolved: true, detail: `Reopened task ${taskId}` } };
+      return { success: true, data: { resolved: true, detail: `Reopened ${itemName(item)}` } };
     }
 
     if (action === 'confirm_completion') {
@@ -337,7 +348,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
           error: `Task ${taskId} was confirmed complete, but the digest item could not be cleared (transient) and may reappear — retry to clear it.`,
         };
       }
-      return { success: true, data: { resolved: true, detail: `Confirmed completion ${taskId}` } };
+      return { success: true, data: { resolved: true, detail: `Confirmed completion of ${itemName(item)}` } };
     }
 
     // Unreachable while every DigestAction returns above. A new action that is

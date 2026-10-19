@@ -58,7 +58,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Judge token caps** — leak and escalation judge verdict caps raised for Haiku 5.5's longer verdicts. (#2077)
 - **Autonomy scoring** — principal verdicts weigh triple; expired approvals no longer count against the score. (#2159)
 - **`ceo-inbox-archive` / `ceo-inbox-label`** — results now include the email's subject and sender. (#2159)
-- **Approvals and learning items** — answered by short numbers ("approve 3", "confirm 2"), not IDs. (#2159)
+- **Approvals and learning items** — answered by short numbers ("approve 3", "confirm task 2"), not IDs. (#2159)
 - **Approval tools** — `short_ref` accepts the approval number; `list-pending-actions` and `list-learning-digest` return numbers. (#2159)
 
 ### Removed

@@ -88,7 +88,7 @@ describe('ListLearningDigestHandler', () => {
     expect(data.sections_markdown).toContain('### Task completion from sent mail');
     // Legacy entries with no stored number render with a deterministic one (#2159 Phase 3):
     // the principal replies by number, not task id.
-    expect(data.sections_markdown).toContain('1. Marked done. Undo? Reply `undo 1` or `dismiss 1`.');
+    expect(data.sections_markdown).toContain('1. Marked done. Undo? Reply `undo task 1` or `dismiss task 1`.');
   });
 
   it('returns n for each completion item, keeping stored numbers and numbering legacy ones above them', async () => {
@@ -151,7 +151,7 @@ describe('ListLearningDigestHandler', () => {
     expect(mixedData.sections_markdown).toContain('### Task completion from sent mail');
     // The aged-out item was numbered 1 before it was hidden, so the survivor keeps 2 and the
     // number the principal saw does not shift when a sibling expires.
-    expect(mixedData.sections_markdown).toContain('`confirm 2`');
+    expect(mixedData.sections_markdown).toContain('`confirm task 2`');
     expect(mixedData.sections_markdown).not.toContain(taskId);
     expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual(digestMap);
     expect(mem.storeFact).not.toHaveBeenCalled();
@@ -187,6 +187,6 @@ describe('ListLearningDigestHandler', () => {
     expect(data.voice_guide).toBeNull();
     expect(data.sections_markdown).not.toContain('### Proposed writing-voice update');
     expect(data.sections_markdown).toContain('### Task completion from sent mail');
-    expect(data.sections_markdown).toContain('`confirm 1`');
+    expect(data.sections_markdown).toContain('`confirm task 1`');
   });
 });

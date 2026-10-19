@@ -6,7 +6,7 @@
   "action_risk": "medium",
   "inputs": {
     "action": "string (approve_voice | dismiss_voice | undo_completion | confirm_completion | dismiss_completion)",
-    "number": "number? (the item's number from the notification, e.g. 2)",
+    "number": "number? (N from the notification's 'confirm/undo/dismiss task N', e.g. 2)",
     "task_id": "string? (alternative to number: full UUID or unique prefix)"
   },
   "outputs": {

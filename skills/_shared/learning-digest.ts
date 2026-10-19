@@ -25,11 +25,13 @@ export function renderCompletionSection(items: CompletionDigestItem[]): string {
     '### Task completion from sent mail',
     '',
     ...items.map((i, idx) => {
-      // The principal answers by item number ("confirm 2"), not by quoting a task id (#2159 Phase 3).
-      // An unnumbered item (a caller that skipped assignDigestNumbers) falls back to the task-id
-      // form, which resolve-learning-digest still accepts, rather than printing a number nothing
-      // would resolve.
-      const ref = i.n !== undefined ? String(i.n) : `completion ${i.taskId}`;
+      // The principal answers by item number ("confirm task 2"), not by quoting a task id (#2159
+      // Phase 3). The word "task" keeps it apart from approvals, which are answered "approve 3" /
+      // "dismiss 3" in the same number space: a bare "dismiss 2" here could be read as dismissing
+      // Approval 2 (review fix F3). An unnumbered item (a caller that skipped assignDigestNumbers)
+      // falls back to the task-id form, which resolve-learning-digest still accepts, rather than
+      // printing a number nothing would resolve.
+      const ref = i.n !== undefined ? `task ${i.n}` : `completion ${i.taskId}`;
       const label = i.n ?? idx + 1;
       // Leave-it-done is dismiss, the same escape confirm items already offer (#1936).
       const verb = i.kind === 'undo' ? 'undo' : 'confirm';

@@ -209,8 +209,8 @@ describe('TaskCompletionFromSentHandler', () => {
     const confirmN = digest['22222222-2222-4222-8222-222222222222'].n as number;
     expect(undoN).toBeGreaterThan(0);
     expect(new Set([undoN, confirmN, digest['33333333-3333-4333-8333-333333333333'].n]).size).toBe(3);
-    expect(payload.body).toContain(`Reply \`undo ${undoN}\` or \`dismiss ${undoN}\`.`);
-    expect(payload.body).toContain(`Reply \`confirm ${confirmN}\` or \`dismiss ${confirmN}\`.`);
+    expect(payload.body).toContain(`Reply \`undo task ${undoN}\` or \`dismiss task ${undoN}\`.`);
+    expect(payload.body).toContain(`Reply \`confirm task ${confirmN}\` or \`dismiss task ${confirmN}\`.`);
     expect(payload.body).not.toContain('11111111-1111-4111-8111-111111111111');
   });
 
@@ -234,7 +234,7 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(digest.keep.n).toBe(1);
     // A rewrite of an already-numbered item must not renumber it.
     expect(digest[taskId].n).toBe(3);
-    expect(ctx.__sendNotification.mock.calls[0]![0].body).toContain('`confirm 3`');
+    expect(ctx.__sendNotification.mock.calls[0]![0].body).toContain('`confirm task 3`');
   });
 
   it('numbers new items above the live max, in processing order, so a stale number never hits a new item', async () => {
@@ -469,8 +469,8 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(ctx.__sendNotification).toHaveBeenCalledTimes(1);
     const body = ctx.__sendNotification.mock.calls[0]![0].body as string;
     // ...but it carries ONLY the confirm item, not the failed undo.
-    expect(body).toMatch(/Reply `confirm \d+` or `dismiss \d+`\./);
-    expect(body).not.toMatch(/`undo \d+`/);
+    expect(body).toMatch(/Reply `confirm task \d+` or `dismiss task \d+`\./);
+    expect(body).not.toMatch(/`undo task \d+`/);
   });
 
   it('DOUBLE-RUN: a digest soft-reject blocks completion entirely; a later successful run completes it with the undo note durable (Finding 6)', async () => {

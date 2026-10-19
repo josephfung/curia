@@ -1,6 +1,6 @@
 {
   "name": "approve-action",
-  "description": "Approve a pending approval request. Re-executes the originally blocked skill with principal authorization. Specify short_ref to target a specific request, or omit when only one is pending.",
+  "description": "Approve a pending approval request. Re-executes the originally blocked skill with principal authorization. Specify short_ref to target a specific request, or omit when only one is pending. Approvals ('Approval N') only, not learning items ('task N').",
   "version": "1.0.4",
   "sensitivity": "elevated",
   "action_risk": "none",
