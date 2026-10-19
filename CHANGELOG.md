@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Autonomy gating setting** — `autonomy.gating: band | tier` chooses score-driven or contact-tier gates; ships as `tier`. (#2159)
 - **Judge brief** — escalation judge answers purpose, speaks-as-principal, grounding and necessity from the turn's lookups. (#2159)
 - **ADR-049** — band-driven autonomy replaces the tier escalation policy. (#2159)
+- **Spot-check pool** — autonomous sends and actions are logged for sampling; never graded by the LLM judge. (#2159)
 
 ### Changed
 
@@ -50,10 +51,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Proactive analysis** — no longer implied by default; add "volunteer observations" to your style to keep it. (#2143)
 - **Haiku 5.5** — default fast tier and both judges move to `claude-haiku-5-5`, without thinking or temperature. (#2077)
 - **Judge token caps** — leak and escalation judge verdict caps raised for Haiku 5.5's longer verdicts. (#2077)
+- **Autonomy scoring** — principal verdicts weigh triple; expired approvals no longer count against the score. (#2159)
 
 ### Removed
 
 - **Decision posture** — gone from identity, wizard and console; the autonomy level decides act-vs-ask. (#2143)
+- **`weakExpiredWeight`** — scoring setting retired; expired approvals carry no signal now. (#2159)
 
 ### Fixed
 
