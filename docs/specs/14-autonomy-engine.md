@@ -394,7 +394,7 @@ Key constraints:
 - Score cannot increase if competence error rate exceeds the configured threshold (default 20%)
 - CEO cooldown: no auto-adjustment for 7 days after a manual CEO `set-autonomy`
 - Unparseable LLM-judge replies retry until `unparseableAfterDays` (default 3), then persist null flags with `scored_by: 'llm-judge-unparseable'` so they leave the queue without biasing the capability score
-- `expired` approvals carry no signal: new rows are scored with every flag null, and `computeCapabilityScore` skips old `expired` rows that still carry flags. The former `weakExpiredWeight` setting is gone.
+- `expired` approvals carry no signal: new rows are scored with every flag null, and `computeCapabilityScore` skips old `expired` rows that still carry flags. The former `weakExpiredWeight` setting is retired: a config that still sets it boots, and the value is ignored.
 - A principal's spot-check verdict weighs 3× a judged row of the same age (see Sampling and feedback)
 - All automatic adjustments write to `autonomy_history` with `changed_by: "system"`
 - Delta capped at ±5 per daily pass; `get-autonomy` surfaces trend and scored action count
