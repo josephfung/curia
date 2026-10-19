@@ -18,6 +18,7 @@ import type { EventBus } from '../../../src/bus/bus.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
 import type { SchedulerService } from '../../../src/scheduler/scheduler-service.js';
 import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/autonomy-service.js';
+import { AutonomyService as RealAutonomyService } from '../../../src/autonomy/autonomy-service.js';
 import type { SecretsService } from '../../../src/secrets/secrets-service.js';
 import type { ApprovalTriggerService, ApprovalRequestResult } from '../../../src/autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
@@ -4758,6 +4759,38 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
     expect(vi.mocked(actionLogRepo.insertSampled).mock.calls[0]![0]).toMatchObject({
       toolName: 'executive-profile-update', signals: { gateProceeded: true },
     });
+  });
+
+  it('still returns the tool result when deciding whether to sample throws', async () => {
+    // isSampledTool → minScoreForActionRisk throws on a risk label it does not know. The
+    // action has already run by then, so a throw must not turn its success into a failure.
+    const error = vi.fn();
+    const spyLogger = {
+      ...logger,
+      child: () => ({ warn: vi.fn(), info: vi.fn(), error, debug: vi.fn() }),
+    } as unknown as typeof logger;
+    const { registry, layer, actionLogRepo } = makePoolLayer({ logger: spyLogger });
+    let ran = false;
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), {
+      execute: vi.fn(async () => { ran = true; return { success: true, data: { ok: true } }; }),
+    });
+    const original = RealAutonomyService.minScoreForActionRisk.bind(RealAutonomyService);
+    // Real behaviour for the gates before the handler; throw only once the action has run.
+    const spy = vi.spyOn(RealAutonomyService, 'minScoreForActionRisk').mockImplementation((risk) => {
+      if (ran) throw new Error('Unknown action_risk label: "bogus"');
+      return original(risk);
+    });
+    try {
+      const result = await layer.invoke('calendar-create-event', {}, undefined, agentTurn);
+      expect(result).toEqual({ success: true, data: { ok: true } });
+      expect(actionLogRepo.insertSampled).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName: 'calendar-create-event' }),
+        expect.stringContaining('spot checks'),
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('still returns the tool result, and logs an error with context, when the pool row cannot be written', async () => {

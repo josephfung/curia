@@ -1522,9 +1522,13 @@ export class ExecutionLayer {
     gateProceeded: boolean,
     skillLogger: Logger,
   ): Promise<void> {
-    if (!this.actionLogRepo || !isSampledTool(toolName, actionRisk)) return;
+    if (!this.actionLogRepo) return;
     if (options?.humanApproved || isLivePrincipalTurn(options?.liveTurn, options?.taskMetadata)) return;
     try {
+      // Inside the try: isSampledTool → minScoreForActionRisk throws on an unknown risk label,
+      // and invoke()'s outer catch would turn the action's success into a failure. The action
+      // has already run, so a throw here may cost only its spot-check row.
+      if (!isSampledTool(toolName, actionRisk)) return;
       await this.actionLogRepo.insertSampled({
         taskId: options?.taskEventId ?? options?.parentEventId ?? 'system',
         ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
