@@ -382,7 +382,7 @@ Agents declare a capability tier, and the system resolves it to a concrete model
 model_routing:
   tiers:
     fast:
-      model: claude-haiku-4-5
+      model: claude-haiku-5-5
     standard:
       model: claude-sonnet-4-6
     powerful:
@@ -402,6 +402,8 @@ The `ModelRegistry` holds static metadata (pricing, context window, provider pre
 **Lookup is exact-first, then prefix (#1804).** A model id that is a registry key resolves to its own entry. Otherwise the longest registered prefix matches — `claude-haiku-4-5-20251001` → `claude-haiku-4-5` — and the hit is logged at `warn`, naming both ids, once per distinct model id. A prefix hit means the model is being priced and sized as a *different* model, which is only a guess: `deepseek/deepseek-v4-pro-0813` prefix-matched `deepseek/deepseek-v4-pro` and inherited its rates, booting cleanly while reporting costs that were wrong by roughly 3x. Register a dated snapshot in its own right whenever its metadata differs from the base model's.
 
 **Capabilities are the gate for capability-dependent subsystems (#1553).** A model declares what it can do (e.g. `streaming`, `tools`) and callers preflight against that, not against the provider interface. Voice is the first consumer: a spoken turn needs true streaming (ADR-037) and tool calls, and a provider merely *exposing* `stream()` does not prove either — OpenRouter implements `stream()` for every routed model, including ones that neither stream nor tool-call. Voice boot therefore resolves its model and refuses to start when the registry entry is missing `streaming` or `tools` (or when the model is unknown to the registry at all).
+
+**Request-shape flags (#2077).** Two registry flags change what `AnthropicProvider` sends, so the rule lives in one place rather than at each call site. `rejectsSamplingParams` marks a model that returns a 400 for any non-default `temperature`, `top_p` or `top_k`: the provider omits the temperature a caller passes, and every `llm.call` publisher records `temperature: null` through `sentTemperature()` so the audit row matches the request. `thinksByDefault` marks a model that runs adaptive thinking when the request leaves `thinking` unset: the provider sends `thinking: {type: "disabled"}`, keeping Curia's thinking-off behavior until the reasoning policy is decided (#2044). `claude-haiku-5-5` carries both.
 
 ### Response Normalization
 

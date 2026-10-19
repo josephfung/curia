@@ -43,6 +43,7 @@ import {
 } from './relay-gate-c.js';
 import { buildApprovalDeliveryWake, type ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
+import type { AutonomyGating } from '../autonomy/band-policy.js';
 import type { BullpenService } from '../memory/bullpen.js';
 import {
   REPLY_LOCK_SKILLS,
@@ -142,6 +143,12 @@ export interface DispatcherConfig {
    * When absent/disabled, the ambiguous cell fails closed (escalate).
    */
   escalationJudge?: EscalationJudge;
+  /**
+   * Which policy gates the relay (#2159). Under 'band', a relayed reply skips the tier
+   * Gate C (except #1059's missing-tier fail-closed); the gateway's band review asks all
+   * four questions instead. Default 'tier'.
+   */
+  gating?: AutonomyGating;
   /**
    * When a reply-lock suppresses the coordinator's relay (#1860), the text is
    * filed here instead of on the principal's channel. Absent in tests that
@@ -249,6 +256,7 @@ export class Dispatcher {
   private contactService?: import('../contacts/contact-service.js').ContactService;
   private approvalTrigger?: ApprovalTriggerService;
   private escalationJudge?: EscalationJudge;
+  private gating: AutonomyGating;
   private bullpenService?: BullpenService;
   private principalIdentities?: readonly ChannelIdentity[];
   private principalBacklog?: PrincipalBacklogSource;
@@ -270,6 +278,7 @@ export class Dispatcher {
     this.contactService = config.contactService;
     this.approvalTrigger = config.approvalTrigger;
     this.escalationJudge = config.escalationJudge;
+    this.gating = config.gating ?? 'tier';
     this.bullpenService = config.bullpenService;
     this.principalIdentities = config.principalIdentities;
     this.principalBacklog = config.principalBacklog;
@@ -1505,6 +1514,7 @@ export class Dispatcher {
       conversationId: routing.conversationId,
       channelId: routing.channelId,
       escalationJudge: this.escalationJudge,
+      gating: this.gating,
     });
     if (gateOutcome.kind === 'decide') {
       const audited = await this.publishRelayGateCDecision({
@@ -1711,8 +1721,13 @@ export class Dispatcher {
     senderId: string;
     content: string;
     tier: import('../contacts/types.js').ContactTier | 'unresolved';
+    /** Why the relay is held, shown to the principal. Default: the tier wording. */
+    reason?: string;
   }): Promise<void> {
-    if (!this.approvalTrigger) return;
+    if (!this.approvalTrigger) {
+      this.logger.warn({ taskEventId: args.taskEventId }, 'Dispatcher: relay held but no approval trigger is wired — no approval raised');
+      return;
+    }
     // Do not create an un-fulfillable approval — dispatcher-relay rejects oversized bodies.
     if (args.content.length > RELAY_BODY_MAX_LENGTH) {
       this.logger.warn(
@@ -1741,7 +1756,7 @@ export class Dispatcher {
         currentScore: 0,
         requiredScore: 0,
         dedupePendingSkillsOnTask: [...REPLY_SKILLS_GATE_C],
-        reason:
+        reason: args.reason ??
           `Curia wanted to relay a reply on ${args.channelId}, but the initiating ` +
           `contact's tier ('${args.tier}') requires approval for ${RELAY_ACTION_RISK}-risk actions.`,
       });
@@ -1841,6 +1856,33 @@ export class Dispatcher {
         blockedDraft: ctx.content,
       });
       await this.bus.publish('dispatch', taskEvent);
+      return;
+    }
+
+    // Band gating's bounce (#2159) on the last attempt: the reply needs the principal, not a
+    // salvage draft (which most channels cannot hold, so the reply would be lost).
+    const ungrounded = findings.some((f) => f.rule === 'ungrounded-claim');
+    const unneeded = findings.some((f) => f.rule === 'unneeded-disclosure');
+    if (ungrounded || unneeded) {
+      // The reason is the approval's preamble, so it names only the problems the judge found.
+      const problems = [
+        ...(ungrounded ? ['states things about the principal that nothing it looked up supports'] : []),
+        ...(unneeded ? ['shares details its purpose does not need'] : []),
+      ];
+      this.logger.warn(
+        { agentId: ctx.agentId, conversationId: ctx.conversationId, attempt: ctx.contentBlockRetryAttempt, rules: findings.map((f) => f.rule) },
+        'Dispatcher content-block relay: band bounce after the last retry — asking the principal',
+      );
+      await this.requestRelayGateCApproval({
+        taskEventId: ctx.taskEventId,
+        conversationId: ctx.conversationId,
+        channelId: ctx.channelId,
+        accountId: ctx.accountId,
+        senderId: ctx.senderId,
+        content: event.payload.content,
+        tier: ctx.originator?.tier ?? 'unresolved',
+        reason: `Curia's reply on ${ctx.channelId} still ${problems.join(' and ')}, and it has no rewrites left.`,
+      });
       return;
     }
 

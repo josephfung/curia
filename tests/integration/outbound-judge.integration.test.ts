@@ -7,7 +7,8 @@
 //   3. Principal-sole messages are short-circuited (no model call, always []).
 //   4. Mixed-audience runs emit outbound.judge judged_pass / judged_block (#1911).
 //
-// Model: claude-haiku-4-5 — cheapest Anthropic model, fast enough for CI parity.
+// Model: claude-haiku-5-5 — the default judge model (#2077). The provider sends
+// it no temperature and thinking disabled, so a 400 here means that rule broke.
 
 import { describe, it, expect, vi } from 'vitest';
 import { OutboundLlmJudge } from '../../src/dispatch/outbound-judge.js';
@@ -55,7 +56,7 @@ function makeJudge(bus = makeBus()) {
   return {
     judge: new OutboundLlmJudge(
       provider,
-      { enabled: true, model: 'claude-haiku-4-5', timeoutMs: 15000, failMode: 'split' },
+      { enabled: true, model: 'claude-haiku-5-5', timeoutMs: 15000, failMode: 'split' },
       bus,
       logger,
       registry,

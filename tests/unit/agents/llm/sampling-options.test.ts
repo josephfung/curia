@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseTemperature, resolveTemperature } from '../../../../src/agents/llm/sampling-options.js';
+import { parseTemperature, resolveTemperature, sentTemperature } from '../../../../src/agents/llm/sampling-options.js';
 import type { Logger } from '../../../../src/logger.js';
 
 function mockLogger(): Logger {
@@ -57,5 +57,23 @@ describe('resolveTemperature', () => {
     expect(resolveTemperature({ temperature: NaN }, logger)).toBeUndefined();
     expect(resolveTemperature({ temperature: Infinity }, logger)).toBeUndefined();
     expect(logger.warn).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('sentTemperature (#2077)', () => {
+  it('returns the caller value for a model that accepts sampling parameters', () => {
+    expect(sentTemperature({ temperature: 0 }, false)).toBe(0);
+    expect(sentTemperature({ temperature: 0.7 }, false)).toBe(0.7);
+  });
+
+  it('returns null when unset or invalid', () => {
+    expect(sentTemperature(undefined, false)).toBeNull();
+    expect(sentTemperature({ temperature: 'hot' }, false)).toBeNull();
+  });
+
+  it('returns null for a model that rejects sampling parameters, whatever the caller passed', () => {
+    expect(sentTemperature({ temperature: 0 }, true)).toBeNull();
+    expect(sentTemperature({ temperature: 1 }, true)).toBeNull();
+    expect(sentTemperature(undefined, true)).toBeNull();
   });
 });

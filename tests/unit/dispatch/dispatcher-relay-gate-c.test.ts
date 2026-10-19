@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
+import { createOutboundMessage } from '../../../src/bus/events.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { Logger } from '../../../src/logger.js';
 import {
@@ -27,6 +28,7 @@ import {
   RELAY_GATE_C_ACTION,
   RELAY_GATE_C_HTTP_PENDING_MESSAGE,
   REPLY_SKILLS_GATE_C,
+  relaySendOptions,
 } from '../../../src/dispatch/relay-gate-c.js';
 import type { ApprovalTriggerService } from '../../../src/autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
@@ -170,6 +172,7 @@ function makeStubs(opts: {
   approvalTrigger?: ApprovalTriggerService;
   escalationJudge?: EscalationJudge;
   contactResolver?: ContactResolver;
+  gating?: 'band' | 'tier';
 } = {}) {
   const publishedEvents: BusEvent[] = [];
   const subscribeHandlers = new Map<string, (event: BusEvent) => void | Promise<void>>();
@@ -196,6 +199,7 @@ function makeStubs(opts: {
     approvalTrigger: opts.approvalTrigger,
     escalationJudge: opts.escalationJudge,
     contactResolver: opts.contactResolver,
+    ...(opts.gating ? { gating: opts.gating } : {}),
     channelPolicies: {
       email: { trust: 'medium', unknownSender: 'allow', threaded: true },
       http: { trust: 'medium', unknownSender: 'allow', threaded: false },
@@ -238,6 +242,58 @@ function makeKnownContactResolver(): ContactResolver {
     }),
   } as unknown as ContactResolver;
 }
+
+describe('relaySendOptions (#2159)', () => {
+  it('marks a relayed reply post-turn and replays it through dispatcher-relay if held', () => {
+    const event = createOutboundMessage({
+      conversationId: 'signal:+14155551234', channelId: 'signal', content: 'See you Tuesday.',
+      recipientId: '+14155551234', taskEventId: 'task-1', parentEventId: 'resp-1',
+    });
+    expect(relaySendOptions(event, '+14155551234')).toEqual({
+      postTurn: true,
+      holdRecipe: {
+        toolName: 'dispatcher-relay',
+        partialPayload: { channelId: 'signal', to: '+14155551234', body: 'See you Tuesday.', conversationId: 'signal:+14155551234' },
+        description: 'Reply to +14155551234 on signal',
+      },
+    });
+  });
+
+  it('carries the principal\'s approval of an approved relay as humanApproved', () => {
+    const event = createOutboundMessage({
+      conversationId: 'slack:C1', channelId: 'slack', content: 'x', recipientId: 'U1', parentEventId: 'r', principalApproved: true,
+    });
+    expect(relaySendOptions(event, 'U1')).toMatchObject({ postTurn: true, humanApproved: true });
+  });
+});
+
+describe('decideRelayGateC under band gating (#2159)', () => {
+  const base = { content: 'Adam has the forms.', conversationId: 'conv-1', channelId: 'email' as const };
+
+  it('skips the tier decision: the gateway\'s band review asks all four questions instead', async () => {
+    const judge = makeJudge({ isThirdPartyFacing: true });
+    const outcome = await decideRelayGateC({ originator: makeOriginator('known'), ...base, escalationJudge: judge, gating: 'band' });
+    expect(outcome).toEqual({ kind: 'skip', reason: 'band_gating' });
+    expect((judge as unknown as { classifyAction: ReturnType<typeof vi.fn> }).classifyAction).not.toHaveBeenCalled();
+  });
+
+  it('still fails closed when an external originator has no tier (#1059)', async () => {
+    const outcome = await decideRelayGateC({ originator: makeOriginator(null), ...base, gating: 'band' });
+    expect(outcome).toMatchObject({ kind: 'decide', decision: 'escalate', tier: 'unresolved' });
+  });
+
+  it('relays a known contact\'s reply without the tier gate when the dispatcher runs band gating', async () => {
+    const { dispatcher, publishedEvents, subscribeHandlers } = makeStubs({ gating: 'band' });
+    dispatcher.register();
+    seedRouting(dispatcher, 'task-band', { originator: makeOriginator('known') });
+
+    await subscribeHandlers.get('agent.response')!(createAgentResponse({
+      agentId: 'coordinator', conversationId: 'conv-1', content: 'Adam has the forms.', parentEventId: 'task-band',
+    }));
+
+    expect(publishedEvents.filter((e) => e.type === 'outbound.message')).toHaveLength(1);
+  });
+});
 
 describe('Dispatcher relay Gate C (#1733)', () => {
   it('withholds outbound.message and emits authorization.decision escalate for known-tier (no judge)', async () => {

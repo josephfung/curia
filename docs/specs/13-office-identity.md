@@ -17,7 +17,11 @@ The key principle:
 
 > **Character is a property of the office, not of each agent.**
 
-Specialist agents do not have personalities. They have task-specific posture. Only the Coordinator expresses the office identity outward.
+The office has one voice, and every agent that writes outward uses it (#2143). The
+coordinator gets the identity block as who it is; every other agent gets the same contract
+in writes-as mode (see [Specialists](#specialists)), because its own YAML already says what
+it is. Until #2143, specialist agents had no identity block at all, and messages they wrote
+to the principal or to third parties carried no tone, length or standing preferences.
 
 ---
 
@@ -249,6 +253,41 @@ Whatever your tone, say plainly when you are unsure or don't know something.
 - Prioritize signal over noise — surface only what's actionable or strategic
 - Escalate ambiguity before taking external action
 ```
+
+---
+
+## Specialists
+
+Every agent other than the coordinator gets `compileWritesAsBlock()`: the same block, with
+section 2 replaced by:
+
+```
+**Who you write as:**
+Anything you write for the principal or for anyone outside the office goes out from
+<name>, <title>, and follows the contract below.
+Anything written in the principal's own name (drafts, posts, essays) follows the
+principal's voice, not this contract.
+Results you return to the coordinator or another agent are not covered; include
+everything they need.
+```
+
+- **No opt-in flag.** Core and deployment agents can't be told apart at runtime (a
+  deployment's image copies its agents into the same directory), and no agent needs to
+  opt out yet. The two scoping sentences do the flag's job:
+  - **Writing as the principal.** ceo-inbox drafts in the principal's voice from
+    `executive-profile-get`; so do a deployment's essay or social-media agents. They keep
+    that voice. Scenario 40e guards it.
+  - **Reporting to the coordinator.** A result a specialist returns is not shortened by a
+    length limit meant for the principal.
+- **Standing preferences are included on purpose:** a rule about what a recap contains
+  binds whichever agent writes the recap.
+- **A separate method, not a parameter,** so a stub that only knows the coordinator block
+  fails to compile instead of quietly serving it to specialists.
+- **No per-turn length reminder** reaches a specialist: delegated, bullpen and scheduled
+  tasks arrive on channels with no length row.
+- **The voice runtime** keeps the coordinator block.
+- **The prompt budget** counts only YAML prompts and SKILL.md bodies, so the block, about
+  400 tokens for the default identity, is not budgeted.
 
 ---
 

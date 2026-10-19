@@ -171,11 +171,12 @@ describe('ModelRegistry', () => {
     });
   });
 
-  describe('all three Anthropic models are registered', () => {
+  describe('all Anthropic models are registered', () => {
     it.each([
       'claude-opus-4-6',
       'claude-sonnet-4-6',
       'claude-haiku-4-5',
+      'claude-haiku-5-5',
     ])('%s is registered with provider, pricing, contextWindow, and capabilities', (model) => {
       const meta = registry.getModel(model);
       expect(meta).toBeDefined();
@@ -184,6 +185,42 @@ describe('ModelRegistry', () => {
       expect(meta!.pricing.inputPerMToken).toBeGreaterThan(0);
       expect(meta!.pricing.outputPerMToken).toBeGreaterThan(0);
       expect(meta!.capabilities).toContain('vision');
+    });
+  });
+
+  // Haiku 5.5 replaces Haiku 4.5 as the default fast tier and judge model (#2077).
+  describe('claude-haiku-5-5 (#2077)', () => {
+    it('has its own entry, distinct from claude-haiku-4-5, with a 1M context window', () => {
+      const meta = registry.getModel('claude-haiku-5-5');
+      expect(meta).toBeDefined();
+      expect(meta).not.toBe(registry.getModel('claude-haiku-4-5'));
+      expect(meta!.contextWindow).toBe(1_000_000);
+    });
+
+    it('records the <=100K-token rates', () => {
+      expect(registry.getPricing('claude-haiku-5-5')).toEqual({
+        inputPerMToken: 0.10,
+        outputPerMToken: 0.50,
+        cacheCreationPerMToken: 0.125,
+        cacheReadPerMToken: 0.01,
+      });
+    });
+
+    it('keeps the default 4096 output cap Haiku 4.5 runs at', () => {
+      expect(registry.getModel('claude-haiku-5-5')!.maxOutputTokens).toBeUndefined();
+      expect(registry.getModel('claude-haiku-4-5')!.maxOutputTokens).toBeUndefined();
+    });
+
+    it('is flagged as rejecting sampling parameters and thinking by default', () => {
+      expect(registry.rejectsSamplingParams('claude-haiku-5-5')).toBe(true);
+      expect(registry.thinksByDefault('claude-haiku-5-5')).toBe(true);
+    });
+
+    it('leaves claude-haiku-4-5 and unknown models unflagged', () => {
+      expect(registry.rejectsSamplingParams('claude-haiku-4-5')).toBe(false);
+      expect(registry.thinksByDefault('claude-haiku-4-5')).toBe(false);
+      expect(registry.rejectsSamplingParams('no-such-model')).toBe(false);
+      expect(registry.thinksByDefault('no-such-model')).toBe(false);
     });
   });
 
@@ -217,6 +254,7 @@ describe('ModelRegistry', () => {
       'claude-opus-4-6',
       'claude-sonnet-4-6',
       'claude-haiku-4-5',
+      'claude-haiku-5-5',
       'google/gemini-3.1-flash-lite',
       'deepseek/deepseek-chat-v3-0324',
       'deepseek/deepseek-v4-pro',

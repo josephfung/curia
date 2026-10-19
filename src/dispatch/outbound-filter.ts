@@ -10,6 +10,12 @@
 //     reports which, and bootstrap logs it (#1870). Skipped for sends the principal
 //     directed — see FilterCheckInput.principalDirected.
 //
+// Under `autonomy.gating: band` (#2159, ADR-049) the contact-data-leak rule and Stage 2.5
+// are off: contact tier no longer decides what a recipient may be told. The gateway's
+// BandSendReview asks the escalation judge's brief instead. The integrity rules
+// (secret-pattern, system-prompt-fragment, internal-structure, principal-note-markup) and
+// Stage 2 run under both.
+//
 // Security principle: each stage is an independent boundary. Stage 1 failures
 // short-circuit immediately; Stages 2 and 2.5 only run on clean Stage 1 output.
 //
@@ -27,6 +33,7 @@ import type { OutboundJudge, JudgeInput } from './outbound-judge.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import { tierPermitsAllDisclosure } from '../autonomy/escalation-policy.js';
 import { NOTE_TAG } from '../agents/principal-note.js';
+import type { AutonomyGating } from '../autonomy/band-policy.js';
 
 /**
  * What the agent is told when the principal-note-markup rule blocks a send. Fixed text,
@@ -102,7 +109,7 @@ export interface FilterResult {
  * Whether Stage 2.5 can run. 'no-judge' means no escalation judge was wired;
  * 'judge-disabled' means one was wired but the escalation.judge kill switch is off.
  */
-export type DisclosureGateStatus = 'active' | 'no-judge' | 'judge-disabled';
+export type DisclosureGateStatus = 'active' | 'no-judge' | 'judge-disabled' | 'band-review';
 
 export interface OutboundContentFilterConfig {
   // Phrases from the system prompt. If any appear in outbound content, it's
@@ -129,6 +136,8 @@ export interface OutboundContentFilterConfig {
   escalationJudge?: EscalationJudge;
   /** Optional logger for principal-bypass audit trails on Stage 1 rules. */
   logger?: Logger;
+  /** 'band' (#2159): contact-data-leak and Stage 2.5 are off; BandSendReview reviews the send instead. Default 'tier'. */
+  gating?: AutonomyGating;
 }
 
 // Bus event type names that should never appear in outbound messages.
@@ -240,6 +249,7 @@ export class OutboundContentFilter {
    * at boot, not only as an absence from the audit log (#1870).
    */
   disclosureGateStatus(): DisclosureGateStatus {
+    if (this.config.gating === 'band') return 'band-review';
     if (!this.escalationJudge) return 'no-judge';
     return this.escalationJudge.isEnabled() ? 'active' : 'judge-disabled';
   }
@@ -270,7 +280,10 @@ export class OutboundContentFilter {
       ...this.checkSystemPromptFragments(normalizedContent, principalIsSoleRecipient),
       ...this.checkInternalStructure(normalizedContent, principalIsSoleRecipient),
       ...this.checkSecretPatterns(normalizedContent),
-      ...this.checkContactDataLeak(normalizedContent, input.recipientEmail, input.recipientTier),
+      // Tier-keyed: off under band gating (#2159).
+      ...(this.config.gating === 'band'
+        ? []
+        : this.checkContactDataLeak(normalizedContent, input.recipientEmail, input.recipientTier)),
       ...this.checkPrincipalNoteMarkup(normalizedContent, principalIsSoleRecipient),
     ];
 
@@ -609,6 +622,8 @@ export class OutboundContentFilter {
    * error). The outer try/catch in check() handles any truly unexpected throws.
    */
   private async runEscalationJudge(input: FilterCheckInput): Promise<FilterFinding[]> {
+    // Replaced by the gateway's BandSendReview under band gating (#2159).
+    if (this.config.gating === 'band') return [];
     // Treat a disabled judge the same as an absent one — both are a no-op pass.
     // A disabled judge is an operator kill switch; we don't want it hard-blocking
     // every message (which is what classifyDisclosure returns when enabled=false).

@@ -32,6 +32,17 @@ export const REGISTER_LINE = 'Match the register of any example lines above, not
 export const HONESTY_LINE = "Whatever your tone, say plainly when you are unsure or don't know something.";
 
 /**
+ * The writes-as block's scoping sentences (#2143). They do what a per-agent flag would
+ * have: an agent writing in the principal's own name (ceo-inbox drafts, a deployment's
+ * essay or social-media drafts) keeps the principal's voice, and a result returned to the
+ * coordinator is never shortened by a length limit meant for the principal.
+ */
+export const WRITES_AS_SCOPE_LINES: readonly string[] = [
+  "Anything written in the principal's own name (drafts, posts, essays) follows the principal's voice, not this contract.",
+  'Results you return to the coordinator or another agent are not covered; include everything they need.',
+];
+
+/**
  * Whether a config's tone can be rendered: a non-empty style and an in-range verbosity.
  * A stored row is not re-validated on read, so the renderer checks before interpolating
  * rather than writing "undefined" into every agent's prompt.
@@ -270,7 +281,7 @@ export class OfficeIdentityService {
   }
 
   /**
-   * Compiles the identity config into a system prompt block.
+   * Compiles the identity config into the coordinator's system prompt block.
    *
    * Output order (constraints-first, per spec):
    *   1. Hard constraints (labeled section, placed first)
@@ -288,6 +299,30 @@ export class OfficeIdentityService {
    */
   compileSystemPromptBlock(): string {
     const id = this.get();
+    return this.compileBlock(['**Who you are:**', `You are ${id.assistant.name}, ${id.assistant.title}.`]);
+  }
+
+  /**
+   * The same contract for every other agent, in "writes-as" mode (#2143): a specialist's
+   * own YAML already says who it is ("You are the Meeting Debrief Specialist"), so section
+   * 2 says who its outward writing goes out from instead, and scopes the contract with two
+   * fixed sentences. Everything else is identical to compileSystemPromptBlock(), standing
+   * preferences included: a rule about what a recap contains binds whichever agent writes
+   * it. A separate method, not a flag, so a stub that only knows the coordinator block
+   * fails to compile rather than quietly serving it to specialists.
+   */
+  compileWritesAsBlock(): string {
+    const id = this.get();
+    return this.compileBlock([
+      '**Who you write as:**',
+      `Anything you write for the principal or for anyone outside the office goes out from ${id.assistant.name}, ${id.assistant.title}, and follows the contract below.`,
+      ...WRITES_AS_SCOPE_LINES,
+    ]);
+  }
+
+  /** The block around section 2, which differs between the coordinator and other agents. */
+  private compileBlock(whoLines: readonly string[]): string {
+    const id = this.get();
     const lines: string[] = [];
 
     lines.push('## Identity & Communication Contract');
@@ -300,9 +335,8 @@ export class OfficeIdentityService {
     }
     lines.push('');
 
-    // 2. Identity header.
-    lines.push('**Who you are:**');
-    lines.push(`You are ${id.assistant.name}, ${id.assistant.title}.`);
+    // 2. Who the agent is, or who it writes as.
+    lines.push(...whoLines);
     lines.push('');
 
     // 3–4. Style and length, only when the tone can be rendered.

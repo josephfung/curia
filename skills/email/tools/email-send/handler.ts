@@ -238,6 +238,8 @@ export class EmailSendHandler implements ToolHandler {
         conversationId: ctx.conversationId,
         humanApproved: ctx.humanApproved,
         principalDirected: isPrincipalDirectedSend(ctx),
+        // Used only if band review holds this send (#2159): approval replays this skill with this input.
+        holdRecipe: { toolName: 'email-send', partialPayload: ctx.input, description: `Email to ${toAddresses[0]} — "${subject}"` },
         ...(attachmentsParsed.length > 0
           ? {
             reExecRecipe: {

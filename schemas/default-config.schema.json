@@ -231,7 +231,8 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "model": { "type": "string" },
-            "timeout_ms": { "type": "integer", "minimum": 250 }
+            "timeout_ms": { "type": "integer", "minimum": 250 },
+            "review_timeout_ms": { "type": "integer", "minimum": 250 }
           }
         }
       }
@@ -450,6 +451,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "gating": { "type": "string", "enum": ["band", "tier"] },
         "bypass_ladder": {
           "type": "object",
           "additionalProperties": false,

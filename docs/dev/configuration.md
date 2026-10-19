@@ -172,6 +172,20 @@ scheduler:
 
 ---
 
+### `autonomy.gating`
+
+Which policy decides when Curia asks first (#2159, [ADR-049](../adr/049-band-driven-autonomy.md)).
+
+```yaml
+autonomy:
+  gating: tier   # or band
+```
+
+- `tier` (the default): contact tier gates consequential actions (Gate C) and what a recipient may be told (Stage 2.5 of the outbound filter).
+- `band`: the autonomy score decides. The escalation judge reviews each send for an outsider steering Curia, for statements in the principal's voice, and for claims about the principal that the drafting turn did not look up. `contact-data-leak` and Stage 2.5 are off.
+
+`band` needs the escalation judge: config load refuses `gating: band` with `escalation.judge.enabled: false`. The judge's brief has its own timeout, `escalation.judge.review_timeout_ms` (default 15000, between 250 and 2147483647), longer than the classifiers' `timeout_ms` because it reads the turn's evidence. The live gating is logged at boot. See [spec 14](../specs/14-autonomy-engine.md#band-gating-2159).
+
 ### `autonomy.approval_expiry`
 
 How often the approval sweep runs.
