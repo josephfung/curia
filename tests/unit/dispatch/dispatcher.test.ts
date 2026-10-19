@@ -2431,7 +2431,30 @@ describe('Dispatcher content-block relay (#1355)', () => {
     expect(salvage!.payload.content).toContain(`Rewritten attempt ${CONTENT_BLOCK_MAX_RETRIES}`);
   });
 
-  it('asks the principal, rather than salvaging or dropping, when a band bounce comes after the last retry (#2159)', async () => {
+  // The reason becomes the approval's preamble, so it must name the problem the judge found.
+  it.each([
+    {
+      label: 'an unsupported claim',
+      lastFindings: [{ rule: 'ungrounded-claim', detail: 'These claims… "I am away."' }],
+      says: ['nothing it looked up supports'],
+      doesNotSay: ['its purpose does not need'],
+    },
+    {
+      label: 'an unneeded disclosure',
+      lastFindings: [{ rule: 'unneeded-disclosure', detail: 'Shares details… "account 4417".' }],
+      says: ['its purpose does not need'],
+      doesNotSay: ['nothing it looked up supports'],
+    },
+    {
+      label: 'both',
+      lastFindings: [
+        { rule: 'ungrounded-claim', detail: 'These claims… "I am away."' },
+        { rule: 'unneeded-disclosure', detail: 'Shares details… "account 4417".' },
+      ],
+      says: ['nothing it looked up supports', 'its purpose does not need'],
+      doesNotSay: [],
+    },
+  ])('asks the principal, naming $label, when a band bounce comes after the last retry (#2159)', async ({ lastFindings, says, doesNotSay }) => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     const outboundMessages: OutboundMessageEvent[] = [];
@@ -2459,7 +2482,7 @@ describe('Dispatcher content-block relay (#1355)', () => {
       // Stage 2 blocks the early attempts; band review bounces the last one.
       const last = attempt === CONTENT_BLOCK_MAX_RETRIES;
       const findings = last
-        ? [{ rule: 'ungrounded-claim', detail: 'These claims… "I am away."' }]
+        ? lastFindings
         : [{ rule: 'llm-judge-audience-leak', detail: 'named internal agent' }];
       await bus.publish('dispatch', createOutboundBlocked({
         blockId: `block_${attempt}`, conversationId: 'signal:+14155551234', channelId: 'signal',
@@ -2480,6 +2503,9 @@ describe('Dispatcher content-block relay (#1355)', () => {
       toolName: 'dispatcher-relay',
       input: expect.objectContaining({ channelId: 'signal', to: '+14155551234', body: `Rewritten attempt ${CONTENT_BLOCK_MAX_RETRIES}` }),
     }));
+    const reason = (request.mock.calls[0]![0] as { reason: string }).reason;
+    for (const phrase of says) expect(reason).toContain(phrase);
+    for (const phrase of doesNotSay) expect(reason).not.toContain(phrase);
   });
 
   it('clears relayOutbound when autonomy.send_blocked carries the outbound message id', async () => {

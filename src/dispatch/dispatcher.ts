@@ -1861,7 +1861,14 @@ export class Dispatcher {
 
     // Band gating's bounce (#2159) on the last attempt: the reply needs the principal, not a
     // salvage draft (which most channels cannot hold, so the reply would be lost).
-    if (findings.some((f) => f.rule === 'ungrounded-claim' || f.rule === 'unneeded-disclosure')) {
+    const ungrounded = findings.some((f) => f.rule === 'ungrounded-claim');
+    const unneeded = findings.some((f) => f.rule === 'unneeded-disclosure');
+    if (ungrounded || unneeded) {
+      // The reason is the approval's preamble, so it names only the problems the judge found.
+      const problems = [
+        ...(ungrounded ? ['states things about the principal that nothing it looked up supports'] : []),
+        ...(unneeded ? ['shares details its purpose does not need'] : []),
+      ];
       this.logger.warn(
         { agentId: ctx.agentId, conversationId: ctx.conversationId, attempt: ctx.contentBlockRetryAttempt, rules: findings.map((f) => f.rule) },
         'Dispatcher content-block relay: band bounce after the last retry — asking the principal',
@@ -1874,7 +1881,7 @@ export class Dispatcher {
         senderId: ctx.senderId,
         content: event.payload.content,
         tier: ctx.originator?.tier ?? 'unresolved',
-        reason: `Curia's reply on ${ctx.channelId} still states things about the principal that nothing it looked up supports, and it has no rewrites left.`,
+        reason: `Curia's reply on ${ctx.channelId} still ${problems.join(' and ')}, and it has no rewrites left.`,
       });
       return;
     }
