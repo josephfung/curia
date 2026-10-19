@@ -285,6 +285,7 @@
             "batchSize": { "type": "integer", "minimum": 1 },
             "minScoredActions": { "type": "integer", "minimum": 1 },
             "halfLifeDays": { "type": "number", "minimum": 1 },
+            "weakExpiredWeight": { "description": "Retired in #2159: accepted and ignored, so configs that still set it keep booting. Safe to remove." },
             "ceoCooldownDays": { "type": "integer", "minimum": 0 },
             "errorRateThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
             "unparseableAfterDays": { "type": "integer", "minimum": 0 }

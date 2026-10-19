@@ -140,6 +140,14 @@ describe('startup validator — default config', () => {
       runWith({ config: path.join(F, 'config/unknown-key') }),
     ).rejects.toThrow(/trust-policy/);
   });
+
+  // #2159 retired autonomy_scoring.weakExpiredWeight. A config that still sets it must
+  // keep booting: the key is accepted and ignored, never a reason to refuse startup.
+  it('passes for a config that still sets the retired weakExpiredWeight', async () => {
+    await expect(
+      runWith({ config: path.join(F, 'config/retired-weak-expired-weight') }),
+    ).resolves.toBeUndefined();
+  });
 });
 
 // ── skills.yaml (MCP server config) validation ──────────────────────────────

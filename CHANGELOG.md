@@ -56,7 +56,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Removed
 
 - **Decision posture** — gone from identity, wizard and console; the autonomy level decides act-vs-ask. (#2143)
-- **`weakExpiredWeight`** — scoring setting retired; expired approvals carry no signal now. (#2159)
+- **`weakExpiredWeight`** — scoring setting retired and ignored if set; safe to delete from configs. (#2159)
 
 ### Fixed
 

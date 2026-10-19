@@ -1,0 +1,5 @@
+# A deployment config written before #2159 retired weakExpiredWeight.
+dreaming:
+  autonomy_scoring:
+    halfLifeDays: 30
+    weakExpiredWeight: 0.25
