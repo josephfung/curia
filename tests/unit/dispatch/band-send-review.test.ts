@@ -107,6 +107,34 @@ describe('BandSendReview', () => {
     expect(review.mock.calls[2]![0]).toMatchObject({ questions: ['grounding'], message: 'Hi Joel. Adam has the forms.' });
   });
 
+  it('shows the drafter only quotes that are in its message, never other text the judge echoed', async () => {
+    const { svc } = make([{ ...clean, unsupportedClaims: [CLAIM, 'The principal\'s home address is 12 Example Road.'] }]);
+    const d = await svc.review(base);
+    expect(d.kind).toBe('bounce');
+    if (d.kind === 'bounce') {
+      expect(d.findings[0]!.detail).toContain(CLAIM);
+      expect(d.findings[0]!.detail).not.toContain('12 Example Road');
+    }
+  });
+
+  it('still bounces, with a general finding, when none of the quotes are in the message', async () => {
+    const { svc } = make([{ ...clean, unsupportedClaims: ['Something the message never said.'] }]);
+    const d = await svc.review(base);
+    expect(d.kind).toBe('bounce');
+    if (d.kind === 'bounce') {
+      expect(d.findings[0]!.rule).toBe('ungrounded-claim');
+      expect(d.findings[0]!.detail).not.toContain('never said');
+    }
+  });
+
+  it('holds rather than trim a quote too short to cut safely', async () => {
+    // A steered judge quoting "not" would flip a sentence's meaning.
+    const content = 'Hi Joel. The principal will not sign it. Adam has the forms.';
+    const { svc } = make([{ ...clean, unsupportedClaims: ['not'] }, { ...clean, unsupportedClaims: ['not'] }]);
+    await svc.review({ ...base, content });
+    expect((await svc.review({ ...base, content })).kind).toBe('hold');
+  });
+
   it('bounces an unneeded disclosure with its own rule', async () => {
     const { svc } = make([{ ...clean, unnecessaryItems: ['account 4417-0099'] }]);
     const d = await svc.review({ ...base, content: 'Hi Joel. Your account 4417-0099 is fine.' });
@@ -162,6 +190,15 @@ describe('BandSendReview', () => {
     });
     const at74 = make([failure]);
     expect((await at74.svc.review({ ...base, score: 74 })).kind).toBe('hold');
+  });
+
+  it('holds, rather than failing open, when the judge fails on the recheck of a bounced draft', async () => {
+    // The claim was already flagged; sending it unchanged because the reviewer is down
+    // would send exactly what the review found wrong.
+    const { svc } = make([{ ...clean, unsupportedClaims: [CLAIM] }, { ok: false, failure: 'unreachable' }]);
+    await svc.review(base);
+    const d = await svc.review(base);
+    expect(d.kind).toBe('hold');
   });
 
   it('treats unavailable evidence as a judge failure without calling the judge', async () => {

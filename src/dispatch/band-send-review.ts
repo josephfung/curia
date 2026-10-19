@@ -35,6 +35,9 @@ import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { FilterFinding } from './outbound-filter.js';
 
 const BOUNCE_TTL_MS = 30 * 60_000;
+// The shortest quote trimming will cut. A steered or careless judge quoting a word such as
+// "not" would flip a sentence's meaning; a real unsupported statement is longer than this.
+const MIN_TRIM_QUOTE_CHARS = 12;
 const ALL_QUESTIONS: readonly BriefQuestion[] = ['purpose', 'speaks-as-principal', 'grounding', 'necessity'];
 
 export const BAND_RULES = {
@@ -85,6 +88,7 @@ export function removeQuoted(content: string, quotes: readonly string[]): string
   for (const raw of quotes) {
     const quote = raw.trim();
     if (!quote) continue;
+    if (quote.length < MIN_TRIM_QUOTE_CHARS) return null;
     const at = out.indexOf(quote);
     if (at === -1) return null;
     out = out.slice(0, at) + out.slice(at + quote.length);
@@ -112,6 +116,12 @@ export class BandSendReview {
     const verdict = await this.ask(input, this.questionsFor(input), taskIds, input.content);
     if (!verdict.ok) {
       this.bounced.delete(key);
+      if (prior) {
+        // This draft already bounced on a finding the drafter has not shown resolved.
+        // Failing open now would send exactly what the review flagged, so hold instead.
+        this.deps.logger.warn({ conversationId: input.conversationId, failure: verdict.failure }, 'band review: reviewer unavailable on the recheck of a bounced draft — holding');
+        return this.hold(BAND_RULES.unreviewed, 'Held for the principal: it was flagged for unverified statements, and the reviewer was unavailable to recheck it.');
+      }
       return this.onJudgeFailure(input, verdict.failure);
     }
     this.deps.limiter.recordJudgeSuccess();
@@ -144,7 +154,7 @@ export class BandSendReview {
         { conversationId: input.conversationId, channel: input.channel, claims: claims.length, items: items.length },
         'band review: bounced to the drafter',
       );
-      return { kind: 'bounce', findings: this.bounceFindings(claims, items) };
+      return { kind: 'bounce', findings: this.bounceFindings(input.content, claims, items) };
     }
 
     // The one bounce is spent.
@@ -229,18 +239,31 @@ export class BandSendReview {
     return { kind: 'hold', reason, findings: [{ rule, detail: reason }] };
   }
 
-  private bounceFindings(claims: string[], items: string[]): FilterFinding[] {
+  /**
+   * The drafter is shown only quotes that are verbatim in its own message. Anything else the
+   * judge wrote (a paraphrase, or text echoed from the evidence) is left out, so a bounce
+   * never carries text the message did not already contain. With no verbatim quote left the
+   * finding still stands, in general terms: the judge did flag something.
+   */
+  private bounceFindings(content: string, claims: string[], items: string[]): FilterFinding[] {
+    const inMessage = (quotes: string[]) => quotes.map((q) => q.trim()).filter((q) => q.length > 0 && content.includes(q));
     const findings: FilterFinding[] = [];
     if (claims.length > 0) {
+      const shown = inMessage(claims);
       findings.push({
         rule: BAND_RULES.ungrounded,
-        detail: `These claims about the principal are not backed by anything you looked up this turn: ${claims.map((c) => `"${c}"`).join('; ')}. Verify them with your tools or remove them.`,
+        detail: shown.length > 0
+          ? `These claims about the principal are not backed by anything you looked up this turn: ${shown.map((c) => `"${c}"`).join('; ')}. Verify them with your tools or remove them.`
+          : 'Some statements about the principal are not backed by anything you looked up this turn. Verify them with your tools or remove them.',
       });
     }
     if (items.length > 0) {
+      const shown = inMessage(items);
       findings.push({
         rule: BAND_RULES.unneeded,
-        detail: `This message shares details its purpose does not need: ${items.map((c) => `"${c}"`).join('; ')}. Remove them unless the recipient needs them.`,
+        detail: shown.length > 0
+          ? `This message shares details its purpose does not need: ${shown.map((c) => `"${c}"`).join('; ')}. Remove them unless the recipient needs them.`
+          : 'This message shares details its purpose does not need. Remove them unless the recipient needs them.',
       });
     }
     return findings;

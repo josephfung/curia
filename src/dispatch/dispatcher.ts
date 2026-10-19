@@ -1721,8 +1721,13 @@ export class Dispatcher {
     senderId: string;
     content: string;
     tier: import('../contacts/types.js').ContactTier | 'unresolved';
+    /** Why the relay is held, shown to the principal. Default: the tier wording. */
+    reason?: string;
   }): Promise<void> {
-    if (!this.approvalTrigger) return;
+    if (!this.approvalTrigger) {
+      this.logger.warn({ taskEventId: args.taskEventId }, 'Dispatcher: relay held but no approval trigger is wired — no approval raised');
+      return;
+    }
     // Do not create an un-fulfillable approval — dispatcher-relay rejects oversized bodies.
     if (args.content.length > RELAY_BODY_MAX_LENGTH) {
       this.logger.warn(
@@ -1751,7 +1756,7 @@ export class Dispatcher {
         currentScore: 0,
         requiredScore: 0,
         dedupePendingSkillsOnTask: [...REPLY_SKILLS_GATE_C],
-        reason:
+        reason: args.reason ??
           `Curia wanted to relay a reply on ${args.channelId}, but the initiating ` +
           `contact's tier ('${args.tier}') requires approval for ${RELAY_ACTION_RISK}-risk actions.`,
       });
@@ -1851,6 +1856,26 @@ export class Dispatcher {
         blockedDraft: ctx.content,
       });
       await this.bus.publish('dispatch', taskEvent);
+      return;
+    }
+
+    // Band gating's bounce (#2159) on the last attempt: the reply needs the principal, not a
+    // salvage draft (which most channels cannot hold, so the reply would be lost).
+    if (findings.some((f) => f.rule === 'ungrounded-claim' || f.rule === 'unneeded-disclosure')) {
+      this.logger.warn(
+        { agentId: ctx.agentId, conversationId: ctx.conversationId, attempt: ctx.contentBlockRetryAttempt, rules: findings.map((f) => f.rule) },
+        'Dispatcher content-block relay: band bounce after the last retry — asking the principal',
+      );
+      await this.requestRelayGateCApproval({
+        taskEventId: ctx.taskEventId,
+        conversationId: ctx.conversationId,
+        channelId: ctx.channelId,
+        accountId: ctx.accountId,
+        senderId: ctx.senderId,
+        content: event.payload.content,
+        tier: ctx.originator?.tier ?? 'unresolved',
+        reason: `Curia's reply on ${ctx.channelId} still states things about the principal that nothing it looked up supports, and it has no rewrites left.`,
+      });
       return;
     }
 

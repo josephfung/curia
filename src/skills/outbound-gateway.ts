@@ -582,6 +582,11 @@ export class OutboundGateway {
     this.outboundQueueReadiness = new Map(config.outboundQueueReadiness ?? []);
     this.gating = config.gating ?? 'tier';
     this.bandReview = config.bandReview;
+    if (this.gating === 'band' && !this.bandReview) {
+      // The filter turns contact-data-leak and Stage 2.5 off under band; without the review
+      // that replaces them, sends would go out with no disclosure review at all.
+      this.log.error({ gating: this.gating }, 'outbound-gateway: band gating without a band review — sends get no disclosure review');
+    }
   }
 
   /**
@@ -1597,7 +1602,6 @@ export class OutboundGateway {
     this.approvalDelivery = approvalDelivery;
   }
 
-  /** Wake the coordinator to deliver an approval nobody is there to deliver (#2159). Never throws. */
   /**
    * Write a pending_approval row for a held send, register what the principal will be shown,
    * queue its one digest mention, and wake the coordinator for a relayed reply (#2159).
@@ -1612,7 +1616,10 @@ export class OutboundGateway {
     extraLines: string[],
   ): Promise<string | undefined> {
     const actionLogRepo = this.actionLogRepo;
-    if (!actionLogRepo) return undefined;
+    if (!actionLogRepo) {
+      this.log.warn({ channel: request.channel }, 'outbound-gateway: no action log wired — a held send cannot raise an approval');
+      return undefined;
+    }
     // Hoist candidateRef so the display registration names the row the insert wrote.
     const candidateRef = generateShortRef();
     try {
@@ -1741,6 +1748,19 @@ export class OutboundGateway {
     const rule = decision.findings[0]?.rule ?? BAND_RULES.unreviewed;
     const recipe = options?.holdRecipe ?? options?.reExecRecipe;
     this.log.info({ channel: request.channel, rule, hasRecipe: recipe !== undefined }, 'outbound-gateway: band review held the send');
+    // A hold with no approval behind it reaches nobody unless it is reported: the agent may
+    // be gone (a relayed reply), and nothing else records it. The digest gets it then.
+    const reportUnapprovedHold = async (why: string): Promise<void> => {
+      this.log.warn({ channel: request.channel, rule, why }, 'outbound-gateway: band hold raised no approval — reporting it to the digest');
+      await this.queueBlockReport(
+        [
+          `Outbound ${request.channel} message to ${recipients.join(', ')} was held by the send review, and no approval request could be raised (${why}).`,
+          `Reason: ${decision.reason}`,
+        ].join('\n'),
+        options?.conversationId ?? undefined,
+        options?.taskEventId ?? options?.parentEventId ?? 'system',
+      );
+    };
     if (recipe && options?.taskEventId) {
       const actionRef = await this.raiseSendApproval(
         request,
@@ -1748,6 +1768,7 @@ export class OutboundGateway {
         { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn },
         [`Held by the send review: ${decision.reason}`],
       );
+      if (!actionRef) await reportUnapprovedHold('the approval row could not be written');
       return {
         content,
         result: {
@@ -1760,6 +1781,7 @@ export class OutboundGateway {
         },
       };
     }
+    await reportUnapprovedHold(recipe ? 'the send has no task to attach it to' : 'this send has no way to replay it');
     return {
       content,
       result: { success: false, blockedReason: `${decision.reason} Ask the principal before sending it.`, blockedRules: [rule] },
@@ -1825,6 +1847,7 @@ export class OutboundGateway {
     }
   }
 
+  /** Wake the coordinator to deliver an approval nobody is there to deliver (#2159). Never throws. */
   private async wakeCoordinatorToDeliver(shortRef: string, description: string, taskEventId: string): Promise<void> {
     try {
       await this.bus.publish('dispatch', buildApprovalDeliveryWake(shortRef, description, taskEventId));

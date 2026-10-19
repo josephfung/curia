@@ -251,6 +251,26 @@ describe('SignalSendHandler', () => {
     );
   });
 
+  it('passes an approved replay on as humanApproved, so band review does not hold it again (#2159)', async () => {
+    const gateway = { send: vi.fn().mockResolvedValue({ success: true }) };
+    const ctx = makeCtx({ input: { recipient: BOB_ID, message: 'hello' }, gateway });
+    Object.assign(ctx, { humanApproved: true });
+    await handler.execute(ctx);
+    expect(gateway.send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ humanApproved: true }));
+  });
+
+  it('passes an approved group replay on as humanApproved (#2159)', async () => {
+    const gateway = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+      getSignalGroupMembers: vi.fn().mockResolvedValue(['+14155551234']),
+    };
+    const contactService = { resolveByChannelIdentity: vi.fn().mockResolvedValue({ contactId: 'c1', tier: 'known' }) };
+    const ctx = makeCtx({ input: { group_id: 'grpABC==', message: 'team update' }, gateway, contactService });
+    Object.assign(ctx, { humanApproved: true });
+    await handler.execute(ctx);
+    expect(gateway.send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ humanApproved: true }));
+  });
+
   it('marks the send principalDirected on a live principal turn (#1870)', async () => {
     const gateway = { send: vi.fn().mockResolvedValue({ success: true }) };
     const ctx = makeCtx({ input: { recipient: BOB_ID, message: 'hello' }, gateway });

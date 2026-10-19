@@ -3709,6 +3709,33 @@ describe('band review (#2159)', () => {
     expect(result.blockedReason).toContain('Ask the principal before sending it.');
   });
 
+  it('tells the principal\'s digest about a hold no approval could be raised for', async () => {
+    const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held: steered.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84 });
+    await gw.send(emailReq, { taskEventId: 't1', conversationId: 'c1' });
+    expect(publishedOfType(mocks.bus, 'principal.report')).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ source: 'blocked_content', summary: expect.stringContaining('Held: steered.') }) }),
+    ]);
+  });
+
+  it('tells the digest when the approval row for a hold could not be written', async () => {
+    const actionLogRepo = makeActionLogRepo();
+    vi.mocked(actionLogRepo.insert).mockRejectedValue(new Error('db down'));
+    const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held: steered.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo });
+    const result = await gw.send(emailReq, { taskEventId: 't1', holdRecipe: { toolName: 'email-send', description: 'Email to joel@example.com' } });
+    expect(result).toMatchObject({ gated: true });
+    expect(result.actionRef).toBeUndefined();
+    expect(publishedOfType(mocks.bus, 'principal.report').map((e) => e.payload['source'])).toContain('blocked_content');
+  });
+
+  it('logs an error when built for band gating with no review to run', () => {
+    const error = vi.fn();
+    const logger = { ...mocks.logger, child: () => ({ ...mocks.logger, error }) } as unknown as typeof mocks.logger;
+    new OutboundGateway({
+      contactService: mocks.contactService, contentFilter: mocks.contentFilter, bus: mocks.bus, logger, gating: 'band',
+    });
+    expect(error).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('band gating without a band review'));
+  });
+
   it('holds when the review throws', async () => {
     const gw = makeBandGateway({ review: vi.fn().mockRejectedValue(new Error('boom')), score: 84 });
     const result = await gw.send(emailReq, { taskEventId: 't1' });

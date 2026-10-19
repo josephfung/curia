@@ -100,6 +100,16 @@ describe('slack-send handler', () => {
       },
     );
 
+    it('passes an approved replay on as humanApproved, so band review does not hold it again (#2159)', async () => {
+      const send = vi.fn().mockResolvedValue({ success: true, messageId: '1.2' });
+      await new SlackSendHandler().execute(makeCtx({
+        input: { recipient: 'principal', message: 'Hello' },
+        outboundGateway: { send, resolveRecipientReference } as never,
+        humanApproved: true,
+      }));
+      expect(send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ humanApproved: true }));
+    });
+
     it('sends nothing when the reference does not resolve', async () => {
       const send = vi.fn();
       const result = await new SlackSendHandler().execute(makeCtx({
