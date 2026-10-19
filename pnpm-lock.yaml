@@ -150,6 +150,9 @@ importers:
       sanitize-html:
         specifier: ^2.18.0
         version: 2.18.0
+      tldts:
+        specifier: ^7.4.18
+        version: 7.4.18
     devDependencies:
       '@types/chokidar':
         specifier: ^2.1.7
@@ -5392,14 +5395,18 @@ packages:
   tldts-core@7.4.10:
     resolution: {integrity: sha512-KnQjp53ZekKgm/r3l+u8kJGGzYgrWdP8+Mql7a4vijh2WE0IrZWspQj/TpTxDho/YxO+AnOZnIjQcCD+q6iJsw==}
 
-  tldts-core@7.4.8:
-    resolution: {integrity: sha512-c1P7u0EhACHj7lPy4MJm8iTFEU8+nB0LCtddH0fhP7noaVoXAqafMtOOeX+ulpuPBqnrRgRhw494RICT3mbhnw==}
+  tldts-core@7.4.18:
+    resolution: {integrity: sha512-KI2PKvCmvQI/xD6ypPqkU0i7oxNXR/O58RLRaHR4svsgVUQ2JE/XC8BtMbG6PSehD27I8sZJRcC1ASnCy6lp3g==}
 
   tldts-experimental@7.4.10:
     resolution: {integrity: sha512-l+FUGTqw3cYLnM6uL45IhdIG1ue9N7ZnMe9ZFC0S3/ROTL6xkJrUFQvsjfqSD9YzywDvgWj9uRZTXib3v3bnHw==}
 
   tldts-experimental@7.4.8:
     resolution: {integrity: sha512-BhnfwjtvAhq2ea0vglBojLEvn2QtZFZenstPQt75O8RtSqf8Xgh2vh7ksD4afpKwqjUNKg9ze2f18C8KbmSy7A==}
+
+  tldts@7.4.18:
+    resolution: {integrity: sha512-somxA8xKAUzlAxl0TX/jMSYIbRNFIVGnI96pVGJPeMc5BsHmfVXn6mOJT6U++ELnl04eGfzpfcEuZe8WiASkXg==}
+    hasBin: true
 
   toad-cache@3.7.4:
     resolution: {integrity: sha512-m1TdR/rvT7kgGJZhspNtXdsdYk0fddFpJJFlG5s+UkPFo6lkLoZ3YLOaovPYjq1R75NP5JfeTlSHaOsE09peCg==}
@@ -11343,7 +11350,7 @@ snapshots:
 
   tldts-core@7.4.10: {}
 
-  tldts-core@7.4.8: {}
+  tldts-core@7.4.18: {}
 
   tldts-experimental@7.4.10:
     dependencies:
@@ -11351,7 +11358,11 @@ snapshots:
 
   tldts-experimental@7.4.8:
     dependencies:
-      tldts-core: 7.4.8
+      tldts-core: 7.4.10
+
+  tldts@7.4.18:
+    dependencies:
+      tldts-core: 7.4.18
 
   toad-cache@3.7.4: {}
 
