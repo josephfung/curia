@@ -697,6 +697,16 @@ describe('ActionLogRepo', () => {
       expect(queries[1]!.sql).toContain("outcome <> 'expired'");
     });
 
+    it('findTerminalBetween reads newest first with a default limit of 1000', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const since = new Date('2026-10-18T00:00:00Z');
+      const until = new Date('2026-10-19T00:00:00Z');
+      await repo.findTerminalBetween(since, until);
+      expect(queries[0]!.sql).toContain('ORDER BY created_at DESC');
+      expect(queries[0]!.params[3]).toBe(1000);
+    });
+
     it('maps ids to numbers', async () => {
       const { pool } = makePool([{ id: '9', parent_action_id: '4', task_id: 't', skill_name: 'x', action_risk: 'low', outcome: 'success', created_at: new Date().toISOString() }]);
       const repo = new ActionLogRepo(pool, createSilentLogger());

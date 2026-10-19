@@ -625,14 +625,22 @@ export class ActionLogRepo {
     };
   }
 
-  /** Terminal autonomy rows in a half-open [since, until) window for activity recap enrichment. */
-  async findTerminalBetween(since: Date, until: Date, limit = 200): Promise<ActionLogRow[]> {
+  /**
+   * Terminal autonomy rows in a half-open [since, until) window for activity recap enrichment.
+   *
+   * Newest first, with a generous limit: since #2159 Phase 3 the spot-check pool writes a
+   * success row for every autonomous triage action (ceo-inbox triage runs every 15 minutes),
+   * so a busy window easily exceeds a few hundred rows. Ascending order cut off the NEWEST
+   * rows, which are the ones the recap most needs to match. The caller matches rows by tool
+   * and time window, so order carries no meaning beyond which rows survive the limit.
+   */
+  async findTerminalBetween(since: Date, until: Date, limit = 1000): Promise<ActionLogRow[]> {
     const result = await this.pool.query(
       `SELECT * FROM autonomy_action_log
        WHERE created_at >= $1
          AND created_at < $2
          AND outcome = ANY($3)
-       ORDER BY created_at ASC
+       ORDER BY created_at DESC
        LIMIT $4`,
       [since, until, TERMINAL_OUTCOMES, limit],
     );
