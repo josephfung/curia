@@ -58,8 +58,11 @@ function partialFailureError(
   return `record-spot-check did not record every verdict. ${parts.join(' ')}`;
 }
 
+// Tells the coordinator the form to ask for: after a clarifying question the principal often
+// answers in words, which records nothing, since only typed pairs count.
 const NOT_TYPED_ERROR =
-  'record-spot-check only records the numbers and verdicts the principal typed in this message. Nothing was recorded.';
+  'record-spot-check only records the numbers and verdicts the principal typed in this message. Nothing was recorded. ' +
+  'To record a verdict, ask the principal to reply in the form "N good" or "N bad" (e.g. "3 bad").';
 
 /**
  * Whether every requested { n, verdict } is among the pairs the dispatcher stamped from the

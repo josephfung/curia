@@ -9,8 +9,13 @@ import { createSilentLogger } from '../../../src/logger.js';
 
 const HOUR = 3_600_000;
 const NOW = Date.parse('2026-10-19T12:00:00.000Z');
-const NO_MATCH = 'No spot check in the last 24 hours matches this reply. Ask the principal which action they mean; do not guess.';
-const NO_SET_ON_THREAD = 'No spot check went out on this email thread. Ask the principal which action they mean; do not guess.';
+const NO_MATCH =
+  'No spot check in the last 24 hours matches this reply. Ask the principal which action they mean; do not guess. ' +
+  'Only verdicts the principal types are recorded, so ask them to reply in the form "N good" or "N bad" (e.g. "3 bad").';
+const NO_SET_ON_THREAD =
+  'No spot check went out on this email thread. Ask the principal which action they mean; do not guess. ' +
+  'Only verdicts the principal types are recorded, so ask them to reply on the digest\'s own email thread ' +
+  'in the form "N good" or "N bad" (e.g. "3 bad").';
 
 function makeSet(over: Partial<SpotCheckSet> = {}): SpotCheckSet {
   return {
@@ -176,6 +181,7 @@ describe('matchVerdicts', () => {
     expect(error).toContain('2. Archived an email from Sam.');
     expect(error).toContain('3. Declined a vendor call from Priya.');
     expect(error).toContain('Ask the principal which action they mean');
+    expect(error).toContain('ask them to reply in the form "N good" or "N bad" (e.g. "3 bad")');
   });
 
   it('fails when the same number is given two different verdicts', () => {
@@ -186,6 +192,7 @@ describe('matchVerdicts', () => {
 
     expect(result.ok).toBe(false);
     expect((result as { error: string }).error).toMatch(/2/);
+    expect((result as { error: string }).error).toContain('in the form "N good" or "N bad"');
   });
 
   it('collapses the same number given twice with the same verdict to one match', () => {

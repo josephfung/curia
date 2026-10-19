@@ -27,13 +27,25 @@ export type ResolveSetResult = { ok: true; set: SpotCheckSet } | { ok: false; er
 const FALLBACK_WINDOW_MS = 24 * 3_600_000;
 const EMAIL_CONVERSATION_PREFIX = 'email:';
 
+/**
+ * Appended to every refusal the coordinator may relay. Only the number-and-verdict pairs the
+ * principal types are recorded (the dispatcher's spotCheckVerdicts stamp), so an answer in
+ * words to a clarifying question ("the renewal one was bad") can never be recorded. Asking for
+ * the exact form is what lets the principal's next reply land.
+ */
+export const SPOT_CHECK_REPLY_FORM =
+  'Only verdicts the principal types are recorded, so ask them to reply in the form "N good" or "N bad" (e.g. "3 bad").';
+
 const NO_MATCHING_SET =
-  'No spot check in the last 24 hours matches this reply. Ask the principal which action they mean; do not guess.';
+  'No spot check in the last 24 hours matches this reply. Ask the principal which action they mean; do not guess. ' +
+  SPOT_CHECK_REPLY_FORM;
 const NEWER_SET_DRAWN =
   'A newer spot check was drawn after the latest one delivered, so these numbers may refer to either. ' +
-  'Ask the principal which action they mean; do not guess.';
+  `Ask the principal which action they mean; do not guess. ${SPOT_CHECK_REPLY_FORM}`;
 const NO_SET_ON_THREAD =
-  'No spot check went out on this email thread. Ask the principal which action they mean; do not guess.';
+  'No spot check went out on this email thread. Ask the principal which action they mean; do not guess. ' +
+  'Only verdicts the principal types are recorded, so ask them to reply on the digest\'s own email thread ' +
+  'in the form "N good" or "N bad" (e.g. "3 bad").';
 
 /**
  * Find the digest set a reply refers to.
@@ -97,7 +109,7 @@ export function matchVerdicts(
       ok: false,
       error:
         `This spot check has no number ${unknown.join(', ')}. Its numbers are:\n${describeItems(set)}\n` +
-        'Ask the principal which action they mean; do not guess. Nothing was recorded.',
+        `Ask the principal which action they mean; do not guess. Nothing was recorded. ${SPOT_CHECK_REPLY_FORM}`,
     };
   }
 
@@ -110,7 +122,7 @@ export function matchVerdicts(
           ok: false,
           error:
             `Number ${v.n} was given both good and bad. Ask the principal which they mean; do not guess. ` +
-            'Nothing was recorded.',
+            `Nothing was recorded. ${SPOT_CHECK_REPLY_FORM}`,
         };
       }
       // Same verdict repeated: keep the first, but take a reason if only the repeat carried one.

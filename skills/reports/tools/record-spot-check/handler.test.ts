@@ -131,7 +131,8 @@ describe('RecordSpotCheckHandler', () => {
   // principal typed, stamped by the dispatcher into trusted metadata, may be recorded.
   describe('only the numbers and verdicts the principal typed (F2)', () => {
     const TYPED_ONLY =
-      'record-spot-check only records the numbers and verdicts the principal typed in this message. Nothing was recorded.';
+      'record-spot-check only records the numbers and verdicts the principal typed in this message. Nothing was recorded. ' +
+      'To record a verdict, ask the principal to reply in the form "N good" or "N bad" (e.g. "3 bad").';
 
     it.each([
       ['a verdict the principal did not type', [{ n: 2, verdict: 'good' }]],
@@ -185,6 +186,39 @@ describe('RecordSpotCheckHandler', () => {
 
       expect(result.success).toBe(true);
       expect(recordPrincipalVerdict).toHaveBeenCalledWith(102, false, 'it was a renewal notice, not a request');
+    });
+  });
+
+  // After a clarifying question the principal often answers in words ("the renewal one was
+  // bad"), which records nothing: only typed pairs count (F2). Every refusal the coordinator may
+  // relay therefore says which form to ask for.
+  describe('every refusal tells the coordinator the reply form to ask for', () => {
+    const FORM = 'in the form "N good" or "N bad" (e.g. "3 bad")';
+
+    it.each([
+      ['a verdict the principal did not type', () => makeCtx({
+        input: { verdicts: [{ n: 2, verdict: 'bad' }] },
+        taskMetadata: { ...PRINCIPAL, spotCheckVerdicts: [] },
+      })],
+      ['an email reply on a thread with no digest', () => {
+        store.findByEmailThread.mockResolvedValue(null);
+        return makeCtx();
+      }],
+      ['a chat reply with no digest in 24 hours', () => makeCtx({ channelId: 'signal', conversationId: 'signal:+15550100' })],
+      ['a chat reply when a newer set was drawn', () => {
+        store.findLatestDelivered.mockResolvedValue(SET);
+        store.hasSetCreatedAfter.mockResolvedValue(true);
+        return makeCtx({ channelId: 'signal', conversationId: 'signal:+15550100' });
+      }],
+      ['an unknown number', () => makeCtx({ input: { verdicts: [{ n: 5, verdict: 'good' }] } })],
+    ] as const)('%s', async (_label, setup) => {
+      const { ctx, recordPrincipalVerdict } = setup();
+
+      const result = await new RecordSpotCheckHandler().execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain(FORM);
+      expect(recordPrincipalVerdict).not.toHaveBeenCalled();
     });
   });
 
