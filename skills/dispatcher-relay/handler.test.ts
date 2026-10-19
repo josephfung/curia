@@ -14,6 +14,14 @@ function makeCtx(overrides: Partial<ToolContext> & { input: Record<string, unkno
 }
 
 describe('DispatcherRelayHandler', () => {
+  it('marks the relay principal-approved only on an approved re-execution (#2159)', async () => {
+    const published: BusEvent[] = [];
+    const bus = { publish: vi.fn(async (_layer: string, event: BusEvent) => { published.push(event); }) };
+    const input = { channelId: 'signal', to: '+14155551234', body: 'x', conversationId: 'signal:+14155551234' };
+    await new DispatcherRelayHandler().execute(makeCtx({ bus: bus as unknown as ToolContext['bus'], input, taskEventId: 't' }));
+    expect(published[0]?.type === 'outbound.message' && published[0].payload.principalApproved).toBeFalsy();
+  });
+
   it('publishes outbound.message for an approved relay', async () => {
     const published: BusEvent[] = [];
     const bus = {
@@ -31,6 +39,7 @@ describe('DispatcherRelayHandler', () => {
         conversationId: 'email:thread-1',
       },
       taskEventId: 'task-1',
+      humanApproved: true,
     }));
 
     expect(result.success).toBe(true);
