@@ -68,3 +68,37 @@ export function isSampledTool(toolName: string, actionRisk: ActionRisk): boolean
   if (TRIAGE_SKILLS.has(toolName)) return true;
   return AutonomyService.minScoreForActionRisk(actionRisk) >= AutonomyService.minScoreForActionRisk('medium');
 }
+
+/**
+ * High (3): what the spec asks to check most. Low (1): routine logistics. Never zero.
+ *
+ * Weights are relative, so the 3:1 ratio is what matters. Routine actions keep a weight of 1
+ * rather than 0: a zero-weight candidate is only ever chosen once nothing else is left, so
+ * a zero would shut routine actions out of the sample almost entirely.
+ */
+export function sampleWeight(signals: SampleSignals): number {
+  const high = signals.speaksAsPrincipal === true || signals.firstContact === true
+    || signals.review !== undefined || signals.gateProceeded === true || signals.triage === true;
+  return high ? 3 : 1;
+}
+
+/**
+ * Weighted random selection without replacement. `random` is injected so tests can seed it.
+ *
+ * Each pick removes the chosen candidate before the next draw, so a heavy candidate cannot
+ * be picked twice. The floor on weights (Number.MIN_VALUE) keeps a non-positive weight from
+ * dropping a candidate out of the draw.
+ */
+export function selectSamples<T>(candidates: readonly T[], weightOf: (c: T) => number, cap: number, random: () => number): T[] {
+  const pool = candidates.map((c) => ({ c, w: Math.max(weightOf(c), Number.MIN_VALUE) }));
+  const picked: T[] = [];
+  while (picked.length < cap && pool.length > 0) {
+    const total = pool.reduce((sum, p) => sum + p.w, 0);
+    let r = random() * total;
+    let i = 0;
+    while (i < pool.length - 1 && r >= pool[i]!.w) { r -= pool[i]!.w; i++; }
+    picked.push(pool[i]!.c);
+    pool.splice(i, 1);
+  }
+  return picked;
+}

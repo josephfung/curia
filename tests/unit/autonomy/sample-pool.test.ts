@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isSampledTool, TRIAGE_SKILLS } from '../../../src/autonomy/sample-pool.js';
+import { isSampledTool, sampleWeight, selectSamples, TRIAGE_SKILLS } from '../../../src/autonomy/sample-pool.js';
 
 describe('isSampledTool', () => {
   it('leaves sends to the gateway, which records them itself', () => {
@@ -31,5 +31,37 @@ describe('isSampledTool', () => {
   it('skips web-browser, which floods the pool, and voice-learn, which only proposes', () => {
     expect(isSampledTool('web-browser', 'medium')).toBe(false);
     expect(isSampledTool('voice-learn', 'medium')).toBe(false);
+  });
+});
+
+describe('sampleWeight', () => {
+  it('weighs speaking for the principal, first contact, a judge intervention, a proceeded gate and triage high', () => {
+    for (const s of [{ speaksAsPrincipal: true }, { firstContact: true }, { review: 'trimmed' as const }, { review: 'bounced' as const }, { review: 'unreviewed' as const }, { gateProceeded: true }, { triage: true }]) {
+      expect(sampleWeight(s)).toBe(3);
+    }
+  });
+  it('weighs routine actions low but never zero', () => {
+    expect(sampleWeight({})).toBe(1);
+  });
+});
+
+describe('selectSamples', () => {
+  it('returns at most the cap, without repeats', () => {
+    const picked = selectSamples([1, 2, 3, 4, 5], () => 1, 3, () => 0.5);
+    expect(picked).toHaveLength(3);
+    expect(new Set(picked).size).toBe(3);
+  });
+  it('returns everything when there are fewer candidates than the cap', () => {
+    expect(selectSamples(['a'], () => 1, 3, Math.random)).toEqual(['a']);
+  });
+  it('favours heavy candidates', () => {
+    let heavy = 0;
+    let seed = 1;
+    const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    for (let i = 0; i < 2000; i++) {
+      if (selectSamples(['light', 'heavy'], (c) => (c === 'heavy' ? 3 : 1), 1, rand)[0] === 'heavy') heavy++;
+    }
+    expect(heavy / 2000).toBeGreaterThan(0.7);
+    expect(heavy / 2000).toBeLessThan(0.8);
   });
 });
