@@ -76,8 +76,8 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0
       chrono-node:
-        specifier: ^2.10.1
-        version: 2.10.1
+        specifier: ^2.10.3
+        version: 2.10.3
       cose-base:
         specifier: ^2.2.0
         version: 2.2.0
@@ -2814,8 +2814,8 @@ packages:
     resolution: {integrity: sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw==}
     engines: {node: '>= 20.19.0'}
 
-  chrono-node@2.10.1:
-    resolution: {integrity: sha512-tPOsBzYVAK5zth+CiHCgp5NGeqRc4mMD8FPthQ5IxkgjPWWxIFdM5odnmfw//IRAzl6C++Xy8olQW7wn5qBR1g==}
+  chrono-node@2.10.3:
+    resolution: {integrity: sha512-MOfrzXgSMZTH4SZ5gyRKQCVwiCrCKY+uYkSJiWoRLXS88DA6WGJm8UjgS+VVEuUQeew/UUXaxrO+SeDn/WCisg==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   cli-cursor@5.0.0:
@@ -5322,8 +5322,8 @@ packages:
   strnum@2.4.2:
     resolution: {integrity: sha512-rDG3Ah4TV0k1hWvLSzkZtMmLN9+eS+h3knq4MP6A42Y3Yh5qGNnOUs1jJkoSr8FG5dsL28c7KgkIBzSEykqtuw==}
 
-  strtok3@10.6.1:
-    resolution: {integrity: sha512-p8ynRS8lXnvA3tsdcUYFjbzwh2MsdBZgxrFT2G+Yb7vNvUfPF+GgHCt/0jkayfsRXA1TwtZstf+JA0V+iQXdHA==}
+  strtok3@10.6.2:
+    resolution: {integrity: sha512-BkdixFFUt7r7LsX6aGNPVyYMLjW+M1USLlKPNbZsrZEmLFh5tGqhdfckKo6xgsZIJqdDD0CZGkeCJJwNWQIKQA==}
     engines: {node: '>=18'}
 
   sucrase@3.35.1:
@@ -8439,7 +8439,7 @@ snapshots:
     dependencies:
       readdirp: 5.0.0
 
-  chrono-node@2.10.1: {}
+  chrono-node@2.10.3: {}
 
   cli-cursor@5.0.0:
     dependencies:
@@ -9145,7 +9145,7 @@ snapshots:
   file-type@21.3.4:
     dependencies:
       '@tokenizer/inflate': 0.4.1
-      strtok3: 10.6.1
+      strtok3: 10.6.2
       token-types: 6.1.2
       uint8array-extras: 1.6.0
     transitivePeerDependencies:
@@ -11274,7 +11274,7 @@ snapshots:
     dependencies:
       anynum: 1.0.1
 
-  strtok3@10.6.1:
+  strtok3@10.6.2:
     dependencies:
       '@tokenizer/token': 0.3.0
     optional: true
