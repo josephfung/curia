@@ -45,6 +45,16 @@ describe('renderCoordinatorVerificationBlock', () => {
     );
   });
 
+  it('names each verification_id, which satisfy and abandon take', () => {
+    const block = renderCoordinatorVerificationBlock(
+      [view(), view({ id: 'ver-2', site: 'rbc.com', browserSessionId: 'sess-bbb' })],
+      opts,
+    );
+    expect(block).toMatch(/- aircanada\.com: .*, verification_id ver-1\n/);
+    expect(block).toMatch(/- rbc\.com: .*, verification_id ver-2\n/);
+    expect(block).toContain('`verification satisfy` with its verification_id');
+  });
+
   it('marks session gone when the browser has no session', () => {
     const block = renderCoordinatorVerificationBlock([view({ sessionAlive: false })], opts);
     expect(block).toContain('session sess-aaa gone');
@@ -94,6 +104,7 @@ describe('renderCoordinatorVerificationBlock', () => {
     expect(block).toContain("don't question, lecture or refuse");
     expect(block).toContain('Enter a code only in the session and site listed.');
     expect(block).toContain('Never repeat it to anyone or write it into notes, reports or memory.');
+    expect(block).toContain('In a task note or reply, call it "the code", never its digits.');
     expect(block).toContain('Email codes: delegate the read to ceo-inbox.');
     expect(block).toContain("don't re-trigger one unasked");
     expect(block).toContain('`verification satisfy`');

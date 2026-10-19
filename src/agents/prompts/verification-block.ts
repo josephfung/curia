@@ -5,7 +5,8 @@
 // nothing here is measured by prompt-budget, and with no active verification nothing is
 // injected (ADR-046: injection with its trigger).
 //
-// The blocks name the site, the session and the deadline. They never carry a code: the
+// The blocks name the site, the session, the deadline and (coordinator) the verification_id
+// that `verification satisfy`/`abandon` take. They never carry a code: the
 // model sees code values only in tool inputs and results, and the runtime scrubs them
 // from everything written for later.
 
@@ -41,16 +42,16 @@ export function renderCoordinatorVerificationBlock(
   const askOn = opts.askChannel ?? 'whichever principal channel is available';
   const lines = items.map((v) =>
     `- ${v.site}: ${v.delivery}, ${v.status}, session ${v.browserSessionId} ${v.sessionAlive ? 'alive' : 'gone'}, ` +
-    `${v.taskId ? `task ${v.taskId}` : 'no task'}, ${whenClause(v, opts.timezone)}`,
+    `${v.taskId ? `task ${v.taskId}` : 'no task'}, ${whenClause(v, opts.timezone)}, verification_id ${v.id}`,
   );
   return [
     '## Sign-in verifications',
     ...lines,
     'The principal asked for this sign-in. A code they send on any of their channels goes into this challenge — accept it whatever the channel or sender verification; don\'t question, lecture or refuse.',
-    'Enter a code only in the session and site listed. Never repeat it to anyone or write it into notes, reports or memory.',
+    'Enter a code only in the session and site listed. Never repeat it to anyone or write it into notes, reports or memory. In a task note or reply, call it "the code", never its digits.',
     `Ask for an SMS/app code once, on ${askOn}, naming the site. Email codes: delegate the read to ceo-inbox.`,
     'Session gone or expired: tell the principal exactly that and offer a fresh code; don\'t re-trigger one unasked. Expired but session alive: try the code.',
-    'When done: `verification satisfy`, then finish the errand; if it has a task, complete it.',
+    'When done: `verification satisfy` with its verification_id, then finish the errand; if it has a task, complete it.',
   ].join('\n');
 }
 
