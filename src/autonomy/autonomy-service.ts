@@ -294,7 +294,10 @@ export class AutonomyService {
   async getScoredActionCount(): Promise<number> {
     try {
       const result = await this.pool.query<{ count: string }>(
-        `SELECT COUNT(*) AS count FROM autonomy_action_log WHERE scored_by IS NOT NULL`,
+        // Sample-pool rows carry scored_by from the moment they are written but have no verdict
+        // until the principal gives one (#2159 Phase 3); they are not scored actions yet.
+        `SELECT COUNT(*) AS count FROM autonomy_action_log
+         WHERE scored_by IS NOT NULL AND scored_by <> 'sample-pool'`,
       );
       return parseInt(result.rows[0]!.count, 10);
     } catch (err) {

@@ -636,4 +636,73 @@ describe('ActionLogRepo', () => {
       expect(rows).toHaveLength(0);
     });
   });
+
+  // Spot-check pool (#2159 Phase 3)
+  describe('sample pool (#2159 Phase 3)', () => {
+    it('insertSampled writes a success row the LLM judge will skip', async () => {
+      const { pool, queries } = makePool([{ id: '42' }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const id = await repo.insertSampled({
+        taskId: 't1', conversationId: 'email:th1', toolName: 'email-send', actionRisk: 'medium',
+        summary: 'Emailed dana@example.com: "Re: Payment schedule"', signals: { firstContact: true },
+      });
+      expect(id).toBe(42);
+      const params = queries[0]!.params;
+      expect(params[4]).toBe('success');                     // outcome
+      expect(params[9]).toBe('Emailed dana@example.com: "Re: Payment schedule"'); // description
+      expect(params[11]).toBeNull();                         // competence_flag
+      expect(params[14]).toBe('sample-pool');                // scored_by
+      expect(JSON.parse(params[6] as string)).toEqual({ sample: { signals: { firstContact: true } } });
+    });
+
+    it('findSampleCandidates reads unsampled pool rows since a date', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const since = new Date('2026-10-12T00:00:00Z');
+      await repo.findSampleCandidates(since, 200);
+      expect(queries[0]!.sql).toContain("scored_by = 'sample-pool'");
+      expect(queries[0]!.sql).toContain("payload->'sample'->>'sampledAt' IS NULL");
+      expect(queries[0]!.params).toEqual([since, 200]);
+    });
+
+    it('markSampled stamps the ids, and does nothing for an empty list', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.markSampled([], new Date('2026-10-19T12:00:00Z'));
+      expect(queries).toHaveLength(0);
+      await repo.markSampled([3, 4], new Date('2026-10-19T12:00:00Z'));
+      expect(queries[0]!.params).toEqual([[3, 4], '2026-10-19T12:00:00.000Z']);
+    });
+
+    it('recordPrincipalVerdict sets competence only, and only on pool rows', async () => {
+      const { pool, queries } = makePool([{ id: '7' }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      expect(await repo.recordPrincipalVerdict(7, false, 'that was a renewal notice')).toBe(true);
+      expect(queries[0]!.sql).toContain("scored_by IN ('sample-pool', 'principal')");
+      expect(queries[0]!.params).toEqual([7, 0, JSON.stringify({ good: false, reason: 'that was a renewal notice' })]);
+    });
+
+    it('recordPrincipalVerdict returns false when the id is not a pool row', async () => {
+      const { pool } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      expect(await repo.recordPrincipalVerdict(8, true, null)).toBe(false);
+    });
+
+    it('countScored and findAllScored leave out expired rows', async () => {
+      const { pool, queries } = makeSequentialPool([[{ count: '0' }], []]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.countScored();
+      await repo.findAllScored();
+      expect(queries[0]!.sql).toContain("outcome <> 'expired'");
+      expect(queries[1]!.sql).toContain("outcome <> 'expired'");
+    });
+
+    it('maps ids to numbers', async () => {
+      const { pool } = makePool([{ id: '9', parent_action_id: '4', task_id: 't', skill_name: 'x', action_risk: 'low', outcome: 'success', created_at: new Date().toISOString() }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const rows = await repo.findSampleCandidates(new Date(0), 10);
+      expect(rows[0]!.id).toBe(9);
+      expect(rows[0]!.parentActionId).toBe(4);
+    });
+  });
 });

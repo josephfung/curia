@@ -13,6 +13,8 @@ import type {
   ResolveResult,
 } from './action-log-types.js';
 import { TERMINAL_OUTCOMES } from './action-log-types.js';
+import { SAMPLE_POOL_SCORED_BY } from './sample-pool.js';
+import type { SampledActionInsert } from './sample-pool.js';
 
 export class ActionLogRepo {
   constructor(
@@ -124,9 +126,12 @@ export class ActionLogRepo {
    * must not count toward `minScoredActions`.
    */
   async countScored(): Promise<number> {
+    // outcome <> 'expired': expired approvals carry no signal (#2159 Phase 3), including rows
+    // scored before the rule changed.
     const result = await this.pool.query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM autonomy_action_log
        WHERE scored_by IS NOT NULL
+         AND outcome <> 'expired'
          AND (competence_flag IS NOT NULL
            OR commitment_flag IS NOT NULL
            OR compatibility IS NOT NULL)`,
@@ -172,9 +177,12 @@ export class ActionLogRepo {
    * must not push real evidence out of the window.
    */
   async findAllScored(limit = 500): Promise<ActionLogRow[]> {
+    // outcome <> 'expired': expired approvals carry no signal (#2159 Phase 3), including rows
+    // scored before the rule changed.
     const result = await this.pool.query(
       `SELECT * FROM autonomy_action_log
        WHERE scored_by IS NOT NULL
+         AND outcome <> 'expired'
          AND (competence_flag IS NOT NULL
            OR commitment_flag IS NOT NULL
            OR compatibility IS NOT NULL)
@@ -183,6 +191,67 @@ export class ActionLogRepo {
       [limit],
     );
     return result.rows.map(mapRow);
+  }
+
+  /** Record an autonomous action in the spot-check pool (#2159 Phase 3). Never LLM-scored. */
+  async insertSampled(row: SampledActionInsert): Promise<number> {
+    return this.insert({
+      taskId: row.taskId,
+      ...(row.conversationId ? { conversationId: row.conversationId } : {}),
+      toolName: row.toolName,
+      actionRisk: row.actionRisk,
+      outcome: 'success',
+      description: row.summary,
+      payload: { sample: { signals: row.signals } },
+      // scored_by set + every flag null: findUnscoredTerminal skips the row and the scorer
+      // ignores it until the principal gives a verdict.
+      scoredBy: SAMPLE_POOL_SCORED_BY,
+    });
+  }
+
+  /** Pool rows not yet shown in a spot check, newest first. */
+  async findSampleCandidates(since: Date, limit: number): Promise<ActionLogRow[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE outcome = 'success'
+         AND scored_by = 'sample-pool'
+         AND created_at >= $1
+         AND payload->'sample'->>'sampledAt' IS NULL
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [since, limit],
+    );
+    return result.rows.map(mapRow);
+  }
+
+  /** Mark pool rows as shown, so the next digest draws different ones. */
+  async markSampled(ids: readonly number[], at: Date): Promise<void> {
+    if (ids.length === 0) return;
+    await this.pool.query(
+      `UPDATE autonomy_action_log
+       SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{sample,sampledAt}', to_jsonb($2::text), true)
+       WHERE id = ANY($1::bigint[])`,
+      [ids, at.toISOString()],
+    );
+  }
+
+  /**
+   * The principal's spot-check verdict (#2159 Phase 3): competence only, scored_by 'principal'.
+   * A second verdict on the same row replaces the first. False when the id is not a pool row.
+   */
+  async recordPrincipalVerdict(id: number, good: boolean, reason: string | null): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE autonomy_action_log
+       SET competence_flag = $2,
+           scored_by = 'principal',
+           payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{sample,verdict}', $3::jsonb, true)
+       WHERE id = $1
+         AND outcome = 'success'
+         AND scored_by IN ('sample-pool', 'principal')
+       RETURNING id`,
+      [id, good ? 1 : 0, JSON.stringify({ good, reason })],
+    );
+    return result.rows.length > 0;
   }
 
   /**
@@ -639,7 +708,8 @@ export class ActionLogRepo {
 /** Map a snake_case DB row to a camelCase ActionLogRow. */
 function mapRow(row: Record<string, unknown>): ActionLogRow {
   return {
-    id: row.id as number,
+    // pg returns int8 (BIGSERIAL) as a string; the spot-check map stores these ids as numbers.
+    id: Number(row.id),
     taskId: row.task_id as string,
     conversationId: row.conversation_id as string | null,
     toolName: row.skill_name as string,
@@ -655,7 +725,7 @@ function mapRow(row: Record<string, unknown>): ActionLogRow {
     resolvedAt: row.resolved_at ? new Date(row.resolved_at as string) : null,
     resolvedBy: row.resolved_by as string | null,
     expiresAt: row.expires_at ? new Date(row.expires_at as string) : null,
-    parentActionId: row.parent_action_id as number | null,
+    parentActionId: row.parent_action_id == null ? null : Number(row.parent_action_id),
     shortRef: row.short_ref as string | null,
     description: row.description as string | null,
     sendResolution: readSendResolution(row.send_resolution),

@@ -213,4 +213,15 @@ describe('AutonomyService', () => {
       await expect(svc.setScore(Infinity, 'ceo')).rejects.toThrow('Invalid autonomy score');
     });
   });
+
+  describe('getScoredActionCount', () => {
+    // Sample-pool rows carry scored_by but no verdict; they must not count as scored (#2159 Phase 3).
+    it("excludes unjudged sample-pool rows from the scored count", async () => {
+      const pool = mockPool();
+      pool.query.mockResolvedValueOnce({ rows: [{ count: '12' }] });
+      const svc = new AutonomyService(pool as any, mockLogger() as any);
+      expect(await svc.getScoredActionCount()).toBe(12);
+      expect(pool.query.mock.calls[0]![0]).toContain("scored_by <> 'sample-pool'");
+    });
+  });
 });
