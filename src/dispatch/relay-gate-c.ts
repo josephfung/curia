@@ -18,6 +18,7 @@ import {
   type EscalationDecision,
 } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
+import type { AutonomyGating } from '../autonomy/band-policy.js';
 
 /** Human-facing outbound skills whose Gate C escalate must suppress the relay. */
 export const REPLY_SKILLS_GATE_C = new Set([
@@ -46,7 +47,7 @@ export const RELAY_BODY_MAX_LENGTH = 50_000;
 export const RELAY_ACTION_RISK = 'medium' as const;
 
 export type RelayGateCOutcome =
-  | { kind: 'skip'; reason: 'originator_absent' | 'system_or_agent' }
+  | { kind: 'skip'; reason: 'originator_absent' | 'system_or_agent' | 'band_gating' }
   | {
       kind: 'decide';
       decision: EscalationDecision;
@@ -62,6 +63,8 @@ export interface DecideRelayGateCOptions {
   channelId: string;
   /** When wired and enabled, resolves known × reversible-external like email-reply. */
   escalationJudge?: EscalationJudge;
+  /** 'band' (#2159): skip the tier decision; the gateway's band review covers the relay. */
+  gating?: AutonomyGating;
 }
 
 /**
@@ -96,6 +99,11 @@ export async function decideRelayGateC(
     }
     return { kind: 'skip', reason: 'system_or_agent' };
   }
+
+  // Band gating (#2159): a relayed reply had no Gate C at the skill, so the gateway's band
+  // review asks it all four questions, and an ask-first verdict raises the approval there.
+  // The missing-tier fail-closed above (#1059) still applies: that is integrity, not policy.
+  if (opts.gating === 'band') return { kind: 'skip', reason: 'band_gating' };
 
   const actionClass = mapActionRiskToConsequenceClass(RELAY_ACTION_RISK);
   const decisionIfReplyToSender = applyActionPolicy(initiatingTier, actionClass, false, false);

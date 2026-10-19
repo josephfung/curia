@@ -43,6 +43,7 @@ import {
 } from './relay-gate-c.js';
 import { buildApprovalDeliveryWake, type ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
+import type { AutonomyGating } from '../autonomy/band-policy.js';
 import type { BullpenService } from '../memory/bullpen.js';
 import {
   REPLY_LOCK_SKILLS,
@@ -142,6 +143,12 @@ export interface DispatcherConfig {
    * When absent/disabled, the ambiguous cell fails closed (escalate).
    */
   escalationJudge?: EscalationJudge;
+  /**
+   * Which policy gates the relay (#2159). Under 'band', a relayed reply skips the tier
+   * Gate C (except #1059's missing-tier fail-closed); the gateway's band review asks all
+   * four questions instead. Default 'tier'.
+   */
+  gating?: AutonomyGating;
   /**
    * When a reply-lock suppresses the coordinator's relay (#1860), the text is
    * filed here instead of on the principal's channel. Absent in tests that
@@ -249,6 +256,7 @@ export class Dispatcher {
   private contactService?: import('../contacts/contact-service.js').ContactService;
   private approvalTrigger?: ApprovalTriggerService;
   private escalationJudge?: EscalationJudge;
+  private gating: AutonomyGating;
   private bullpenService?: BullpenService;
   private principalIdentities?: readonly ChannelIdentity[];
   private principalBacklog?: PrincipalBacklogSource;
@@ -270,6 +278,7 @@ export class Dispatcher {
     this.contactService = config.contactService;
     this.approvalTrigger = config.approvalTrigger;
     this.escalationJudge = config.escalationJudge;
+    this.gating = config.gating ?? 'tier';
     this.bullpenService = config.bullpenService;
     this.principalIdentities = config.principalIdentities;
     this.principalBacklog = config.principalBacklog;
@@ -1505,6 +1514,7 @@ export class Dispatcher {
       conversationId: routing.conversationId,
       channelId: routing.channelId,
       escalationJudge: this.escalationJudge,
+      gating: this.gating,
     });
     if (gateOutcome.kind === 'decide') {
       const audited = await this.publishRelayGateCDecision({
