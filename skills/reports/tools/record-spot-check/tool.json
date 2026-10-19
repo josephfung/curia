@@ -1,6 +1,6 @@
 {
   "name": "record-spot-check",
-  "description": "Record the principal's verdicts on a digest's spot check, e.g. '2 bad, that was a renewal notice' or '1 good 3 good'. Pass each number with good or bad and any reason they gave. Only for the principal's own reply. If it reports no matching spot check or an unknown number, ask the principal which action they mean.",
+  "description": "Record the principal's verdicts on a digest's spot check, e.g. '2 bad, that was a renewal notice' or '1 good 3 good'. Pass each number with good or bad exactly as the principal typed it in this message, and any reason they gave. Only for the principal's own reply. If it reports no matching spot check or an unknown number, ask the principal which action they mean.",
   "version": "0.1.0",
   "sensitivity": "normal",
   "action_risk": "none",

@@ -34,19 +34,33 @@ const SET: SpotCheckSet = {
 
 const PRINCIPAL = { originator: { systemRole: 'principal' } };
 
+/**
+ * The dispatcher's trusted stamp of the pairs the principal typed (F2). By default a test's
+ * principal typed exactly the numbers and verdicts its input asks to record; the F2 tests
+ * pass their own taskMetadata to make the two differ.
+ */
+function typedFor(input: Record<string, unknown>): Array<{ n: unknown; verdict: unknown }> {
+  const raw = input['verdicts'];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((e): e is Record<string, unknown> => typeof e === 'object' && e !== null)
+    .map((e) => ({ n: e['n'], verdict: e['verdict'] }));
+}
+
 function makeCtx(over: Partial<ToolContext> = {}) {
   const recordPrincipalVerdict = vi.fn<(id: number, good: boolean, reason: string | null) => Promise<boolean>>()
     .mockResolvedValue(true);
   const log = createSilentLogger();
   const warn = vi.spyOn(log, 'warn');
+  const input = over.input ?? { verdicts: [{ n: 2, verdict: 'bad', reason: 'that was a renewal notice' }] };
   const ctx = {
-    input: { verdicts: [{ n: 2, verdict: 'bad', reason: 'that was a renewal notice' }] },
+    input,
     secret: () => { throw new Error('no secrets'); },
     log,
     channelId: 'email',
     conversationId: 'email:th1',
     liveTurn: true,
-    taskMetadata: PRINCIPAL,
+    taskMetadata: { ...PRINCIPAL, spotCheckVerdicts: typedFor(input) },
     actionLogRepo: { recordPrincipalVerdict } as unknown as ActionLogRepo,
     entityMemory: { findEntities: vi.fn(), getFacts: vi.fn(), storeFact: vi.fn() } as unknown as EntityMemory,
     ...over,
@@ -106,6 +120,68 @@ describe('RecordSpotCheckHandler', () => {
     expect(recordPrincipalVerdict).not.toHaveBeenCalled();
     expect(store.findByEmailThread).not.toHaveBeenCalled();
     expect(store.findLatestDelivered).not.toHaveBeenCalled();
+  });
+
+  // F2: prompt injection in quoted or forwarded mail, or in a tool result, could steer the
+  // coordinator into grading during the principal's own live turn. Only the pairs the
+  // principal typed, stamped by the dispatcher into trusted metadata, may be recorded.
+  describe('only the numbers and verdicts the principal typed (F2)', () => {
+    const TYPED_ONLY =
+      'record-spot-check only records the numbers and verdicts the principal typed in this message. Nothing was recorded.';
+
+    it.each([
+      ['a verdict the principal did not type', [{ n: 2, verdict: 'good' }]],
+      ['a number the principal did not type', [{ n: 3, verdict: 'bad' }]],
+      ['an empty stamp', []],
+      ['a malformed stamp', 'two bad'],
+    ] as const)('refuses %s and writes nothing', async (_label, typed) => {
+      const { ctx, recordPrincipalVerdict } = makeCtx({
+        input: { verdicts: [{ n: 2, verdict: 'bad' }] },
+        taskMetadata: { ...PRINCIPAL, spotCheckVerdicts: typed },
+      });
+
+      const result = await new RecordSpotCheckHandler().execute(ctx);
+
+      expect(result).toEqual({ success: false, error: TYPED_ONLY });
+      expect(recordPrincipalVerdict).not.toHaveBeenCalled();
+      expect(store.findByEmailThread).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the stamp is absent and writes nothing', async () => {
+      const { ctx, recordPrincipalVerdict } = makeCtx({ taskMetadata: PRINCIPAL });
+
+      const result = await new RecordSpotCheckHandler().execute(ctx);
+
+      expect(result).toEqual({ success: false, error: TYPED_ONLY });
+      expect(recordPrincipalVerdict).not.toHaveBeenCalled();
+    });
+
+    it('refuses the whole call when one of several verdicts was not typed', async () => {
+      const { ctx, recordPrincipalVerdict } = makeCtx({
+        input: { verdicts: [{ n: 1, verdict: 'good' }, { n: 2, verdict: 'bad' }] },
+        taskMetadata: { ...PRINCIPAL, spotCheckVerdicts: [{ n: 2, verdict: 'bad' }] },
+      });
+
+      const result = await new RecordSpotCheckHandler().execute(ctx);
+
+      expect(result).toEqual({ success: false, error: TYPED_ONLY });
+      expect(recordPrincipalVerdict).not.toHaveBeenCalled();
+    });
+
+    it('records when every verdict was typed; the reason is not constrained', async () => {
+      const { ctx, recordPrincipalVerdict } = makeCtx({
+        input: { verdicts: [{ n: 2, verdict: 'bad', reason: 'it was a renewal notice, not a request' }] },
+        taskMetadata: {
+          ...PRINCIPAL,
+          spotCheckVerdicts: [{ n: 1, verdict: 'good' }, { n: 2, verdict: 'bad' }],
+        },
+      });
+
+      const result = await new RecordSpotCheckHandler().execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(recordPrincipalVerdict).toHaveBeenCalledWith(102, false, 'it was a renewal notice, not a request');
+    });
   });
 
   it('writes nothing when one number is unknown, and lists the valid numbers', async () => {

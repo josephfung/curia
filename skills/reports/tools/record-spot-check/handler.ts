@@ -9,6 +9,12 @@
 // live-principal-turn check instead: only the principal's own, live reply can grade an action.
 // Without it, a third party's email reading "2 good" could score Curia's work for it, and a
 // woken or scheduled principal-lineage task could grade its own actions.
+//
+// Second guard (#2159 F2): on the principal's own live turn, injected text in quoted or
+// forwarded mail, or in a tool result, could still steer the coordinator into calling this
+// tool with numbers the principal never typed. The dispatcher stamps the pairs the principal
+// typed into trusted task metadata (`spotCheckVerdicts`, stripped from untrusted metadata in
+// mergeTaskMetadata), and every requested pair must be one of them.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isLivePrincipalTurn } from '../../../../src/contacts/principal.js';
@@ -21,6 +27,24 @@ import {
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 
 const MAX_REASON_LENGTH = 500;
+
+const NOT_TYPED_ERROR =
+  'record-spot-check only records the numbers and verdicts the principal typed in this message. Nothing was recorded.';
+
+/**
+ * Whether every requested { n, verdict } is among the pairs the dispatcher stamped from the
+ * principal's own text. Anything other than an array of { n, verdict } pairs (absent, a
+ * forged string, a malformed entry) is treated as no pairs, so it fails closed. Reasons are
+ * not checked: they come from the principal's text but the coordinator may paraphrase them.
+ */
+function allTyped(stamp: unknown, verdicts: readonly SpotCheckVerdictInput[]): boolean {
+  if (!Array.isArray(stamp)) return false;
+  const typed = stamp.filter(
+    (p): p is { n: number; verdict: 'good' | 'bad' } =>
+      isPlainObject(p) && typeof p['n'] === 'number' && (p['verdict'] === 'good' || p['verdict'] === 'bad'),
+  );
+  return verdicts.every((v) => typed.some((t) => t.n === v.n && t.verdict === v.verdict));
+}
 
 type ParseResult = { ok: true; verdicts: SpotCheckVerdictInput[] } | { ok: false; error: string };
 
@@ -89,6 +113,21 @@ export class RecordSpotCheckHandler implements ToolHandler {
           'record-spot-check: refused outside a live principal turn',
         );
         return { success: false, error: 'record-spot-check only records the principal\'s own reply' };
+      }
+
+      // F2: also before any read or write. The log carries numbers and verdicts only.
+      const typedStamp = ctx.taskMetadata?.['spotCheckVerdicts'];
+      if (!allTyped(typedStamp, parsed.verdicts)) {
+        ctx.log.warn(
+          {
+            channelId: ctx.channelId,
+            conversationId: ctx.conversationId,
+            requested: parsed.verdicts.map((v) => ({ n: v.n, verdict: v.verdict })),
+            typed: Array.isArray(typedStamp) ? typedStamp : null,
+          },
+          'record-spot-check: refused verdicts the principal did not type in this message',
+        );
+        return { success: false, error: NOT_TYPED_ERROR };
       }
 
       const store = new SpotCheckStore(new ConfigStore(entityMemory, ctx.log), ctx.log);
