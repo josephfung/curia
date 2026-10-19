@@ -522,6 +522,21 @@ describe('AutonomyScoringPass', () => {
       expect(Math.abs(capability! - (0.45 * 0.4 + 0.35 * 0.5 + 0.20 * 0.5))).toBeLessThan(1e-9);
     });
 
+    // A mixed set is the real guard: a lone row scores 0.5 whether it is skipped or the
+    // set is empty, so it cannot tell "ignored" from "weighted down" (review finding).
+    it('leaves the capability at the normal rows alone when an old expired row carries flags', async () => {
+      const rows = [
+        makeRow({ id: 1, outcome: 'success', competenceFlag: 1, commitmentFlag: 1, compatibility: 1, scoredBy: 'llm-judge' }),
+        makeRow({ id: 2, outcome: 'expired', commitmentFlag: 1, compatibility: 0, scoredBy: 'deterministic' }),
+      ];
+
+      const capability = await capabilityFor(rows);
+
+      // The normal row alone is 0.45 + 0.35 + 0.20 = 1.0; any weight on the expired row pulls compatibility down.
+      expect(capability).not.toBeNull();
+      expect(Math.abs(capability! - 1.0)).toBeLessThan(1e-9);
+    });
+
     it('ignores an old expired row that still carries flags', async () => {
       const rows = [
         makeRow({ id: 1, outcome: 'expired', commitmentFlag: 1, compatibility: 0, scoredBy: 'deterministic' }),
