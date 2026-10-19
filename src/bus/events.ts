@@ -1504,7 +1504,10 @@ export type PrincipalReportSource =
   | 'principal_note'
   | 'blocked_content'
   | 'approval_pending'
-  | 'approval_expired';
+  | 'approval_expired'
+  | 'gate_proceeded'       // band gating let through an action the tier policy would have held (#2159)
+  | 'sent_without_review'  // the judge was unavailable at 80+, so the send went out unreviewed (#2159)
+  | 'claim_trimmed';       // unverified statements were cut from a send after one bounce (#2159)
 export interface PrincipalReportPayload {
   /** One or two sentences, written for the principal. */
   summary: string;
@@ -1521,7 +1524,7 @@ export interface PrincipalReportPayload {
 
 export interface PrincipalReportEvent extends BaseEvent {
   type: 'principal.report';
-  sourceLayer: 'dispatch' | 'system';
+  sourceLayer: 'dispatch' | 'system' | 'execution';
   payload: PrincipalReportPayload;
 }
 
@@ -2454,8 +2457,9 @@ export function createDelegationPrincipalNote(
 
 export function createPrincipalReport(
   // sourceLayer is the publishing layer: dispatch for the dispatcher, gateway and report
-  // tools; system for interval jobs such as the approval expiry sweep.
-  payload: PrincipalReportPayload & { parentEventId: string; sourceLayer: 'dispatch' | 'system' },
+  // tools; system for interval jobs such as the approval expiry sweep; execution for Gate C
+  // under band gating (#2159).
+  payload: PrincipalReportPayload & { parentEventId: string; sourceLayer: 'dispatch' | 'system' | 'execution' },
 ): PrincipalReportEvent {
   const { parentEventId, sourceLayer, ...rest } = payload;
   return {

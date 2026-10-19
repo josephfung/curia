@@ -30,9 +30,20 @@ const DEFAULT_LIMIT = 100;
 const SEQ_PATTERN = /^\d{1,19}$/;
 
 const URGENCIES: ReadonlySet<string> = new Set<PrincipalReportUrgency>(['digest', 'now']);
-const SOURCES: ReadonlySet<string> = new Set<PrincipalReportSource>([
-  'agent', 'principal_note', 'blocked_content', 'approval_pending', 'approval_expired',
-]);
+// Keyed by PrincipalReportSource so the compiler rejects this table when a source is added
+// to the union and not here. A source missing here would drop its items from every digest
+// as malformed rows (#2159 added three).
+const SOURCE_KEYS: Record<PrincipalReportSource, true> = {
+  agent: true,
+  principal_note: true,
+  blocked_content: true,
+  approval_pending: true,
+  approval_expired: true,
+  gate_proceeded: true,
+  sent_without_review: true,
+  claim_trimmed: true,
+};
+const SOURCES: ReadonlySet<string> = new Set(Object.keys(SOURCE_KEYS));
 
 /** ack() was handed a cursor that list() did not issue. */
 export class InvalidReportCursorError extends Error {

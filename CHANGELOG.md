@@ -20,6 +20,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Weekly fallback digest** — sent when queued items go a week unreported. (#2159)
 - **`deliver-approval`** — sends a pending approval on one chosen channel; undelivered ones email after 15 minutes. (#2159)
 - **`approvalDelivery` capability** — new `ToolContext` field for tools that deliver approvals. (#2159)
+- **Autonomy gating setting** — `autonomy.gating: band | tier` chooses score-driven or contact-tier gates; ships as `tier`. (#2159)
+- **Judge brief** — escalation judge answers purpose, speaks-as-principal, grounding and necessity from the turn's lookups. (#2159)
 
 ### Changed
 
@@ -29,6 +31,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Identity block** — tells Curia to say what is there, not what isn't, and skip narration. (#2143)
 - **Console Detail preview** — shows each channel's length limit at the current setting. (#2143)
 - **Principal notices** — notes, block notices and expired approvals go to the digest, not email. (#2159)
+- **`principal.report` (public API)** — three new sources; the execution layer may now publish it. (#2159)
 - **Approval delivery** — one message on the principal's preferred channel, not email, Signal and Slack. (#2159)
 - **One-channel standing preference** — fresh installs seed it: Signal, then SMS, then email. (#2159)
 - **Approval expiry sweep** — runs every 15 minutes, doubling as the approval-delivery safety net. (#2159)
