@@ -7,6 +7,7 @@ import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import { createSilentLogger, type Logger } from '../../../src/logger.js';
 import type { SpotCheckSet, SpotCheckStore } from '../../../src/reports/spot-check-store.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
+import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 
 function makePrincipal(channel: string, identifier: string): ChannelIdentity {
   return {
@@ -38,6 +39,7 @@ const BOUND_SET: SpotCheckSet = {
 describe('SpotCheckBinder', () => {
   let bus: { subscribe: ReturnType<typeof vi.fn>; publish: ReturnType<typeof vi.fn> };
   let store: { bindDelivery: ReturnType<typeof vi.fn> };
+  let actionLogRepo: { markSampled: ReturnType<typeof vi.fn> };
   let gateway: { getEmailMessage: ReturnType<typeof vi.fn> };
   let logger: ReturnType<typeof createSilentLogger>;
   let warn: ReturnType<typeof vi.fn>;
@@ -49,6 +51,7 @@ describe('SpotCheckBinder', () => {
     bus = { subscribe: vi.fn(), publish: vi.fn() };
     store = { bindDelivery: vi.fn().mockResolvedValue({ kind: 'bound', set: BOUND_SET }) };
     gateway = { getEmailMessage: vi.fn().mockResolvedValue({ threadId: 'th1' }) };
+    actionLogRepo = { markSampled: vi.fn().mockResolvedValue(1) };
     logger = createSilentLogger();
     // Spy on the child logger the binder builds, so warnings/errors can be asserted.
     warn = vi.fn();
@@ -61,6 +64,7 @@ describe('SpotCheckBinder', () => {
       bus: bus as unknown as EventBus,
       store: store as unknown as Pick<SpotCheckStore, 'bindDelivery'>,
       gateway: gateway as unknown as Pick<OutboundGateway, 'getEmailMessage'>,
+      actionLogRepo: actionLogRepo as unknown as Pick<ActionLogRepo, 'markSampled'>,
       principalIdentities: [
         makePrincipal('email', 'dana@example.com'),
         makePrincipal('signal', '+15555550100'),
@@ -167,6 +171,47 @@ describe('SpotCheckBinder', () => {
       expect.any(String),
     );
     expect(info).not.toHaveBeenCalledWith(expect.objectContaining({ setId: expect.anything() }), expect.any(String));
+    // Unbound rows stay in the pool and can be offered again.
+    expect(actionLogRepo.markSampled).not.toHaveBeenCalled();
+  });
+
+  // Rows leave the pool only once their digest reached the principal and can be answered.
+  it('marks the bound set\'s rows sampled', async () => {
+    await handler(createOutboundDelivered({
+      channel: 'signal',
+      recipientId: '+15555550100',
+      content: DIGEST,
+      conversationId: 'scheduler:job1:run1',
+      messageId: '1710000000000',
+    }));
+
+    expect(actionLogRepo.markSampled).toHaveBeenCalledWith([101], expect.any(Date));
+  });
+
+  it('does not mark anything for a digest it did not bind', async () => {
+    await handler(createOutboundDelivered({
+      channel: 'email', content: DIGEST, recipientId: 'sam@example.com', conversationId: 'c1', messageId: 'm1',
+    }));
+    await handler(createOutboundDelivered({ channel: 'email', content: DIGEST, recipientId: 'dana@example.com' }));
+
+    expect(actionLogRepo.markSampled).not.toHaveBeenCalled();
+  });
+
+  it('logs at error, and does not throw, when marking the rows fails', async () => {
+    actionLogRepo.markSampled.mockRejectedValue(new Error('db down'));
+
+    await expect(handler(createOutboundDelivered({
+      channel: 'signal',
+      recipientId: '+15555550100',
+      content: DIGEST,
+      conversationId: 'scheduler:job1:run1',
+      messageId: '1710000000000',
+    }))).resolves.toBeUndefined();
+
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ setId: 'set-1', actionLogIds: [101] }),
+      expect.any(String),
+    );
   });
 
   it('does not bind a delivery that lost the spot-check block', async () => {

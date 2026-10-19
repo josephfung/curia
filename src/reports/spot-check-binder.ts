@@ -6,6 +6,11 @@
 // listens for outbound.delivered, the same signal ReactionApprovalMapper uses to bind a
 // delivered approval message, and hands the delivery to SpotCheckStore.bindDelivery.
 //
+// A bound set's rows are then marked sampled, so the next digest does not offer them again.
+// That happens here, not when the block is drawn: only a delivered, bound block can be answered,
+// and marking earlier burned samples whose digest never went out. A second delivery of the same
+// digest marks the same rows again, which is harmless (markSampled overwrites one jsonb key).
+//
 // Failure policy: binding is best-effort bookkeeping. A failure is logged and never thrown,
 // because it runs inside a bus handler and must not disturb delivery. The cost of a missed
 // bind is bounded: a reply on a thread falls back to the "most recent delivered digest within
@@ -15,15 +20,18 @@ import type { EventBus } from '../bus/bus.js';
 import type { OutboundDeliveredEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ChannelIdentity } from '../contacts/types.js';
+import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import { isPrincipalIdentity } from '../contacts/principal-recipient.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
-import type { SpotCheckStore } from './spot-check-store.js';
+import type { SpotCheckSet, SpotCheckStore } from './spot-check-store.js';
 import { SPOT_CHECK_HEADER } from './spot-check-sampler.js';
 
 export interface SpotCheckBinderDeps {
   bus: EventBus;
   store: Pick<SpotCheckStore, 'bindDelivery'>;
   gateway: Pick<OutboundGateway, 'getEmailMessage'>;
+  /** Marks a bound set's rows sampled, taking them out of the pool. */
+  actionLogRepo: Pick<ActionLogRepo, 'markSampled'>;
   principalIdentities: readonly ChannelIdentity[];
   logger: Logger;
 }
@@ -32,6 +40,7 @@ export class SpotCheckBinder {
   private readonly bus: EventBus;
   private readonly store: Pick<SpotCheckStore, 'bindDelivery'>;
   private readonly gateway: Pick<OutboundGateway, 'getEmailMessage'>;
+  private readonly actionLogRepo: Pick<ActionLogRepo, 'markSampled'>;
   private readonly principalIdentities: readonly ChannelIdentity[];
   private readonly log: Logger;
 
@@ -39,6 +48,7 @@ export class SpotCheckBinder {
     this.bus = deps.bus;
     this.store = deps.store;
     this.gateway = deps.gateway;
+    this.actionLogRepo = deps.actionLogRepo;
     this.principalIdentities = deps.principalIdentities;
     this.log = deps.logger.child({ component: 'spot-check-binder' });
   }
@@ -105,10 +115,24 @@ export class SpotCheckBinder {
         { setId: result.set.id, channel, messageId, threadId: threadId !== undefined },
         'spot-check binder: bound the delivered digest to its spot-check set',
       );
+      await this.markSampled(result.set);
     } catch (err) {
       this.log.error(
         { err, conversationId, messageId },
         'spot-check binder: failed to bind the delivery to its spot-check set',
+      );
+    }
+  }
+
+  /** Take a bound set's rows out of the pool. A failure only means they may be offered again. */
+  private async markSampled(set: SpotCheckSet): Promise<void> {
+    const actionLogIds = set.items.map((i) => i.actionLogId);
+    try {
+      await this.actionLogRepo.markSampled(actionLogIds, new Date());
+    } catch (err) {
+      this.log.error(
+        { err, setId: set.id, actionLogIds },
+        'spot-check binder: could not mark the bound set\'s rows sampled; a later digest may offer them again',
       );
     }
   }

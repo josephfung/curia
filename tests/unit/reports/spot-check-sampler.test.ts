@@ -32,10 +32,13 @@ function makeDeps(opts: {
     if (opts.findError) throw opts.findError;
     return opts.rows ?? [];
   });
+  // markSampled is on the fake only to prove draw() never calls it: rows are marked when the
+  // digest is delivered and bound (SpotCheckBinder), not when it is drawn.
   const markSampled = vi.fn(async (ids: readonly number[]) => ids.length);
+  const actionLogRepo = { findSampleCandidates, markSampled };
   const add = vi.fn(async (_set: SpotCheckSet) => opts.addResult ?? true);
   const sampler = new SpotCheckSampler({
-    actionLogRepo: { findSampleCandidates, markSampled },
+    actionLogRepo,
     store: { add },
     logger,
     // 0 always picks the first remaining candidate, so the draw order is the row order.
@@ -58,7 +61,7 @@ afterEach(() => {
 });
 
 describe('SpotCheckSampler.draw', () => {
-  it('numbers up to three picks, stores their map, then marks them sampled', async () => {
+  it('numbers up to three picks and stores their map, without marking them sampled', async () => {
     const { sampler, add, markSampled } = makeDeps({ rows: [row(1), row(2), row(3), row(4), row(5)] });
 
     const drawn = await sampler.draw('scheduler:job1:run1');
@@ -81,9 +84,9 @@ describe('SpotCheckSampler.draw', () => {
     expect(set.createdAt).toBe(new Date(NOW).toISOString());
     expect(typeof set.id).toBe('string');
 
-    expect(markSampled).toHaveBeenCalledWith([1, 2, 3], new Date(NOW));
-    // The map must exist before the rows leave the pool: store first, then mark.
-    expect(add.mock.invocationCallOrder[0]!).toBeLessThan(markSampled.mock.invocationCallOrder[0]!);
+    // A drawn digest may never be delivered (quiet-day debrief, failed send, block dropped by
+    // the agent). The rows stay in the pool until the binder sees the digest delivered.
+    expect(markSampled).not.toHaveBeenCalled();
   });
 
   it('returns null and stores or marks nothing when there are no candidates', async () => {
@@ -146,7 +149,6 @@ describe('SpotCheckSampler.draw', () => {
           row(1, { payload: { sample: 'not an object' } }),
           row(2, { payload: { sample: { signals: { firstContact: true } } } }),
         ]),
-        markSampled: vi.fn(async () => 2),
       },
       store: { add },
       logger,
@@ -209,7 +211,8 @@ describe('SpotCheckSampler.draw', () => {
       expect(drawn!.block.split('\n')[1]).toBe('1. Archive an email');
       expect(warn).toHaveBeenCalled();
       expect(add).toHaveBeenCalledTimes(1);
-      expect(markSampled).toHaveBeenCalledWith([1, 2], new Date(NOW));
+      expect(add.mock.calls[0]![0].items.map((i) => i.actionLogId)).toEqual([1, 2]);
+      expect(markSampled).not.toHaveBeenCalled();
     });
 
     it('keeps the stored summary, with a warning, when the lookup returns null', async () => {

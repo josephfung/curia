@@ -2937,6 +2937,7 @@ async function main(): Promise<void> {
       bus,
       store: new SpotCheckStore(new ConfigStore(entityMemory, logger), logger),
       gateway: outboundGateway,
+      actionLogRepo,
       principalIdentities,
       logger,
     }).register();

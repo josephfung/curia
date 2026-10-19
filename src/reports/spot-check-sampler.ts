@@ -3,14 +3,18 @@
 // Autonomous actions land in the sample pool (sample-pool.ts) as unscored autonomy_action_log
 // rows. Each digest asks this sampler for up to three of them, weighted towards what the spec
 // most wants checked (sends that speak for the principal, first contacts, triage). The picks
-// are numbered 1..N for the principal, the number-to-row map is stored (SpotCheckStore) so a
-// reply like "2 good" can be resolved later, and only then are the rows marked sampled so the
-// next digest does not show them again.
+// are numbered 1..N for the principal and the number-to-row map is stored (SpotCheckStore) so a
+// reply like "2 good" can be resolved later.
+//
+// The rows are NOT marked sampled here. A drawn block may never reach the principal: a quiet
+// day's debrief, a failed or held send, an agent that dropped the block. Marking at draw time
+// burned those samples for good. SpotCheckBinder marks a set's rows once the digest carrying it
+// is delivered and bound, i.e. once its numbers can actually be answered. Until then the rows
+// stay in the pool and a later digest may offer them again; an unbound set is pruned by age.
 //
 // Failure policy: draw() never throws. A digest must go out without samples rather than fail,
-// so every error returns null with a log line. Ordering matters on the write path: the map is
-// stored BEFORE the rows are marked. If the store rejects the map, the rows stay in the pool
-// for a later digest; marking first would burn samples whose numbers could never be resolved.
+// so every error returns null with a log line. The map is stored before the block is returned:
+// a block whose numbers could not be resolved is never shown.
 
 import { randomUUID } from 'node:crypto';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
@@ -38,7 +42,7 @@ const DESCRIBE_TIMEOUT_MS = 3_000;
 export type DescribeEmail = (messageId: string, account?: string) => Promise<{ subject?: string; from?: string } | null>;
 
 export interface SpotCheckSamplerDeps {
-  actionLogRepo: Pick<ActionLogRepo, 'findSampleCandidates' | 'markSampled'>;
+  actionLogRepo: Pick<ActionLogRepo, 'findSampleCandidates'>;
   store: Pick<SpotCheckStore, 'add'>;
   logger: Logger;
   random?: () => number;
@@ -99,12 +103,10 @@ export class SpotCheckSampler {
         deliveries: [],
       });
       if (!stored) {
-        // The rows stay unmarked, so a later digest can offer them again.
+        // The rows were never shown, so a later digest can offer them again.
         this.deps.logger.warn({ conversationId, count: items.length }, 'spot-check sampler: the map could not be stored; digest goes out without samples');
         return null;
       }
-
-      await this.deps.actionLogRepo.markSampled(items.map((i) => i.actionLogId), new Date(now));
 
       return {
         block: [SPOT_CHECK_HEADER, ...items.map((i) => `${i.n}. ${i.summary}`)].join('\n'),
