@@ -112,6 +112,21 @@ describe('SpotCheckStore', () => {
     expect((await store.findByEmailThread('th1'))?.id).toBe('set-1');
   });
 
+  it('reports whether another set was created after a given instant within the window', async () => {
+    const { store } = makeStore();
+    await store.add(makeSet({ id: 'old', createdAt: new Date(NOW - 10 * HOUR).toISOString() }));
+    await store.add(makeSet({ id: 'new', createdAt: new Date(NOW - 10 * 60_000).toISOString() }));
+
+    // 'new' was created after the instant, whether or not it was ever delivered.
+    expect(await store.hasSetCreatedAfter(NOW - HOUR, DAY, 'old')).toBe(true);
+    // The set being resolved is never counted against itself.
+    expect(await store.hasSetCreatedAfter(NOW - HOUR, DAY, 'new')).toBe(false);
+    // Nothing created after the instant.
+    expect(await store.hasSetCreatedAfter(NOW - 60_000, DAY, 'old')).toBe(false);
+    // Outside the window does not count.
+    expect(await store.hasSetCreatedAfter(NOW - 11 * HOUR, 5 * 60_000, 'none')).toBe(false);
+  });
+
   it('prunes sets older than 14 days on the next add', async () => {
     const { store, stored } = makeStore();
     await store.add(makeSet({ id: 'old', createdAt: new Date(NOW - 15 * DAY).toISOString() }));

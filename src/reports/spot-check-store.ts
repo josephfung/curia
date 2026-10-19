@@ -262,6 +262,22 @@ export class SpotCheckStore {
     return best?.set ?? null;
   }
 
+  /**
+   * Whether a set other than `exceptId` was created after `afterMs` and no earlier than
+   * `withinMs` ago, delivered or not. The reply resolver asks this before trusting the latest
+   * delivered set: a newer draw whose delivery never bound (the agent reworded the block) was
+   * probably seen by the principal, so its numbers may be the ones they are answering.
+   */
+  async hasSetCreatedAfter(afterMs: number, withinMs: number, exceptId: string): Promise<boolean> {
+    const sets = await this.read();
+    const cutoff = this.now() - withinMs;
+    return sets.some((s) => {
+      if (s.id === exceptId) return false;
+      const created = Date.parse(s.createdAt);
+      return created > afterMs && created >= cutoff;
+    });
+  }
+
   /** Read and validate the stored sets. Corrupt data yields fewer (or no) sets, never a throw; a `get` error does throw. */
   private async read(): Promise<SpotCheckSet[]> {
     const raw = await this.configStore.get(SPOT_CHECK_NAMESPACE, SPOT_CHECK_KEY);

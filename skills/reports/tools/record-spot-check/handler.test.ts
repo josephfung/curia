@@ -10,11 +10,13 @@ import { createSilentLogger } from '../../../../src/logger.js';
 const store = vi.hoisted(() => ({
   findByEmailThread: vi.fn<(threadId: string) => Promise<SpotCheckSet | null>>(),
   findLatestDelivered: vi.fn<(withinMs: number) => Promise<SpotCheckSet | null>>(),
+  hasSetCreatedAfter: vi.fn<(afterMs: number, withinMs: number, exceptId: string) => Promise<boolean>>(),
 }));
 vi.mock('../../../../src/reports/spot-check-store.js', () => ({
   SpotCheckStore: class {
     findByEmailThread(threadId: string) { return store.findByEmailThread(threadId); }
     findLatestDelivered(withinMs: number) { return store.findLatestDelivered(withinMs); }
+    hasSetCreatedAfter(afterMs: number, withinMs: number, exceptId: string) { return store.hasSetCreatedAfter(afterMs, withinMs, exceptId); }
   },
 }));
 
@@ -72,6 +74,7 @@ function makeCtx(over: Partial<ToolContext> = {}) {
 beforeEach(() => {
   store.findByEmailThread.mockReset().mockResolvedValue(SET);
   store.findLatestDelivered.mockReset().mockResolvedValue(null);
+  store.hasSetCreatedAfter.mockReset().mockResolvedValue(false);
 });
 
 describe('RecordSpotCheckHandler', () => {

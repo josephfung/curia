@@ -29,6 +29,9 @@ const EMAIL_CONVERSATION_PREFIX = 'email:';
 
 const NO_MATCHING_SET =
   'No spot check in the last 24 hours matches this reply. Ask the principal which action they mean; do not guess.';
+const NEWER_SET_DRAWN =
+  'A newer spot check was drawn after the latest one delivered, so these numbers may refer to either. ' +
+  'Ask the principal which action they mean; do not guess.';
 const NO_SET_ON_THREAD =
   'No spot check went out on this email thread. Ask the principal which action they mean; do not guess.';
 
@@ -45,7 +48,7 @@ const NO_SET_ON_THREAD =
  * Store read errors propagate: an outage must not look like "no digest found".
  */
 export async function resolveSpotCheckSet(
-  store: Pick<SpotCheckStore, 'findByEmailThread' | 'findLatestDelivered'>,
+  store: Pick<SpotCheckStore, 'findByEmailThread' | 'findLatestDelivered' | 'hasSetCreatedAfter'>,
   where: { channelId?: string; conversationId?: string },
 ): Promise<ResolveSetResult> {
   const { channelId, conversationId } = where;
@@ -56,8 +59,16 @@ export async function resolveSpotCheckSet(
     return onThread ? { ok: true, set: onThread } : { ok: false, error: NO_SET_ON_THREAD };
   }
   const latest = await store.findLatestDelivered(FALLBACK_WINDOW_MS);
-  if (latest) return { ok: true, set: latest };
-  return { ok: false, error: NO_MATCHING_SET };
+  if (!latest) return { ok: false, error: NO_MATCHING_SET };
+  // A set drawn after this one's latest delivery may have reached the principal unbound (its
+  // block reworded, so the binder could not match it). Their "2 bad" could then mean that
+  // digest's item 2, so the older set is not trusted. findLatestDelivered only returns a set
+  // with a delivery in the window, so its latest delivery is the newest one it has.
+  const latestDeliveredAt = Math.max(...latest.deliveries.map((d) => Date.parse(d.at)));
+  if (await store.hasSetCreatedAfter(latestDeliveredAt, FALLBACK_WINDOW_MS, latest.id)) {
+    return { ok: false, error: NEWER_SET_DRAWN };
+  }
+  return { ok: true, set: latest };
 }
 
 /** The set's numbers as the principal saw them, for an error the coordinator can read back. */

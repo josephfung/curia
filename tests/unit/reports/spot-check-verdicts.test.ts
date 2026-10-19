@@ -91,6 +91,37 @@ describe('resolveSpotCheckSet', () => {
     expect(result).toEqual({ ok: true, set: expect.objectContaining({ id: 'latest' }) });
   });
 
+  // A weekly digest went out at 8am with its block bound; the 6pm daily drew a set but its block
+  // was reformatted, so the delivery never bound. "2 bad" at 6:10pm most likely means the daily's
+  // item 2, so resolving it against the weekly would grade an action the principal never meant.
+  it('refuses a chat reply when a newer set was drawn after the latest delivery, even unbound', async () => {
+    const weekly = makeSet({
+      id: 'weekly',
+      createdAt: at(10 * HOUR + 5 * 60_000),
+      deliveries: [{ channel: 'signal', messageId: 's1', at: at(10 * HOUR) }],
+    });
+    const daily = makeSet({ id: 'daily', createdAt: at(10 * 60_000), deliveries: [] });
+
+    const result = await resolveSpotCheckSet(storeWith([weekly, daily]), { channelId: 'signal', conversationId: 'signal:+15550100' });
+
+    expect(result.ok).toBe(false);
+    expect((result as { error: string }).error).toContain('Ask the principal which action they mean');
+    expect((result as { error: string }).error).toContain('newer spot check');
+  });
+
+  it('still resolves a chat reply when the only other set was drawn before the latest delivery', async () => {
+    const earlier = makeSet({ id: 'earlier', createdAt: at(20 * HOUR), deliveries: [] });
+    const latest = makeSet({
+      id: 'latest',
+      createdAt: at(3 * HOUR),
+      deliveries: [{ channel: 'signal', messageId: 's1', at: at(2 * HOUR) }],
+    });
+
+    const result = await resolveSpotCheckSet(storeWith([earlier, latest]), { channelId: 'signal', conversationId: 'signal:+15550100' });
+
+    expect(result).toEqual({ ok: true, set: expect.objectContaining({ id: 'latest' }) });
+  });
+
   it('fails when nothing was delivered within 24 hours, telling the coordinator to ask the principal', async () => {
     const stale = makeSet({
       deliveries: [{ channel: 'signal', messageId: 's1', at: at(25 * HOUR) }],
@@ -114,7 +145,7 @@ describe('resolveSpotCheckSet', () => {
   });
 
   it('propagates a store read error rather than reporting no match', async () => {
-    const store = { findByEmailThread: vi.fn(), findLatestDelivered: vi.fn().mockRejectedValue(new Error('db down')) };
+    const store = { findByEmailThread: vi.fn(), findLatestDelivered: vi.fn().mockRejectedValue(new Error('db down')), hasSetCreatedAfter: vi.fn() };
 
     await expect(resolveSpotCheckSet(store, { channelId: 'signal' })).rejects.toThrow('db down');
   });
