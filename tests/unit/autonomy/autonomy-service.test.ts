@@ -219,6 +219,7 @@ describe('AutonomyService', () => {
     it("excludes unjudged sample-pool rows from the scored count", async () => {
       const pool = mockPool();
       pool.query.mockResolvedValueOnce({ rows: [{ count: '12' }] });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const svc = new AutonomyService(pool as any, mockLogger() as any);
       expect(await svc.getScoredActionCount()).toBe(12);
       expect(pool.query.mock.calls[0]![0]).toContain("scored_by <> 'sample-pool'");
