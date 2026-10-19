@@ -6,10 +6,8 @@
 // and code decides what each answer does at the current band.
 //
 // Which questions are asked:
-//   principal-directed (a live principal turn)        → grounding
-//   80+                                               → all four
-//   below 80, Gate C already asked this task's two    → grounding, necessity
-//   below 80 otherwise (relayed replies, unreviewed)  → all four
+//   principal-directed (a live principal turn)  → grounding
+//   otherwise, at every band                    → all four (Gate C leaves sends to this review)
 //
 // What each answer does:
 //   purpose = steered                → hold, at every band
@@ -30,7 +28,7 @@ import type { Logger } from '../logger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import type { SendEvidenceCollector } from '../autonomy/send-evidence.js';
 import type { BriefQuestion, BriefVerdict } from '../autonomy/judge-brief.js';
-import { isSpotCheckOrAbove, type FailOpenLimiter, type GateCReviews } from '../autonomy/band-policy.js';
+import { isSpotCheckOrAbove, type FailOpenLimiter } from '../autonomy/band-policy.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { FilterFinding } from './outbound-filter.js';
 
@@ -57,7 +55,7 @@ export interface BandReviewInput {
   taskEventId?: string;
   /** A live principal turn told Curia to send this: only grounding is asked. */
   principalDirected: boolean;
-  /** A dispatcher-relayed reply: no Gate C ran, so all four questions are asked. */
+  /** A dispatcher-relayed reply. Asked the same questions as any send; kept for the logs. */
   postTurn: boolean;
 }
 
@@ -71,7 +69,6 @@ export type BandReviewDecision =
 export interface BandSendReviewDeps {
   judge: Pick<EscalationJudge, 'review' | 'isEnabled'> | undefined;
   evidence: Pick<SendEvidenceCollector, 'collect'>;
-  gateCReviews: Pick<GateCReviews, 'wasReviewed'>;
   limiter: FailOpenLimiter;
   /** Called once when the fail-open cap trips. Must not throw. */
   onLimiterTripped: () => Promise<void>;
@@ -183,11 +180,7 @@ export class BandSendReview {
   }
 
   private questionsFor(input: BandReviewInput): readonly BriefQuestion[] {
-    if (input.principalDirected) return ['grounding'];
-    if (!isSpotCheckOrAbove(input.score) && !input.postTurn && this.deps.gateCReviews.wasReviewed(input.taskEventId)) {
-      return ['grounding', 'necessity'];
-    }
-    return ALL_QUESTIONS;
+    return input.principalDirected ? ['grounding'] : ALL_QUESTIONS;
   }
 
   private async ask(

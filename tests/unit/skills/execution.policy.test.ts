@@ -27,7 +27,6 @@ import type { ContactService } from '../../../src/contacts/contact-service.js';
 import { SensitivityClassifier } from '../../../src/memory/sensitivity.js';
 import { emailAccountIdFromInput, replyToMessageIdFromInput } from '../../../src/channels/email/account-id.js';
 import { UnknownEmailAccountError } from '../../../src/skills/outbound-gateway.js';
-import { GateCReviews } from '../../../src/autonomy/band-policy.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -4527,16 +4526,15 @@ describe('Gate C — band gating (#2159)', () => {
     };
   }
 
-  function makeBandLayer(score: number, review = vi.fn(), bus = makeBus()) {
+  function makeBandLayer(score: number, review = vi.fn(), bus = makeBus(), evidence: { unavailable: boolean } = { unavailable: false }) {
     const registry = new ToolRegistry();
-    const gateCReviews = new GateCReviews();
-    const sendEvidence = { collect: vi.fn().mockResolvedValue({ unavailable: false, toolResults: [] }) };
+    const sendEvidence = { collect: vi.fn().mockResolvedValue({ ...evidence, toolResults: [] }) };
     const classifyAction = vi.fn();
     const escalationJudge = { isEnabled: () => true, review, classifyAction } as unknown as EscalationJudge;
     const layer = new ExecutionLayer(registry, logger, {
-      autonomyService: makeAutonomyService(score), bus, escalationJudge, gating: 'band', gateCReviews, sendEvidence,
+      autonomyService: makeAutonomyService(score), bus, escalationJudge, gating: 'band', sendEvidence,
     });
-    return { registry, layer, gateCReviews, bus, classifyAction };
+    return { registry, layer, bus, classifyAction };
   }
 
   function reports(bus: EventBus): Array<{ payload: { source: string; summary: string } }> {
@@ -4545,22 +4543,17 @@ describe('Gate C — band gating (#2159)', () => {
       .filter((e) => e.type === 'principal.report');
   }
 
-  it('lets a known contact\'s send through at 84 without the judge, and reports it', async () => {
-    const review = vi.fn();
-    const { registry, layer, bus, classifyAction } = makeBandLayer(84, review);
-    registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler({ sent: true }));
-    const result = await layer.invoke('email-send', {}, undefined, bandOriginator('known'));
-    expect(result.success).toBe(true);
-    expect(review).not.toHaveBeenCalled();
-    expect(classifyAction).not.toHaveBeenCalled();
-    expect(reports(bus).map((r) => r.payload.source)).toEqual(['gate_proceeded']);
-  });
-
-  it('does not report a trusted contact\'s send the tier gate would have allowed', async () => {
-    const { registry, layer, bus } = makeBandLayer(84);
-    registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler({ sent: true }));
-    expect((await layer.invoke('email-send', {}, undefined, bandOriginator('trusted'))).success).toBe(true);
-    expect(reports(bus)).toEqual([]);
+  it('leaves sends to the gateway\'s review at every band: no judge call, no early report', async () => {
+    for (const score of [84, 74]) {
+      const review = vi.fn();
+      const { registry, layer, bus, classifyAction } = makeBandLayer(score, review);
+      registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler({ sent: true }));
+      const result = await layer.invoke('email-send', {}, undefined, bandOriginator('known'));
+      expect(result.success).toBe(true);
+      expect(review).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+      expect(reports(bus)).toEqual([]);
+    }
   });
 
   it('asks purpose for a calendar write steered by an unknown contact at 84, and holds it', async () => {
@@ -4573,31 +4566,32 @@ describe('Gate C — band gating (#2159)', () => {
     expect(review.mock.calls[0]![0].questions).toEqual(['purpose']);
   });
 
-  it('asks first at 74 when the send speaks for the principal', async () => {
+  it('lets a serving calendar write from a known contact through at 84, and reports it', async () => {
+    const review = vi.fn().mockResolvedValue({ ok: true, purpose: 'serving', reason: 'x' });
+    const { registry, layer, bus } = makeBandLayer(84, review);
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), makeHandler({ ok: true }));
+    expect((await layer.invoke('calendar-create-event', {}, undefined, bandOriginator('known'))).success).toBe(true);
+    expect(reports(bus).map((r) => r.payload.summary)).toEqual([
+      'Went ahead with calendar-create-event on a request from a known contact without asking first.',
+    ]);
+  });
+
+  it('asks first at 74 when a non-send action speaks for the principal', async () => {
     const review = vi.fn().mockResolvedValue({ ok: true, purpose: 'serving', speaksAsPrincipal: true, reason: 'commits' });
     const { registry, layer } = makeBandLayer(74, review);
-    registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler('should not run'));
-    const result = await layer.invoke('email-send', {}, undefined, bandOriginator('trusted'));
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), makeHandler('should not run'));
+    // Score 74 < 80 is below Gate B's high-risk floor, so use a medium-risk calendar action.
+    registry.register(makeRiskyManifest('calendar-respond', 'medium'), makeHandler('should not run'));
+    const result = await layer.invoke('calendar-respond', {}, undefined, bandOriginator('trusted'));
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain("needs the principal's approval");
     expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'speaks-as-principal']);
   });
 
-  it('lets a coordinating send through at 74 and marks the task reviewed', async () => {
-    const review = vi.fn().mockResolvedValue({ ok: true, purpose: 'serving', speaksAsPrincipal: false, reason: 'logistics' });
-    const { registry, layer, gateCReviews } = makeBandLayer(74, review);
-    registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler({ sent: true }));
-    const result = await layer.invoke('email-send', {}, undefined, bandOriginator('known'));
-    expect(result.success).toBe(true);
-    expect(gateCReviews.wasReviewed('task-1')).toBe(true);
-  });
-
-  it('reviews a scheduler-originated send at 74 too: the band decides, not the originator', async () => {
+  it('reviews a scheduler-originated action at 74 too: the band decides, not the originator', async () => {
     const review = vi.fn().mockResolvedValue({ ok: true, purpose: 'serving', speaksAsPrincipal: true, reason: 'commits' });
     const { registry, layer } = makeBandLayer(74, review);
-    registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler('should not run'));
-    const result = await layer.invoke('email-send', {}, undefined, bandOriginator(null, 'system'));
-    expect(result.success).toBe(false);
+    registry.register(makeRiskyManifest('calendar-respond', 'medium'), makeHandler('should not run'));
+    expect((await layer.invoke('calendar-respond', {}, undefined, bandOriginator(null, 'system'))).success).toBe(false);
   });
 
   it('leaves a low-risk internal write by a trusted originator alone below 80', async () => {
@@ -4608,16 +4602,28 @@ describe('Gate C — band gating (#2159)', () => {
     expect(review).not.toHaveBeenCalled();
   });
 
-  it('holds at 74 and proceeds with a report at 84 when the judge fails', async () => {
-    const failing = () => vi.fn().mockResolvedValue({ ok: false, failure: 'unreachable' });
-    const low = makeBandLayer(74, failing());
-    low.registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler('x'));
-    expect((await low.layer.invoke('email-send', {}, undefined, bandOriginator('known'))).success).toBe(false);
+  it('holds when the judge fails, at 84 as well as 74: purpose is an outsider\'s only check here', async () => {
+    for (const score of [84, 74]) {
+      const { registry, layer } = makeBandLayer(score, vi.fn().mockResolvedValue({ ok: false, failure: 'unreachable' }));
+      registry.register(makeRiskyManifest('calendar-respond', 'medium'), makeHandler('should not run'));
+      expect((await layer.invoke('calendar-respond', {}, undefined, bandOriginator('unknown'))).success).toBe(false);
+    }
+  });
 
-    const high = makeBandLayer(84, failing());
-    high.registry.register(makeRiskyManifest('calendar-create-event', 'high'), makeHandler({ ok: true }));
-    expect((await high.layer.invoke('calendar-create-event', {}, undefined, bandOriginator('unknown'))).success).toBe(true);
-    expect(reports(high.bus)[0]!.payload.summary).toContain('reviewer was unavailable');
+  it('holds when the drafting turn\'s evidence cannot be read, without asking the judge', async () => {
+    const review = vi.fn();
+    const { registry, layer } = makeBandLayer(84, review, makeBus(), { unavailable: true });
+    registry.register(makeRiskyManifest('calendar-respond', 'medium'), makeHandler('should not run'));
+    expect((await layer.invoke('calendar-respond', {}, undefined, bandOriginator('unknown'))).success).toBe(false);
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it('says "an unknown contact" in the digest', async () => {
+    const review = vi.fn().mockResolvedValue({ ok: true, purpose: 'serving', reason: 'x' });
+    const { registry, layer, bus } = makeBandLayer(84, review);
+    registry.register(makeRiskyManifest('calendar-respond', 'medium'), makeHandler({ ok: true }));
+    await layer.invoke('calendar-respond', {}, undefined, bandOriginator('unknown'));
+    expect(reports(bus)[0]!.payload.summary).toContain('from an unknown contact');
   });
 
   it('keeps the KG-write block for unknown senders (#1290)', async () => {

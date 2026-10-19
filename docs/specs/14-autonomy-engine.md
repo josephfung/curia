@@ -302,12 +302,12 @@ At every band an outsider steering Curia means the action is held, the integrity
 |---|---|---|
 | KG write from an unknown or blocked sender | escalate (#1290) | same |
 | External originator with no tier | escalate (#1059) | same |
-| A send | proceed, no judge — the gateway reviews it | ask *purpose* and *speaks as principal*; escalate on "steered" or "yes"; on allow mark the task reviewed |
-| A non-send at medium risk or above | ask *purpose* if an outsider initiated it; escalate on "steered" | ask *purpose* and *speaks as principal* |
+| A send (`HUMAN_SEND_SKILLS`) | proceed — the gateway's band review asks all four questions | same |
+| Any other action at medium risk or above | ask *purpose* if an outsider (below `trusted`) initiated it; escalate on "steered" | ask *purpose* and *speaks as principal*; escalate on "steered" or "yes" |
 | A low-risk action | ask *purpose* if an outsider initiated it | same |
-| Judge failure | proceed, with a `gate_proceeded` digest item | escalate |
+| Judge failure, or the drafting turn's evidence cannot be read | escalate | escalate |
 
-At 80+, an action the tier policy would have escalated emits a `gate_proceeded` digest item. Unlike the tier gate, band Gate C also covers system- and agent-originated tasks. A send to the principal alone is not reviewed.
+Gate C leaves sends to the gateway because it sees only a truncated description with contact references, while the gateway sees the whole message and its resolved recipients; a hold there raises the same approval. At 80+, a non-send the tier policy would have escalated emits a `gate_proceeded` digest item. Unlike the tier gate, band Gate C also covers system- and agent-originated tasks.
 
 ### Send-time review (`BandSendReview`, `src/dispatch/band-send-review.ts`)
 
@@ -316,9 +316,9 @@ Under `band` the outbound filter's `contact-data-leak` rule and Stage 2.5 are of
 | Send | Questions |
 |---|---|
 | Principal-directed (a live principal turn) | grounding |
-| 80+ | purpose, speaks as principal, grounding, necessity |
-| Below 80, Gate C already asked this task | grounding, necessity |
-| Below 80 otherwise (relayed replies, unreviewed tasks) | all four |
+| Everything else, at every band | purpose, speaks as principal, grounding, necessity |
+
+`send-draft` is the exception: a principal-directed draft send (a live turn or an approval) is not reviewed at all, because `send-draft` marks every call `humanApproved` and a stored draft cannot be trimmed; an autonomous one (a woken task) gets all four questions.
 
 | Answer | Effect |
 |---|---|

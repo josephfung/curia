@@ -2,21 +2,20 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { BandSendReview, removeQuoted, type BandReviewInput } from '../../../src/dispatch/band-send-review.js';
-import { FailOpenLimiter, GateCReviews } from '../../../src/autonomy/band-policy.js';
+import { FailOpenLimiter } from '../../../src/autonomy/band-policy.js';
 import type { BriefVerdict } from '../../../src/autonomy/judge-brief.js';
 import { createSilentLogger } from '../../../src/logger.js';
 
 const OK_EVIDENCE = { unavailable: false, toolResults: [], principalBlock: null };
 
-function make(verdicts: BriefVerdict[], opts: { reviewed?: boolean; evidence?: { unavailable: boolean } } = {}) {
+function make(verdicts: BriefVerdict[], opts: { evidence?: { unavailable: boolean } } = {}) {
   const review = vi.fn();
   for (const v of verdicts) review.mockResolvedValueOnce(v);
   const judge = { review, isEnabled: () => true };
   const collect = vi.fn().mockResolvedValue({ ...OK_EVIDENCE, ...opts.evidence });
-  const gateCReviews = { wasReviewed: vi.fn().mockReturnValue(opts.reviewed ?? false) };
   const onLimiterTripped = vi.fn().mockResolvedValue(undefined);
   const limiter = new FailOpenLimiter();
-  const svc = new BandSendReview({ judge, evidence: { collect }, gateCReviews, limiter, onLimiterTripped, logger: createSilentLogger() });
+  const svc = new BandSendReview({ judge, evidence: { collect }, limiter, onLimiterTripped, logger: createSilentLogger() });
   return { svc, review, collect, onLimiterTripped, limiter };
 }
 
@@ -67,15 +66,9 @@ describe('BandSendReview', () => {
     expect((await at74.svc.review({ ...base, score: 74 })).kind).toBe('hold');
   });
 
-  it('asks only grounding and necessity below 80 when Gate C already reviewed the task', async () => {
-    const { svc, review } = make([clean], { reviewed: true });
+  it('asks all four questions below 80 too: Gate C leaves sends to this review', async () => {
+    const { svc, review } = make([clean]);
     await svc.review({ ...base, score: 74 });
-    expect(review.mock.calls[0]![0].questions).toEqual(['grounding', 'necessity']);
-  });
-
-  it('asks all four for a relayed reply below 80 even when the task was reviewed', async () => {
-    const { svc, review } = make([clean], { reviewed: true });
-    await svc.review({ ...base, score: 74, postTurn: true });
     expect(review.mock.calls[0]![0].questions).toHaveLength(4);
   });
 
@@ -211,7 +204,7 @@ describe('BandSendReview', () => {
   it('treats no judge as a judge failure', async () => {
     const collect = vi.fn().mockResolvedValue(OK_EVIDENCE);
     const svc = new BandSendReview({
-      judge: undefined, evidence: { collect }, gateCReviews: new GateCReviews(),
+      judge: undefined, evidence: { collect },
       limiter: new FailOpenLimiter(), onLimiterTripped: vi.fn(), logger: createSilentLogger(),
     });
     expect((await svc.review({ ...base, score: 74 })).kind).toBe('hold');

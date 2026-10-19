@@ -49,8 +49,9 @@ Alternatives considered and rejected:
 4. **One bounce.** Unsupported claims or unneeded disclosures go back to the drafter once.
    After that, at 80+ the quoted statements are cut and the trimmed message is rechecked and
    sent with a digest item; below 80 it is held.
-5. **Below 80, speaking or committing as the principal asks first.** Gate C asks the judge
-   before the skill runs; the gateway asks of relayed replies.
+5. **Below 80, speaking or committing as the principal asks first.** For a send the gateway
+   asks, with the whole message and its resolved recipients, and a hold raises the approval;
+   for any other action Gate C asks before the skill runs.
 6. **Judge failure fails open at 80+ only,** with a "sent without review" digest item, capped
    at five an hour (then everything holds until the judge answers). Below 80 it holds.
 7. **Code guards only Curia's integrity.** The deterministic rules that stay are
@@ -77,8 +78,10 @@ Alternatives considered and rejected:
   judge's mistakes are found.
 - There is no hard "never by email" list. If sampling shows the judge getting a class of
   disclosure wrong, structure is added then, not before.
-- Each send at band gating costs one judge call (at most two below 80: one at Gate C, one at
-  the gateway). Evidence read from the audit log is trimmed to about 12,000 characters, and
-  credentials are redacted before it leaves for the judge's provider.
+- Each send at band gating costs one judge call at the gateway (two when it bounces). Non-send
+  actions cost one at Gate C when asked. Evidence read from the audit log is trimmed to about
+  12,000 characters, and credentials are redacted before it leaves for the judge's provider.
+- Gate C fails closed on a judge or evidence failure for non-send actions at every band:
+  *purpose* is an outsider's only check there. Sends keep the spec's fail-open at 80+, capped.
 
 See issue #2159 and `docs/wip/2026-10-15-band-driven-autonomy-design.md`.

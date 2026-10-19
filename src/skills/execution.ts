@@ -93,7 +93,7 @@ import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-cl
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { AutonomyConfig } from '../autonomy/autonomy-service.js';
-import { HUMAN_SEND_SKILLS, isSpotCheckOrAbove, type AutonomyGating, type GateCReviews } from '../autonomy/band-policy.js';
+import { HUMAN_SEND_SKILLS, isSpotCheckOrAbove, type AutonomyGating } from '../autonomy/band-policy.js';
 import type { SendEvidenceCollector } from '../autonomy/send-evidence.js';
 import type { BriefEvidence, BriefQuestion } from '../autonomy/judge-brief.js';
 import { meetsMinimumTier } from '../contacts/types.js';
@@ -285,7 +285,6 @@ export class ExecutionLayer {
   private approvalTrigger?: ApprovalTriggerService;
   private escalationJudge?: EscalationJudge;
   private gating: AutonomyGating;
-  private gateCReviews?: Pick<GateCReviews, 'mark'>;
   private sendEvidence?: Pick<SendEvidenceCollector, 'collect'>;
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
   private approvalDelivery?: import('../autonomy/approval-delivery.js').ApprovalDelivery;
@@ -360,8 +359,6 @@ export class ExecutionLayer {
      * the principal. Default 'tier'.
      */
     gating?: AutonomyGating;
-    /** Records the tasks whose purpose and speaks-as-principal questions Gate C asked (#2159). */
-    gateCReviews?: Pick<GateCReviews, 'mark'>;
     /** The drafting turn's evidence, for Gate C's band questions (#2159). */
     sendEvidence?: Pick<SendEvidenceCollector, 'collect'>;
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
@@ -417,7 +414,6 @@ export class ExecutionLayer {
     this.approvalTrigger = options?.approvalTrigger;
     this.escalationJudge = options?.escalationJudge;
     this.gating = options?.gating ?? 'tier';
-    this.gateCReviews = options?.gateCReviews;
     this.sendEvidence = options?.sendEvidence;
     this.actionLogRepo = options?.actionLogRepo;
     this.approvalDelivery = options?.approvalDelivery;
@@ -1345,17 +1341,21 @@ export class ExecutionLayer {
    * a consequential action that is not principal-originated. Returns null to proceed, or a
    * failed ToolResult that escalates (an approval request, as Gate C's tier escalation does).
    *
-   *   80+, a send                 → proceed. The gateway's band review asks the questions.
-   *   80+, anything else          → proceed; if an outsider (below trusted) initiated it, ask
-   *                                 the judge *purpose* first and escalate on "steered".
-   *   below 80, medium risk and up → ask *purpose* and *speaks as principal*; escalate on
-   *                                 "steered" or "yes"; on allow, mark the task reviewed so the
-   *                                 gateway asks only grounding and necessity of its sends.
-   *   below 80, low risk           → ask *purpose* only when an outsider initiated it.
-   *   judge failure               → 80+: proceed with a report item; below 80: escalate.
+   *   a send, any band              → proceed. The gateway's band review asks all four
+   *                                   questions with the whole message and its resolved
+   *                                   recipients, and a hold there raises the same approval.
+   *                                   Gate C's view of a send is a truncated description with
+   *                                   contact references, so judging it here would be weaker.
+   *   80+, any other action         → ask *purpose* if an outsider (below trusted) initiated
+   *                                   it; escalate on "steered".
+   *   below 80, medium risk and up  → ask *purpose* and *speaks as principal*; escalate on
+   *                                   "steered" or "yes".
+   *   below 80, low risk            → ask *purpose* only when an outsider initiated it.
+   *   judge or evidence failure     → escalate, at every band. Purpose is an outsider's only
+   *                                   check on a non-send, so it never fails open here.
    *
-   * At 80+, an action the tier policy would have escalated emits a `gate_proceeded` report
-   * item, so the principal sees in the digest what band gating let through.
+   * At 80+, a non-send the tier policy would have escalated emits a `gate_proceeded` digest
+   * item, so the principal sees what band gating let through.
    */
   private async runBandGateC(args: {
     toolName: string;
@@ -1366,7 +1366,6 @@ export class ExecutionLayer {
     currentScore: number;
     initiatingTier: ContactTier | null;
     sendPins: readonly SendRecipientPin[] | undefined;
-    sendRecipients: ReadonlyMap<string, string> | undefined;
   }): Promise<ToolResult | null> {
     const { toolName, manifest, input, options, skillLogger, currentScore, initiatingTier } = args;
     const isSend = HUMAN_SEND_SKILLS.has(toolName);
@@ -1375,39 +1374,28 @@ export class ExecutionLayer {
     const highBand = isSpotCheckOrAbove(currentScore);
     const lowRisk = manifest.action_risk === 'low';
 
-    let questions: BriefQuestion[];
-    if (highBand) {
-      questions = !isSend && outsider ? ['purpose'] : [];
-    } else if (!lowRisk) {
-      questions = ['purpose', 'speaks-as-principal'];
-    } else {
-      questions = outsider ? ['purpose'] : [];
+    let questions: BriefQuestion[] = [];
+    if (!isSend) {
+      if (highBand || lowRisk) {
+        questions = outsider ? ['purpose'] : [];
+      } else {
+        questions = ['purpose', 'speaks-as-principal'];
+      }
     }
 
-    // A send to the principal alone neither speaks for them nor is steered toward a third
-    // party; the gateway skips its review too.
-    if (questions.length > 0 && isSend && this.isBandPrincipalSoleSend(toolName, input, args.sendRecipients)) {
-      questions = [];
-    }
-
-    let unreviewed = false;
     if (questions.length > 0) {
       const verdict = await this.askBandGateC(questions, toolName, manifest, input, options, currentScore);
       if (!verdict.ok) {
-        if (!highBand) {
-          skillLogger.warn({ toolName, failure: verdict.failure, currentScore }, 'autonomy gate: Gate C band review unavailable below 80 — escalating');
-          return this.escalateBandGateC(args, 'the reviewer was unavailable to check it');
-        }
-        skillLogger.warn({ toolName, failure: verdict.failure }, 'autonomy gate: Gate C band review unavailable at 80+ — proceeding with a report item');
-        unreviewed = true;
-      } else if (verdict.purpose === 'steered') {
+        skillLogger.warn({ toolName, failure: verdict.failure, currentScore }, 'autonomy gate: Gate C band review unavailable — escalating');
+        return this.escalateBandGateC(args, 'the reviewer was unavailable to check it');
+      }
+      if (verdict.purpose === 'steered') {
         skillLogger.info({ toolName, reason: verdict.reason }, 'autonomy gate: Gate C band review — steered by an outsider');
         return this.escalateBandGateC(args, 'it looks steered by someone outside the principal\'s business');
-      } else if (verdict.speaksAsPrincipal === true) {
+      }
+      if (verdict.speaksAsPrincipal === true) {
         skillLogger.info({ toolName, reason: verdict.reason, currentScore }, 'autonomy gate: Gate C band review — speaks for the principal below 80');
         return this.escalateBandGateC(args, 'it speaks for or commits the principal, and this autonomy band asks first for that');
-      } else if (!highBand && options?.taskEventId) {
-        this.gateCReviews?.mark(options.taskEventId);
       }
     }
 
@@ -1420,11 +1408,11 @@ export class ExecutionLayer {
     }
 
     // What band gating let through that the tier policy would have held, for the digest.
-    const tierWouldEscalate = initiatingTier !== null && applyActionPolicy(
+    // Not for sends: the gateway has not reviewed them yet, and it reports its own outcome.
+    if (highBand && !isSend && initiatingTier !== null && applyActionPolicy(
       initiatingTier, mapActionRiskToConsequenceClass(manifest.action_risk), true,
-    ) === 'escalate';
-    if (highBand && (tierWouldEscalate || unreviewed) && initiatingTier !== null) {
-      await this.publishGateProceeded(toolName, initiatingTier, unreviewed, options, skillLogger);
+    ) === 'escalate') {
+      await this.publishGateProceeded(toolName, initiatingTier, options, skillLogger);
     }
     return null;
   }
@@ -1439,14 +1427,16 @@ export class ExecutionLayer {
     currentScore: number,
   ): Promise<import('../autonomy/judge-brief.js').BriefVerdict> {
     if (!this.escalationJudge?.isEnabled()) return { ok: false, failure: 'disabled' };
-    // Purpose and speaks-as-principal can be judged from the action and the turn's request;
-    // when the evidence lookup fails the judge still answers from the action alone.
-    let evidence: BriefEvidence = { toolResults: [] };
-    if (this.sendEvidence && options?.taskEventId) {
-      const collected = await this.sendEvidence.collect([options.taskEventId]);
-      if (!collected.unavailable) evidence = collected;
-    }
     try {
+      // Purpose depends on what the turn was answering; without that the judge sees only the
+      // action, which leans toward "serving". A failed lookup is a review failure.
+      let evidence: BriefEvidence = { toolResults: [] };
+      if (this.sendEvidence) {
+        if (!options?.taskEventId) return { ok: false, failure: 'unreachable' };
+        const collected = await this.sendEvidence.collect([options.taskEventId]);
+        if (collected.unavailable) return { ok: false, failure: 'unreachable' };
+        evidence = collected;
+      }
       return await this.escalationJudge.review({
         questions,
         message: buildActionDescription(toolName, manifest, input),
@@ -1456,7 +1446,7 @@ export class ExecutionLayer {
         conversationId: options?.conversationId ?? 'system',
       });
     } catch (err) {
-      // review() is documented never to throw; treat a throw as a review failure.
+      // review() and collect() are documented never to throw; treat a throw as a failure.
       this.logger.error({ err, toolName }, 'autonomy gate: Gate C band review threw');
       return { ok: false, failure: 'unreachable' };
     }
@@ -1491,15 +1481,17 @@ export class ExecutionLayer {
   private async publishGateProceeded(
     toolName: string,
     initiatingTier: ContactTier,
-    unreviewed: boolean,
     options: InvokeOptions | undefined,
     skillLogger: Logger,
   ): Promise<void> {
-    if (!this.bus) return;
+    if (!this.bus) {
+      skillLogger.warn({ toolName }, 'autonomy gate: no bus — the gate_proceeded digest item is only in this log');
+      return;
+    }
+    const article = /^[aeiou]/i.test(initiatingTier) ? 'an' : 'a';
     try {
       await this.bus.publish('execution', createPrincipalReport({
-        summary: `Went ahead with ${toolName} on a request from a ${initiatingTier} contact without asking first.` +
-          (unreviewed ? ' The reviewer was unavailable.' : ''),
+        summary: `Went ahead with ${toolName} on a request from ${article} ${initiatingTier} contact without asking first.`,
         urgency: 'digest',
         source: 'gate_proceeded',
         ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
@@ -1507,24 +1499,9 @@ export class ExecutionLayer {
         sourceLayer: 'execution',
       }));
     } catch (err) {
-      // The action was allowed; only its digest line is lost.
+      // The action was allowed after a successful review; only its digest line is lost.
       skillLogger.error({ err, toolName }, 'autonomy gate: failed to queue the gate_proceeded report item');
     }
-  }
-
-  /** True when a send skill's resolved recipients are all the verified principal. */
-  private isBandPrincipalSoleSend(
-    toolName: string,
-    input: Record<string, unknown>,
-    sendRecipients: ReadonlyMap<string, string> | undefined,
-  ): boolean {
-    const found = findCarveoutSkill(toolName);
-    if (!found || found.carveout.resolveRecipients) return false;
-    const parsed = found.carveout.parseRecipients(input);
-    if (parsed === null) return false;
-    const substituted = this.substituteResolvedRecipients(parsed, sendRecipients);
-    if (!substituted.ok) return false;
-    return resolvePrincipalIsSoleRecipientFromSkillInput(toolName, input, this.principalIdentities, substituted.recipients);
   }
 
   /**
@@ -1942,7 +1919,7 @@ export class ExecutionLayer {
               // Band gating (#2159): the score decides; the judge flags steering and speaking
               // for the principal. The #1290 KG-write block above still applies.
               const blocked = await this.runBandGateC({
-                toolName, manifest, input, options, skillLogger, currentScore, initiatingTier, sendPins, sendRecipients,
+                toolName, manifest, input, options, skillLogger, currentScore, initiatingTier, sendPins,
               });
               if (blocked) return blocked;
             } else {
@@ -2182,7 +2159,7 @@ export class ExecutionLayer {
             // System and agent originators (#2159): tier gating skipped them, but the band
             // table is about what Curia does, not who asked.
             const blocked = await this.runBandGateC({
-              toolName, manifest, input, options, skillLogger, currentScore, initiatingTier: null, sendPins, sendRecipients,
+              toolName, manifest, input, options, skillLogger, currentScore, initiatingTier: null, sendPins,
             });
             if (blocked) return blocked;
           }

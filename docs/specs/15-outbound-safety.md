@@ -29,8 +29,9 @@ the CEO, or exfiltrate internal data to an external party.
 | Threat | Example | Defence |
 |---|---|---|
 | **Prompt injection via inbound email** | Attacker email instructs LLM to dump system prompt in reply | Content filter — Stage 1 (deterministic) + Stage 2 (LLM-as-judge) |
-| **Accidental context leakage** | LLM naturally includes a third party's email address in a reply | Content filter — contact data leakage rule |
-| **Over-disclosure to an untrusted recipient** | Reply shares the CEO's availability or another contact's details with an unknown-tier recipient | Content filter — Stage 2.5 tier-keyed disclosure gate (escalation judge) |
+| **Accidental context leakage** | LLM naturally includes a third party's email address in a reply | Content filter — contact data leakage rule (`autonomy.gating: tier`); band send review's *necessity* question (`band`) |
+| **Over-disclosure to an untrusted recipient** | Reply shares the CEO's availability or another contact's details with an unknown-tier recipient | Content filter — Stage 2.5 tier-keyed disclosure gate (`tier`); band send review (`band`, [spec 14](14-autonomy-engine.md#band-gating-2159)) |
+| **A false claim in the principal's voice** | Reply tells a counterparty the principal is away when they are not | Band send review's *grounding* question (`band` only) |
 | **Skill-layer bypass** | Prompt injection tricks LLM into calling `email-send` directly, circumventing the dispatcher filter | Outbound gateway — all `nylasClient.sendMessage()` calls go through it |
 | **Impersonation of CEO** | Attacker sends email claiming to be the CEO, triggers a high-sensitivity action | Caller verification — cross-channel challenge/response for elevated skills |
 | **Display name spoofing** | Reply-To header set to `Jane Doe <attacker@evil.com>` | Display name sanitization — strip or flag mismatched display names |
@@ -156,6 +157,8 @@ the token for visibility; it does not block.
 
 A multi-stage pipeline that runs on every outbound message to an external recipient: Stage 1 (deterministic rules), Stage 2 (LLM audience-leak judge), and Stage 2.5 (tier-keyed disclosure gate). Each stage can block; later stages run only if earlier ones pass.
 
+Under `autonomy.gating: band` (#2159, [ADR-049](../adr/049-band-driven-autonomy.md)) the `contact-data-leak` rule and Stage 2.5 are off, and the gateway's band send review runs after Stage 2 instead; see [spec 14 → Band gating](14-autonomy-engine.md#band-gating-2159). Everything below about those two applies under `tier`, the default.
+
 ### Stage 1: Deterministic Rules (implemented)
 
 Fast, zero-cost pattern matching. Any finding from Stage 1 blocks immediately — Stage 2 is skipped.
@@ -231,7 +234,7 @@ the blocked body onto `outbound.no_reply.abandonedContent`. There is no review-a
 resend flow yet (see *What's Not Here Yet*), so a false positive currently means the agent's send
 is dropped and must be re-requested.
 
-### Stage 2.5: Escalation Judge — tier-keyed disclosure gate (implemented)
+### Stage 2.5: Escalation Judge — tier-keyed disclosure gate (implemented; `autonomy.gating: tier` only)
 
 Stages 1 and 2 catch *leaked internal content*. Stage 2.5 catches *over-disclosure to a recipient who isn't trusted enough to receive it* — sharing the principal's availability with an unknown sender, or another contact's details with someone who has no business seeing them. It runs only if Stages 1 and 2 both pass (#948, #949).
 

@@ -1,7 +1,7 @@
 // band-policy.test.ts — band gating helpers (#2159).
 
 import { describe, expect, it } from 'vitest';
-import { FailOpenLimiter, GateCReviews, HUMAN_SEND_SKILLS, isSpotCheckOrAbove } from '../../../src/autonomy/band-policy.js';
+import { FailOpenLimiter, HUMAN_SEND_SKILLS, isSpotCheckOrAbove } from '../../../src/autonomy/band-policy.js';
 
 describe('isSpotCheckOrAbove', () => {
   it('is true from 80', () => {
@@ -17,28 +17,6 @@ describe('HUMAN_SEND_SKILLS', () => {
       expect(HUMAN_SEND_SKILLS.has(s)).toBe(true);
     }
     expect(HUMAN_SEND_SKILLS.has('calendar-create-event')).toBe(false);
-  });
-});
-
-describe('GateCReviews', () => {
-  it('remembers a marked task until the TTL passes', () => {
-    let t = 0;
-    const reviews = new GateCReviews({ ttlMs: 1000, now: () => t });
-    reviews.mark('task-1');
-    expect(reviews.wasReviewed('task-1')).toBe(true);
-    expect(reviews.wasReviewed('task-2')).toBe(false);
-    expect(reviews.wasReviewed(undefined)).toBe(false);
-    t = 1001;
-    expect(reviews.wasReviewed('task-1')).toBe(false);
-  });
-
-  it('drops the oldest entry past maxEntries', () => {
-    const reviews = new GateCReviews({ maxEntries: 2 });
-    reviews.mark('a');
-    reviews.mark('b');
-    reviews.mark('c');
-    expect(reviews.wasReviewed('a')).toBe(false);
-    expect(reviews.wasReviewed('c')).toBe(true);
   });
 });
 

@@ -104,7 +104,7 @@ import { TRIGGER_GUIDANCE_MARKER_SOURCES } from './agents/prompts/trigger-guidan
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
 import type { JudgeConfig } from './dispatch/outbound-judge.js';
 import type { EscalationJudge } from './autonomy/escalation-judge.js';
-import { FailOpenLimiter, GateCReviews } from './autonomy/band-policy.js';
+import { FailOpenLimiter } from './autonomy/band-policy.js';
 import { checkBandGatingReady } from './autonomy/band-wiring.js';
 import { SendEvidenceCollector } from './autonomy/send-evidence.js';
 import { BandSendReview } from './dispatch/band-send-review.js';
@@ -1721,10 +1721,7 @@ async function main(): Promise<void> {
     .filter((name): name is string => typeof name === 'string' && name.trim() !== '');
   const conversationEntities = ConversationEntityState.createWithPostgres(pool, logger, principalNames);
 
-  // Band gating's send review (#2159). Gate C marks the tasks whose purpose and
-  // speaks-as-principal questions it already asked, so the gateway asks only grounding and
-  // necessity of their sends. The evidence is what the drafting turn looked up.
-  const gateCReviews = new GateCReviews();
+  // Band gating's send review (#2159). The evidence is what the drafting turn looked up.
   const sendEvidence = new SendEvidenceCollector({
     auditLogRepo,
     // Read per call: principal identities hot-reload in place (#1514).
@@ -1735,7 +1732,6 @@ async function main(): Promise<void> {
     ? new BandSendReview({
       judge: escalationJudge,
       evidence: sendEvidence,
-      gateCReviews,
       limiter: new FailOpenLimiter(),
       // Once, when unreviewed sends pass the hourly cap: sends now hold until the reviewer
       // answers again. Never throws — the review holds the send either way.
@@ -2420,7 +2416,7 @@ async function main(): Promise<void> {
   // the subscriber and sweep below. Wiring the lookup while those are off would let a
   // pending row block that agent in that conversation with nothing left to resolve it.
   const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, gateCReviews, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>
