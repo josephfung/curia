@@ -105,6 +105,8 @@ const JUDGE_TEMPERATURE = 0;
 type LlmKind = 'disclosure' | 'action' | 'review';
 
 const DEFAULT_REVIEW_TIMEOUT_MS = 15_000;
+// The brief can quote several sentences back (#2159), so it gets the most room.
+const REVIEW_MAX_TOKENS = 800;
 
 interface LlmCallResult {
   content: string;
@@ -226,6 +228,12 @@ export class EscalationJudge {
    */
   async review(input: BriefInput): Promise<BriefVerdict> {
     if (!this.config.enabled) return { ok: false, failure: 'disabled' };
+    // No questions would parse as a vacuous pass. A caller that built an empty list has a bug;
+    // treat it as a failure so it cannot read as a clean review.
+    if (input.questions.length === 0) {
+      this.logger.error({ conversationId: input.conversationId }, 'escalation-judge: review called with no questions');
+      return { ok: false, failure: 'malformed' };
+    }
     const userPrompt = buildBriefUserPrompt(input);
     const result = await this.callLlm(
       userPrompt,
@@ -235,6 +243,10 @@ export class EscalationJudge {
       this.config.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
     );
     if (result === null) return { ok: false, failure: 'unreachable' };
+    // Before parsing, so a malformed verdict's raw response is archived too: under band
+    // gating a malformed verdict can send unreviewed at 80+, and the archive is how to tell
+    // a truncated answer from a garbled one. Fire-and-forget: never delays the review.
+    void this.publishTelemetry(result, userPrompt, input.conversationId, 'review');
     const answers = parseBriefVerdict(result.content, input.questions);
     if (answers === null) {
       this.logger.error(
@@ -242,13 +254,14 @@ export class EscalationJudge {
           responseHash: createHash('sha256').update(result.content).digest('hex'),
           conversationId: input.conversationId,
           questions: input.questions,
+          outputTokens: result.usage.outputTokens,
+          maxTokens: REVIEW_MAX_TOKENS,
+          likelyTruncated: result.usage.outputTokens >= REVIEW_MAX_TOKENS,
         },
         'escalation-judge: unparseable brief verdict',
       );
       return { ok: false, failure: 'malformed' };
     }
-    // Fire-and-forget: telemetry failure must never delay or block the review.
-    void this.publishTelemetry(result, userPrompt, input.conversationId, 'review');
     return { ok: true, ...answers };
   }
 
@@ -268,7 +281,7 @@ export class EscalationJudge {
     // for disclosure — give it more room so verbose reason strings don't truncate.
     // The brief can quote several sentences back (#2159), so it gets the most room.
     // Truncated JSON → parseVerdict returns null → escalate (safe failure mode).
-    const maxTokens = kind === 'review' ? 800 : kind === 'action' ? 200 : 120;
+    const maxTokens = kind === 'review' ? REVIEW_MAX_TOKENS : kind === 'action' ? 200 : 120;
 
     try {
       const chatPromise = this.provider.chat({

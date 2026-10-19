@@ -1,7 +1,7 @@
 // judge-brief.test.ts — the band brief's prompt and verdict parser (#2159).
 
 import { describe, expect, it } from 'vitest';
-import { buildBriefUserPrompt, parseBriefVerdict, type BriefInput } from '../../../src/autonomy/judge-brief.js';
+import { BRIEF_SYSTEM_PROMPT, buildBriefUserPrompt, parseBriefVerdict, type BriefInput } from '../../../src/autonomy/judge-brief.js';
 
 const ALL = ['purpose', 'speaks-as-principal', 'grounding', 'necessity'] as const;
 
@@ -31,9 +31,12 @@ describe('parseBriefVerdict', () => {
     expect(parseBriefVerdict(JSON.stringify({ purpose: 'maybe', reason: 'x' }), ['purpose'])).toBeNull();
     expect(parseBriefVerdict(JSON.stringify({ unsupportedClaims: 'none', reason: 'x' }), ['grounding'])).toBeNull();
     expect(parseBriefVerdict(JSON.stringify({ unsupportedClaims: [3], reason: 'x' }), ['grounding'])).toBeNull();
-    expect(parseBriefVerdict(JSON.stringify({ unsupportedClaims: [] }), ['grounding'])).toBeNull();
     expect(parseBriefVerdict('not json', ['grounding'])).toBeNull();
     expect(parseBriefVerdict('[]', ['grounding'])).toBeNull();
+  });
+
+  it('defaults a missing reason: it decides nothing, so it must not turn a verdict into a failure', () => {
+    expect(parseBriefVerdict(JSON.stringify({ unsupportedClaims: [] }), ['grounding'])).toEqual({ unsupportedClaims: [], reason: '' });
   });
 
   it('accepts a fenced JSON object', () => {
@@ -63,6 +66,10 @@ describe('buildBriefUserPrompt', () => {
     expect(prompt).toContain('"unsupportedClaims"');
     expect(prompt).not.toContain('"purpose"');
     expect(prompt).not.toContain('"speaksAsPrincipal"');
+  });
+
+  it('tells the judge that what others wrote is not support for facts about the principal', () => {
+    expect(BRIEF_SYSTEM_PROMPT).toMatch(/someone other than the principal/);
   });
 
   it('carries the evidence beside the message, not inside it', () => {

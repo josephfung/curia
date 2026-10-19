@@ -94,9 +94,19 @@ export class FailOpenLimiter {
     return { allowed: true, justTripped: false };
   }
 
-  /** A judge call succeeded: clear the trip and the window. */
+  /**
+   * A judge call succeeded. If the cap had tripped, the reviewer is back: clear the trip and
+   * start a fresh window. Otherwise keep the count — a judge that fails intermittently (say,
+   * truncating only long messages) must still trip the cap, not reset it on every success.
+   */
   recordJudgeSuccess(): void {
+    if (!this.tripped) return;
     this.tripped = false;
     this.stamps = [];
+  }
+
+  /** True while sends hold for want of a reviewer. In memory: a restart clears it. */
+  isTripped(): boolean {
+    return this.tripped;
   }
 }

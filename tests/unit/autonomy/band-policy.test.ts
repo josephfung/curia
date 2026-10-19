@@ -61,6 +61,27 @@ describe('FailOpenLimiter', () => {
     expect(limiter.tryAcquire()).toEqual({ allowed: true, justTripped: false });
   });
 
+  it('still trips when judge successes come between the failures', () => {
+    // A judge that fails on long messages and succeeds on short ones must not reset the
+    // count each time, or the long ones fail open forever.
+    const t = 0;
+    const limiter = new FailOpenLimiter({ now: () => t });
+    for (let i = 0; i < 5; i++) {
+      expect(limiter.tryAcquire().allowed).toBe(true);
+      limiter.recordJudgeSuccess();
+    }
+    expect(limiter.tryAcquire()).toEqual({ allowed: false, justTripped: true });
+  });
+
+  it('starts a fresh window after recovering from a trip', () => {
+    const t = 0;
+    const limiter = new FailOpenLimiter({ now: () => t });
+    for (let i = 0; i < 6; i++) limiter.tryAcquire();
+    limiter.recordJudgeSuccess();
+    for (let i = 0; i < 5; i++) expect(limiter.tryAcquire().allowed).toBe(true);
+    expect(limiter.tryAcquire().justTripped).toBe(true);
+  });
+
   it('forgets fail-opens older than the window', () => {
     let t = 0;
     const limiter = new FailOpenLimiter({ now: () => t });

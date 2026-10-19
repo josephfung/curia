@@ -716,6 +716,20 @@ describe('EscalationJudge.review (band brief, #2159)', () => {
     expect(provider.chat).not.toHaveBeenCalled();
   });
 
+  it('treats an empty question list as a failure, without calling the model', async () => {
+    const provider = providerReturning(textResponse('{"reason": "ok"}'));
+    const { judge } = makeJudge(provider);
+    await expect(judge.review({ ...brief, questions: [] })).resolves.toEqual({ ok: false, failure: 'malformed' });
+    expect(provider.chat).not.toHaveBeenCalled();
+  });
+
+  it('records llm.call telemetry for a malformed verdict too, so the raw response is archived', async () => {
+    const { judge, bus } = makeJudge(providerReturning(textResponse('{"unsupportedClaims": ["cut off')));
+    await judge.review(brief);
+    await vi.waitFor(() => expect(bus.published.length).toBeGreaterThan(0));
+    expect((bus.published[0] as { payload: { agentId: string } }).payload.agentId).toBe('escalation-judge-review');
+  });
+
   it('archives the brief system prompt in llm.call telemetry', async () => {
     const { judge, bus } = makeJudge(providerReturning(textResponse('{"unsupportedClaims": [], "reason": "ok"}')));
     await judge.review(brief);

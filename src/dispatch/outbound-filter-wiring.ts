@@ -60,9 +60,12 @@ export function buildEscalationJudge(deps: {
   }
   // The band brief's own timeout (#2159). Same floor: a typo'd tiny value would time out
   // every review, which under band gating fails sends open at 80+.
-  if (!Number.isInteger(config.reviewTimeoutMs) || (config.reviewTimeoutMs ?? 0) < 250) {
+  // The ceiling is Node's timer limit: setTimeout fires a larger delay after 1 ms, which
+  // would time out every review.
+  const reviewTimeoutMs = config.reviewTimeoutMs ?? 0;
+  if (!Number.isInteger(reviewTimeoutMs) || reviewTimeoutMs < 250 || reviewTimeoutMs > 2_147_483_647) {
     throw new EscalationJudgeConfigError(
-      'escalation.judge.review_timeout_ms must be an integer >= 250 (ms) — fix config (default.yaml or local.yaml)',
+      'escalation.judge.review_timeout_ms must be an integer >= 250 and <= 2147483647 (ms) — fix config (default.yaml or local.yaml)',
       { reviewTimeoutMs: config.reviewTimeoutMs },
     );
   }

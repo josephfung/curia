@@ -41,6 +41,13 @@ describe('loadYamlConfig — autonomy.gating validation (#2159)', () => {
     expect(resolveAutonomyGating(loadYamlConfig(writeConfig('autonomy:\n  gating: tier\n')).autonomy)).toBe('tier');
   });
 
+  it('refuses band gating with the escalation judge switched off', () => {
+    // Every band review would be a judge failure: unreviewed sends at 80+, holds below.
+    expect(() => loadYamlConfig(writeConfig('autonomy:\n  gating: band\nescalation:\n  judge:\n    enabled: false\n')))
+      .toThrow(/autonomy.gating: band needs the escalation judge/);
+    expect(resolveAutonomyGating(loadYamlConfig(writeConfig('autonomy:\n  gating: tier\nescalation:\n  judge:\n    enabled: false\n')).autonomy)).toBe('tier');
+  });
+
   it('rejects anything else at load time', () => {
     expect(() => loadYamlConfig(writeConfig('autonomy:\n  gating: score\n')))
       .toThrow(/autonomy.gating must be one of band, tier/);

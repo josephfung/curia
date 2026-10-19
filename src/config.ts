@@ -1432,6 +1432,12 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   if (gating !== undefined && !AUTONOMY_GATINGS.includes(gating)) {
     throw new Error(`autonomy.gating must be one of ${AUTONOMY_GATINGS.join(', ')}, got: ${String(gating)}`);
   }
+  // Band gating reviews every send with the escalation judge. With the judge off, every
+  // review is a failure: up to 5 unreviewed sends an hour at 80+, every send held below.
+  // That is never what an operator means, so refuse the combination at boot.
+  if (gating === 'band' && config.escalation?.judge?.enabled === false) {
+    throw new Error('autonomy.gating: band needs the escalation judge — set escalation.judge.enabled: true, or use autonomy.gating: tier');
+  }
 
   // Validate autonomy.report_fallback if present (#2159). Same guard: a mis-shaped block
   // must fail loudly rather than fall back to the defaults.

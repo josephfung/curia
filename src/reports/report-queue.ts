@@ -31,8 +31,8 @@ const SEQ_PATTERN = /^\d{1,19}$/;
 
 const URGENCIES: ReadonlySet<string> = new Set<PrincipalReportUrgency>(['digest', 'now']);
 // Keyed by PrincipalReportSource so the compiler rejects this table when a source is added
-// to the union and not here. A source missing here would drop its items from every digest
-// as malformed rows (#2159 added three).
+// to the union and not here. A source missing here would have its items relabelled 'agent'
+// in every digest (toItem's fallback), losing what produced them (#2159 added three).
 const SOURCE_KEYS: Record<PrincipalReportSource, true> = {
   agent: true,
   principal_note: true,
@@ -148,9 +148,12 @@ export class ReportQueue {
     const urgency = typeof p.urgency === 'string' && URGENCIES.has(p.urgency)
       ? (p.urgency as PrincipalReportUrgency)
       : 'digest';
-    const source = typeof p.source === 'string' && SOURCES.has(p.source)
-      ? (p.source as PrincipalReportSource)
-      : 'agent';
+    const knownSource = typeof p.source === 'string' && SOURCES.has(p.source);
+    if (!knownSource) {
+      // A row from an older or newer build: keep it, but say so, or the relabel is invisible.
+      this.deps.logger.warn({ auditId: row.id, source: p.source }, 'report-queue: unknown report source — listed as agent');
+    }
+    const source = knownSource ? (p.source as PrincipalReportSource) : 'agent';
     return {
       id: row.id,
       at: row.timestamp,

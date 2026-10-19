@@ -40,6 +40,10 @@ describe('buildEscalationJudge — review_timeout_ms (#2159)', () => {
     expect(Date.now() - started).toBeLessThan(3000);
   });
 
+  it('rejects a review_timeout_ms past the Node.js timer limit (it would fire at once)', () => {
+    expect(() => buildEscalationJudge(deps({ review_timeout_ms: 3_000_000_000 }))).toThrow(/review_timeout_ms must be an integer >= 250 and <= 2147483647/);
+  });
+
   it('rejects a review_timeout_ms below 250', () => {
     expect(() => buildEscalationJudge(deps({ review_timeout_ms: 10 }))).toThrow(EscalationJudgeConfigError);
     expect(() => buildEscalationJudge(deps({ review_timeout_ms: 10 }))).toThrow(/review_timeout_ms must be an integer >= 250/);

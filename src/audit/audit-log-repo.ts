@@ -365,6 +365,31 @@ export class AuditLogRepo {
   }
 
   /**
+   * The tool results of the given agent turns, newest first (#2159: the band brief's evidence).
+   * A tool.result is the child of its tool.invoke, which is the child of the agent.task
+   * (runtime.ts), so this walks two levels. Both levels use idx_audit_log_parent_event_id.
+   * Newest first so the limit keeps the lookups closest to the send.
+   */
+  async findToolResultsForTasks(taskEventIds: readonly string[], limit: number): Promise<AuditLogRow[]> {
+    if (taskEventIds.length === 0) return [];
+    const clamped = Math.min(Math.max(limit, 1), MAX_LIMIT);
+    const result = await this.pool.query(
+      `SELECT ${SELECT_COLUMNS}
+       FROM audit_log
+       WHERE event_type = ANY(ARRAY['tool.result', 'skill.result']::text[])
+         AND parent_event_id IN (
+           SELECT id::text FROM audit_log
+           WHERE parent_event_id = ANY($1::text[])
+             AND event_type = ANY(ARRAY['tool.invoke', 'skill.invoke']::text[])
+         )
+       ORDER BY timestamp DESC, id DESC
+       LIMIT $2`,
+      [[...taskEventIds], clamped],
+    );
+    return result.rows.map(mapRow);
+  }
+
+  /**
    * Requester-identity evidence rendered into one delegated specialist task (#1859).
    * `delegateEventId` is that task's `agent.task` id. Matches the structured
    * `target_id` and, if extraction failed, `payload.delegateEventId`.
