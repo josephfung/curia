@@ -22,6 +22,7 @@
 export type TurnGuidanceKey =
   | 'principal-reply-shaped'
   | 'non-principal-reply-shaped'
+  | 'spot-check-reply'
   | 'outbound-context'
   | 'outbound-context-task-wake'
   | 'outbound-context-clarification'
@@ -83,6 +84,20 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   'this exchange that they can act on, add it after the message inside',
   '<note_for_principal></note_for_principal> tags. The note is emailed to the principal and',
   'only they see it; nothing for the principal goes in the message.',
+];
+
+/**
+ * A live principal message that looks like a verdict on a digest's spot check ("2 bad, that
+ * was a renewal notice"). Added only on a live principal turn (turn-guidance-triggers.ts),
+ * so a third party's "2 good" can never reach the tool. It names the two calls in order
+ * because record-spot-check lives in the `reports` bundle, not the coordinator's pins, and
+ * says to ask when the tool finds no match: a guessed verdict would score the wrong action.
+ */
+const SPOT_CHECK_REPLY = [
+  'The principal\'s message looks like a spot-check verdict on a digest ("2 bad, that was a',
+  'renewal notice"). Call skill-activate with skill `reports`, then record-spot-check with each',
+  'number, good or bad, and any reason they gave. If it finds no matching spot check or an',
+  'unknown number, ask the principal which action they meant. Never guess.',
 ];
 
 /**
@@ -195,6 +210,7 @@ const SCHEDULER_DELIVERY = [
 const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
   'principal-reply-shaped': PRINCIPAL_REPLY_SHAPED,
   'non-principal-reply-shaped': NON_PRINCIPAL_REPLY_SHAPED,
+  'spot-check-reply': SPOT_CHECK_REPLY,
   'outbound-context': OUTBOUND_CONTEXT,
   'outbound-context-task-wake': OUTBOUND_CONTEXT_TASK_WAKE,
   'outbound-context-clarification': OUTBOUND_CONTEXT_CLARIFICATION,
@@ -213,6 +229,7 @@ const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
 export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
   'principal-reply-shaped',
   'non-principal-reply-shaped',
+  'spot-check-reply',
   'outbound-context',
   'outbound-context-task-wake',
   'outbound-context-clarification',

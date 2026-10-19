@@ -2625,3 +2625,74 @@ describe('Dispatcher content-block relay (#1355)', () => {
     expect(agentTasks).toHaveLength(1);
   });
 });
+
+describe('Dispatcher — spot-check verdict turn guidance', () => {
+  // A principal reply like "2 bad, that was a renewal notice" should point the coordinator
+  // at record-spot-check. The email channel prepends "Subject: ..." to the body, so the
+  // dispatcher must look past it for the start-of-message rule to work on a real email.
+  function setup(systemRole: 'principal' | null) {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: makeResolverWithContact({
+        contactConfidence: 1.0,
+        tier: systemRole === 'principal' ? 'principal' : 'known',
+        kind: systemRole === 'principal' ? 'principal' : 'person',
+        systemRole,
+      }),
+    });
+    dispatcher.register();
+    return { bus, tasks };
+  }
+
+  it('adds spot-check-reply for a principal email whose body starts with "2 bad"', async () => {
+    const { bus, tasks } = setup('principal');
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-digest-1',
+      channelId: 'email',
+      senderId: 'dana@example.com',
+      content: 'Subject: Re: Your daily digest\n\n2 bad, that was a renewal notice\n\nOn Mon, Curia wrote:\n> Spot check (optional, reply with a number):',
+    }));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.turnGuidance).toContain('spot-check-reply');
+  });
+
+  it('adds it for a principal message on a non-email channel too', async () => {
+    const { bus, tasks } = setup('principal');
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'signal:+15551230000',
+      channelId: 'signal',
+      senderId: '+15551230000',
+      content: '#2 bad',
+    }));
+    expect(tasks[0]!.payload.turnGuidance).toContain('spot-check-reply');
+  });
+
+  it('does not add it when a principal message merely mentions a number and a verdict word', async () => {
+    const { bus, tasks } = setup('principal');
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-digest-2',
+      channelId: 'email',
+      senderId: 'dana@example.com',
+      content: 'Subject: Ideas\n\nI have 2 good ideas for the offsite',
+    }));
+    expect(tasks[0]!.payload.turnGuidance).not.toContain('spot-check-reply');
+  });
+
+  it('never adds it for a non-principal sender, even with the same text', async () => {
+    const { bus, tasks } = setup(null);
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-digest-3',
+      channelId: 'email',
+      senderId: 'sam@example.com',
+      content: 'Subject: Re: Your daily digest\n\n2 good',
+    }));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.liveTurn).toBe(false);
+    expect(tasks[0]!.payload.turnGuidance).not.toContain('spot-check-reply');
+  });
+});
