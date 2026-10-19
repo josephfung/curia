@@ -54,7 +54,8 @@
 //     self-addresses come from email_accounts without the vault grant check.
 
 import * as path from 'node:path';
-import { loadConfig, loadYamlConfig, resolveLateDeliveryConfig, resolveTasksConfig, type Config, type YamlConfig } from '../config.js';
+import { loadConfig, loadYamlConfig, resolveLateDeliveryConfig, resolveTasksConfig, resolveVerificationConfig, type Config, type YamlConfig } from '../config.js';
+import { createVerificationRuntime } from '../verification/index.js';
 import { createLogger, type Logger } from '../logger.js';
 import { createPool, type DbPool } from '../db/connection.js';
 import { EventBus } from '../bus/bus.js';
@@ -767,6 +768,12 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
           releaseRunning: (delegateEventId) => releaseRunningDelegation(pool, delegateEventId),
         }
       : undefined;
+    // Delegated sign-in verification (#2017), wired like src/index.ts so the default-deny
+    // scrub runs under test. No channel adapters start in this stack, so no channel is
+    // enabled and askChannel() is always null; nothing here asks the principal anything.
+    const verification = createVerificationRuntime(
+      pool, logger, resolveVerificationConfig(yamlConfig.verification), principalIdentities, new Set<string>(),
+    );
     const baseExecutionLayer = new ExecutionLayer(toolRegistry, logger, {
       bus,
       agentRegistry,
@@ -792,6 +799,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings,
       principalIdentities,
       skillRegistry,
+      verification,
       ...(outboundContextService ? { outboundContextService } : {}),
       ...(openDelegationLookup ? { openDelegationLookup } : {}),
     });

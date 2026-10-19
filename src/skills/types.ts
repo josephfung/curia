@@ -353,6 +353,10 @@ export interface ToolContext {
   /** Shared sensitivity classifier — available to skills declaring 'sensitivityClassifier'.
    *  Classifies free text against config sensitivity_rules. */
   sensitivityClassifier?: import('../memory/sensitivity.js').SensitivityClassifier;
+  /** Delegated sign-in verification (#2017) — available to skills declaring 'verification'.
+   *  Use `verification.listActive()` / `verification.close()`, not the raw service's, so the
+   *  code tracker's TTL stays in step with the table. */
+  verification?: import('../verification/index.js').VerificationRuntime;
   /** Where an identifier an agent enters may have come from (#2061, ADR-047): the messages
    *  people sent in this task's conversation and the results of source tools read in it.
    *  Set by the agent runtime and the voice bridge; absent on calls outside a task (approval

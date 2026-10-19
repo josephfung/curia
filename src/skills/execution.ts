@@ -123,6 +123,7 @@ import { isDbUnavailableError } from '../db/resilience.js';
 import { USER_SECRET_PREFIX } from '../secrets/user-secret-name.js';
 import { splitCommaSeparatedAddresses } from '../contacts/principal-carveout-parse.js';
 import type { ErrorType } from '../errors/types.js';
+import type { VerificationRuntime } from '../verification/index.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
   addressOrReferenceError,
@@ -333,6 +334,8 @@ export class ExecutionLayer {
    *  Not a manifest capability: declaring one would fail-closed every ExecutionLayer
    *  that loads the real delegate tool without a pool (integration tests, smoke). */
   private openDelegationLookup?: import('../db/queries/pending-delegations.js').OpenDelegationLookup;
+  /** Delegated sign-in verification (#2017). When set, every tool input except web-browser's is scrubbed of tracked codes. */
+  private verification?: VerificationRuntime;
 
   constructor(registry: ToolRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -393,6 +396,8 @@ export class ExecutionLayer {
     skillRegistry?: SkillRegistry;
     /** Pending-delegation lookup for the delegate skill (#1858). */
     openDelegationLookup?: import('../db/queries/pending-delegations.js').OpenDelegationLookup;
+    /** Delegated sign-in verification (#2017) — scrubs tracked codes from tool inputs and backs the 'verification' capability. */
+    verification?: VerificationRuntime;
   }) {
     this.registry = registry;
     this.skillRegistry = options?.skillRegistry;
@@ -441,6 +446,7 @@ export class ExecutionLayer {
     this.exportControlService = options?.exportControlService;
     this.sensitivityClassifier = options?.sensitivityClassifier;
     this.openDelegationLookup = options?.openDelegationLookup;
+    this.verification = options?.verification;
     if (!this.actionLogRepo) {
       // Once here rather than per call: without the repo no autonomous action reaches the
       // spot-check pool (#2159 Phase 3), and that should not be invisible.
@@ -506,6 +512,8 @@ export class ExecutionLayer {
       // sensitivityClassifier (#1419) — plain field injection, no special-casing needed.
       // Classifies free text against config sensitivity_rules; shared with EntityMemory.
       sensitivityClassifier: this.sensitivityClassifier,
+      // verification (#2017) — plain field injection: the service, code tracker and ask channel.
+      verification: this.verification,
     };
   }
 
@@ -1682,6 +1690,15 @@ export class ExecutionLayer {
           error: this.wrapSkillError(`Input '${key}' could not be parsed as a valid datetime: "${raw}". Please provide an ISO 8601 string with a UTC offset (e.g. "2026-04-06T08:00:00-04:00").`),
         };
       }
+    }
+
+    // Default-deny scrub of sign-in codes (#2017). Everything below — gates, approval
+    // payloads, audit rows and the handler itself — sees the scrubbed input. web-browser
+    // is the one tool that must receive the real value (its own guard decides where a
+    // tracked code may be typed). MCP tools come through here too. scrubDeep returns a
+    // copy, so the caller's object is never mutated.
+    if (this.verification && toolName !== 'web-browser') {
+      input = this.verification.tracker.scrubDeep(input);
     }
 
     // Read the live autonomy score ONCE per invocation (#1125). Used by both the
