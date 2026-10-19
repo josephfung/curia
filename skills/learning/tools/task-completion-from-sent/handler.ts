@@ -14,6 +14,7 @@ import {
   readCompletionDigest,
   writeCompletionDigest,
   pruneExpiredCompletionDigest,
+  assignDigestNumbers,
   usableCompletionDigestCreatedAt,
   composeUndoNote,
   composeConfirmNote,
@@ -200,11 +201,14 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     // removals already computed in `remaining`) retries next run rather than persisting a
     // candidate-queue state that doesn't match what was actually recorded.
     let digestStored = true;
+    // The map as written, with every item's number — the notification must quote these exact numbers.
+    let numberedDigest: CompletionDigestMap = {};
     if (digestAdds.length > 0) {
-      // Drop aged siblings as part of the write this run already owns. Do not write
+      // Number the stored items BEFORE pruning (so legacy numbers match what the readers derive),
+      // then drop aged siblings as part of the write this run already owns. Do not write
       // solely to prune — that race belongs to a read that should stay a read.
       const digestMap: CompletionDigestMap = pruneExpiredCompletionDigest(
-        await readCompletionDigest(store, ctx.log),
+        assignDigestNumbers(await readCompletionDigest(store, ctx.log)),
         Date.now(),
         ctx.log,
       );
@@ -216,9 +220,13 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
         // This does not retrofit the pre-#1936 backlog: a task that is already done is
         // skipped above and never reaches this write. dismiss_completion clears those.
         const createdAt = usableCompletionDigestCreatedAt(digestMap[item.taskId]?.createdAt) ?? nowIso;
-        digestMap[item.taskId] = { ...item, createdAt };
+        // A retried item keeps its number (the principal may already hold it); a new one is
+        // numbered by assignDigestNumbers below.
+        const existingN = digestMap[item.taskId]?.n;
+        digestMap[item.taskId] = { ...item, createdAt, ...(existingN !== undefined ? { n: existingN } : {}) };
       }
-      digestStored = await writeCompletionDigest(store, digestMap);
+      numberedDigest = assignDigestNumbers(digestMap);
+      digestStored = await writeCompletionDigest(store, numberedDigest);
       if (!digestStored) {
         ctx.log.warn(
           {},
@@ -266,9 +274,11 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     // run — an undo whose completeTask threw is still in `digestAdds`/the durable digest (which
     // self-heals next run), but must NOT be announced as done. Gated on digestStored (the durable
     // digest the reply resolves against) and non-empty. Best-effort — notify never fails the run.
-    const notifyItems = digestAdds.filter(
-      (i) => i.kind === 'confirm' || completedTaskIds.has(i.taskId),
-    );
+    // Take the items from the numbered map that was written, not from `digestAdds`, so the numbers
+    // in the message are the ones persisted.
+    const notifyItems = digestAdds
+      .filter((i) => i.kind === 'confirm' || completedTaskIds.has(i.taskId))
+      .map((i) => numberedDigest[i.taskId] ?? i);
     if (digestStored && notifyItems.length > 0) {
       await notifyLearningProposal(ctx, buildCompletionDigestNotification(notifyItems));
     }

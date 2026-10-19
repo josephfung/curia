@@ -40,6 +40,32 @@ describe('learning digest renderers', () => {
   });
 });
 
+describe('numbered completion items (#2159 Phase 3)', () => {
+  it('renders the stored number and number-based reply commands', () => {
+    const items: CompletionDigestItem[] = [
+      { ...COMPLETION_ITEMS[0]!, n: 1 },
+      { ...COMPLETION_ITEMS[1]!, n: 2 },
+    ];
+    const out = renderCompletionSection(items);
+    expect(out).toContain('2. Did emailing board@example.com complete *Plan AGM*? Reply `confirm 2` or `dismiss 2`.');
+    expect(out).toContain('1. Marked *Follow up with John* done — you emailed john@example.com. Undo? Reply `undo 1` or `dismiss 1`.');
+    // The task id is no longer shown once an item has a number.
+    expect(out).not.toContain('aaa');
+    expect(out).not.toContain('bbb');
+  });
+
+  it('shows the item number, not the list position, when numbers are not contiguous', () => {
+    const out = renderCompletionSection([{ ...COMPLETION_ITEMS[1]!, n: 7 }]);
+    expect(out).toContain('7. Did emailing');
+    expect(out).toContain('`confirm 7`');
+  });
+
+  it('the notification body carries the number-based commands', () => {
+    const { body } = buildCompletionDigestNotification([{ ...COMPLETION_ITEMS[0]!, n: 3 }]);
+    expect(body).toContain('Reply `undo 3` or `dismiss 3`.');
+  });
+});
+
 describe('event-driven learning notification bodies (#1466)', () => {
   it('voice proposal notification inlines the guide and the approve/dismiss reply commands', () => {
     const { subject, body } = buildVoiceProposalNotification('- Writes short.\n- Dry humour.');

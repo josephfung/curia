@@ -645,11 +645,114 @@ describe('ResolveLearningDigestHandler', () => {
     const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
     expect(updated.t1).toBeUndefined();
     expect(updated.old).toBeUndefined();
-    expect(updated.young).toEqual(young);
+    // Persisted with a number (assigned on this write); everything else is unchanged.
+    expect(updated.young).toEqual({ ...young, n: expect.any(Number) });
     expect(info).toHaveBeenCalledWith(
       { key: COMPLETION_DIGEST_KEY, pruned: 1, undo: 1, confirm: 0 },
       expect.stringMatching(/90-day/),
     );
+  });
+
+  describe('resolution by item number (#2159 Phase 3)', () => {
+    function numberedCtx(mem: ReturnType<typeof makeMem>, input: Record<string, unknown>) {
+      const completeTask = vi.fn(async () => undefined);
+      const getTask = vi.fn(async (id: string) => ({ id, status: 'open' }));
+      const ctx = {
+        input,
+        entityMemory: mem,
+        executiveProfileService: { get: vi.fn(), update: vi.fn() },
+        taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
+        agentId: 'coordinator',
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      } as unknown as ToolContext;
+      return { ctx, completeTask, getTask };
+    }
+    // Recent clocks: anything past the 90-day backstop is pruned on write.
+    const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+    const seed = (mem: ReturnType<typeof makeMem>) => {
+      const map: CompletionDigestMap = {
+        'task-a': { kind: 'confirm', taskId: 'task-a', taskTitle: 'A', note: 'Did A?', n: 1 },
+        'task-b': { kind: 'confirm', taskId: 'task-b', taskTitle: 'B', note: 'Did B?', n: 2 },
+        'task-c': { kind: 'confirm', taskId: 'task-c', taskTitle: 'C', note: 'Did C?', n: 4 },
+      };
+      mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(map));
+    };
+
+    it('confirm_completion by number resolves the entry with that n and leaves the others numbered', async () => {
+      const mem = makeMem();
+      seed(mem);
+      const { ctx, completeTask } = numberedCtx(mem, { action: 'confirm_completion', number: 2 });
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect(result.success).toBe(true);
+      expect(completeTask).toHaveBeenCalledWith('task-b', expect.any(String), 'coordinator');
+      const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+      expect(updated['task-b']).toBeUndefined();
+      expect(updated['task-a']!.n).toBe(1);
+      expect(updated['task-c']!.n).toBe(4);
+    });
+
+    it('accepts the number as a digit string', async () => {
+      const mem = makeMem();
+      seed(mem);
+      const { ctx, completeTask } = numberedCtx(mem, { action: 'confirm_completion', number: '1' });
+      expect((await new ResolveLearningDigestHandler().execute(ctx)).success).toBe(true);
+      expect(completeTask).toHaveBeenCalledWith('task-a', expect.any(String), 'coordinator');
+    });
+
+    it('dismiss_completion works by number', async () => {
+      const mem = makeMem();
+      seed(mem);
+      const { ctx } = numberedCtx(mem, { action: 'dismiss_completion', number: 4 });
+      expect((await new ResolveLearningDigestHandler().execute(ctx)).success).toBe(true);
+      const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+      expect(Object.keys(updated).sort()).toEqual(['task-a', 'task-b']);
+    });
+
+    it('an unknown number fails listing the valid numbers, with no mutation', async () => {
+      const mem = makeMem();
+      seed(mem);
+      const before = mem.__values.get(COMPLETION_DIGEST_KEY);
+      const { ctx, completeTask } = numberedCtx(mem, { action: 'confirm_completion', number: 3 });
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect(result.success).toBe(false);
+      const error = (result as { error: string }).error;
+      expect(error).toContain('3');
+      expect(error).toContain('1, 2, 4');
+      expect(completeTask).not.toHaveBeenCalled();
+      expect(mem.__values.get(COMPLETION_DIGEST_KEY)).toBe(before);
+    });
+
+    it('a non-positive-integer number is rejected', async () => {
+      const mem = makeMem();
+      seed(mem);
+      const { ctx } = numberedCtx(mem, { action: 'confirm_completion', number: 1.5 });
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect(result.success).toBe(false);
+    });
+
+    it('numbers legacy entries the same way list-learning-digest shows them', async () => {
+      const mem = makeMem();
+      const map: CompletionDigestMap = {
+        'task-x': { kind: 'confirm', taskId: 'task-x', taskTitle: 'X', note: 'n', createdAt: daysAgo(3) },
+        'task-y': { kind: 'confirm', taskId: 'task-y', taskTitle: 'Y', note: 'n', createdAt: daysAgo(2) },
+      };
+      mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(map));
+      const { ctx, completeTask } = numberedCtx(mem, { action: 'confirm_completion', number: 2 });
+      expect((await new ResolveLearningDigestHandler().execute(ctx)).success).toBe(true);
+      expect(completeTask).toHaveBeenCalledWith('task-y', expect.any(String), 'coordinator');
+      // The write persists the derived numbering for the survivor.
+      const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+      expect(updated['task-x']!.n).toBe(1);
+    });
+
+    it('fails with neither number nor task_id', async () => {
+      const mem = makeMem();
+      seed(mem);
+      const { ctx } = numberedCtx(mem, { action: 'confirm_completion' });
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain('number');
+    });
   });
 
   describe('task_id prefix resolution (#1545)', () => {

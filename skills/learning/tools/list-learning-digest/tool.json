@@ -1,13 +1,13 @@
 {
   "name": "list-learning-digest",
   "description": "List the pending voice-guide proposal and sent-mail task-completion undo/confirm items for the daily principal digest. Undo items offer undo or dismiss; confirm items offer confirm or dismiss. Returns structured items plus pre-rendered markdown sections (always present; an empty string when nothing renders).",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {},
   "outputs": {
     "voice_guide": "string | null (pending proposed writing-voice guide markdown, or null)",
-    "completion_items": "object[]",
+    "completion_items": "object[] (each has n, the number to reply with)",
     "sections_markdown": "string (always returned; the non-empty sections joined together, or an empty string when nothing renders)"
   },
   "permissions": [],

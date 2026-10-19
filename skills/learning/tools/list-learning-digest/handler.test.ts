@@ -86,9 +86,27 @@ describe('ListLearningDigestHandler', () => {
     expect(data.voice_guide).toContain('Dry humour');
     expect(data.sections_markdown).toContain('### Proposed writing-voice update');
     expect(data.sections_markdown).toContain('### Task completion from sent mail');
-    // UX unchanged: the CEO still replies with these exact commands to act on the item.
-    expect(data.sections_markdown).toContain('undo completion t1');
-    expect(data.sections_markdown).toContain('dismiss completion t1');
+    // Legacy entries with no stored number render with a deterministic one (#2159 Phase 3):
+    // the principal replies by number, not task id.
+    expect(data.sections_markdown).toContain('1. Marked done. Undo? Reply `undo 1` or `dismiss 1`.');
+  });
+
+  it('returns n for each completion item, keeping stored numbers and numbering legacy ones', async () => {
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      a: { kind: 'confirm', taskId: 'a', taskTitle: 'A', note: 'Did A?', n: 3, createdAt: new Date(Date.now() - 3 * 86_400_000).toISOString() },
+      b: { kind: 'undo', taskId: 'b', taskTitle: 'B', note: 'Did B?', createdAt: new Date(Date.now() - 2 * 86_400_000).toISOString() },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const ctx = {
+      entityMemory: mem,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as ToolContext;
+    const result = await new ListLearningDigestHandler().execute(ctx);
+    const data = (result as { data: { completion_items: Array<{ taskId: string; n: number }> } }).data;
+    expect(data.completion_items.map((i) => [i.taskId, i.n])).toEqual([['a', 3], ['b', 1]]);
+    // A read does not write: the legacy number is derived, not persisted, until the next write.
+    expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual(digestMap);
   });
 
   it('omits the task-completion section once the only item is past the 90-day backstop', async () => {
@@ -131,7 +149,9 @@ describe('ListLearningDigestHandler', () => {
     expect(mixed.success).toBe(true);
     const mixedData = (mixed as { data: { sections_markdown: string } }).data;
     expect(mixedData.sections_markdown).toContain('### Task completion from sent mail');
-    expect(mixedData.sections_markdown).toContain('confirm completion young');
+    // The aged-out item was numbered 1 before it was hidden, so the survivor keeps 2 and the
+    // number the principal saw does not shift when a sibling expires.
+    expect(mixedData.sections_markdown).toContain('`confirm 2`');
     expect(mixedData.sections_markdown).not.toContain(taskId);
     expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual(digestMap);
     expect(mem.storeFact).not.toHaveBeenCalled();
@@ -167,6 +187,6 @@ describe('ListLearningDigestHandler', () => {
     expect(data.voice_guide).toBeNull();
     expect(data.sections_markdown).not.toContain('### Proposed writing-voice update');
     expect(data.sections_markdown).toContain('### Task completion from sent mail');
-    expect(data.sections_markdown).toContain('confirm completion t2');
+    expect(data.sections_markdown).toContain('`confirm 1`');
   });
 });

@@ -7,6 +7,7 @@ import {
   readCompletionDigest,
   writeCompletionDigest,
   pruneExpiredCompletionDigest,
+  assignDigestNumbers,
   type CompletionDigestMap,
 } from '../../../_shared/learning-state.js';
 
@@ -56,6 +57,40 @@ export function resolveDigestTaskId(
 
   // No prefix hit — keep the caller id so the existing "No actionable …" path fires.
   return { ok: true, taskId };
+}
+
+/**
+ * Resolve a completion-digest item by the number the principal replied with ("confirm 2").
+ * `digestMap` must already be numbered (assignDigestNumbers). An unknown number fails closed and
+ * names the valid ones, so the coordinator can ask the principal instead of guessing.
+ */
+export function resolveDigestNumber(
+  digestMap: CompletionDigestMap,
+  n: number,
+): { ok: true; taskId: string } | { ok: false; error: string } {
+  const hit = Object.entries(digestMap).find(([, item]) => item.n === n);
+  if (hit) return { ok: true, taskId: hit[0] };
+  const valid = Object.values(digestMap)
+    .map((item) => item.n)
+    .filter((v): v is number => v !== undefined)
+    .sort((a, b) => a - b);
+  return {
+    ok: false,
+    error:
+      valid.length > 0
+        ? `No digest item is numbered ${n}. Valid numbers: ${valid.join(', ')}. Ask the principal which one they meant.`
+        : `No digest item is numbered ${n}: no completion items are pending. Ask the principal what they meant.`,
+  };
+}
+
+/** The `number` input as a positive integer. Accepts a digit string because models relay "2" as text. */
+function parseItemNumber(raw: unknown): number | null {
+  if (typeof raw === 'number') return Number.isInteger(raw) && raw > 0 ? raw : null;
+  if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
+    const n = Number(raw.trim());
+    return n > 0 ? n : null;
+  }
+  return null;
 }
 
 export class ResolveLearningDigestHandler implements ToolHandler {
@@ -158,13 +193,27 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       return { success: true, data: { resolved: true, detail: 'Dismissed voice guide' } };
     }
 
-    // completion actions
+    // completion actions: the item is named by its notification number (preferred), or by task id.
+    const numberProvided = input.number !== undefined && input.number !== null && input.number !== '';
     const rawTaskId = typeof input.task_id === 'string' ? input.task_id.trim() : '';
-    if (!rawTaskId) return { success: false, error: 'task_id is required for completion actions' };
+    let itemNumber: number | null = null;
+    if (numberProvided) {
+      itemNumber = parseItemNumber(input.number);
+      if (itemNumber === null) {
+        return { success: false, error: 'number must be a positive whole number (the item number from the notification)' };
+      }
+    } else if (!rawTaskId) {
+      return { success: false, error: 'number (or task_id) is required for completion actions' };
+    }
 
     const store = new ConfigStore(ctx.entityMemory, ctx.log);
-    const digestMap = await readCompletionDigest(store, ctx.log);
-    const resolved = resolveDigestTaskId(digestMap, rawTaskId);
+    // Number before resolving, on the full stored map, so legacy entries without `n` get the same
+    // numbers list-learning-digest showed. The clearing writes below persist this numbering.
+    const digestMap = assignDigestNumbers(await readCompletionDigest(store, ctx.log));
+    const resolved =
+      itemNumber !== null
+        ? resolveDigestNumber(digestMap, itemNumber)
+        : resolveDigestTaskId(digestMap, rawTaskId);
     if (!resolved.ok) {
       return { success: false, error: resolved.error };
     }
@@ -179,7 +228,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
     // which mutate a task and must not run against an arbitrary id.
     if (action === 'dismiss_completion') {
       if (!item) {
-        return { success: false, error: `No completion-digest item for task ${rawTaskId}` };
+        return { success: false, error: `No completion-digest item for task ${taskId}` };
       }
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
@@ -209,7 +258,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       const actual = item ? ` (digest has '${item.kind}')` : '';
       return {
         success: false,
-        error: `No actionable ${expectedKind} item for task ${rawTaskId}${actual}`,
+        error: `No actionable ${expectedKind} item for task ${taskId}${actual}`,
       };
     }
 

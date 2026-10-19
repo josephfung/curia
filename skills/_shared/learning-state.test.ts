@@ -17,6 +17,7 @@ import {
   composeUndoNote,
   composeConfirmNote,
   digestMapToItems,
+  assignDigestNumbers,
   COMPLETION_DIGEST_MAX_AGE_DAYS,
   COMPLETION_DIGEST_MAX_AGE_MS,
   isCompletionDigestItemExpired,
@@ -372,5 +373,80 @@ describe('learning-state config accessors', () => {
       .toBe('Marked *Ship* done — you emailed a@x (2026-07-01). Undo?');
     expect(composeConfirmNote({ taskTitle: 'Ship', recipient: 'a@x' }))
       .toBe('Did emailing a@x complete *Ship*?');
+  });
+
+  describe('assignDigestNumbers (#2159 Phase 3 numbering)', () => {
+    const item = (taskId: string, extra: Partial<CompletionDigestItem> = {}): CompletionDigestItem => ({
+      kind: 'confirm',
+      taskId,
+      taskTitle: taskId,
+      note: 'n',
+      ...extra,
+    });
+
+    it('gives an unnumbered entry the lowest free number and keeps existing numbers', () => {
+      const map: CompletionDigestMap = { a: item('a', { n: 1 }), b: item('b'), c: item('c', { n: 3 }) };
+      const out = assignDigestNumbers(map);
+      expect(out.a!.n).toBe(1);
+      expect(out.b!.n).toBe(2);
+      expect(out.c!.n).toBe(3);
+    });
+
+    it('numbers unnumbered entries in createdAt order, then by key', () => {
+      const map: CompletionDigestMap = {
+        z: item('z', { createdAt: '2026-01-01T00:00:00.000Z' }),
+        b: item('b', { createdAt: '2026-02-01T00:00:00.000Z' }),
+        a: item('a', { createdAt: '2026-02-01T00:00:00.000Z' }),
+        // No usable clock sorts after the dated ones.
+        m: item('m'),
+      };
+      const out = assignDigestNumbers(map);
+      expect([out.z!.n, out.a!.n, out.b!.n, out.m!.n]).toEqual([1, 2, 3, 4]);
+    });
+
+    it('is stable: a resolved number is reused by the next new entry while the others keep theirs', () => {
+      const map: CompletionDigestMap = assignDigestNumbers({
+        a: item('a', { n: 1 }),
+        c: item('c', { n: 3 }),
+        b: item('b', { n: 2 }),
+      });
+      const { a: _resolved, ...rest } = map;
+      void _resolved;
+      const out = assignDigestNumbers({ ...rest, d: item('d') });
+      expect(out.d!.n).toBe(1);
+      expect(out.b!.n).toBe(2);
+      expect(out.c!.n).toBe(3);
+    });
+
+    it('is pure and idempotent', () => {
+      const map: CompletionDigestMap = { a: item('a'), b: item('b') };
+      const out = assignDigestNumbers(map);
+      expect(map.a!.n).toBeUndefined();
+      expect(assignDigestNumbers(out)).toEqual(out);
+    });
+
+    it('renumbers a duplicate or invalid stored n rather than letting two items share a number', () => {
+      const map = {
+        a: item('a', { n: 1, createdAt: '2026-01-01T00:00:00.000Z' }),
+        b: item('b', { n: 1, createdAt: '2026-01-02T00:00:00.000Z' }),
+        c: item('c', { n: 0 }),
+      } as CompletionDigestMap;
+      const out = assignDigestNumbers(map);
+      const numbers = Object.values(out).map((i) => i.n);
+      expect(new Set(numbers).size).toBe(3);
+      expect(out.a!.n).toBe(1);
+    });
+
+    it('readCompletionDigest keeps a stored n and drops a non-positive-integer one', async () => {
+      const { store } = fakeStore({
+        [COMPLETION_DIGEST_KEY]: JSON.stringify({
+          a: { kind: 'undo', taskId: 'a', taskTitle: 'A', note: 'n', n: 4 },
+          b: { kind: 'undo', taskId: 'b', taskTitle: 'B', note: 'n', n: 'two' },
+        }),
+      });
+      const map = await readCompletionDigest(store);
+      expect(map.a!.n).toBe(4);
+      expect(map.b!.n).toBeUndefined();
+    });
   });
 });

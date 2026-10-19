@@ -204,9 +204,37 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(payload.ceoEmail).toBe('ceo@example.com');
     expect(payload.body).toContain('### Task completion from sent mail');
     // Both the undo (auto-completed) and a confirm item's reply commands are inlined.
-    expect(payload.body).toContain('undo completion 11111111-1111-4111-8111-111111111111');
-    expect(payload.body).toContain('dismiss completion 11111111-1111-4111-8111-111111111111');
-    expect(payload.body).toContain('confirm completion 22222222-2222-4222-8222-222222222222');
+    // Replies are by item number (#2159 Phase 3); the persisted numbers match the ones sent.
+    const undoN = digest['11111111-1111-4111-8111-111111111111'].n as number;
+    const confirmN = digest['22222222-2222-4222-8222-222222222222'].n as number;
+    expect(undoN).toBeGreaterThan(0);
+    expect(new Set([undoN, confirmN, digest['33333333-3333-4333-8333-333333333333'].n]).size).toBe(3);
+    expect(payload.body).toContain(`Reply \`undo ${undoN}\` or \`dismiss ${undoN}\`.`);
+    expect(payload.body).toContain(`Reply \`confirm ${confirmN}\` or \`dismiss ${confirmN}\`.`);
+    expect(payload.body).not.toContain('11111111-1111-4111-8111-111111111111');
+  });
+
+  it('numbers a new item around the numbers already in the digest and keeps a retried item number', async () => {
+    const ctx = makeCtx();
+    const taskId = '33333333-3333-4333-8333-333333333333';
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({ [taskId]: CANDIDATE_MAP[taskId]! }),
+    );
+    ctx.__mem.__values.set(
+      COMPLETION_DIGEST_KEY,
+      JSON.stringify({
+        keep: { kind: 'confirm', taskId: 'keep', taskTitle: 'K', note: 'n', n: 1, createdAt: new Date().toISOString() },
+        [taskId]: { kind: 'confirm', taskId, taskTitle: 'Maybe related', note: 'old', n: 3, createdAt: new Date().toISOString() },
+      }),
+    );
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest.keep.n).toBe(1);
+    // A rewrite of an already-numbered item must not renumber it.
+    expect(digest[taskId].n).toBe(3);
+    expect(ctx.__sendNotification.mock.calls[0]![0].body).toContain('`confirm 3`');
   });
 
   it('keeps an existing digest createdAt when the same task is written again', async () => {
@@ -416,8 +444,8 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(ctx.__sendNotification).toHaveBeenCalledTimes(1);
     const body = ctx.__sendNotification.mock.calls[0]![0].body as string;
     // ...but it carries ONLY the confirm item, not the failed undo.
-    expect(body).toContain('confirm completion 33333333-3333-4333-8333-333333333333');
-    expect(body).not.toContain('undo completion 11111111-1111-4111-8111-111111111111');
+    expect(body).toMatch(/Reply `confirm \d+` or `dismiss \d+`\./);
+    expect(body).not.toMatch(/`undo \d+`/);
   });
 
   it('DOUBLE-RUN: a digest soft-reject blocks completion entirely; a later successful run completes it with the undo note durable (Finding 6)', async () => {

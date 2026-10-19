@@ -3,7 +3,7 @@
 // migrated to config JSON (#1438); only the render* functions remain live.
 
 // CompletionDigestItem now lives in learning-state.ts (#1438) since it's also the config-store
-// map value type. renderCompletionSection reads only kind/taskId/note, all present there.
+// map value type. renderCompletionSection reads kind/n/taskId/note, all present there.
 import type { CompletionDigestItem } from './learning-state.js';
 
 /** Render digest sections — empty string when no items (omit section). */
@@ -25,11 +25,15 @@ export function renderCompletionSection(items: CompletionDigestItem[]): string {
     '### Task completion from sent mail',
     '',
     ...items.map((i, idx) => {
-      if (i.kind === 'undo') {
-        // Leave-it-done is dismiss, the same escape confirm items already offer (#1936).
-        return `${idx + 1}. ${i.note} Reply \`undo completion ${i.taskId}\` or \`dismiss completion ${i.taskId}\`.`;
-      }
-      return `${idx + 1}. ${i.note} Reply \`confirm completion ${i.taskId}\` or \`dismiss completion ${i.taskId}\`.`;
+      // The principal answers by item number ("confirm 2"), not by quoting a task id (#2159 Phase 3).
+      // An unnumbered item (a caller that skipped assignDigestNumbers) falls back to the task-id
+      // form, which resolve-learning-digest still accepts, rather than printing a number nothing
+      // would resolve.
+      const ref = i.n !== undefined ? String(i.n) : `completion ${i.taskId}`;
+      const label = i.n ?? idx + 1;
+      // Leave-it-done is dismiss, the same escape confirm items already offer (#1936).
+      const verb = i.kind === 'undo' ? 'undo' : 'confirm';
+      return `${label}. ${i.note} Reply \`${verb} ${ref}\` or \`dismiss ${ref}\`.`;
     }),
     '',
   ];

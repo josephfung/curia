@@ -4,6 +4,7 @@ import {
   readVoiceProposal,
   readCompletionDigest,
   digestMapToItems,
+  assignDigestNumbers,
   pruneExpiredCompletionDigest,
 } from '../../../_shared/learning-state.js';
 import { renderCompletionSection, renderVoiceGuideSection } from '../../../_shared/learning-digest.js';
@@ -19,8 +20,13 @@ export class ListLearningDigestHandler implements ToolHandler {
       const guide = store ? await readVoiceProposal(store, ctx.log) : null;
       // Hide aged items in the rendered view only. This tool does not write the digest:
       // action_risk is "none", and a persist here would be a destructive config write.
+      // Number BEFORE pruning so the numbers match what resolve-learning-digest derives from the
+      // same stored map. Legacy entries without `n` get a deterministic number here; it is not
+      // persisted (this tool does not write) until the next writer persists the same numbering.
       const completion_items = store
-        ? digestMapToItems(pruneExpiredCompletionDigest(await readCompletionDigest(store, ctx.log)))
+        ? digestMapToItems(
+            pruneExpiredCompletionDigest(assignDigestNumbers(await readCompletionDigest(store, ctx.log))),
+          )
         : [];
       const guideText = guide?.status === 'pending' ? guide.guide : null;
 

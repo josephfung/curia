@@ -66,6 +66,10 @@ export interface CompletionDigestItem {
   note: string;
   /** `Date.toISOString()` instant the item was added. Absent on pre-#1936 entries. */
   createdAt?: string;
+  /** The item's number in the notification ("confirm 2"). Assigned by `assignDigestNumbers`, then
+   *  stable for the item's life: resolving another item never renumbers it. Positive integer.
+   *  Absent on entries written before numbering (#2159 Phase 3); readers number those on the fly. */
+  n?: number;
 }
 
 /** `Date.toISOString()` form only. Bare `Date.parse` accepts `"0"` and `"2"` and
@@ -129,9 +133,17 @@ function isCompletionCandidate(v: unknown): v is CompletionCandidate {
   );
 }
 
-/** Stored shape before clock normalization. `createdAt` is unchecked here so a
- *  non-string clock does not fail the predicate and does not get mutated in place. */
-type StoredCompletionDigestItem = Omit<CompletionDigestItem, 'createdAt'> & { createdAt?: unknown };
+/** Stored shape before clock/number normalization. `createdAt` and `n` are unchecked here so a
+ *  malformed one does not fail the predicate (dropping a pending item) and is not mutated in place. */
+type StoredCompletionDigestItem = Omit<CompletionDigestItem, 'createdAt' | 'n'> & {
+  createdAt?: unknown;
+  n?: unknown;
+};
+
+/** A usable item number: a positive integer. Anything else is treated as unnumbered. */
+function isItemNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v > 0;
+}
 
 function isCompletionDigestItem(v: unknown): v is StoredCompletionDigestItem {
   return (
@@ -154,6 +166,8 @@ function copyCompletionDigestItem(raw: StoredCompletionDigestItem): { item: Comp
     note: raw.note,
   };
   if (createdAt !== undefined) item.createdAt = createdAt;
+  // A junk `n` is dropped (not the item): assignDigestNumbers hands the item a fresh number.
+  if (isItemNumber(raw.n)) item.n = raw.n;
   return { item, badClock: raw.createdAt !== undefined && createdAt === undefined };
 }
 
@@ -326,6 +340,55 @@ export async function readIdSet(store: ConfigStore, key: string, log?: Logger): 
 }
 export async function writeIdSet(store: ConfigStore, key: string, ids: Set<string>): Promise<boolean> {
   return (await store.set(LEARNING_STATE_NAMESPACE, key, JSON.stringify([...ids]))).stored;
+}
+
+/**
+ * Give every digest item a stable number so the principal can reply "confirm 2" instead of quoting
+ * a task id (#2159 Phase 3). Pure: returns a new map, the input is untouched.
+ *
+ * - An item that already has a valid number keeps it, so resolving one item never shifts the others.
+ * - An unnumbered item takes the lowest free positive integer, so a freed number is reused.
+ * - Unnumbered items are numbered in `createdAt` order (no usable clock sorts last), then by key,
+ *   so the legacy backlog numbers deterministically: the writer, `list-learning-digest` and
+ *   `resolve-learning-digest` all derive the same numbers from the same map until a write persists them.
+ * - A duplicate or invalid stored number is treated as unnumbered (the earlier item in that same
+ *   order keeps a contested number), so two items can never answer to one number.
+ *
+ * Callers that prune expired items should number BEFORE pruning, so the numbers the principal was
+ * shown do not shift because an aged-out sibling disappeared from the map.
+ */
+export function assignDigestNumbers(map: CompletionDigestMap): CompletionDigestMap {
+  const ordered = Object.entries(map).sort(([ka, a], [kb, b]) => {
+    const ta = usableCompletionDigestCreatedAt(a.createdAt);
+    const tb = usableCompletionDigestCreatedAt(b.createdAt);
+    if (ta !== undefined && tb !== undefined && ta !== tb) return ta < tb ? -1 : 1;
+    if (ta !== undefined && tb === undefined) return -1;
+    if (ta === undefined && tb !== undefined) return 1;
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+
+  const numberOf = new Map<string, number>();
+  const taken = new Set<number>();
+  for (const [key, item] of ordered) {
+    if (isItemNumber(item.n) && !taken.has(item.n)) {
+      numberOf.set(key, item.n);
+      taken.add(item.n);
+    }
+  }
+  let next = 1;
+  for (const [key] of ordered) {
+    if (numberOf.has(key)) continue;
+    while (taken.has(next)) next += 1;
+    numberOf.set(key, next);
+    taken.add(next);
+  }
+
+  // Rebuild in the input's key order: digestMapToItems preserves insertion order for rendering.
+  const out: CompletionDigestMap = {};
+  for (const [key, item] of Object.entries(map)) {
+    out[key] = { ...item, n: numberOf.get(key)! };
+  }
+  return out;
 }
 
 /** Flatten the digest map to the array the render helpers consume, preserving insertion order. */
