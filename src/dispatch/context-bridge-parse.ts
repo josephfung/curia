@@ -69,6 +69,21 @@ export function parseContextBridge(raw: unknown, log: Logger): ContextBridgeInpu
 }
 
 
+/** Whether a pending verification suppresses task binding. A lookup error binds (today's behaviour). */
+async function taskBindSuppressed(
+  outboundContext: OutboundContextCapability,
+  taskId: string,
+  log: Logger,
+): Promise<boolean> {
+  if (!outboundContext.taskAutoBindSuppressed) return false;
+  try {
+    return await outboundContext.taskAutoBindSuppressed(taskId);
+  } catch (err) {
+    log.warn({ err, taskId }, 'outbound context: verification lookup failed — binding the task reply as usual');
+    return false;
+  }
+}
+
 /**
  * Single-call outbound context registration that replaces the two-step
  * parse+conditional-register pattern in send skills.
@@ -104,7 +119,13 @@ export async function registerOutboundContext(
     // one the system supplied, and the log would credit the agent for both.
     const agentChoseTtl = bridge?.expires_in_hours != null;
 
-    if (!bridge && boundTask) {
+    // A pending sign-in verification for the task skips binding altogether (#2017): the
+    // principal's reply is the code, and it must reach the coordinator, not be persisted
+    // onto the task. Covers both branches below — an explicit bridge would otherwise have
+    // the binding merged into it. A failed lookup falls back to today's behaviour (bind).
+    const skipTaskBind = boundTask ? await taskBindSuppressed(outboundContext, boundTask.taskId, log) : false;
+
+    if (!bridge && boundTask && !skipTaskBind) {
       // Task-wake send without explicit context_bridge — attach durable task binding.
       bridge = buildTaskWakeAutoBridge({
         taskId: boundTask.taskId,
@@ -112,7 +133,7 @@ export async function registerOutboundContext(
         messageContent: content,
       });
       log.debug({ taskId: boundTask.taskId }, 'outbound context: auto-bound task-wake reply');
-    } else if (bridge && boundTask && !bridge.metadata?.[TASK_WAKE_TASK_ID_KEY]) {
+    } else if (bridge && boundTask && !skipTaskBind && !bridge.metadata?.[TASK_WAKE_TASK_ID_KEY]) {
       bridge = {
         ...bridge,
         metadata: {

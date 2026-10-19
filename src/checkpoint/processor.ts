@@ -6,6 +6,7 @@ import type { ConversationCheckpointEvent } from '../bus/events.js';
 import { createCheckpointExtractionSkipped } from '../bus/events.js';
 import type { ToolResult } from '../skills/types.js';
 import type { ChannelPolicyConfig } from '../contacts/types.js';
+import type { VerificationRuntime } from '../verification/index.js';
 import {
   loadFirstExternalOriginator,
   resolveChannelTrust,
@@ -26,6 +27,9 @@ export class ConversationCheckpointProcessor {
     private pool: DbPool,
     private logger: Logger,
     private channelPolicies?: Record<string, ChannelPolicyConfig>,
+    // Delegated sign-in verification (#2017): tracked codes are scrubbed from the
+    // transcript before extraction. Unset (tests) leaves the transcript as is.
+    private verification?: VerificationRuntime,
   ) {}
 
   register(): void {
@@ -82,9 +86,11 @@ export class ConversationCheckpointProcessor {
       return;
     }
 
-    const transcript = turns
+    const rawTranscript = turns
       .map(t => `${t.role === 'user' ? 'User' : 'Curia'}: ${t.content}`)
       .join('\n\n');
+    // A sign-in code must not become a fact or relationship (#2017).
+    const transcript = this.verification ? this.verification.tracker.scrubText(rawTranscript) : rawTranscript;
 
     const source = `system:checkpoint/conversation:${conversationId}/agent:${agentId}/channel:${channelId}`;
 

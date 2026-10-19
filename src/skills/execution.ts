@@ -545,6 +545,10 @@ export class ExecutionLayer {
             log: skillLogger,
           }
         : undefined,
+      // A pending verification for the task suppresses the task-wake auto-bind (#2017).
+      this.verification
+        ? async (taskId) => (await this.verification!.service.pendingForTask(taskId)) !== null
+        : undefined,
     );
   }
 

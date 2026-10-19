@@ -136,6 +136,13 @@ export interface OutboundContextCapability {
   markExchangeOpen(entryId: string, mark: { agentId: string; taskEventId: string; reason?: string }): Promise<boolean>;
   /** Release unless the given delegation marked the entry open — the delegate's release (#1972). */
   releaseUnlessKeptOpen(entryId: string, taskEventId: string): Promise<'released' | 'kept_open' | 'not_active'>;
+  /**
+   * True when a task-wake send for this task must not bind the principal's reply to it:
+   * a sign-in verification is pending for the task, and the principal's reply is the code,
+   * which has to reach the coordinator (and the code tracker), not be persisted onto the
+   * task (#2017). Optional: absent means never suppressed.
+   */
+  taskAutoBindSuppressed?(taskId: string): Promise<boolean>;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -553,7 +560,14 @@ export class ScopedOutboundContext implements OutboundContextCapability {
     // Optional so callers without an agent roster still work; every production
     // invocation passes it, which is what makes the attribution code-owned.
     private attribution?: OutboundAttribution,
+    // Optional lookup: is a verification pending for this task? Wired by the execution
+    // layer when the verification runtime exists (#2017).
+    private pendingVerificationForTask?: (taskId: string) => Promise<boolean>,
   ) {}
+
+  async taskAutoBindSuppressed(taskId: string): Promise<boolean> {
+    return this.pendingVerificationForTask ? this.pendingVerificationForTask(taskId) : false;
+  }
 
   get defaultExpiryHours(): number {
     return this.service.defaultExpiryHours;

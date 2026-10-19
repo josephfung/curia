@@ -7,6 +7,8 @@ import type { EventBus } from '../../src/bus/bus.js';
 import type { BusEvent, AgentTaskEvent } from '../../src/bus/events.js';
 import { createAgentResponse } from '../../src/bus/events.js';
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
+import type { VerificationRuntime } from '../../src/verification/index.js';
+import type { Verification } from '../../src/verification/types.js';
 
 /** Fake bus that, when an agent.task is published, immediately delivers a successful
  *  agent.response parented to it so DelegateHandler's await resolves. */
@@ -332,5 +334,121 @@ describe('DelegateHandler resolved entities (#1818)', () => {
       agent: 'research-analyst',
       resolvedContactIds: [id],
     });
+  });
+});
+
+describe('DelegateHandler sign-in code tracking from ceo-inbox (#2017)', () => {
+  afterEach(() => {
+    restoreDefaultRegistry();
+  });
+
+  function useInboxRegistry(): void {
+    agentRegistryMock.has = (n: string) => n === 'ceo-inbox' || n === 'research-analyst';
+    agentRegistryMock.get = (n: string) => ({ name: n, role: 'specialist' });
+    agentRegistryMock.listSpecialists = () => [{ name: 'ceo-inbox' }, { name: 'research-analyst' }];
+  }
+
+  function makeVerification(over: Partial<Verification> = {}): Verification {
+    return {
+      id: 'ver-1',
+      purpose: 'sign_in',
+      kind: 'code',
+      delivery: 'email',
+      site: 'aircanada.com',
+      pageDomain: 'aircanada.com',
+      browserSessionId: 'sess-1',
+      taskId: null,
+      conversationId: null,
+      status: 'pending',
+      requestedAt: new Date(),
+      expiresAt: new Date(Date.now() + 600_000),
+      resolvedAt: null,
+      metadata: {},
+      ...over,
+    };
+  }
+
+  function makeRuntime(rows: Verification[] | Error) {
+    const register = vi.fn();
+    const listActive = vi.fn(async () => {
+      if (rows instanceof Error) throw rows;
+      return rows;
+    });
+    const runtime = { listActive, tracker: { register } } as unknown as VerificationRuntime;
+    return { runtime, register, listActive };
+  }
+
+  const inboxInput = { agent: 'ceo-inbox', task: 'find the Air Canada code in the inbox' };
+
+  it('registers a 6-8 character code from a ceo-inbox result for the pending email verification', async () => {
+    useInboxRegistry();
+    const { bus } = makeBus('Your Air Canada code is 739204');
+    const { runtime, register } = makeRuntime([makeVerification()]);
+    const result = await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
+    expect(result.success).toBe(true);
+    expect(register).toHaveBeenCalledWith('ver-1', 'aircanada.com', '739204');
+    // The result returned to the coordinator is unchanged.
+    if (!result.success) return;
+    expect(JSON.stringify(result.data)).toContain('739204');
+  });
+
+  it('registers against every pending email verification and ignores other rows', async () => {
+    useInboxRegistry();
+    const { bus } = makeBus('Code: 739204');
+    const { runtime, register } = makeRuntime([
+      makeVerification({ id: 'ver-1' }),
+      makeVerification({ id: 'ver-2', pageDomain: 'idp.example.com' }),
+      makeVerification({ id: 'ver-sms', delivery: 'sms' }),
+      makeVerification({ id: 'ver-done', status: 'satisfied' }),
+    ]);
+    await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
+    expect(register.mock.calls.map(c => c[0]).sort()).toEqual(['ver-1', 'ver-2']);
+  });
+
+  it('does not register a 4-digit code from a ceo-inbox result', async () => {
+    useInboxRegistry();
+    const { bus } = makeBus('Your Air Canada code is 4821');
+    const { runtime, register } = makeRuntime([makeVerification()]);
+    const result = await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
+    expect(result.success).toBe(true);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('registers nothing when delegating to another agent', async () => {
+    useInboxRegistry();
+    const { bus } = makeBus('Your Air Canada code is 739204');
+    const { runtime, register, listActive } = makeRuntime([makeVerification()]);
+    const result = await new DelegateHandler().execute(makeCtx(bus, { verification: runtime }));
+    expect(result.success).toBe(true);
+    expect(register).not.toHaveBeenCalled();
+    expect(listActive).not.toHaveBeenCalled();
+  });
+
+  it('registers nothing when no email verification is pending', async () => {
+    useInboxRegistry();
+    const { bus } = makeBus('Your Air Canada code is 739204');
+    const { runtime, register } = makeRuntime([makeVerification({ delivery: 'sms' })]);
+    await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('still delegates normally when no verification runtime is wired', async () => {
+    useInboxRegistry();
+    const { bus } = makeBus('Your Air Canada code is 739204');
+    const result = await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput }));
+    expect(result.success).toBe(true);
+  });
+
+  it('does not fail the delegation when listing verifications throws, and logs no content', async () => {
+    useInboxRegistry();
+    const { bus } = makeBus('Your Air Canada code is 739204');
+    const { runtime, register } = makeRuntime(new Error('db down'));
+    const log = pino({ level: 'silent' });
+    const warnSpy = vi.spyOn(log, 'warn');
+    const result = await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime, log }));
+    expect(result.success).toBe(true);
+    expect(register).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('739204');
   });
 });

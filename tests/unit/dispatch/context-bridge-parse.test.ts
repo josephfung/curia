@@ -231,6 +231,82 @@ describe('registerOutboundContext', () => {
   });
 });
 
+// Delegated sign-in verification (#2017): a CODE ASK in flight for the bound task must
+// not leave a task-bound reply entry, so the principal's code reply reaches the coordinator
+// (and the code tracker) instead of being persisted onto the task as a plain reply.
+describe('registerOutboundContext task auto-bind suppression (#2017)', () => {
+  const taskId = 'f9e9a0d9-0000-4000-8000-000000000001';
+
+  it('does not auto-bind a task-wake send while a verification is pending for the task', async () => {
+    const taskAutoBindSuppressed = vi.fn().mockResolvedValue(true);
+    const cap = makeCap({ taskAutoBindSuppressed });
+    await registerOutboundContext(cap, undefined, { ...baseOpts, boundTask: { taskId } });
+
+    expect(taskAutoBindSuppressed).toHaveBeenCalledWith(taskId);
+    expect(cap.register).toHaveBeenCalledOnce();
+    const entry = (cap.register as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(entry.metadata).toBeUndefined();
+    expect(entry.ttlSource).toBe('channel-default');
+  });
+
+  it('still auto-binds a task-wake send when no verification is pending for the task', async () => {
+    const cap = makeCap({ taskAutoBindSuppressed: vi.fn().mockResolvedValue(false) });
+    await registerOutboundContext(cap, undefined, { ...baseOpts, boundTask: { taskId } });
+
+    expect(cap.register).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ task_id: taskId }),
+      ttlSource: 'task-wake',
+    }));
+  });
+
+  it('still auto-binds when the capability has no suppression lookup', async () => {
+    const cap = makeCap();
+    await registerOutboundContext(cap, undefined, { ...baseOpts, boundTask: { taskId } });
+    expect(cap.register).toHaveBeenCalledWith(expect.objectContaining({ ttlSource: 'task-wake' }));
+  });
+
+  it('falls back to auto-binding when the suppression lookup throws', async () => {
+    const cap = makeCap({ taskAutoBindSuppressed: vi.fn().mockRejectedValue(new Error('db down')) });
+    await registerOutboundContext(cap, undefined, { ...baseOpts, boundTask: { taskId } });
+    expect(cap.register).toHaveBeenCalledWith(expect.objectContaining({ ttlSource: 'task-wake' }));
+  });
+
+  it('does not merge the task binding into an explicit bridge while a verification is pending', async () => {
+    const cap = makeCap({ taskAutoBindSuppressed: vi.fn().mockResolvedValue(true) });
+    await registerOutboundContext(
+      cap,
+      JSON.stringify({ agent_id: 'coordinator', expected_reply: 'the code' }),
+      { ...baseOpts, boundTask: { taskId } },
+    );
+    const entry = (cap.register as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(entry.metadata).toBeUndefined();
+    expect(entry.ttlSource).not.toBe('task-wake');
+  });
+
+  it('merges the task binding into an explicit bridge when no verification is pending', async () => {
+    const cap = makeCap({ taskAutoBindSuppressed: vi.fn().mockResolvedValue(false) });
+    await registerOutboundContext(
+      cap,
+      JSON.stringify({ agent_id: 'coordinator', expected_reply: 'the answer' }),
+      { ...baseOpts, boundTask: { taskId } },
+    );
+    expect(cap.register).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ task_id: taskId }),
+    }));
+  });
+
+  it('ScopedOutboundContext delegates to the injected pendingForTask-style lookup', async () => {
+    const service = { defaultExpiryHours: 6, explicitExpiryHours: 24 } as unknown as OutboundContextService;
+    const lookup = vi.fn().mockResolvedValue(true);
+    const scoped = new ScopedOutboundContext(service, 'conv-1', undefined, lookup);
+    await expect(scoped.taskAutoBindSuppressed(taskId)).resolves.toBe(true);
+    expect(lookup).toHaveBeenCalledWith(taskId);
+
+    const bare = new ScopedOutboundContext(service, 'conv-1');
+    await expect(bare.taskAutoBindSuppressed(taskId)).resolves.toBe(false);
+  });
+});
+
 // The stubs above mirror the real service by hand, which is exactly how the two
 // resolution sites drifted once already: every production registration logged
 // ttlSource 'caller' because registerOutboundContext always passes an explicit

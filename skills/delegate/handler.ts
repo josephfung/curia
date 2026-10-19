@@ -60,6 +60,7 @@ import {
 } from '../../src/agents/prompts/delegate-result-guidance.js';
 import { shapeSpecialistAnswer } from '../../src/agents/specialist-answer.js';
 import { buildInboundEmailIdentifierBlock, preambleAccountLabel, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
+import { extractCodeCandidates } from '../../src/verification/code-shape.js';
 import {
   parseSpecialistDeclineMarker,
   SPECIALIST_DECLINE_REASON,
@@ -345,6 +346,39 @@ function formatStructuredFailureMessage(agent: string, reason: AgentResponseFail
       return `Specialist '${agent}' did not respond within the delegate wait window — the task may still be running`;
     default:
       return `Specialist '${agent}' could not complete the task`;
+  }
+}
+
+/** The specialist that reads the principal's inbox, where an emailed sign-in code lands. */
+const CEO_INBOX_AGENT = 'ceo-inbox';
+
+/**
+ * Register every 6-8 character code in a ceo-inbox result against each pending `email`
+ * verification. 4-5 character codes are tracked only when typed by web-browser, so they are
+ * not looked for here. The result is returned to the coordinator unchanged. Never logs a
+ * value, and a failed lookup never fails the delegation (under-capture is logged, not fatal).
+ */
+async function trackInboxCodes(ctx: ToolContext, agent: string, resultText: string): Promise<void> {
+  const runtime = ctx.verification;
+  if (!runtime) return;
+  const candidates = extractCodeCandidates(resultText);
+  if (candidates.length === 0) return;
+  try {
+    const pending = (await runtime.listActive()).filter((v) => v.status === 'pending' && v.delivery === 'email');
+    if (pending.length === 0) return;
+    for (const v of pending) {
+      for (const value of candidates) runtime.tracker.register(v.id, v.pageDomain, value);
+    }
+    ctx.log.info(
+      { targetAgent: agent, verificationIds: pending.map((v) => v.id), candidateCount: candidates.length },
+      'Sign-in code(s) from the inbox specialist tracked for the pending email verification(s)',
+    );
+  } catch (err) {
+    // The err message could in principle echo a value; log the error name only.
+    ctx.log.warn(
+      { targetAgent: agent, errName: err instanceof Error ? err.name : typeof err },
+      'Could not list verifications; a code in the inbox specialist result was not tracked',
+    );
   }
 }
 
@@ -927,6 +961,12 @@ export class DelegateHandler implements ToolHandler {
             message: decline.message,
           },
         };
+      }
+
+      // A sign-in code the principal's inbox specialist read out of an email is tracked
+      // here, before the result reaches the coordinator or any store (#2017).
+      if (agent === CEO_INBOX_AGENT && ctx.verification) {
+        await trackInboxCodes(ctx, agent, response);
       }
 
       // Pull contact IDs out before the execution layer strips the
