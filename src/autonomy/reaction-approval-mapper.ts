@@ -42,9 +42,19 @@ import {
  * format is a contract with approval-notification.ts, which says so where it renders it.
  *
  * Global (`g`) for matchAll, which works on a copy and never touches this regex's lastIndex.
+ *
+ * @internal exported so a test can pin it against buildApprovalNotificationBody's output.
  */
-const APPROVAL_FINGERPRINT_RE =
+export const APPROVAL_FINGERPRINT_RE =
   /^(?:Reference: ([0-9a-f]{8})|Approval (\d{1,3}))\nExpires: (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/gm;
+
+/**
+ * Loose look-alike of the fingerprint's identifier line: any line STARTING with `Approval <digit>` or
+ * `Reference: <8-hex>`. Used only to decide how loudly to log a message that did not bind (never to
+ * bind): a line shaped like this without the strict fingerprint is a mangled or forged notification
+ * worth a warning, while ordinary chat stays silent.
+ */
+const APPROVAL_LOOKALIKE_RE = /^(?:Approval \d|Reference: [0-9a-f]{8})/m;
 
 /**
  * The approval a delivered body identifies, taken from the LAST fingerprint. The detail block
@@ -178,17 +188,43 @@ export class ReactionApprovalMapper {
     // Approvals are delivered only to the principal's own identities. A notification-shaped
     // message sent anywhere else (a group, a third party) is not one the principal answers by
     // reaction, so it never binds.
-    if (!isPrincipalIdentity(channel, recipientId, this.principalIdentities)) return;
+    if (!isPrincipalIdentity(channel, recipientId, this.principalIdentities)) {
+      if (APPROVAL_LOOKALIKE_RE.test(content)) {
+        this.log.debug(
+          { channel, messageId },
+          'reaction-approval: approval-shaped message delivered to a recipient that is not a principal identity — not binding',
+        );
+      }
+      return;
+    }
 
     const identifier = lastApprovalIdentifier(content);
-    if (!identifier) return;
+    if (!identifier) {
+      // Real notifications always carry the strict fingerprint. A line that looks like one without
+      // it means the renderer and this regex drifted apart (reactions silently stop working) or
+      // someone is imitating a notification; either way it should be seen.
+      if (APPROVAL_LOOKALIKE_RE.test(content)) {
+        this.log.warn(
+          { channel, messageId },
+          'reaction-approval: approval-shaped message to the principal lacks the strict notification fingerprint — not binding',
+        );
+      }
+      return;
+    }
 
     try {
       // A number resolves only among live approvals of the last 7 days, where it is unique.
       const row = 'approvalNumber' in identifier
         ? await this.actionLogRepo.findPendingByApprovalNumber(identifier.approvalNumber)
         : await this.actionLogRepo.findPendingByShortRef(identifier.shortRef);
-      if (!row) return;
+      if (!row) {
+        // Normal for a notification about an approval that was resolved or expired before delivery.
+        this.log.debug(
+          { ...identifier, channel, messageId },
+          'reaction-approval: no live approval matches the delivered fingerprint — not binding',
+        );
+        return;
+      }
 
       // The fingerprint must carry THIS approval's own expiry, exactly as the notification renders
       // it (approval-delivery passes row.expiresAt to buildApprovalNotificationBody, which prints
@@ -196,7 +232,19 @@ export class ReactionApprovalMapper {
       // line would otherwise bind whichever live approval holds 1 today: forged or echoed text
       // sent to the principal could then turn a habitual 👍 into approving something they never
       // saw. A row with no expiry cannot be matched and never binds.
-      if (row.expiresAt?.toISOString() !== identifier.expires) return;
+      if (row.expiresAt?.toISOString() !== identifier.expires) {
+        this.log.warn(
+          {
+            ...identifier,
+            rowExpiresAt: row.expiresAt?.toISOString() ?? null,
+            actionLogId: row.id,
+            channel,
+            messageId,
+          },
+          'reaction-approval: fingerprint expiry does not match the live approval — not binding',
+        );
+        return;
+      }
 
       await this.actionLogRepo.bindDeliveryMessage(row.id, channel, messageId);
       this.log.info(

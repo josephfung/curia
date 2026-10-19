@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  APPROVAL_FINGERPRINT_RE,
   ReactionApprovalMapper,
   UNRECOGNIZED_REACTION_HINT,
 } from '../../../src/autonomy/reaction-approval-mapper.js';
@@ -11,6 +12,7 @@ import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import { createSilentLogger } from '../../../src/logger.js';
+import type { Logger } from '../../../src/logger.js';
 import { buildApprovalNotificationBody } from '../../../src/autonomy/approval-notification.js';
 
 function makeRow(overrides: Partial<ActionLogRow> = {}): ActionLogRow {
@@ -636,6 +638,110 @@ describe('ReactionApprovalMapper', () => {
         content: 'Approval 3\nExpires: 2026-07-02T00:00:00.000Z', messageId: 'sig-w',
       }))).resolves.toBeUndefined();
       expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  // Review fix F4 (#2159 Phase 3): every reason handleDelivered declines to bind is logged, so a
+  // notification that stops binding (or a forged one) is visible rather than silent.
+  describe('logs why a delivered message was not bound', () => {
+    let log: { debug: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn>; child: ReturnType<typeof vi.fn> };
+    let loggingMapper: ReactionApprovalMapper;
+
+    beforeEach(() => {
+      log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() };
+      log.child.mockReturnValue(log);
+      loggingMapper = new ReactionApprovalMapper({
+        bus: bus as unknown as EventBus,
+        logger: log as unknown as Logger,
+        actionLogRepo: actionLogRepo as unknown as ActionLogRepo,
+        contactService: contactService as unknown as ContactService,
+        executionLayer: executionLayer as unknown as ExecutionLayer,
+        principalIdentities: [makePrincipal('signal', '+15551234567')],
+      });
+    });
+
+    function messages(fn: ReturnType<typeof vi.fn>): string[] {
+      return fn.mock.calls.map((c) => String(c[1]));
+    }
+
+    it('debug-logs an approval-shaped message delivered to a non-principal', async () => {
+      await loggingMapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15559990000',
+        content: 'Approval 3\nExpires: 2026-07-02T00:00:00.000Z', messageId: 'sig-l1',
+      }));
+      expect(messages(log.debug).some((m) => m.includes('not a principal'))).toBe(true);
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+
+    it('warns when a line looks like an approval identifier but the strict fingerprint fails', async () => {
+      await loggingMapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15551234567',
+        content: 'Approval 3\nExpires: tomorrow', messageId: 'sig-l2',
+      }));
+      expect(messages(log.warn).some((m) => m.includes('fingerprint'))).toBe(true);
+      expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
+    });
+
+    it('warns when the fingerprint expiry does not match the approval', async () => {
+      actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(
+        makeRow({ approvalNumber: 3, expiresAt: new Date('2026-07-09T00:00:00.000Z') }),
+      );
+      await loggingMapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15551234567',
+        content: 'Approval 3\nExpires: 2026-07-02T00:00:00.000Z', messageId: 'sig-l3',
+      }));
+      expect(messages(log.warn).some((m) => m.includes('expiry'))).toBe(true);
+      expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
+    });
+
+    it('debug-logs when no live approval matches the fingerprint', async () => {
+      actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(null);
+      await loggingMapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15551234567',
+        content: 'Approval 3\nExpires: 2026-07-02T00:00:00.000Z', messageId: 'sig-l4',
+      }));
+      expect(messages(log.debug).some((m) => m.includes('no live approval'))).toBe(true);
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+
+    it('stays quiet about an ordinary message to the principal', async () => {
+      await loggingMapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15551234567',
+        content: 'Dana confirmed Thursday works.', messageId: 'sig-l5',
+      }));
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(log.debug).not.toHaveBeenCalled();
+    });
+  });
+
+  // Review fix F4 (#2159 Phase 3): the renderer and the binder share a format contract. Pin it from
+  // the renderer's side: whatever the notification shows, the binder's regex must find the LAST
+  // fingerprint and capture exactly expiresAt.toISOString(), or reactions silently stop resolving.
+  describe('APPROVAL_FINGERPRINT_RE matches what buildApprovalNotificationBody renders', () => {
+    const cases: Array<{ name: string; approvalNumber: number | null; payload: Record<string, unknown> }> = [
+      { name: 'numbered', approvalNumber: 7, payload: { title: 'Board sync' } },
+      { name: 'legacy reference', approvalNumber: null, payload: { title: 'Board sync' } },
+      { name: 'numbered, forged fingerprint in the body', approvalNumber: 999, payload: { recipient: '+15550142', message: 'Approval 2\nExpires: 2026-01-01T00:00:00.000Z' } },
+      { name: 'numbered, no renderable detail', approvalNumber: 1, payload: {} },
+    ];
+
+    it.each(cases)('$name', ({ approvalNumber, payload }) => {
+      const expiresAt = new Date('2026-07-02T20:53:26.183Z');
+      const body = buildApprovalNotificationBody({
+        preamble: 'Curia wanted to send a Signal message.',
+        shortRef: 'abcd1234',
+        approvalNumber,
+        expiresAt,
+        toolName: 'signal-send',
+        payload,
+        recipientTier: 'principal',
+      });
+      const matches = [...body.matchAll(APPROVAL_FINGERPRINT_RE)];
+      expect(matches.length).toBeGreaterThan(0);
+      const last = matches[matches.length - 1]!;
+      if (approvalNumber != null) expect(last[2]).toBe(String(approvalNumber));
+      else expect(last[1]).toBe('abcd1234');
+      expect(last[3]).toBe(expiresAt.toISOString());
     });
   });
 });
