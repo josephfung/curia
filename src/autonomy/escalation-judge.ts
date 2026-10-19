@@ -107,7 +107,9 @@ type LlmKind = 'disclosure' | 'action' | 'review';
 
 const DEFAULT_REVIEW_TIMEOUT_MS = 15_000;
 // The brief can quote several sentences back (#2159), so it gets the most room.
-const REVIEW_MAX_TOKENS = 800;
+// A four-question brief over a six-claim message measured 229 tokens on Haiku 4.5
+// and up to 408 on Haiku 5.5; 1200 keeps the ~3x headroom 800 used to give (#2077).
+const REVIEW_MAX_TOKENS = 1200;
 
 interface LlmCallResult {
   content: string;
