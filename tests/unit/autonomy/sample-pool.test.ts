@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { sanitizeObjectOutput } from '../../../src/skills/sanitize.js';
 import { formatEmailSummary, isSampledTool, sampleEmailFromResult, sampleWeight, selectSamples, TRIAGE_SKILLS } from '../../../src/autonomy/sample-pool.js';
 
 describe('isSampledTool', () => {
@@ -147,5 +148,70 @@ describe('untrusted email text in a sample summary', () => {
     expect(all).not.toContain('sk-ant-api03-abcdefghijk1234567890');
     expect(email!.from).toBe('Billing (billing@example.com)');
     expect(email!.subject).toContain('Renew now');
+  });
+});
+
+// sanitizeOutput decodes one level of HTML entities per pass, and the tool result is decoded
+// again by sanitizeObjectOutput on its way to the agent. A cleaner that decodes once and then
+// neutralizes leaves a second level to be decoded into live markup downstream (#2159 re-review).
+describe('entity-encoded markup in a sample summary', () => {
+  const LINK = /\[[^\]]*\]\([^)]*\)/;
+
+  /** The line as the agent sees it: through the output sanitizer once, and (paranoid) three times. */
+  function asSeen(line: string): string[] {
+    const once = (sanitizeObjectOutput({ block: line }) as { block: string }).block;
+    let thrice = once;
+    for (let i = 0; i < 2; i++) thrice = (sanitizeObjectOutput({ block: thrice }) as { block: string }).block;
+    return [once, thrice];
+  }
+
+  function expectInert(line: string): void {
+    for (const seen of asSeen(line)) {
+      expect(seen).not.toMatch(LINK);
+      expect(seen).not.toMatch(/[<>[\]]/);
+      expect(seen).not.toMatch(/<a\b/i);
+    }
+  }
+
+  const encodings: Array<[string, string]> = [
+    ['single', '&#91;Renew&#93;(https://evil.example)'],
+    ['double', '&amp;#91;Renew&amp;#93;(https://evil.example)'],
+    ['triple', '&amp;amp;#91;Renew&amp;amp;#93;(https://evil.example)'],
+    ['single tag', '&lt;a href="https://evil.example"&gt;Renew&lt;/a&gt;'],
+    ['double tag', '&amp;lt;a href="https://evil.example"&amp;gt;Renew&amp;lt;/a&amp;gt;'],
+    ['triple tag', '&amp;amp;lt;a href="https://evil.example"&amp;amp;gt;Renew&amp;amp;lt;/a&amp;amp;gt;'],
+  ];
+
+  it.each(encodings)('write time: a %s-encoded subject stays inert downstream', (_label, subject) => {
+    const email = sampleEmailFromResult({ subject, from: 'sam@example.com' });
+    const line = formatEmailSummary('Archive an email', email?.subject, email?.from);
+    expectInert(line);
+    expect(line).toContain('Renew');
+  });
+
+  it.each(encodings)('formatEmailSummary alone: a %s-encoded subject stays inert downstream', (_label, subject) => {
+    expectInert(formatEmailSummary('Archive an email', subject));
+  });
+
+  it('does not keep an entity-encoded address as an address', () => {
+    for (const from of ['&#60b&#62x@evil.example', 'Sam <&#60b&#62x@evil.example>', 'Sam (&#60b&#62x@evil.example)']) {
+      const line = formatEmailSummary('Archive an email', 'Hi', from);
+      expectInert(line);
+      expect(line).not.toContain('&#');
+      expect(sampleEmailFromResult({ from })?.from ?? '').not.toContain('&#');
+    }
+  });
+
+  it('keeps an encoding deeper than the decode cap inert', () => {
+    // Eight levels: past the cleaner's pass cap, so what is left must be defused, not decoded.
+    const deep = '&#91;Renew&#93;(https://evil.example)'.replace(/&/g, `&${'amp;'.repeat(8)}`);
+    let seen = formatEmailSummary('Archive an email', deep);
+    // Decode far more often than any real pipeline would: nothing must ever become markup.
+    for (let i = 0; i < 12; i++) seen = (sanitizeObjectOutput({ block: seen }) as { block: string }).block;
+    expect(seen).not.toMatch(/[<>[\]]/);
+  });
+
+  it('keeps a plain ampersand readable', () => {
+    expect(formatEmailSummary('Archive an email', 'Q&A with Sam')).toBe('Archive an email: "Q&A with Sam"');
   });
 });

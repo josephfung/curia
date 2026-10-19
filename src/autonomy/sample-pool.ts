@@ -98,9 +98,25 @@ function capText(s: string, max: number): string {
 // for parentheses, so `[Renew](https://evil.example)` can never render as a link. Every path
 // into a summary (write time in the execution layer, draw-time lookup in the sampler) goes
 // through formatEmailSummary or sampleEmailFromResult, so this is the one place it happens.
+//
+// Entities: sanitizeOutput decodes one level of HTML entities per call, and the tool result is
+// decoded again by sanitizeObjectOutput on its way to the agent. So `&amp;#91;` cleaned once
+// would become `&#91;`, and then `[` downstream, AFTER neutralization. The cleaner therefore
+// decodes to a fixed point first (see fullyDecoded) and, after neutralizing, defuses any `&`
+// that could still start an entity, so a later decode has nothing left to turn into markup.
 
-/** A bare address. Excludes every character that could carry markup or break the line. */
-const BARE_ADDRESS = /^[^\s@<>()[\]"',;:\\]+@[^\s@<>()[\]"',;:\\]+$/;
+/**
+ * A bare address. Excludes every character that could carry markup or break the line,
+ * including `&` and `#`, so an entity-encoded address (`&#60b&#62x@…`) is never kept as one.
+ */
+const BARE_ADDRESS = /^[^\s@<>()[\]"',;:\\&#]+@[^\s@<>()[\]"',;:\\&#]+$/;
+
+/**
+ * Upper bound on sanitizeOutput passes. Each pass decodes one entity level and only shrinks or
+ * keeps the string, so it reaches a fixed point quickly; the cap only bounds the work on a
+ * pathologically nested input. Anything still encoded past it is defused by defuseEntities.
+ */
+const MAX_DECODE_PASSES = 5;
 
 /**
  * Split `Name <address>` (legacy rows, provider strings) or `Name (address)` (describeMessage),
@@ -121,16 +137,42 @@ function neutralizeMarkup(s: string): string {
   return s.replace(/[[<]/g, '(').replace(/[\]>]/g, ')');
 }
 
-/** A subject made safe to show: tags stripped, secrets redacted, no link or tag syntax left. */
+/**
+ * sanitizeOutput (tag strip, secret redaction, one entity level decoded) repeated until the
+ * string stops changing, so every encoded level is decoded, and then stripped if it was a tag.
+ */
+function fullyDecoded(raw: string): string {
+  let text = raw;
+  for (let i = 0; i < MAX_DECODE_PASSES; i++) {
+    const next = sanitizeOutput(text);
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
+
+/**
+ * Break every `&` that could begin an entity by putting a space after it, so no later decode
+ * can produce markup from it: a numeric one (`&#91;`), a named one (`&lbrack;`), or one of the
+ * legacy names a decoder accepts without the semicolon that matter here (`&lt`, `&gt`, `&amp`,
+ * `&quot`). A plain `Q&A` is not an entity and keeps reading as written.
+ */
+function defuseEntities(s: string): string {
+  return s.replace(/&(?=#|[a-z][a-z0-9]*;|lt|gt|amp|quot)/gi, '& ');
+}
+
+/** A subject made safe to show: tags stripped, secrets redacted, no link, tag or entity left. */
 function cleanSubject(raw: string): string {
-  return oneLine(neutralizeMarkup(sanitizeOutput(raw)));
+  return oneLine(defuseEntities(neutralizeMarkup(fullyDecoded(raw))));
 }
 
 /** A sender name through the display-name allowlist (which drops brackets, colons, slashes). */
 function cleanName(raw: string): string {
   if (!raw.trim()) return '';
-  // A name has no business carrying a URL: drop a markdown link's target, keep its text.
-  const name = sanitizeDisplayName(raw.replace(/\]\([^)]*\)/g, ']'));
+  // Decode every entity level first, so an encoded link or tag is seen (and dropped) for what
+  // it is. A name has no business carrying a URL: drop a markdown link's target, keep its text.
+  // The display-name allowlist then drops `&`, `#` and `;`, so no entity survives.
+  const name = sanitizeDisplayName(fullyDecoded(raw).replace(/\]\([^)]*\)/g, ']'));
   // sanitizeDisplayName's last resort for a name that sanitizes to nothing is the literal
   // 'Unknown'. Beside an address, showing nothing is better than inventing a name.
   return name === 'Unknown' && !/unknown/i.test(raw) ? '' : name;

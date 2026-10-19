@@ -4,6 +4,7 @@ import { SpotCheckSampler, SPOT_CHECK_HEADER, type DrawResult } from '../../../s
 import type { SpotCheckSet } from '../../../src/reports/spot-check-store.js';
 import type { ActionLogRow } from '../../../src/autonomy/action-log-types.js';
 import { createSilentLogger } from '../../../src/logger.js';
+import { sanitizeObjectOutput } from '../../../src/skills/sanitize.js';
 
 const DAY = 86_400_000;
 const NOW = Date.parse('2026-10-19T12:00:00.000Z');
@@ -316,6 +317,25 @@ describe('SpotCheckSampler.draw', () => {
 
       expect(lines[1]).toBe('1. Emailed dana@example.com: "Action 1"');
       expect(lines[2]).toBe('2. Archive an email: "Q4 board deck"');
+    });
+
+    // The draw-time lookup reads a subject straight from the mailbox; the block then reaches the
+    // agent through sanitizeObjectOutput, which decodes entities once more.
+    it.each([
+      '&amp;#91;Renew&amp;#93;(https://evil.example)',
+      '&amp;amp;#91;Renew&amp;amp;#93;(https://evil.example)',
+      '&amp;lt;a href="https://evil.example"&amp;gt;Renew&amp;lt;/a&amp;gt;',
+    ])('keeps an entity-encoded looked-up subject inert in the delivered block (%s)', async (subject) => {
+      const describeEmail = vi.fn(async () => ({ subject, from: 'Sam (&#60b&#62x@evil.example)' }));
+      const { sampler } = makeDeps({ rows: [triageRow(1, { message_id: 'msg-1' })], describeEmail });
+
+      const { block } = drawnOf(await sampler.draw('conv-1'));
+      const seen = (sanitizeObjectOutput({ block }) as { block: string }).block;
+      const lines = seen.split('\n').slice(1).join('\n');
+
+      expect(lines).not.toMatch(/\[[^\]]*\]\([^)]*\)/);
+      expect(lines).not.toMatch(/[<>[\]]/);
+      expect(lines).toContain('Renew');
     });
 
     it('never looks up a non-triage row, or a triage row without a message id', async () => {
