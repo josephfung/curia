@@ -682,6 +682,19 @@ describe('ReactionApprovalMapper', () => {
       expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
     });
 
+    // Controller ruling on F4: the coordinator now writes "Approval 3: …" in ordinary replies, so a
+    // look-alike line alone is not suspicious. Only a near-miss of a real notification (look-alike
+    // line AND an Expires line, yet no strict match) warns; plain prose stays at debug.
+    it('does not warn on coordinator prose that mentions an approval but has no Expires line', async () => {
+      await loggingMapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15551234567',
+        content: 'Two approvals are waiting:\nApproval 3: email Dana the budget\nApproval 5: invite Sam to the board sync',
+        messageId: 'sig-l6',
+      }));
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
+    });
+
     it('warns when the fingerprint expiry does not match the approval', async () => {
       actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(
         makeRow({ approvalNumber: 3, expiresAt: new Date('2026-07-09T00:00:00.000Z') }),

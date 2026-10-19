@@ -51,10 +51,12 @@ export const APPROVAL_FINGERPRINT_RE =
 /**
  * Loose look-alike of the fingerprint's identifier line: any line STARTING with `Approval <digit>` or
  * `Reference: <8-hex>`. Used only to decide how loudly to log a message that did not bind (never to
- * bind): a line shaped like this without the strict fingerprint is a mangled or forged notification
- * worth a warning, while ordinary chat stays silent.
+ * bind). On its own it is ordinary coordinator prose ("Approval 3: email Dana") and logs at debug.
  */
 const APPROVAL_LOOKALIKE_RE = /^(?:Approval \d|Reference: [0-9a-f]{8})/m;
+
+/** An `Expires:` line, the other half of a notification. With a look-alike line, a near-miss. */
+const EXPIRES_LINE_RE = /^Expires: /m;
 
 /**
  * The approval a delivered body identifies, taken from the LAST fingerprint. The detail block
@@ -200,14 +202,22 @@ export class ReactionApprovalMapper {
 
     const identifier = lastApprovalIdentifier(content);
     if (!identifier) {
-      // Real notifications always carry the strict fingerprint. A line that looks like one without
-      // it means the renderer and this regex drifted apart (reactions silently stop working) or
-      // someone is imitating a notification; either way it should be seen.
+      // Real notifications always carry the strict fingerprint. A near-miss (an identifier-like
+      // line AND an Expires line, yet no strict match) means the renderer and this regex drifted
+      // apart (reactions silently stop working) or someone is imitating a notification: warn. A
+      // look-alike line alone is ordinary coordinator prose ("Approval 3: email Dana"): debug.
       if (APPROVAL_LOOKALIKE_RE.test(content)) {
-        this.log.warn(
-          { channel, messageId },
-          'reaction-approval: approval-shaped message to the principal lacks the strict notification fingerprint — not binding',
-        );
+        if (EXPIRES_LINE_RE.test(content)) {
+          this.log.warn(
+            { channel, messageId },
+            'reaction-approval: near-miss approval notification to the principal fails the strict fingerprint — not binding',
+          );
+        } else {
+          this.log.debug(
+            { channel, messageId },
+            'reaction-approval: approval mentioned without a notification fingerprint — not binding',
+          );
+        }
       }
       return;
     }
