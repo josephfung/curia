@@ -625,7 +625,6 @@ export interface YamlConfig {
       batchSize?: number;
       minScoredActions?: number;
       halfLifeDays?: number;
-      weakExpiredWeight?: number;
       ceoCooldownDays?: number;
       errorRateThreshold?: number;
       /** Days a parse failure may retry before null-flag dead-letter. Default: 3. */
@@ -1246,9 +1245,6 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       }
       if (autonomyScoring.halfLifeDays !== undefined && (typeof autonomyScoring.halfLifeDays !== 'number' || autonomyScoring.halfLifeDays <= 0)) {
         throw new Error(`dreaming.autonomy_scoring.halfLifeDays must be a positive number, got: ${autonomyScoring.halfLifeDays}`);
-      }
-      if (autonomyScoring.weakExpiredWeight !== undefined && (typeof autonomyScoring.weakExpiredWeight !== 'number' || autonomyScoring.weakExpiredWeight < 0 || autonomyScoring.weakExpiredWeight > 1)) {
-        throw new Error(`dreaming.autonomy_scoring.weakExpiredWeight must be a number between 0 and 1, got: ${autonomyScoring.weakExpiredWeight}`);
       }
       if (autonomyScoring.ceoCooldownDays !== undefined && (!Number.isInteger(autonomyScoring.ceoCooldownDays) || autonomyScoring.ceoCooldownDays < 0)) {
         throw new Error(`dreaming.autonomy_scoring.ceoCooldownDays must be a non-negative integer, got: ${autonomyScoring.ceoCooldownDays}`);

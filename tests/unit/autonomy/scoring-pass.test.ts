@@ -6,6 +6,7 @@ import type { AutonomyService } from '../../../src/autonomy/autonomy-service.js'
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import { createSilentLogger } from '../../../src/logger.js';
 import type { ActionLogRow } from '../../../src/autonomy/action-log-types.js';
+import { DETERMINISTIC_SCORES } from '../../../src/autonomy/action-log-types.js';
 
 function makeRow(overrides: Partial<ActionLogRow>): ActionLogRow {
   return {
@@ -88,7 +89,6 @@ const defaultConfig = {
   batchSize: 50,
   minScoredActions: 30,
   halfLifeDays: 30,
-  weakExpiredWeight: 0.3,
   ceoCooldownDays: 7,
   errorRateThreshold: 0.20,
   unparseableAfterDays: 3,
@@ -479,6 +479,57 @@ describe('AutonomyScoringPass', () => {
       for (const call of calls) {
         expect((call as [number])[0]).toBeLessThanOrEqual(75);
       }
+    });
+  });
+
+  // #2159 Phase 3: the scorer weights the principal's spot-check verdicts most and
+  // ignores lapsed approvals. computeCapabilityScore is private, so these drive run()
+  // with a mocked repo that clears the sample-size and cooldown guards.
+  describe('principal verdicts and expired approvals (#2159 Phase 3)', () => {
+    async function capabilityFor(rows: ActionLogRow[]): Promise<number | null> {
+      const oldDate = new Date(Date.now() - 30 * 86_400_000); // past the principal cooldown
+      const repo = makeRepo({
+        countScored: vi.fn().mockResolvedValue(rows.length + 100), // above minScoredActions
+        getRecentCompetenceErrorRate: vi.fn().mockResolvedValue(0),
+        findAllScored: vi.fn().mockResolvedValue(rows),
+      });
+      const svc = makeAutonomyService(75, 'system', oldDate);
+      const pass = new AutonomyScoringPass(repo, svc, makeLlmProvider(), createSilentLogger(), defaultConfig);
+      const result = await pass.run();
+      return result.capabilityScore;
+    }
+
+    it('expired approvals score with no signal on any dimension', () => {
+      expect(DETERMINISTIC_SCORES.expired).toEqual({
+        competenceFlag: null,
+        commitmentFlag: null,
+        compatibility: null,
+        scoredBy: 'deterministic',
+      });
+    });
+
+    it('weights a principal verdict three times a judge verdict', async () => {
+      const rows = [
+        makeRow({ id: 1, competenceFlag: 0, scoredBy: 'principal' }),
+        makeRow({ id: 2, competenceFlag: 1, scoredBy: 'llm-judge' }),
+        makeRow({ id: 3, competenceFlag: 1, scoredBy: 'llm-judge' }),
+      ];
+
+      const capability = await capabilityFor(rows);
+
+      // Competence (1 + 1 + 0*3) / (1 + 1 + 3) = 0.4; commitment and compatibility have no data (0.5).
+      expect(capability).not.toBeNull();
+      expect(Math.abs(capability! - (0.45 * 0.4 + 0.35 * 0.5 + 0.20 * 0.5))).toBeLessThan(1e-9);
+    });
+
+    it('ignores an old expired row that still carries flags', async () => {
+      const rows = [
+        makeRow({ id: 1, outcome: 'expired', commitmentFlag: 1, compatibility: 0, scoredBy: 'deterministic' }),
+      ];
+
+      const capability = await capabilityFor(rows);
+
+      expect(capability).toBeCloseTo(0.5, 9);
     });
   });
 });

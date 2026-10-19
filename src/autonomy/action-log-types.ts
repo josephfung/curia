@@ -112,7 +112,8 @@ export interface ScoringFlags {
 export const DETERMINISTIC_SCORES: Record<string, ScoringFlags> = {
   approved:            { competenceFlag: 1, commitmentFlag: 1, compatibility: 1,    scoredBy: 'deterministic' },
   denied:              { competenceFlag: 0, commitmentFlag: null, compatibility: 0, scoredBy: 'deterministic' },
-  expired:             { competenceFlag: null, commitmentFlag: 1, compatibility: 0, scoredBy: 'deterministic' },
+  // An approval that lapsed says nothing about Curia's judgement: the principal may simply not have seen it (#2159 Phase 3).
+  expired:             { competenceFlag: null, commitmentFlag: null, compatibility: null, scoredBy: 'deterministic' },
   resolved_externally: { competenceFlag: 1, commitmentFlag: 1, compatibility: null, scoredBy: 'deterministic' },
   rejected:            { competenceFlag: 0, commitmentFlag: 1, compatibility: null, scoredBy: 'deterministic' },
 };

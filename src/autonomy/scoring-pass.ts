@@ -15,6 +15,7 @@ import type { ActionLogRepo } from './action-log-repo.js';
 import type { AutonomyService } from './autonomy-service.js';
 import type { ActionLogRow, ScoringFlags } from './action-log-types.js';
 import { DETERMINISTIC_SCORES, LLM_SCORED_OUTCOMES, RESOLVED_BY } from './action-log-types.js';
+import { PRINCIPAL_SCORED_BY } from './sample-pool.js';
 
 export interface ScoringPassConfig {
   intervalMs: number;
@@ -22,7 +23,6 @@ export interface ScoringPassConfig {
   batchSize: number;
   minScoredActions: number;
   halfLifeDays: number;
-  weakExpiredWeight: number;
   ceoCooldownDays: number;
   errorRateThreshold: number;
   /** Days an unscored row may retry a parse failure before it is dead-lettered. */
@@ -64,6 +64,10 @@ const DIMENSION_WEIGHTS = {
   commitment: 0.35,
   compatibility: 0.20,
 } as const;
+
+// Multiplier on the time-decay weight of a principal-scored row. A spot-check verdict
+// from the principal outweighs three judge verdicts of the same age.
+const PRINCIPAL_VERDICT_WEIGHT = 3;
 
 export class AutonomyScoringPass {
   constructor(
@@ -305,17 +309,17 @@ Respond with ONLY a JSON object: {"competence_flag": 0|1, "commitment_flag": 0|1
     let compatWeightSum = 0, compatValueSum = 0;
 
     for (const row of rows) {
+      // rows scored before #2159 Phase 3 still carry flags
+      if (row.outcome === 'expired') continue;
+
       const daysSince = (now - row.createdAt.getTime()) / 86_400_000;
       // Exponential decay with a configurable half-life. After halfLifeDays,
       // a row contributes half the weight of a row created today.
       let weight = Math.pow(0.5, daysSince / this.config.halfLifeDays);
 
-      // Expired rows where compatibility=0 indicate Curia took an action that
-      // the principal ultimately let lapse rather than approving. These weak signals
-      // get reduced weight so they don't drag down the score unfairly.
-      if (row.outcome === 'expired' && row.compatibility === 0) {
-        weight *= this.config.weakExpiredWeight;
-      }
+      // The principal's own verdict on a sampled action is the strongest evidence the
+      // scorer gets (spec: principal-scored rows above llm-judge rows).
+      if (row.scoredBy === PRINCIPAL_SCORED_BY) weight *= PRINCIPAL_VERDICT_WEIGHT;
 
       if (row.competenceFlag !== null) {
         compWeightSum += weight;

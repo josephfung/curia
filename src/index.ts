@@ -2157,7 +2157,6 @@ async function main(): Promise<void> {
     batchSize: yamlConfig.dreaming?.autonomy_scoring?.batchSize ?? 50,
     minScoredActions: yamlConfig.dreaming?.autonomy_scoring?.minScoredActions ?? 30,
     halfLifeDays: yamlConfig.dreaming?.autonomy_scoring?.halfLifeDays ?? 30,
-    weakExpiredWeight: yamlConfig.dreaming?.autonomy_scoring?.weakExpiredWeight ?? 0.3,
     ceoCooldownDays: yamlConfig.dreaming?.autonomy_scoring?.ceoCooldownDays ?? 7,
     errorRateThreshold: yamlConfig.dreaming?.autonomy_scoring?.errorRateThreshold ?? 0.20,
     unparseableAfterDays: yamlConfig.dreaming?.autonomy_scoring?.unparseableAfterDays ?? 3,
