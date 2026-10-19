@@ -4793,7 +4793,7 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
     const { registry, layer, actionLogRepo } = makePoolLayer({ logger: spyLogger });
     let ran = false;
     registry.register(makeRiskyManifest('calendar-create-event', 'high'), {
-      execute: vi.fn(async () => { ran = true; return { success: true, data: { ok: true } }; }),
+      execute: vi.fn(async (): Promise<ToolResult> => { ran = true; return { success: true, data: { ok: true } }; }),
     });
     const original = RealAutonomyService.minScoreForActionRisk.bind(RealAutonomyService);
     // Real behaviour for the gates before the handler; throw only once the action has run.
