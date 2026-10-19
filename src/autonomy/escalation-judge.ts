@@ -38,6 +38,13 @@ import {
   parseDisclosureVerdict,
   parseActionVerdict,
 } from './escalation-judge-prompt.js';
+import {
+  BRIEF_SYSTEM_PROMPT,
+  buildBriefUserPrompt,
+  parseBriefVerdict,
+  type BriefInput,
+  type BriefVerdict,
+} from './judge-brief.js';
 
 export interface EscalationJudgeConfig {
   /** When false, both classifiers return 'escalate' without calling the model. */
@@ -46,6 +53,12 @@ export interface EscalationJudgeConfig {
   model: string;
   /** Hard timeout for each LLM call in ms. */
   timeoutMs: number;
+  /**
+   * Timeout for the band brief (review(), #2159). It reads the drafting turn's evidence and
+   * can quote several sentences back, so it needs longer than a one-word classification.
+   * Default 15000.
+   */
+  reviewTimeoutMs?: number;
 }
 
 export interface DisclosureInput {
@@ -89,7 +102,9 @@ const TIMEOUT = Symbol('escalation-judge-timeout');
 /** Deterministic verdict sampling — used for both the chat() call and llm.call audit. */
 const JUDGE_TEMPERATURE = 0;
 
-type LlmKind = 'disclosure' | 'action';
+type LlmKind = 'disclosure' | 'action' | 'review';
+
+const DEFAULT_REVIEW_TIMEOUT_MS = 15_000;
 
 interface LlmCallResult {
   content: string;
@@ -131,7 +146,7 @@ export class EscalationJudge {
     }
 
     const userPrompt = buildDisclosureUserPrompt(input.content);
-    const result = await this.callLlm(userPrompt, DISCLOSURE_SYSTEM_PROMPT, input.conversationId, 'disclosure');
+    const result = await this.callLlm(userPrompt, DISCLOSURE_SYSTEM_PROMPT, input.conversationId, 'disclosure', this.config.timeoutMs);
 
     if (result === null) {
       return { decision: 'escalate', reason: 'judge unreachable or timed out' };
@@ -173,7 +188,7 @@ export class EscalationJudge {
     }
 
     const userPrompt = buildActionUserPrompt(input.description);
-    const result = await this.callLlm(userPrompt, ACTION_SYSTEM_PROMPT, input.conversationId, 'action');
+    const result = await this.callLlm(userPrompt, ACTION_SYSTEM_PROMPT, input.conversationId, 'action', this.config.timeoutMs);
 
     if (result === null) {
       return { decision: 'escalate', reason: 'judge unreachable or timed out' };
@@ -205,12 +220,45 @@ export class EscalationJudge {
     }
   }
 
+  /**
+   * Ask the band brief's questions (#2159). Never throws. A failure is returned as such,
+   * never as a pass: the caller decides what a failure does at the current band.
+   */
+  async review(input: BriefInput): Promise<BriefVerdict> {
+    if (!this.config.enabled) return { ok: false, failure: 'disabled' };
+    const userPrompt = buildBriefUserPrompt(input);
+    const result = await this.callLlm(
+      userPrompt,
+      BRIEF_SYSTEM_PROMPT,
+      input.conversationId,
+      'review',
+      this.config.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
+    );
+    if (result === null) return { ok: false, failure: 'unreachable' };
+    const answers = parseBriefVerdict(result.content, input.questions);
+    if (answers === null) {
+      this.logger.error(
+        {
+          responseHash: createHash('sha256').update(result.content).digest('hex'),
+          conversationId: input.conversationId,
+          questions: input.questions,
+        },
+        'escalation-judge: unparseable brief verdict',
+      );
+      return { ok: false, failure: 'malformed' };
+    }
+    // Fire-and-forget: telemetry failure must never delay or block the review.
+    void this.publishTelemetry(result, userPrompt, input.conversationId, 'review');
+    return { ok: true, ...answers };
+  }
+
   /** Make a single LLM call with timeout and abort. Returns null on any failure. */
   private async callLlm(
     userPrompt: string,
     systemPrompt: string,
     conversationId: string,
     kind: LlmKind,
+    timeoutMs: number,
   ): Promise<LlmCallResult | null> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -218,8 +266,9 @@ export class EscalationJudge {
 
     // The action verdict has three fields (class, isThirdPartyFacing, reason) vs two
     // for disclosure — give it more room so verbose reason strings don't truncate.
+    // The brief can quote several sentences back (#2159), so it gets the most room.
     // Truncated JSON → parseVerdict returns null → escalate (safe failure mode).
-    const maxTokens = kind === 'action' ? 200 : 120;
+    const maxTokens = kind === 'review' ? 800 : kind === 'action' ? 200 : 120;
 
     try {
       const chatPromise = this.provider.chat({
@@ -237,14 +286,14 @@ export class EscalationJudge {
       });
 
       const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
-        timer = setTimeout(() => resolve(TIMEOUT), this.config.timeoutMs);
+        timer = setTimeout(() => resolve(TIMEOUT), timeoutMs);
       });
 
       const raced = await Promise.race([chatPromise, timeoutPromise]);
 
       if (raced === TIMEOUT) {
         controller.abort();
-        this.logger.warn({ timeoutMs: this.config.timeoutMs, kind, conversationId }, 'escalation-judge: timed out');
+        this.logger.warn({ timeoutMs, kind, conversationId }, 'escalation-judge: timed out');
         return null;
       }
 
@@ -302,7 +351,9 @@ export class EscalationJudge {
         parentEventId: 'system',
         archive: {
           prompt: {
-            system: kind === 'disclosure' ? DISCLOSURE_SYSTEM_PROMPT : ACTION_SYSTEM_PROMPT,
+            system: kind === 'disclosure'
+              ? DISCLOSURE_SYSTEM_PROMPT
+              : kind === 'action' ? ACTION_SYSTEM_PROMPT : BRIEF_SYSTEM_PROMPT,
             user: userPrompt,
           },
           response: buildLlmArchiveResponse({

@@ -49,12 +49,21 @@ export function buildEscalationJudge(deps: {
     enabled: true,
     model: yaml?.model ?? 'claude-haiku-4-5',
     timeoutMs: yaml?.timeout_ms ?? 5000,
+    reviewTimeoutMs: yaml?.review_timeout_ms ?? 15000,
   };
   // local.yaml overrides are deep-merged but not schema-checked, so validate here.
   if (!Number.isInteger(config.timeoutMs) || config.timeoutMs < 250) {
     throw new EscalationJudgeConfigError(
       'escalation.judge.timeout_ms must be an integer >= 250 (ms) — fix config (default.yaml or local.yaml)',
       { timeoutMs: config.timeoutMs },
+    );
+  }
+  // The band brief's own timeout (#2159). Same floor: a typo'd tiny value would time out
+  // every review, which under band gating fails sends open at 80+.
+  if (!Number.isInteger(config.reviewTimeoutMs) || (config.reviewTimeoutMs ?? 0) < 250) {
+    throw new EscalationJudgeConfigError(
+      'escalation.judge.review_timeout_ms must be an integer >= 250 (ms) — fix config (default.yaml or local.yaml)',
+      { reviewTimeoutMs: config.reviewTimeoutMs },
     );
   }
   if (!modelRegistry.isKnownModel(config.model)) {

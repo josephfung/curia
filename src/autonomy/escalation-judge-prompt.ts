@@ -154,7 +154,7 @@ export function parseActionVerdict(raw: string): ActionVerdict | null {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function stripCodeFence(raw: string): string {
+export function stripCodeFence(raw: string): string {
   const trimmed = raw.trim();
   const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   return fence ? fence[1]!.trim() : trimmed;
@@ -168,7 +168,7 @@ function stripCodeFence(raw: string): string {
  * Intentionally not shared with outbound-judge.ts — the two security boundaries
  * must remain independent so a change to one cannot silently weaken the other.
  */
-function extractFirstJsonObject(text: string): string | null {
+export function extractFirstJsonObject(text: string): string | null {
   const start = text.indexOf('{');
   if (start === -1) return null;
   let depth = 0;

@@ -585,6 +585,8 @@ export interface YamlConfig {
       model?: string;
       /** Hard timeout per call in ms. Default: 5000. */
       timeout_ms?: number;
+      /** Timeout for the band brief (#2159), which reads the drafting turn's evidence. Default: 15000. */
+      review_timeout_ms?: number;
       // No failMode — EscalationJudge is hard-coded fail-closed. A local.yaml
       // `failMode` key is deep-merged into the object but ignored by the type and
       // constructor (see #1911). Do not add it here.

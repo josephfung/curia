@@ -671,3 +671,58 @@ describe('EscalationJudgeConfig has no failMode (#1911)', () => {
     expect(_check.timeoutMs).toBe(5000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Band brief (#2159): review()
+// ---------------------------------------------------------------------------
+
+describe('EscalationJudge.review (band brief, #2159)', () => {
+  const brief = {
+    questions: ['grounding'] as const,
+    message: 'Dana will be there at 3.',
+    recipients: ['sam@example.com'],
+    band: 'spot-check' as const,
+    evidence: { toolResults: [] },
+    conversationId: 'c1',
+  };
+
+  it('returns the parsed answers', async () => {
+    const { judge } = makeJudge(providerReturning(textResponse('{"unsupportedClaims": ["Dana will be there at 3."], "reason": "no lookup"}')));
+    await expect(judge.review(brief)).resolves.toEqual({
+      ok: true, unsupportedClaims: ['Dana will be there at 3.'], reason: 'no lookup',
+    });
+  });
+
+  it('reports malformed output as a failure, never a pass', async () => {
+    const { judge } = makeJudge(providerReturning(textResponse('looks fine to me')));
+    await expect(judge.review(brief)).resolves.toEqual({ ok: false, failure: 'malformed' });
+  });
+
+  it('reports a timeout as unreachable', async () => {
+    const { judge } = makeJudge(providerReturning(new Promise<LLMResponse>(() => {})), { reviewTimeoutMs: 300 });
+    await expect(judge.review(brief)).resolves.toEqual({ ok: false, failure: 'unreachable' });
+  });
+
+  it('reports a provider error as unreachable', async () => {
+    const errorResponse = { type: 'error', error: { message: 'boom' } } as unknown as LLMResponse;
+    const { judge } = makeJudge(providerReturning(errorResponse));
+    await expect(judge.review(brief)).resolves.toEqual({ ok: false, failure: 'unreachable' });
+  });
+
+  it('reports disabled without calling the model', async () => {
+    const provider = providerReturning(textResponse('{}'));
+    const { judge } = makeJudge(provider, { enabled: false });
+    await expect(judge.review(brief)).resolves.toEqual({ ok: false, failure: 'disabled' });
+    expect(provider.chat).not.toHaveBeenCalled();
+  });
+
+  it('archives the brief system prompt in llm.call telemetry', async () => {
+    const { judge, bus } = makeJudge(providerReturning(textResponse('{"unsupportedClaims": [], "reason": "ok"}')));
+    await judge.review(brief);
+    await vi.waitFor(() => expect(bus.published.length).toBeGreaterThan(0));
+    // archive rides on the event, not the payload (it never persists into audit_log.payload).
+    const event = bus.published[0] as { payload: { agentId: string }; archive?: { prompt: { system: string } } };
+    expect(event.payload.agentId).toBe('escalation-judge-review');
+    expect(event.archive?.prompt.system).toContain('You review messages and actions');
+  });
+});

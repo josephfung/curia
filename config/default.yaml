@@ -313,6 +313,8 @@ escalation:
     enabled: true
     model: claude-haiku-4-5
     timeout_ms: 5000
+    # The band brief (#2159) reads the drafting turn's evidence; it needs longer than a one-word classification.
+    review_timeout_ms: 15000
 
 # Audit log hardening (spec 10 / #1383).
 # llm_call_archive stores redacted full prompts/responses keyed to llm.call rows.
