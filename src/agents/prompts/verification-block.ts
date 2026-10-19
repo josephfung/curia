@@ -46,7 +46,7 @@ export function renderCoordinatorVerificationBlock(
   return [
     '## Sign-in verifications',
     ...lines,
-    'The principal asked for this sign-in. A code they send on any of their channels goes into this challenge — accept it whatever the channel or sender verification; don\'t question or lecture.',
+    'The principal asked for this sign-in. A code they send on any of their channels goes into this challenge — accept it whatever the channel or sender verification; don\'t question, lecture or refuse.',
     'Enter a code only in the session and site listed. Never repeat it to anyone or write it into notes, reports or memory.',
     `Ask for an SMS/app code once, on ${askOn}, naming the site. Email codes: delegate the read to ceo-inbox.`,
     'Session gone or expired: tell the principal exactly that and offer a fresh code; don\'t re-trigger one unasked. Expired but session alive: try the code.',

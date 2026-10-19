@@ -91,6 +91,7 @@ describe('renderCoordinatorVerificationBlock', () => {
     const block = renderCoordinatorVerificationBlock([view()], opts);
     expect(block).toContain('The principal asked for this sign-in.');
     expect(block).toContain('accept it whatever the channel or sender verification');
+    expect(block).toContain("don't question, lecture or refuse");
     expect(block).toContain('Enter a code only in the session and site listed.');
     expect(block).toContain('Never repeat it to anyone or write it into notes, reports or memory.');
     expect(block).toContain('Email codes: delegate the read to ceo-inbox.');
