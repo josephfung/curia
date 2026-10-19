@@ -70,6 +70,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [046](046-agent-behavior-fix-placement.md) | Agent behavior fixes go on the highest rung that works (code → trigger injection → tool description → playbook → always-on prompt); CI budgets the always-on prompt and local tool definitions (#1961) | Accepted |
 | [047](047-send-skills-address-recipients-by-reference.md) | Send skills address recipients by contact reference or the `principal` alias, with no raw-address path (cold outreach creates a contact first); agent-entered addresses are `agent_stated`, verified after a duplicate check; a `#label` hint selects a secondary address; a near-miss principal check is rejected; an `email-reply` verifies its recipient only when mail authentication passed, the address is not Curia's, and no likely duplicate exists (#2033, #2041, #2047, #2071) | Accepted |
 | [048](048-reasoning-policy.md) | Reasoning policy — reasoning passes back within a tool loop on every provider; one provider-neutral `reasoning.effort` per tier (unset by default) covers OpenRouter and Anthropic thinking; agent calls send no temperature; `llm.call` records reasoning tokens, effort and upstream endpoint (#2044) | Accepted |
+| [049](049-band-driven-autonomy.md) | The autonomy band decides when Curia asks first; contact tier only flags an outsider steering Curia, judged per send with the drafting turn's evidence; integrity rules stay deterministic; `autonomy.gating` rolls back (#2159) | Accepted |
 
 ## Adding new ADRs
 

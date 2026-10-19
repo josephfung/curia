@@ -39,7 +39,7 @@ The score maps to one of five named bands. Each band has a behavioral descriptio
 
 ### Band Behavioral Descriptions
 
-These are injected as-is into the Coordinator's system prompt. They define self-governance behavior at each band.
+These are injected as-is into the Coordinator's system prompt. They define self-governance behavior at each band. The text below is the `autonomy.gating: tier` set; under `band` a second set that matches the [band table](#band-gating-2159) is injected instead (`BAND_DESCRIPTIONS_BAND_GATING` in `src/autonomy/autonomy-service.ts`).
 
 **Full (90–100)**
 > Act independently. No confirmation needed for standard operations. Flag only genuinely novel, irreversible, or high-stakes actions — where the downside of acting without checking outweighs the cost of the pause.
@@ -279,6 +279,57 @@ A wake carries a `wakeContext` marker (stamped by the scheduler when it fires a 
 Effective standing is also what handlers see: `ctx.taskMetadata` carries the post-ladder standing (audit logs read the raw lineage separately). #1126 abolished the handler-level origination re-checks on every `elevated` skill (the gate is now the single enforcement point), but two `action_risk: 'none'` `normal` skills the autonomy gate cannot govern deliberately retain a handler re-check — `send-draft` and `calendar-list-events` (an egress/parameter check) — and they must see post-ladder standing. Effective standing also keeps the lineage-forwarding skills (`delegate`, `scheduler-create`, `bullpen-post`, `bullpen-reply`) from riding or propagating standing the woken task no longer holds — a freshly-derived sub-turn carries no `wakeContext` and would otherwise escape the ladder. **Fail direction:** when the live score is momentarily unreadable, a *live* turn fails open (a transient DB issue must not disable a human-directed agent), but a *woken* task fails closed on non-read actions — with no human in the loop and no score, there is no basis to inherit autonomous standing.
 
 ---
+
+## Band gating (#2159)
+
+`autonomy.gating: band | tier` (`config/default.yaml`) chooses who decides when Curia asks first. It ships as `tier`, the contact-tier policy described above (Gate C's tier veto and the outbound filter's Stage 2.5). Under `band` the score decides, and contact tier only matters when an outsider is steering Curia. See [ADR-049](../adr/049-band-driven-autonomy.md).
+
+### Behavior by band
+
+| Band | Score | Taking on new work | Coordinating | Speaking or committing as the principal | Principal hears about it |
+|---|---|---|---|---|---|
+| Full | 90+ | Proceeds | Acts | Acts | Digest, notable items only |
+| Spot-check | 80–89 | Proceeds, reports | Acts | Acts, after the fact check | Digest |
+| Approval | 70–79 | Proceeds, reports | Acts | **Asks first** | Digest, plus the asks |
+| Draft | 60–69 | Principal confirms | Drafts | Drafts | Digest, plus the asks |
+| Restricted | <60 | Proposes only | Drafts only | Drafts only | Digest |
+
+At every band an outsider steering Curia means the action is held, the integrity rules block, and the fact check runs whenever Curia speaks as the principal. Gates A and B are unchanged and apply on top.
+
+### Gate C under band (`runBandGateC`, `src/skills/execution.ts`)
+
+| Case | 80+ | Below 80 |
+|---|---|---|
+| KG write from an unknown or blocked sender | escalate (#1290) | same |
+| External originator with no tier | escalate (#1059) | same |
+| A send | proceed, no judge — the gateway reviews it | ask *purpose* and *speaks as principal*; escalate on "steered" or "yes"; on allow mark the task reviewed |
+| A non-send at medium risk or above | ask *purpose* if an outsider initiated it; escalate on "steered" | ask *purpose* and *speaks as principal* |
+| A low-risk action | ask *purpose* if an outsider initiated it | same |
+| Judge failure | proceed, with a `gate_proceeded` digest item | escalate |
+
+At 80+, an action the tier policy would have escalated emits a `gate_proceeded` digest item. Unlike the tier gate, band Gate C also covers system- and agent-originated tasks. A send to the principal alone is not reviewed.
+
+### Send-time review (`BandSendReview`, `src/dispatch/band-send-review.ts`)
+
+Under `band` the outbound filter's `contact-data-leak` rule and Stage 2.5 are off. After the integrity rules and Stage 2 pass, the gateway asks the escalation judge's brief (`src/autonomy/judge-brief.ts`). The judge sees the message, the recipients, the band and the drafting turn's evidence: the turn's tool results read back from the audit log (task → `tool.invoke` → `tool.result`), its task content and progress, and the "Who you serve" block. The evidence is passed beside the message, never written into it, and credentials are redacted before it leaves.
+
+| Send | Questions |
+|---|---|
+| Principal-directed (a live principal turn) | grounding |
+| 80+ | purpose, speaks as principal, grounding, necessity |
+| Below 80, Gate C already asked this task | grounding, necessity |
+| Below 80 otherwise (relayed replies, unreviewed tasks) | all four |
+
+| Answer | Effect |
+|---|---|
+| steered | hold, at every band |
+| speaks as principal, below 80 | hold |
+| unsupported claims or unneeded disclosures | bounce to the drafter once. On the recheck: at 80+ cut the quoted text, recheck the trimmed message for grounding, send with a `claim_trimmed` digest item, hold if it still fails; below 80 hold |
+| judge failure | 80+: send with a `sent_without_review` item, at most five an hour, then hold until a judge call succeeds and email the principal once; below 80: hold. A failure on the recheck of a bounced draft holds. |
+
+A bounce publishes `outbound.blocked`, so a relayed reply goes through the dispatcher's rewrite, and shows the drafter only text quoted verbatim from its message. A hold raises an approval through the send's `holdRecipe` (each send skill replays itself; relayed replies replay through `dispatcher-relay`) and never publishes `outbound.blocked`; a hold with no approval behind it queues a digest item. Sends the principal approved (`humanApproved`), system notifications and sends to the principal alone are not reviewed. A stored draft cannot be trimmed, so a draft the review would trim is held.
+
+Relayed replies skip the dispatcher's tier Gate C (except #1059's missing-tier escalate) and get all four questions at the gateway.
 
 ## Phase 3: Automatic Score Adjustment
 

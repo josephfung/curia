@@ -22,6 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`approvalDelivery` capability** — new `ToolContext` field for tools that deliver approvals. (#2159)
 - **Autonomy gating setting** — `autonomy.gating: band | tier` chooses score-driven or contact-tier gates; ships as `tier`. (#2159)
 - **Judge brief** — escalation judge answers purpose, speaks-as-principal, grounding and necessity from the turn's lookups. (#2159)
+- **ADR-049** — band-driven autonomy replaces the tier escalation policy. (#2159)
 
 ### Changed
 
@@ -36,6 +37,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Outbound filter** — under `band`, `contact-data-leak` and the tier disclosure table are off. (#2159)
 - **Relayed replies** — a held reply raises an approval on every channel, not only email. (#2159)
 - **`outbound.message` (public API)** — new `principalApproved` flag; approved relays are not held twice. (#2159)
+- **Gate C** — under `band`, the score decides; tier only matters when the judge sees steering. (#2159)
+- **Band descriptions** — under `band`, the injected autonomy guidance matches the new band table. (#2159)
 - **Approval delivery** — one message on the principal's preferred channel, not email, Signal and Slack. (#2159)
 - **One-channel standing preference** — fresh installs seed it: Signal, then SMS, then email. (#2159)
 - **Approval expiry sweep** — runs every 15 minutes, doubling as the approval-delivery safety net. (#2159)
