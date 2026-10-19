@@ -78,7 +78,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **Approval reactions** — a 👍 binds only to a principal-bound approval notification, never to other messages. (#2159)
+- **Approval reactions** — a 👍 binds only to the principal's own notification, matching that approval's number and expiry. (#2159)
+- **Approval references** — a present but unreadable `short_ref` fails closed instead of picking the sole pending approval. (#2159)
 
 ## [0.44.0] — 2026-10-16 — "WALL-E"
 
