@@ -155,7 +155,8 @@ describeIf('Contacts Integration', () => {
         label: 'Full Flow Test manages the annual budget',
         source: 'integration-test',
       });
-      if (fact.nodeId) createdKgNodeIds.push(fact.nodeId);
+      // 'updated' returns an existing fact node, which is not ours to delete.
+      if (fact.action === 'created' && fact.nodeId) createdKgNodeIds.push(fact.nodeId);
     }
 
     // ContactResolver.resolve does DB lookup + KG enrichment in one call

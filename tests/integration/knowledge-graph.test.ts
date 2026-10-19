@@ -104,7 +104,8 @@ describeIf('Knowledge Graph Integration', () => {
       label: 'Integration Person is a test entity',
       source: 'test',
     });
-    if (fact.nodeId) createdKgNodeIds.push(fact.nodeId);
+    // 'updated' returns an existing fact node, which is not ours to delete.
+    if (fact.action === 'created' && fact.nodeId) createdKgNodeIds.push(fact.nodeId);
 
     const facts = await entityMemory.getFacts(entity.id);
     expect(facts.length).toBeGreaterThanOrEqual(1);
