@@ -1773,7 +1773,17 @@ export class OutboundGateway {
         },
       });
     } catch (err) {
-      this.log.warn({ err, channel: args.channel }, 'outbound-gateway: could not record the send for spot checks — it went out, but will not be sampled');
+      // error, like the gateway's other action_log insert failures: a pool that silently
+      // stops filling starves the spot check. The pg SQLSTATE code, when there is one, tells
+      // a schema problem from an outage. Not rethrown: the send has already gone out.
+      const code = (err as { code?: unknown } | null)?.code;
+      this.log.error(
+        {
+          err, channel: args.channel, toolName: args.toolName, taskEventId: args.options?.taskEventId,
+          ...(typeof code === 'string' ? { code } : {}),
+        },
+        'outbound-gateway: could not record the send for spot checks — it went out, but will not be sampled',
+      );
     }
   }
 

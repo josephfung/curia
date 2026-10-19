@@ -4673,11 +4673,11 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
     return { insertSampled: vi.fn().mockResolvedValue(1) } as unknown as ActionLogRepo;
   }
 
-  function makePoolLayer(opts: { score?: number; band?: boolean; review?: ReturnType<typeof vi.fn>; bus?: EventBus } = {}) {
+  function makePoolLayer(opts: { score?: number; band?: boolean; review?: ReturnType<typeof vi.fn>; bus?: EventBus; logger?: typeof logger } = {}) {
     const registry = new ToolRegistry();
     const actionLogRepo = makeSampleRepo();
     const bus = opts.bus ?? makeBus();
-    const layer = new ExecutionLayer(registry, logger, {
+    const layer = new ExecutionLayer(registry, opts.logger ?? logger, {
       autonomyService: makeAutonomyService(opts.score ?? 85),
       bus,
       actionLogRepo,
@@ -4760,11 +4760,21 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
     });
   });
 
-  it('still returns the tool result when the pool row cannot be written', async () => {
-    const { registry, layer, actionLogRepo } = makePoolLayer();
-    vi.mocked(actionLogRepo.insertSampled).mockRejectedValue(new Error('db down'));
+  it('still returns the tool result, and logs an error with context, when the pool row cannot be written', async () => {
+    const error = vi.fn();
+    const spyLogger = {
+      ...logger,
+      child: () => ({ warn: vi.fn(), info: vi.fn(), error, debug: vi.fn() }),
+    } as unknown as typeof logger;
+    const { registry, layer, actionLogRepo } = makePoolLayer({ logger: spyLogger });
+    // A pg error carries a SQLSTATE code; it is what tells a full disk from a bad column.
+    vi.mocked(actionLogRepo.insertSampled).mockRejectedValue(Object.assign(new Error('db down'), { code: '53100' }));
     registry.register(makeRiskyManifest('calendar-create-event', 'high'), makeHandler({ ok: true }));
     const result = await layer.invoke('calendar-create-event', {}, undefined, agentTurn);
     expect(result).toEqual({ success: true, data: { ok: true } });
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: 'calendar-create-event', taskEventId: 'task-1', code: '53100' }),
+      expect.stringContaining('spot checks'),
+    );
   });
 });

@@ -1540,8 +1540,14 @@ export class ExecutionLayer {
         },
       });
     } catch (err) {
-      // The action already ran; only its chance of being spot-checked is lost.
-      skillLogger.warn({ err, toolName }, 'execution: could not record the action for spot checks — it ran, but will not be sampled');
+      // The action already ran; only its chance of being spot-checked is lost, so no rethrow.
+      // Logged at error all the same: a pool that silently stops filling starves the spot
+      // check. The pg SQLSTATE code, when there is one, tells a schema problem from an outage.
+      const code = (err as { code?: unknown } | null)?.code;
+      skillLogger.error(
+        { err, toolName, taskEventId: options?.taskEventId, ...(typeof code === 'string' ? { code } : {}) },
+        'execution: could not record the action for spot checks — it ran, but will not be sampled',
+      );
     }
   }
 

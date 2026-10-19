@@ -4004,16 +4004,20 @@ describe('spot-check pool (#2159 Phase 3)', () => {
     }
   });
 
-  it('still reports success, and warns, when the pool row cannot be written', async () => {
-    const warn = vi.fn();
-    const child = { ...mocks.logger, warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  it('still reports success, and logs an error with context, when the pool row cannot be written', async () => {
+    const error = vi.fn();
+    const child = { ...mocks.logger, warn: vi.fn(), info: vi.fn(), error, debug: vi.fn() };
     mocks.logger = { ...mocks.logger, child: () => child } as unknown as typeof mocks.logger;
     const actionLogRepo = makeActionLogRepo();
-    vi.mocked(actionLogRepo.insertSampled).mockRejectedValue(new Error('db down'));
+    // A pg error carries a SQLSTATE code; it is what tells a full disk from a bad column.
+    vi.mocked(actionLogRepo.insertSampled).mockRejectedValue(Object.assign(new Error('db down'), { code: '53100' }));
     const gw = makePoolGateway({ actionLogRepo });
-    const result = await gw.send(danaReq, { taskEventId: 't1' });
+    const result = await gw.send(danaReq, { taskEventId: 't1', exportContext: { toolName: 'email-reply' } });
     expect(result.success).toBe(true);
-    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ channel: 'email' }), expect.stringContaining('spot checks'));
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'email', toolName: 'email-reply', taskEventId: 't1', code: '53100' }),
+      expect.stringContaining('spot checks'),
+    );
   });
 
   it('labels chat sends by channel with the first line of the message', async () => {
