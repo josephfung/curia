@@ -230,6 +230,15 @@ export function sampleEmailFromResult(data: unknown): SampleEmail | undefined {
   return { ...(subject ? { subject } : {}), ...(from ? { from } : {}) };
 }
 
+/**
+ * Whether a tool's result says the call changed nothing, so it has no place in the pool.
+ * Today only ceo-inbox-archive reports one (`already_archived: true`, the message was already
+ * out of the inbox); a no-op archive would otherwise ask the principal to grade nothing.
+ */
+export function isNoOpResult(data: unknown): boolean {
+  return typeof data === 'object' && data !== null && (data as Record<string, unknown>)['already_archived'] === true;
+}
+
 /** Whether the execution layer records a successful autonomous call of this tool in the pool. */
 export function isSampledTool(toolName: string, actionRisk: ActionRisk): boolean {
   if (RECORDED_BY_GATEWAY.has(toolName) || NOT_SAMPLED.has(toolName)) return false;

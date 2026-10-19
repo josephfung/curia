@@ -102,7 +102,7 @@ import type { BypassLadderConfig } from '../autonomy/effective-standing.js';
 import type { BrowserService } from '../browser/browser-service.js';
 import { formatAuthorizationSubjectSummary } from '../contacts/authorization.js';
 import { approvalAdvisory, buildDescription, type ApprovalTriggerService } from '../autonomy/approval-trigger.js';
-import { formatEmailSummary, isSampledTool, sampleEmailFromResult, TRIAGE_SKILLS } from '../autonomy/sample-pool.js';
+import { formatEmailSummary, isNoOpResult, isSampledTool, sampleEmailFromResult, TRIAGE_SKILLS } from '../autonomy/sample-pool.js';
 import { TempFileStore } from './temp-file-store.js';
 import type { InfraLlmService } from './infra-llm.js';
 import { OutboundContextService, ScopedOutboundContext } from '../dispatch/outbound-context.js';
@@ -1540,6 +1540,9 @@ export class ExecutionLayer {
       // and invoke()'s outer catch would turn the action's success into a failure. The action
       // has already run, so a throw here may cost only its spot-check row.
       if (!isSampledTool(toolName, actionRisk)) return;
+      // A call that reports it changed nothing (ceo-inbox-archive on a message already out of
+      // the inbox) is not an action the principal can grade.
+      if (isNoOpResult(resultData)) return;
       // A triage tool that already read the message returns its subject and sender; naming
       // them makes the sample gradable ("Archive an email" alone is not). Only triage tools
       // are read this way, so another tool's `subject` output is never mistaken for an email's.

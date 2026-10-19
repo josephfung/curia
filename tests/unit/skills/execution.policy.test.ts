@@ -4775,6 +4775,16 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
     });
   });
 
+  it('does not record a triage call that changed nothing (already archived)', async () => {
+    const { registry, layer, actionLogRepo } = makePoolLayer();
+    registry.register(
+      makeRiskyManifest('ceo-inbox-archive', 'low'),
+      makeHandler({ message_id: 'm1', subject: 'Statement ready', already_archived: true }),
+    );
+    expect((await layer.invoke('ceo-inbox-archive', { message_id: 'm1' }, undefined, agentTurn)).success).toBe(true);
+    expect(actionLogRepo.insertSampled).not.toHaveBeenCalled();
+  });
+
   it('keeps the plain triage summary when the result has no subject', async () => {
     const { registry, layer, actionLogRepo } = makePoolLayer();
     registry.register(makeRiskyManifest('ceo-inbox-archive', 'low'), makeHandler({ message_id: 'm1' }));

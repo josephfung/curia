@@ -39,7 +39,9 @@ export class CeoInboxArchiveHandler implements ToolHandler {
       if (withoutInbox.length === currentFolders.length) {
         // INBOX label not present — already archived
         ctx.log.info({ messageId }, 'ceo-inbox-archive: already archived');
-        return { success: true, data: { message_id: messageId, ...described } };
+        // already_archived tells the execution layer nothing changed, so the call is not put
+        // in the spot-check pool for the principal to grade (#2159).
+        return { success: true, data: { message_id: messageId, ...described, already_archived: true } };
       }
 
       await client.updateMessageFolders(messageId, withoutInbox);

@@ -98,7 +98,9 @@ describe('CeoInboxArchiveHandler', () => {
     expect(sanitized['from']).toContain('billing@example.com');
   });
 
-  it('returns the subject and sender when the message was already archived', async () => {
+  // already_archived marks the no-op, so the spot-check pool does not ask the principal to
+  // grade an action that changed nothing (#2159).
+  it('returns the subject and sender, marked already_archived, when the message was already archived', async () => {
     fetchSpy.mockResolvedValueOnce(jsonResponse({
       id: 'm1', folders: ['Label_3'], subject: 'Statement ready',
       from: [{ email: 'billing@example.com' }],
@@ -108,7 +110,7 @@ describe('CeoInboxArchiveHandler', () => {
 
     expect(result).toEqual({
       success: true,
-      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'billing@example.com' },
+      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'billing@example.com', already_archived: true },
     });
     expect(calls(fetchSpy)).toEqual(['GET /messages/19a2b3c4d5e6f708']);
   });
