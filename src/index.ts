@@ -343,7 +343,10 @@ async function main(): Promise<void> {
 
   // Autonomy service — manages the global autonomy score (0–100).
   // Instantiated early (right after DB connect) so it's ready before agents start.
-  const autonomyService = new AutonomyService(pool, logger);
+  // Which policy decides when Curia asks first (#2159, ADR-049). Ships as 'tier'. Resolved here
+  // because the autonomy service stamps it on the config the prompt block reads.
+  const autonomyGating = resolveAutonomyGating(yamlConfig.autonomy);
+  const autonomyService = new AutonomyService(pool, logger, { gating: autonomyGating });
 
   // Run pending migrations so the schema is always current when the process starts.
   // Uses node-pg-migrate's programmatic runner with the same DATABASE_URL.
@@ -1385,9 +1388,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Which policy decides when Curia asks first (#2159, ADR-049). Ships as 'tier'. Logged at
-  // boot so the live policy is visible; band with no working judge is logged at error.
-  const autonomyGating = resolveAutonomyGating(yamlConfig.autonomy);
+  // Logged at boot so the live policy is visible; band with no working judge is logged at error.
   checkBandGatingReady(autonomyGating, escalationJudge, logger);
 
   let outboundFilter: OutboundContentFilter | undefined;
