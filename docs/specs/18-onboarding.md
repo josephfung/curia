@@ -160,9 +160,10 @@ personable* template, so a fresh install switches freely.
 - **On submit (step 6):**
   1. `PUT /api/autonomy` with the picked band's score and
      `reason: 'Set via onboarding wizard'`, skipped when the band is unchanged. It goes
-     **first**: as soon as a `wizard` identity version exists, `isIdentityConfigured()`
-     is true and the wizard never shows again, so an autonomy failure after the identity
-     save could not be fixed here. With autonomy first, a failure leaves the deployment
+     **first**: as soon as the wizard's identity save lands (recorded as an `api` version,
+     since the wizard sends no `changedBy`), `isIdentityConfigured()` is true and the
+     wizard never shows again, so an autonomy failure after the identity save could not be
+     fixed here. With autonomy first, a failure leaves the deployment
      unconfigured and the wizard runs again.
   2. `PUT /api/identity` with the compiled identity payload and
      `note: 'Saved via onboarding wizard'`.

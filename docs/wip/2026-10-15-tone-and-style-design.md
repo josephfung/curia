@@ -375,8 +375,9 @@ constraints and preferences edited after boot are not scanned until a restart.
   - **Submit order: autonomy first.** The wizard sends `PUT /api/autonomy` (with `reason:
     "Set via onboarding wizard"`, the field the route reads; skipped when the band is
     unchanged) **before**
-    `PUT /api/identity`. As soon as a `wizard` identity version exists,
-    `isIdentityConfigured()` returns true and the wizard never shows again. If identity
+    `PUT /api/identity`. As soon as the wizard's identity save lands (recorded as an `api`
+    version, since the wizard sends no `changedBy`), `isIdentityConfigured()` returns true
+    and the wizard never shows again. If identity
     were saved first and autonomy then failed, the operator could not get back to fix it.
     With autonomy first, a failure leaves the deployment unconfigured and the wizard
     re-runs.
