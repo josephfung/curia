@@ -33,7 +33,7 @@ import {
  * The fingerprint of an approval notification (buildApprovalNotificationBody): the identifier
  * line, `Approval <n>` for numbered approvals (#2159 Phase 3) or `Reference: <8-hex>` for ones
  * raised before migration 098, directly followed by its `Expires: <ISO-8601>` line. Group 1 is
- * the short_ref, group 2 the number.
+ * the short_ref, group 2 the number, group 3 the expiry exactly as rendered.
  *
  * Deliberately strict: case-sensitive, whole lines, single spaces, and the Expires line
  * required. An ordinary message that merely mentions an approval ("Sent you approval 3", a
@@ -44,7 +44,7 @@ import {
  * Global (`g`) for matchAll, which works on a copy and never touches this regex's lastIndex.
  */
 const APPROVAL_FINGERPRINT_RE =
-  /^(?:Reference: ([0-9a-f]{8})|Approval (\d{1,3}))\nExpires: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/gm;
+  /^(?:Reference: ([0-9a-f]{8})|Approval (\d{1,3}))\nExpires: (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/gm;
 
 /**
  * The approval a delivered body identifies, taken from the LAST fingerprint. The detail block
@@ -52,12 +52,15 @@ const APPROVAL_FINGERPRINT_RE =
  * real fingerprint, which only the fixed call to action follows. A body that forges a
  * fingerprint for another approval must not redirect this notification's binding to it.
  */
-function lastApprovalIdentifier(content: string): { shortRef: string } | { approvalNumber: number } | null {
+function lastApprovalIdentifier(
+  content: string,
+): ({ shortRef: string } | { approvalNumber: number }) & { expires: string } | null {
   let last: RegExpExecArray | null = null;
   for (const match of content.matchAll(APPROVAL_FINGERPRINT_RE)) last = match;
-  if (!last) return null;
-  if (last[1]) return { shortRef: last[1] };
-  return last[2] ? { approvalNumber: Number(last[2]) } : null;
+  if (!last || !last[3]) return null;
+  const expires = last[3];
+  if (last[1]) return { shortRef: last[1], expires };
+  return last[2] ? { approvalNumber: Number(last[2]), expires } : null;
 }
 
 export const UNRECOGNIZED_REACTION_HINT =
@@ -186,6 +189,14 @@ export class ReactionApprovalMapper {
         ? await this.actionLogRepo.findPendingByApprovalNumber(identifier.approvalNumber)
         : await this.actionLogRepo.findPendingByShortRef(identifier.shortRef);
       if (!row) return;
+
+      // The fingerprint must carry THIS approval's own expiry, exactly as the notification renders
+      // it (approval-delivery passes row.expiresAt to buildApprovalNotificationBody, which prints
+      // toISOString()). Numbers are small and reused, so "Approval 1" with any well-formed Expires
+      // line would otherwise bind whichever live approval holds 1 today: forged or echoed text
+      // sent to the principal could then turn a habitual 👍 into approving something they never
+      // saw. A row with no expiry cannot be matched and never binds.
+      if (row.expiresAt?.toISOString() !== identifier.expires) return;
 
       await this.actionLogRepo.bindDeliveryMessage(row.id, channel, messageId);
       this.log.info(

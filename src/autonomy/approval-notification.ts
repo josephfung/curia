@@ -386,8 +386,10 @@ export function buildApprovalNotificationBody(opts: BuildApprovalNotificationBod
   // under it are the notification's fingerprint. ReactionApprovalMapper binds a delivered message
   // to its approval only when it finds exactly these two adjacent lines (APPROVAL_FINGERPRINT_RE:
   // `Approval <n>` or `Reference: <8-hex>`, then `Expires: <toISOString()>`), and takes the LAST
-  // such pair, so they must stay below the detail block and above only fixed text. Changing their
-  // wording, spacing, order or the timestamp format silently stops reactions resolving approvals.
+  // such pair, so they must stay below the detail block and above only fixed text. It binds only
+  // when the Expires value equals the approval row's own expiresAt.toISOString(), so callers must
+  // pass the row's expiresAt here. Changing their wording, spacing, order or the timestamp format
+  // silently stops reactions resolving approvals.
   lines.push(
     opts.approvalNumber != null ? `Approval ${opts.approvalNumber}` : `Reference: ${opts.shortRef}`,
     `Expires: ${opts.expiresAt.toISOString()}`,

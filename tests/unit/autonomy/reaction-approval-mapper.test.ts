@@ -56,6 +56,9 @@ function makePrincipal(channel: string, identifier: string): ChannelIdentity {
   };
 }
 
+/** The expiry the fixtures' notification bodies render (`Expires: 2026-07-02T00:00:00.000Z`). */
+const RENDERED_EXPIRY = new Date('2026-07-02T00:00:00.000Z');
+
 describe('ReactionApprovalMapper', () => {
   let actionLogRepo: {
     findPendingByDeliveryMessage: ReturnType<typeof vi.fn>;
@@ -412,7 +415,7 @@ describe('ReactionApprovalMapper', () => {
   });
 
   it('binds outbound.delivered messageId when content embeds Reference: short_ref', async () => {
-    actionLogRepo.findPendingByShortRef.mockResolvedValue(makeRow());
+    actionLogRepo.findPendingByShortRef.mockResolvedValue(makeRow({ expiresAt: RENDERED_EXPIRY }));
 
     await mapper.handleDelivered(createOutboundDelivered({
       channel: 'slack',
@@ -431,7 +434,7 @@ describe('ReactionApprovalMapper', () => {
 
   // #2159 Phase 3: numbered approvals show "Approval <n>" in place of the Reference line.
   it('binds outbound.delivered messageId when content embeds Approval <n>', async () => {
-    actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(makeRow({ id: 77, approvalNumber: 3 }));
+    actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(makeRow({ id: 77, approvalNumber: 3, expiresAt: RENDERED_EXPIRY }));
 
     await mapper.handleDelivered(createOutboundDelivered({
       channel: 'signal',
@@ -463,7 +466,7 @@ describe('ReactionApprovalMapper', () => {
   // sits ABOVE the approval's own line. A body saying "Approval 2" or "Reference: …" must not
   // bind this notification to a different approval, or a 👍 here would approve that one.
   it('binds by the last approval line, ignoring numbers or references quoted in the details', async () => {
-    actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(makeRow({ id: 88, approvalNumber: 5 }));
+    actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(makeRow({ id: 88, approvalNumber: 5, expiresAt: RENDERED_EXPIRY }));
 
     await mapper.handleDelivered(createOutboundDelivered({
       channel: 'slack',
@@ -533,7 +536,9 @@ describe('ReactionApprovalMapper', () => {
     });
 
     it('binds the body buildApprovalNotificationBody actually renders', async () => {
-      actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(makeRow({ id: 91, approvalNumber: 12 }));
+      actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(
+        makeRow({ id: 91, approvalNumber: 12, expiresAt: new Date('2026-07-02T20:53:26.183Z') }),
+      );
       const content = buildApprovalNotificationBody({
         preamble: 'Curia wanted to send a Signal message.',
         shortRef: 'abcd1234',
@@ -553,6 +558,74 @@ describe('ReactionApprovalMapper', () => {
       expect(actionLogRepo.findPendingByApprovalNumber).toHaveBeenCalledTimes(1);
       expect(actionLogRepo.findPendingByApprovalNumber).toHaveBeenCalledWith(12);
       expect(actionLogRepo.bindDeliveryMessage).toHaveBeenCalledWith(91, 'signal', 'sig-z');
+    });
+
+    // Review fix F2 (#2159 Phase 3): numbers are small and reused, so "Approval 1" plus ANY
+    // well-formed Expires line used to bind whichever live approval held 1. The expiry is the
+    // approval's own, rendered from row.expiresAt.toISOString(); it must match exactly.
+    it('does not bind the right number with the wrong expiry', async () => {
+      actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(
+        makeRow({ id: 61, approvalNumber: 1, expiresAt: new Date('2026-07-02T00:00:00.001Z') }),
+      );
+
+      await mapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15551234567',
+        content: 'Approval 1\nExpires: 2026-07-02T00:00:00.000Z', messageId: 'sig-f2a',
+      }));
+
+      expect(actionLogRepo.findPendingByApprovalNumber).toHaveBeenCalledWith(1);
+      expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
+    });
+
+    it('binds the right number with the exact expiry', async () => {
+      actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(
+        makeRow({ id: 62, approvalNumber: 1, expiresAt: RENDERED_EXPIRY }),
+      );
+
+      await mapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15551234567',
+        content: 'Approval 1\nExpires: 2026-07-02T00:00:00.000Z', messageId: 'sig-f2b',
+      }));
+
+      expect(actionLogRepo.bindDeliveryMessage).toHaveBeenCalledWith(62, 'signal', 'sig-f2b');
+    });
+
+    it('does not bind a row that has no expiry', async () => {
+      actionLogRepo.findPendingByApprovalNumber.mockResolvedValue(
+        makeRow({ id: 63, approvalNumber: 1, expiresAt: null }),
+      );
+
+      await mapper.handleDelivered(createOutboundDelivered({
+        channel: 'signal', recipientId: '+15551234567',
+        content: 'Approval 1\nExpires: 2026-07-02T00:00:00.000Z', messageId: 'sig-f2c',
+      }));
+
+      expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
+    });
+
+    it('binds a legacy Reference notification with the exact expiry', async () => {
+      actionLogRepo.findPendingByShortRef.mockResolvedValue(makeRow({ id: 64, expiresAt: RENDERED_EXPIRY }));
+
+      await mapper.handleDelivered(createOutboundDelivered({
+        channel: 'slack', recipientId: 'U_CEO',
+        content: 'Reference: abcd1234\nExpires: 2026-07-02T00:00:00.000Z', messageId: 'sl-f2d',
+      }));
+
+      expect(actionLogRepo.findPendingByShortRef).toHaveBeenCalledWith('abcd1234');
+      expect(actionLogRepo.bindDeliveryMessage).toHaveBeenCalledWith(64, 'slack', 'sl-f2d');
+    });
+
+    it('does not bind a legacy Reference notification with the wrong expiry', async () => {
+      actionLogRepo.findPendingByShortRef.mockResolvedValue(
+        makeRow({ id: 65, expiresAt: new Date('2026-07-03T00:00:00.000Z') }),
+      );
+
+      await mapper.handleDelivered(createOutboundDelivered({
+        channel: 'slack', recipientId: 'U_CEO',
+        content: 'Reference: abcd1234\nExpires: 2026-07-02T00:00:00.000Z', messageId: 'sl-f2e',
+      }));
+
+      expect(actionLogRepo.bindDeliveryMessage).not.toHaveBeenCalled();
     });
 
     it('logs instead of throwing when the lookup fails', async () => {
