@@ -249,8 +249,8 @@ importers:
   apps/console:
     dependencies:
       cronstrue:
-        specifier: ^3.30.0
-        version: 3.30.0
+        specifier: ^3.32.0
+        version: 3.32.0
       livekit-client:
         specifier: ^2.22.4
         version: 2.22.4(@types/dom-mediacapture-record@1.0.22)
@@ -2960,8 +2960,8 @@ packages:
     resolution: {integrity: sha512-pKRrRagItwk9rGIStcUyMxFX34x56zoX3KDf9HJ4ttwkXIK1qxK63EvXvEDmlxI9AdPJ+Y7TEKRftRlW5eSS7A==}
     engines: {node: '>=18'}
 
-  cronstrue@3.30.0:
-    resolution: {integrity: sha512-yyID2G7xhMPgVy+Kd6VPJC9s1czj5z1J8AaVsBmt5K5q9Ck9eEkWezMtm4Oe/D01Jg2K43edfhPIjk0qYEjZqA==}
+  cronstrue@3.32.0:
+    resolution: {integrity: sha512-OHTec7+5nosN4UsitwgBDQ0bofGZF3H4pLqgqa93NR3nExNlhtVHcO2JY3jRognrFH8Bl9oAooT0hyCjSyOU+Q==}
     hasBin: true
 
   cross-spawn@7.0.6:
@@ -8579,7 +8579,7 @@ snapshots:
     dependencies:
       luxon: 3.7.2
 
-  cronstrue@3.30.0: {}
+  cronstrue@3.32.0: {}
 
   cross-spawn@7.0.6:
     dependencies:
