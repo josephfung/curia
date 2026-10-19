@@ -188,7 +188,12 @@ describe('SmsAdapter', () => {
 
     expect(gateway.send).toHaveBeenCalledWith(
       { channel: 'sms', recipient: '+14155552671', message: 'Reply text' },
-      expect.objectContaining({ conversationId: 'sms:+14155552671' }),
+      expect.objectContaining({
+        conversationId: 'sms:+14155552671',
+        // A relayed reply: a band hold wakes the coordinator and replays via dispatcher-relay (#2159).
+        postTurn: true,
+        holdRecipe: expect.objectContaining({ toolName: 'dispatcher-relay' }),
+      }),
     );
   });
 

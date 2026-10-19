@@ -52,6 +52,8 @@ export class DispatcherRelayHandler implements ToolHandler {
       recipientId: to,
       taskEventId: ctx.taskEventId,
       parentEventId: ctx.taskEventId,
+      // This skill runs only on approve-action's re-execution: the principal approved this text.
+      principalApproved: true,
     });
 
     try {

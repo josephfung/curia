@@ -220,6 +220,12 @@ interface OutboundMessagePayload {
    * Set by the dispatcher after content-filter retries are exhausted (#1355).
    */
   contentBlockSalvage?: boolean;
+  /**
+   * True when the principal approved this exact text (#2159). Set only by the
+   * dispatcher-relay skill, which approve-action re-invokes. Adapters send it as
+   * humanApproved, so band review does not hold an approved reply a second time.
+   */
+  principalApproved?: boolean;
 }
 
 // OutboundDeliveredPayload — emitted by OutboundGateway after a successful

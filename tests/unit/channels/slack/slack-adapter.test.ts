@@ -154,6 +154,9 @@ describe('SlackAdapter', () => {
       expect.objectContaining({
         conversationId: 'slack:C999:1710000000.000200',
         parentEventId: 'evt-1',
+        // A relayed reply: a band hold wakes the coordinator and replays via dispatcher-relay (#2159).
+        postTurn: true,
+        holdRecipe: expect.objectContaining({ toolName: 'dispatcher-relay' }),
       }),
     );
   });

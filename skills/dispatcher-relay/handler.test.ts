@@ -42,6 +42,8 @@ describe('DispatcherRelayHandler', () => {
       expect(published[0].payload.content).toBe('Approved reply body');
       expect(published[0].payload.recipientId).toBe('dana@example.com');
       expect(published[0].payload.channelId).toBe('email');
+      // The principal approved this exact text: the adapter must not send it for review again (#2159).
+      expect(published[0].payload.principalApproved).toBe(true);
     }
   });
 

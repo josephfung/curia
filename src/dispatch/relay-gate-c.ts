@@ -18,6 +18,7 @@ import {
   type EscalationDecision,
 } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
+import type { OutboundMessageEvent } from '../bus/events.js';
 import type { AutonomyGating } from '../autonomy/band-policy.js';
 
 /** Human-facing outbound skills whose Gate C escalate must suppress the relay. */
@@ -159,6 +160,39 @@ export async function decideRelayGateC(
     decision: 'escalate',
     tier: initiatingTier,
     reason: 'third_party_axis_ambiguous_no_judge',
+  };
+}
+
+/**
+ * Gateway send options for a dispatcher-relayed reply, used by the channel adapters (#2159).
+ * No agent turn is waiting on the result, so a held approval wakes the coordinator
+ * (`postTurn`), and a band hold replays the reply through dispatcher-relay on approval —
+ * the same skill the tier relay gate's approvals use. An approved relay is sent as
+ * humanApproved so it is not held for review again.
+ */
+export function relaySendOptions(
+  outbound: OutboundMessageEvent,
+  to: string,
+): {
+  postTurn: true;
+  humanApproved?: true;
+  holdRecipe: { toolName: string; partialPayload: Record<string, unknown>; description: string };
+} {
+  const p = outbound.payload;
+  return {
+    postTurn: true,
+    ...(p.principalApproved === true ? { humanApproved: true as const } : {}),
+    holdRecipe: {
+      toolName: RELAY_GATE_C_ACTION,
+      partialPayload: buildRelayApprovalInput({
+        channelId: p.channelId,
+        senderId: to,
+        content: p.content,
+        conversationId: p.conversationId,
+        ...(p.accountId ? { accountId: p.accountId } : {}),
+      }),
+      description: `Reply to ${to} on ${p.channelId}`,
+    },
   };
 }
 

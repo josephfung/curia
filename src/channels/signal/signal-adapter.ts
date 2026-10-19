@@ -17,6 +17,7 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import { meetsMinimumTier } from '../../contacts/types.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { OutboundMessageEvent } from '../../bus/events.js';
+import { relaySendOptions } from '../../dispatch/relay-gate-c.js';
 import type { SignalEnvelope } from './types.js';
 import { SignalRpcClient } from './signal-rpc-client.js';
 import { convertSignalEnvelope, convertSignalReaction } from './message-converter.js';
@@ -373,6 +374,8 @@ export class SignalAdapter implements Channel {
       taskEventId: outbound.payload.taskEventId,
       conversationId: outbound.payload.conversationId,
       parentEventId: outbound.id,   // link the outbound.delivered row back to the outbound.message event
+      // A relayed reply: postTurn, the dispatcher-relay hold recipe, and approval (#2159).
+      ...relaySendOptions(outbound, outbound.payload.recipientId ?? conversationTarget),
     });
 
     if (result.success) {
