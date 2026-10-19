@@ -66,10 +66,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Decision posture** — gone from identity, wizard and console; the autonomy level decides act-vs-ask. (#2143)
 - **`weakExpiredWeight`** — scoring setting retired and ignored if set; safe to delete from configs. (#2159)
 
-### Security
-
-- **Approval reactions** — a 👍 binds only to a principal-bound approval notification, never to other messages. (#2159)
-
 ### Fixed
 
 - **Integration test cleanup** — contacts and knowledge-graph suites delete only their own rows, ending parallel FK races. (#2183)
@@ -79,6 +75,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Scenario 18 stubs** — a task note or brief on the renewal deadline no longer trips the stub gate. (#2150)
 - **Fork PR CI** — `ci` and Semgrep reach their steps on fork PRs, pulling anonymously without Docker Hub secrets. (#2153)
 - **Approval attribution** — resolve tools record `coordinator`; only reaction decisions count as principal feedback. (#2159)
+
+### Security
+
+- **Approval reactions** — a 👍 binds only to a principal-bound approval notification, never to other messages. (#2159)
 
 ## [0.44.0] — 2026-10-16 — "WALL-E"
 
