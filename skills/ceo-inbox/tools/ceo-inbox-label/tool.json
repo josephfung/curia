@@ -15,7 +15,7 @@
     "created": "string[] (labels that were newly created in Gmail)",
     "folders": "string[] (full folder list after update)",
     "subject": "string (subject of the labelled message; omitted when it has none)",
-    "from": "string (sender as \"Name <email>\" or just the email; omitted when unknown)"
+    "from": "string (sender as \"Name (email)\" or just the email; omitted when unknown)"
   },
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],

@@ -4722,12 +4722,12 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
     const { registry, layer, actionLogRepo } = makePoolLayer();
     registry.register(
       makeRiskyManifest('ceo-inbox-archive', 'low'),
-      makeHandler({ message_id: 'm1', subject: 'Statement ready', from: 'Billing <billing@example.com>' }),
+      makeHandler({ message_id: 'm1', subject: 'Statement ready', from: 'Billing (billing@example.com)' }),
     );
     await layer.invoke('ceo-inbox-archive', { message_id: 'm1' }, undefined, agentTurn);
     expect(vi.mocked(actionLogRepo.insertSampled).mock.calls[0]![0]).toMatchObject({
-      summary: 'Archive an email: "Statement ready" from Billing <billing@example.com>',
-      email: { subject: 'Statement ready', from: 'Billing <billing@example.com>' },
+      summary: 'Archive an email: "Statement ready" from Billing (billing@example.com)',
+      email: { subject: 'Statement ready', from: 'Billing (billing@example.com)' },
     });
   });
 

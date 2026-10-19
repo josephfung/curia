@@ -11,7 +11,7 @@
     "success": "boolean",
     "message_id": "string",
     "subject": "string (subject of the archived message; omitted when it has none)",
-    "from": "string (sender as \"Name <email>\" or just the email; omitted when unknown)"
+    "from": "string (sender as \"Name (email)\" or just the email; omitted when unknown)"
   },
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],

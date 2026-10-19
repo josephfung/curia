@@ -161,7 +161,7 @@ describe('SpotCheckSampler.draw', () => {
 
   describe('triage enrichment', () => {
     it('adds the subject and sender to a triage summary', async () => {
-      const describeEmail = vi.fn(async () => ({ subject: 'Q4 board deck', from: 'Priya Shah <priya@example.com>' }));
+      const describeEmail = vi.fn(async () => ({ subject: 'Q4 board deck', from: 'Priya Shah (priya@example.com)' }));
       const { sampler, add } = makeDeps({
         rows: [triageRow(1, { message_id: 'msg-1', account: 'work' })],
         describeEmail,
@@ -170,7 +170,7 @@ describe('SpotCheckSampler.draw', () => {
       const drawn = await sampler.draw('conv-1');
 
       expect(describeEmail).toHaveBeenCalledWith('msg-1', 'work');
-      const line = 'Archive an email: "Q4 board deck" from Priya Shah <priya@example.com>';
+      const line = 'Archive an email: "Q4 board deck" from Priya Shah (priya@example.com)';
       expect(drawn!.block.split('\n')[1]).toBe(`1. ${line}`);
       // The stored map carries the same summary the principal saw.
       expect(add.mock.calls[0]![0].items[0]!.summary).toBe(line);
@@ -239,8 +239,8 @@ describe('SpotCheckSampler.draw', () => {
       const describeEmail = vi.fn(async () => ({ subject: 'should not be used' }));
       const stored = row(1, {
         toolName: 'ceo-inbox-archive', actionRisk: 'low',
-        description: 'Archive an email: "Statement ready" from Billing <billing@example.com>',
-        payload: { sample: { signals: { triage: true }, input: { message_id: 'msg-1' }, email: { subject: 'Statement ready', from: 'Billing <billing@example.com>' } } },
+        description: 'Archive an email: "Statement ready" from Billing (billing@example.com)',
+        payload: { sample: { signals: { triage: true }, input: { message_id: 'msg-1' }, email: { subject: 'Statement ready', from: 'Billing (billing@example.com)' } } },
       });
       const { sampler, warn } = makeDeps({ rows: [stored], describeEmail });
 
@@ -248,7 +248,7 @@ describe('SpotCheckSampler.draw', () => {
 
       expect(describeEmail).not.toHaveBeenCalled();
       expect(warn).not.toHaveBeenCalled();
-      expect(drawn!.block.split('\n')[1]).toBe('1. Archive an email: "Statement ready" from Billing <billing@example.com>');
+      expect(drawn!.block.split('\n')[1]).toBe('1. Archive an email: "Statement ready" from Billing (billing@example.com)');
     });
 
     it('still looks up a triage row whose email has no subject', async () => {

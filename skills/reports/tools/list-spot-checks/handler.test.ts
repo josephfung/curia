@@ -5,6 +5,7 @@ import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
 import type { SpotCheckSamplerDeps } from '../../../../src/reports/spot-check-sampler.js';
 import { createSilentLogger } from '../../../../src/logger.js';
+import { sanitizeObjectOutput } from '../../../../src/skills/sanitize.js';
 
 // The sampler has its own unit tests; here it is stubbed so the handler's wiring is what is tested.
 const sampler = vi.hoisted(() => ({
@@ -76,7 +77,7 @@ describe('ListSpotChecksHandler', () => {
     expect((sampler.deps[0] as SpotCheckSamplerDeps).describeEmail).toBeUndefined();
   });
 
-  it('describes a triage email from the outbound gateway as subject and "Name <email>"', async () => {
+  it('describes a triage email from the outbound gateway as subject and "Name (email)"', async () => {
     sampler.draw.mockResolvedValue(null);
     const getEmailMessage = vi.fn()
       .mockResolvedValueOnce({ subject: 'Q4 board deck', from: [{ name: 'Priya Shah', email: 'priya@example.com' }] })
@@ -87,7 +88,10 @@ describe('ListSpotChecksHandler', () => {
     await new ListSpotChecksHandler().execute(makeCtx({ outboundGateway }));
     const describeEmail = (sampler.deps[0] as SpotCheckSamplerDeps).describeEmail!;
 
-    expect(await describeEmail('msg-1', 'work')).toEqual({ subject: 'Q4 board deck', from: 'Priya Shah <priya@example.com>' });
+    const described = await describeEmail('msg-1', 'work');
+    expect(described).toEqual({ subject: 'Q4 board deck', from: 'Priya Shah (priya@example.com)' });
+    // The block reaches the digest through sanitizeObjectOutput, which strips "<...>" as a tag.
+    expect(sanitizeObjectOutput(described)).toEqual(described);
     expect(getEmailMessage).toHaveBeenCalledWith('msg-1', 'work');
     expect(await describeEmail('msg-2')).toEqual({ subject: undefined, from: 'sam@example.com' });
     expect(await describeEmail('msg-3')).toEqual({ subject: 'No sender', from: undefined });

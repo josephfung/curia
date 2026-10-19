@@ -68,8 +68,8 @@ describe('selectSamples', () => {
 
 describe('formatEmailSummary', () => {
   it('adds the subject and sender to the base summary', () => {
-    expect(formatEmailSummary('Archive an email', 'Statement ready', 'Billing <billing@example.com>'))
-      .toBe('Archive an email: "Statement ready" from Billing <billing@example.com>');
+    expect(formatEmailSummary('Archive an email', 'Statement ready', 'Billing (billing@example.com)'))
+      .toBe('Archive an email: "Statement ready" from Billing (billing@example.com)');
   });
   it('drops a missing part', () => {
     expect(formatEmailSummary('Archive an email', 'Statement ready')).toBe('Archive an email: "Statement ready"');

@@ -56,7 +56,7 @@ describe('CeoInboxLabelHandler', () => {
     expect(result.data).toMatchObject({
       message_id: '19a2b3c4d5e6f708',
       subject: 'Statement ready',
-      from: 'Billing <billing@example.com>',
+      from: 'Billing (billing@example.com)',
     });
     // list folders, read message, write folders: nothing more than before.
     expect(fetchSpy).toHaveBeenCalledTimes(3);

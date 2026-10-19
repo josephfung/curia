@@ -989,13 +989,15 @@ function normalizeMessageFull(msg: NylasApiMessage): NylasMessageFull {
 /**
  * The subject and sender of a message, for tools that report what they touched. The
  * spot-check pool (#2159) shows these to the principal so a triage sample is gradable.
- * The sender renders as "Name <email>", or just the email when there is no display name;
+ * The sender renders as "Name (email)", or just the email when there is no display name;
  * a missing or empty part is left out so callers can spread the result into their output.
+ * Not "Name <email>": every skill result passes through sanitizeObjectOutput, which strips
+ * "<...>" as a tag, so the address would never reach the agent or the digest.
  */
 export function describeMessage(msg: Pick<NylasMessageSummary, 'subject' | 'from'>): { subject?: string; from?: string } {
   const sender = msg.from[0];
   const from = sender
-    ? (sender.name?.trim() ? `${sender.name.trim()} <${sender.email}>` : sender.email)
+    ? (sender.name?.trim() ? `${sender.name.trim()} (${sender.email})` : sender.email)
     : '';
   return {
     ...(msg.subject ? { subject: msg.subject } : {}),

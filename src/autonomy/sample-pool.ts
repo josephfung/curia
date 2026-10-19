@@ -90,7 +90,7 @@ function capText(s: string, max: number): string {
 
 /**
  * The summary line for a triage sample once the email is known:
- * `Archive an email: "Statement ready" from Billing <billing@example.com>`.
+ * `Archive an email: "Statement ready" from Billing (billing@example.com)`.
  *
  * Returns the base (as one line) when there is no subject or sender to add. One helper for
  * the execution layer (write time) and the sampler (draw-time lookup) so the two cannot drift.

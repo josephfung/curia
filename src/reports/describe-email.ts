@@ -5,12 +5,16 @@
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 import type { DescribeEmail } from './spot-check-sampler.js';
 
-/** Subject and sender ("Name <email>", or the bare email) of a message, read through the gateway. */
+/**
+ * Subject and sender ("Name (email)", or the bare email) of a message, read through the gateway.
+ * Not "Name <email>": the list-spot-checks result passes through sanitizeObjectOutput, which
+ * strips "<...>" as a tag and would leave the principal reading "from Name ".
+ */
 export function describeEmailVia(gateway: Pick<OutboundGateway, 'getEmailMessage'>): DescribeEmail {
   return async (messageId, account) => {
     const msg = await gateway.getEmailMessage(messageId, account);
     const sender = msg.from[0];
-    const from = sender ? (sender.name ? `${sender.name} <${sender.email}>` : sender.email) : undefined;
+    const from = sender ? (sender.name ? `${sender.name} (${sender.email})` : sender.email) : undefined;
     return { subject: msg.subject || undefined, from: from || undefined };
   };
 }

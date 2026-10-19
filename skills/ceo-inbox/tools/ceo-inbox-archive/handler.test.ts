@@ -5,6 +5,7 @@ import pino from 'pino';
 import { CeoInboxArchiveHandler } from './handler.js';
 import { ExecutionLayer } from '../../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../../src/skills/registry.js';
+import { sanitizeObjectOutput } from '../../../../src/skills/sanitize.js';
 import type { ToolContext, ToolManifest } from '../../../../src/skills/types.js';
 
 const logger = pino({ level: 'silent' });
@@ -75,8 +76,26 @@ describe('CeoInboxArchiveHandler', () => {
 
     expect(result).toEqual({
       success: true,
-      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'Billing <billing@example.com>' },
+      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'Billing (billing@example.com)' },
     });
+  });
+
+  // Every skill result goes through sanitizeObjectOutput, which strips "<...>" as a tag. The
+  // sender is rendered "Name (email)" so the address survives to the agent and the digest.
+  it('reports a sender whose address survives the output sanitizer', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'm1', folders: ['INBOX'], subject: 'Statement ready',
+        from: [{ name: 'Billing', email: 'billing@example.com' }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: [] }));
+
+    const result = await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: '19a2b3c4d5e6f708' }));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const sanitized = sanitizeObjectOutput(result.data) as Record<string, unknown>;
+    expect(sanitized['from']).toContain('billing@example.com');
   });
 
   it('returns the subject and sender when the message was already archived', async () => {

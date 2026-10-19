@@ -683,10 +683,10 @@ describe('ActionLogRepo', () => {
       await repo.insertSampled({
         taskId: 't1', toolName: 'ceo-inbox-archive', actionRisk: 'low',
         summary: 'Archive an email: "Statement ready"', signals: { triage: true },
-        email: { subject: 'Statement ready', from: 'Billing <billing@example.com>' },
+        email: { subject: 'Statement ready', from: 'Billing (billing@example.com)' },
       });
       expect(JSON.parse(queries[0]!.params[6] as string)).toEqual({
-        sample: { signals: { triage: true }, email: { subject: 'Statement ready', from: 'Billing <billing@example.com>' } },
+        sample: { signals: { triage: true }, email: { subject: 'Statement ready', from: 'Billing (billing@example.com)' } },
       });
     });
 
