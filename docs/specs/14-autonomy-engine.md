@@ -353,9 +353,9 @@ Spot check (optional, reply with a number):
 1. <summary>
 ```
 
-Email subjects and senders are written by outsiders, so they are cleaned before they reach a summary or a stored row: text is sanitized to a fixed point (entities decoded until stable), links and tags are neutralized, secrets are redacted, and a summary is one line of at most 120 characters. A triage line with no readable subject ends "(details unavailable)".
+Email subjects and senders are written by outsiders, so they are cleaned before they reach a summary or a stored row: text is sanitized to a fixed point (entities decoded until stable), links and tags are neutralized, secrets are redacted, and every summary is one line. An email-enriched triage line is capped at 120 characters (`ENRICHED_SUMMARY_MAX`). A triage line with no readable subject ends "(details unavailable)", added after that cap.
 
-Two paths draw: the meeting-debrief recap (step 3 calls `list-spot-checks`) and the weekly fallback digest (`src/reports/report-fallback-digest.ts`).
+Two paths draw: the scheduled daily/weekly debrief recap (`src/agents/prompts/debrief-recap-instruction.ts`, step 3 calls `list-spot-checks`) and the weekly fallback digest (`src/reports/report-fallback-digest.ts`).
 
 **The number-to-action map.** Each draw stores `{ id, createdAt, conversationId, items: [{ n, actionLogId, summary }], deliveries }` in the config store under `reports` / `spot_checks`. Every write prunes sets older than 14 days and keeps at most 30. Writes are read-modify-write on one value, so they run one at a time through a process-wide queue (held on `globalThis`, because the bundled app and skill handlers load separate copies of the module).
 
