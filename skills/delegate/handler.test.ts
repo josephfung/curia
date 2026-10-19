@@ -370,12 +370,13 @@ describe('DelegateHandler sign-in code tracking from ceo-inbox (#2017)', () => {
 
   function makeRuntime(rows: Verification[] | Error) {
     const register = vi.fn();
+    const closed = vi.fn();
     const listActive = vi.fn(async () => {
       if (rows instanceof Error) throw rows;
       return rows;
     });
-    const runtime = { listActive, tracker: { register } } as unknown as VerificationRuntime;
-    return { runtime, register, listActive };
+    const runtime = { listActive, tracker: { register, closed } } as unknown as VerificationRuntime;
+    return { runtime, register, closed, listActive };
   }
 
   const inboxInput = { agent: 'ceo-inbox', task: 'find the Air Canada code in the inbox' };
@@ -392,17 +393,39 @@ describe('DelegateHandler sign-in code tracking from ceo-inbox (#2017)', () => {
     expect(JSON.stringify(result.data)).toContain('739204');
   });
 
-  it('registers against every pending email verification and ignores other rows', async () => {
+  it('registers against every pending-or-recent email verification and ignores other deliveries', async () => {
     useInboxRegistry();
     const { bus } = makeBus('Code: 739204');
-    const { runtime, register } = makeRuntime([
+    const { runtime, register, closed } = makeRuntime([
       makeVerification({ id: 'ver-1' }),
       makeVerification({ id: 'ver-2', pageDomain: 'idp.example.com' }),
       makeVerification({ id: 'ver-sms', delivery: 'sms' }),
       makeVerification({ id: 'ver-done', status: 'satisfied' }),
     ]);
     await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
-    expect(register.mock.calls.map(c => c[0]).sort()).toEqual(['ver-1', 'ver-2']);
+    expect(register.mock.calls.map(c => c[0]).sort()).toEqual(['ver-1', 'ver-2', 'ver-done']);
+    // Only the already-closed row starts its TTL clock; pending rows stay open.
+    expect(closed.mock.calls.map(c => c[0])).toEqual(['ver-done']);
+  });
+
+  it.each(['expired', 'abandoned'] as const)(
+    'still registers for a recently %s email verification and starts its TTL clock',
+    async (status) => {
+      useInboxRegistry();
+      const { bus } = makeBus('Your Air Canada code is 739204');
+      const { runtime, register, closed } = makeRuntime([makeVerification({ id: 'ver-r', status })]);
+      await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
+      expect(register).toHaveBeenCalledWith('ver-r', 'aircanada.com', '739204');
+      expect(closed).toHaveBeenCalledWith('ver-r');
+    },
+  );
+
+  it('does not start the TTL clock for a pending verification', async () => {
+    useInboxRegistry();
+    const { bus } = makeBus('Your Air Canada code is 739204');
+    const { runtime, closed } = makeRuntime([makeVerification()]);
+    await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
+    expect(closed).not.toHaveBeenCalled();
   });
 
   it('does not register a 4-digit code from a ceo-inbox result', async () => {
@@ -424,7 +447,7 @@ describe('DelegateHandler sign-in code tracking from ceo-inbox (#2017)', () => {
     expect(listActive).not.toHaveBeenCalled();
   });
 
-  it('registers nothing when no email verification is pending', async () => {
+  it('registers nothing when no email verification is pending or recent', async () => {
     useInboxRegistry();
     const { bus } = makeBus('Your Air Canada code is 739204');
     const { runtime, register } = makeRuntime([makeVerification({ delivery: 'sms' })]);

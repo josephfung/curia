@@ -353,8 +353,8 @@ function formatStructuredFailureMessage(agent: string, reason: AgentResponseFail
 const CEO_INBOX_AGENT = 'ceo-inbox';
 
 /**
- * Register every 6-8 character code in a ceo-inbox result against each pending `email`
- * verification. 4-5 character codes are tracked only when typed by web-browser, so they are
+ * Register every 6-8 character code in a ceo-inbox result against each pending or recent
+ * `email` verification. 4-5 character codes are tracked only when typed by web-browser, so they are
  * not looked for here. The result is returned to the coordinator unchanged. Never logs a
  * value, and a failed lookup never fails the delegation (under-capture is logged, not fatal).
  */
@@ -364,14 +364,19 @@ async function trackInboxCodes(ctx: ToolContext, agent: string, resultText: stri
   const candidates = extractCodeCandidates(resultText);
   if (candidates.length === 0) return;
   try {
-    const pending = (await runtime.listActive()).filter((v) => v.status === 'pending' && v.delivery === 'email');
-    if (pending.length === 0) return;
-    for (const v of pending) {
+    // listActive returns pending plus recently closed rows (design §1): a code can still
+    // arrive after the soft expiry, so every email row counts, whatever its status.
+    const active = (await runtime.listActive()).filter((v) => v.delivery === 'email');
+    if (active.length === 0) return;
+    for (const v of active) {
       for (const value of candidates) runtime.tracker.register(v.id, v.pageDomain, value);
+      // Registering on an untracked id creates an entry with no closedAt; a row that is
+      // already closed must start its TTL clock now or the value would never age out.
+      if (v.status !== 'pending') runtime.tracker.closed(v.id);
     }
     ctx.log.info(
-      { targetAgent: agent, verificationIds: pending.map((v) => v.id), candidateCount: candidates.length },
-      'Sign-in code(s) from the inbox specialist tracked for the pending email verification(s)',
+      { targetAgent: agent, verificationIds: active.map((v) => v.id), candidateCount: candidates.length },
+      'Sign-in code(s) from the inbox specialist tracked for the pending or recent email verification(s)',
     );
   } catch (err) {
     // The err message could in principle echo a value; log the error name only.
