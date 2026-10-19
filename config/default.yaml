@@ -197,6 +197,17 @@ contextBridge:
   channelDefaultExpiryHours:
     email: 72
 
+# Delegated sign-in with external verification (#2017).
+# When a site asks the principal for a code (email, SMS or authenticator app), Curia asks
+# them on the first channel in askChannelOrder that is enabled and has a verified principal
+# identity, never the channel the errand came in on. Valid channels: signal, sms, slack, email.
+verification:
+  askChannelOrder: [signal, sms, slack, email]
+  defaultExpiryMinutes: 10        # a pending verification is treated as expired after this (a hint, not a cliff)
+  recentWindowMinutes: 120        # a closed verification still counts as recent for this long
+  codeTtlMinutesAfterClose: 120   # a tracked code value is kept this long after its verification closes
+  emailWaitSeconds: 180           # how long to wait for an emailed code before asking the principal
+
 # Meeting debrief agent configuration (spec §17-meeting-debrief.md).
 # Controls the proactive debrief prompt sent after external meetings end.
 # The agent itself is defined in agents/meeting-debrief.yaml.

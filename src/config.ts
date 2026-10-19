@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { parseSensitivityRules, type SensitivityRule } from './memory/sensitivity.js';
 import { parseProxyConfig } from './browser/proxy-config.js';
 import { AUTONOMY_GATINGS, type AutonomyGating } from './autonomy/band-policy.js';
+import type { VerificationConfig } from './verification/types.js';
 
 // ---------------------------------------------------------------------------
 // Multi-account email config types
@@ -202,6 +203,39 @@ export function resolveLateDeliveryConfig(yaml: YamlConfig['delegate']): LateDel
     ttlMinutes: l?.ttlMinutes ?? DEFAULT_LATE_DELIVERY_CONFIG.ttlMinutes,
     sweepIntervalMinutes: l?.sweepIntervalMinutes ?? DEFAULT_LATE_DELIVERY_CONFIG.sweepIntervalMinutes,
     maxResultChars: l?.maxResultChars ?? DEFAULT_LATE_DELIVERY_CONFIG.maxResultChars,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Delegated sign-in verification config (#2017)
+// ---------------------------------------------------------------------------
+
+/** Channels the principal can be asked on for a sign-in code. */
+export const VERIFICATION_ASK_CHANNELS = ['signal', 'sms', 'slack', 'email'] as const;
+
+const VERIFICATION_NUMERIC_KEYS = [
+  'defaultExpiryMinutes',
+  'recentWindowMinutes',
+  'codeTtlMinutesAfterClose',
+  'emailWaitSeconds',
+] as const;
+
+const DEFAULT_VERIFICATION_CONFIG: VerificationConfig = {
+  askChannelOrder: [...VERIFICATION_ASK_CHANNELS],
+  defaultExpiryMinutes: 10,
+  recentWindowMinutes: 120,
+  codeTtlMinutesAfterClose: 120,
+  emailWaitSeconds: 180,
+};
+
+/** Resolve the optional YAML verification block to a fully-populated config. */
+export function resolveVerificationConfig(yaml: YamlConfig['verification']): VerificationConfig {
+  return {
+    askChannelOrder: [...(yaml?.askChannelOrder ?? DEFAULT_VERIFICATION_CONFIG.askChannelOrder)],
+    defaultExpiryMinutes: yaml?.defaultExpiryMinutes ?? DEFAULT_VERIFICATION_CONFIG.defaultExpiryMinutes,
+    recentWindowMinutes: yaml?.recentWindowMinutes ?? DEFAULT_VERIFICATION_CONFIG.recentWindowMinutes,
+    codeTtlMinutesAfterClose: yaml?.codeTtlMinutesAfterClose ?? DEFAULT_VERIFICATION_CONFIG.codeTtlMinutesAfterClose,
+    emailWaitSeconds: yaml?.emailWaitSeconds ?? DEFAULT_VERIFICATION_CONFIG.emailWaitSeconds,
   };
 }
 
@@ -682,6 +716,20 @@ export interface YamlConfig {
      * nor in the built-ins use `defaultExpiryHours`.
      */
     channelDefaultExpiryHours?: Record<string, number>;
+  };
+
+  /** Delegated sign-in verification (#2017). Every field optional; see resolveVerificationConfig. */
+  verification?: {
+    /** Channels to ask the principal on, in preference order. Default: signal, sms, slack, email. */
+    askChannelOrder?: string[];
+    /** Minutes until a pending verification is treated as expired (a hint, not a cliff). Default: 10. */
+    defaultExpiryMinutes?: number;
+    /** Minutes a closed verification still counts as recent. Default: 120. */
+    recentWindowMinutes?: number;
+    /** Minutes a tracked code value lives after its verification closes. Default: 120. */
+    codeTtlMinutesAfterClose?: number;
+    /** Seconds to wait for an emailed code before asking the principal. Default: 180. */
+    emailWaitSeconds?: number;
   };
 
   /** Meeting debrief agent configuration (spec §17-meeting-debrief.md). */
@@ -1331,6 +1379,43 @@ export function loadYamlConfig(configDir: string): YamlConfig {
             `contextBridge.channelDefaultExpiryHours.${channelId} must be a positive integer, got: ${hours}`,
           );
         }
+      }
+    }
+  }
+
+  // Validate verification if present
+  if (config.verification !== undefined) {
+    // Same root guard as contextBridge: `verification: []` or `verification: 5` must
+    // fail at boot, not fall back to defaults nobody chose.
+    if (
+      config.verification === null ||
+      typeof config.verification !== 'object' ||
+      Array.isArray(config.verification)
+    ) {
+      throw new Error(
+        `verification must be a YAML mapping, got: ${Array.isArray(config.verification) ? 'list' : typeof config.verification}`,
+      );
+    }
+    const { askChannelOrder, ...numeric } = config.verification;
+    if (askChannelOrder !== undefined) {
+      if (!Array.isArray(askChannelOrder)) {
+        throw new Error(`verification.askChannelOrder must be a list of channel names, got: ${typeof askChannelOrder}`);
+      }
+      if (askChannelOrder.length === 0) {
+        throw new Error('verification.askChannelOrder must not be empty');
+      }
+      for (const channel of askChannelOrder) {
+        if (!(VERIFICATION_ASK_CHANNELS as readonly unknown[]).includes(channel)) {
+          throw new Error(
+            `verification.askChannelOrder contains unknown channel ${JSON.stringify(channel)}; valid: ${VERIFICATION_ASK_CHANNELS.join(', ')}`,
+          );
+        }
+      }
+    }
+    for (const key of VERIFICATION_NUMERIC_KEYS) {
+      const value: unknown = numeric[key];
+      if (value !== undefined && (typeof value !== 'number' || !Number.isInteger(value) || value < 1)) {
+        throw new Error(`verification.${key} must be a positive integer, got: ${String(value)}`);
       }
     }
   }
