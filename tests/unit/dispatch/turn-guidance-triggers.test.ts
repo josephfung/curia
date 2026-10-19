@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   inboundTurnGuidance,
   looksLikeSpotCheckReply,
+  parseSpotCheckVerdicts,
   spotCheckCandidateText,
   type InboundGuidanceFacts,
 } from '../../../src/dispatch/turn-guidance-triggers.js';
@@ -176,6 +177,37 @@ describe('looksLikeSpotCheckReply', () => {
 
   it('is false for a long message even if it starts like a verdict', () => {
     expect(looksLikeSpotCheckReply(`2 bad ${'x'.repeat(400)}`)).toBe(false);
+  });
+});
+
+// F2: the dispatcher stamps the pairs the principal typed into trusted task metadata, and
+// record-spot-check records only those. So this parser decides what a turn may record.
+describe('parseSpotCheckVerdicts', () => {
+  it.each([
+    ['2 bad, that was a renewal notice', [{ n: 2, verdict: 'bad' }]],
+    ['1 good 3 good', [{ n: 1, verdict: 'good' }, { n: 3, verdict: 'good' }]],
+    ['1 good, 2 BAD (wrong person), 3 Good', [
+      { n: 1, verdict: 'good' }, { n: 2, verdict: 'bad' }, { n: 3, verdict: 'good' },
+    ]],
+    ['#2 bad', [{ n: 2, verdict: 'bad' }]],
+    ['12 bad', [{ n: 12, verdict: 'bad' }]],
+    // A repeated pair is stamped once.
+    ['2 bad, yes 2 bad', [{ n: 2, verdict: 'bad' }]],
+    // Both verdicts for one number are kept as typed; record-spot-check accepts either.
+    ['2 good, no wait 2 bad', [{ n: 2, verdict: 'good' }, { n: 2, verdict: 'bad' }]],
+  ] as const)('parses %j', (text, expected) => {
+    expect(parseSpotCheckVerdicts(text)).toEqual(expected);
+  });
+
+  it.each([
+    'good morning',
+    'Meet at 2',
+    '2 badgers',
+    // The tail of a longer number is not a spot-check number.
+    '123 good',
+    '',
+  ])('finds nothing in %j', (text) => {
+    expect(parseSpotCheckVerdicts(text)).toEqual([]);
   });
 });
 

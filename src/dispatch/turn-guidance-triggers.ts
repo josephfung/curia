@@ -46,6 +46,36 @@ export function looksLikeSpotCheckReply(text: string): boolean {
   return trimmed.length < SPOT_CHECK_REPLY_MAX_CHARS && SPOT_CHECK_REPLY_START.test(trimmed);
 }
 
+/** One number-and-verdict pair as the principal typed it ("2 bad"). */
+export interface TypedSpotCheckVerdict {
+  n: number;
+  verdict: 'good' | 'bad';
+}
+
+// Every "N good" / "N bad" pair, anywhere in the reply ("1 good 3 good", "1 good, 2 bad").
+// The lookbehind keeps the tail of a longer number ("123 good") from reading as "23 good".
+const SPOT_CHECK_PAIR = /(?<!\d)(\d{1,2})\s+(good|bad)\b/gi;
+
+/**
+ * The number-and-verdict pairs in a spot-check reply, in the order typed, each pair once.
+ *
+ * SECURITY (F2): the dispatcher stamps these into trusted task metadata, and
+ * record-spot-check records only pairs found here. Call it on spotCheckCandidateText (the
+ * reply with any quoted mail cut off), so text the principal did not type, such as quoted
+ * or forwarded mail, cannot add a pair. Both verdicts for one number are kept if typed
+ * ("2 good, no wait 2 bad"); the coordinator still has to pick one, and either is the
+ * principal's own.
+ */
+export function parseSpotCheckVerdicts(text: string): TypedSpotCheckVerdict[] {
+  const pairs: TypedSpotCheckVerdict[] = [];
+  for (const m of text.matchAll(SPOT_CHECK_PAIR)) {
+    const n = Number(m[1]);
+    const verdict = m[2]!.toLowerCase() === 'good' ? 'good' : 'bad';
+    if (!pairs.some((p) => p.n === n && p.verdict === verdict)) pairs.push({ n, verdict });
+  }
+  return pairs;
+}
+
 // The email channel prepends "Subject: <subject>\n\n" to every body (message-converter.ts),
 // which would hide a reply's first words from the start-of-message rule.
 const EMAIL_SUBJECT_PREFIX = /^Subject:[^\n]*\n+/;
