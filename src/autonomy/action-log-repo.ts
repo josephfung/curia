@@ -755,33 +755,18 @@ export class ActionLogRepo {
    * not_found, already_resolved and expired apart.
    */
   private async resolvePendingByNumber(approvalNumber: number): Promise<ResolveResult> {
-    // LIMIT 2: allocation makes a second live row with the same number impossible. If one ever
-    // appears, refuse to pick (ambiguous) rather than act on what may be the wrong approval.
-    const pending = await this.pool.query(
-      `SELECT * FROM autonomy_action_log
-       WHERE approval_number = $1
-         AND outcome = 'pending_approval'
-         AND expires_at > now()
-         AND created_at > now() - interval '7 days'
-       ORDER BY created_at ASC
-       LIMIT 2`,
-      [approvalNumber],
-    );
-    if (pending.rows.length === 1) {
-      return { found: true, row: mapRow(pending.rows[0]) };
+    const live = await this.liveRowsByApprovalNumber(approvalNumber);
+    if (live.length === 1) {
+      return { found: true, row: live[0]! };
     }
-    if (pending.rows.length > 1) {
-      const rows = pending.rows.map(mapRow);
-      this.logger.error(
-        { approvalNumber, ids: rows.map((r) => r.id) },
-        'action-log-repo: two live approvals share an approval number — allocation invariant broken',
-      );
-      const refs = rows.map(r => `${r.shortRef} (task: ${r.taskId}): ${r.description}`).join(', ');
+    if (live.length > 1) {
+      // Refuse to pick (ambiguous) rather than act on what may be the wrong approval.
+      const refs = live.map(r => `${r.shortRef} (task: ${r.taskId}): ${r.description}`).join(', ');
       return {
         found: false,
         reason: 'ambiguous',
         error: `Approval ${approvalNumber} matches multiple pending requests — use the reference instead. Pending: ${refs}`,
-        pending: rows,
+        pending: live,
       };
     }
 
@@ -802,6 +787,39 @@ export class ActionLogRepo {
       return { found: false, reason: 'already_resolved', error: `Approval ${approvalNumber} is already resolved (outcome: ${row.outcome})` };
     }
     return { found: false, reason: 'expired', error: `Approval ${approvalNumber} has expired` };
+  }
+
+  /**
+   * The live approvals carrying `approvalNumber`: pending, non-expired, and created in the last
+   * 7 days, the window in which insert() keeps numbers unique. An older row with the number is
+   * an earlier approval the number was reused from and must never match.
+   *
+   * The ONE definition of "which approval does number n mean", shared by resolvePending()
+   * ("approve 3") and findPendingByApprovalNumber() (reaction binding), so the two can never
+   * disagree about which row a number names.
+   *
+   * LIMIT 2: allocation makes a second live row with the same number impossible. If one ever
+   * appears it is logged here, and each caller refuses to pick between them.
+   */
+  private async liveRowsByApprovalNumber(approvalNumber: number): Promise<ActionLogRow[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE approval_number = $1
+         AND outcome = 'pending_approval'
+         AND expires_at > now()
+         AND created_at > now() - interval '7 days'
+       ORDER BY created_at ASC
+       LIMIT 2`,
+      [approvalNumber],
+    );
+    const rows = result.rows.map(mapRow);
+    if (rows.length > 1) {
+      this.logger.error(
+        { approvalNumber, ids: rows.map((r) => r.id) },
+        'action-log-repo: two live approvals share an approval number — allocation invariant broken',
+      );
+    }
+    return rows;
   }
 
   /**
@@ -896,31 +914,14 @@ export class ActionLogRepo {
    * outbound.delivered content that shows `Approval <n>`, so a reaction on that message can
    * resolve the approval.
    *
-   * Same filter as resolvePendingByNumber(): pending, non-expired, and created in the last 7
-   * days, the window in which insert() keeps numbers unique. An older row with the number is an
-   * earlier approval the number was reused from and must never match. Two live rows sharing a
-   * number would break the allocation invariant; then nothing is returned rather than a guess,
-   * since binding the wrong row would let a reaction approve an action the principal never saw.
+   * Uses the same lookup as resolvePending()'s number path (liveRowsByApprovalNumber), so the
+   * mapper binds exactly the row "approve <n>" would resolve. Two live rows sharing a number
+   * break the allocation invariant; then nothing is returned rather than a guess, since binding
+   * the wrong row would let a reaction approve an action the principal never saw.
    */
   async findPendingByApprovalNumber(approvalNumber: number): Promise<ActionLogRow | null> {
-    const result = await this.pool.query(
-      `SELECT * FROM autonomy_action_log
-       WHERE approval_number = $1
-         AND outcome = 'pending_approval'
-         AND expires_at > now()
-         AND created_at > now() - interval '7 days'
-       ORDER BY created_at ASC
-       LIMIT 2`,
-      [approvalNumber],
-    );
-    if (result.rows.length > 1) {
-      this.logger.error(
-        { approvalNumber, ids: result.rows.map((r) => Number((r as { id: unknown }).id)) },
-        'action-log-repo: two live approvals share an approval number — allocation invariant broken; not binding either',
-      );
-      return null;
-    }
-    return result.rows[0] ? mapRow(result.rows[0]) : null;
+    const live = await this.liveRowsByApprovalNumber(approvalNumber);
+    return live.length === 1 ? live[0]! : null;
   }
 }
 

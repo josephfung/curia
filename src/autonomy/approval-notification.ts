@@ -382,9 +382,12 @@ export function buildApprovalNotificationBody(opts: BuildApprovalNotificationBod
     });
   }
 
-  // This line stays the last approval identifier in the body: the reaction mapper binds a
-  // delivered message by the LAST `Approval <n>` / `Reference:` match, so anything quoted in the
-  // detail block above cannot redirect the binding to another approval.
+  // BINDING CONTRACT (#1479, #2159 Phase 3): the identifier line and the `Expires:` line directly
+  // under it are the notification's fingerprint. ReactionApprovalMapper binds a delivered message
+  // to its approval only when it finds exactly these two adjacent lines (APPROVAL_FINGERPRINT_RE:
+  // `Approval <n>` or `Reference: <8-hex>`, then `Expires: <toISOString()>`), and takes the LAST
+  // such pair, so they must stay below the detail block and above only fixed text. Changing their
+  // wording, spacing, order or the timestamp format silently stops reactions resolving approvals.
   lines.push(
     opts.approvalNumber != null ? `Approval ${opts.approvalNumber}` : `Reference: ${opts.shortRef}`,
     `Expires: ${opts.expiresAt.toISOString()}`,

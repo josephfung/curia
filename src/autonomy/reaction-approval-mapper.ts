@@ -30,24 +30,33 @@ import {
 } from './reaction-intent.js';
 
 /**
- * Matches the approval's identifier line in a notification body: `Approval <n>` for numbered
- * approvals (#2159 Phase 3), or `Reference: <8-hex>` for ones raised before migration 098.
- * Group 1 is the short_ref, group 2 the number.
+ * The fingerprint of an approval notification (buildApprovalNotificationBody): the identifier
+ * line, `Approval <n>` for numbered approvals (#2159 Phase 3) or `Reference: <8-hex>` for ones
+ * raised before migration 098, directly followed by its `Expires: <ISO-8601>` line. Group 1 is
+ * the short_ref, group 2 the number.
+ *
+ * Deliberately strict: case-sensitive, whole lines, single spaces, and the Expires line
+ * required. An ordinary message that merely mentions an approval ("Sent you approval 3", a
+ * spot-check line ending "for approval", "the approval 2-day window") must never bind, or a
+ * principal 👍 meant as an acknowledgement would approve something they were not shown. The
+ * format is a contract with approval-notification.ts, which says so where it renders it.
+ *
+ * Global (`g`) for matchAll, which works on a copy and never touches this regex's lastIndex.
  */
-const REFERENCE_RE = /\b(?:Reference:\s*([0-9a-f]{8})|Approval\s+(\d{1,3}))\b/i;
+const APPROVAL_FINGERPRINT_RE =
+  /^(?:Reference: ([0-9a-f]{8})|Approval (\d{1,3}))\nExpires: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/gm;
 
 /**
- * The approval a delivered body identifies, taken from the LAST match. The detail block
+ * The approval a delivered body identifies, taken from the LAST fingerprint. The detail block
  * (message bodies, subjects, descriptions) holds agent and third-party text and sits above the
- * identifier line, which only fixed text follows (Expires, the call to action). A body quoting
- * "Approval 2" or "Reference: …" must not bind this notification to that other approval, or a
- * 👍 here would approve something the principal was not shown.
+ * real fingerprint, which only the fixed call to action follows. A body that forges a
+ * fingerprint for another approval must not redirect this notification's binding to it.
  */
 function lastApprovalIdentifier(content: string): { shortRef: string } | { approvalNumber: number } | null {
   let last: RegExpExecArray | null = null;
-  for (const match of content.matchAll(new RegExp(REFERENCE_RE.source, 'gi'))) last = match;
+  for (const match of content.matchAll(APPROVAL_FINGERPRINT_RE)) last = match;
   if (!last) return null;
-  if (last[1]) return { shortRef: last[1].toLowerCase() };
+  if (last[1]) return { shortRef: last[1] };
   return last[2] ? { approvalNumber: Number(last[2]) } : null;
 }
 
@@ -160,27 +169,34 @@ export class ReactionApprovalMapper {
 
   /** @internal exported for tests */
   async handleDelivered(event: OutboundDeliveredEvent): Promise<void> {
-    const { channel, messageId, content } = event.payload;
+    const { channel, messageId, content, recipientId } = event.payload;
     if (!messageId || !content) return;
+
+    // Approvals are delivered only to the principal's own identities. A notification-shaped
+    // message sent anywhere else (a group, a third party) is not one the principal answers by
+    // reaction, so it never binds.
+    if (!isPrincipalIdentity(channel, recipientId, this.principalIdentities)) return;
 
     const identifier = lastApprovalIdentifier(content);
     if (!identifier) return;
 
-    // A number resolves only among live approvals of the last 7 days, where it is unique.
-    const row = 'approvalNumber' in identifier
-      ? await this.actionLogRepo.findPendingByApprovalNumber(identifier.approvalNumber)
-      : await this.actionLogRepo.findPendingByShortRef(identifier.shortRef);
-    if (!row) return;
-
     try {
+      // A number resolves only among live approvals of the last 7 days, where it is unique.
+      const row = 'approvalNumber' in identifier
+        ? await this.actionLogRepo.findPendingByApprovalNumber(identifier.approvalNumber)
+        : await this.actionLogRepo.findPendingByShortRef(identifier.shortRef);
+      if (!row) return;
+
       await this.actionLogRepo.bindDeliveryMessage(row.id, channel, messageId);
       this.log.info(
         { actionLogId: row.id, shortRef: row.shortRef, approvalNumber: row.approvalNumber, channel, messageId },
         'reaction-approval: bound delivered message to pending approval',
       );
     } catch (err) {
+      // A failed lookup or bind leaves the message unbound: a reaction on it is then ignored,
+      // and the principal can still answer by reply.
       this.log.warn(
-        { err, actionLogId: row.id, channel, messageId },
+        { err, ...identifier, channel, messageId },
         'reaction-approval: failed to bind delivered message',
       );
     }

@@ -669,6 +669,15 @@ describe('ActionLogRepo', () => {
         const { pool } = makeSequentialPool([[numbered, { ...numbered, id: 11 }]]);
         expect(await new ActionLogRepo(pool, createSilentLogger()).findPendingByApprovalNumber(3)).toBeNull();
       });
+
+      // The mapper must bind exactly the row "approve 3" would resolve: one shared lookup.
+      it('runs the same live-row query as resolvePending(n)', async () => {
+        const binding = makeSequentialPool([[numbered]]);
+        await new ActionLogRepo(binding.pool, createSilentLogger()).findPendingByApprovalNumber(3);
+        const resolving = makeSequentialPool([[numbered]]);
+        await new ActionLogRepo(resolving.pool, createSilentLogger()).resolvePending('3');
+        expect(binding.queries[0]).toEqual(resolving.queries[0]);
+      });
     });
 
     it('resolves to sole pending row when no short_ref provided', async () => {
