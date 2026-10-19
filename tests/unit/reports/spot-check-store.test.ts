@@ -12,6 +12,9 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const NOW = Date.parse('2026-10-19T12:00:00.000Z');
 
+// The delivered message: the block as the sampler renders it for makeSet()'s items.
+const DIGEST = "Today's recap\n\nSpot check (optional, reply with a number):\n1. Replied to Dana about the Thursday slot.\n2. Declined a vendor call from Sam.";
+
 function makeSet(over: Partial<SpotCheckSet> = {}): SpotCheckSet {
   return {
     id: 'set-1',
@@ -64,8 +67,8 @@ describe('SpotCheckStore', () => {
 
     const at = new Date(NOW - 60_000).toISOString();
     await expect(
-      store.bindDelivery(set.conversationId, { channel: 'email', messageId: 'm1', threadId: 'th1', at }),
-    ).resolves.toBe(true);
+      store.bindDelivery(set.conversationId, { channel: 'email', messageId: 'm1', threadId: 'th1', at }, DIGEST),
+    ).resolves.toMatchObject({ kind: 'bound', set: { id: 'set-1' } });
 
     expect((await store.findByEmailThread('th1'))?.id).toBe('set-1');
     expect((await store.findLatestDelivered(DAY))?.id).toBe('set-1');
@@ -77,8 +80,8 @@ describe('SpotCheckStore', () => {
     const set = makeSet();
     await store.add(set);
     const delivery = { channel: 'email', messageId: 'm1', threadId: 'th1', at: new Date(NOW).toISOString() };
-    await store.bindDelivery(set.conversationId, delivery);
-    await store.bindDelivery(set.conversationId, delivery);
+    await store.bindDelivery(set.conversationId, delivery, DIGEST);
+    await store.bindDelivery(set.conversationId, delivery, DIGEST);
     expect(stored().sets[0]!.deliveries).toHaveLength(1);
   });
 
@@ -88,10 +91,10 @@ describe('SpotCheckStore', () => {
     await store.add(makeSet({ id: 'b', conversationId: 'conv-b' }));
     await store.bindDelivery('conv-a', {
       channel: 'email', messageId: 'ma', threadId: 'th-a', at: new Date(NOW - 3 * HOUR).toISOString(),
-    });
+    }, DIGEST);
     await store.bindDelivery('conv-b', {
       channel: 'email', messageId: 'mb', threadId: 'th-b', at: new Date(NOW - 1 * HOUR).toISOString(),
-    });
+    }, DIGEST);
 
     expect((await store.findLatestDelivered(DAY))?.id).toBe('b');
     expect((await store.findByEmailThread('th-a'))?.id).toBe('a');
@@ -103,7 +106,7 @@ describe('SpotCheckStore', () => {
     await store.add(makeSet());
     await store.bindDelivery('conv-1', {
       channel: 'email', messageId: 'm1', threadId: 'th1', at: new Date(NOW - 25 * HOUR).toISOString(),
-    });
+    }, DIGEST);
 
     expect(await store.findLatestDelivered(DAY)).toBeNull();
     expect((await store.findByEmailThread('th1'))?.id).toBe('set-1');
@@ -158,14 +161,14 @@ describe('SpotCheckStore', () => {
     await expect(store.add(makeSet())).resolves.toBe(false);
   });
 
-  it('returns false from bindDelivery for an unknown conversation and writes nothing', async () => {
+  it('returns no_set from bindDelivery for an unknown conversation and writes nothing', async () => {
     const { store, set } = makeStore();
     await store.add(makeSet());
     set.mockClear();
 
     await expect(
-      store.bindDelivery('no-such-conversation', { channel: 'email', messageId: 'm1', at: new Date(NOW).toISOString() }),
-    ).resolves.toBe(false);
+      store.bindDelivery('no-such-conversation', { channel: 'email', messageId: 'm1', at: new Date(NOW).toISOString() }, DIGEST),
+    ).resolves.toEqual({ kind: 'no_set' });
     expect(set).not.toHaveBeenCalled();
   });
 
@@ -175,8 +178,8 @@ describe('SpotCheckStore', () => {
     set.mockClear();
 
     await expect(
-      store.bindDelivery('conv-1', { channel: 'email', messageId: 'm1', at: new Date(NOW).toISOString() }),
-    ).resolves.toBe(false);
+      store.bindDelivery('conv-1', { channel: 'email', messageId: 'm1', at: new Date(NOW).toISOString() }, DIGEST),
+    ).resolves.toEqual({ kind: 'no_set' });
     expect(set).not.toHaveBeenCalled();
   });
 
@@ -184,11 +187,80 @@ describe('SpotCheckStore', () => {
     const { store, stored } = makeStore();
     await store.add(makeSet({ id: 'older', createdAt: new Date(NOW - HOUR).toISOString() }));
     await store.add(makeSet({ id: 'newer', createdAt: new Date(NOW - 60_000).toISOString() }));
-    await store.bindDelivery('conv-1', { channel: 'signal', messageId: 'm1', at: new Date(NOW).toISOString() });
+    await store.bindDelivery('conv-1', { channel: 'signal', messageId: 'm1', at: new Date(NOW).toISOString() }, DIGEST);
 
     const byId = Object.fromEntries(stored().sets.map((s) => [s.id, s]));
     expect(byId['newer']!.deliveries).toHaveLength(1);
     expect(byId['older']!.deliveries).toHaveLength(0);
+  });
+
+  it('returns rejected from bindDelivery when the config store soft-rejects the write', async () => {
+    const { store, set } = makeStore();
+    await store.add(makeSet());
+    set.mockResolvedValueOnce({ stored: false });
+
+    await expect(
+      store.bindDelivery('conv-1', { channel: 'signal', messageId: 'm1', at: new Date(NOW).toISOString() }, DIGEST),
+    ).resolves.toEqual({ kind: 'rejected' });
+  });
+
+  it('returns the bound set, without writing again, for a messageId already recorded', async () => {
+    const { store, set } = makeStore();
+    await store.add(makeSet());
+    const delivery = { channel: 'signal', messageId: 'm1', at: new Date(NOW).toISOString() };
+    await store.bindDelivery('conv-1', delivery, DIGEST);
+    set.mockClear();
+
+    await expect(store.bindDelivery('conv-1', delivery, DIGEST)).resolves.toMatchObject({ kind: 'bound', set: { id: 'set-1' } });
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  // Two digests composed in one conversation (a retry, or a second draw) each store a set. The
+  // delivery belongs to the set whose numbered lines the message actually shows.
+  describe('choosing between sets of one conversation', () => {
+    const older = makeSet({
+      id: 'older',
+      createdAt: new Date(NOW - HOUR).toISOString(),
+      items: [{ n: 1, actionLogId: 201, summary: 'Archive an email: "Statement ready"' }],
+    });
+    const newer = makeSet({
+      id: 'newer',
+      createdAt: new Date(NOW - 60_000).toISOString(),
+      items: [{ n: 1, actionLogId: 301, summary: 'Accepted the Q3 sync invite' }],
+    });
+    const delivery = { channel: 'signal', messageId: 'm1', at: new Date(NOW).toISOString() };
+
+    it('binds the set whose first line the content shows, even when it is not the newest', async () => {
+      const { store, stored } = makeStore();
+      await store.add(older);
+      await store.add(newer);
+
+      const result = await store.bindDelivery('conv-1', delivery, 'Spot check (optional, reply with a number):\n1. Archive an email: "Statement ready"');
+
+      expect(result).toMatchObject({ kind: 'bound', set: { id: 'older' } });
+      const byId = Object.fromEntries(stored().sets.map((s) => [s.id, s]));
+      expect(byId['older']!.deliveries).toHaveLength(1);
+      expect(byId['newer']!.deliveries).toHaveLength(0);
+    });
+
+    it('binds nothing when the content matches neither of several sets', async () => {
+      const { store, set } = makeStore();
+      await store.add(older);
+      await store.add(newer);
+      set.mockClear();
+
+      await expect(store.bindDelivery('conv-1', delivery, 'Spot check (optional, reply with a number):\n1. something reworded'))
+        .resolves.toEqual({ kind: 'no_set' });
+      expect(set).not.toHaveBeenCalled();
+    });
+
+    it('binds the only set when the content does not show its first line verbatim', async () => {
+      const { store } = makeStore();
+      await store.add(newer);
+
+      await expect(store.bindDelivery('conv-1', delivery, 'Spot check (optional, reply with a number):\n1) Accepted the Q3 sync'))
+        .resolves.toMatchObject({ kind: 'bound', set: { id: 'newer' } });
+    });
   });
 
   // add() and bindDelivery() read the whole list, change it and write it back. The tool and the
@@ -217,7 +289,7 @@ describe('SpotCheckStore', () => {
     const results = await Promise.allSettled([
       a.add(makeSet({ id: 'lost', conversationId: 'conv-x' })),
       b.add(makeSet({ id: 'kept', conversationId: 'conv-1' })),
-      a.bindDelivery('conv-1', { channel: 'signal', messageId: 'm1', at: new Date(NOW).toISOString() }),
+      a.bindDelivery('conv-1', { channel: 'signal', messageId: 'm1', at: new Date(NOW).toISOString() }, DIGEST),
     ]);
 
     // The failure reaches only its own caller.
@@ -231,7 +303,7 @@ describe('SpotCheckStore', () => {
   it('lets a config-store read error propagate', async () => {
     const { store } = makeStore({ getError: new Error('db down') });
     await expect(store.add(makeSet())).rejects.toThrow('db down');
-    await expect(store.bindDelivery('conv-1', { channel: 'email', messageId: 'm', at: new Date(NOW).toISOString() }))
+    await expect(store.bindDelivery('conv-1', { channel: 'email', messageId: 'm', at: new Date(NOW).toISOString() }, DIGEST))
       .rejects.toThrow('db down');
     await expect(store.findByEmailThread('th1')).rejects.toThrow('db down');
     await expect(store.findLatestDelivered(DAY)).rejects.toThrow('db down');

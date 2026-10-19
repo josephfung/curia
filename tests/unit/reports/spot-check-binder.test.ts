@@ -5,7 +5,7 @@ import { createOutboundDelivered } from '../../../src/bus/events.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import { createSilentLogger, type Logger } from '../../../src/logger.js';
-import type { SpotCheckStore } from '../../../src/reports/spot-check-store.js';
+import type { SpotCheckSet, SpotCheckStore } from '../../../src/reports/spot-check-store.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
 
 function makePrincipal(channel: string, identifier: string): ChannelIdentity {
@@ -27,6 +27,14 @@ function makePrincipal(channel: string, identifier: string): ChannelIdentity {
 // The binder only binds messages that carry the block, so the default body includes the header.
 const DIGEST = `Today's recap\n\n${SPOT_CHECK_HEADER}\n1. Accepted the Q3 sync invite`;
 
+const BOUND_SET: SpotCheckSet = {
+  id: 'set-1',
+  createdAt: '2026-10-19T11:55:00.000Z',
+  conversationId: 'scheduler:job1:run1',
+  items: [{ n: 1, actionLogId: 101, summary: 'Accepted the Q3 sync invite' }],
+  deliveries: [],
+};
+
 describe('SpotCheckBinder', () => {
   let bus: { subscribe: ReturnType<typeof vi.fn>; publish: ReturnType<typeof vi.fn> };
   let store: { bindDelivery: ReturnType<typeof vi.fn> };
@@ -34,17 +42,19 @@ describe('SpotCheckBinder', () => {
   let logger: ReturnType<typeof createSilentLogger>;
   let warn: ReturnType<typeof vi.fn>;
   let error: ReturnType<typeof vi.fn>;
+  let info: ReturnType<typeof vi.fn>;
   let handler: (event: unknown) => Promise<void>;
 
   beforeEach(() => {
     bus = { subscribe: vi.fn(), publish: vi.fn() };
-    store = { bindDelivery: vi.fn().mockResolvedValue(true) };
+    store = { bindDelivery: vi.fn().mockResolvedValue({ kind: 'bound', set: BOUND_SET }) };
     gateway = { getEmailMessage: vi.fn().mockResolvedValue({ threadId: 'th1' }) };
     logger = createSilentLogger();
     // Spy on the child logger the binder builds, so warnings/errors can be asserted.
     warn = vi.fn();
     error = vi.fn();
-    const child = { info: vi.fn(), debug: vi.fn(), warn, error } as unknown as Logger;
+    info = vi.fn();
+    const child = { info, debug: vi.fn(), warn, error } as unknown as Logger;
     vi.spyOn(logger, 'child').mockReturnValue(child as never);
 
     new SpotCheckBinder({
@@ -79,7 +89,13 @@ describe('SpotCheckBinder', () => {
       messageId: 'm1',
       threadId: 'th1',
       at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
-    });
+    }, DIGEST);
+    // One info line per bind, so a bound digest is visible in the logs.
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ setId: 'set-1', channel: 'email', messageId: 'm1', threadId: true }),
+      expect.any(String),
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('binds a Signal delivery without a thread id and without fetching an email', async () => {
@@ -98,11 +114,22 @@ describe('SpotCheckBinder', () => {
     expect('threadId' in delivery).toBe(false);
   });
 
+  it('does not bind, or warn, when the recipient is not the principal', async () => {
+    await handler(createOutboundDelivered({
+      channel: 'email', content: DIGEST, recipientId: 'sam@example.com', conversationId: 'c1', messageId: 'm1',
+    }));
+
+    expect(store.bindDelivery).not.toHaveBeenCalled();
+    expect(gateway.getEmailMessage).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  // A queue-flushed send has no conversationId. The digest went out with numbers nobody can
+  // resolve, so that must be loud, not a silent skip.
   it.each([
-    ['the recipient is not the principal', { recipientId: 'sam@example.com', conversationId: 'c1', messageId: 'm1' }],
     ['there is no conversationId', { recipientId: 'dana@example.com', messageId: 'm1' }],
     ['there is no messageId', { recipientId: 'dana@example.com', conversationId: 'c1' }],
-  ])('does not bind when %s', async (_label, fields) => {
+  ])('warns and does not bind a spot-check digest when %s', async (_label, fields) => {
     await handler(createOutboundDelivered({
       channel: 'email',
       content: DIGEST,
@@ -111,6 +138,35 @@ describe('SpotCheckBinder', () => {
 
     expect(store.bindDelivery).not.toHaveBeenCalled();
     expect(gateway.getEmailMessage).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'email' }),
+      'spot-check digest delivered without conversationId/messageId; its numbers cannot be answered',
+    );
+  });
+
+  it('stays quiet about a message without the block and without ids', async () => {
+    await handler(createOutboundDelivered({ channel: 'email', recipientId: 'dana@example.com', content: 'hello' }));
+
+    expect(store.bindDelivery).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['no_set', 'rejected'] as const)('warns when the store reports %s for a principal digest', async (kind) => {
+    store.bindDelivery.mockResolvedValue({ kind });
+
+    await handler(createOutboundDelivered({
+      channel: 'signal',
+      recipientId: '+15555550100',
+      content: DIGEST,
+      conversationId: 'scheduler:job1:run1',
+      messageId: '1710000000000',
+    }));
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'scheduler:job1:run1', messageId: '1710000000000', kind }),
+      expect.any(String),
+    );
+    expect(info).not.toHaveBeenCalledWith(expect.objectContaining({ setId: expect.anything() }), expect.any(String));
   });
 
   it('does not bind a delivery that lost the spot-check block', async () => {

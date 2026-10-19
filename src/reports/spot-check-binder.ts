@@ -53,11 +53,20 @@ export class SpotCheckBinder {
   /** @internal exported for tests */
   async handleDelivered(event: OutboundDeliveredEvent): Promise<void> {
     const { channel, recipientId, content, conversationId, messageId } = event.payload;
-    if (!conversationId || !messageId) return;
 
     // A digest that lost the block cannot be answered by number, so it must not be bound.
-    // The check also keeps the config-store read below off every other message.
+    // Checked first: it keeps everything below (logging included) off every other message.
     if (!content.includes(SPOT_CHECK_HEADER)) return;
+
+    // The block went out but cannot be tied to its set (a queue-flushed send carries no
+    // conversationId). The principal now holds numbers nothing can resolve: say so.
+    if (!conversationId || !messageId) {
+      this.log.warn(
+        { channel, messageId, conversationId },
+        'spot-check digest delivered without conversationId/messageId; its numbers cannot be answered',
+      );
+      return;
+    }
 
     // Only a digest sent to the principal can be graded by them.
     if (!isPrincipalIdentity(channel, recipientId, this.principalIdentities)) return;
@@ -77,13 +86,25 @@ export class SpotCheckBinder {
         }
       }
 
-      const bound = await this.store.bindDelivery(conversationId, {
+      const result = await this.store.bindDelivery(conversationId, {
         channel,
         messageId,
         ...(threadId ? { threadId } : {}),
         at: new Date().toISOString(),
-      });
-      this.log.debug({ conversationId, messageId, bound }, 'spot-check binder: delivery processed');
+      }, content);
+      if (result.kind !== 'bound') {
+        // no_set: no stored set fits this message (none drawn in this conversation, or several
+        // and the content matched none). rejected: the config store refused the write.
+        this.log.warn(
+          { conversationId, messageId, channel, kind: result.kind },
+          'spot-check binder: a delivered digest shows a spot-check block but was not bound; its numbers cannot be answered',
+        );
+        return;
+      }
+      this.log.info(
+        { setId: result.set.id, channel, messageId, threadId: threadId !== undefined },
+        'spot-check binder: bound the delivered digest to its spot-check set',
+      );
     } catch (err) {
       this.log.error(
         { err, conversationId, messageId },

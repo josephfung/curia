@@ -60,6 +60,16 @@ export interface SpotCheckSet {
   deliveries: SpotCheckDelivery[];
 }
 
+/**
+ * What bindDelivery did. `bound` carries the set (so the caller can mark its rows sampled);
+ * `no_set` means no set of that conversation fits the delivered message; `rejected` means the
+ * config store soft-rejected the write.
+ */
+export type BindDeliveryResult =
+  | { kind: 'bound'; set: SpotCheckSet }
+  | { kind: 'no_set' }
+  | { kind: 'rejected' };
+
 const MS_PER_DAY = 86_400_000;
 const MAX_AGE_MS = 14 * MS_PER_DAY;
 const MAX_SETS = 30;
@@ -130,23 +140,30 @@ export class SpotCheckStore {
   }
 
   /**
-   * Record that a message carried the digest composed in `conversationId`. Returns false (and
-   * writes nothing) when no recent set belongs to that conversation. A messageId already
-   * recorded is a no-op that still returns true: the delivery is bound, a retry changed nothing.
+   * Record that a message (`content`) carried a digest composed in `conversationId`.
+   *
+   * Which set: a conversation can hold more than one recent set (a retried digest draws
+   * again), so the set bound is the newest one whose first numbered line (`1. <summary>`)
+   * appears in the content: the numbers the principal sees must resolve to what they saw.
+   * When no set's line appears (the agent reworded the block), the delivery is bound only if
+   * the conversation has exactly one set in the window; with several, guessing could bind the
+   * wrong numbers, so it returns no_set and writes nothing (the binder warns).
+   *
+   * A messageId already recorded is a no-op that still returns `bound`: a retry changed nothing.
    */
-  async bindDelivery(conversationId: string, delivery: SpotCheckDelivery): Promise<boolean> {
-    return serialize(async () => {
+  async bindDelivery(conversationId: string, delivery: SpotCheckDelivery, content: string): Promise<BindDeliveryResult> {
+    return serialize(async (): Promise<BindDeliveryResult> => {
       const sets = await this.read();
       const cutoff = this.now() - BIND_WINDOW_MS;
-      let target: SpotCheckSet | undefined;
-      for (const s of sets) {
-        if (s.conversationId !== conversationId || Date.parse(s.createdAt) < cutoff) continue;
-        if (!target || Date.parse(s.createdAt) > Date.parse(target.createdAt)) target = s;
-      }
-      if (!target) return false;
-      if (target.deliveries.some((d) => d.messageId === delivery.messageId)) return true;
+      const candidates = sets
+        .filter((s) => s.conversationId === conversationId && Date.parse(s.createdAt) >= cutoff)
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      const shown = candidates.find((s) => s.items[0] !== undefined && content.includes(`1. ${s.items[0].summary}`));
+      const target = shown ?? (candidates.length === 1 ? candidates[0] : undefined);
+      if (!target) return { kind: 'no_set' };
+      if (target.deliveries.some((d) => d.messageId === delivery.messageId)) return { kind: 'bound', set: target };
       target.deliveries.push(delivery);
-      return this.write(sets);
+      return (await this.write(sets)) ? { kind: 'bound', set: target } : { kind: 'rejected' };
     });
   }
 
