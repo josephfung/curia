@@ -1,5 +1,5 @@
 // SpotCheckStore — digest number-to-action maps kept in the config store (#2159).
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   SpotCheckStore,
   SPOT_CHECK_NAMESPACE,
@@ -298,6 +298,75 @@ describe('SpotCheckStore', () => {
     expect(results[2]!.status).toBe('fulfilled');
     expect(stored().sets.map((s) => s.id)).toEqual(['kept']);
     expect(stored().sets[0]!.deliveries).toHaveLength(1);
+  });
+
+  // Production runs the tsup bundle, which carries its own copy of this module, while the
+  // list-spot-checks handler imports it from source: two module instances. They must share one
+  // queue, so it lives on globalThis rather than in a module variable.
+  it('shares the write queue between two independent copies of the module', async () => {
+    vi.resetModules();
+    const first = await import('../../../src/reports/spot-check-store.js');
+    vi.resetModules();
+    const second = await import('../../../src/reports/spot-check-store.js');
+    expect(first.SpotCheckStore).not.toBe(second.SpotCheckStore);
+
+    const { get, set, stored } = makeStore();
+    const logger = createSilentLogger();
+    await Promise.all([
+      new first.SpotCheckStore({ get, set }, logger, () => NOW).add(makeSet({ id: 'a', conversationId: 'conv-a' })),
+      new second.SpotCheckStore({ get, set }, logger, () => NOW).add(makeSet({ id: 'b', conversationId: 'conv-b' })),
+    ]);
+
+    expect(stored().sets.map((s) => s.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('waits for an op queued on the shared chain through the global symbol', async () => {
+    const holder = globalThis as unknown as Record<symbol, { tail: Promise<void> } | undefined>;
+    const chain = holder[Symbol.for('curia.spotCheckStore.mutationChain')];
+    expect(chain).toBeDefined();
+
+    // Queue an op the way another module copy would, and hold it open.
+    let release!: () => void;
+    const held = chain!.tail.then(() => new Promise<void>((resolve) => { release = resolve; }));
+    chain!.tail = held;
+
+    const { store, set } = makeStore();
+    const adding = store.add(makeSet());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(set).not.toHaveBeenCalled();
+
+    release();
+    await expect(adding).resolves.toBe(true);
+    expect(set).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a config store that never answers', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('times the op out to its own caller, releases the queue, and skips the late write', async () => {
+      vi.useFakeTimers();
+      const { store, get, set, stored } = makeStore();
+      let answer!: (v: string | null) => void;
+      get.mockImplementationOnce(() => new Promise<string | null>((resolve) => { answer = resolve; }));
+
+      const hung = store.add(makeSet({ id: 'hung', conversationId: 'conv-hung' }));
+      const hungResult = hung.then(() => 'resolved', (err: Error) => err.message);
+      const next = store.add(makeSet({ id: 'next', conversationId: 'conv-next' }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await hungResult).toMatch(/timed out/);
+      await expect(next).resolves.toBe(true);
+      expect(stored().sets.map((s) => s.id)).toEqual(['next']);
+
+      // The abandoned op's read finally answers: it must not write its stale list over 'next'.
+      set.mockClear();
+      answer(null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(set).not.toHaveBeenCalled();
+      expect(stored().sets.map((s) => s.id)).toEqual(['next']);
+    });
   });
 
   it('lets a config-store read error propagate', async () => {

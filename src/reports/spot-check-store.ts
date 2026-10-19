@@ -24,9 +24,13 @@
 //
 // Concurrency: add() and bindDelivery() are read-modify-write on one value. Two of them
 // overlapping would each write back the list it read, and one set (or delivery) would be lost.
-// They run one at a time through a module-level chain (see `serialize`), not a per-instance
+// They run one at a time through one process-wide chain (see `serialize`), not a per-instance
 // lock: the list-spot-checks tool builds a store per call and the boot wiring builds its own,
-// so an instance lock would never see the other's writes.
+// so an instance lock would never see the other's writes. The chain lives on globalThis, not in
+// a module variable: production runs the tsup bundle (dist/index.js, with its own copy of this
+// file) while skill handlers import src/reports/spot-check-store.ts from source, so there are
+// two module instances that must still share one queue. Each queued op is bounded by a timeout
+// (the config store has none), so one read that never settles cannot stall every later write.
 
 import type { ConfigStore } from '../memory/config-store.js';
 import type { Logger } from '../logger.js';
@@ -76,21 +80,68 @@ const MAX_SETS = 30;
 /** A delivery is bound shortly after the digest is composed; an older set is a different digest. */
 const BIND_WINDOW_MS = 2 * 3_600_000;
 
-/** Tail of the add/bindDelivery queue. It never rejects, so one failed op cannot stall the rest. */
-let mutationChain: Promise<void> = Promise.resolve();
+/** Where the shared queue lives on globalThis. Symbol.for, so every module copy finds the same one. */
+const MUTATION_CHAIN_KEY = Symbol.for('curia.spotCheckStore.mutationChain');
+/** Longest one queued op may hold the queue. Far above a healthy config-store round trip. */
+const MUTATION_TIMEOUT_MS = 10_000;
+
+/** The add/bindDelivery queue. `tail` never rejects, so one failed op cannot stall the rest. */
+interface MutationChain {
+  tail: Promise<void>;
+}
+
+/** The process-wide queue, created by whichever module copy gets here first. */
+function mutationChain(): MutationChain {
+  const holder = globalThis as unknown as Record<symbol, MutationChain | undefined>;
+  let chain = holder[MUTATION_CHAIN_KEY];
+  if (!chain) {
+    chain = { tail: Promise.resolve() };
+    holder[MUTATION_CHAIN_KEY] = chain;
+  }
+  return chain;
+}
 
 /**
  * Run `op` after every earlier add/bindDelivery has settled. Its result or error goes to this
  * caller only: the chain keeps a settled-either-way copy so the next op starts regardless.
+ *
+ * The op gets an `abandoned()` check. Past MUTATION_TIMEOUT_MS the caller gets a timeout error
+ * and the queue moves on; an op whose read answers after that must not write, or it would put
+ * its stale list over whatever the ops after it wrote. So every op checks before writing.
  */
-function serialize<T>(op: () => Promise<T>): Promise<T> {
-  const run = mutationChain.then(op);
-  mutationChain = run.then(
+function serialize<T>(logger: Logger, op: (abandoned: () => boolean) => Promise<T>): Promise<T> {
+  const chain = mutationChain();
+  const run = chain.tail.then(async () => {
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        reject(new Error(`spot-check store: config store did not answer within ${MUTATION_TIMEOUT_MS}ms; operation timed out`));
+      }, MUTATION_TIMEOUT_MS);
+    });
+    const work = op(() => timedOut).catch((err: unknown) => {
+      // After a timeout the caller has already had its error; this is the only trace left.
+      if (timedOut) logger.warn({ err }, 'spot-check store: a timed-out operation failed after it was abandoned');
+      throw err;
+    });
+    try {
+      return await Promise.race([work, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+  chain.tail = run.then(
     () => undefined,
     // Not swallowed: `run` (returned below) still rejects to the caller, who logs it.
     () => undefined,
   );
   return run;
+}
+
+/** Thrown inside an abandoned op instead of writing. Nobody awaits it but the warn above. */
+function abandonedError(): Error {
+  return new Error('spot-check store: operation abandoned after its timeout; not writing a stale list');
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -130,8 +181,9 @@ export class SpotCheckStore {
 
   /** Store a new set, pruning old ones. Returns false when the config store soft-rejects the write. */
   async add(set: SpotCheckSet): Promise<boolean> {
-    return serialize(async () => {
+    return serialize(this.logger, async (abandoned) => {
       const sets = await this.read();
+      if (abandoned()) throw abandonedError();
       // Replace a set re-added under the same id rather than listing it twice.
       const next = sets.filter((s) => s.id !== set.id);
       next.push(set);
@@ -152,8 +204,9 @@ export class SpotCheckStore {
    * A messageId already recorded is a no-op that still returns `bound`: a retry changed nothing.
    */
   async bindDelivery(conversationId: string, delivery: SpotCheckDelivery, content: string): Promise<BindDeliveryResult> {
-    return serialize(async (): Promise<BindDeliveryResult> => {
+    return serialize(this.logger, async (abandoned): Promise<BindDeliveryResult> => {
       const sets = await this.read();
+      if (abandoned()) throw abandonedError();
       const cutoff = this.now() - BIND_WINDOW_MS;
       const candidates = sets
         .filter((s) => s.conversationId === conversationId && Date.parse(s.createdAt) >= cutoff)
