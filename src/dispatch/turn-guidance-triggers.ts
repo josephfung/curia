@@ -56,6 +56,8 @@ const EMAIL_SUBJECT_PREFIX = /^Subject:[^\n]*\n+/;
 // miss only means the guidance does not fire for that reply, never that a score is wrong.
 const QUOTE_HEADER_ON_WROTE = /^On .+ wrote:$/i;
 const QUOTE_ORIGINAL_MESSAGE = /^-{2,}\s*Original Message\s*-{2,}$/i;
+// The line htmlToText renders for an <hr> (src/channels/email/html-to-text.ts).
+const OUTLOOK_HR_RULE = /^-{3,}$/;
 
 /** Index of the first line that starts quoted text, or -1 when the reply quotes nothing. */
 function firstQuoteLine(lines: readonly string[]): number {
@@ -66,9 +68,16 @@ function firstQuoteLine(lines: readonly string[]): number {
     if (QUOTE_HEADER_ON_WROTE.test(line)) return i;
     // Gmail wraps a long "On ... <address> wrote:" header onto a second line.
     if (/^On /i.test(line) && i + 1 < lines.length && QUOTE_HEADER_ON_WROTE.test(`${line} ${lines[i + 1]!.trim()}`)) return i;
-    // Outlook-style header block. Only after a blank line, so a "From:" inside the reply's
-    // own sentence-per-line text is not mistaken for one.
-    if (/^From:\s/i.test(line) && i > 0 && lines[i - 1]!.trim() === '') return i;
+    // Outlook-style header block. Only after a blank line or a bare rule line, so a "From:"
+    // inside the reply's own sentence-per-line text is not mistaken for one.
+    if (/^From:\s/i.test(line) && i > 0) {
+      const prev = lines[i - 1]!.trim();
+      if (prev === '') return i;
+      // Outlook on the web / new Outlook put an <hr> above the header block, which htmlToText
+      // renders as a "---" line directly above "From:" (F3). Cut at the rule so it does not
+      // dangle on the end of the reply.
+      if (OUTLOOK_HR_RULE.test(prev)) return i - 1;
+    }
   }
   return -1;
 }

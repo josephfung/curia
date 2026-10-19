@@ -8,6 +8,7 @@ import {
   spotCheckCandidateText,
   type InboundGuidanceFacts,
 } from '../../../src/dispatch/turn-guidance-triggers.js';
+import { htmlToText } from '../../../src/channels/email/html-to-text.js';
 
 function facts(overrides: Partial<InboundGuidanceFacts> = {}): InboundGuidanceFacts {
   return {
@@ -206,6 +207,45 @@ describe('spotCheckCandidateText', () => {
       // Without the cut, the quoted tail would push the message past the length gate.
       expect(looksLikeSpotCheckReply(body)).toBe(false);
       expect(looksLikeSpotCheckReply(candidate(body))).toBe(true);
+    });
+
+    // F3: Outlook on the web / new Outlook put an <hr> above a bold "From:" header block, and
+    // htmlToText renders the <hr> as a "---" line, so the From: line follows "---", not a blank
+    // line. Built from the real converter's output, not a hand-written guess at it.
+    it('at an Outlook on the web header that follows the converter\'s <hr> rule', () => {
+      const html = [
+        '<div>2 bad, that was a renewal notice</div>',
+        '<hr>',
+        '<div><b>From:</b> Curia &lt;curia@example.com&gt;<br>',
+        '<b>Sent:</b> Monday, October 19, 2026 7:05 AM<br>',
+        '<b>To:</b> Dana &lt;dana@example.com&gt;<br>',
+        '<b>Subject:</b> Your daily digest</div>',
+        '<div>Daily digest for Dana<br>',
+        `Handled today: ${'14 emails triaged, 3 meetings rescheduled, 2 invoices filed. '.repeat(4)}<br>`,
+        'Spot check (optional, reply with a number):<br>',
+        '1. Archived a newsletter from the design collective.<br>',
+        '2. Declined a meeting request from Sam about the Q4 planning offsite.<br>',
+        '3. Filed an invoice from the catering company under operations.</div>',
+      ].join('');
+      const body = htmlToText(html);
+      // Guard the premise: the converter really does emit the rule line before From:.
+      expect(body).toMatch(/^-{3,}$/m);
+      expect(body.length).toBeGreaterThan(400);
+      expect(candidate(body)).toBe(REPLY);
+      expect(looksLikeSpotCheckReply(candidate(body))).toBe(true);
+      // And so the trigger fires for the principal's OWA reply.
+      expect(inboundTurnGuidance(facts({
+        channelId: 'email',
+        spotCheckReply: looksLikeSpotCheckReply(candidate(body)),
+      }))).toContain('spot-check-reply');
+    });
+
+    it('cuts at the rule line, not just the From: line, after an Outlook <hr>', () => {
+      expect(candidate(`${REPLY}\n---\nFrom: Curia <curia@example.com>\nSent: Monday\n${QUOTED_TAIL}`)).toBe(REPLY);
+    });
+
+    it('does not cut at a From: line after a rule line that is not bare dashes', () => {
+      expect(candidate(`${REPLY}\n--- notes\nFrom: the vendor\nthat was it`)).toContain('that was it');
     });
 
     it('does not cut at a From: line that does not follow a blank line', () => {
