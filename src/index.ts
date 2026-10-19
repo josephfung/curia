@@ -2908,6 +2908,7 @@ async function main(): Promise<void> {
     bullpenService,
     principalIdentities,
     principalBacklog: createPrincipalBacklogSource(pool),
+    verification: verificationRuntime,
   });
   dispatcher.register();
   // Deferred delegations wake in the originating conversation (#1893). The
