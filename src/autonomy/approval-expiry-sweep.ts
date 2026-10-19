@@ -28,7 +28,7 @@ import type { EventBus } from '../bus/bus.js';
 import { createPrincipalReport } from '../bus/events.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { ActionLogRow } from './action-log-types.js';
-import type { ApprovalDelivery, DeliverResult } from './approval-delivery.js';
+import type { ApprovalChannel, ApprovalDelivery, DeliverResult } from './approval-delivery.js';
 
 export interface ApprovalExpirySweepOptions {
   actionLogRepo: Pick<ActionLogRepo, 'findExpired' | 'expireRows' | 'findUndelivered'>;
@@ -177,7 +177,7 @@ export class ApprovalExpirySweep {
         continue;
       }
       try {
-        const result = await this.deliverOnFirstWorkingChannel(r.shortRef);
+        const result = await this.deliverOnFirstWorkingChannel(approvalDelivery, r.shortRef);
         if (result.delivered) {
           delivered += 1;
           // An agent was told to deliver this and did not; worth seeing in the logs.
@@ -198,18 +198,25 @@ export class ApprovalExpirySweep {
     return delivered;
   }
 
-  /** Email first, as the spec says; then each other available channel, one at a time. */
-  private async deliverOnFirstWorkingChannel(shortRef: string): Promise<DeliverResult> {
-    const approvalDelivery = this.opts.approvalDelivery!;
-    let result = await approvalDelivery.deliver(shortRef, 'email');
-    const tried = new Set<string>(['email']);
-    while (!result.delivered && (result.reason === 'channel_unavailable' || result.reason === 'send_failed')) {
-      const next = result.available.find((c) => !tried.has(c));
-      if (!next) break;
-      tried.add(next);
-      result = await approvalDelivery.deliver(shortRef, next);
+  /** Email first, as the spec says; then each other configured channel, one at a time. */
+  private async deliverOnFirstWorkingChannel(
+    approvalDelivery: Pick<ApprovalDelivery, 'deliver' | 'availableChannels'>,
+    shortRef: string,
+  ): Promise<DeliverResult> {
+    // The live channel list, not deliver()'s `available`: that one leaves out channels that
+    // failed earlier in this process, which is right for an agent choosing its next try but
+    // would retire a channel for good after one transient outage. Each tick tries them all.
+    const order: ApprovalChannel[] = ['email', ...approvalDelivery.availableChannels().filter((c) => c !== 'email')];
+    let result: DeliverResult | undefined;
+    for (const channel of order) {
+      result = await approvalDelivery.deliver(shortRef, channel);
+      if (result.delivered) return result;
+      // Only a channel problem is worth another channel; anything else (already delivered,
+      // gone) is final for this row.
+      if (result.reason !== 'channel_unavailable' && result.reason !== 'send_failed') return result;
     }
-    return result;
+    // `order` always has email, so the loop ran at least once.
+    return result as DeliverResult;
   }
 
   /** Queue one digest item per expired row. Returns how many were queued. */

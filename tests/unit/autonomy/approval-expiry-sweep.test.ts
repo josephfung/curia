@@ -9,9 +9,12 @@ import { ApprovalExpirySweep } from '../../../src/autonomy/approval-expiry-sweep
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 import type { ActionLogRow } from '../../../src/autonomy/action-log-types.js';
 import type { EventBus } from '../../../src/bus/bus.js';
-import type { ApprovalDelivery, DeliverResult } from '../../../src/autonomy/approval-delivery.js';
+import { ApprovalDelivery, type DeliverResult } from '../../../src/autonomy/approval-delivery.js';
+import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
+import type { ChannelIdentity, PrincipalEmailRef } from '../../../src/contacts/types.js';
 
 const NOW = new Date('2026-10-18T12:00:00.000Z');
+const DAY_MS = 86_400_000;
 import type { BusEvent, PrincipalReportEvent } from '../../../src/bus/events.js';
 import type { Logger } from '../../../src/logger.js';
 
@@ -254,12 +257,63 @@ describe('ApprovalExpirySweep safety net (#2159)', () => {
     const { sweep, deliver } = makeSweep({
       undeliveredRows: [makeRow({ id: 9, shortRef: 'late-ref' })],
       deliverResults: [{ delivered: false, reason: 'send_failed', available: ['signal', 'sms'] }],
+      availableChannels: ['signal', 'sms', 'email'],
     });
 
     const result = await sweep.tick();
 
     expect(deliver.mock.calls.map((c) => c[1])).toEqual(['email', 'signal']);
     expect(result.safetyNetDelivered).toBe(1);
+  });
+
+  // Review fix: ApprovalDelivery drops a channel that failed once from `available` for the
+  // rest of the process. Building the fallback from that list retired the principal's only
+  // channel after one transient outage, so the safety net never pinged them.
+  it('retries a channel that failed earlier, with a real ApprovalDelivery', async () => {
+    const row = makeRow({ id: 9, shortRef: 'late-ref', expiresAt: new Date(NOW.getTime() + DAY_MS) });
+    const send = vi.fn()
+      .mockResolvedValueOnce({ success: false, blockedReason: 'signal-cli down' })
+      .mockResolvedValue({ success: true, messageId: 'sig-1' });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const delivery = new ApprovalDelivery({
+      actionLogRepo: {
+        findPendingByShortRef: vi.fn().mockResolvedValue(row),
+        claimNotification: vi.fn().mockResolvedValue(true),
+        releaseNotification: vi.fn().mockResolvedValue(undefined),
+        bindDeliveryMessage: vi.fn().mockResolvedValue(true),
+      } as unknown as ActionLogRepo,
+      outboundGateway: { send } as unknown as OutboundGateway,
+      // Signal only: no email on file.
+      principalIdentities: [{
+        id: 'id-signal', contactId: 'principal-1', channel: 'signal', channelIdentifier: '+15550001111', label: null,
+        verified: true, verifiedAt: null, status: 'active', source: 'ceo_stated', createdAt: NOW, updatedAt: NOW,
+      } as ChannelIdentity],
+      principalEmail: { current: '' } as PrincipalEmailRef,
+      logger: logger as unknown as Logger,
+    });
+
+    // The agent's attempt during the outage fails and marks Signal as failed.
+    await expect(delivery.deliver('late-ref', 'signal')).resolves.toMatchObject({ delivered: false, reason: 'send_failed' });
+
+    const sweep = new ApprovalExpirySweep({
+      actionLogRepo: {
+        findExpired: vi.fn().mockResolvedValue([]),
+        expireRows: vi.fn().mockResolvedValue([]),
+        findUndelivered: vi.fn().mockResolvedValue([row]),
+      } as unknown as ActionLogRepo,
+      bus: { publish: vi.fn() } as unknown as EventBus,
+      approvalDelivery: delivery,
+      logger: logger as unknown as Logger,
+      intervalMinutes: 15,
+      undeliveredAfterMinutes: 15,
+      now: () => NOW,
+    });
+
+    const result = await sweep.tick();
+
+    expect(result.safetyNetDelivered).toBe(1);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1]![0]).toMatchObject({ channel: 'signal', recipient: '+15550001111' });
   });
 
   it('a failing row does not stop the other rows or the expiry pass', async () => {
