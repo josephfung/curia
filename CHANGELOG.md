@@ -24,6 +24,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Judge brief** — escalation judge answers purpose, speaks-as-principal, grounding and necessity from the turn's lookups. (#2159)
 - **ADR-049** — band-driven autonomy replaces the tier escalation policy. (#2159)
 - **Spot-check pool** — autonomous sends and actions are logged for sampling; never graded by the LLM judge. (#2159)
+- **Spot checks in the digest** — up to three weighted samples of autonomous actions, numbered, never IDs. (#2159)
+- **`list-spot-checks`** — returns the digest's spot-check block and remembers which number means which action. (#2159)
 
 ### Changed
 
@@ -52,6 +54,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Haiku 5.5** — default fast tier and both judges move to `claude-haiku-5-5`, without thinking or temperature. (#2077)
 - **Judge token caps** — leak and escalation judge verdict caps raised for Haiku 5.5's longer verdicts. (#2077)
 - **Autonomy scoring** — principal verdicts weigh triple; expired approvals no longer count against the score. (#2159)
+- **`ceo-inbox-archive` / `ceo-inbox-label`** — results now include the email's subject and sender. (#2159)
 
 ### Removed
 
