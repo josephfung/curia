@@ -8,6 +8,7 @@
 import { AutonomyService } from './autonomy-service.js';
 import { HUMAN_SEND_SKILLS } from './band-policy.js';
 import type { ActionRisk } from '../skills/types.js';
+import { sanitizeDisplayName, sanitizeOutput } from '../skills/sanitize.js';
 
 export const SAMPLE_POOL_SCORED_BY = 'sample-pool';
 export const PRINCIPAL_SCORED_BY = 'principal';
@@ -88,17 +89,80 @@ function capText(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
 }
 
+// ── Untrusted email text ────────────────────────────────────────────────────
+//
+// A subject and a sender name are written by whoever sent the email. They land in the
+// principal's digest (rendered as markdown or HTML by some channels) and in the context of the
+// agent composing it. So before either goes into a summary line: tags are stripped and secret
+// patterns redacted, and the characters that build a markdown link or an HTML tag are swapped
+// for parentheses, so `[Renew](https://evil.example)` can never render as a link. Every path
+// into a summary (write time in the execution layer, draw-time lookup in the sampler) goes
+// through formatEmailSummary or sampleEmailFromResult, so this is the one place it happens.
+
+/** A bare address. Excludes every character that could carry markup or break the line. */
+const BARE_ADDRESS = /^[^\s@<>()[\]"',;:\\]+@[^\s@<>()[\]"',;:\\]+$/;
+
+/**
+ * Split `Name <address>` (legacy rows, provider strings) or `Name (address)` (describeMessage),
+ * or null when the line does not end in a bracketed plain address. Index-based rather than a
+ * regex so a long hostile name cannot make the parse backtrack.
+ */
+function splitNamedAddress(line: string): { name: string; address: string } | null {
+  const close = line.at(-1);
+  if (close !== '>' && close !== ')') return null;
+  const open = line.lastIndexOf(close === '>' ? '<' : '(');
+  if (open < 0) return null;
+  const address = line.slice(open + 1, -1).trim();
+  return BARE_ADDRESS.test(address) ? { name: line.slice(0, open), address } : null;
+}
+
+/** Swap the characters that build a markdown link or an HTML tag for parentheses. */
+function neutralizeMarkup(s: string): string {
+  return s.replace(/[[<]/g, '(').replace(/[\]>]/g, ')');
+}
+
+/** A subject made safe to show: tags stripped, secrets redacted, no link or tag syntax left. */
+function cleanSubject(raw: string): string {
+  return oneLine(neutralizeMarkup(sanitizeOutput(raw)));
+}
+
+/** A sender name through the display-name allowlist (which drops brackets, colons, slashes). */
+function cleanName(raw: string): string {
+  if (!raw.trim()) return '';
+  // A name has no business carrying a URL: drop a markdown link's target, keep its text.
+  const name = sanitizeDisplayName(raw.replace(/\]\([^)]*\)/g, ']'));
+  // sanitizeDisplayName's last resort for a name that sanitizes to nothing is the literal
+  // 'Unknown'. Beside an address, showing nothing is better than inventing a name.
+  return name === 'Unknown' && !/unknown/i.test(raw) ? '' : name;
+}
+
+/**
+ * A sender made safe to show, as `Name (address)`, the bare address, or the name alone. The
+ * address stays readable (the principal grades by it) but is kept only when it is a plain
+ * address with no markup characters; anything else is treated as part of the name.
+ */
+function cleanSender(raw: string): string {
+  const line = oneLine(raw);
+  if (BARE_ADDRESS.test(line)) return line;
+  const named = splitNamedAddress(line);
+  const name = cleanName(named ? named.name : line);
+  const address = named?.address ?? '';
+  if (name && address) return `${name} (${address})`;
+  return name || address;
+}
+
 /**
  * The summary line for a triage sample once the email is known:
  * `Archive an email: "Statement ready" from Billing (billing@example.com)`.
  *
  * Returns the base (as one line) when there is no subject or sender to add. One helper for
  * the execution layer (write time) and the sampler (draw-time lookup) so the two cannot drift.
+ * The subject and sender are untrusted and cleaned here (see "Untrusted email text" above).
  */
 export function formatEmailSummary(base: string, subject?: string, from?: string): string {
   const cleanBase = oneLine(base);
-  const s = subject ? oneLine(subject) : '';
-  const f = from ? oneLine(from) : '';
+  const s = subject ? cleanSubject(subject) : '';
+  const f = from ? cleanSender(from) : '';
   if (!s && !f) return cleanBase;
   const detail = [s ? `"${s}"` : '', f ? `from ${f}` : ''].filter(Boolean).join(' ');
   return capText(`${cleanBase}: ${detail}`, ENRICHED_SUMMARY_MAX);
@@ -106,18 +170,20 @@ export function formatEmailSummary(base: string, subject?: string, from?: string
 
 /**
  * Pull the subject/sender out of a tool result's data, or undefined when it has neither.
- * Anything that is not a non-empty string is ignored: tool output is untyped.
+ * Anything that is not a non-empty string is ignored: tool output is untyped. Both are
+ * cleaned before they are stored (see "Untrusted email text" above), so the row never holds
+ * a link or markup even if a later reader skips formatEmailSummary.
  */
 export function sampleEmailFromResult(data: unknown): SampleEmail | undefined {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return undefined;
   const rec = data as Record<string, unknown>;
-  const field = (v: unknown): string | undefined => {
+  const field = (v: unknown, clean: (raw: string) => string): string | undefined => {
     if (typeof v !== 'string') return undefined;
-    const t = oneLine(v);
+    const t = clean(v);
     return t ? capText(t, SAMPLE_EMAIL_FIELD_MAX) : undefined;
   };
-  const subject = field(rec['subject']);
-  const from = field(rec['from']);
+  const subject = field(rec['subject'], cleanSubject);
+  const from = field(rec['from'], cleanSender);
   if (!subject && !from) return undefined;
   return { ...(subject ? { subject } : {}), ...(from ? { from } : {}) };
 }
