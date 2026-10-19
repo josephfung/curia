@@ -3,8 +3,9 @@
 //
 // The numbers in a digest's "Spot check" block only mean something against the digest that
 // showed them. Two steps, both pure apart from the store reads:
-//   1. resolveSpotCheckSet picks the digest: the one delivered on the reply's email thread,
-//      else the most recently delivered one within 24 hours.
+//   1. resolveSpotCheckSet picks the digest: for an email reply, the one delivered on its
+//      thread (and nothing else); for a chat reply, the most recently delivered one within 24
+//      hours.
 //   2. matchVerdicts maps each number to that digest's item.
 //
 // Neither step guesses. No matching digest, an unknown number, or a number given two
@@ -22,21 +23,24 @@ export interface SpotCheckVerdictInput {
 
 export type ResolveSetResult = { ok: true; set: SpotCheckSet } | { ok: false; error: string };
 
-/** How far back a reply off the digest's own email thread may reach. */
+/** How far back a chat reply may reach for the latest delivered digest. */
 const FALLBACK_WINDOW_MS = 24 * 3_600_000;
 const EMAIL_CONVERSATION_PREFIX = 'email:';
 
 const NO_MATCHING_SET =
   'No spot check in the last 24 hours matches this reply. Ask the principal which action they mean; do not guess.';
+const NO_SET_ON_THREAD =
+  'No spot check went out on this email thread. Ask the principal which action they mean; do not guess.';
 
 /**
  * Find the digest set a reply refers to.
  *
- * An email reply on the digest's own thread is unambiguous, so it resolves with no time limit.
- * Anything else (another channel, or an email on a thread no digest went out on) resolves
- * against the latest delivered set, and only within 24 hours: past that, "2 good" is too likely
- * to mean something else. Only delivered sets resolve, so a set whose block was dropped before
- * sending (the principal never saw those numbers) can never be graded.
+ * An email reply resolves only by its thread: on the digest's own thread it is unambiguous (no
+ * time limit); on any other thread, "2 bad" is about that thread, not the latest digest, so it
+ * fails and the coordinator asks. A chat reply (Signal, Slack, ...) has no thread to go by and
+ * resolves against the latest delivered set, only within 24 hours: past that, "2 good" is too
+ * likely to mean something else (spec 14). Only delivered sets resolve, so a set whose block was
+ * dropped before sending (the principal never saw those numbers) can never be graded.
  *
  * Store read errors propagate: an outage must not look like "no digest found".
  */
@@ -45,9 +49,11 @@ export async function resolveSpotCheckSet(
   where: { channelId?: string; conversationId?: string },
 ): Promise<ResolveSetResult> {
   const { channelId, conversationId } = where;
-  if (channelId === 'email' && conversationId?.startsWith(EMAIL_CONVERSATION_PREFIX)) {
-    const onThread = await store.findByEmailThread(conversationId.slice(EMAIL_CONVERSATION_PREFIX.length));
-    if (onThread) return { ok: true, set: onThread };
+  if (channelId === 'email') {
+    const onThread = conversationId?.startsWith(EMAIL_CONVERSATION_PREFIX)
+      ? await store.findByEmailThread(conversationId.slice(EMAIL_CONVERSATION_PREFIX.length))
+      : null;
+    return onThread ? { ok: true, set: onThread } : { ok: false, error: NO_SET_ON_THREAD };
   }
   const latest = await store.findLatestDelivered(FALLBACK_WINDOW_MS);
   if (latest) return { ok: true, set: latest };

@@ -10,6 +10,7 @@ import { createSilentLogger } from '../../../src/logger.js';
 const HOUR = 3_600_000;
 const NOW = Date.parse('2026-10-19T12:00:00.000Z');
 const NO_MATCH = 'No spot check in the last 24 hours matches this reply. Ask the principal which action they mean; do not guess.';
+const NO_SET_ON_THREAD = 'No spot check went out on this email thread. Ask the principal which action they mean; do not guess.';
 
 function makeSet(over: Partial<SpotCheckSet> = {}): SpotCheckSet {
   return {
@@ -56,9 +57,25 @@ describe('resolveSpotCheckSet', () => {
     expect(result).toEqual({ ok: true, set: expect.objectContaining({ id: 'thread-set' }) });
   });
 
+  // The 24 hour fallback is for chat replies (spec 14). An email reply always lands on some
+  // thread; if no digest went out on it, "2 bad" is about something else, not the latest digest.
   it.each([
-    ['an email on a thread with no digest', { channelId: 'email', conversationId: 'email:unbound' }],
+    ['on a thread with no digest', 'email:unbound'],
+    ['with no thread at all', 'conv-without-prefix'],
+  ])('refuses an email reply %s, even when a set was delivered within 24 hours', async (_label, conversationId) => {
+    const recent = makeSet({
+      id: 'recent',
+      deliveries: [{ channel: 'signal', messageId: 's1', at: at(HOUR) }],
+    });
+
+    const result = await resolveSpotCheckSet(storeWith([recent]), { channelId: 'email', conversationId });
+
+    expect(result).toEqual({ ok: false, error: NO_SET_ON_THREAD });
+  });
+
+  it.each([
     ['a Signal reply', { channelId: 'signal', conversationId: 'signal:+15550100' }],
+    ['a Slack reply', { channelId: 'slack', conversationId: 'slack:C1' }],
   ])('falls back to the latest delivered set within 24 hours for %s', async (_label, where) => {
     const older = makeSet({
       id: 'older',
@@ -93,7 +110,7 @@ describe('resolveSpotCheckSet', () => {
     const viaEmail = await resolveSpotCheckSet(storeWith([undelivered]), { channelId: 'email', conversationId: 'email:th1' });
 
     expect(viaFallback).toEqual({ ok: false, error: NO_MATCH });
-    expect(viaEmail).toEqual({ ok: false, error: NO_MATCH });
+    expect(viaEmail).toEqual({ ok: false, error: NO_SET_ON_THREAD });
   });
 
   it('propagates a store read error rather than reporting no match', async () => {
