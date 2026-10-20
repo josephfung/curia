@@ -2,6 +2,7 @@
 
 Date: 2026-07-16
 Status: Accepted
+Amended: 2026-10-20 — shadow rows no longer feed the Phase 3 score or the error-rate guard (#2191)
 
 ## Context
 
@@ -75,3 +76,34 @@ Rationale for rejecting a parallel competence model (option 1): Phase 3 already 
 - **`ceo-inbox` must become autonomy-band-aware.** Per the spec 14 checklist, scheduled specialists need explicit `autonomyService` injection so triage aggressiveness tracks the live band as shadow competence raises the score.
 - **No new public memory API.** Skills and bus events are additive (`ceo.sent_observed`, new skills); the skill/handler surfaces grow, but knowledge-graph and task schemas do not gain parallel "learning" tables.
 - **Accepted trade-off:** shadow rows are judged by a batched LLM assessment of substantive decision/recommendation equivalence at reconciliation time, not by the live per-action scoring-pass judge. They arrive pre-scored, so the scoring-pass judge path never sees them directly. Operators must understand `scored_by = 'shadow-reconciler'` in audits.
+
+## Amendment (2026-10-20) — shadows leave the score (#2191)
+
+**Decision B is reversed.** Shadow rows are still captured, judged and written to
+`autonomy_action_log`, but they no longer feed the Phase 3 pass: `countScored`,
+`findAllScored` and `getRecentCompetenceErrorRate` all leave out
+`outcome = 'shadow_evaluated'`. Passive observation (decision A) is unchanged.
+
+Why, from three months of prod data:
+
+- **The sample selects hard cases.** Shadows are drafted only for messages Curia chose
+  to punt (Seen, Urgent, Stuck). Seen means personal, sensitive or uncertain, and Urgent
+  means the principal has to decide. On those, a draft that differs from the principal's
+  reply mostly shows that punting was right. Counting it as a competence error penalized
+  correct caution.
+- **The signal was noisy.** 11 of the first 15 judged pairs scored as different
+  decisions. At least 3 of the 11 were artifacts: a send about a week after capture
+  paired as "the reply", one reply scored against two shadows, and a judge treating two
+  routes to the same outcome as opposite decisions. Most of the rest share one theme:
+  the shadow commits the principal, or asserts facts Curia could not know.
+- **It blocked the score.** Shadows were 11 of the 16 errors in the guard's 30-row
+  window (53%, against a 20% threshold), so they alone kept the score from rising.
+
+The rows stay useful as draft-quality evidence: the learning checkup reads their
+disagreement reasons. If shadows return to the score, it should be after the pairing is
+bounded (a send close to capture, one send per shadow) and the judge sees the inbound
+message, and probably at a reduced weight.
+
+The same change bounds the error-rate window by age (`errorRateWindowDays`, default 90)
+as well as count. Competence rows are sparse, so "the last 30" had reached back five
+months.

@@ -50,7 +50,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [025](025-conversation-id-reversible-text-key.md) | `conversation_id` is a reversible TEXT key, not a UUID v5 — reject the #16 migration, reconcile specs to reality | Accepted |
 | [027](027-structured-secret-subfield-addressing.md) | Structured secrets with schema-tagged sub-field addressing — `secret_ref#field` projections gated to a registered schema, shipping `credit_card` first | Accepted |
 | [028](028-shared-unbound-agent-memory.md) | Shared, unbound agent memory — remove the inert `memory.scopes` field; govern access by capability gating + sensitivity tiers + provenance, not per-agent scopes | Accepted |
-| [029](029-passive-email-observation-and-counterfactual-competence.md) | Passive email observation with counterfactual (shadow) competence as a Phase 3 input — reuse existing stores, no new memory types | Accepted |
+| [029](029-passive-email-observation-and-counterfactual-competence.md) | Passive email observation — reuse existing stores, no new memory types; counterfactual (shadow) drafts are judged and recorded but no longer feed the Phase 3 score (#2191) | Accepted |
 | [030](030-per-task-warm-browser-session.md) | Opt-in, per-task warm browser session (`keep_warm`) — reject a global canonical session (collision); profile-level warmth stays always-on | Accepted |
 | [031](031-tools-vs-skills-vocabulary.md) | Tools vs skills vocabulary — atom rename to **tool**; free **skill** for collections (Phase 1 of #1436) | Accepted |
 | [032](032-polymorphic-pins-and-mcp-as-skill.md) | Polymorphic capability pins (skill \| tool \| future MCP) + MCP servers project skills into `SkillRegistry` — prerequisites for #1494 | Accepted |

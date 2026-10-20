@@ -391,7 +391,7 @@ Capability Score =
 Key constraints:
 - Minimum 30 scored actions before any automatic adjustment fires
 - Time-decay weighting (recent actions weighted more heavily via exponential half-life)
-- Score cannot increase if competence error rate exceeds the configured threshold (default 20%)
+- Score cannot increase if competence error rate exceeds the configured threshold (default 20%). The rate covers the last 30 competence-flagged rows no older than `errorRateWindowDays` (default 90), shadow rows excluded
 - CEO cooldown: no auto-adjustment for 7 days after a manual CEO `set-autonomy`
 - Unparseable LLM-judge replies retry until `unparseableAfterDays` (default 3), then persist null flags with `scored_by: 'llm-judge-unparseable'` so they leave the queue without biasing the capability score
 - `expired` approvals carry no signal: new rows are scored with every flag null, and `computeCapabilityScore` skips old `expired` rows that still carry flags. The former `weakExpiredWeight` setting is retired: a config that still sets it boots, and the value is ignored.
@@ -399,38 +399,35 @@ Key constraints:
 - All automatic adjustments write to `autonomy_history` with `changed_by: "system"`
 - Delta capped at ±5 per daily pass; `get-autonomy` surfaces trend and scored action count
 
-The scorer reads rows with `scored_by` set and at least one non-null flag, and `outcome <> 'expired'`: `findAllScored` filters in SQL, and `countScored` applies the same evidence filter. That leaves out sampled-pool rows until the principal grades them, coordinator-resolved rows and dead-lettered judge replies (all flags null).
+The scorer reads rows with `scored_by` set and at least one non-null flag, and `outcome NOT IN ('expired', 'shadow_evaluated')`: `findAllScored` filters in SQL, and `countScored` applies the same evidence filter. That leaves out sampled-pool rows until the principal grades them, coordinator-resolved rows and dead-lettered judge replies (all flags null), and shadow-draft rows (see below).
 
 See `src/autonomy/scoring-pass.ts`, `src/autonomy/action-log-repo.ts`, and ADR-018.
 
 The `autonomy_history` table from Phase 1 is the exact foundation Phase 3 writes to. Phase 3 gets its own design doc when the time comes.
 
-### Shadow-draft competence (counterfactual input, ADR-029)
-
-Capability growth from email observation feeds this **same** Phase 3 pass — no parallel
-competence model and no second score dial (ADR-029).
+### Shadow-draft evaluation (counterfactual record, ADR-029)
 
 When `ceo-inbox` triages a message but punts (Seen / Urgent / Stuck), it may silently
 generate a **non-surfaced, non-sent** shadow draft and store it in OKF. High-sensitivity
 threads (board, investors, legal, spouse — KG sensitivity tier) are **included** in shadow
-capture, not excluded. Those are the highest-stakes decisions, where competence evidence
-matters most. When the sent-mail observer later reconciles against the CEO's actual send,
-it batches `(shadow draft, actual sent reply)` pairs (batch size 20) into a single
-`ctx.infraLlm.extract()` call that judges whether the shadow draft reached the same
-substantive decision/recommendation as the actual send, then writes a **pre-scored**
-`autonomy_action_log` row:
+capture, not excluded. When the sent-mail observer later reconciles against the CEO's
+actual send, it judges `(shadow draft, actual sent reply)` pairs in chunks of 8 (up to 40
+pairs per run, the chunks run concurrently) via `ctx.infraLlm.extract()`, asking whether
+the shadow draft reached the same substantive decision/recommendation as the actual send.
+Each chunk is parsed all-or-nothing on its own, so one bad response holds back only its
+own pairs. It then writes a **pre-scored** `autonomy_action_log` row:
 
 | Field | Value |
 |---|---|
-| `competence_flag` | `1` if the batched LLM judged the shadow draft equivalent (same substantive decision/recommendation) to the actual send; `0` if it diverged |
-| `commitment_flag` / `compatibility` | `null` — pure competence signal; `computeCapabilityScore` ignores nulls per dimension |
-| `scored_by` | `'shadow-reconciler'` — `findUnscoredTerminal` skips it; `findAllScored` includes it |
+| `competence_flag` | `1` if the LLM judged the shadow draft equivalent (same substantive decision/recommendation) to the actual send; `0` if it diverged |
+| `commitment_flag` / `compatibility` | `null` |
+| `scored_by` | `'shadow-reconciler'` — `findUnscoredTerminal` skips it |
 | Markers | `skill_name: 'shadow-draft-eval'`, `action_risk: 'none'`, `payload.shadow: true`, `outcome: 'shadow_evaluated'` |
 
-These rows arrive pre-scored and feed the existing Phase 3 scoring pass unchanged, same
-as any other scored row. Shadow drafts never create approvals or notifications. As
-competence accrues, the single global score rises through the existing bands; agents
-that receive the autonomy prompt block (including `ceo-inbox` once `autonomyService`
-is injected, see checklist above) draft/handle more rather than punt. Fully autonomous
-*sending* still sits behind the existing `medium`/70 floor. The loop never writes the
-global score itself, only the Phase 3 pass does.
+**These rows do not feed the Phase 3 score** (amended 2026-10-20, #2191).
+`countScored`, `findAllScored` and the error-rate guard all leave out
+`outcome = 'shadow_evaluated'`. Shadows are drafted only for messages Curia chose to
+punt, so a disagreement mostly says the punt was right, not that an action was wrong; and
+in prod 11 of the first 15 judged pairs disagreed, with at least 3 of those from pairing or
+judge artifacts. The rows stay in the table as draft-quality evidence for the learning
+checkup. Shadow drafts never create approvals or notifications.

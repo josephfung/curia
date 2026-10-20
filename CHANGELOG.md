@@ -60,6 +60,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ceo-inbox-archive` / `ceo-inbox-label`** — results now include the email's subject and sender. (#2159)
 - **Approvals and learning items** — answered by short numbers ("approve 3", "confirm task 2"), not IDs. (#2159)
 - **Approval tools** — `short_ref` accepts the approval number; `list-pending-actions` and `list-learning-digest` return numbers. (#2159)
+- **Shadow drafts** — still judged and recorded, but no longer count toward the autonomy score. ADR-029. (#2191)
+- **Error-rate guard** — its last-30 window now also stops at 90 days (`errorRateWindowDays`). (#2191)
 
 ### Removed
 
@@ -68,6 +70,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`ceo-inbox-sent-observe`** — shadow pairs are judged in small chunks, so a truncated reply no longer stalls observation. (#2191)
 - **Integration test cleanup** — contacts and knowledge-graph suites delete only their own rows, ending parallel FK races. (#2183)
 - **Email signature** — the model's own sign-off is replaced by the configured signature, so emails sign once. (#2138)
 - **Requests no tool can do** — an empty `tool-registry` search says to reach whoever can, not research around it. (#2149)
