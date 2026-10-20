@@ -287,3 +287,66 @@ describe('AgentRuntime model fallback (#813)', () => {
     expect(fallbackEvents).toHaveLength(0);
   });
 });
+
+describe('AgentRuntime reasoning setting (ADR-048 §3)', () => {
+  const logger = createSilentLogger();
+  const AGENT_ID = 'test-agent';
+  const PRIMARY_MODEL = 'deepseek/deepseek-v4.1-flash';
+  const FALLBACK_MODEL = 'claude-sonnet-4-6';
+
+  let bus: EventBus;
+  beforeEach(() => {
+    bus = new EventBus(logger);
+  });
+
+  function optionsOf(provider: LLMProvider): unknown {
+    const params = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { options?: unknown };
+    return params.options;
+  }
+
+  it('sends the tier reasoning setting on agent turns', async () => {
+    const primary = makeProvider('openrouter', makeSuccessResponse(PRIMARY_MODEL));
+    new AgentRuntime({
+      agentId: AGENT_ID, systemPrompt: 'You are helpful.', provider: primary, resolvedModel: PRIMARY_MODEL,
+      tier: 'standard', reasoning: { effort: 'low' }, bus, logger,
+    }).register();
+    await runTask(bus, AGENT_ID);
+    expect(optionsOf(primary)).toEqual({ reasoning: { effort: 'low' } });
+  });
+
+  it('sends no options when the tier leaves reasoning unset', async () => {
+    const primary = makeProvider('openrouter', makeSuccessResponse(PRIMARY_MODEL));
+    new AgentRuntime({
+      agentId: AGENT_ID, systemPrompt: 'You are helpful.', provider: primary, resolvedModel: PRIMARY_MODEL, tier: 'standard', bus, logger,
+    }).register();
+    await runTask(bus, AGENT_ID);
+    expect(optionsOf(primary)).toBeUndefined();
+  });
+
+  it('sends the fallback tier its own setting', async () => {
+    const primary = makeProvider('openrouter', makeNotFoundResponse());
+    const fallback = makeProvider('anthropic', makeSuccessResponse(FALLBACK_MODEL));
+    new AgentRuntime({
+      agentId: AGENT_ID, systemPrompt: 'You are helpful.', provider: primary, resolvedModel: PRIMARY_MODEL, tier: 'standard',
+      reasoning: { effort: 'low' }, fallbackModel: FALLBACK_MODEL, fallbackProvider: fallback, fallbackReasoning: { effort: 'high' },
+      bus, logger,
+    }).register();
+    await runTask(bus, AGENT_ID);
+    expect(optionsOf(primary)).toEqual({ reasoning: { effort: 'low' } });
+    expect(optionsOf(fallback)).toEqual({ reasoning: { effort: 'high' } });
+  });
+
+  it('records the effort the provider reports it sent on llm.call', async () => {
+    const response = makeSuccessResponse(PRIMARY_MODEL);
+    if (response.type === 'text') response.provenance.reasoningEffort = 'low';
+    const primary = makeProvider('openrouter', response);
+    const calls: Array<{ payload: { reasoningEffort?: unknown } }> = [];
+    bus.subscribe('llm.call', 'system', (event) => { calls.push(event as unknown as { payload: { reasoningEffort?: unknown } }); });
+    new AgentRuntime({
+      agentId: AGENT_ID, systemPrompt: 'You are helpful.', provider: primary, resolvedModel: PRIMARY_MODEL,
+      tier: 'standard', reasoning: { effort: 'low' }, bus, logger,
+    }).register();
+    await runTask(bus, AGENT_ID);
+    expect(calls[0]!.payload.reasoningEffort).toBe('low');
+  });
+});

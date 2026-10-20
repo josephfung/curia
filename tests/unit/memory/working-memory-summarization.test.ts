@@ -18,6 +18,7 @@ import { WorkingMemory, type SummarizationConfig } from '../../../src/memory/wor
 import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../src/memory/llm-failure-turn.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { DbPool } from '../../../src/db/connection.js';
+import { NO_REASONING } from '../../../src/agents/llm/sampling-options.js';
 
 // ---------------------------------------------------------------------------
 // Minimal mock pool builder
@@ -161,6 +162,8 @@ describe('WorkingMemory — context summarization', () => {
     const promptContent = callArg.messages[0]!.content as string;
     expect(promptContent).toContain('Turn 0');
     expect(promptContent).toContain('Condense');
+    // Summarization is infrastructure: it never inherits reasoning (ADR-048 §3).
+    expect(callArg.options).toEqual({ reasoning: NO_REASONING });
   });
 
   it('rewrites LLM failure markers in the summarization transcript (#1767)', async () => {

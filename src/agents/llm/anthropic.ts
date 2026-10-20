@@ -28,8 +28,20 @@ import type { LLMProvider, LLMReasoning, LLMResponse, LLMStreamEvent, LLMUsage, 
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
-import { resolveTemperature } from './sampling-options.js';
+import { logUnsentReasoningEffort, resolveReasoning, resolveTemperature, type ReasoningEffort } from './sampling-options.js';
 import { PrefixHasher, sendableReasoningBlocks } from './reasoning-blocks.js';
+
+/**
+ * Output cap for a request that will think and set no max_tokens (ADR-048 §2).
+ * Thinking shares max_tokens with the reply, so the registry default (4,096
+ * for every Anthropic model) is too tight. The SDK refuses a non-streaming
+ * request whose max_tokens implies more than ten minutes (about 21,333), and
+ * agent turns are non-streaming, so this stays below that.
+ */
+export const THINKING_MAX_TOKENS = 16_384;
+
+/** Below this caller max_tokens, a requested effort does not turn thinking on. */
+const MIN_THINKING_MAX_TOKENS = 1_024;
 
 /**
  * The Anthropic thinking block a passed-back reasoning block holds, rebuilt
@@ -111,6 +123,8 @@ export class AnthropicProvider implements LLMProvider {
     signal?: AbortSignal;
     /** Set when the model binds thinking to the request prefix (prefix guard). */
     prefixHash?: string;
+    /** The effort the request carries, when it sends one (`none` = thinking disabled). */
+    reasoningEffort?: ReasoningEffort;
   } {
     // Anthropic requires the system prompt as a separate top-level parameter,
     // not as an element in the messages array. We extract it here so agent
@@ -242,13 +256,54 @@ export class AnthropicProvider implements LLMProvider {
       }
     }
 
-    // Models that think by default (Haiku 5.5) would otherwise spend max_tokens
-    // on a thinking block — a 10-token classifier cap can then return no text —
-    // and emit thinking blocks this provider does not carry back through tool
-    // loops. Curia never enabled thinking on Haiku 4.5, so keep it off here
-    // until the reasoning policy is decided (#2044, #2077).
-    if (this.modelRegistry.thinksByDefault(model)) {
+    // Reasoning (ADR-048 §2). Unset sends no thinking key, so the model keeps
+    // its own default: Haiku 5.5 thinks adaptively, the 4.6 models do not. An
+    // effort turns on adaptive thinking with summarized display, so the archive
+    // keeps readable reasoning; `none` disables thinking. Non-agent call sites
+    // send `none` (NO_REASONING) where they cannot afford thinking.
+    const thinksByDefault = this.modelRegistry.thinksByDefault(model);
+    let reasoningEffort: ReasoningEffort | undefined;
+    const requestedEffort = resolveReasoning(options, this.logger);
+    if (requestedEffort !== undefined) {
+      if (!this.modelRegistry.honorsReasoningEffort(model, requestedEffort)) {
+        logUnsentReasoningEffort(this.logger, model, requestedEffort, this.modelRegistry.reasoningSupport(model)?.efforts);
+      } else if (requestedEffort === 'none') {
+        reasoningEffort = 'none';
+      } else if (createParams.temperature !== undefined) {
+        // Thinking rejects temperature; the caller's explicit temperature wins.
+        this.logger.warn(
+          { model, effort: requestedEffort, temperature: createParams.temperature },
+          'Thinking omitted — the call sets a temperature, which thinking rejects',
+        );
+        reasoningEffort = thinksByDefault ? 'none' : undefined;
+      } else if (callerMaxTokens !== undefined && callerMaxTokens < MIN_THINKING_MAX_TOKENS) {
+        this.logger.warn(
+          { model, effort: requestedEffort, maxTokens: callerMaxTokens },
+          'Thinking omitted — max_tokens leaves no room for it',
+        );
+        reasoningEffort = thinksByDefault ? 'none' : undefined;
+      } else {
+        reasoningEffort = requestedEffort;
+      }
+    }
+    if (reasoningEffort === 'none') {
       createParams.thinking = { type: 'disabled' };
+    } else if (reasoningEffort !== undefined) {
+      createParams.thinking = { type: 'adaptive', display: 'summarized' };
+      createParams.output_config = { effort: reasoningEffort };
+    }
+
+    // Thinking counts against max_tokens. A request that will think and set no
+    // cap gets room for it; one with a small cap on a model that thinks by
+    // default should have sent `none`, so say so.
+    const willThink = reasoningEffort === undefined ? thinksByDefault : reasoningEffort !== 'none';
+    if (willThink && callerMaxTokens === undefined) {
+      createParams.max_tokens = Math.max(createParams.max_tokens, THINKING_MAX_TOKENS);
+    } else if (willThink && callerMaxTokens !== undefined && callerMaxTokens < MIN_THINKING_MAX_TOKENS) {
+      this.logger.warn(
+        { model, maxTokens: callerMaxTokens },
+        'Model thinks by default and max_tokens leaves little room — the call site should send reasoning effort none',
+      );
     }
 
     // Only attach the tools array when tools are provided — the API rejects
@@ -315,7 +370,13 @@ export class AnthropicProvider implements LLMProvider {
     // Honor an optional AbortSignal passed via options.signal so callers can
     // cancel an in-flight request instead of orphaning it.
     const signal = options?.signal instanceof AbortSignal ? options.signal : undefined;
-    return { createParams, model, signal, ...(prefixHash !== undefined ? { prefixHash } : {}) };
+    return {
+      createParams,
+      model,
+      signal,
+      ...(prefixHash !== undefined ? { prefixHash } : {}),
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    };
   }
 
   private usageFromResponse(response: AnthropicMessage): LLMUsage {
@@ -332,11 +393,16 @@ export class AnthropicProvider implements LLMProvider {
     };
   }
 
-  private provenanceFromResponse(response: AnthropicMessage, requestedModel: string): LLMCallProvenance {
+  private provenanceFromResponse(
+    response: AnthropicMessage,
+    requestedModel: string,
+    reasoningEffort: ReasoningEffort | undefined,
+  ): LLMCallProvenance {
     return {
       requestedModel,
       actualModel: response.model,
       providerRequestId: response.id,
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     };
   }
 
@@ -372,7 +438,7 @@ export class AnthropicProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'chat');
       model = built.model;
-      const { createParams, signal, prefixHash } = built;
+      const { createParams, signal, prefixHash, reasoningEffort } = built;
       const response = await this.client.messages.create(createParams, signal ? { signal } : undefined);
 
       this.logger.debug(
@@ -388,7 +454,7 @@ export class AnthropicProvider implements LLMProvider {
       );
 
       const usage = this.usageFromResponse(response);
-      const provenance = this.provenanceFromResponse(response, model);
+      const provenance = this.provenanceFromResponse(response, model, reasoningEffort);
       const reasoning = reasoningFieldsFrom(response, usage);
 
       // Use type guard functions for narrowing — avoids casting and is safer
@@ -448,7 +514,7 @@ export class AnthropicProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'stream');
       model = built.model;
-      const { createParams, signal, prefixHash } = built;
+      const { createParams, signal, prefixHash, reasoningEffort } = built;
       const stream = this.client.messages.stream(createParams, signal ? { signal } : undefined);
 
       // Guarantee the underlying fetch Response / ReadableStream is released on every
@@ -479,7 +545,7 @@ export class AnthropicProvider implements LLMProvider {
         );
 
         const usage = this.usageFromResponse(response);
-        const provenance = this.provenanceFromResponse(response, model);
+        const provenance = this.provenanceFromResponse(response, model, reasoningEffort);
         const toolCalls = this.toolCallsFromResponse(response);
         const content = this.textFromResponse(response);
         const reasoning = reasoningFieldsFrom(response, usage);

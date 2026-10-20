@@ -11,6 +11,81 @@ import type { Logger } from '../../logger.js';
  */
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'max';
 
+/** Every effort, in increasing order. */
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = Object.freeze(['none', 'low', 'medium', 'high', 'max']);
+
+/** `options.reasoning` and `model_routing.tiers.<tier>.reasoning` (ADR-048). */
+export interface ReasoningSetting {
+  effort: ReasoningEffort;
+}
+
+/**
+ * What every non-agent call site sends: the judges, infra-llm, the scoring
+ * pass, the drift detector, summarization and voice (ADR-048 §3). A provider
+ * sends it only to models whose registry entry lists `none`, so each of those
+ * requests stays as it was before the reasoning setting existed.
+ */
+export const NO_REASONING: Readonly<ReasoningSetting> = Object.freeze({ effort: 'none' });
+
+/** Pure parse of `options.reasoning` — no logging. */
+export type ParsedReasoning =
+  | { kind: 'unset' }
+  | { kind: 'set'; effort: ReasoningEffort }
+  | { kind: 'invalid'; value: unknown };
+
+/**
+ * Parse `options.reasoning` without side effects. `undefined` is unset, so
+ * `options: { reasoning: tierCfg.reasoning }` with an unset tier does not warn.
+ */
+export function parseReasoning(options: Record<string, unknown> | undefined): ParsedReasoning {
+  const value = options?.reasoning;
+  if (value === undefined) return { kind: 'unset' };
+  if (typeof value === 'object' && value !== null) {
+    const effort = (value as { effort?: unknown }).effort;
+    if (typeof effort === 'string' && (REASONING_EFFORTS as readonly string[]).includes(effort)) {
+      return { kind: 'set', effort: effort as ReasoningEffort };
+    }
+  }
+  return { kind: 'invalid', value };
+}
+
+/**
+ * Log a requested effort the model's registry entry does not list, which the
+ * provider then leaves out. `none` is the expected case for the non-agent call
+ * sites on models that cannot turn reasoning off, so it logs at debug.
+ */
+export function logUnsentReasoningEffort(
+  logger: Logger,
+  model: string,
+  effort: ReasoningEffort,
+  supported: readonly ReasoningEffort[] | undefined,
+): void {
+  const fields = { model, effort, supported: supported ?? [] };
+  if (effort === 'none') {
+    logger.debug(fields, 'Not sending reasoning effort none — the model cannot turn reasoning off cleanly; provider default applies');
+  } else {
+    logger.warn(fields, 'Not sending reasoning effort — the model does not list it; provider default applies');
+  }
+}
+
+/**
+ * Resolve `options.reasoning` for a provider request: the effort the caller
+ * asked for, or undefined when unset. Warns and returns undefined on a
+ * malformed value, so the provider default applies. Providers then check the
+ * effort against the model's registry entry.
+ */
+export function resolveReasoning(
+  options: Record<string, unknown> | undefined,
+  logger: Logger,
+): ReasoningEffort | undefined {
+  const parsed = parseReasoning(options);
+  if (parsed.kind === 'set') return parsed.effort;
+  if (parsed.kind === 'invalid') {
+    logger.warn({ reasoning: parsed.value }, 'Ignoring malformed options.reasoning — provider default will be used');
+  }
+  return undefined;
+}
+
 /** Pure parse of `options.temperature` — no logging. */
 export type ParsedTemperature =
   | { kind: 'unset' }

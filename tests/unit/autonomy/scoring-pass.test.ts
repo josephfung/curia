@@ -7,6 +7,7 @@ import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import { createSilentLogger } from '../../../src/logger.js';
 import type { ActionLogRow } from '../../../src/autonomy/action-log-types.js';
 import { DETERMINISTIC_SCORES } from '../../../src/autonomy/action-log-types.js';
+import { NO_REASONING } from '../../../src/agents/llm/sampling-options.js';
 
 function makeRow(overrides: Partial<ActionLogRow>): ActionLogRow {
   return {
@@ -200,6 +201,8 @@ describe('AutonomyScoringPass', () => {
       expect(llm.chat).toHaveBeenCalledTimes(1);
       const prompt = vi.mocked(llm.chat).mock.calls[0]![0].messages[1]!.content as string;
       expect(prompt).toContain('calendar API returned 403');
+      // A background scoring call never inherits reasoning (ADR-048 §3).
+      expect(vi.mocked(llm.chat).mock.calls[0]![0].options).toEqual({ reasoning: NO_REASONING });
       expect(repo.updateScoringFlags).toHaveBeenCalledWith(32, expect.objectContaining({
         competenceFlag: 0,
         scoredBy: 'llm-judge',

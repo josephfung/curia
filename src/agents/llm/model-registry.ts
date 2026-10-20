@@ -14,6 +14,15 @@
 // billed against the wrong numbers (#1804).
 
 import type { Logger } from '../../logger.js';
+import type { ReasoningEffort } from './sampling-options.js';
+
+// Anthropic effort docs, read 2026-10-20: Haiku 5.5, Sonnet 4.6 and Opus 4.6
+// take low through max (xhigh is left out, ADR-048), and `none` maps to a
+// clean `thinking: disabled`.
+const ANTHROPIC_ADAPTIVE: ModelReasoningSupport = {
+  control: 'anthropic-adaptive',
+  efforts: ['none', 'low', 'medium', 'high', 'max'],
+};
 
 export interface ModelPricing {
   /** USD per million input tokens */
@@ -53,9 +62,9 @@ export interface ModelMetadata {
   rejectsSamplingParams?: boolean;
   /**
    * The model runs adaptive thinking when a request leaves `thinking` unset.
-   * Curia has never enabled thinking on Anthropic models, so AnthropicProvider
-   * sends `thinking: {type: "disabled"}` for these until #2044 decides the
-   * reasoning policy (#2077).
+   * A fact about the model, not a request rule: unset reasoning gets the
+   * provider default (ADR-048 §3). AnthropicProvider reads it only to size
+   * `max_tokens` for a request that will think.
    */
   thinksByDefault?: boolean;
   /**
@@ -65,6 +74,25 @@ export interface ModelMetadata {
    * from the first changed prefix onward (ADR-048 §1, prefix guard).
    */
   thinkingBoundToPrefix?: boolean;
+  /**
+   * How the model takes a reasoning effort, and which efforts it honors
+   * (ADR-048 §2). Absent when Curia sends it no reasoning setting at all: a
+   * tier effort on such a model fails at boot, and a call site's effort is not
+   * sent. `none` is listed only where it turns reasoning off cleanly.
+   */
+  reasoning?: ModelReasoningSupport;
+}
+
+/** How a provider expresses reasoning effort for a model. */
+export type ReasoningControl =
+  /** OpenRouter's unified `reasoning: { effort }`; `none` is `{ enabled: false }`. */
+  | 'openrouter-effort'
+  /** Anthropic adaptive thinking plus `output_config.effort`; `none` is `thinking: disabled`. */
+  | 'anthropic-adaptive';
+
+export interface ModelReasoningSupport {
+  control: ReasoningControl;
+  efforts: readonly ReasoningEffort[];
 }
 
 // Keyed by model name prefix. OpenRouter models added by #379.
@@ -82,6 +110,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheReadPerMToken: 1.50,
     },
     capabilities: ['vision', 'reasoning', 'coding', 'large_context', 'streaming', 'tools'],
+    reasoning: ANTHROPIC_ADAPTIVE,
   },
   'claude-sonnet-4-6': {
     provider: 'anthropic',
@@ -93,7 +122,10 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheReadPerMToken: 0.30,
     },
     capabilities: ['vision', 'reasoning', 'coding', 'streaming', 'tools'],
+    reasoning: ANTHROPIC_ADAPTIVE,
   },
+  // No `reasoning` entry: Haiku 4.5 takes only a thinking budget, which Curia
+  // does not send (ADR-048 §2), so a tier effort on it fails at boot.
   'claude-haiku-4-5': {
     provider: 'anthropic',
     contextWindow: 200_000,
@@ -121,12 +153,13 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheCreationPerMToken: 0.125,
       cacheReadPerMToken: 0.01,
     },
-    // No 'reasoning': Curia sends thinking disabled on this model (see
-    // thinksByDefault), so it runs with the same capabilities as Haiku 4.5.
+    // The loose 'reasoning' capability tag is left off; `reasoning` below is
+    // what the code reads (needs are documentary only, #379).
     capabilities: ['vision', 'coding', 'streaming', 'tools'],
     rejectsSamplingParams: true,
     thinksByDefault: true,
     thinkingBoundToPrefix: true,
+    reasoning: ANTHROPIC_ADAPTIVE,
   },
 
   // OpenRouter models — non-Claude models routed via OpenRouter's OpenAI-compatible API.
@@ -146,6 +179,9 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheReadPerMToken: 0.025,
     },
     capabilities: ['vision', 'coding', 'streaming', 'tools'],
+    // OpenRouter supported_efforts. No `none`: the judges run Gemini's default
+    // `minimal` thinking today, and `none` at a call site must not change that.
+    reasoning: { control: 'openrouter-effort', efforts: ['low', 'medium', 'high'] },
     maxOutputTokens: 8_192,
   },
   // Removed from OpenRouter ~2026-05-31. Entry retained for audit log provenance.
@@ -219,6 +255,10 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheReadPerMToken: 0.003,
     },
     capabilities: ['vision', 'coding', 'reasoning', 'streaming', 'tools'],
+    // OpenRouter supported_efforts, confirmed by the 2026-10-08 probe with
+    // require_parameters (ADR-048). No `none`: on a hard task the model then
+    // writes its working into the visible reply.
+    reasoning: { control: 'openrouter-effort', efforts: ['low', 'high', 'max'] },
     maxOutputTokens: 32_768,
   },
   'z-ai/glm-5.3-flash': {
@@ -277,6 +317,10 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
 for (const entry of Object.values(MODEL_REGISTRY)) {
   Object.freeze(entry.pricing);
   Object.freeze(entry.capabilities);
+  if (entry.reasoning) {
+    Object.freeze(entry.reasoning.efforts);
+    Object.freeze(entry.reasoning);
+  }
   Object.freeze(entry);
 }
 Object.freeze(MODEL_REGISTRY);
@@ -364,6 +408,16 @@ export class ModelRegistry {
   /** True when the model thinks unless the request disables it. False for unknown models. */
   thinksByDefault(modelId: string): boolean {
     return this.getModel(modelId)?.thinksByDefault === true;
+  }
+
+  /** How the model takes a reasoning effort, or undefined when Curia sends it none. */
+  reasoningSupport(modelId: string): ModelReasoningSupport | undefined {
+    return this.getModel(modelId)?.reasoning;
+  }
+
+  /** True when the model's registry entry lists this effort. False for unknown models. */
+  honorsReasoningEffort(modelId: string, effort: ReasoningEffort): boolean {
+    return this.reasoningSupport(modelId)?.efforts.includes(effort) === true;
   }
 
   /** True when the model rejects thinking sent back after a prefix change. False for unknown models. */

@@ -26,6 +26,7 @@ import {
   assertStreamingProvider,
   runStreamingToolLoop,
 } from '../../agents/llm/streaming-turn.js';
+import { NO_REASONING } from '../../agents/llm/sampling-options.js';
 import { SentenceChunker } from './sentence-chunker.js';
 
 export { StreamUnsupportedError, DEFAULT_STREAMING_MAX_ROUNDS };
@@ -121,6 +122,8 @@ export class VoiceTurnRunner {
       signal,
       invokeTool: this.config.invokeTool,
       missingInvokeToolResult: MISSING_INVOKE_TOOL_RESULT,
+      // Time to first token is the budget; voice never reasons (ADR-048 §3).
+      requestOptions: { reasoning: NO_REASONING },
       logger: this.log,
       hooks: {
         onTextDelta: async (text) => {

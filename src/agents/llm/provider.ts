@@ -7,6 +7,7 @@
 // Adding a new provider: implement LLMProvider, wire it in the DI layer.
 
 import type { AgentError } from '../../errors/types.js';
+import type { ReasoningEffort } from './sampling-options.js';
 
 /**
  * Content block types for multi-turn tool-use conversations.
@@ -134,6 +135,11 @@ export interface LLMCallProvenance {
    * measurements are comparable only within one (ADR-048).
    */
   upstreamProvider?: string;
+  /**
+   * The reasoning effort the request actually carried, after the provider
+   * checked it against the model (ADR-048 §5). Absent when it sent none.
+   */
+  reasoningEffort?: ReasoningEffort;
 }
 
 // Import and re-export ToolDefinition from the canonical location in skills/types.ts

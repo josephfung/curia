@@ -43,6 +43,10 @@ pnpm smoke --case "urgent" --show-calls
 
 # One case at a time (default: 4 at once)
 pnpm smoke --concurrency 1
+
+# A reasoning-effort A/B arm (ADR-048): every tier, or only the tiers named
+pnpm smoke --model deepseek/deepseek-v4.1-flash --reasoning-effort low
+pnpm smoke --reasoning-effort fast=none
 ```
 
 Flags are parsed strictly: an unknown flag, a missing value or `--model=x` stops the run instead of being ignored. The database needs a principal contact, and `DATABASE_URL` must point at this machine (`--allow-remote-db` overrides). Before any case runs, every stub is checked against the tool registry: a misspelt tool name or input is an error, since such a stub would never fire. The `Commit:` line ends in `-dirty` when tracked files have uncommitted changes.

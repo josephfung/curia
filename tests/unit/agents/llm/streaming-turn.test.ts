@@ -713,3 +713,22 @@ describe('reasoning pass-back through the tool loop (ADR-048 §1)', () => {
     expect(result.messages[2]).toEqual(buildUserToolResultMessage([{ id: 'call_1', content: 'ok' }]));
   });
 });
+
+describe('requestOptions', () => {
+  it('reach provider.stream beside the signal', async () => {
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    const provider: LLMProvider = {
+      id: 'fake',
+      chat: async () => ({ type: 'text', content: '', usage, provenance }),
+      stream: async function* (params) {
+        seen.push(params.options);
+        yield { type: 'message_end', content: 'ok', usage, provenance };
+      },
+    };
+    const signal = new AbortController().signal;
+    await runStreamingToolLoop([{ role: 'user', content: 'Hi' }], {
+      provider, model: 'fake', maxRounds: 2, signal, logger, requestOptions: { reasoning: { effort: 'none' } },
+    });
+    expect(seen).toEqual([{ reasoning: { effort: 'none' }, signal }]);
+  });
+});

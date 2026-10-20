@@ -162,6 +162,8 @@ describe('temperature:0 callers on claude-haiku-5-5 send no sampling parameters 
 
     const request = mockCreate.mock.calls[0]![0];
     for (const key of SAMPLING_KEYS) expect(request).not.toHaveProperty(key);
+    // NO_REASONING keeps #2077's thinking-off request (ADR-048 §3).
+    expect(request.thinking).toEqual({ type: 'disabled' });
     expect(llmCallTemperatures(bus)).toEqual([null]);
   });
 
@@ -184,6 +186,8 @@ describe('temperature:0 callers on claude-haiku-5-5 send no sampling parameters 
 
     const request = mockCreate.mock.calls[0]![0];
     for (const key of SAMPLING_KEYS) expect(request).not.toHaveProperty(key);
+    // NO_REASONING keeps #2077's thinking-off request (ADR-048 §3).
+    expect(request.thinking).toEqual({ type: 'disabled' });
     expect(llmCallTemperatures(bus)).toEqual([null]);
   });
 
@@ -206,5 +210,7 @@ describe('temperature:0 callers on claude-haiku-5-5 send no sampling parameters 
 
     const request = mockCreate.mock.calls[0]![0];
     for (const key of SAMPLING_KEYS) expect(request).not.toHaveProperty(key);
+    // NO_REASONING keeps #2077's thinking-off request (ADR-048 §3).
+    expect(request.thinking).toEqual({ type: 'disabled' });
   });
 });

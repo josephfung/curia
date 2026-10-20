@@ -5,7 +5,8 @@
 // assert exactly what parameters were sent.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AnthropicProvider } from '../../../../src/agents/llm/anthropic.js';
+import { AnthropicProvider, THINKING_MAX_TOKENS } from '../../../../src/agents/llm/anthropic.js';
+import { NO_REASONING } from '../../../../src/agents/llm/sampling-options.js';
 import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import type { LLMStreamEvent, Message } from '../../../../src/agents/llm/provider.js';
@@ -425,7 +426,7 @@ describe('AnthropicProvider — claude-haiku-5-5 request shape', () => {
     expect(mockStream.mock.calls[0]![0]).not.toHaveProperty('temperature');
   });
 
-  it('sends thinking disabled on chat and stream', async () => {
+  it('sends no thinking key when reasoning is unset, so the model keeps its adaptive default (ADR-048 §3)', async () => {
     mockStream.mockReturnValue(makeStream([
       { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } },
     ], makeTextResponse()));
@@ -433,8 +434,20 @@ describe('AnthropicProvider — claude-haiku-5-5 request shape', () => {
     await provider.chat({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hello' }] });
     await collectStream(provider.stream({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hello' }] }));
 
-    expect(mockCreate.mock.calls[0]![0].thinking).toEqual({ type: 'disabled' });
-    expect(mockStream.mock.calls[0]![0].thinking).toEqual({ type: 'disabled' });
+    for (const params of [mockCreate.mock.calls[0]![0], mockStream.mock.calls[0]![0]]) {
+      expect(params).not.toHaveProperty('thinking');
+      expect(params).not.toHaveProperty('output_config');
+      // It will think, so the cap leaves room for that.
+      expect(params.max_tokens).toBe(THINKING_MAX_TOKENS);
+    }
+  });
+
+  it('sends thinking disabled for NO_REASONING, as #2077 did for every request', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hello' }], options: { reasoning: NO_REASONING } });
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params.thinking).toEqual({ type: 'disabled' });
+    expect(params.max_tokens).toBe(4096);
   });
 
   it('keeps the caller max_tokens cap (classify sends 10)', async () => {
@@ -442,10 +455,11 @@ describe('AnthropicProvider — claude-haiku-5-5 request shape', () => {
     await provider.chat({
       model: 'claude-haiku-5-5',
       messages: [{ role: 'user', content: 'yes or no?' }],
-      options: { max_tokens: 10 },
+      options: { max_tokens: 10, reasoning: NO_REASONING },
     });
 
     expect(mockCreate.mock.calls[0]![0].max_tokens).toBe(10);
+    expect(mockCreate.mock.calls[0]![0].thinking).toEqual({ type: 'disabled' });
   });
 
   it('leaves claude-haiku-4-5 requests unchanged: temperature sent, no thinking key', async () => {
@@ -875,5 +889,84 @@ describe('AnthropicProvider — reasoning pass-back (ADR-048 §1)', () => {
     const events = await collectStream(provider.stream({ messages: [{ role: 'user', content: 'Hi' }], tools, model: 'claude-sonnet-4-6' }));
     const toolUse = events.at(-1);
     expect(toolUse?.type === 'tool_use' && toolUse.reasoningBlocks?.map((b) => b.data)).toEqual([thinking]);
+  });
+});
+
+describe('AnthropicProvider — reasoning effort (ADR-048 §2)', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+    mockStream.mockReset();
+    mockCreate.mockResolvedValue(makeTextResponse());
+  });
+
+  const provider = () => new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+  const sent = () => mockCreate.mock.calls[0]![0];
+
+  it.each(['claude-haiku-5-5', 'claude-sonnet-4-6', 'claude-opus-4-6'])('maps an effort to adaptive thinking with summarized display on %s', async (model) => {
+    const result = await provider().chat({ model, messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'low' } } });
+    expect(sent().thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+    expect(sent().output_config).toEqual({ effort: 'low' });
+    expect(sent().max_tokens).toBe(THINKING_MAX_TOKENS);
+    expect(result.type === 'text' && result.provenance.reasoningEffort).toBe('low');
+  });
+
+  it('sends nothing on a 4.6 model when unset, with the registry cap', async () => {
+    const result = await provider().chat({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'Hi' }] });
+    expect(sent()).not.toHaveProperty('thinking');
+    expect(sent()).not.toHaveProperty('output_config');
+    expect(sent().max_tokens).toBe(4096);
+    expect(result.type === 'text' && 'reasoningEffort' in result.provenance).toBe(false);
+  });
+
+  it('records none when it sends thinking disabled', async () => {
+    const result = await provider().chat({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: NO_REASONING } });
+    expect(sent().thinking).toEqual({ type: 'disabled' });
+    expect(result.type === 'text' && result.provenance.reasoningEffort).toBe('none');
+  });
+
+  it('keeps a caller max_tokens when thinking is on', async () => {
+    await provider().chat({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'high' }, max_tokens: 2000 } });
+    expect(sent().max_tokens).toBe(2000);
+    expect(sent().thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+  });
+
+  it('keeps thinking off when the caller max_tokens is below 1,024', async () => {
+    const result = await provider().chat({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'high' }, max_tokens: 200 } });
+    // Haiku 5.5 would think by default, so "off" has to be stated.
+    expect(sent().thinking).toEqual({ type: 'disabled' });
+    expect(sent()).not.toHaveProperty('output_config');
+    expect(result.type === 'text' && result.provenance.reasoningEffort).toBe('none');
+  });
+
+  it('lets an explicit temperature win over thinking on a model that takes both', async () => {
+    const result = await provider().chat({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'high' }, temperature: 0 } });
+    expect(sent().temperature).toBe(0);
+    expect(sent()).not.toHaveProperty('thinking');
+    expect(result.type === 'text' && 'reasoningEffort' in result.provenance).toBe(false);
+  });
+
+  it('thinks on Haiku 5.5 even when the caller passes a temperature, which is never sent', async () => {
+    await provider().chat({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'medium' }, temperature: 0 } });
+    expect(sent()).not.toHaveProperty('temperature');
+    expect(sent().thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+  });
+
+  it('sends nothing for a model with no reasoning entry (Haiku 4.5)', async () => {
+    await provider().chat({ model: 'claude-haiku-4-5', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'low' } } });
+    expect(sent()).not.toHaveProperty('thinking');
+    expect(sent()).not.toHaveProperty('output_config');
+  });
+
+  it('ignores a malformed reasoning option', async () => {
+    await provider().chat({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'xhigh' } } });
+    expect(sent()).not.toHaveProperty('thinking');
+  });
+
+  it('maps the effort on the streaming path too', async () => {
+    mockStream.mockReturnValue(makeStream([], makeTextResponse()));
+    const events = await collectStream(provider().stream({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'max' } } }));
+    expect(mockStream.mock.calls[0]![0].output_config).toEqual({ effort: 'max' });
+    const end = events.at(-1);
+    expect(end?.type === 'message_end' && end.provenance.reasoningEffort).toBe('max');
   });
 });

@@ -407,6 +407,41 @@ describe('resolveAgentModelBinding', () => {
   });
 });
 
+describe('tier reasoning on the binding (ADR-048 §3)', () => {
+  it('carries the primary and fallback tiers\' own settings into the runtime config', () => {
+    const configs = [coordinatorYaml()];
+    const ctx = buildContext(textProvider(), configs);
+    const modelRouter = new ModelRouter(
+      {
+        tiers: {
+          fast: { model: 'claude-haiku-5-5' },
+          standard: { model: 'claude-sonnet-4-6', reasoning: { effort: 'low' } },
+          powerful: { model: 'claude-opus-4-6', reasoning: { effort: 'high' } },
+        },
+        default_tier: 'standard',
+      },
+      ctx.models.modelRegistry,
+      ctx.logger,
+    );
+    const models = { ...ctx.models, modelRouter };
+    const binding = resolveAgentModelBinding(configs[0]!, models);
+    expect(binding.reasoning).toEqual({ effort: 'low' });
+    expect(binding.fallbackReasoning).toEqual({ effort: 'high' });
+
+    const [coordinator] = assembleAgents(configs, { ...ctx, models });
+    expect(coordinator!.runtimeConfig.reasoning).toEqual({ effort: 'low' });
+    expect(coordinator!.runtimeConfig.fallbackReasoning).toEqual({ effort: 'high' });
+  });
+
+  it('leaves both unset when the tiers are', () => {
+    const configs = [coordinatorYaml()];
+    const ctx = buildContext(textProvider(), configs);
+    const binding = resolveAgentModelBinding(configs[0]!, ctx.models);
+    expect(binding).not.toHaveProperty('reasoning');
+    expect(binding).not.toHaveProperty('fallbackReasoning');
+  });
+});
+
 describe('identity block per agent (#2143)', () => {
   it('gives the coordinator the identity block and every other agent the writes-as block', async () => {
     const configs = [coordinatorYaml(), specialistYaml()];

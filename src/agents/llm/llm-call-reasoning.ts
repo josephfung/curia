@@ -14,8 +14,9 @@ export interface LlmCallReasoningFields {
 
 /**
  * Reasoning fields for an `llm.call` payload, from a successful response.
- * `reasoningEffort` is null until the reasoning setting lands: no request
- * sends one yet, so every call ran at the provider default.
+ * `reasoningEffort` is what the provider reports it sent, so the row matches
+ * the request even when the provider dropped an effort the model does not
+ * take; null means the provider default applied.
  */
 export function llmCallReasoningFields(
   usage: LLMUsage,
@@ -23,7 +24,7 @@ export function llmCallReasoningFields(
 ): LlmCallReasoningFields {
   return {
     reasoningTokens: usage.reasoningTokens ?? null,
-    reasoningEffort: null,
+    reasoningEffort: provenance.reasoningEffort ?? null,
     upstreamProvider: provenance.upstreamProvider ?? null,
   };
 }

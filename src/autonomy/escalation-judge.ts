@@ -22,7 +22,7 @@ import type { Logger } from '../logger.js';
 import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
-import { sentTemperature } from '../agents/llm/sampling-options.js';
+import { NO_REASONING, sentTemperature } from '../agents/llm/sampling-options.js';
 import { llmCallReasoningFields } from '../agents/llm/llm-call-reasoning.js';
 import type { ContactTier } from '../contacts/types.js';
 import {
@@ -296,7 +296,8 @@ export class EscalationJudge {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        options: { temperature: JUDGE_TEMPERATURE, max_tokens: maxTokens, signal: controller.signal },
+        // Verdict caps leave no room for thinking (ADR-048 §3).
+        options: { temperature: JUDGE_TEMPERATURE, max_tokens: maxTokens, reasoning: NO_REASONING, signal: controller.signal },
       });
       // Suppress unhandled-rejection for post-timeout orphaned provider calls.
       // The primary error path is the outer catch; this handles the late-rejection race edge case.

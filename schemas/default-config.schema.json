@@ -561,7 +561,16 @@
       "required": ["model"],
       "additionalProperties": false,
       "properties": {
-        "model": { "type": "string", "minLength": 1 }
+        "model": { "type": "string", "minLength": 1 },
+        "reasoning": {
+          "description": "Reasoning effort for agent turns on this tier (ADR-048). Unset means the provider default. The effort must be one the model's registry entry lists; boot fails otherwise.",
+          "type": "object",
+          "required": ["effort"],
+          "additionalProperties": false,
+          "properties": {
+            "effort": { "type": "string", "enum": ["none", "low", "medium", "high", "max"] }
+          }
+        }
       }
     }
   }

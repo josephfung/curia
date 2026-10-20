@@ -43,7 +43,7 @@ import { loadConfig } from '../../src/config.js';
 import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { formatTaskWakeContent } from '../../src/scheduler/wake-disposition.js';
-import { createTestModeStack, type OfficeIdentityFixture, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import { createTestModeStack, type OfficeIdentityFixture, type TestModeStack, type TierReasoningOverride } from '../../src/startup/test-mode-stack.js';
 import {
   closeAttempt,
   createCaseContext,
@@ -241,7 +241,7 @@ export interface StackSources {
  * run, so the identity is the run's, never a case's.
  */
 export async function createScenarioHarness(
-  options: { model?: string; officeIdentity?: OfficeIdentityFixture } & StackSources = {},
+  options: { model?: string; reasoning?: TierReasoningOverride; officeIdentity?: OfficeIdentityFixture } & StackSources = {},
 ): Promise<ScenarioHarness> {
   const context = createCaseContext<ScenarioRunState>();
   const currentScope = (): SeedScope | undefined => context.current()?.scope;
@@ -270,6 +270,7 @@ export async function createScenarioHarness(
   const stack = await createTestModeStack({
     config: { ...config, databaseUrl: withApplicationName(config.databaseUrl) },
     model: options.model,
+    ...(options.reasoning ? { reasoning: options.reasoning } : {}),
     ...(options.agentsDir ? { agentsDir: options.agentsDir } : {}),
     ...(options.skillsDir ? { skillsDir: options.skillsDir } : {}),
     ...(options.configDir ? { configDir: options.configDir } : {}),

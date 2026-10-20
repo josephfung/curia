@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseTemperature, resolveTemperature, sentTemperature } from '../../../../src/agents/llm/sampling-options.js';
+import { NO_REASONING, parseReasoning, parseTemperature, resolveReasoning, resolveTemperature, sentTemperature } from '../../../../src/agents/llm/sampling-options.js';
+import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
+import { createSilentLogger } from '../../../../src/logger.js';
 import type { Logger } from '../../../../src/logger.js';
 
 function mockLogger(): Logger {
@@ -75,5 +77,48 @@ describe('sentTemperature (#2077)', () => {
     expect(sentTemperature({ temperature: 0 }, true)).toBeNull();
     expect(sentTemperature({ temperature: 1 }, true)).toBeNull();
     expect(sentTemperature(undefined, true)).toBeNull();
+  });
+});
+
+describe('reasoning options (ADR-048)', () => {
+  it('parses unset, set and invalid', () => {
+    expect(parseReasoning(undefined)).toEqual({ kind: 'unset' });
+    expect(parseReasoning({ reasoning: undefined })).toEqual({ kind: 'unset' });
+    expect(parseReasoning({ reasoning: { effort: 'low' } })).toEqual({ kind: 'set', effort: 'low' });
+    expect(parseReasoning({ reasoning: NO_REASONING })).toEqual({ kind: 'set', effort: 'none' });
+    expect(parseReasoning({ reasoning: { effort: 'xhigh' } })).toEqual({ kind: 'invalid', value: { effort: 'xhigh' } });
+    expect(parseReasoning({ reasoning: 'low' })).toEqual({ kind: 'invalid', value: 'low' });
+  });
+
+  it('resolves an effort, and warns and falls back to unset on a malformed one', () => {
+    const warn = vi.fn();
+    const logger = { warn } as unknown as Logger;
+    expect(resolveReasoning({ reasoning: { effort: 'max' } }, logger)).toBe('max');
+    expect(resolveReasoning({}, logger)).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+    expect(resolveReasoning({ reasoning: { effort: 'adaptive' } }, logger)).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it('NO_REASONING is frozen', () => {
+    expect(Object.isFrozen(NO_REASONING)).toBe(true);
+  });
+});
+
+describe('ModelRegistry reasoning support', () => {
+  const registry = new ModelRegistry(createSilentLogger());
+
+  it('lists the efforts each model honors', () => {
+    expect(registry.honorsReasoningEffort('deepseek/deepseek-v4.1-flash', 'low')).toBe(true);
+    expect(registry.honorsReasoningEffort('deepseek/deepseek-v4.1-flash', 'none')).toBe(false);
+    expect(registry.honorsReasoningEffort('google/gemini-3.1-flash-lite', 'none')).toBe(false);
+    expect(registry.honorsReasoningEffort('claude-haiku-5-5', 'none')).toBe(true);
+    expect(registry.honorsReasoningEffort('claude-haiku-4-5', 'low')).toBe(false);
+    expect(registry.honorsReasoningEffort('openai/gpt-4o', 'low')).toBe(false);
+    expect(registry.reasoningSupport('claude-sonnet-4-6')?.control).toBe('anthropic-adaptive');
+  });
+
+  it('freezes reasoning entries', () => {
+    expect(Object.isFrozen(registry.reasoningSupport('claude-haiku-5-5')?.efforts)).toBe(true);
   });
 });

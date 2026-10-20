@@ -33,7 +33,7 @@ import { createAgentDiscuss, createInboundMessage, type ModelFallbackEngagedEven
 import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
 import type { BullpenService } from '../../src/memory/bullpen.js';
-import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import { createTestModeStack, type TestModeStack, type TierReasoningOverride } from '../../src/startup/test-mode-stack.js';
 import { closeAttempt, createCaseContext, guardProvider, meterAgentCalls, type TurnErrorKind } from '../shared/case-scope.js';
 import { createTurnCapture, withoutRecentHistory, type ObservedToolCall } from '../shared/turn-capture.js';
 import { UsageLedger, type UsageBreakdown } from '../shared/usage.js';
@@ -112,6 +112,8 @@ export interface HarnessOptions {
    * follows from the model registry). Default: the configured model_routing.
    */
   model?: string;
+  /** Per-tier reasoning for an A/B arm (--reasoning-effort, ADR-048). */
+  reasoning?: TierReasoningOverride;
 }
 
 export interface TurnResponse {
@@ -197,6 +199,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   const stubs = createSmokeStubs(context);
   const stack = await createTestModeStack({
     model: options.model,
+    ...(options.reasoning ? { reasoning: options.reasoning } : {}),
     wrapExecutionLayer: (layer) => stubs.wrap(layer),
     // Times each model call against its case, and refuses a cancelled case's calls.
     wrapLlmProvider: (provider) => guardProvider(provider, context.current),

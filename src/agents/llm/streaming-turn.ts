@@ -144,6 +144,12 @@ export interface StreamingTurnConfig {
   /** Placeholder tool_result content when invokeTool is missing. */
   missingInvokeToolResult?: string;
   /**
+   * Extra request options for provider.stream() (the signal is added). Voice
+   * sends NO_REASONING here: it is latency-bound and never inherits a tier's
+   * reasoning setting (ADR-048 §3). Ignored on the openStream path.
+   */
+  requestOptions?: Record<string, unknown>;
+  /**
    * Custom per-round stream source. Text AgentRuntime passes a chatWithRetry
    * adapter here so retry/fallback/telemetry stay on the chat path while the
    * tool loop is shared (#1563 / ADR-038).
@@ -309,7 +315,7 @@ export async function runStreamingToolLoop(
           messages: streamParams.messages,
           tools: streamParams.tools,
           model: streamParams.model,
-          options: { signal },
+          options: { ...config.requestOptions, signal },
         });
 
     let toolUse: { toolCalls: ToolCall[]; content?: string; reasoningBlocks?: ReasoningContent[] } | undefined;

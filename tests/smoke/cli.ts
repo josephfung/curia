@@ -1,6 +1,6 @@
 // tests/smoke/cli.ts
 //
-// `pnpm smoke [--model <id>] [--case <substring>]... [--tags a,b] [--concurrency N] [--show-calls] [--allow-remote-db]`
+// `pnpm smoke [--model <id>] [--reasoning-effort <e>] [--case <substring>]... [--tags a,b] [--concurrency N] [--show-calls] [--allow-remote-db]`
 //
 // Exits 1 when any case fails the gate (gate.ts: weighted score below 80%, a critical
 // behavior rated MISS, or an execution or judge error), known failures aside. The
@@ -27,6 +27,7 @@ import { formatPct, gatingFailures, mergeRetries, staleKnownFailures } from './g
 import { generateReport } from './report.js';
 import { liveSearchLines } from '../shared/live-search.js';
 import { emptyBreakdown, formatUsageLines, formatUsd, sumBreakdowns } from '../shared/usage.js';
+import { describeReasoningOverride } from '../shared/reasoning-flag.js';
 import { CASE_PASS_THRESHOLD, type CaseExecution, type RunResult, type HistoricalEntry } from './types.js';
 
 const CASES_DIR = path.resolve(import.meta.dirname, 'cases');
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const { tags, model, showCalls, concurrency } = args;
+  const reasoningLabel = describeReasoningOverride(args.reasoning);
   // A case runs when its name contains any --case value.
   const caseFilters = args.cases;
 
@@ -158,7 +160,7 @@ async function main(): Promise<void> {
   out('   Booting Curia stack...');
   let harness: CuriaHarness;
   try {
-    harness = await createHarness({ model });
+    harness = await createHarness({ model, ...(args.reasoning ? { reasoning: args.reasoning } : {}) });
   } catch (e) {
     await dropClone();
     const detail = e instanceof Error ? e.message : String(e);
@@ -187,6 +189,7 @@ async function main(): Promise<void> {
     const judge = createJudge(harness.stack.llmProviders, principal.displayName, { logger: harness.logger });
     out('   Stack ready.');
     out(`   Model: ${modelLabel ?? 'configured model_routing'}`);
+    out(`   Reasoning: ${reasoningLabel}`);
     out(`   Judge: ${judge.model} (OpenRouter)`);
     out(`   Commit: ${commit}`);
     // Differences from production that change what the agents see or can do. The
@@ -297,6 +300,7 @@ async function main(): Promise<void> {
     const runResult: RunResult = {
       timestamp,
       model: modelLabel,
+      reasoning: reasoningLabel,
       commit,
       filtered,
       cases: caseResults,

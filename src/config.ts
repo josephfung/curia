@@ -6,6 +6,7 @@ import { parseProxyConfig } from './browser/proxy-config.js';
 import { AUTONOMY_GATINGS, type AutonomyGating } from './autonomy/band-policy.js';
 import type { VerificationConfig } from './verification/types.js';
 import { registrableDomain } from './verification/domain.js';
+import type { TierConfig } from './agents/llm/model-router.js';
 
 // ---------------------------------------------------------------------------
 // Multi-account email config types
@@ -731,9 +732,9 @@ export interface YamlConfig {
    *  Agents declare a tier in their YAML; the operator controls which model each tier resolves to. */
   model_routing?: {
     tiers: {
-      fast: { model: string };
-      standard: { model: string };
-      powerful: { model: string };
+      fast: TierConfig;
+      standard: TierConfig;
+      powerful: TierConfig;
     };
     default_tier: 'fast' | 'standard' | 'powerful';
   };

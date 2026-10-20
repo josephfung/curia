@@ -24,6 +24,7 @@ import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { LLMProvider, LLMUsage, ToolDefinition } from '../agents/llm/provider.js';
 import type { ModelRouter, Tier } from '../agents/llm/model-router.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
+import type { ReasoningSetting } from '../agents/llm/sampling-options.js';
 import { DEFAULT_SAFETY_MARGIN } from '../agents/llm/token-estimator.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { OfficeIdentityService } from '../identity/service.js';
@@ -95,6 +96,10 @@ export interface AgentModelBinding {
   tier: Tier;
   fallbackModel: string;
   fallbackProvider: LLMProvider;
+  /** The primary tier's reasoning setting for agent turns (ADR-048 §3). */
+  reasoning?: ReasoningSetting;
+  /** The fallback tier's own setting, used when the fallback model serves a turn. */
+  fallbackReasoning?: ReasoningSetting;
 }
 
 /**
@@ -151,6 +156,8 @@ export function resolveAgentModelBinding(agentConfig: AgentYamlConfig, deps: Mod
     tier: resolved.tier,
     fallbackModel: fallbackResolved.model,
     fallbackProvider,
+    ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+    ...(fallbackResolved.reasoning !== undefined ? { fallbackReasoning: fallbackResolved.reasoning } : {}),
   };
 }
 
@@ -441,6 +448,8 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     tier: binding.tier,
     fallbackModel: binding.fallbackModel,
     fallbackProvider: binding.fallbackProvider,
+    ...(binding.reasoning !== undefined ? { reasoning: binding.reasoning } : {}),
+    ...(binding.fallbackReasoning !== undefined ? { fallbackReasoning: binding.fallbackReasoning } : {}),
     bus: ctx.bus,
     logger,
     memory: ctx.memory,

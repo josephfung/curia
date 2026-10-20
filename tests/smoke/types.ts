@@ -159,6 +159,8 @@ export interface RunResult {
   timestamp: string; // ISO 8601
   /** The model every agent ran on (--model), or null for the configured routing. */
   model: string | null;
+  /** The --reasoning-effort arm, e.g. "fast=none (other tiers as configured)" (ADR-048). Absent in older results. */
+  reasoning?: string;
   /** The commit the run started on, for the release pre-flight record. */
   commit: string;
   /** True when --case / --tags narrowed the run — a passing filtered run is not a release gate. */

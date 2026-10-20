@@ -67,7 +67,11 @@ import { discoverAgentManifests, type AgentYamlConfig } from '../agents/loader.j
 import { AnthropicProvider } from '../agents/llm/anthropic.js';
 import { OpenRouterProvider } from '../agents/llm/openrouter.js';
 import { ModelRegistry } from '../agents/llm/model-registry.js';
-import { ModelRouter, type ModelRoutingConfig } from '../agents/llm/model-router.js';
+import { ModelRouter, type ModelRoutingConfig, type Tier, type TierConfig } from '../agents/llm/model-router.js';
+import type { ReasoningSetting } from '../agents/llm/sampling-options.js';
+
+/** Per-tier reasoning settings laid over model_routing (the suites' --reasoning-effort). */
+export type TierReasoningOverride = Partial<Record<Tier, ReasoningSetting>>;
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import type { LLMProvider } from '../agents/llm/provider.js';
 import { buildBaseSystemPrompt, formatTaskTailBlocks } from '../agents/system-prompt.js';
@@ -176,6 +180,12 @@ export interface TestModeStackOptions {
    * Anthropic or OpenRouter. Must be a model the registry knows.
    */
   model?: string;
+  /**
+   * Reasoning settings laid over the routing's tiers (the suites' --reasoning-effort,
+   * ADR-048). A tier left out keeps its configured setting. ModelRouter validates each
+   * against its tier's model, as at a real boot.
+   */
+  reasoning?: TierReasoningOverride;
   /**
    * Which agents/tools/skills load. 'registry' (default) is what production would load
    * on its next boot: the enabled rows in tool_registry / skill_registry /
@@ -532,20 +542,37 @@ const EXECUTION_LAYER_METHODS = [
   'provenanceSourceText',
 ] as const;
 
-function routingFor(yamlConfig: YamlConfig, model: string | undefined, modelRegistry: ModelRegistry): ModelRoutingConfig {
+/**
+ * The routing a test-mode stack boots with: the configured model_routing, with
+ * --model replacing every tier's model and --reasoning-effort laid over the
+ * tiers it names. ModelRouter validates the result as at a real boot.
+ */
+export function routingFor(
+  yamlConfig: YamlConfig,
+  model: string | undefined,
+  reasoning: TierReasoningOverride | undefined,
+  modelRegistry: ModelRegistry,
+): ModelRoutingConfig {
   const configured = yamlConfig.model_routing;
   if (!configured) {
     throw new Error('model_routing config section is required in config/default.yaml');
   }
-  if (!model) return configured;
-  if (!modelRegistry.isKnownModel(model)) {
+  if (model && !modelRegistry.isKnownModel(model)) {
     throw new Error(
       `Unknown model '${model}'. Known models: ${Object.keys(modelRegistry.getAllModels()).sort().join(', ')}`,
     );
   }
+  // --model replaces every tier, configured reasoning included: that setting was
+  // validated against the configured model, not this one.
+  const tier = (name: Tier): TierConfig => {
+    const base: TierConfig = model ? { model } : configured.tiers[name];
+    const override = reasoning?.[name];
+    return override ? { ...base, reasoning: override } : base;
+  };
+  if (!model && !reasoning) return configured;
   return {
     ...configured,
-    tiers: { fast: { model }, standard: { model }, powerful: { model } },
+    tiers: { fast: tier('fast'), standard: tier('standard'), powerful: tier('powerful') },
   };
 }
 
@@ -644,7 +671,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
 
     // ── LLM providers ──────────────────────────────────────────────────────
     const modelRegistry = new ModelRegistry(logger);
-    const routing = routingFor(yamlConfig, options.model, modelRegistry);
+    const routing = routingFor(yamlConfig, options.model, options.reasoning, modelRegistry);
     const modelRouter = new ModelRouter(routing, modelRegistry, logger);
     const estimateCostUsd = createEstimateCostUsd(modelRegistry, routing.tiers.standard.model);
     const providerRegistry = new Map<string, LLMProvider>();

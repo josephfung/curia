@@ -7,6 +7,7 @@ import type {
   ToolCall,
 } from '../../../../src/agents/llm/provider.js';
 import { VoiceTurnRunner, StreamUnsupportedError, VoiceTurnError } from '../../../../src/channels/voice/turn-runner.js';
+import { NO_REASONING } from '../../../../src/agents/llm/sampling-options.js';
 
 const logger = createSilentLogger();
 
@@ -397,5 +398,21 @@ describe('VoiceTurnRunner', () => {
     // speak() joins with single spaces — not raw delta concat.
     expect(result.finalText).toBe('Let me check. It is sunny.');
     expect(result.finalText).not.toBe('Let me check. It is sunny. ');
+  });
+});
+
+describe('VoiceTurnRunner reasoning (ADR-048 §3)', () => {
+  it('sends NO_REASONING with the abort signal on every stream request', async () => {
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    const provider = new FakeStreamProvider([[{ type: 'message_end', content: 'Hi.', usage, provenance }]]);
+    const original = provider.stream.bind(provider);
+    provider.stream = async function* (params: { options?: Record<string, unknown> }) {
+      seen.push(params.options);
+      yield* original(params);
+    };
+    const runner = new VoiceTurnRunner({ provider, model: 'fake', logger, onSpeechText: async () => {} });
+    const signal = new AbortController().signal;
+    await runner.runTurn({ messages: [{ role: 'user', content: 'hi' }], signal });
+    expect(seen).toEqual([{ reasoning: NO_REASONING, signal }]);
   });
 });

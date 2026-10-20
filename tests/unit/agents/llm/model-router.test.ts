@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ModelRouter, type ModelRoutingConfig } from '../../../../src/agents/llm/model-router.js';
+import { ModelRouter, type ModelRoutingConfig, type TierConfig } from '../../../../src/agents/llm/model-router.js';
 import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 
@@ -131,5 +131,44 @@ describe('ModelRouter.getFallbackTier', () => {
     const resolved = router.resolve(fastFallback);
     expect(resolved.model).toBe('claude-sonnet-4-6');
     expect(resolved.tier).toBe('standard');
+  });
+});
+
+describe('ModelRouter — tier reasoning (ADR-048 §3)', () => {
+  const logger = createSilentLogger();
+  const registry = new ModelRegistry(logger);
+  const routing = (standard: TierConfig): ModelRoutingConfig => ({
+    tiers: { fast: { model: 'claude-haiku-5-5' }, standard, powerful: { model: 'claude-opus-4-6' } },
+    default_tier: 'standard',
+  });
+
+  it('carries a tier reasoning setting on the resolved model', () => {
+    const router = new ModelRouter(routing({ model: 'deepseek/deepseek-v4.1-flash', reasoning: { effort: 'low' } }), registry, logger);
+    expect(router.resolve('standard')).toEqual({ model: 'deepseek/deepseek-v4.1-flash', tier: 'standard', reasoning: { effort: 'low' } });
+    expect(router.resolve('fast')).toEqual({ model: 'claude-haiku-5-5', tier: 'fast' });
+  });
+
+  it('rejects an effort the model does not list', () => {
+    expect(() => new ModelRouter(routing({ model: 'deepseek/deepseek-v4.1-flash', reasoning: { effort: 'medium' } }), registry, logger))
+      .toThrow(/"medium" is not supported by model "deepseek\/deepseek-v4.1-flash" \(supported: low, high, max\)/);
+  });
+
+  it('rejects none where the model would write its reasoning into the reply', () => {
+    expect(() => new ModelRouter(routing({ model: 'deepseek/deepseek-v4.1-flash', reasoning: { effort: 'none' } }), registry, logger))
+      .toThrow(/"none" is not supported/);
+  });
+
+  it('accepts none on an Anthropic tier', () => {
+    expect(() => new ModelRouter(routing({ model: 'claude-haiku-5-5', reasoning: { effort: 'none' } }), registry, logger)).not.toThrow();
+  });
+
+  it('rejects any effort on a model with no reasoning entry', () => {
+    expect(() => new ModelRouter(routing({ model: 'claude-haiku-4-5', reasoning: { effort: 'low' } }), registry, logger))
+      .toThrow(/takes no reasoning setting/);
+  });
+
+  it('rejects a malformed setting', () => {
+    const bad = { model: 'claude-haiku-5-5', reasoning: { effort: 'xhigh' } } as unknown as TierConfig;
+    expect(() => new ModelRouter(routing(bad), registry, logger)).toThrow(/must be \{ effort: none \| low/);
   });
 });

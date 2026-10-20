@@ -18,11 +18,18 @@
 
 import type { Logger } from '../../logger.js';
 import type { ModelRegistry } from './model-registry.js';
+import { parseReasoning, type ReasoningSetting } from './sampling-options.js';
 
 export type Tier = 'fast' | 'standard' | 'powerful';
 
 export interface TierConfig {
   model: string;
+  /**
+   * Reasoning effort for agent turns on this tier (ADR-048 §3). Unset means
+   * the provider's default. Validated at construction against the model's
+   * registry entry.
+   */
+  reasoning?: ReasoningSetting;
 }
 
 export interface ModelRoutingConfig {
@@ -33,6 +40,8 @@ export interface ModelRoutingConfig {
 export interface ResolvedModel {
   model: string;
   tier: Tier;
+  /** The tier's reasoning setting, when it has one. */
+  reasoning?: ReasoningSetting;
 }
 
 const VALID_TIERS: ReadonlySet<string> = new Set<string>(['fast', 'standard', 'powerful']);
@@ -44,6 +53,28 @@ const FALLBACK_TIER: Record<Tier, Tier> = {
   standard: 'powerful',
   powerful: 'standard',
 };
+
+/**
+ * Reject a tier reasoning setting its model cannot honor, the same way an
+ * unknown tier model is rejected. That covers `none` on DeepSeek, where the
+ * model would write its reasoning into the reply instead (ADR-048 §3).
+ */
+export function validateTierReasoning(tier: string, tc: TierConfig, registry: ModelRegistry): void {
+  if (tc.reasoning === undefined) return;
+  const parsed = parseReasoning({ reasoning: tc.reasoning });
+  if (parsed.kind !== 'set') {
+    throw new Error(
+      `model_routing.tiers.${tier}.reasoning must be { effort: none | low | medium | high | max }, got ${JSON.stringify(tc.reasoning)}`,
+    );
+  }
+  if (!registry.honorsReasoningEffort(tc.model, parsed.effort)) {
+    const efforts = registry.reasoningSupport(tc.model)?.efforts;
+    throw new Error(
+      `model_routing.tiers.${tier}.reasoning.effort: "${parsed.effort}" is not supported by model "${tc.model}"` +
+        (efforts ? ` (supported: ${efforts.join(', ')})` : ' (the model takes no reasoning setting)'),
+    );
+  }
+}
 
 export class ModelRouter {
   private readonly config: ModelRoutingConfig;
@@ -65,6 +96,7 @@ export class ModelRouter {
           `model_routing.tiers.${tier}: model "${tc.model}" not found in the model registry`,
         );
       }
+      validateTierReasoning(tier, tc, registry);
     }
     if (!VALID_TIERS.has(config.default_tier)) {
       throw new Error(
@@ -101,6 +133,7 @@ export class ModelRouter {
     return {
       model: tierConfig.model,
       tier: effectiveTier as Tier,
+      ...(tierConfig.reasoning !== undefined ? { reasoning: tierConfig.reasoning } : {}),
     };
   }
 

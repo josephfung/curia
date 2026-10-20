@@ -11,6 +11,26 @@ Changes to `default.yaml` take effect on restart. Changes to `.env` also require
 
 ## `config/default.yaml` — full reference
 
+### `model_routing`
+
+Maps each capability tier to a model (ADR-014). The provider follows from the model registry.
+
+```yaml
+model_routing:
+  tiers:
+    fast:
+      model: claude-haiku-5-5
+    standard:
+      model: claude-sonnet-4-6
+      # reasoning:            # Optional (ADR-048). Unset = the model's own default.
+      #   effort: low         # none | low | medium | high | max
+    powerful:
+      model: claude-opus-4-6
+  default_tier: standard
+```
+
+`reasoning.effort` applies to agent turns on that tier; the judges, infra skills, scoring, summarization and voice set their own. Boot fails if the tier's model does not list the effort in the model registry: DeepSeek V4.1 Flash takes `low`, `high` and `max`, and the Anthropic models take `none` through `max`. Unset means the provider's default, so Haiku 5.5 thinks adaptively at `medium`. On Anthropic models an effort turns on adaptive thinking with summarized display; `none` turns thinking off.
+
 ### `channels`
 
 Controls which channel adapters activate at startup.

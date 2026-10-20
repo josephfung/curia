@@ -10,7 +10,7 @@ import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
 import type { ModelRegistry } from './llm/model-registry.js';
-import { sentTemperature } from './llm/sampling-options.js';
+import { sentTemperature, type ReasoningSetting } from './llm/sampling-options.js';
 import { llmCallReasoningFields } from './llm/llm-call-reasoning.js';
 import { createHash } from 'node:crypto';
 import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
@@ -162,6 +162,14 @@ import {
 } from './resolved-entities.js';
 import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
 
+/**
+ * Request options for an agent turn: the tier's reasoning setting, when it has
+ * one (ADR-048 §3). Nothing otherwise, so the provider default applies.
+ */
+function agentTurnOptions(reasoning: ReasoningSetting | undefined): { options?: Record<string, unknown> } {
+  return reasoning !== undefined ? { options: { reasoning } } : {};
+}
+
 export interface AgentConfig {
   agentId: string;
   systemPrompt: string;
@@ -182,6 +190,10 @@ export interface AgentConfig {
   /** Provider instance for the fallback model. May differ from the primary provider
    *  when the primary and fallback tiers are served by different providers. */
   fallbackProvider?: LLMProvider;
+  /** Reasoning setting for this agent's turns, from its tier (ADR-048 §3). Unset = provider default. */
+  reasoning?: ReasoningSetting;
+  /** The fallback tier's own reasoning setting, sent when the fallback model serves a turn. */
+  fallbackReasoning?: ReasoningSetting;
   bus: EventBus;
   logger: Logger;
   /** Optional working memory for conversation persistence across turns. */
@@ -2956,6 +2968,7 @@ export class AgentRuntime {
         const response = await provider.chat({
           messages,
           ...(modelForCall !== undefined ? { model: modelForCall } : {}),
+          ...agentTurnOptions(this.config.reasoning),
         });
         // Recorded like any other call (#1990): the raw text, including a rejected
         // draft and anything outside the reply block, is otherwise kept nowhere.
@@ -3242,7 +3255,11 @@ export class AgentRuntime {
     // set only modelName (e.g. unit tests) still reach the provider without error.
     const modelForCall = this.config.resolvedModel ?? this.config.modelName;
     const callStartMs = Date.now();
-    const response = await provider.chat({ ...params, ...(modelForCall !== undefined ? { model: modelForCall } : {}) });
+    const response = await provider.chat({
+      ...params,
+      ...(modelForCall !== undefined ? { model: modelForCall } : {}),
+      ...agentTurnOptions(this.config.reasoning),
+    });
     const latencyMs = Date.now() - callStartMs;
     if (response.type !== 'error') {
       // LLM call succeeded — reset consecutive error counter and publish telemetry
@@ -3278,7 +3295,12 @@ export class AgentRuntime {
         let fallbackResponse: LLMResponse;
         const fallbackStartMs = Date.now();
         try {
-          fallbackResponse = await this.config.fallbackProvider.chat({ ...params, model: this.config.fallbackModel });
+          // The fallback tier's own reasoning setting, not the primary's (ADR-048 §3).
+          fallbackResponse = await this.config.fallbackProvider.chat({
+            ...params,
+            model: this.config.fallbackModel,
+            ...agentTurnOptions(this.config.fallbackReasoning),
+          });
         } catch (err) {
           // Provider threw synchronously (network failure, misconfiguration, etc.) —
           // normalize into AgentError so the audit trail stays complete.
@@ -3383,7 +3405,11 @@ export class AgentRuntime {
       await new Promise(resolve => setTimeout(resolve, backoffMs));
 
       const retryStartMs = Date.now();
-      const retryResponse = await provider.chat({ ...params, ...(modelForCall !== undefined ? { model: modelForCall } : {}) });
+      const retryResponse = await provider.chat({
+        ...params,
+        ...(modelForCall !== undefined ? { model: modelForCall } : {}),
+        ...agentTurnOptions(this.config.reasoning),
+      });
       const retryLatencyMs = Date.now() - retryStartMs;
       if (retryResponse.type !== 'error') {
         // Retry succeeded — reset consecutive error counter and publish telemetry

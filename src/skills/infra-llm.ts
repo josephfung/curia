@@ -19,6 +19,7 @@ import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import { llmCallReasoningFields } from '../agents/llm/llm-call-reasoning.js';
+import { NO_REASONING } from '../agents/llm/sampling-options.js';
 import type { Logger } from '../logger.js';
 
 /**
@@ -94,7 +95,8 @@ export class InfraLlmService {
       response = await this.providerRouter.chat({
         model: resolved.model,
         messages: [{ role: 'user', content: prompt }],
-        options: { max_tokens: 10 },
+        // A 10-token classifier cap leaves no room for thinking (ADR-048 §3).
+        options: { max_tokens: 10, reasoning: NO_REASONING },
       });
     } catch (err) {
       // LLMProvider contract says chat() never throws, but network-level exceptions
@@ -149,7 +151,7 @@ export class InfraLlmService {
       response = await this.providerRouter.chat({
         model: resolved.model,
         messages: [message],
-        options: { max_tokens: options?.maxTokens ?? 4000 },
+        options: { max_tokens: options?.maxTokens ?? 4000, reasoning: NO_REASONING },
       });
     } catch (err) {
       this.logger.error({ err, toolName: scope.toolName }, 'infraLlm.extract: provider threw unexpectedly');

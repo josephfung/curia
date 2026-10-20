@@ -35,6 +35,7 @@ pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-f
 | Flag | Meaning |
 |---|---|
 | `--model <id>` | Route every agent to this model (registry id). Default: the configured `model_routing`. |
+| `--reasoning-effort <e>` | Reasoning effort for agent turns (ADR-048): `low` sets every tier; `fast=none,standard=low` sets only the tiers named. Boot fails if a tier's model does not list the effort. The run header and results record the arm. |
 | `--case <text>` | Only cases whose name contains this text (case-insensitive). |
 | `--tags a,b` | Only cases with one of these tags. |
 | `--runs <n>` | Runs per case, overriding the case's `runs` and the default of 5. |

@@ -16,6 +16,7 @@ import type { AutonomyService } from './autonomy-service.js';
 import type { ActionLogRow, ScoringFlags } from './action-log-types.js';
 import { DETERMINISTIC_SCORES, LLM_SCORED_OUTCOMES, RESOLVED_BY } from './action-log-types.js';
 import { PRINCIPAL_SCORED_BY } from './sample-pool.js';
+import { NO_REASONING } from '../agents/llm/sampling-options.js';
 
 export interface ScoringPassConfig {
   intervalMs: number;
@@ -299,6 +300,8 @@ Respond with ONLY a JSON object: {"competence_flag": 0|1, "commitment_flag": 0|1
       // Pass model at the top-level param (not inside options) — consistent with
       // all other LLM consumers (WorkingMemory, DriftDetector, ExecutionLayer infra skills).
       model: this.config.model,
+      // A background scoring call, not an agent turn (ADR-048 §3).
+      options: { reasoning: NO_REASONING },
     });
 
     // LLMResponse discriminated union: 'text' | 'tool_use' | 'error'

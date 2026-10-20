@@ -1,6 +1,7 @@
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { LLMProvider } from '../agents/llm/provider.js';
+import { NO_REASONING } from '../agents/llm/sampling-options.js';
 import {
   createDbUnavailableAgentError,
   isDbUnavailableError,
@@ -638,6 +639,8 @@ class PostgresBackend implements StorageBackend {
     const response = await provider.chat({
       messages: [{ role: 'user', content: summaryPrompt }],
       model,
+      // Summarization is infrastructure, not an agent turn (ADR-048 §3).
+      options: { reasoning: NO_REASONING },
     });
 
     if (response.type === 'error') {

@@ -480,6 +480,8 @@ export interface CaseResult {
 export interface SuiteResult {
   timestamp: string;
   model: string;
+  /** The --reasoning-effort arm, e.g. "standard=low (other tiers as configured)" (ADR-048). Absent in older results. */
+  reasoning?: string;
   commit?: string;
   /** With --overlay: the deployment repo's commit, whose agents and cases ran. */
   overlayCommit?: string;

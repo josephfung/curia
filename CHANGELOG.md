@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Sign-in details with secrets** — `secret-capture-request` stores login URL and username; `list-user-secrets` returns them. (#2201)
 - **`listUserSecretDetails` capability** — new `ToolContext` field returning non-secret sign-in details per `user.*` key. (#2201)
+- **Tier reasoning effort** — **public API (config):** `model_routing.tiers.<tier>.reasoning.effort` for agent turns, validated at boot. (#2044)
 - **`llm.call` reasoning fields** — **public API:** optional `reasoningTokens`, `reasoningEffort`, `upstreamProvider` on the bus event. (#2044)
 - **Suite reasoning metrics** — smoke and scenarios print reasoning tokens and latency p50/p90 per agent. (#2044)
 - **Style scenarios** — seven cases score reply length, filler and register under a fixed office identity. (#2143)
@@ -43,6 +44,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`verification` open** — result now says the next step; email codes go through ceo-inbox. (#2201)
+- **Haiku 5.5 agent turns** — unset reasoning now uses the model default, so fast-tier agents think. (#2044)
+- **Non-agent LLM calls** — judges, infra, scoring, summarization and voice state no reasoning explicitly. (#2044)
 - **Reasoning pass-back** — tool loops hand each model its own reasoning back next step; the archive keeps markers. (#2044)
 - **ADR-048 amended** — unset reasoning means provider default; Haiku 5.5 adaptive thinking; stale thinking dropped. (#2044)
 - **Prompt tone directives** — "warm" and sample sentences removed; the office identity alone sets tone. (#2143)

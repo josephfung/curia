@@ -12,6 +12,7 @@
 
 import type { LLMProvider } from '../agents/llm/provider.js';
 import type { Logger } from '../logger.js';
+import { NO_REASONING } from '../agents/llm/sampling-options.js';
 
 export type DriftConfidence = 'high' | 'medium' | 'low';
 
@@ -90,7 +91,7 @@ export class DriftDetector {
           { role: 'user', content: userLines.join('\n') },
         ],
         model: this.config.model,
-        options: { max_tokens: 200, temperature: 0 },
+        options: { max_tokens: 200, temperature: 0, reasoning: NO_REASONING },
       });
 
       if (response.type === 'error') {

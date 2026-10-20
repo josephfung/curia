@@ -2,6 +2,9 @@
 # Agents declare a tier (fast | standard | powerful) — this config maps each
 # tier to a concrete model. The provider is resolved from the model registry.
 # Change these values to upgrade all agents of a tier in one place.
+# A tier may also set `reasoning: { effort: none | low | medium | high | max }`
+# for agent turns (ADR-048); unset means the model's own default. Boot fails
+# if the tier's model does not list the effort in the model registry.
 model_routing:
   tiers:
     fast:

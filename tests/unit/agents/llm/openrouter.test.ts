@@ -1399,3 +1399,54 @@ describe('OpenRouterProvider — reasoning pass-back (ADR-048 §1)', () => {
     ]);
   });
 });
+
+describe('OpenRouterProvider — reasoning effort (ADR-048 §2)', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+    mockCreate.mockResolvedValue(makeTextResponse());
+  });
+
+  const provider = (registry = new ModelRegistry(createSilentLogger())) => new OpenRouterProvider('test-key', createSilentLogger(), registry);
+  const sent = () => mockCreate.mock.calls[0]![0] as Record<string, unknown>;
+
+  it('sends no reasoning key when unset', async () => {
+    const result = await provider().chat({ model: 'deepseek/deepseek-v4.1-flash', messages: [{ role: 'user', content: 'Hi' }] });
+    expect(sent()).not.toHaveProperty('reasoning');
+    expect(result.type === 'text' && 'reasoningEffort' in result.provenance).toBe(false);
+  });
+
+  it('sends reasoning.effort for an effort the model lists, and records it', async () => {
+    const result = await provider().chat({ model: 'deepseek/deepseek-v4.1-flash', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'low' } } });
+    expect(sent().reasoning).toEqual({ effort: 'low' });
+    expect(result.type === 'text' && result.provenance.reasoningEffort).toBe('low');
+  });
+
+  it('leaves out an effort the model does not list, so the judges on Gemini are unchanged', async () => {
+    const result = await provider().chat({ model: 'google/gemini-3.1-flash-lite', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'none' } } });
+    expect(sent()).not.toHaveProperty('reasoning');
+    expect(result.type === 'text' && 'reasoningEffort' in result.provenance).toBe(false);
+  });
+
+  it('sends nothing to a model with no reasoning entry', async () => {
+    await provider().chat({ model: 'openai/gpt-4o', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'low' } } });
+    expect(sent()).not.toHaveProperty('reasoning');
+  });
+
+  it('maps none to enabled: false where a model lists it', async () => {
+    const registry = new ModelRegistry(createSilentLogger());
+    vi.spyOn(registry, 'honorsReasoningEffort').mockReturnValue(true);
+    await provider(registry).chat({ model: 'deepseek/deepseek-v4.1-flash', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'none' } } });
+    expect(sent().reasoning).toEqual({ enabled: false });
+  });
+
+  it('sends the effort on streamed requests and records it', async () => {
+    mockCreate.mockResolvedValueOnce(makeStream([
+      { id: 'gen-3', model: 'deepseek/deepseek-v4.1-flash', choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop', logprobs: null }], usage: null, object: 'chat.completion.chunk', created: 1700000000 },
+      { id: 'gen-3', model: 'deepseek/deepseek-v4.1-flash', choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }, object: 'chat.completion.chunk', created: 1700000000 },
+    ]));
+    const events = await collectStream(provider().stream({ model: 'deepseek/deepseek-v4.1-flash', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'max' } } }));
+    expect(sent().reasoning).toEqual({ effort: 'max' });
+    const end = events.at(-1);
+    expect(end?.type === 'message_end' && end.provenance.reasoningEffort).toBe('max');
+  });
+});

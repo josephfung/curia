@@ -4,6 +4,7 @@
 //   pnpm scenarios --case transfer --runs 3                       # iterate on one case
 //   pnpm scenarios --concurrency 1                                # one case at a time
 //   pnpm scenarios --on-demand                                    # also the release_gate: false cases
+//   pnpm scenarios --model … --reasoning-effort low               # an effort A/B arm (ADR-048)
 //
 // Cases run --concurrency at a time (default 4); a case's own runs stay one at a time,
 // and cases that seed the same contact never overlap (seed.ts: seedConflictKeys). The
@@ -29,6 +30,8 @@ import { describeError, seedConflictKeys } from './seed.js';
 import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from '../shared/case-scope.js';
 import { liveSearchLines } from '../shared/live-search.js';
 import { formatUsageLines, formatUsd, sumBreakdowns, UsageLedger } from '../shared/usage.js';
+import { describeReasoningOverride, parseReasoningEffortFlag } from '../shared/reasoning-flag.js';
+import type { TierReasoningOverride } from '../../src/startup/test-mode-stack.js';
 import { mustStub } from './stub-layer.js';
 import { buildOverlay } from './overlay.js';
 import { coverageViolations, mergeCoverage, readCoverage, writeCoverage } from './stub-coverage.js';
@@ -52,6 +55,8 @@ const COVERAGE_FILE = path.resolve(import.meta.dirname, 'stub-coverage.json');
 
 interface Args {
   model?: string;
+  /** --reasoning-effort: per-tier reasoning for an A/B arm (ADR-048). */
+  reasoning?: TierReasoningOverride;
   caseFilter?: string;
   tags?: string[];
   runs?: number;
@@ -82,6 +87,7 @@ function parseArgs(argv: string[]): Args {
   const concurrencyRaw = value('--concurrency');
   return {
     model: value('--model'),
+    ...(value('--reasoning-effort') !== undefined ? { reasoning: parseReasoningEffortFlag(value('--reasoning-effort')!) } : {}),
     caseFilter: value('--case'),
     tags: value('--tags')?.split(','),
     runs,
@@ -346,6 +352,7 @@ async function main(): Promise<void> {
   try {
     harness = await createScenarioHarness({
       model: args.model,
+      ...(args.reasoning ? { reasoning: args.reasoning } : {}),
       ...(identity ? { officeIdentity: identity.config } : {}),
       ...(overlay ?? {}),
       ...(args.mcpSnapshots ? { mcpSnapshotDirs: [args.mcpSnapshots] } : {}),
@@ -358,6 +365,7 @@ async function main(): Promise<void> {
   }
 
   const model = args.model ?? harness.stack.yamlConfig.model_routing?.tiers.standard.model ?? 'configured routing';
+  const reasoningLabel = describeReasoningOverride(args.reasoning);
   let exitCode = 0;
   const stopHooks: Array<() => Promise<void>> = [];
   if (overlay) stopHooks.push(async () => overlay.cleanup());
@@ -367,6 +375,7 @@ async function main(): Promise<void> {
       : undefined;
     const judge = createJudge(harness.stack.llmProviders, principal?.displayName, { logger: harness.stack.logger });
     out(`   Model: ${model}`);
+    out(`   Reasoning: ${reasoningLabel}`);
     out(`   Judge: ${judge.model} (OpenRouter)`);
     if (cases.some(c => c.delegation === 'real')) {
       out(`   Real-delegation per-run timeout: ${Math.round(Math.max(RUN_TIMEOUT_MS, harness.delegationRunTimeoutMs) / 1000)}s (the longest delegate wait, plus a margin)`);
@@ -526,6 +535,7 @@ async function main(): Promise<void> {
     const suite: SuiteResult = {
       timestamp: new Date(started).toISOString(),
       model,
+      reasoning: reasoningLabel,
       commit,
       ...(overlayCommit ? { overlayCommit } : {}),
       ...(onDemandSkipped.length > 0 ? { onDemandSkipped } : {}),
@@ -560,6 +570,7 @@ async function main(): Promise<void> {
     out(`\n   Commit:  ${suite.commit ?? '(unknown)'}`);
     if (suite.overlayCommit) out(`   Overlay: ${suite.overlayCommit}`);
     out(`   Model:   ${model}`);
+    out(`   Reasoning: ${reasoningLabel}`);
     if (identity) out(`   Identity: ${identity.name}`);
     out(`   Results: ${resultsFile}`);
     out(`   Time:    ${Math.round(suite.durationMs / 1000)}s (concurrency ${args.concurrency})`);

@@ -5,10 +5,14 @@
 // suite, and still print "Gate passed". Unknown flags, `--flag=value` and missing values
 // are errors.
 import { DEFAULT_CONCURRENCY, parseConcurrency } from '../shared/case-scope.js';
+import { parseReasoningEffortFlag } from '../shared/reasoning-flag.js';
+import type { TierReasoningOverride } from '../../src/startup/test-mode-stack.js';
 
 export interface SmokeArgs {
   /** Route every agent to this model (the release gate passes the production standard tier). */
   model?: string;
+  /** --reasoning-effort: per-tier reasoning for an A/B arm (ADR-048). */
+  reasoning?: TierReasoningOverride;
   /** Run cases carrying any of these tags. */
   tags?: string[];
   /** Run cases whose name contains any of these (case-insensitive). Repeatable. */
@@ -21,7 +25,7 @@ export interface SmokeArgs {
   concurrency: number;
 }
 
-const VALUE_FLAGS = new Set(['--model', '--tags', '--case', '--concurrency']);
+const VALUE_FLAGS = new Set(['--model', '--reasoning-effort', '--tags', '--case', '--concurrency']);
 const BOOLEAN_FLAGS = new Set(['--show-calls', '--allow-remote-db']);
 
 export function parseSmokeArgs(argv: string[]): SmokeArgs {
@@ -36,7 +40,7 @@ export function parseSmokeArgs(argv: string[]): SmokeArgs {
       continue;
     }
     if (!VALUE_FLAGS.has(flag)) {
-      throw new Error(`unknown argument '${flag}' — expected --model, --case, --tags, --concurrency, --show-calls or --allow-remote-db`);
+      throw new Error(`unknown argument '${flag}' — expected --model, --reasoning-effort, --case, --tags, --concurrency, --show-calls or --allow-remote-db`);
     }
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--') || value.trim() === '') throw new Error(`${flag} needs a value`);
@@ -44,6 +48,9 @@ export function parseSmokeArgs(argv: string[]): SmokeArgs {
     if (flag === '--model') {
       if (args.model !== undefined) throw new Error('--model given twice');
       args.model = value;
+    } else if (flag === '--reasoning-effort') {
+      if (args.reasoning !== undefined) throw new Error('--reasoning-effort given twice');
+      args.reasoning = parseReasoningEffortFlag(value);
     } else if (flag === '--concurrency') {
       if (concurrencyGiven) throw new Error('--concurrency given twice');
       concurrencyGiven = true;

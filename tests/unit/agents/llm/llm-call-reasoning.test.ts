@@ -11,6 +11,7 @@ import { InfraLlmService } from '../../../../src/skills/infra-llm.js';
 import { OutboundLlmJudge } from '../../../../src/dispatch/outbound-judge.js';
 import { EscalationJudge } from '../../../../src/autonomy/escalation-judge.js';
 import { createSilentLogger } from '../../../../src/logger.js';
+import { NO_REASONING } from '../../../../src/agents/llm/sampling-options.js';
 import type { LLMCallProvenance, LLMProvider, LLMResponse, LLMUsage } from '../../../../src/agents/llm/provider.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { FilterRecipient } from '../../../../src/dispatch/outbound-filter.js';
@@ -133,4 +134,23 @@ describe('llm.call publishers record the reasoning fields (ADR-048 §5)', () => 
       });
     });
   }
+});
+
+describe('InfraLlmService sends NO_REASONING (ADR-048 §3)', () => {
+  it('on classify and extract', async () => {
+    const chat = vi.fn(async (): Promise<LLMResponse> => ({ type: 'text', content: 'yes', usage: usage(), provenance: provenance() }));
+    const provider: LLMProvider = { id: 'anthropic', chat };
+    const router = new ModelRouter({
+      tiers: { fast: { model: 'claude-haiku-5-5' }, standard: { model: MODEL }, powerful: { model: MODEL } },
+      default_tier: 'standard',
+    }, registry, logger);
+    const { bus } = recordingBus();
+    const service = new InfraLlmService(provider, router, bus, logger, registry).scoped({ toolName: 'extract-facts' });
+    await service.classify('is it ready?');
+    await service.extract('pull the facts');
+    for (const [params] of chat.mock.calls as unknown as Array<[{ options?: Record<string, unknown> }]>) {
+      expect(params.options?.reasoning).toBe(NO_REASONING);
+    }
+    expect(chat).toHaveBeenCalledTimes(2);
+  });
 });

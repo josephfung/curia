@@ -22,7 +22,7 @@ import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvena
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
-import { resolveTemperature } from './sampling-options.js';
+import { logUnsentReasoningEffort, resolveReasoning, resolveTemperature, type ReasoningEffort } from './sampling-options.js';
 import { sendableReasoningBlocks } from './reasoning-blocks.js';
 
 /**
@@ -247,6 +247,12 @@ export interface OpenRouterReasoningData {
   reasoning?: string;
 }
 
+/**
+ * OpenRouter's unified reasoning parameter, which the SDK type does not declare.
+ * `none` is sent as `{ enabled: false }` (ADR-048 §2).
+ */
+type OpenRouterReasoningParam = { effort: Exclude<ReasoningEffort, 'none'> } | { enabled: false };
+
 /** An assistant message carrying passed-back reasoning, which the SDK type does not declare. */
 type AssistantMessageWithReasoning = ChatCompletionAssistantMessageParam & OpenRouterReasoningData;
 
@@ -343,6 +349,8 @@ export class OpenRouterProvider implements LLMProvider {
     createParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
     model: string;
     signal?: AbortSignal;
+    /** The effort the request carries, when it sends one. */
+    reasoningEffort?: ReasoningEffort;
   } {
     // Extract and concatenate all system messages into a single system role
     // entry. The OpenAI API accepts system messages inline (unlike Anthropic),
@@ -515,6 +523,24 @@ export class OpenRouterProvider implements LLMProvider {
       createParams.temperature = temperature;
     }
 
+    // Reasoning effort (ADR-048 §2). Unset sends no key, so the model keeps its
+    // own default. An effort the model's registry entry does not list is left
+    // out: tiers are validated at boot, so this is a call site's `none` on a
+    // model that cannot turn reasoning off cleanly.
+    let reasoningEffort: ReasoningEffort | undefined;
+    const requestedEffort = resolveReasoning(options, this.logger);
+    if (requestedEffort !== undefined) {
+      if (this.modelRegistry.honorsReasoningEffort(model, requestedEffort)) {
+        const reasoning: OpenRouterReasoningParam = requestedEffort === 'none'
+          ? { enabled: false }
+          : { effort: requestedEffort };
+        (createParams as typeof createParams & { reasoning?: OpenRouterReasoningParam }).reasoning = reasoning;
+        reasoningEffort = requestedEffort;
+      } else {
+        logUnsentReasoningEffort(this.logger, model, requestedEffort, this.modelRegistry.reasoningSupport(model)?.efforts);
+      }
+    }
+
     // Only attach the tools array when tools are provided — the API rejects
     // an empty tools array, so we omit the key entirely when there are none.
     if (tools && tools.length > 0) {
@@ -531,20 +557,25 @@ export class OpenRouterProvider implements LLMProvider {
     // Honor an optional AbortSignal passed via options.signal so callers can
     // cancel an in-flight request instead of orphaning it.
     const signal = options?.signal instanceof AbortSignal ? options.signal : undefined;
-    return { createParams, model, signal };
+    return { createParams, model, signal, ...(reasoningEffort !== undefined ? { reasoningEffort } : {}) };
   }
 
   private usageFromCompletion(response: ChatCompletion): LLMUsage {
     return usageFromOpenRouter(response.usage);
   }
 
-  private provenanceFromCompletion(response: ChatCompletion, requestedModel: string): LLMCallProvenance {
+  private provenanceFromCompletion(
+    response: ChatCompletion,
+    requestedModel: string,
+    reasoningEffort: ReasoningEffort | undefined,
+  ): LLMCallProvenance {
     const upstreamProvider = upstreamProviderFrom(response);
     return {
       requestedModel,
       actualModel: response.model,
       providerRequestId: response.id,
       ...(upstreamProvider !== undefined ? { upstreamProvider } : {}),
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     };
   }
 
@@ -604,7 +635,7 @@ export class OpenRouterProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'chat');
       model = built.model;
-      const { createParams, signal } = built;
+      const { createParams, signal, reasoningEffort } = built;
       const response: ChatCompletion = await this.client.chat.completions.create(createParams, signal ? { signal } : undefined);
 
       // Extract the first choice — OpenRouter always returns at least one.
@@ -638,7 +669,7 @@ export class OpenRouterProvider implements LLMProvider {
       }
 
       const usage = this.usageFromCompletion(response);
-      const provenance = this.provenanceFromCompletion(response, model);
+      const provenance = this.provenanceFromCompletion(response, model, reasoningEffort);
       const reasoning = reasoningFromCarrier(
         choice.message,
         usage,
@@ -730,7 +761,7 @@ export class OpenRouterProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'stream');
       model = built.model;
-      const { createParams, signal } = built;
+      const { createParams, signal, reasoningEffort } = built;
       const streamParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
         ...createParams,
         stream: true,
@@ -820,6 +851,7 @@ export class OpenRouterProvider implements LLMProvider {
         actualModel,
         providerRequestId,
         ...(upstreamProvider !== undefined ? { upstreamProvider } : {}),
+        ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
       };
       const reasoning = reasoningFieldsFromParts(
         reasoningDirect,
