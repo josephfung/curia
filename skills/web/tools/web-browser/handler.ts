@@ -627,7 +627,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       }
       // Destination guard for keys (#2017): while a sign-in code is tracked, a key that types
       // a character goes only into a field on a verification's own page in this session.
-      // Enter, Tab, Backspace, arrows and shortcuts type nothing and always pass.
+      // Listed non-printing keys (Enter, Tab, Backspace, arrows, …) and Control/Meta
+      // shortcuts always pass; every other key name counts as typing (typesCharacter).
       if (typesCharacter(key) && !(await characterKeyAllowed(page, ctx, sessionId))) {
         return { ok: false, error: TRACKED_CODE_KEY_REFUSAL };
       }
@@ -766,19 +767,45 @@ function trackedCodeAllowedOn(ctx: ToolContext, value: string, destinationUrl: s
   );
 }
 
+/** Modifiers that make a chord a shortcut (select all, paste, …) rather than typed text. */
+const SHORTCUT_MODIFIERS: ReadonlySet<string> = new Set([
+  'Control', 'ControlLeft', 'ControlRight', 'Meta', 'MetaLeft', 'MetaRight', 'ControlOrMeta',
+]);
+
+/** Named keys that never type a character. Anything not listed is treated as typing one. */
+const NON_PRINTING_KEYS: ReadonlySet<string> = new Set([
+  'Enter', 'Tab', 'Backspace', 'Delete', 'Escape',
+  'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+  'Home', 'End', 'PageUp', 'PageDown', 'Insert',
+  ...Array.from({ length: 24 }, (_, i) => `F${i + 1}`),
+  'CapsLock', 'NumLock', 'ScrollLock', 'PrintScreen', 'Pause', 'ContextMenu',
+  'Shift', 'ShiftLeft', 'ShiftRight', 'Alt', 'AltLeft', 'AltRight',
+  'Control', 'ControlLeft', 'ControlRight', 'Meta', 'MetaLeft', 'MetaRight',
+]);
+
 /**
- * True when a Playwright key name types a character: a single character ("4", "a", "+"),
- * a key code that types one (KeyA, Digit4, Numpad4), alone or with Shift and/or Alt. Named
- * keys (Enter, Tab, Backspace, ArrowLeft) and Control/Meta shortcuts type nothing.
+ * True when a Playwright key or chord may type a character. Fail closed: it counts as
+ * non-typing only when a modifier is Control/Meta/ControlOrMeta (Left/Right forms
+ * included), or its base key is in NON_PRINTING_KEYS. Every other key name ("4",
+ * Digit4, Numpad4, KeyA, Minus, Space, ShiftLeft+4, AltRight+Digit4) goes through the guard.
  */
 function typesCharacter(key: string): boolean {
-  if ([...key].length === 1) return true;
-  // "Shift++" presses "+": the last segment of a key ending in "+" is "+" itself.
-  const parts = key.endsWith('++') ? [...key.slice(0, -2).split('+'), '+'] : key.split('+');
-  const base = parts[parts.length - 1]!;
-  const modifiers = parts.slice(0, -1);
-  if (!modifiers.every((m) => m === 'Shift' || m === 'Alt')) return false;
-  return [...base].length === 1 || /^(?:Key[A-Z]|Digit\d|Numpad\d)$/.test(base);
+  // "+" is the key itself; "Shift++" is Shift with "+".
+  let base: string;
+  let modifiers: string[];
+  if (key === '+') {
+    base = '+';
+    modifiers = [];
+  } else if (key.endsWith('++')) {
+    base = '+';
+    modifiers = key.slice(0, -2).split('+');
+  } else {
+    const parts = key.split('+');
+    base = parts[parts.length - 1]!;
+    modifiers = parts.slice(0, -1);
+  }
+  if (modifiers.some((m) => SHORTCUT_MODIFIERS.has(m))) return false;
+  return !NON_PRINTING_KEYS.has(base);
 }
 
 /**

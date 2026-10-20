@@ -2225,7 +2225,11 @@ describe('web-browser sign-in verification (#2017)', () => {
       expect(page.keyboard.press).not.toHaveBeenCalled();
     });
 
-    it.each(['Shift+4', 'Digit4', 'Numpad4', 'KeyA', 'a', 'Shift+A', '+', 'Shift++'])('treats %s as a character', async (key) => {
+    it.each([
+      'Shift+4', 'Digit4', 'Numpad4', 'KeyA', 'a', 'Shift+A', '+', 'Shift++',
+      // Left/Right modifier names and key codes outside any pattern still type (fail closed).
+      'ShiftLeft+4', 'AltRight+Digit4', 'Shift+Digit8', 'Minus', 'NumpadAdd', 'Space',
+    ])('treats %s as a character', async (key) => {
       const { runtime } = trackedRuntime();
       const { ctx, page } = focusCtx({
         topUrl: 'https://login.aircanada.com/mfa',
@@ -2239,9 +2243,12 @@ describe('web-browser sign-in verification (#2017)', () => {
       expect(page.keyboard.press).not.toHaveBeenCalled();
     });
 
-    it('always allows Enter, Tab, Backspace and arrows, without a lookup', async () => {
+    it('always allows named non-printing keys and Control/Meta chords, without a lookup', async () => {
       const { runtime, listActive } = trackedRuntime();
-      const keys = ['Enter', 'Tab', 'Backspace', 'ArrowLeft', 'Escape', 'Control+a'];
+      const keys = [
+        'Enter', 'Tab', 'Backspace', 'ArrowLeft', 'ArrowDown', 'Escape', 'Control+a', 'Control+A', 'Meta+V',
+        'ControlOrMeta+a', 'ControlLeft+Digit4', 'Shift+Tab', 'Shift', 'AltRight', 'F5', 'PageDown',
+      ];
       const { ctx, page } = focusCtx({
         topUrl: 'https://login.aircanada.com/mfa',
         childUrl: 'https://chat.widgetvendor.com/frame',
