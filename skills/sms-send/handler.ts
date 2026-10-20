@@ -12,7 +12,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
-import { isPrincipalDirectedSend } from '../../src/skills/_shared/principal-directed.js';
+import { isPrincipalDirectedSend, originatorOption, relayDeferredData } from '../../src/skills/_shared/principal-directed.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
   findRetiredRecipientField,
@@ -95,6 +95,8 @@ export class SmsSendHandler implements ToolHandler {
           taskEventId: ctx.taskEventId,
           conversationId: ctx.conversationId,
           principalDirected: isPrincipalDirectedSend(ctx),
+          // Counted against the outside contact who started this work (#1320).
+          ...originatorOption(ctx),
           // An approve-action replay: the principal approved this exact send (#2159).
           humanApproved: ctx.humanApproved,
           // Used only if band review holds this send (#2159): approval replays this skill with this input.
@@ -125,6 +127,8 @@ export class SmsSendHandler implements ToolHandler {
           ...(contactId ? { contact_id: contactId } : {}),
           ...(identityName ? { recipient_identity: identityName } : {}),
           channel: 'sms',
+          // Held by the relay budget for the principal's digest (#1320).
+          ...relayDeferredData(result),
         },
       };
     } catch (err) {

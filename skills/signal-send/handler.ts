@@ -19,7 +19,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/type
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
-import { isPrincipalDirectedSend } from '../../src/skills/_shared/principal-directed.js';
+import { isPrincipalDirectedSend, originatorOption, relayDeferredData } from '../../src/skills/_shared/principal-directed.js';
 import { hasPresentValue } from '../../src/contacts/principal-carveout-parse.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
@@ -155,6 +155,8 @@ export class SignalSendHandler implements ToolHandler {
           taskEventId: ctx.taskEventId,
           conversationId: ctx.conversationId,
           principalDirected: isPrincipalDirectedSend(ctx),
+          // Counted against the outside contact who started this work (#1320).
+          ...originatorOption(ctx),
           // An approve-action replay: the principal approved this exact send (#2159).
           humanApproved: ctx.humanApproved,
           // Used only if band review holds this send (#2159): approval replays this skill with this input.
@@ -174,7 +176,7 @@ export class SignalSendHandler implements ToolHandler {
           boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
         });
 
-        return { success: true, data: { delivered_to: groupId, channel: 'signal' } };
+        return { success: true, data: { delivered_to: groupId, channel: 'signal', ...relayDeferredData(result) } };
       } catch (err) {
         const errMessage = err instanceof Error ? err.message : String(err);
         ctx.log.error({ err, destinationType: 'group' }, 'signal-send: gateway threw unexpectedly');
@@ -218,6 +220,8 @@ export class SignalSendHandler implements ToolHandler {
         taskEventId: ctx.taskEventId,
         conversationId: ctx.conversationId,
         principalDirected: isPrincipalDirectedSend(ctx),
+        // Counted against the outside contact who started this work (#1320).
+        ...originatorOption(ctx),
         // An approve-action replay: the principal approved this exact send (#2159).
         humanApproved: ctx.humanApproved,
         // Used only if band review holds this send (#2159): approval replays this skill with this input.
@@ -248,6 +252,8 @@ export class SignalSendHandler implements ToolHandler {
           ...(contactId ? { contact_id: contactId } : {}),
           ...(identityName ? { recipient_identity: identityName } : {}),
           channel: 'signal',
+          // Held by the relay budget for the principal's digest (#1320).
+          ...relayDeferredData(result),
         },
       };
     } catch (err) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isPrincipalDirectedSend } from '../../../../src/skills/_shared/principal-directed.js';
+import { isPrincipalDirectedSend, originatorOption, relayDeferredData, RELAY_DEFERRED_NOTE } from '../../../../src/skills/_shared/principal-directed.js';
 
 function originator(systemRole: 'principal' | 'agent' | 'system' | null) {
   return { originator: { contactId: 'c1', systemRole, channel: 'signal', initiatedAt: '2026-09-17T14:00:00Z', tier: null } };
@@ -31,5 +31,29 @@ describe('isPrincipalDirectedSend (#1870)', () => {
 
   it('is false with no task metadata (fail-closed default)', () => {
     expect(isPrincipalDirectedSend({ taskMetadata: undefined })).toBe(false);
+  });
+});
+
+describe('originatorOption (#1320)', () => {
+  it('passes the task originator through for the relay budget', () => {
+    const meta = originator(null);
+    expect(originatorOption({ taskMetadata: meta })).toEqual({ originator: meta.originator });
+  });
+
+  it('is empty when the task has no originator', () => {
+    expect(originatorOption({ taskMetadata: undefined })).toEqual({});
+    expect(originatorOption({ taskMetadata: {} })).toEqual({});
+  });
+});
+
+describe('relayDeferredData (#1320)', () => {
+  it('tells the agent the message is queued and must not be re-sent', () => {
+    expect(relayDeferredData({ deferredToDigest: true })).toEqual({ deferred_to_digest: true, note: RELAY_DEFERRED_NOTE });
+    expect(RELAY_DEFERRED_NOTE).toMatch(/digest/);
+    expect(RELAY_DEFERRED_NOTE).toMatch(/not re-send/i);
+  });
+
+  it('adds nothing to a delivered send', () => {
+    expect(relayDeferredData({})).toEqual({});
   });
 });

@@ -501,3 +501,16 @@ describe('SignalSendHandler', () => {
     });
   });
 });
+
+describe('signal-send relay budget (#1320)', () => {
+  const OUTSIDER = { originator: { contactId: 'dana-contact', systemRole: null, channel: 'email', initiatedAt: '2026-10-19T12:00:00Z', tier: 'known' } };
+
+  it('passes the task originator to the gateway and surfaces a relay-budget deferral', async () => {
+    const send = vi.fn().mockResolvedValue({ success: true, deferredToDigest: true });
+    const ctx = { ...makeCtx({ input: { recipient: 'principal', message: 'Hello' }, gateway: { send } }), taskMetadata: OUTSIDER } as ToolContext;
+    const result = await new SignalSendHandler().execute(ctx);
+    expect(send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ originator: OUTSIDER.originator }));
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ deferred_to_digest: true, note: expect.stringMatching(/digest/) });
+  });
+});
