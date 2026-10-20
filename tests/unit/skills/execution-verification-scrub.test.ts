@@ -143,6 +143,39 @@ describe('execution layer sign-in code scrub (#2017)', () => {
     });
   });
 
+  it('the tier-mode escalation judge sees a web-browser input with the code scrubbed', async () => {
+    // web-browser keeps the real code (it must type it), so the judge's description of the
+    // action is the one place that has to scrub it itself. Score 100 keeps Gates A and B
+    // out; a known-tier originator makes Gate C ask the judge whether the call targets a
+    // third party.
+    const registry = new ToolRegistry();
+    const handler = new CapturingHandler();
+    registry.register({ ...manifest('web-browser', { action: 'string', text: 'string?' }), action_risk: 'medium' }, handler);
+    const classifyAction = vi.fn(async (_req: { description: string }) => ({
+      decision: 'allow' as const, actionClass: 'reversible-external' as const, isThirdPartyFacing: false, reason: 'stub',
+    }));
+    const layer = new ExecutionLayer(registry, logger, {
+      verification: runtime(trackerWithCode()),
+      autonomyService: {
+        getConfig: vi.fn(async () => ({ score: 100, band: 'full', updatedAt: new Date(), updatedBy: 'test' })),
+      } as unknown as AutonomyService,
+      escalationJudge: { classifyAction, isEnabled: () => true } as never,
+    });
+
+    await layer.invoke('web-browser', { action: 'type', text: '482913' }, undefined, {
+      taskMetadata: {
+        originator: { contactId: 'c-1', systemRole: null, channel: 'email', initiatedAt: new Date().toISOString(), tier: 'known' },
+      },
+    });
+
+    expect(classifyAction).toHaveBeenCalledOnce();
+    const description = classifyAction.mock.calls[0]![0].description;
+    expect(description).toContain('[sign-in code]');
+    expect(description).not.toContain('482913');
+    // The handler still receives the real code to type.
+    expect(handler.seen?.text).toBe('482913');
+  });
+
   it('does not touch the caller\'s input object', async () => {
     const { layer } = setup('task-update', { progress_note: 'string?' }, trackerWithCode());
     const input = { progress_note: 'code 482913' };

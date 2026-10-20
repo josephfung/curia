@@ -642,6 +642,22 @@ export class ExecutionLayer {
   }
 
   /**
+   * The escalation judge's description of a call (buildActionDescription), with any tracked
+   * sign-in code scrubbed (#2017). Every judge prompt goes through here: the scrub-exempt
+   * tool's input still carries the real code, and the judge needs the action, not the code.
+   * Every other tool's input was already scrubbed on entry; scrubbing again is a no-op.
+   */
+  private describeActionForJudge(
+    toolName: string,
+    manifest: ToolManifest,
+    input: Record<string, unknown>,
+    extras?: Parameters<typeof buildActionDescription>[3],
+  ): string {
+    const tracker = this.verification?.tracker;
+    return buildActionDescription(toolName, manifest, tracker ? tracker.scrubDeep(input) : input, extras);
+  }
+
+  /**
    * True when `input` still carries a tracked sign-in code (#2017). Only the scrub-exempt
    * tool can: every other tool's input was scrubbed on entry. Such an input is never queued
    * for approval, because an approval stores the input verbatim (and re-runs it on approve)
@@ -1338,7 +1354,7 @@ export class ExecutionLayer {
     // was already pinned structurally.
     if (this.escalationJudge?.isEnabled()) {
       const verdict = await this.escalationJudge.classifyAction({
-        description: buildActionDescription(toolName, manifest, input, judgeDescriptionExtras),
+        description: this.describeActionForJudge(toolName, manifest, input, judgeDescriptionExtras),
         initiatingTier,
         conversationId: options?.conversationId ?? 'system',
       });
@@ -1492,12 +1508,7 @@ export class ExecutionLayer {
       }
       return await this.escalationJudge.review({
         questions,
-        // The judge needs the action, not a sign-in code the scrub-exempt tool still carries (#2017).
-        message: buildActionDescription(
-          toolName,
-          manifest,
-          this.verification && toolName === SIGN_IN_CODE_SCRUB_EXEMPT_TOOL ? this.verification.tracker.scrubDeep(input) : input,
-        ),
+        message: this.describeActionForJudge(toolName, manifest, input),
         recipients: [],
         band: AutonomyService.bandForScore(currentScore),
         evidence,
