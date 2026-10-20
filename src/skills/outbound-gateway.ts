@@ -36,7 +36,7 @@ import { TelnyxSendError } from '../channels/sms/sms-client.js';
 import { TELNYX_ERROR_OPTED_OUT } from '../channels/sms/types.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import { classifyEmailSender } from '../contacts/contact-service.js';
-import type { ContactTier, ChannelIdentity } from '../contacts/types.js';
+import type { ContactTier, ChannelIdentity, TaskOriginator } from '../contacts/types.js';
 import {
   isPrincipalIdentity,
   computePrincipalIsSoleRecipient,
@@ -47,7 +47,7 @@ import type { OutboundContentFilter, FilterRecipient } from '../dispatch/outboun
 import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
-import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createAutonomySendBlocked, createPrincipalReport } from '../bus/events.js';
+import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createAutonomySendBlocked, createAutonomyRelayDeferred, createPrincipalReport } from '../bus/events.js';
 import type { ChannelReconnectEvent } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { markdownToMrkdwn } from '../format/markdown-to-mrkdwn.js';
@@ -56,6 +56,7 @@ import { approvalAdvisory, buildApprovalDeliveryWake, generateShortRef, readAppr
 import { enrichGatewayApprovalPayload } from '../autonomy/approval-notification.js';
 import type { ApprovalDelivery } from '../autonomy/approval-delivery.js';
 import type { AutonomyGating } from '../autonomy/band-policy.js';
+import { budgetedOriginator, type RelayBudget } from '../autonomy/relay-budget.js';
 import { BAND_RULES, type BandReviewReport, type BandReviewSignals, type BandSendReview } from '../dispatch/band-send-review.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
@@ -177,6 +178,12 @@ export interface OutboundSendResult {
    * Permanent failures (opt-out, validation) must leave this unset/false.
    */
   queueable?: boolean;
+  /**
+   * True when the relay budget held this send for the principal's digest instead of sending
+   * it (#1320). `success` is true: the message is kept, and the caller must not re-send it
+   * another way.
+   */
+  deferredToDigest?: boolean;
 }
 
 /** Result from createEmailDraft() — extends send result with the Nylas draft ID. */
@@ -338,6 +345,11 @@ export interface OutboundGatewayConfig {
   gating?: AutonomyGating;
   /** The band review (#2159). Used only when gating is 'band'. */
   bandReview?: Pick<BandSendReview, 'review'>;
+  /**
+   * Caps the immediate messages to the principal that one outside contact can cause (#1320).
+   * Absent: no cap.
+   */
+  relayBudget?: RelayBudget;
 }
 
 /** What a band hold replays on approval: the same shape as reExecRecipe (#2159). */
@@ -369,6 +381,24 @@ interface SendRecipe {
 function redactId(value: string): string {
   if (value.length <= 6) return '***';
   return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+/**
+ * The once-per-window relay-budget notice (#1320), addressed exactly as the held relay was:
+ * same channel, account and principal address, with the body replaced and any threading or
+ * attachments dropped, so nothing of the held message rides along.
+ */
+function relayNoticeRequest(request: OutboundSendRequest, text: string, subject: string): OutboundSendRequest {
+  switch (request.channel) {
+    case 'email':
+      return { channel: 'email', to: request.to, subject, body: text, ...(request.accountId ? { accountId: request.accountId } : {}) };
+    case 'slack':
+      return { channel: 'slack', slackChannelId: request.slackChannelId, ...(request.slackUserId ? { slackUserId: request.slackUserId } : {}), message: text };
+    case 'sms':
+      return { channel: 'sms', recipient: request.recipient, message: text };
+    case 'signal':
+      return { channel: 'signal', ...(request.recipient ? { recipient: request.recipient } : {}), message: text };
+  }
 }
 
 /**
@@ -574,6 +604,7 @@ export class OutboundGateway {
   private readonly outboundQueueReadiness: Map<string, () => boolean>;
   private readonly gating: AutonomyGating;
   private readonly bandReview?: Pick<BandSendReview, 'review'>;
+  private readonly relayBudget?: RelayBudget;
   private flushInFlight = new Set<string>();
   /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
   private flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -603,6 +634,7 @@ export class OutboundGateway {
     this.outboundQueueReadiness = new Map(config.outboundQueueReadiness ?? []);
     this.gating = config.gating ?? 'tier';
     this.bandReview = config.bandReview;
+    this.relayBudget = config.relayBudget;
     if (this.gating === 'band' && !this.bandReview) {
       // The filter turns contact-data-leak and Stage 2.5 off under band; without the review
       // that replaces them, sends would go out with no disclosure review at all.
@@ -747,6 +779,11 @@ export class OutboundGateway {
        * for it. Falls back to reExecRecipe when absent.
        */
       holdRecipe?: SendRecipe;
+      /**
+       * Who started the work this send belongs to: the task's originator, which send skills
+       * pass through. Used only by the relay budget (#1320). Omitted: never budgeted.
+       */
+      originator?: TaskOriginator;
     },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
@@ -1273,6 +1310,20 @@ export class OutboundGateway {
         },
         unmatched,
       );
+    }
+
+    // ------------------------------------------------------------------
+    // Step 2.4: Relay budget (#1320)
+    // ------------------------------------------------------------------
+    // An outside contact can only cause so many immediate messages to the principal. Sends to
+    // the principal alone skip the band review below, so this is the only limit on them. Over
+    // budget, the relay goes to the digest. Runs after the content filter, so blocked content is
+    // never queued and the digest gets redacted text.
+    const relayOriginator = principalIsSoleRecipient && this.relayBudget ? budgetedOriginator(options) : null;
+    if (relayOriginator && this.relayBudget!.tryAcquire(relayOriginator.contactId) === 'over') {
+      const deferred = await this.deferRelay(request, redactedBody, redactedSubject, relayOriginator, options);
+      if (deferred) return deferred;
+      // The digest item could not be recorded: deliver after all. Noise beats a lost message.
     }
 
     // ------------------------------------------------------------------
@@ -1972,6 +2023,101 @@ export class OutboundGateway {
       if (report.source === 'sent_without_review') {
         await this.emailPrincipal('Curia: a message went out without review', report.summary);
       }
+    }
+  }
+
+  /**
+   * Hold an over-budget relay for the principal's digest (#1320): record the digest item, send
+   * the once-per-window notice, log and audit it. Returns null when the digest item could not be
+   * recorded, so the caller delivers the relay instead of losing it. Never throws.
+   */
+  private async deferRelay(
+    request: OutboundSendRequest,
+    body: string,
+    subject: string | undefined,
+    originator: TaskOriginator,
+    options: { taskEventId?: string; parentEventId?: string; conversationId?: string } | undefined,
+  ): Promise<OutboundSendResult | null> {
+    const name = await this.originatorName(originator.contactId);
+    const summary = [
+      `Held for your digest (relay limit reached for ${name ?? 'a contact'}):`,
+      ...(request.channel === 'email' && subject ? [`Subject: ${subject}`] : []),
+      body,
+    ].join('\n');
+    try {
+      await this.bus.publish('dispatch', createPrincipalReport({
+        summary,
+        urgency: 'digest',
+        source: 'relay_deferred',
+        ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
+        parentEventId: options?.taskEventId ?? options?.parentEventId ?? 'system',
+        sourceLayer: 'dispatch',
+      }));
+    } catch (err) {
+      this.log.error(
+        { err, originatorContactId: originator.contactId, channel: request.channel },
+        'outbound-gateway: relay over budget, but its digest item could not be recorded — delivering it now',
+      );
+      return null;
+    }
+
+    const noticeSent = this.relayBudget!.shouldNotify(originator.contactId)
+      ? await this.sendRelayNotice(request, name ?? 'A contact', options)
+      : false;
+    const tier = originator.tier ?? 'unknown';
+    this.log.warn(
+      { originatorContactId: originator.contactId, tier, channel: request.channel, count: this.relayBudget!.count(originator.contactId), noticeSent },
+      'outbound-gateway: relay budget reached — relay held for the digest',
+    );
+    try {
+      await this.bus.publish('dispatch', createAutonomyRelayDeferred({
+        originatorContactId: originator.contactId,
+        tier,
+        channel: request.channel,
+        ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
+        ...(options?.taskEventId ? { taskEventId: options.taskEventId } : {}),
+        noticeSent,
+      }, options?.taskEventId));
+    } catch (err) {
+      // The relay is already safe in the digest; only the audit row is missing.
+      this.log.error({ err, originatorContactId: originator.contactId }, 'AUDIT FAILURE: autonomy.relay_deferred could not be published');
+    }
+    return { success: true, deferredToDigest: true };
+  }
+
+  /** The once-per-window "holding them for your digest" line (#1320). True if delivered. Never throws. */
+  private async sendRelayNotice(
+    request: OutboundSendRequest,
+    name: string,
+    options: { taskEventId?: string; conversationId?: string } | undefined,
+  ): Promise<boolean> {
+    const notice = relayNoticeRequest(request, `${name} has more updates. I'm holding them for your digest.`, `Holding updates from ${name}`);
+    try {
+      // A system notification: never budgeted, so this cannot recurse into another deferral.
+      const result = await this.send(notice, {
+        isSystemNotification: true,
+        skipNotificationOnBlock: true,
+        ...(options?.taskEventId ? { taskEventId: options.taskEventId } : {}),
+        ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
+      });
+      if (!result.success) {
+        this.log.warn({ channel: request.channel, reason: result.blockedReason }, 'outbound-gateway: relay-budget notice was not delivered');
+      }
+      return result.success;
+    } catch (err) {
+      this.log.warn({ err, channel: request.channel }, 'outbound-gateway: relay-budget notice threw');
+      return false;
+    }
+  }
+
+  /** The originator's display name, or null when there is none or the lookup fails. Never throws. */
+  private async originatorName(contactId: string): Promise<string | null> {
+    try {
+      const name = (await this.contactService.getContact(contactId))?.displayName?.trim();
+      return name ? name : null;
+    } catch (err) {
+      this.log.warn({ err, contactId }, 'outbound-gateway: could not look up the relay originator\'s name');
+      return null;
     }
   }
 

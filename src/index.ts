@@ -20,7 +20,7 @@
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig, resolveRelayBudgetConfig } from './config.js';
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
@@ -106,6 +106,7 @@ import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
 import type { JudgeConfig } from './dispatch/outbound-judge.js';
 import type { EscalationJudge } from './autonomy/escalation-judge.js';
 import { FailOpenLimiter } from './autonomy/band-policy.js';
+import { RelayBudget } from './autonomy/relay-budget.js';
 import { checkBandGatingReady } from './autonomy/band-wiring.js';
 import { SendEvidenceCollector } from './autonomy/send-evidence.js';
 import { BandSendReview } from './dispatch/band-send-review.js';
@@ -1810,6 +1811,8 @@ async function main(): Promise<void> {
       outboundQueueReadiness,
       gating: autonomyGating,
       ...(bandReview ? { bandReview } : {}),
+      // Caps immediate relays to the principal per outside contact (#1320).
+      relayBudget: new RelayBudget({ perHour: resolveRelayBudgetConfig(yamlConfig.autonomy).perHour }),
     });
     outboundGateway.start();
     logger.info({
