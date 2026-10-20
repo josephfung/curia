@@ -574,6 +574,12 @@ autonomy:
     max_age_days: 7
     check_interval_hours: 24
 
+  # Cap on immediate messages to the principal that one outside contact (tier known
+  # or below) can cause (#1320). Over the cap, the relay goes to the digest and the
+  # principal gets one line saying more is waiting. 0 turns the cap off.
+  relay_budget:
+    per_hour: 3
+
   # Emoji → approval intent for inbound.reaction (#1479). Channel-agnostic —
   # Slack shortcodes and unicode glyphs both listed. Adapters never map intent.
   # Skin tones / VS16 are stripped before matching (see normalizeReactionEmoji).

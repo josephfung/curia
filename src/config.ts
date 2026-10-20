@@ -311,6 +311,22 @@ export function resolveAutonomyGating(yaml: YamlConfig['autonomy']): AutonomyGat
   return yaml?.gating ?? 'tier';
 }
 
+// ---------------------------------------------------------------------------
+// Relay budget (#1320)
+// ---------------------------------------------------------------------------
+
+export interface RelayBudgetConfig {
+  /** Immediate relays to the principal one outside contact may cause per hour. 0 = off. */
+  perHour: number;
+}
+
+const DEFAULT_RELAY_BUDGET_PER_HOUR = 3;
+
+/** Resolve autonomy.relay_budget. Validated in loadYamlConfig. */
+export function resolveRelayBudgetConfig(yaml: YamlConfig['autonomy']): RelayBudgetConfig {
+  return { perHour: yaml?.relay_budget?.per_hour ?? DEFAULT_RELAY_BUDGET_PER_HOUR };
+}
+
 /** Resolve the optional YAML tasks block to a fully-populated config with defaults. */
 export function resolveTasksConfig(yaml: YamlConfig['tasks']): TasksConfig {
   return {
@@ -884,6 +900,11 @@ export interface YamlConfig {
       max_age_days?: number;
       /** How often to check, in hours. Default 24. */
       check_interval_hours?: number;
+    };
+    /** Cap on immediate relays to the principal that one outside contact can cause (#1320). */
+    relay_budget?: {
+      /** Relays per originator per hour; over it, relays go to the digest. 0 turns it off. Default 3. */
+      per_hour?: number;
     };
   };
 }
@@ -1558,6 +1579,17 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   const gating = config.autonomy?.gating;
   if (gating !== undefined && !AUTONOMY_GATINGS.includes(gating)) {
     throw new Error(`autonomy.gating must be one of ${AUTONOMY_GATINGS.join(', ')}, got: ${String(gating)}`);
+  }
+  // autonomy.relay_budget (#1320): a bad value must fail at boot, not silently drop the cap.
+  const relayBudget = config.autonomy?.relay_budget;
+  if (relayBudget !== undefined) {
+    if (typeof relayBudget !== 'object' || Array.isArray(relayBudget) || relayBudget === null) {
+      throw new Error(`autonomy.relay_budget must be a YAML mapping, got: ${typeof relayBudget}`);
+    }
+    const perHour = relayBudget.per_hour;
+    if (perHour !== undefined && (!Number.isInteger(perHour) || perHour < 0)) {
+      throw new Error(`autonomy.relay_budget.per_hour must be a non-negative integer, got: ${String(perHour)}`);
+    }
   }
   // Band gating reviews every send with the escalation judge. With the judge off, every
   // review is a failure: up to 5 unreviewed sends an hour at 80+, every send held below.

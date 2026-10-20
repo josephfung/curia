@@ -512,6 +512,14 @@
             "max_age_days": { "type": "integer", "minimum": 1 },
             "check_interval_hours": { "type": "integer", "minimum": 1 }
           }
+        },
+        "relay_budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Cap on immediate relays to the principal that one outside contact can cause (#1320).",
+          "properties": {
+            "per_hour": { "type": "integer", "minimum": 0 }
+          }
         }
       }
     },
