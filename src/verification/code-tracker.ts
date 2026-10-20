@@ -68,6 +68,11 @@ function buildMatcher(values: Iterable<string>): RegExp | null {
   return new RegExp(`(?<![A-Za-z0-9])(?:${body})(?![A-Za-z0-9])`, 'gi');
 }
 
+/** A page domain reduced to its registrable domain, or lowercased as given when it has none. */
+function normalizeDomain(pageDomain: string): string {
+  return registrableDomain(pageDomain) ?? pageDomain.trim().toLowerCase();
+}
+
 function isPlainObject(value: object): value is Record<string, unknown> {
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -96,15 +101,22 @@ export class CodeTracker {
     this.prune();
     let entry = this.byVerification.get(verificationId);
     if (!entry) {
-      entry = {
-        pageDomain: registrableDomain(pageDomain) ?? pageDomain.trim().toLowerCase(),
-        values: new Set(),
-      };
+      entry = { pageDomain: normalizeDomain(pageDomain), values: new Set() };
       this.byVerification.set(verificationId, entry);
     }
     entry.values.add(value);
     entry.matcher = undefined;
     this.combined = undefined;
+  }
+
+  /**
+   * Point a verification's tracked values at a new page domain (normalized as in
+   * `register`), for when a reused verification's code-entry page moved. A no-op for
+   * a verification that tracks nothing.
+   */
+  retarget(verificationId: string, pageDomain: string): void {
+    const entry = this.byVerification.get(verificationId);
+    if (entry) entry.pageDomain = normalizeDomain(pageDomain);
   }
 
   /** Start the TTL clock for a verification's values. The first close wins. */

@@ -70,9 +70,10 @@ export class VerificationService {
   ) {}
 
   /**
-   * Open a verification, or return the site's existing pending one (`reused: true`).
-   * A pending row already past its expiry is persisted as expired first, so a
-   * fresh sign-in attempt gets a fresh record instead of a dead one.
+   * Open a verification, or reuse the site's existing pending one (`reused: true`),
+   * refreshed to the caller's browser session and page domain. A pending row already
+   * past its expiry is persisted as expired first, so a fresh sign-in attempt gets a
+   * fresh record instead of a dead one.
    */
   async open(input: OpenVerificationInput): Promise<{ verification: Verification; reused: boolean }> {
     const site = registrableDomain(input.site);
@@ -120,18 +121,29 @@ export class VerificationService {
       if (!isUniqueViolation(err)) throw err;
     }
 
-    // Unique violation: another pending row exists for this site. Return it.
+    // Unique violation: another pending row exists for this site. Reuse it, pointed at the
+    // caller's session and page: the stored session may have died (a restart, an expired
+    // session) and the code-entry page may now sit on another registrable domain (an
+    // identity provider). Keeping the old values would show a dead session as the one to
+    // type into and key the browser guard on the wrong domain. A missing task or
+    // conversation link is filled; an existing one is kept.
     const { rows } = await this.pool.query<VerificationRow>(
-      `SELECT ${COLUMNS} FROM verifications WHERE site = $1 AND status = 'pending'`,
-      [site],
+      `UPDATE verifications
+         SET browser_session_id = $2,
+             page_domain = $3,
+             task_id = COALESCE(task_id, $4),
+             conversation_id = COALESCE(conversation_id, $5)
+       WHERE site = $1 AND status = 'pending'
+       RETURNING ${COLUMNS}`,
+      [site, input.browserSessionId, pageDomain, input.taskId ?? null, input.conversationId ?? null],
     );
     const existing = rows[0];
     if (!existing) {
-      // The pending row closed between the failed insert and this read. Surface it
+      // The pending row closed between the failed insert and this update. Surface it
       // rather than loop; the caller's next turn opens a fresh record.
       throw new Error('Verification for this site changed while opening; retry');
     }
-    this.logger.info({ verificationId: existing.id, site }, 'Verification reused');
+    this.logger.info({ verificationId: existing.id, site, pageDomain }, 'Verification reused');
     return { verification: toVerification(existing), reused: true };
   }
 

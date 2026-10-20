@@ -217,3 +217,24 @@ describe('CodeTracker.allowedDomainsFor', () => {
     expect(tracker.allowedDomainsFor('123456')).toEqual(new Set(['localhost']));
   });
 });
+
+describe('CodeTracker.retarget', () => {
+  it('moves a verification\'s values to its new page domain, normalized', () => {
+    const { tracker } = makeTracker();
+    tracker.register('v1', 'aircanada.com', '123456');
+    tracker.retarget('v1', 'https://acme.B2CLOGIN.com/mfa');
+    expect(tracker.allowedDomainsFor('123456')).toEqual(new Set(['b2clogin.com']));
+    // The values themselves still scrub.
+    expect(tracker.scrubText('123456')).toBe(TOKEN);
+  });
+
+  it('leaves other verifications alone and ignores an untracked id', () => {
+    const { tracker } = makeTracker();
+    tracker.register('v1', 'aircanada.com', '123456');
+    tracker.register('v2', 'manulife.ca', '654321');
+    tracker.retarget('v1', 'b2clogin.com');
+    tracker.retarget('nope', 'evil.example');
+    expect(tracker.allowedDomainsFor('654321')).toEqual(new Set(['manulife.ca']));
+    expect(tracker.trackedIds().sort()).toEqual(['v1', 'v2']);
+  });
+});

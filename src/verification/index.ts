@@ -29,9 +29,10 @@ export interface VerificationRuntime {
   readonly service: VerificationService;
   readonly tracker: CodeTracker;
   /**
-   * Open a verification (or reuse the pending one for the site). The service expires a
-   * site's stale pending row silently on the way in; this then starts the TTL clock for
-   * any tracked values whose verification is no longer pending.
+   * Open a verification (or reuse the pending one for the site, refreshed to this
+   * session and page domain; tracked values are retargeted to the new page domain). The
+   * service expires a site's stale pending row silently on the way in; this then starts
+   * the TTL clock for any tracked values whose verification is no longer pending.
    */
   open(input: OpenVerificationInput): Promise<{ verification: Verification; reused: boolean }>;
   /**
@@ -46,8 +47,10 @@ export interface VerificationRuntime {
   /**
    * Where to ask the principal for a code: the first channel in the configured order
    * that is enabled AND has a verified, active principal identity. Deliberately takes
-   * no argument: the channel an errand arrived on never steers the ask (a code sent
-   * to a third party's inbox must not be requested there). Null when none qualifies.
+   * no argument: the configured order alone decides, and the channel the errand
+   * arrived on plays no part (the principal often hands things over by email or voice
+   * to be done later, so it says nothing about where they are now). Null when none
+   * qualifies.
    */
   askChannel(): string | null;
 }
@@ -85,6 +88,9 @@ export function createVerificationRuntime(
     tracker,
     async open(input) {
       const result = await service.open(input);
+      // A reused row was refreshed to the caller's page domain; values already tracked
+      // for it must follow, or the browser guard would refuse the code on the new page.
+      if (result.reused) tracker.retarget(result.verification.id, result.verification.pageDomain);
       // The pending set after open is the (possibly new) row alone for this site, but
       // other sites may have pending rows too, so ask the table rather than guess.
       await reconcile();

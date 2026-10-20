@@ -134,6 +134,19 @@ describe('VerificationRuntime tracker aging (cross-task ruling)', () => {
     expect(closed.mock.calls.map(c => c[0])).toEqual(['stale']);
   });
 
+  it('open() reusing a row whose page moved retargets the tracker, so the guard follows it', async () => {
+    const rt = runtimeFor([], []);
+    rt.tracker.register('v', 'accounts.example.com', '482913');
+    const moved = { ...row('v', 'pending'), pageDomain: 'b2clogin.com', browserSessionId: 's-new' };
+    vi.spyOn(rt.service, 'open').mockResolvedValue({ verification: moved, reused: true });
+    vi.spyOn(rt.service, 'listActive').mockResolvedValue([moved]);
+    await rt.open({
+      purpose: 'sign_in', kind: 'code', delivery: 'sms', site: 'example.com',
+      pageDomain: 'https://acme.b2clogin.com/mfa', browserSessionId: 's-new',
+    });
+    expect(rt.tracker.allowedDomainsFor('482913')).toEqual(new Set(['b2clogin.com']));
+  });
+
   it('close() marks the tracker closed', async () => {
     const rt = runtimeFor([], []);
     const closed = vi.spyOn(rt.tracker, 'closed');

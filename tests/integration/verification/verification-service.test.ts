@@ -11,6 +11,7 @@ import pino from 'pino';
 import { VerificationService } from '../../../src/verification/verification-service.js';
 import type { VerificationConfig } from '../../../src/verification/types.js';
 import { requireCuriaTestDatabase } from '../require-test-db.js';
+import { renderCoordinatorVerificationBlock } from '../../../src/agents/prompts/verification-block.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -115,6 +116,47 @@ describeIf('VerificationService (#2017)', () => {
     expect(second.verification.id).toBe(first.verification.id);
     const { rows } = await pool.query(`SELECT 1 FROM verifications WHERE site = $1`, [site]);
     expect(rows).toHaveLength(1);
+  });
+
+  it('reuse after a restart refreshes the session id, so the block shows the live session', async () => {
+    const site = newSite();
+    const first = await service.open(openInput(site, { browserSessionId: 'session-before-restart' }));
+    const second = await service.open(openInput(site, { browserSessionId: 'session-after-restart' }));
+    expect(second.reused).toBe(true);
+    expect(second.verification.id).toBe(first.verification.id);
+    expect(second.verification.browserSessionId).toBe('session-after-restart');
+    expect((await service.get(first.verification.id))?.browserSessionId).toBe('session-after-restart');
+
+    // The injected block reads the row from listActive; only the new session is alive.
+    const row = (await service.listActive()).find((v) => v.id === first.verification.id)!;
+    const block = renderCoordinatorVerificationBlock(
+      [{ ...row, sessionAlive: row.browserSessionId === 'session-after-restart' }],
+      { askChannel: 'signal', timezone: 'UTC' },
+    );
+    expect(block).toContain('session session-after-restart alive');
+  });
+
+  it('reuse refreshes page_domain when the code-entry page moved to another registrable domain', async () => {
+    const site = newSite();
+    const first = await service.open(openInput(site));
+    expect(first.verification.pageDomain).toBe(site);
+    const second = await service.open(openInput(site, { pageDomain: 'https://acme.b2clogin.com/mfa' }));
+    expect(second.reused).toBe(true);
+    expect(second.verification.pageDomain).toBe('b2clogin.com');
+    expect((await service.get(first.verification.id))?.pageDomain).toBe('b2clogin.com');
+  });
+
+  it('reuse fills a missing task / conversation link but never overwrites one', async () => {
+    const site = newSite();
+    const taskId = randomUUID();
+    const first = await service.open(openInput(site));
+    expect(first.verification.taskId).toBeNull();
+    const second = await service.open(openInput(site, { taskId, conversationId: 'conv-a' }));
+    expect(second.verification.taskId).toBe(taskId);
+    expect(second.verification.conversationId).toBe('conv-a');
+    const third = await service.open(openInput(site, { taskId: randomUUID(), conversationId: 'conv-b' }));
+    expect(third.verification.taskId).toBe(taskId);
+    expect(third.verification.conversationId).toBe('conv-a');
   });
 
   it('concurrent opens for one site produce a single pending row', async () => {
