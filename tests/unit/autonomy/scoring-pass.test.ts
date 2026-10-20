@@ -170,6 +170,42 @@ describe('AutonomyScoringPass', () => {
       }));
     });
 
+    // #2196: the re-execution of an approved action has no summary; the parent carries the signal.
+    it('scores a successful re-execution of an approved action as no signal, without the judge', async () => {
+      const row = makeRow({ id: 45, outcome: 'success', parentActionId: 43, taskSummary: null });
+      const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });
+      const llm = makeLlmProvider(0, 0, 0);
+      const pass = new AutonomyScoringPass(repo, makeAutonomyService(), llm, createSilentLogger(), defaultConfig);
+
+      const result = await pass.run();
+
+      expect(llm.chat).not.toHaveBeenCalled();
+      expect(result.llmCallsMade).toBe(0);
+      expect(repo.updateScoringFlags).toHaveBeenCalledWith(45, {
+        competenceFlag: null,
+        commitmentFlag: null,
+        compatibility: null,
+        scoredBy: 'deterministic-approved-execution',
+      });
+    });
+
+    it('still judges a failed re-execution of an approved action, with its error as context', async () => {
+      const row = makeRow({ id: 32, outcome: 'failure', parentActionId: 31, taskSummary: 'calendar API returned 403' });
+      const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });
+      const llm = makeLlmProvider(0, 1, 1);
+      const pass = new AutonomyScoringPass(repo, makeAutonomyService(), llm, createSilentLogger(), defaultConfig);
+
+      await pass.run();
+
+      expect(llm.chat).toHaveBeenCalledTimes(1);
+      const prompt = vi.mocked(llm.chat).mock.calls[0]![0].messages[1]!.content as string;
+      expect(prompt).toContain('calendar API returned 403');
+      expect(repo.updateScoringFlags).toHaveBeenCalledWith(32, expect.objectContaining({
+        competenceFlag: 0,
+        scoredBy: 'llm-judge',
+      }));
+    });
+
     it('applies deterministic scores for rejected outcome', async () => {
       const row = makeRow({ id: 12, outcome: 'rejected' });
       const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });

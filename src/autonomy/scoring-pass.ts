@@ -46,6 +46,18 @@ const COORDINATOR_RESOLVED_FLAGS: ScoringFlags = {
   scoredBy: 'deterministic-coordinator',
 };
 
+/**
+ * A successful re-execution of an approved action (#2196): no signal of its own. The
+ * principal's approval is already scored on the parent row, and the child row carries
+ * no summary, so the judge would only be guessing.
+ */
+const APPROVED_EXECUTION_FLAGS: ScoringFlags = {
+  competenceFlag: null,
+  commitmentFlag: null,
+  compatibility: null,
+  scoredBy: 'deterministic-approved-execution',
+};
+
 const JUDGE_PAYLOAD_PREVIEW_CHARS = 300;
 
 export interface ScoringPassResult {
@@ -204,6 +216,14 @@ export class AutonomyScoringPass {
     // the row so it leaves the unscored queue, but give it no signal.
     if (row.resolvedBy === RESOLVED_BY.coordinator) {
       await this.repo.updateScoringFlags(row.id, COORDINATOR_RESOLVED_FLAGS);
+      return true;
+    }
+
+    // A child row is the re-execution of a parent the principal approved. On success it
+    // adds nothing to the parent's score. A failure keeps its error as the summary and
+    // still goes to the judge below.
+    if (row.parentActionId !== null && row.outcome === 'success') {
+      await this.repo.updateScoringFlags(row.id, APPROVED_EXECUTION_FLAGS);
       return true;
     }
 

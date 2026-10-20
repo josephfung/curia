@@ -81,6 +81,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Autonomy scoring** — successful re-executions of approved actions no longer judged blind; past verdicts cleared. (#2196)
 - **`ceo-inbox-sent-observe`** — shadow pairs judged in small chunks; held-back pairs and long holds now reported. (#2191)
 - **Integration test cleanup** — contacts and knowledge-graph suites delete only their own rows, ending parallel FK races. (#2183)
 - **Email signature** — the model's own sign-off is replaced by the configured signature, so emails sign once. (#2138)
