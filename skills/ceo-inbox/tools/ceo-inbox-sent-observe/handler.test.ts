@@ -7,6 +7,8 @@ import {
   PENDING_DIFFS_PATH,
   BACKFILL_BEFORE_KEY,
   BACKFILL_TARGET_KEY,
+  MAX_JUDGE_PAIRS,
+  JUDGE_CHUNK_SIZE,
 } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
@@ -1444,6 +1446,126 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBeUndefined();
     const shadowDoc = ctx.__docs.get(shadowDraftPath('src-1'));
     expect(shadowDoc?.frontmatter.reconciled_at).toBeUndefined();
+  });
+
+  describe('#2191 chunked shadow judge', () => {
+    // n shadows, each on its own thread, each answered by one send. Bodies are served for every
+    // send; `fetchedBodies` records which ones the handler pulled.
+    function setupShadows(n: number): {
+      snapshots: Parameters<typeof buildCtx>[0]['snapshots'];
+      fetchedBodies: string[];
+    } {
+      const sends = Array.from({ length: n }, (_, i) => ({
+        id: `msg-sent-${i}`,
+        thread_id: `thread-${i}`,
+        subject: `Re: Topic ${i}`,
+        from: [{ email: 'ceo@example.com' }],
+        to: [{ email: 'alice@example.com' }],
+        cc: [],
+        snippet: `reply ${i}`,
+        date: 1_720_000_500 + i,
+        unread: false,
+        folders: ['SENT'],
+        attachments: [],
+      }));
+      const fetchedBodies: string[] = [];
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+        const u = String(url);
+        const single = u.match(/\/messages\/(msg-sent-\d+)/);
+        if (single) {
+          fetchedBodies.push(single[1]!);
+          const send = sends.find((s) => s.id === single[1])!;
+          return new Response(
+            JSON.stringify({ data: { ...send, body: `<p>${send.snippet}</p>`, bcc: [], labels: [] } }),
+            { status: 200 },
+          );
+        }
+        if (u.includes('/messages?')) {
+          return new Response(JSON.stringify({ data: sends }), { status: 200 });
+        }
+        throw new Error(`unexpected ${u}`);
+      });
+      const snapshots = sends.map((_, i) => ({
+        path: shadowDraftPath(`src-${i}`),
+        type: SHADOW_DOC_TYPE,
+        frontmatter: {
+          source_message_id: `src-${i}`,
+          thread_id: `thread-${i}`,
+          subject: `Re: Topic ${i}`,
+          recipients: ['alice@example.com'],
+          created_at: '2024-07-03T00:00:00.000Z',
+        },
+        body: `shadow ${i}`,
+      }));
+      return { snapshots, fetchedBodies };
+    }
+
+    /** Answer every pair named in the prompt as same_decision. */
+    function verdictsFor(prompt: string): string {
+      const ids = [...prompt.matchAll(/source_message_id: (\S+)\)/g)].map((m) => m[1]!);
+      return JSON.stringify(ids.map((id) => ({ source_message_id: id, same_decision: true, reason: 'same' })));
+    }
+
+    it('judges in chunks, without a token cap, and a failed chunk holds back only its own pairs', async () => {
+      const { snapshots } = setupShadows(10);
+      // 10 pairs → chunks of 8 and 2. The second chunk (src-8, src-9) comes back truncated, which
+      // is what the 1500-token cap did every day from 2026-09-17.
+      const extract = vi.fn(async (prompt: string, _opts?: unknown) =>
+        prompt.includes('source_message_id: src-9)')
+          ? { ok: true as const, text: '[{"source_message_id":"src-8","same_deci' }
+          : { ok: true as const, text: verdictsFor(prompt) },
+      );
+      const ctx = buildCtx({
+        force: true,
+        nowMs: 1_720_100_000_000,
+        infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+        withActionLogRepo: true,
+        snapshots,
+        tasks: [],
+      });
+
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+
+      expect(extract).toHaveBeenCalledTimes(2);
+      // No maxTokens override: the infraLlm default leaves room for reasoning tokens.
+      for (const call of extract.mock.calls) expect(call[1]).toBeUndefined();
+
+      // The clean chunk landed and is stamped, so the next run retries only the failed two.
+      expect(ctx.__actionLog).toHaveLength(8);
+      for (let i = 0; i < 8; i++) {
+        expect(ctx.__docs.get(shadowDraftPath(`src-${i}`))?.frontmatter.reconciled_at).toBeTruthy();
+      }
+      for (const i of [8, 9]) {
+        expect(ctx.__docs.get(shadowDraftPath(`src-${i}`))?.frontmatter.reconciled_at).toBeUndefined();
+      }
+      const data = (result as { data: { watermark_advanced_to: number | null; shadow_reconciled: number } }).data;
+      expect(data.shadow_reconciled).toBe(8);
+      expect(data.watermark_advanced_to).toBeNull();
+    });
+
+    it('stops fetching sent bodies at the per-run judge limit and holds the watermark for the rest', async () => {
+      const { snapshots, fetchedBodies } = setupShadows(MAX_JUDGE_PAIRS + 1);
+      const extract = vi.fn(async (prompt: string) => ({ ok: true as const, text: verdictsFor(prompt) }));
+      const ctx = buildCtx({
+        force: true,
+        nowMs: 1_720_100_000_000,
+        infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+        withActionLogRepo: true,
+        snapshots,
+        tasks: [],
+      });
+
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+
+      expect(fetchedBodies).toHaveLength(MAX_JUDGE_PAIRS);
+      expect(extract).toHaveBeenCalledTimes(Math.ceil(MAX_JUDGE_PAIRS / JUDGE_CHUNK_SIZE));
+      expect(ctx.__actionLog).toHaveLength(MAX_JUDGE_PAIRS);
+      const data = (result as { data: { watermark_advanced_to: number | null } }).data;
+      // The deferred shadow's send must be re-observed next run.
+      expect(data.watermark_advanced_to).toBeNull();
+    });
   });
 
   it('skips when idle backoff is active', async () => {

@@ -66,6 +66,16 @@ export const EVIDENCE_RETENTION_DAYS = 90;
 /** Idle backoff when a run finds nothing — 2 hours (t2125 pattern). */
 const IDLE_BACKOFF_MS = 2 * 60 * 60 * 1000;
 
+/** Most shadow pairs judged per run. Overflow pairs stay unreconciled and retry next run. */
+export const MAX_JUDGE_PAIRS = 40;
+
+/** Pairs per judge call (#2191). Each chunk is parsed all-or-nothing on its own, so one bad
+ *  response holds back at most this many pairs. A single 40-pair call with a 1500-token cap
+ *  truncated every day from 2026-09-17: the standard-tier model spends output tokens on
+ *  reasoning, the strict parse rejected the cut-off JSON, the watermark held, and the next run
+ *  retried the same oversized batch. Small chunks shrink the retry set as chunks land. */
+export const JUDGE_CHUNK_SIZE = 8;
+
 /** Safety ceiling on messages scanned per run — a daily Sent volume never reaches
  *  this, but it bounds a runaway mailbox. Truncation is handled by holding the
  *  watermark (see watermark-advance below), not by silently dropping the tail. */
@@ -449,9 +459,20 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // below can hold the watermark too.
     let shadowReconcileOk = true;
     if (ctx.actionLogRepo) {
+      let overflow = 0;
       for (const shadow of shadows) {
         const send = selectShadowSend(shadow, messages);
         if (!send) continue;
+
+        // Cap pairs BEFORE fetching bodies: past the per-run judge limit a pair would be fetched
+        // only to be dropped, and each fetch is a sequential Nylas call against the tool timeout.
+        // Overflow shadows keep reconciled_at unset; hold the watermark so their sends are
+        // re-observed next run.
+        if (judgePairs.length >= MAX_JUDGE_PAIRS) {
+          overflow += 1;
+          shadowReconcileOk = false;
+          continue;
+        }
 
         // Finding 7: never judge against a truncated snippet — the LLM would write a false
         // competence score. If the full sent body can't be fetched, don't push the pair and
@@ -482,102 +503,115 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
           sentBody,
         });
       }
-    }
-
-    // Shadow-draft competence reconcile (#1419 / ADR-029): ONE LLM call per run over up to 40
-    // pairs. A failed batch leaves those shadow docs' reconciled_at unset — but the stored
-    // watermark is maxDate+1, so the carrying Sent message is only re-fetched next run if we
-    // HOLD the watermark. shadowReconcileOk tracks that: anything short of a clean, complete
-    // response flips it false and the watermark-advance guard below blocks the advance. Retry is
-    // idempotent because already-reconciled shadows are skipped (parseShadowDoc returns null once
-    // reconciled_at is set) and diff/completion matching is idempotent via the matched/asked sets.
-    if (judgePairs.length > 0 && ctx.infraLlm && ctx.actionLogRepo) {
-      const MAX_JUDGE = 40;
-      const batch = judgePairs.slice(0, MAX_JUDGE);
-      if (judgePairs.length > MAX_JUDGE) {
-        // Overflow pairs stay unreconciled (reconciled_at unset) and retry next run; hold the
-        // watermark so their carrying sends are re-observed.
-        shadowReconcileOk = false;
+      if (overflow > 0) {
         ctx.log.warn(
-          { total: judgePairs.length, judged: MAX_JUDGE, dropped: judgePairs.length - MAX_JUDGE },
-          'sent-observe: more than 40 shadow pairs — judging the first 40, the rest retry next run',
+          { judged: judgePairs.length, deferred: overflow, max: MAX_JUDGE_PAIRS },
+          'sent-observe: more shadow pairs than the per-run judge limit — the rest retry next run',
         );
       }
+    }
 
-      const res = await ctx.infraLlm.extract(buildShadowJudgePrompt(batch), { maxTokens: 1500 });
-      const judged = res.ok
-        ? parseShadowJudgeResult(res.text, batch.map((p) => p.sourceMessageId))
-        : null;
+    // Shadow-draft competence reconcile (#1419 / ADR-029): the pairs are judged in chunks of
+    // JUDGE_CHUNK_SIZE, the calls run concurrently to stay inside the tool timeout. A failed chunk
+    // leaves its shadow docs' reconciled_at unset — but the stored watermark is maxDate+1, so the
+    // carrying Sent message is only re-fetched next run if we HOLD the watermark.
+    // shadowReconcileOk tracks that: anything short of a clean, complete response for a chunk
+    // flips it false and the watermark-advance guard below blocks the advance. The chunks that
+    // did land are stamped, so the retry set shrinks run over run instead of repeating the same
+    // failing batch (#2191). Retry is idempotent because already-reconciled shadows are skipped
+    // (parseShadowDoc returns null once reconciled_at is set) and diff/completion matching is
+    // idempotent via the matched/asked sets.
+    if (judgePairs.length > 0 && ctx.infraLlm && ctx.actionLogRepo) {
+      const infraLlm = ctx.infraLlm;
+      const chunks: ShadowJudgePair[][] = [];
+      for (let i = 0; i < judgePairs.length; i += JUDGE_CHUNK_SIZE) {
+        chunks.push(judgePairs.slice(i, i + JUDGE_CHUNK_SIZE));
+      }
 
-      // All-or-nothing: an LLM error, or a malformed / duplicate-id / incomplete response, fails
-      // the WHOLE batch — write no rows, hold the watermark, retry next run.
-      if (judged === null) {
-        shadowReconcileOk = false;
-        ctx.log.warn(
-          { count: batch.length, error: res.ok ? 'malformed-or-incomplete-response' : res.error },
-          'sent-observe: shadow judge failed or returned an unusable response — holding watermark',
-        );
-      } else {
-        // Clean response — per-pair idempotent insert (#1432: migration-074 unique index is the
-        // durable dedup) + reconciled_at mark (the efficiency guard that lets the watermark advance
-        // and skips re-judging next run). A per-pair insert/mark failure holds the watermark for
-        // that pair (it re-judges next run) without discarding the pairs that did land.
-        for (const pair of batch) {
-          const j = judged.get(pair.sourceMessageId)!; // strict parse guarantees exact coverage
-          try {
-            // Idempotent insert (#1432): the migration-074 partial unique index guarantees one
-            // 'shadow_evaluated' row per source_message_id, so a re-run after a failed mark can't
-            // double-score. A null return means the row already exists (recorded on a prior run) —
-            // that's not an error; we still fall through to mark reconciled_at so the re-run
-            // converges. Only a THROW holds the watermark.
-            await ctx.actionLogRepo.insertShadowEvaluated({
-              taskId: ctx.taskEventId ?? `shadow:${j.sourceMessageId}`,
-              conversationId: ctx.conversationId,
-              toolName: 'shadow-draft-eval',
-              actionRisk: 'none',
-              outcome: 'shadow_evaluated',
-              taskSummary: `Shadow vs sent (${j.sourceMessageId}): ${j.reason}`,
-              payload: { shadow: true, source_message_id: j.sourceMessageId, competence_reason: j.reason },
-              competenceFlag: j.sameDecision ? 1 : 0,
-              scoredBy: 'shadow-reconciler',
+      // No maxTokens override: the infraLlm default leaves room for the model's reasoning
+      // tokens, which the old 1500 cap did not (#2191).
+      const verdicts = await Promise.all(
+        chunks.map(async (chunk) => {
+          const res = await infraLlm.extract(buildShadowJudgePrompt(chunk));
+          const judged = res.ok
+            ? parseShadowJudgeResult(res.text, chunk.map((p) => p.sourceMessageId))
+            : null;
+          return { chunk, judged, error: res.ok ? 'malformed-or-incomplete-response' : res.error };
+        }),
+      );
+
+      for (const { chunk: batch, judged, error } of verdicts) {
+        // All-or-nothing per chunk: an LLM error, or a malformed / duplicate-id / incomplete
+        // response, fails that WHOLE chunk — write none of its rows, hold the watermark, retry next
+        // run. Other chunks are unaffected.
+        if (judged === null) {
+          shadowReconcileOk = false;
+          ctx.log.warn(
+            { count: batch.length, error },
+            'sent-observe: shadow judge failed or returned an unusable response — holding watermark',
+          );
+        } else {
+          // Clean response — per-pair idempotent insert (#1432: migration-074 unique index is the
+          // durable dedup) + reconciled_at mark (the efficiency guard that lets the watermark advance
+          // and skips re-judging next run). A per-pair insert/mark failure holds the watermark for
+          // that pair (it re-judges next run) without discarding the pairs that did land.
+          for (const pair of batch) {
+            const j = judged.get(pair.sourceMessageId)!; // strict parse guarantees exact coverage
+            try {
+              // Idempotent insert (#1432): the migration-074 partial unique index guarantees one
+              // 'shadow_evaluated' row per source_message_id, so a re-run after a failed mark can't
+              // double-score. A null return means the row already exists (recorded on a prior run) —
+              // that's not an error; we still fall through to mark reconciled_at so the re-run
+              // converges. Only a THROW holds the watermark.
+              await ctx.actionLogRepo.insertShadowEvaluated({
+                taskId: ctx.taskEventId ?? `shadow:${j.sourceMessageId}`,
+                conversationId: ctx.conversationId,
+                toolName: 'shadow-draft-eval',
+                actionRisk: 'none',
+                outcome: 'shadow_evaluated',
+                taskSummary: `Shadow vs sent (${j.sourceMessageId}): ${j.reason}`,
+                payload: { shadow: true, source_message_id: j.sourceMessageId, competence_reason: j.reason },
+                competenceFlag: j.sameDecision ? 1 : 0,
+                scoredBy: 'shadow-reconciler',
+              });
+            } catch (err) {
+              shadowReconcileOk = false;
+              ctx.log.error(
+                { err, sourceMessageId: j.sourceMessageId },
+                'sent-observe: shadow competence insert failed — holding watermark',
+              );
+              continue;
+            }
+
+            // Insert succeeded — durably mark the shadow doc reconciled so retry skips it.
+            const path = `${SHADOW_SCRATCH_PREFIX}/${j.sourceMessageId}.md`;
+            const doc = await ctx.workingDocs.read(path);
+            if (!doc) {
+              shadowReconcileOk = false;
+              ctx.log.warn(
+                { sourceMessageId: j.sourceMessageId },
+                'sent-observe: shadow doc missing at mark time — holding watermark',
+              );
+              continue;
+            }
+            // The autonomy_action_log row inserted above is the authoritative competence signal
+            // for scoring (dedup'd by the #1432 unique index). This frontmatter competence_flag
+            // is informational only — it may reflect a later re-judge that a deduped (ON CONFLICT
+            // DO NOTHING) DB row never recorded, so don't treat it as a source of truth.
+            const upd = await ctx.workingDocs.update(path, {
+              frontmatter: { ...doc.frontmatter, reconciled_at: new Date().toISOString(), competence_flag: j.sameDecision ? 1 : 0 },
+              expectedVersion: doc.version,
             });
-          } catch (err) {
-            shadowReconcileOk = false;
-            ctx.log.error(
-              { err, sourceMessageId: j.sourceMessageId },
-              'sent-observe: shadow competence insert failed — holding watermark',
-            );
-            continue;
+            if (!upd.ok) {
+              shadowReconcileOk = false;
+              ctx.log.warn(
+                { sourceMessageId: j.sourceMessageId },
+                'sent-observe: shadow doc mark update conflict — holding watermark',
+              );
+              continue;
+            }
+            shadowReconciled += 1;
           }
-
-          // Insert succeeded — durably mark the shadow doc reconciled so retry skips it.
-          const path = `${SHADOW_SCRATCH_PREFIX}/${j.sourceMessageId}.md`;
-          const doc = await ctx.workingDocs.read(path);
-          if (!doc) {
-            shadowReconcileOk = false;
-            ctx.log.warn(
-              { sourceMessageId: j.sourceMessageId },
-              'sent-observe: shadow doc missing at mark time — holding watermark',
-            );
-            continue;
-          }
-          // The autonomy_action_log row inserted above is the authoritative competence signal
-          // for scoring (dedup'd by the #1432 unique index). This frontmatter competence_flag
-          // is informational only — it may reflect a later re-judge that a deduped (ON CONFLICT
-          // DO NOTHING) DB row never recorded, so don't treat it as a source of truth.
-          const upd = await ctx.workingDocs.update(path, {
-            frontmatter: { ...doc.frontmatter, reconciled_at: new Date().toISOString(), competence_flag: j.sameDecision ? 1 : 0 },
-            expectedVersion: doc.version,
-          });
-          if (!upd.ok) {
-            shadowReconcileOk = false;
-            ctx.log.warn(
-              { sourceMessageId: j.sourceMessageId },
-              'sent-observe: shadow doc mark update conflict — holding watermark',
-            );
-            continue;
-          }
-          shadowReconciled += 1;
         }
       }
     }
