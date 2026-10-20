@@ -51,7 +51,7 @@ function setup(toolName: string, inputs: Record<string, string>, tracker?: CodeT
 
 function trackerWithCode(): CodeTracker {
   const tracker = new CodeTracker({ ttlMinutesAfterClose: 120 });
-  tracker.register('v1', 'accounts.example.com', '482913');
+  tracker.register('v1', 'accounts.example.com', '482913', 's1');
   return tracker;
 }
 

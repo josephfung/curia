@@ -30,7 +30,7 @@ export interface VerificationRuntime {
   readonly tracker: CodeTracker;
   /**
    * Open a verification (or reuse the pending one for the site and errand, refreshed to
-   * this session and page domain; tracked values are retargeted to the new page domain).
+   * this session and page domain; tracked values are retargeted to both).
    * A pending row for a different task is superseded: closed as abandoned and its values'
    * TTL clock started here. The service expires a site's stale pending row silently on the
    * way in; this then starts the TTL clock for any tracked values whose verification is no
@@ -90,9 +90,12 @@ export function createVerificationRuntime(
     tracker,
     async open(input) {
       const result = await service.open(input);
-      // A reused row was refreshed to the caller's page domain; values already tracked
-      // for it must follow, or the browser guard would refuse the code on the new page.
-      if (result.reused) tracker.retarget(result.verification.id, result.verification.pageDomain);
+      // A reused row was refreshed to the caller's page domain and session; values already
+      // tracked for it must follow, or the browser guard would refuse the code on the new
+      // page or in the new session.
+      if (result.reused) {
+        tracker.retarget(result.verification.id, result.verification.pageDomain, result.verification.browserSessionId);
+      }
       // A superseded row is closed: its values age out from now, before (and whatever
       // happens to) the reconcile below.
       if (result.superseded) tracker.closed(result.superseded.id);

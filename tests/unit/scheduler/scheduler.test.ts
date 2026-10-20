@@ -1641,7 +1641,7 @@ describe('Scheduler', () => {
     describe('sign-in codes stay out of the stored run record (#2017)', () => {
       function scrubbingScheduler() {
         const tracker = new CodeTracker({ ttlMinutesAfterClose: 120 });
-        tracker.register('v-1', 'aircanada.com', '482913');
+        tracker.register('v-1', 'aircanada.com', '482913', 's1');
         return new Scheduler({
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           pool: pool as any,

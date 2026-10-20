@@ -100,7 +100,7 @@ describe('VerificationRuntime tracker aging (cross-task ruling)', () => {
 
   it('listActive starts the TTL clock for every non-pending row and not for pending ones', async () => {
     const rt = runtimeFor([], []);
-    for (const id of ['a', 'b', 'c']) rt.tracker.register(id, 'accounts.example.com', `${id.charCodeAt(0)}12345`);
+    for (const id of ['a', 'b', 'c']) rt.tracker.register(id, 'accounts.example.com', `${id.charCodeAt(0)}12345`, 's');
     const closed = vi.spyOn(rt.tracker, 'closed');
     vi.spyOn(rt.service, 'listActive').mockResolvedValue([row('a', 'pending'), row('b', 'expired'), row('c', 'satisfied')]);
     const rows = await rt.listActive();
@@ -110,8 +110,8 @@ describe('VerificationRuntime tracker aging (cross-task ruling)', () => {
 
   it('a verification expired outside the recent window still starts the TTL clock', async () => {
     const rt = runtimeFor([], []);
-    rt.tracker.register('old', 'accounts.example.com', '482913');
-    rt.tracker.register('live', 'accounts.example.com', '777111');
+    rt.tracker.register('old', 'accounts.example.com', '482913', 's1');
+    rt.tracker.register('live', 'accounts.example.com', '777111', 's1');
     const closed = vi.spyOn(rt.tracker, 'closed');
     // The service expired 'old' lazily but, being past the window, did not return it.
     vi.spyOn(rt.service, 'listActive').mockResolvedValue([row('live', 'pending')]);
@@ -121,7 +121,7 @@ describe('VerificationRuntime tracker aging (cross-task ruling)', () => {
 
   it('open() on the same site ages out the stale verification\'s values', async () => {
     const rt = runtimeFor([], []);
-    rt.tracker.register('stale', 'accounts.example.com', '482913');
+    rt.tracker.register('stale', 'accounts.example.com', '482913', 's1');
     const closed = vi.spyOn(rt.tracker, 'closed');
     const fresh = row('fresh', 'pending');
     // service.open expired 'stale' silently; only the new row is pending afterwards.
@@ -137,7 +137,7 @@ describe('VerificationRuntime tracker aging (cross-task ruling)', () => {
 
   it('open() reusing a row whose page moved retargets the tracker, so the guard follows it', async () => {
     const rt = runtimeFor([], []);
-    rt.tracker.register('v', 'accounts.example.com', '482913');
+    rt.tracker.register('v', 'accounts.example.com', '482913', 's1');
     const moved = { ...row('v', 'pending'), pageDomain: 'b2clogin.com', browserSessionId: 's-new' };
     vi.spyOn(rt.service, 'open').mockResolvedValue({ verification: moved, reused: true });
     vi.spyOn(rt.service, 'listActive').mockResolvedValue([moved]);
@@ -146,11 +146,13 @@ describe('VerificationRuntime tracker aging (cross-task ruling)', () => {
       pageDomain: 'https://acme.b2clogin.com/mfa', browserSessionId: 's-new',
     });
     expect(rt.tracker.allowedDomainsFor('482913')).toEqual(new Set(['b2clogin.com']));
+    // The session follows too, so the browser guard accepts the code in the reopened session only.
+    expect(rt.tracker.allowedTargetsFor('482913')).toEqual([{ pageDomain: 'b2clogin.com', browserSessionId: 's-new' }]);
   });
 
   it('open() superseding another task\'s row starts that row\'s TTL clock, even if the reconcile cannot list', async () => {
     const rt = runtimeFor([], []);
-    rt.tracker.register('old', 'accounts.example.com', '482913');
+    rt.tracker.register('old', 'accounts.example.com', '482913', 's1');
     const closed = vi.spyOn(rt.tracker, 'closed');
     const fresh = row('fresh', 'pending');
     vi.spyOn(rt.service, 'open').mockResolvedValue({ verification: fresh, reused: false, superseded: row('old', 'abandoned') });

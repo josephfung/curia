@@ -280,7 +280,7 @@ The tracker is in memory, so a process restart drops every tracked value (the br
 
 **`web-browser` and verifications.** With the verification runtime wired, `web-browser`:
 
-- refuses to `type` a tracked code, or `navigate` to a URL containing one (raw, form-decoded or percent-decoded), on any page that is not on the registrable domain of the verification that tracked it. `login.aircanada.com` matches `aircanada.com`; a lookalike does not, and a page with no registrable domain (`about:blank`, an IP) never matches. The refusal does not echo the value;
+- refuses to `type` a tracked code, or `navigate` to a URL containing one (raw, form-decoded or percent-decoded), on any page that is not on the registrable domain of a verification that tracked it, or in any browser session but that verification's. `login.aircanada.com` matches `aircanada.com`; a lookalike does not, and a page with no registrable domain (`about:blank`, an IP) never matches. The session keeps apart two verifications on one identity provider. The refusal does not echo the value;
 - tracks a code-shaped literal it types on a verification's `page_domain` (the only source for 4–5 character codes), and scrubs it from what the session reads back;
 - adds `verification_suspected: { page_domain, signals[] }` to its page state when the page carries a one-time-code input, a short numeric input beside code-entry wording, or a delivery-choice screen. It is a nudge, not a decision;
 - logs navigate URLs through a log-safe form, with a code replaced or the URL withheld.

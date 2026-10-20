@@ -150,7 +150,7 @@ describe('AgentRuntime verification-code-received guidance (#2017)', () => {
   });
   function runtimeWith(rows: Verification[], trackedFor: string[]): VerificationRuntime {
     const tracker = new CodeTracker({ ttlMinutesAfterClose: 120 });
-    for (const id of trackedFor) tracker.register(id, 'example-insurer.ca', '482913');
+    for (const id of trackedFor) tracker.register(id, 'example-insurer.ca', '482913', 's1');
     return { tracker, listActive: vi.fn(async () => rows) } as unknown as VerificationRuntime;
   }
   const guidanceOf = (messages: Message[]) => {

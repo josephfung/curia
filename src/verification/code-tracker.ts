@@ -25,8 +25,16 @@ export interface CodeTrackerOptions {
   now?: () => Date;
 }
 
+/** Where a tracked value may be entered: its verification's page domain, in its browser session. */
+export interface TrackedTarget {
+  pageDomain: string;
+  browserSessionId: string;
+}
+
 interface Tracked {
   pageDomain: string;
+  /** The browser session the verification's challenge is waiting in. */
+  browserSessionId: string;
   values: Set<string>;
   closedAt?: Date;
   /** Compiled matcher for this verification's values; null when it has none. */
@@ -93,15 +101,17 @@ export class CodeTracker {
   /**
    * Track a code against a verification. The value is normalized (uppercased, one
    * internal space or dash removed); the page domain is reduced to its registrable
-   * domain, or lowercased as given when it has none. Never logs the value.
+   * domain, or lowercased as given when it has none. The browser session is the one the
+   * verification's challenge waits in: the web-browser guard lets the value through only
+   * in that session. Never logs the value.
    */
-  register(verificationId: string, pageDomain: string, rawValue: string): void {
+  register(verificationId: string, pageDomain: string, rawValue: string, browserSessionId: string): void {
     const value = normalizeCode(rawValue);
     if (value === '') return;
     this.prune();
     let entry = this.byVerification.get(verificationId);
     if (!entry) {
-      entry = { pageDomain: normalizeDomain(pageDomain), values: new Set() };
+      entry = { pageDomain: normalizeDomain(pageDomain), browserSessionId, values: new Set() };
       this.byVerification.set(verificationId, entry);
     }
     entry.values.add(value);
@@ -111,12 +121,15 @@ export class CodeTracker {
 
   /**
    * Point a verification's tracked values at a new page domain (normalized as in
-   * `register`), for when a reused verification's code-entry page moved. A no-op for
-   * a verification that tracks nothing.
+   * `register`) and browser session, for when a reused verification's code-entry page
+   * moved or its session was replaced. A no-op for a verification that tracks nothing.
    */
-  retarget(verificationId: string, pageDomain: string): void {
+  retarget(verificationId: string, pageDomain: string, browserSessionId: string): void {
     const entry = this.byVerification.get(verificationId);
-    if (entry) entry.pageDomain = normalizeDomain(pageDomain);
+    if (entry) {
+      entry.pageDomain = normalizeDomain(pageDomain);
+      entry.browserSessionId = browserSessionId;
+    }
   }
 
   /** Start the TTL clock for a verification's values. The first close wins. */
@@ -156,6 +169,26 @@ export class CodeTracker {
       }
     }
     return domains;
+  }
+
+  /**
+   * Where a text containing tracked values may be entered: null when it contains no
+   * tracked value, otherwise the page domain and browser session of every verification
+   * that tracked a value found in it. The web-browser guard needs both: two verifications
+   * whose challenges sit on one identity provider share a page domain, and only the
+   * session tells one's code from the other's.
+   */
+  allowedTargetsFor(text: string): TrackedTarget[] | null {
+    this.prune();
+    let targets: TrackedTarget[] | null = null;
+    for (const entry of this.byVerification.values()) {
+      const matcher = this.entryMatcher(entry);
+      if (matcher && text.search(matcher) !== -1) {
+        targets ??= [];
+        targets.push({ pageDomain: entry.pageDomain, browserSessionId: entry.browserSessionId });
+      }
+    }
+    return targets;
   }
 
   /** Ids of the verifications that still hold tracked values (pruned first). */

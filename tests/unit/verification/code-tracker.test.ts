@@ -15,7 +15,7 @@ function makeTracker(ttlMinutesAfterClose = 120) {
 describe('CodeTracker.scrubText', () => {
   it('replaces 123456, 123 456 and 123-456 with [sign-in code]', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'aircanada.com', '123456');
+    tracker.register('v1', 'aircanada.com', '123456', 's1');
     expect(tracker.scrubText('code 123456, or 123 456, or 123-456 done')).toBe(
       `code ${TOKEN}, or ${TOKEN}, or ${TOKEN} done`,
     );
@@ -23,7 +23,7 @@ describe('CodeTracker.scrubText', () => {
 
   it('does not touch 1234567 when 123456 is tracked', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'aircanada.com', '123456');
+    tracker.register('v1', 'aircanada.com', '123456', 's1');
     expect(tracker.scrubText('order 1234567 and x123456 and 1234567')).toBe(
       'order 1234567 and x123456 and 1234567',
     );
@@ -31,13 +31,13 @@ describe('CodeTracker.scrubText', () => {
 
   it('does not touch a split form that runs into a longer number', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'aircanada.com', '123456');
+    tracker.register('v1', 'aircanada.com', '123456', 's1');
     expect(tracker.scrubText('ref 123-4567 and 123 4567')).toBe('ref 123-4567 and 123 4567');
   });
 
   it('matches alphanumeric codes case-insensitively, including a dash after a prefix', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'example.com', 'g-482913');
+    tracker.register('v1', 'example.com', 'g-482913', 's1');
     expect(tracker.scrubText('G-482913 / g482913 / G482913 / G 482913')).toBe(
       `${TOKEN} / ${TOKEN} / ${TOKEN} / ${TOKEN}`,
     );
@@ -45,7 +45,7 @@ describe('CodeTracker.scrubText', () => {
 
   it('catches a split at any internal position for values of length 6 or more', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'example.com', '12345678');
+    tracker.register('v1', 'example.com', '12345678', 's1');
     expect(tracker.scrubText('1234 5678 | 12-345678 | 1 2345678 | 1234567-8')).toBe(
       `${TOKEN} | ${TOKEN} | ${TOKEN} | ${TOKEN}`,
     );
@@ -53,20 +53,20 @@ describe('CodeTracker.scrubText', () => {
 
   it('does not build split variants for 4-5 character values', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'example.com', '4821');
+    tracker.register('v1', 'example.com', '4821', 's1');
     expect(tracker.scrubText('pin 4821 vs 48 21 vs 48-21')).toBe(`pin ${TOKEN} vs 48 21 vs 48-21`);
   });
 
   it('replaces every occurrence and covers every tracked value', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'a.com', '111111');
-    tracker.register('v2', 'b.com', '222222');
+    tracker.register('v1', 'a.com', '111111', 's1');
+    tracker.register('v2', 'b.com', '222222', 's1');
     expect(tracker.scrubText('111111 222222 111111')).toBe(`${TOKEN} ${TOKEN} ${TOKEN}`);
   });
 
   it('treats a normalized registration the same as the raw form', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'a.com', ' 123 456 ');
+    tracker.register('v1', 'a.com', ' 123 456 ', 's1');
     expect(tracker.scrubText('123456')).toBe(TOKEN);
   });
 
@@ -77,13 +77,13 @@ describe('CodeTracker.scrubText', () => {
 
   it('regex-escapes tracked values instead of interpreting them', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'a.com', 'a.b+c*d');
+    tracker.register('v1', 'a.com', 'a.b+c*d', 's1');
     expect(tracker.scrubText('axbbbcd and A.B+C*D')).toBe(`axbbbcd and ${TOKEN}`);
   });
 
   it('ignores an empty registration', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'a.com', '   ');
+    tracker.register('v1', 'a.com', '   ', 's1');
     expect(tracker.size()).toBe(0);
     expect(tracker.scrubText('some text')).toBe('some text');
   });
@@ -92,7 +92,7 @@ describe('CodeTracker.scrubText', () => {
 describe('CodeTracker.scrubDeep', () => {
   it('rewrites nested progress_note and leaves numbers/booleans alone', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'a.com', '123456');
+    tracker.register('v1', 'a.com', '123456', 's1');
     const input = {
       task_id: 'abc',
       progress_note: 'used 123456 to log in',
@@ -114,7 +114,7 @@ describe('CodeTracker.scrubDeep', () => {
 
   it('does not mutate the caller object and returns a new structure', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'a.com', '123456');
+    tracker.register('v1', 'a.com', '123456', 's1');
     const input = { note: 'code 123456', arr: ['123456'] };
     const snapshot = JSON.parse(JSON.stringify(input)) as typeof input;
     const out = tracker.scrubDeep(input);
@@ -125,7 +125,7 @@ describe('CodeTracker.scrubDeep', () => {
 
   it('handles top-level strings, arrays and primitives', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'a.com', '123456');
+    tracker.register('v1', 'a.com', '123456', 's1');
     expect(tracker.scrubDeep('is 123456')).toBe(`is ${TOKEN}`);
     expect(tracker.scrubDeep(['123456', 7])).toEqual([TOKEN, 7]);
     expect(tracker.scrubDeep(5)).toBe(5);
@@ -135,7 +135,7 @@ describe('CodeTracker.scrubDeep', () => {
 
   it('leaves non-plain objects such as Dates untouched and survives cycles', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'a.com', '123456');
+    tracker.register('v1', 'a.com', '123456', 's1');
     const when = new Date('2026-10-19T00:00:00Z');
     const cyc: Record<string, unknown> = { note: '123456', when };
     cyc.self = cyc;
@@ -149,7 +149,7 @@ describe('CodeTracker.scrubDeep', () => {
 describe('CodeTracker expiry', () => {
   it('values expire ttlMinutesAfterClose after closed()', () => {
     const { tracker, advanceMinutes } = makeTracker(120);
-    tracker.register('v1', 'a.com', '123456');
+    tracker.register('v1', 'a.com', '123456', 's1');
     // Not closed yet: never expires, however long it takes.
     advanceMinutes(600);
     expect(tracker.scrubText('123456')).toBe(TOKEN);
@@ -170,7 +170,7 @@ describe('CodeTracker expiry', () => {
     tracker.closed('nope');
     expect(tracker.size()).toBe(0);
 
-    tracker.register('v1', 'a.com', '123456');
+    tracker.register('v1', 'a.com', '123456', 's1');
     tracker.closed('v1');
     advanceMinutes(40);
     tracker.closed('v1');
@@ -180,8 +180,8 @@ describe('CodeTracker expiry', () => {
 
   it('expires verifications independently', () => {
     const { tracker, advanceMinutes } = makeTracker(60);
-    tracker.register('v1', 'a.com', '111111');
-    tracker.register('v2', 'b.com', '222222');
+    tracker.register('v1', 'a.com', '111111', 's1');
+    tracker.register('v2', 'b.com', '222222', 's1');
     tracker.closed('v1');
     advanceMinutes(61);
     expect(tracker.scrubText('111111 222222')).toBe(`111111 ${TOKEN}`);
@@ -191,7 +191,7 @@ describe('CodeTracker expiry', () => {
 describe('CodeTracker.allowedDomainsFor', () => {
   it('returns b2clogin.com for a value tracked against it, null for untracked text', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'https://manulife.b2clogin.com/signin', '123456');
+    tracker.register('v1', 'https://manulife.b2clogin.com/signin', '123456', 's1');
     expect(tracker.allowedDomainsFor('123456')).toEqual(new Set(['b2clogin.com']));
     expect(tracker.allowedDomainsFor('654321')).toBeNull();
     expect(tracker.allowedDomainsFor('')).toBeNull();
@@ -199,30 +199,48 @@ describe('CodeTracker.allowedDomainsFor', () => {
 
   it('matches split and case variants, and unions the domains of every matching verification', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'aircanada.com', '123456');
-    tracker.register('v2', 'login.example.co.uk', '123456');
-    tracker.register('v3', 'other.com', '999999');
+    tracker.register('v1', 'aircanada.com', '123456', 's1');
+    tracker.register('v2', 'login.example.co.uk', '123456', 's1');
+    tracker.register('v3', 'other.com', '999999', 's1');
     expect(tracker.allowedDomainsFor('123 456')).toEqual(new Set(['aircanada.com', 'example.co.uk']));
   });
 
   it('does not match inside a longer alphanumeric run', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'aircanada.com', '123456');
+    tracker.register('v1', 'aircanada.com', '123456', 's1');
     expect(tracker.allowedDomainsFor('1234567')).toBeNull();
   });
 
   it('falls back to the lowercased input when the domain has no registrable form', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'LocalHost', '123456');
+    tracker.register('v1', 'LocalHost', '123456', 's1');
     expect(tracker.allowedDomainsFor('123456')).toEqual(new Set(['localhost']));
   });
 });
 
+describe('CodeTracker.allowedTargetsFor', () => {
+  it('returns the page domain and browser session of every verification holding a value in the text', () => {
+    const { tracker } = makeTracker();
+    tracker.register('v1', 'https://a.b2clogin.com/mfa', '123456', 'sess-a');
+    tracker.register('v2', 'https://b.b2clogin.com/mfa', '654321', 'sess-b');
+    expect(tracker.allowedTargetsFor('code 123 456')).toEqual([{ pageDomain: 'b2clogin.com', browserSessionId: 'sess-a' }]);
+    expect(tracker.allowedTargetsFor('654321')).toEqual([{ pageDomain: 'b2clogin.com', browserSessionId: 'sess-b' }]);
+    expect(tracker.allowedTargetsFor('nothing here')).toBeNull();
+  });
+});
+
 describe('CodeTracker.retarget', () => {
+  it('moves a verification\'s values to its new browser session too', () => {
+    const { tracker } = makeTracker();
+    tracker.register('v1', 'aircanada.com', '123456', 'sess-old');
+    tracker.retarget('v1', 'aircanada.com', 'sess-new');
+    expect(tracker.allowedTargetsFor('123456')).toEqual([{ pageDomain: 'aircanada.com', browserSessionId: 'sess-new' }]);
+  });
+
   it('moves a verification\'s values to its new page domain, normalized', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'aircanada.com', '123456');
-    tracker.retarget('v1', 'https://acme.B2CLOGIN.com/mfa');
+    tracker.register('v1', 'aircanada.com', '123456', 's1');
+    tracker.retarget('v1', 'https://acme.B2CLOGIN.com/mfa', 's1');
     expect(tracker.allowedDomainsFor('123456')).toEqual(new Set(['b2clogin.com']));
     // The values themselves still scrub.
     expect(tracker.scrubText('123456')).toBe(TOKEN);
@@ -230,10 +248,10 @@ describe('CodeTracker.retarget', () => {
 
   it('leaves other verifications alone and ignores an untracked id', () => {
     const { tracker } = makeTracker();
-    tracker.register('v1', 'aircanada.com', '123456');
-    tracker.register('v2', 'manulife.ca', '654321');
-    tracker.retarget('v1', 'b2clogin.com');
-    tracker.retarget('nope', 'evil.example');
+    tracker.register('v1', 'aircanada.com', '123456', 's1');
+    tracker.register('v2', 'manulife.ca', '654321', 's1');
+    tracker.retarget('v1', 'b2clogin.com', 's1');
+    tracker.retarget('nope', 'evil.example', 's1');
     expect(tracker.allowedDomainsFor('654321')).toEqual(new Set(['manulife.ca']));
     expect(tracker.trackedIds().sort()).toEqual(['v1', 'v2']);
   });

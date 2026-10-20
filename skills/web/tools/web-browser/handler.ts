@@ -509,7 +509,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       }
       // A tracked sign-in code in the URL may only travel to its own page domain (#2017).
       // Check the decoded forms too, so percent-encoding can't smuggle one past the matcher.
-      if (textVariants(url).some((variant) => !trackedCodeAllowedOn(ctx, variant, parsedUrl.toString()))) {
+      if (textVariants(url).some((variant) => !trackedCodeAllowedOn(ctx, variant, parsedUrl.toString(), sessionId))) {
         return { ok: false, error: TRACKED_CODE_REFUSAL };
       }
       const response = await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
@@ -682,8 +682,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
           return { ok: false, error: 'type requires text (string) or secret_ref (string)' };
         }
         // Destination guard (#2017): a tracked sign-in code types only on its own page
-        // domain, judged by the field's own document.
-        if (!trackedCodeAllowedOn(ctx, text, typedOnUrl)) {
+        // domain, judged by the field's own document, and only in its verification's session.
+        if (!trackedCodeAllowedOn(ctx, text, typedOnUrl, sessionId)) {
           return { ok: false, error: TRACKED_CODE_REFUSAL };
         }
         fillValue = text;
@@ -736,18 +736,20 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
 }
 
 /**
- * Destination guard (#2017): false when `value` contains a tracked sign-in code and
- * `destinationUrl` is not on the registrable domain of any verification that tracked it.
- * True when there is no runtime or the value holds no tracked code. A destination with
- * no registrable domain (about:blank, an IP) never matches, so it fails closed.
+ * Destination guard (#2017): false when `value` contains a tracked sign-in code and no
+ * verification that tracked it has both its page domain on `destinationUrl`'s registrable
+ * domain and its browser session as this call's. The session matters when two
+ * verifications' challenges sit on one identity provider (both on b2clogin.com): only it
+ * keeps one's code out of the other's challenge. True when there is no runtime or the value
+ * holds no tracked code. A destination with no registrable domain (about:blank, an IP)
+ * never matches, so it fails closed.
  */
-function trackedCodeAllowedOn(ctx: ToolContext, value: string, destinationUrl: string): boolean {
-  const allowed = ctx.verification?.tracker.allowedDomainsFor(value);
+function trackedCodeAllowedOn(ctx: ToolContext, value: string, destinationUrl: string, sessionId: string): boolean {
+  const allowed = ctx.verification?.tracker.allowedTargetsFor(value);
   if (!allowed) return true;
-  for (const domain of allowed) {
-    if (sameRegistrableDomain(destinationUrl, domain)) return true;
-  }
-  return false;
+  return allowed.some(
+    (target) => target.browserSessionId === sessionId && sameRegistrableDomain(destinationUrl, target.pageDomain),
+  );
 }
 
 /** Stands in for a URL or message whose sign-in code could not be scrubbed out of every form. */

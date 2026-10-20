@@ -39,7 +39,7 @@ export function registerCodes(
   if (values.length === 0) return [];
   const targets = rows.filter(acceptsCodes);
   for (const v of targets) {
-    for (const value of values) runtime.tracker.register(v.id, v.pageDomain, value);
+    for (const value of values) runtime.tracker.register(v.id, v.pageDomain, value, v.browserSessionId);
     if (v.status !== 'pending') runtime.tracker.closed(v.id);
   }
   return targets;

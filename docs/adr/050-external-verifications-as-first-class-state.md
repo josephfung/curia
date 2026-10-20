@@ -97,9 +97,12 @@ Alternatives considered and rejected:
    browser, and the coordinator's replies.
 6. **`web-browser` is the one exemption and guards itself.** It receives the real value but
    refuses to `type` it, or `navigate` to a URL containing it (including percent-encoded forms),
-   on any domain that is not the registrable domain of the verification that tracked it. The
-   match is by registrable domain, so `login.aircanada.com` matches `aircanada.com` and a
-   lookalike does not. URLs are made log-safe before they are logged or echoed.
+   anywhere but the registrable domain of a verification that tracked it, and only in that
+   verification's browser session. The match is by registrable domain, so `login.aircanada.com`
+   matches `aircanada.com` and a lookalike does not; the session tells apart two verifications
+   whose challenges sit on one identity provider (both on `b2clogin.com`), so one's code never
+   lands in the other's. A reused verification moves its tracked values to its new session.
+   URLs are made log-safe before they are logged or echoed.
 7. **Reply scrubbing sits in the dispatcher, not the outbound filter.** The design called for a
    value-aware rule in Stage 1. The filter only blocks, and the principal chose replace over
    block, so `Dispatcher.handleAgentResponse` scrubs the reply and the note for the principal

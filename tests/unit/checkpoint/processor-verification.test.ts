@@ -27,7 +27,7 @@ function setup(withRuntime: boolean) {
   } as unknown as Logger;
 
   const tracker = new CodeTracker({ ttlMinutesAfterClose: 120 });
-  tracker.register('ver-1', 'aircanada.com', '739204');
+  tracker.register('ver-1', 'aircanada.com', '739204', 's1');
   const runtime = { tracker } as unknown as VerificationRuntime;
 
   const processor = new ConversationCheckpointProcessor(

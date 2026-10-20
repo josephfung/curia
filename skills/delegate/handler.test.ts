@@ -387,7 +387,7 @@ describe('DelegateHandler sign-in code tracking from ceo-inbox (#2017)', () => {
     const { runtime, register } = makeRuntime([makeVerification()]);
     const result = await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
     expect(result.success).toBe(true);
-    expect(register).toHaveBeenCalledWith('ver-1', 'aircanada.com', '739204');
+    expect(register).toHaveBeenCalledWith('ver-1', 'aircanada.com', '739204', 'sess-1');
     // The result returned to the coordinator is unchanged.
     if (!result.success) return;
     expect(JSON.stringify(result.data)).toContain('739204');
@@ -416,7 +416,7 @@ describe('DelegateHandler sign-in code tracking from ceo-inbox (#2017)', () => {
       const { bus } = makeBus('Your Air Canada code is 739204');
       const { runtime, register, closed } = makeRuntime([makeVerification({ id: 'ver-r', status })]);
       await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
-      expect(register).toHaveBeenCalledWith('ver-r', 'aircanada.com', '739204');
+      expect(register).toHaveBeenCalledWith('ver-r', 'aircanada.com', '739204', 'sess-1');
       expect(closed).toHaveBeenCalledWith('ver-r');
     },
   );

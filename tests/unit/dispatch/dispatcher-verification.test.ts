@@ -116,7 +116,7 @@ describe('Dispatcher — principal-relayed sign-in codes (#2017)', () => {
     await send("it's 482 913");
 
     expect(registerSpy).toHaveBeenCalledTimes(1);
-    expect(registerSpy).toHaveBeenCalledWith('v-1', 'login.example.com', expect.any(String));
+    expect(registerSpy).toHaveBeenCalledWith('v-1', 'login.example.com', expect.any(String), 'bs-1');
     // The tracker holds the code in whichever written form: it is scrubbed from text.
     expect(tracker.scrubText('use 482913 now')).toBe('use [sign-in code] now');
     // The live turn still gets the code.

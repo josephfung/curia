@@ -291,7 +291,9 @@ a longer number isn't masked.
 
 **Browser destination guard.** `web-browser` refuses to type a tracked value on any domain
 other than its verification's `page_domain` (registrable-domain match, so `login.aircanada.com`
-matches `aircanada.com`; a lookalike does not). The error says why without echoing the value.
+matches `aircanada.com`; a lookalike does not), or in any browser session other than that
+verification's (two verifications on one identity provider share a page domain). The error
+says why without echoing the value.
 
 **Other write paths that aren't tool calls.** The same scrub applies to:
 
