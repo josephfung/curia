@@ -2,9 +2,8 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 import {
   readVoiceProposal,
-  readCompletionDigest,
+  readNumberedCompletionDigest,
   digestMapToItems,
-  assignDigestNumbers,
   pruneExpiredCompletionDigest,
 } from '../../../_shared/learning-state.js';
 import { renderCompletionSection, renderVoiceGuideSection } from '../../../_shared/learning-digest.js';
@@ -21,11 +20,12 @@ export class ListLearningDigestHandler implements ToolHandler {
       // Hide aged items in the rendered view only. This tool does not write the digest:
       // action_risk is "none", and a persist here would be a destructive config write.
       // Number BEFORE pruning so the numbers match what resolve-learning-digest derives from the
-      // same stored map. Legacy entries without `n` get a deterministic number here; it is not
-      // persisted (this tool does not write) until the next writer persists the same numbering.
+      // same stored map (readNumberedCompletionDigest is the one numbering every path uses).
+      // Legacy entries without `n` get a deterministic number here; it is not persisted (this
+      // tool does not write) until the next writer persists the same numbering.
       const completion_items = store
         ? digestMapToItems(
-            pruneExpiredCompletionDigest(assignDigestNumbers(await readCompletionDigest(store, ctx.log))),
+            pruneExpiredCompletionDigest((await readNumberedCompletionDigest(store, ctx.log)).map),
           )
         : [];
       const guideText = guide?.status === 'pending' ? guide.guide : null;

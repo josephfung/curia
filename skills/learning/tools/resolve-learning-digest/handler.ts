@@ -4,10 +4,9 @@ import { CONFIG_NAMESPACE as VOICE_NS, DISMISSED_KEY } from '../voice-learn/hand
 import {
   readVoiceProposal,
   writeVoiceProposal,
-  readCompletionDigest,
+  readNumberedCompletionDigest,
   writeCompletionDigest,
   pruneExpiredCompletionDigest,
-  assignDigestNumbers,
   type CompletionDigestItem,
   type CompletionDigestMap,
 } from '../../../_shared/learning-state.js';
@@ -86,8 +85,8 @@ export function resolveDigestNumber(
 
 /**
  * How a success `detail` names the item acted on: its task title, or the note when the title is
- * blank. Numbers are reused once the digest empties, so a stale "confirm task 2" can land on a newer
- * item 2; naming it lets the coordinator read back WHICH task it acted on (review fix F3, #2159).
+ * blank. Numbers are reused only once the digest empties (the high-water mark covers a resolved top
+ * item until then), so a stale "confirm task 2" can still land on a newer item 2 after that; naming it lets the coordinator read back WHICH task it acted on (review fix F3, #2159).
  */
 function itemName(item: CompletionDigestItem): string {
   const title = typeof item.taskTitle === 'string' ? item.taskTitle.trim() : '';
@@ -220,7 +219,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
     const store = new ConfigStore(ctx.entityMemory, ctx.log);
     // Number before resolving, on the full stored map, so legacy entries without `n` get the same
     // numbers list-learning-digest showed. The clearing writes below persist this numbering.
-    const digestMap = assignDigestNumbers(await readCompletionDigest(store, ctx.log));
+    const { map: digestMap } = await readNumberedCompletionDigest(store, ctx.log);
     const resolved =
       itemNumber !== null
         ? resolveDigestNumber(digestMap, itemNumber)

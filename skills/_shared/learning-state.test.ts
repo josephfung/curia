@@ -4,12 +4,16 @@ import {
   LEARNING_STATE_NAMESPACE,
   COMPLETION_CANDIDATES_KEY,
   COMPLETION_DIGEST_KEY,
+  COMPLETION_DIGEST_HIGH_WATER_KEY,
   VOICE_PROPOSAL_KEY,
   ASKED_TASK_IDS_KEY,
   readCompletionCandidates,
   writeCompletionCandidates,
   readCompletionDigest,
   writeCompletionDigest,
+  readDigestHighWater,
+  writeDigestHighWater,
+  readNumberedCompletionDigest,
   readVoiceProposal,
   writeVoiceProposal,
   readIdSet,
@@ -419,6 +423,15 @@ describe('learning-state config accessors', () => {
       expect(out.c!.n).toBe(3);
     });
 
+    it('numbers above the high-water mark, so resolving the top item does not free its number', () => {
+      // Items 1-3 were shown and "confirm task 3" resolved the top one. The mark still says 3,
+      // so a late or repeated "confirm task 3" cannot land on the next new item.
+      const out = assignDigestNumbers({ a: item('a', { n: 1 }), b: item('b', { n: 2 }), d: item('d') }, 3);
+      expect(out.d!.n).toBe(4);
+      expect(out.a!.n).toBe(1);
+      expect(out.b!.n).toBe(2);
+    });
+
     it('restarts at 1 only when no numbered item remains', () => {
       expect(assignDigestNumbers({ d: item('d') }).d!.n).toBe(1);
     });
@@ -443,6 +456,42 @@ describe('learning-state config accessors', () => {
       // Repairs are deterministic and above the live max (createdAt order, no clock last).
       expect(out.b!.n).toBe(2);
       expect(out.c!.n).toBe(3);
+    });
+
+    it('round-trips the high-water mark and reads 0 when none is stored', async () => {
+      const { store, values } = fakeStore();
+      expect(await readDigestHighWater(store)).toBe(0);
+      expect(await writeDigestHighWater(store, 7)).toBe(true);
+      expect(values.get(COMPLETION_DIGEST_HIGH_WATER_KEY)).toBe('7');
+      expect(await readDigestHighWater(store)).toBe(7);
+    });
+
+    it('reads a corrupt high-water mark as 0 and warns', async () => {
+      const { logger, warnCalls } = fakeLogger();
+      for (const raw of ['not json', '-2', '1.5', '"3"']) {
+        const { store } = fakeStore({ [COMPLETION_DIGEST_HIGH_WATER_KEY]: raw });
+        expect(await readDigestHighWater(store, logger)).toBe(0);
+      }
+      expect(warnCalls).toHaveLength(4);
+      expect(warnCalls[0]![0]).toMatchObject({ key: COMPLETION_DIGEST_HIGH_WATER_KEY });
+    });
+
+    it('readNumberedCompletionDigest numbers above the stored mark, and ignores the mark on an empty digest', async () => {
+      const { store } = fakeStore({
+        [COMPLETION_DIGEST_KEY]: JSON.stringify({
+          a: { kind: 'undo', taskId: 'a', taskTitle: 'A', note: 'n', n: 1 },
+          // A junk n is repaired; it must get the number the writer would give it: above the mark.
+          b: { kind: 'undo', taskId: 'b', taskTitle: 'B', note: 'n', n: 'two' },
+        }),
+        [COMPLETION_DIGEST_HIGH_WATER_KEY]: '4',
+      });
+      const { map, highWater } = await readNumberedCompletionDigest(store);
+      expect(highWater).toBe(4);
+      expect(map.a!.n).toBe(1);
+      expect(map.b!.n).toBe(5);
+
+      const empty = fakeStore({ [COMPLETION_DIGEST_HIGH_WATER_KEY]: '4' });
+      expect(await readNumberedCompletionDigest(empty.store)).toEqual({ map: {}, highWater: 0 });
     });
 
     it('readCompletionDigest keeps a stored n and drops a non-positive-integer one', async () => {

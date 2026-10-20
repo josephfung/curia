@@ -6,6 +6,7 @@ import { CONFIG_NAMESPACE } from '../../../ceo-inbox/tools/ceo-inbox-sent-observ
 import {
   COMPLETION_CANDIDATES_KEY,
   COMPLETION_DIGEST_KEY,
+  COMPLETION_DIGEST_HIGH_WATER_KEY,
   COMPLETION_DIGEST_MAX_AGE_MS,
   usableCompletionDigestCreatedAt,
   type CompletionCandidateMap,
@@ -260,6 +261,38 @@ describe('TaskCompletionFromSentHandler', () => {
     const body = ctx.__sendNotification.mock.calls[0]![0].body as string;
     expect(body.indexOf('6. ')).toBeGreaterThan(-1);
     expect(body.indexOf('6. ')).toBeLessThan(body.indexOf('7. '));
+  });
+
+  it('numbers above the stored high-water mark after the top item was resolved, and advances it', async () => {
+    // Items 1-3 were shown, then "confirm task 3" resolved the top one: the digest holds 1 and 2,
+    // the mark still says 3. A late or repeated "confirm task 3" must not land on the new item.
+    const ctx = makeCtx();
+    const taskId = '33333333-3333-4333-8333-333333333333';
+    ctx.__mem.__values.set(COMPLETION_CANDIDATES_KEY, JSON.stringify({ [taskId]: CANDIDATE_MAP[taskId]! }));
+    ctx.__mem.__values.set(
+      COMPLETION_DIGEST_KEY,
+      JSON.stringify({
+        keep: { kind: 'confirm', taskId: 'keep', taskTitle: 'K', note: 'n', n: 1, createdAt: new Date().toISOString() },
+        other: { kind: 'confirm', taskId: 'other', taskTitle: 'O', note: 'n', n: 2, createdAt: new Date().toISOString() },
+      }),
+    );
+    ctx.__mem.__values.set(COMPLETION_DIGEST_HIGH_WATER_KEY, '3');
+    expect((await handler.execute(ctx)).success).toBe(true);
+    const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest[taskId].n).toBe(4);
+    expect(ctx.__mem.__values.get(COMPLETION_DIGEST_HIGH_WATER_KEY)).toBe('4');
+    expect(ctx.__sendNotification.mock.calls[0]![0].body).toContain('`confirm task 4`');
+  });
+
+  it('restarts numbering at 1 once the digest is empty, whatever the mark says', async () => {
+    const ctx = makeCtx();
+    const taskId = '33333333-3333-4333-8333-333333333333';
+    ctx.__mem.__values.set(COMPLETION_CANDIDATES_KEY, JSON.stringify({ [taskId]: CANDIDATE_MAP[taskId]! }));
+    ctx.__mem.__values.set(COMPLETION_DIGEST_HIGH_WATER_KEY, '5');
+    expect((await handler.execute(ctx)).success).toBe(true);
+    const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest[taskId].n).toBe(1);
+    expect(ctx.__mem.__values.get(COMPLETION_DIGEST_HIGH_WATER_KEY)).toBe('1');
   });
 
   it('keeps an existing digest createdAt when the same task is written again', async () => {

@@ -15,6 +15,8 @@ export const LEARNING_STATE_NAMESPACE = 'ceo_inbox';
 
 export const COMPLETION_CANDIDATES_KEY = 'sent_observe.completion_candidates';
 export const COMPLETION_DIGEST_KEY = 'sent_observe.completion_digest';
+/** Highest digest item number handed out since the digest was last empty (#2159 Phase 3). */
+export const COMPLETION_DIGEST_HIGH_WATER_KEY = 'sent_observe.completion_digest_high_water';
 export const VOICE_PROPOSAL_KEY = 'voice_learn.proposal';
 export const MATCHED_DRAFT_IDS_KEY = 'sent_observe.matched_draft_ids';
 export const ASKED_TASK_IDS_KEY = 'sent_observe.asked_task_ids';
@@ -292,6 +294,42 @@ export async function writeCompletionDigest(store: ConfigStore, map: CompletionD
   return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_KEY, JSON.stringify(map))).stored;
 }
 
+/**
+ * The digest's number high-water mark: the highest item number handed out since the digest was last
+ * empty. Without it, resolving the top item ("confirm task 3" with 1-3 live) would free 3 for the
+ * next new item. Absent reads 0; anything but a non-negative integer reads 0 with a warning, which
+ * degrades to numbering above the live max only.
+ */
+export async function readDigestHighWater(store: ConfigStore, log?: Logger): Promise<number> {
+  const raw = await store.get(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_HIGH_WATER_KEY);
+  if (!raw) return 0;
+  const onCorrupt = corruptionLogger(COMPLETION_DIGEST_HIGH_WATER_KEY, raw, log);
+  const parsed = parseJson<unknown>(raw, onCorrupt);
+  if (parsed === null) return 0;
+  if (typeof parsed !== 'number' || !Number.isInteger(parsed) || parsed < 0) {
+    onCorrupt();
+    return 0;
+  }
+  return parsed;
+}
+export async function writeDigestHighWater(store: ConfigStore, n: number): Promise<boolean> {
+  return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_HIGH_WATER_KEY, JSON.stringify(n))).stored;
+}
+
+/**
+ * Read the digest numbered the one way the writer, `list-learning-digest` and
+ * `resolve-learning-digest` all number it, so the principal sees and replies with the same numbers
+ * every path derives. An empty digest restarts numbering, so its mark is reported as 0 (unread).
+ */
+export async function readNumberedCompletionDigest(
+  store: ConfigStore,
+  log?: Logger,
+): Promise<{ map: CompletionDigestMap; highWater: number }> {
+  const stored = await readCompletionDigest(store, log);
+  const highWater = Object.keys(stored).length === 0 ? 0 : await readDigestHighWater(store, log);
+  return { map: assignDigestNumbers(stored, highWater), highWater };
+}
+
 export async function readVoiceProposal(store: ConfigStore, log?: Logger): Promise<VoiceGuideProposal | null> {
   const raw = await store.get(LEARNING_STATE_NAMESPACE, VOICE_PROPOSAL_KEY);
   const parsed = parseJson<unknown>(raw, raw ? corruptionLogger(VOICE_PROPOSAL_KEY, raw, log) : undefined);
@@ -347,9 +385,11 @@ export async function writeIdSet(store: ConfigStore, key: string, ids: Set<strin
  * a task id (#2159 Phase 3). Pure: returns a new map, the input is untouched.
  *
  * - An item that already has a valid number keeps it, so resolving one item never shifts the others.
- * - An unnumbered item takes max(live numbers) + 1, never a gap left by a resolved item: a stale
- *   "confirm task 2" from an older notification must not land on a newer item 2 and act on the wrong
- *   task. Numbers restart at 1 only when no numbered item remains in the map.
+ * - An unnumbered item takes max(live numbers, highWater) + 1, never a number a resolved item held:
+ *   a stale "confirm task 2" from an older notification must not land on a newer item 2 and act on
+ *   the wrong task. `highWater` (readDigestHighWater) covers the resolved top item, which the live
+ *   max alone would hand out again. Numbers restart at 1 only when the digest is empty: the writer
+ *   then passes 0.
  * - Unnumbered items are numbered in `createdAt` order (no usable clock sorts last), then by key,
  *   so the legacy backlog numbers deterministically: the writer, `list-learning-digest` and
  *   `resolve-learning-digest` all derive the same numbers from the same map until a write persists them.
@@ -359,7 +399,7 @@ export async function writeIdSet(store: ConfigStore, key: string, ids: Set<strin
  * Callers that prune expired items should number BEFORE pruning, so the numbers the principal was
  * shown do not shift because an aged-out sibling disappeared from the map.
  */
-export function assignDigestNumbers(map: CompletionDigestMap): CompletionDigestMap {
+export function assignDigestNumbers(map: CompletionDigestMap, highWater = 0): CompletionDigestMap {
   const ordered = Object.entries(map).sort(([ka, a], [kb, b]) => {
     const ta = usableCompletionDigestCreatedAt(a.createdAt);
     const tb = usableCompletionDigestCreatedAt(b.createdAt);
@@ -377,7 +417,7 @@ export function assignDigestNumbers(map: CompletionDigestMap): CompletionDigestM
       taken.add(item.n);
     }
   }
-  let next = Math.max(0, ...taken) + 1;
+  let next = Math.max(highWater, ...taken) + 1;
   for (const [key] of ordered) {
     if (numberOf.has(key)) continue;
     numberOf.set(key, next);

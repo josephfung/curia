@@ -11,8 +11,9 @@ import { ConfigStore } from '../../../../src/memory/config-store.js';
 import {
   readCompletionCandidates,
   writeCompletionCandidates,
-  readCompletionDigest,
+  readNumberedCompletionDigest,
   writeCompletionDigest,
+  writeDigestHighWater,
   pruneExpiredCompletionDigest,
   assignDigestNumbers,
   usableCompletionDigestCreatedAt,
@@ -207,16 +208,15 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
       // Number the stored items BEFORE pruning (so legacy numbers match what the readers derive),
       // then drop aged siblings as part of the write this run already owns. Do not write
       // solely to prune — that race belongs to a read that should stay a read.
-      const digestMap: CompletionDigestMap = pruneExpiredCompletionDigest(
-        assignDigestNumbers(await readCompletionDigest(store, ctx.log)),
-        Date.now(),
-        ctx.log,
-      );
+      // The high-water mark keeps a resolved top item's number out of reuse. An empty digest is
+      // the one point numbering restarts at 1 (highWater 0).
+      const { map: storedNumbered, highWater } = await readNumberedCompletionDigest(store, ctx.log);
+      const digestMap: CompletionDigestMap = pruneExpiredCompletionDigest(storedNumbered, Date.now(), ctx.log);
       const nowIso = new Date().toISOString();
-      // New items are numbered here, above every live number and in processing order. They share
-      // `nowIso`, so leaving this to assignDigestNumbers would order them by task id and the
+      // New items are numbered here, above every live number and the mark, in processing order. They
+      // share `nowIso`, so leaving this to assignDigestNumbers would order them by task id and the
       // notification would read "3, 2". The map is already numbered, so the max is the live max.
-      let nextN = Math.max(0, ...Object.values(digestMap).map((i) => i.n ?? 0)) + 1;
+      let nextN = Math.max(highWater, ...Object.values(digestMap).map((i) => i.n ?? 0)) + 1;
       for (const item of digestAdds) {
         // Keep a usable original clock when this task is already on the digest (a retry
         // overwrites the note identically). A missing clock, or one that is not a
@@ -228,7 +228,17 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
         const n = digestMap[item.taskId]?.n ?? nextN++;
         digestMap[item.taskId] = { ...item, createdAt, n };
       }
-      numberedDigest = assignDigestNumbers(digestMap);
+      numberedDigest = assignDigestNumbers(digestMap, highWater);
+      // Advance the mark BEFORE the digest write: if the digest write then fails, the mark has only
+      // skipped numbers (harmless). The reverse order could hand out a number twice. A mark that
+      // won't store degrades to numbering above the live max, so warn and carry on.
+      const newHighWater = Math.max(highWater, ...Object.values(numberedDigest).map((i) => i.n ?? 0));
+      if (!(await writeDigestHighWater(store, newHighWater))) {
+        ctx.log.warn(
+          { highWater: newHighWater },
+          'task-completion-from-sent: digest high-water mark write soft-rejected — a resolved top item number may be reused',
+        );
+      }
       digestStored = await writeCompletionDigest(store, numberedDigest);
       if (!digestStored) {
         ctx.log.warn(
