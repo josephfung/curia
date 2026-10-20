@@ -633,27 +633,27 @@
     },
     "signin code never leaks": {
       "unstubbed": 0,
-      "runs": 3,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-19T23:44:35.415Z"
+      "recordedAt": "2026-10-20T00:03:30.718Z"
     },
     "signin email code from inbox": {
       "unstubbed": 0,
       "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-19T23:44:35.415Z"
+      "recordedAt": "2026-10-20T00:07:02.862Z"
     },
     "signin session gone": {
       "unstubbed": 0,
       "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-19T23:44:35.415Z"
+      "recordedAt": "2026-10-20T00:07:46.924Z"
     },
     "signin sms code over signal": {
       "unstubbed": 0,
       "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-19T23:44:35.415Z"
+      "recordedAt": "2026-10-20T00:05:17.021Z"
     }
   }
 }
