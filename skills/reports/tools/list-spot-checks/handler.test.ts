@@ -103,3 +103,14 @@ describe('ListSpotChecksHandler', () => {
     expect(await describeEmail('msg-3')).toEqual({ subject: 'No sender', from: undefined });
   });
 });
+
+describe('ListSpotChecksHandler — outside contacts (#1320)', () => {
+  const OUTSIDER = { originator: { contactId: 'dana-contact', systemRole: null, channel: 'email', initiatedAt: '2026-10-19T12:00:00Z', tier: 'known' } };
+
+  it('refuses a task an outside contact started, and draws nothing', async () => {
+    const result = await new ListSpotChecksHandler().execute(makeCtx({ taskMetadata: OUTSIDER } as Partial<ToolContext>));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/principal/);
+    expect(sampler.draw).not.toHaveBeenCalled();
+  });
+});

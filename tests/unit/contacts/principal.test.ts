@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, isLivePrincipalTurn, makeSystemOriginator, makePrincipalOriginator, capOriginatorToParent } from '../../../src/contacts/principal.js';
+import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, isLivePrincipalTurn, makeSystemOriginator, makePrincipalOriginator, capOriginatorToParent, isOutsiderOriginated } from '../../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 
 describe('isPrincipalOriginated', () => {
@@ -253,5 +253,24 @@ describe('isLivePrincipalTurn (#1126 — the elevated gate predicate)', () => {
 
   it('is false for empty/absent inputs', () => {
     expect(isLivePrincipalTurn(undefined, undefined)).toBe(false);
+  });
+});
+
+describe('isOutsiderOriginated (#1320 — digest tools refuse an outsider\'s task)', () => {
+  function meta(systemRole: TaskOriginator['systemRole'], tier: TaskOriginator['tier'] = null) {
+    return { originator: { contactId: 'c-1', systemRole, channel: 'email', initiatedAt: '2026-10-19T12:00:00Z', tier } satisfies TaskOriginator };
+  }
+
+  it.each(['known', 'trusted', 'unknown', null] as const)('is true for an outside contact (tier %s)', (tier) => {
+    expect(isOutsiderOriginated(meta(null, tier))).toBe(true);
+  });
+
+  it.each(['principal', 'system', 'agent'] as const)('is false for a %s-originated task', (role) => {
+    expect(isOutsiderOriginated(meta(role))).toBe(false);
+  });
+
+  it('is false when there is no originator (structurally internal work)', () => {
+    expect(isOutsiderOriginated(undefined)).toBe(false);
+    expect(isOutsiderOriginated({})).toBe(false);
   });
 });

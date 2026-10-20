@@ -10,6 +10,7 @@
 // samples keep their stored summaries.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { refuseOutsiderDigestAccess } from '../../../../src/skills/_shared/principal-directed.js';
 import { SpotCheckSampler } from '../../../../src/reports/spot-check-sampler.js';
 import { describeEmailVia } from '../../../../src/reports/describe-email.js';
 import { SpotCheckStore } from '../../../../src/reports/spot-check-store.js';
@@ -17,6 +18,9 @@ import { ConfigStore } from '../../../../src/memory/config-store.js';
 
 export class ListSpotChecksHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
+    // An outside contact's task never reads or acknowledges the principal's digest (#1320).
+    const refused = refuseOutsiderDigestAccess(ctx);
+    if (refused) return refused;
     if (!ctx.actionLogRepo) {
       return { success: false, error: 'list-spot-checks requires actionLogRepo capability' };
     }

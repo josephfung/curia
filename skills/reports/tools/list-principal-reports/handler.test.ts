@@ -67,3 +67,22 @@ describe('ListPrincipalReportsHandler', () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe('ListPrincipalReportsHandler — outside contacts (#1320)', () => {
+  const OUTSIDER = { originator: { contactId: 'dana-contact', systemRole: null, channel: 'email', initiatedAt: '2026-10-19T12:00:00Z', tier: 'known' } };
+
+  it("refuses a task an outside contact started: the principal's digest is not theirs to read", async () => {
+    const { ctx } = makeCtx([row('a', '2026-10-19T09:00:00.000Z', 'Held for your digest: a message from Bob.')]);
+    const result = await new ListPrincipalReportsHandler().execute({ ...ctx, taskMetadata: OUTSIDER } as ToolContext);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/principal/);
+    expect(ctx.auditLogRepo!.findByEventTypeAfterSeq).not.toHaveBeenCalled();
+  });
+
+  it('still serves a scheduled digest (system-originated task)', async () => {
+    const { ctx } = makeCtx([]);
+    const system = { originator: { ...OUTSIDER.originator, systemRole: 'system', tier: null } };
+    const result = await new ListPrincipalReportsHandler().execute({ ...ctx, taskMetadata: system } as ToolContext);
+    expect(result.success).toBe(true);
+  });
+});

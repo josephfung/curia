@@ -6,12 +6,16 @@
 // Audit ids are never returned — the principal sees numbers, not ids (mobile UX).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { refuseOutsiderDigestAccess } from '../../../../src/skills/_shared/principal-directed.js';
 import { ReportQueue } from '../../../../src/reports/report-queue.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 
 export class ListPrincipalReportsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
+    // An outside contact's task never reads or acknowledges the principal's digest (#1320).
+    const refused = refuseOutsiderDigestAccess(ctx);
+    if (refused) return refused;
     if (!ctx.auditLogRepo) {
       return { success: false, error: 'list-principal-reports requires auditLogRepo capability' };
     }

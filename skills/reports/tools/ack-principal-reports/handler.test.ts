@@ -67,3 +67,15 @@ describe('AckPrincipalReportsHandler', () => {
     expect((await handler.execute({ ...makeCtx({ cursor: '14' }), auditLogRepo: undefined } as ToolContext)).success).toBe(false);
   });
 });
+
+describe('AckPrincipalReportsHandler — outside contacts (#1320)', () => {
+  const OUTSIDER = { originator: { contactId: 'dana-contact', systemRole: null, channel: 'email', initiatedAt: '2026-10-19T12:00:00Z', tier: 'known' } };
+
+  it("refuses a task an outside contact started, so they can't clear the principal's queue", async () => {
+    const ctx = { ...makeCtx({ cursor: '12' }), taskMetadata: OUTSIDER } as ToolContext;
+    const result = await new AckPrincipalReportsHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/principal/);
+    expect(ctx.entityMemory!.storeFact).not.toHaveBeenCalled();
+  });
+});

@@ -6,11 +6,15 @@
 // stays put and the items repeat in the next digest, rather than being dropped.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { refuseOutsiderDigestAccess } from '../../../../src/skills/_shared/principal-directed.js';
 import { ReportQueue, InvalidReportCursorError } from '../../../../src/reports/report-queue.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 
 export class AckPrincipalReportsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
+    // An outside contact's task never reads or acknowledges the principal's digest (#1320).
+    const refused = refuseOutsiderDigestAccess(ctx);
+    if (refused) return refused;
     if (!ctx.auditLogRepo) {
       return { success: false, error: 'ack-principal-reports requires auditLogRepo capability' };
     }

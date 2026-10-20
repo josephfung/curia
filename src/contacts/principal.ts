@@ -112,6 +112,24 @@ export function isSystemOriginated(
 }
 
 /**
+ * Check whether an outside contact started this task chain: an originator that is neither
+ * the principal, the system nor an agent, at any tier. The principal's digest tools refuse
+ * such a task, so a contact who writes in can't read or acknowledge what is queued for the
+ * principal (#1320). No originator at all is structurally internal work, not an outsider.
+ *
+ * @param metadata  Task metadata (from ctx.taskMetadata or agent.task payload)
+ */
+export function isOutsiderOriginated(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!metadata) return false;
+  // Runtime-validated in callers; cast through unknown per repo policy.
+  const originator = metadata.originator as unknown as TaskOriginator | undefined;
+  if (!originator) return false;
+  return originator.systemRole !== 'principal' && originator.systemRole !== 'system' && originator.systemRole !== 'agent';
+}
+
+/**
  * Create a TaskOriginator representing operator-configured, platform-executed work.
  * Used by upsertDeclarativeJob() to stamp YAML-defined scheduled jobs.
  * A factory (not a constant) so `initiatedAt` reflects the actual upsert time.

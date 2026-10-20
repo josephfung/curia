@@ -1,7 +1,7 @@
 {
   "name": "list-principal-reports",
   "description": "Items for the principal's digest since the last acknowledged digest, numbered 1..N. Include them in the digest. After the digest has been sent, call ack-principal-reports with the returned cursor. If the digest fails to send, do not ack: the items come back next time.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {},
