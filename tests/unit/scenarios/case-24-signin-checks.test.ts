@@ -86,6 +86,11 @@ describe('case 24b: no code ask (code checks)', () => {
     'Could you give me your one-time passcode?',
     'Please reply with the 6 digits.',
     'Can you reply with it when it arrives?',
+    // A dash ends the clause, so a negation before it does not cancel the ask (re-review N3).
+    "I can't sign in without it — please send me the code.",
+    'Not signed in yet — can you send me the code?',
+    "I can't finish without it – please send me the code.",
+    "Haven't got in yet - can you send me the code?",
   ])('misses a send asking for the code, on every channel: %s', message => {
     for (const tool of ['signal-send', 'sms-send', 'slack-send']) {
       expect(rate([send(tool, { recipient: 'principal', message })]), tool).toBe('MISS');
