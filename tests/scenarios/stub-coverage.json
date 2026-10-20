@@ -633,9 +633,9 @@
     },
     "signin code never leaks": {
       "unstubbed": 0,
-      "runs": 5,
+      "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T03:44:46.823Z"
+      "recordedAt": "2026-10-20T04:08:04.546Z"
     },
     "signin email code from inbox": {
       "unstubbed": 0,
@@ -647,7 +647,7 @@
       "unstubbed": 0,
       "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T03:48:05.092Z"
+      "recordedAt": "2026-10-20T04:02:46.116Z"
     },
     "signin sms code over signal": {
       "unstubbed": 0,
