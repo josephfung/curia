@@ -129,12 +129,13 @@ export class VerificationToolHandler implements ToolHandler {
       };
     }
 
-    // The document the code goes into: the top page, or the one same-site or
-    // identity-provider frame inside it that holds the code input. web-browser judges a
+    // The document the code goes into: the top page, or the one frame inside it on the
+    // top page's own domain or a configured identity provider's that holds the code input
+    // (never steered by the model's site argument). web-browser judges a
     // typed code by the field's own frame, so page_domain must name that frame's domain.
     const pageUrl = await codeEntryPageUrl(
       session.page,
-      { site, identityProviderDomains: runtime.service.config.identityProviderDomains },
+      { identityProviderDomains: runtime.service.config.identityProviderDomains },
       ctx.log,
     );
     if (registrableDomain(pageUrl) === null) {

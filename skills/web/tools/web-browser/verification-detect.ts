@@ -109,8 +109,6 @@ async function hasCodeEntry(scope: Page | Frame, log?: ToolContext['log']): Prom
 
 /** Which child frames may stand in for the top page as the code's destination. */
 export interface CodeEntryTrust {
-  /** The site the principal asked about (URL or domain); a same-site frame is trusted. */
-  site: string;
   /** Registrable domains of identity providers a site may embed (verification.identityProviderDomains). */
   identityProviderDomains: readonly string[];
 }
@@ -121,8 +119,10 @@ export interface CodeEntryTrust {
  * own frame, so the two must agree.
  *
  * The top-level page, unless the main frame has no code input and exactly one child frame
- * does whose registrable domain is the site's own or a configured identity provider's (an
- * IdP embedded in the site's page), and which the SSRF frame guard allows. A frame's DOM is
+ * does whose registrable domain is the top page's own or a configured identity provider's
+ * (an IdP embedded in the site's page), and which the SSRF frame guard allows. The anchor
+ * is the live top page, never the model's `site` argument, so a confused or injected
+ * coordinator cannot name a third party into trust. A frame's DOM is
  * supplied by whoever serves it, so a code input alone never makes a frame trusted: a
  * chat or ad iframe, or two competing candidates, leave the top page as the destination,
  * and the guard then refuses a code typed into the stray frame (fail closed). The main
@@ -132,9 +132,9 @@ export async function codeEntryPageUrl(page: Page, trust: CodeEntryTrust, log?: 
   const topUrl = page.url();
   const main = page.mainFrame();
   if (await hasCodeEntry(main, log)) return topUrl;
-  const siteDomain = registrableDomain(trust.site);
+  const topDomain = registrableDomain(topUrl);
   const trusted = new Set(trust.identityProviderDomains);
-  if (siteDomain !== null) trusted.add(siteDomain);
+  if (topDomain !== null) trusted.add(topDomain);
   const candidates: string[] = [];
   for (const frame of page.frames()) {
     if (frame === main) continue;

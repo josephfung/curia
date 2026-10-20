@@ -193,6 +193,16 @@ describe('verification tool', () => {
       if (result.success) expect((result.data as Data).page_domain).toBe('manulife.ca');
     });
 
+    it('never lets the model\'s site argument make a third-party iframe the page_domain', async () => {
+      // A confused or prompt-injected coordinator names the ad network as the site.
+      const runtime = makeRuntime();
+      const browser = makeBrowser('https://www.manulife.ca/signin', [], [fakeFrame('https://ads.example/slot', ['one-time-code-input'])]);
+      await new VerificationToolHandler().execute(
+        makeCtx({ ...input, site: 'ads.example' }, runtime, browser),
+      );
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: 'https://www.manulife.ca/signin' }));
+    });
+
     it('takes a same-site child frame holding the code input', async () => {
       const runtime = makeRuntime();
       const browser = makeBrowser('https://www.manulife.ca/signin', [], [fakeFrame('https://login.manulife.ca/otp', ['one-time-code-input'])]);

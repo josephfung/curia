@@ -54,7 +54,7 @@ export interface VerificationConfig {
   /**
    * Registrable domains of identity providers a site may embed its sign-in in. A child
    * frame holding the code input becomes the verification's page_domain only when it is
-   * on the site's own domain or one of these.
+   * on the sign-in page's own domain (the top page's, never the model's site argument) or one of these.
    */
   identityProviderDomains: string[];
 }

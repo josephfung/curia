@@ -208,8 +208,9 @@ verification:
   codeTtlMinutesAfterClose: 120   # a tracked code value is kept this long after its verification closes
   emailWaitSeconds: 180           # how long to wait for an emailed code before asking the principal
   # Identity providers whose embedded sign-in frame may receive a sign-in code: a child
-  # frame holding the code input becomes the verification's page_domain only on the site's
-  # own domain or one of these. Kept short and well-known on purpose; a deployment extends it
+  # frame holding the code input becomes the verification's page_domain only on the sign-in
+  # page's own domain (the top page's) or one of these. Kept short and well-known on purpose;
+  # a deployment extends it
   # by setting this list (the setting replaces the default, so repeat these entries).
   identityProviderDomains: [b2clogin.com, microsoftonline.com, okta.com, auth0.com, onelogin.com, pingidentity.com, duosecurity.com]
 
