@@ -1551,7 +1551,9 @@ describe('web-browser session_reused signal', () => {
 });
 
 describe('web-browser sign-in verification (#2017)', () => {
-  const REFUSAL = 'refused: that value is a sign-in code for another site and can only be entered there';
+  const REFUSAL =
+    'refused: this page or frame is not the sign-in page this code belongs to, so it was not entered. ' +
+    'Enter it only in the code field of the sign-in page the verification was opened on.';
   const CODE = '482913';
 
   function verification(over: Partial<Verification>): Verification {
@@ -1897,7 +1899,14 @@ describe('web-browser sign-in verification (#2017)', () => {
      * A page on `topUrl` whose only matching field lives in a child frame on `frameUrl`:
      * every top-level locator misses, the child frame's role locator matches.
      */
-    function framedCtx(topUrl: string, frameUrl: string, input: Record<string, unknown>, runtime: VerificationRuntime) {
+    function framedCtx(
+      topUrl: string,
+      frameUrl: string,
+      input: Record<string, unknown>,
+      runtime: VerificationRuntime,
+      // A frame between the top page and the field's frame (the field's parentFrame()).
+      parentUrl?: string,
+    ) {
       const miss = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
       const hit = { count: vi.fn().mockResolvedValue(1), first: vi.fn().mockReturnThis(), isVisible: vi.fn().mockResolvedValue(true) };
       const scope = (url: string, matches: boolean) => ({
@@ -1909,15 +1918,16 @@ describe('web-browser sign-in verification (#2017)', () => {
         getByText: vi.fn().mockReturnValue(miss),
         locator: vi.fn().mockReturnValue(miss),
       });
-      const mainFrame = scope(topUrl, false);
-      const childFrame = scope(frameUrl, true);
+      const mainFrame = { ...scope(topUrl, false), parentFrame: vi.fn().mockReturnValue(null) };
+      const middle = parentUrl === undefined ? null : { ...scope(parentUrl, false), parentFrame: vi.fn().mockReturnValue(mainFrame) };
+      const childFrame = { ...scope(frameUrl, true), parentFrame: vi.fn().mockReturnValue(middle ?? mainFrame) };
       const page = {
         ...makeMockPage('page', vi.fn(), topUrl),
         getByRole: vi.fn().mockReturnValue(miss),
         getByLabel: vi.fn().mockReturnValue(miss),
         getByText: vi.fn().mockReturnValue(miss),
         locator: vi.fn().mockReturnValue(miss),
-        frames: vi.fn().mockReturnValue([mainFrame, childFrame]),
+        frames: vi.fn().mockReturnValue(middle ? [mainFrame, middle, childFrame] : [mainFrame, childFrame]),
         mainFrame: vi.fn().mockReturnValue(mainFrame),
       };
       const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
@@ -1966,6 +1976,26 @@ describe('web-browser sign-in verification (#2017)', () => {
       );
 
       expect(result.success).toBe(true);
+    });
+
+    it('judges an inline (about:srcdoc) field by the nearest website frame above it', async () => {
+      const v = verification({ site: 'manulife.ca', pageDomain: 'manulife.ca' });
+      const { runtime, tracker } = makeRuntime([v]);
+      const register = vi.spyOn(tracker, 'register');
+
+      const ok = await new WebBrowserHandler().execute(
+        framedCtx('https://www.manulife.ca/signin', 'about:srcdoc', { action: 'type', selector: 'code', text: CODE }, runtime),
+      );
+      expect(ok.success).toBe(true);
+      expect(register).toHaveBeenCalledWith('v-1', 'manulife.ca', CODE);
+
+      // An inline frame inside a third-party iframe belongs to that iframe's site.
+      vi.mocked(humanType).mockClear();
+      const refused = await new WebBrowserHandler().execute(
+        framedCtx('https://www.manulife.ca/signin', 'about:srcdoc', { action: 'type', selector: 'code', text: CODE }, runtime, 'https://ads.example/slot'),
+      );
+      expect(refused).toEqual({ success: false, error: REFUSAL });
+      expect(vi.mocked(humanType)).not.toHaveBeenCalled();
     });
 
     it('allows a tracked code into an identity-provider iframe the verification was opened on', async () => {

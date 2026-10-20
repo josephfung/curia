@@ -227,11 +227,13 @@ const VERIFICATION_NUMERIC_KEYS = [
  */
 export const DEFAULT_IDENTITY_PROVIDER_DOMAINS = [
   'b2clogin.com',
+  'ciamlogin.com',
   'microsoftonline.com',
   'okta.com',
   'auth0.com',
   'onelogin.com',
   'pingidentity.com',
+  'pingone.com',
   'duosecurity.com',
 ] as const;
 

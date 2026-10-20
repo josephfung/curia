@@ -212,7 +212,7 @@ verification:
   # page's own domain (the top page's) or one of these. Kept short and well-known on purpose;
   # a deployment extends it
   # by setting this list (the setting replaces the default, so repeat these entries).
-  identityProviderDomains: [b2clogin.com, microsoftonline.com, okta.com, auth0.com, onelogin.com, pingidentity.com, duosecurity.com]
+  identityProviderDomains: [b2clogin.com, ciamlogin.com, microsoftonline.com, okta.com, auth0.com, onelogin.com, pingidentity.com, pingone.com, duosecurity.com]
 
 # Meeting debrief agent configuration (spec §17-meeting-debrief.md).
 # Controls the proactive debrief prompt sent after external meetings end.

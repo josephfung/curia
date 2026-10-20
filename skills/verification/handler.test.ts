@@ -5,6 +5,7 @@ import type { ToolContext } from '../../src/skills/types.js';
 import type { Verification } from '../../src/verification/types.js';
 import type { VerificationRuntime } from '../../src/verification/index.js';
 import { registrableDomain } from '../../src/verification/domain.js';
+import { DEFAULT_IDENTITY_PROVIDER_DOMAINS } from '../../src/config.js';
 
 const silentLog = pino({ level: 'silent' });
 const SESSION = 'sess-1';
@@ -35,7 +36,7 @@ function makeRuntime(overrides: Partial<VerificationRuntime> = {}) {
     service: {
       config: {
         emailWaitSeconds: 180,
-        identityProviderDomains: ['b2clogin.com', 'microsoftonline.com', 'okta.com', 'auth0.com', 'onelogin.com', 'pingidentity.com', 'duosecurity.com'],
+        identityProviderDomains: [...DEFAULT_IDENTITY_PROVIDER_DOMAINS],
       },
     },
     open: vi.fn(async (input: { site: string; pageDomain: string; delivery: Verification['delivery'] }) => ({

@@ -99,7 +99,9 @@ const MAX_BATCH_ACTIONS = 50;
 // Browser destination guard (#2017, design §5). The execution layer exempts web-browser
 // from its sign-in-code scrub so a code can actually be typed; this is the refusal when a
 // tracked code is headed anywhere but its verification's page domain. Never echoes the value.
-const TRACKED_CODE_REFUSAL = 'refused: that value is a sign-in code for another site and can only be entered there';
+const TRACKED_CODE_REFUSAL =
+  'refused: this page or frame is not the sign-in page this code belongs to, so it was not entered. ' +
+  'Enter it only in the code field of the sign-in page the verification was opened on.';
 
 /** One step in a batched call — the same per-action fields as a single invocation, minus
  *  the call-level fields (session_id/incognito/block_ads/screenshot), which apply to the
@@ -657,7 +659,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // chat or ad widget) rather than the top page (#2017). Read before typing, so the
       // tracking below keys on where the code went even if Enter navigates.
       const { locator: typeTarget, scope: typeScope } = await resolveLocatorWithScope(page, selector, ctx.log);
-      const typedOnUrl = typeScope.url();
+      const typedOnUrl = documentSiteUrl(page, typeScope);
 
       let fillValue: string;
       if (hasSecretRef) {
@@ -934,6 +936,18 @@ async function isLikelyEmpty(page: Page, log: ToolContext['log']): Promise<boole
  */
 async function resolveLocator(page: Page, selector: string, log: ToolContext['log']): Promise<Locator> {
   return (await resolveLocatorWithScope(page, selector, log)).locator;
+}
+
+/**
+ * The website URL a field's document belongs to (#2017): the scope's own URL, or, for an
+ * inline frame with no site of its own (about:blank, about:srcdoc, data:, blob:), the
+ * nearest http(s) frame above it, whose content it is. The top page's URL when none is.
+ */
+function documentSiteUrl(page: Page, scope: Page | Frame): string {
+  if (!('parentFrame' in scope)) return scope.url();
+  let frame: Frame | null = scope;
+  while (frame && !/^https?:/i.test(frame.url())) frame = frame.parentFrame();
+  return frame ? frame.url() : page.url();
 }
 
 /** A resolved locator and the document it lives in: the page (main frame) or one child frame. */

@@ -229,7 +229,7 @@ verification:
   recentWindowMinutes: 120        # a closed verification still counts as recent, and still tracks codes, for this long
   codeTtlMinutesAfterClose: 120   # a tracked code value is scrubbed this long after its verification closes
   emailWaitSeconds: 180           # how long ceo-inbox waits for an emailed code before the coordinator asks the principal
-  identityProviderDomains: [b2clogin.com, microsoftonline.com, okta.com, auth0.com, onelogin.com, pingidentity.com, duosecurity.com]
+  identityProviderDomains: [b2clogin.com, ciamlogin.com, microsoftonline.com, okta.com, auth0.com, onelogin.com, pingidentity.com, pingone.com, duosecurity.com]
 ```
 
 `askChannelOrder` takes `signal`, `sms`, `slack` and `email`, and the configured order alone decides where to ask. The channel the errand arrived on plays no part, because the principal often hands things over by email or voice to be done later. The four numbers must be positive integers. A bad value fails at startup.

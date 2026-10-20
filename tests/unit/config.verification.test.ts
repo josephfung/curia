@@ -45,7 +45,8 @@ describe('resolveVerificationConfig', () => {
 
   it('defaults identityProviderDomains to a short list of well-known identity providers', () => {
     expect(resolveVerificationConfig(undefined).identityProviderDomains).toEqual([
-      'b2clogin.com', 'microsoftonline.com', 'okta.com', 'auth0.com', 'onelogin.com', 'pingidentity.com', 'duosecurity.com',
+      'b2clogin.com', 'ciamlogin.com', 'microsoftonline.com', 'okta.com', 'auth0.com', 'onelogin.com',
+      'pingidentity.com', 'pingone.com', 'duosecurity.com',
     ]);
   });
 
