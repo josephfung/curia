@@ -52,6 +52,10 @@ export const BACKFILL_BEFORE_KEY = 'sent_observe.backfill_before';
  *  watermark jumps to backfill_target + 1 only once the drain reaches its oldest sub-window, so the
  *  watermark never sits above an un-drained message. */
 export const BACKFILL_TARGET_KEY = 'sent_observe.backfill_target';
+/** When the current run of consecutive watermark holds began (ms epoch), or EPOCH when the last
+ *  run advanced (#2191). The watermark itself can't measure a hold: it stays fixed on idle days
+ *  and for the whole of a backfill drain, by design. */
+export const HELD_SINCE_KEY = 'sent_observe.held_since';
 export const PENDING_DIFFS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-diffs.md`;
 export const PENDING_DIFFS_TYPE = 'voice-pending-diffs';
 
@@ -780,6 +784,12 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     let watermarkAdvancedTo: number | null = null;
     // True after this run if a drain is still underway (fed to the caller/logs).
     let backfillStillActive = backfillActive;
+    const heldSinceRaw = await store.get(CONFIG_NAMESPACE, HELD_SINCE_KEY);
+    const heldSinceMs = heldSinceRaw && heldSinceRaw !== EPOCH ? Number(heldSinceRaw) : Number.NaN;
+    if (advanceOk && Number.isFinite(heldSinceMs)) {
+      // A clean run ends the hold. A soft-rejected clear only risks one early escalation later.
+      await store.set(CONFIG_NAMESPACE, HELD_SINCE_KEY, EPOCH);
+    }
     if (advanceOk) {
       if (backfillActive) {
         if (messages.length > 0 && truncated) {
@@ -876,7 +886,11 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
             : 'ceo-inbox-sent-observe: guard write failed — holding watermark for retry';
       // One held run is routine (it retries tomorrow); a watermark held for days is a stuck
       // observer. #2191 sat at warn for a month, so escalate once the hold outlives a few runs.
-      const heldDays = watermark > 0 ? (nowMs / 1000 - watermark) / 86_400 : 0;
+      // Measured from the first held run, not from the watermark (see HELD_SINCE_KEY).
+      if (!Number.isFinite(heldSinceMs)) {
+        await store.set(CONFIG_NAMESPACE, HELD_SINCE_KEY, String(nowMs));
+      }
+      const heldDays = Number.isFinite(heldSinceMs) ? (nowMs - heldSinceMs) / 86_400_000 : 0;
       const holdFields = {
         path: PENDING_DIFFS_PATH,
         evidencePersisted,

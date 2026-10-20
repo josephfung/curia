@@ -7,6 +7,7 @@ import {
   PENDING_DIFFS_PATH,
   BACKFILL_BEFORE_KEY,
   BACKFILL_TARGET_KEY,
+  HELD_SINCE_KEY,
   MAX_JUDGE_PAIRS,
   JUDGE_CHUNK_SIZE,
 } from './handler.js';
@@ -1515,11 +1516,12 @@ describe('CeoInboxSentObserveHandler', () => {
           ? { ok: true as const, text: '[{"source_message_id":"src-8","same_deci' }
           : { ok: true as const, text: verdictsFor(prompt) },
       );
+      const nowMs = 1_720_000_000_000 + 5 * 86_400_000;
       const ctx = buildCtx({
-        // Watermark five days behind "now": a hold this old must log at error, not warn.
-        seed: { [WATERMARK_KEY]: '1720000000' },
+        // Held for five days already: this hold must log at error, not warn.
+        seed: { [WATERMARK_KEY]: '1720000000', [HELD_SINCE_KEY]: String(nowMs - 5 * 86_400_000) },
         force: true,
-        nowMs: 1_720_000_000_000 + 5 * 86_400_000,
+        nowMs,
         infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
         withActionLogRepo: true,
         snapshots,
@@ -1583,6 +1585,76 @@ describe('CeoInboxSentObserveHandler', () => {
       expect(data.watermark_advanced_to).toBeNull();
       expect(data.shadow_deferred).toBe(1);
       expect(data.watermark_held).toBe(true);
+    });
+  });
+
+  describe('#2191 hold escalation', () => {
+    // One send on thread-1 answering shadow src-1; `judgeOk` decides whether the run holds.
+    function setupOneShadow(judgeOk: boolean): {
+      snapshots: NonNullable<NonNullable<Parameters<typeof buildCtx>[0]>['snapshots']>;
+      infraLlm: InfraLlm;
+    } {
+      const send = {
+        id: 'msg-sent-1', thread_id: 'thread-1', subject: 'Re: Hello',
+        from: [{ email: 'ceo@example.com' }], to: [{ email: 'alice@example.com' }], cc: [],
+        snippet: 'Thanks Alice', date: 1_720_000_500, unread: false, folders: ['SENT'], attachments: [],
+      };
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+        const u = String(url);
+        if (u.includes('/messages/msg-sent-1')) {
+          return new Response(JSON.stringify({ data: { ...send, body: '<p>Thanks</p>', bcc: [], labels: [] } }), { status: 200 });
+        }
+        if (u.includes('/messages?')) return new Response(JSON.stringify({ data: [send] }), { status: 200 });
+        throw new Error(`unexpected ${u}`);
+      });
+      const extract = vi.fn(async () =>
+        judgeOk
+          ? { ok: true as const, text: '[{"source_message_id":"src-1","same_decision":true,"reason":"same"}]' }
+          : { ok: false as const, error: 'llm unavailable' },
+      );
+      return {
+        infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+        snapshots: [{
+          path: shadowDraftPath('src-1'),
+          type: SHADOW_DOC_TYPE,
+          frontmatter: { source_message_id: 'src-1', thread_id: 'thread-1', subject: 'Re: Hello', recipients: [], created_at: '2024-07-03T00:00:00.000Z' },
+          body: 'shadow',
+        }],
+      };
+    }
+
+    // The watermark stays fixed on idle days and through a drain, so an old watermark alone is
+    // not a long hold. The first held run starts the clock and logs at warn.
+    it('logs a first hold at warn even when the watermark is old, and starts the clock', async () => {
+      const { snapshots, infraLlm } = setupOneShadow(false);
+      const nowMs = 1_720_000_000_000 + 10 * 86_400_000;
+      const ctx = buildCtx({
+        seed: { [WATERMARK_KEY]: '1720000000' },
+        force: true, nowMs, infraLlm, withActionLogRepo: true, snapshots, tasks: [],
+      });
+
+      await handler.execute(ctx);
+
+      expect(ctx.log.error).not.toHaveBeenCalled();
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ heldDays: 0 }),
+        expect.stringContaining('shadow reconcile failed'),
+      );
+      expect(ctx.__mem.__values.get(HELD_SINCE_KEY)).toBe(String(nowMs));
+    });
+
+    it('clears the hold clock on a run that advances', async () => {
+      const { snapshots, infraLlm } = setupOneShadow(true);
+      const nowMs = 1_720_100_000_000;
+      const ctx = buildCtx({
+        seed: { [HELD_SINCE_KEY]: String(nowMs - 2 * 86_400_000) },
+        force: true, nowMs, infraLlm, withActionLogRepo: true, snapshots, tasks: [],
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect((result as { data: { watermark_held: boolean } }).data.watermark_held).toBe(false);
+      expect(ctx.__mem.__values.get(HELD_SINCE_KEY)).toBe('0');
     });
   });
 
