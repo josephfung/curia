@@ -223,12 +223,15 @@ export class ActionLogRepo {
    * must not count toward `minScoredActions`.
    */
   async countScored(): Promise<number> {
-    // outcome <> 'expired': expired approvals carry no signal (#2159 Phase 3), including rows
-    // scored before the rule changed.
+    // Excluded outcomes carry no evidence about actions Curia took:
+    // - 'expired': expired approvals carry no signal (#2159 Phase 3), including rows scored
+    //   before the rule changed.
+    // - 'shadow_evaluated': counterfactual shadow drafts, drafted only for punted messages
+    //   (#2191, ADR-029). They stay in the table for checkups.
     const result = await this.pool.query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM autonomy_action_log
        WHERE scored_by IS NOT NULL
-         AND outcome <> 'expired'
+         AND outcome NOT IN ('expired', 'shadow_evaluated')
          AND (competence_flag IS NOT NULL
            OR commitment_flag IS NOT NULL
            OR compatibility IS NOT NULL)`,
@@ -237,15 +240,20 @@ export class ActionLogRepo {
   }
 
   /**
-   * Compute the competence error rate among the most recent `window` scored rows.
-   * Returns null when no row in the window carries a competence flag: that is "no
-   * evidence", not "no errors", and the scoring pass blocks increases on it (#2159).
+   * Compute the competence error rate among the most recent `window` scored rows that are
+   * no older than `maxAgeDays`. Returns null when no row in the window carries a competence
+   * flag: that is "no evidence", not "no errors", and the scoring pass blocks increases on
+   * it (#2159).
    *
    * A row is counted as an "error" when competence_flag = 0 (Curia made a mistake).
    * Rows with competence_flag = 1 are successes; null rows are excluded from the window
    * by the WHERE clause (competence_flag IS NOT NULL).
+   *
+   * The age bound matters because competence rows are sparse: a count-only window reached
+   * back five months in prod and kept old failures blocking increases (#2191). Shadow rows
+   * are left out for the same reason as in countScored.
    */
-  async getRecentCompetenceErrorRate(window: number): Promise<number | null> {
+  async getRecentCompetenceErrorRate(window: number, maxAgeDays: number): Promise<number | null> {
     const result = await this.pool.query<{ total: string; errors: string }>(
       `SELECT
          COUNT(*) AS total,
@@ -254,10 +262,12 @@ export class ActionLogRepo {
          SELECT competence_flag
          FROM autonomy_action_log
          WHERE scored_by IS NOT NULL AND competence_flag IS NOT NULL
+           AND outcome <> 'shadow_evaluated'
+           AND created_at > now() - make_interval(days => $2)
          ORDER BY created_at DESC
          LIMIT $1
        ) recent`,
-      [window],
+      [window, maxAgeDays],
     );
     const total = parseInt(result.rows[0]!.total, 10);
     if (total === 0) return null;
@@ -274,12 +284,12 @@ export class ActionLogRepo {
    * must not push real evidence out of the window.
    */
   async findAllScored(limit = 500): Promise<ActionLogRow[]> {
-    // outcome <> 'expired': expired approvals carry no signal (#2159 Phase 3), including rows
-    // scored before the rule changed.
+    // Same excluded outcomes as countScored: expired approvals (#2159 Phase 3) and
+    // counterfactual shadow drafts (#2191).
     const result = await this.pool.query(
       `SELECT * FROM autonomy_action_log
        WHERE scored_by IS NOT NULL
-         AND outcome <> 'expired'
+         AND outcome NOT IN ('expired', 'shadow_evaluated')
          AND (competence_flag IS NOT NULL
            OR commitment_flag IS NOT NULL
            OR compatibility IS NOT NULL)

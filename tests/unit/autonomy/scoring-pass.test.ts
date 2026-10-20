@@ -92,6 +92,7 @@ const defaultConfig = {
   halfLifeDays: 30,
   ceoCooldownDays: 7,
   errorRateThreshold: 0.20,
+  errorRateWindowDays: 90,
   unparseableAfterDays: 3,
 };
 
@@ -547,5 +548,43 @@ describe('AutonomyScoringPass', () => {
 
       expect(capability).toBeCloseTo(0.5, 9);
     });
+
+    // #2191: shadow drafts are counterfactual (drafted only for punted messages), not evidence
+    // about actions taken. Mixed set for the same reason as the expired test above.
+    it('leaves a shadow disagreement out of the capability score', async () => {
+      const rows = [
+        makeRow({ id: 1, outcome: 'success', competenceFlag: 1, commitmentFlag: 1, compatibility: 1, scoredBy: 'llm-judge' }),
+        makeRow({ id: 2, outcome: 'shadow_evaluated', competenceFlag: 0, scoredBy: 'shadow-reconciler' }),
+      ];
+
+      const capability = await capabilityFor(rows);
+
+      // Any weight on the shadow row pulls competence below 1.0.
+      expect(capability).not.toBeNull();
+      expect(Math.abs(capability! - 1.0)).toBeLessThan(1e-9);
+    });
+  });
+
+  // #2191: the guard's window is bounded by age as well as count.
+  it('passes the configured age bound to the error-rate window', async () => {
+    const oldDate = new Date(Date.now() - 30 * 86_400_000);
+    const scoredRows = Array.from({ length: 35 }, (_, i) =>
+      makeRow({ id: i + 1, competenceFlag: 1, commitmentFlag: 1, compatibility: 1, scoredBy: 'llm-judge', createdAt: new Date(Date.now() - i * 86_400_000) }),
+    );
+    const getRecentCompetenceErrorRate = vi.fn().mockResolvedValue(0);
+    const repo = makeRepo({
+      countScored: vi.fn().mockResolvedValue(35),
+      getRecentCompetenceErrorRate,
+      findAllScored: vi.fn().mockResolvedValue(scoredRows),
+    });
+    const svc = makeAutonomyService(75, 'system', oldDate);
+    const pass = new AutonomyScoringPass(repo, svc, makeLlmProvider(), createSilentLogger(), {
+      ...defaultConfig,
+      errorRateWindowDays: 45,
+    });
+
+    await pass.run();
+
+    expect(getRecentCompetenceErrorRate).toHaveBeenCalledWith(30, 45);
   });
 });

@@ -25,6 +25,8 @@ export interface ScoringPassConfig {
   halfLifeDays: number;
   ceoCooldownDays: number;
   errorRateThreshold: number;
+  /** Oldest row, in days, the error-rate window may reach (#2191). */
+  errorRateWindowDays: number;
   /** Days an unscored row may retry a parse failure before it is dead-lettered. */
   unparseableAfterDays: number;
 }
@@ -146,7 +148,7 @@ export class AutonomyScoringPass {
     // Step 6: Guard — block score increases when the recent competence error rate is high.
     // A high error rate means Curia has been making mistakes; don't increase autonomy yet.
     if (delta > 0) {
-      const errorRate = await this.repo.getRecentCompetenceErrorRate(30);
+      const errorRate = await this.repo.getRecentCompetenceErrorRate(30, this.config.errorRateWindowDays);
       // No recent competence evidence at all is not a clean record. Since #2159 coordinator-
       // resolved approvals carry no flags, so the window can empty out; an increase then
       // needs evidence from principal decisions or judged actions first.
@@ -311,6 +313,10 @@ Respond with ONLY a JSON object: {"competence_flag": 0|1, "commitment_flag": 0|1
     for (const row of rows) {
       // rows scored before #2159 Phase 3 still carry flags
       if (row.outcome === 'expired') continue;
+      // Shadow drafts are counterfactual and drafted only for messages Curia chose to punt, so
+      // they are not evidence about actions taken (#2191, ADR-029). findAllScored already filters
+      // them; this keeps the formula honest for any other caller.
+      if (row.outcome === 'shadow_evaluated') continue;
 
       const daysSince = (now - row.createdAt.getTime()) / 86_400_000;
       // Exponential decay with a configurable half-life. After halfLifeDays,

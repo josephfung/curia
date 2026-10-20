@@ -368,6 +368,7 @@ dreaming:
     halfLifeDays: 30              # time-decay half-life for weighting
     ceoCooldownDays: 7            # days after CEO set-autonomy before auto-adjust resumes
     errorRateThreshold: 0.20      # competence error rate that blocks score increases
+    errorRateWindowDays: 90       # that rate covers the last 30 competence rows, none older than this
     unparseableAfterDays: 3       # parse failures retry this many days, then dead-letter
 
 # Sensitivity classification rules for KG nodes (issue #200).

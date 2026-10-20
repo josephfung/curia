@@ -364,7 +364,7 @@ describe('ActionLogRepo', () => {
     it('returns the error rate from the last N scored rows', async () => {
       const { pool } = makePool([{ total: '30', errors: '8' }]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
-      const rate = await repo.getRecentCompetenceErrorRate(30);
+      const rate = await repo.getRecentCompetenceErrorRate(30, 90);
       expect(rate).toBeCloseTo(8 / 30);
     });
 
@@ -372,8 +372,23 @@ describe('ActionLogRepo', () => {
     it('returns null when no scored rows exist', async () => {
       const { pool } = makePool([{ total: '0', errors: '0' }]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
-      const rate = await repo.getRecentCompetenceErrorRate(30);
+      const rate = await repo.getRecentCompetenceErrorRate(30, 90);
       expect(rate).toBeNull();
+    });
+
+    // #2191: the window is bounded by age as well as count, and shadow rows are not evidence.
+    // Both filters must sit inside the subquery, before the LIMIT, or old and shadow rows would
+    // still take window slots.
+    it('bounds the window by age and leaves out shadow rows, before the limit applies', async () => {
+      const { pool, queries } = makePool([{ total: '0', errors: '0' }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.getRecentCompetenceErrorRate(30, 90);
+      const sql = queries[0]!.sql;
+      expect(sql).toContain("outcome <> 'shadow_evaluated'");
+      expect(sql).toContain('make_interval(days => $2)');
+      expect(sql.indexOf('shadow_evaluated')).toBeLessThan(sql.indexOf('LIMIT'));
+      expect(sql.indexOf('make_interval')).toBeLessThan(sql.indexOf('LIMIT'));
+      expect(queries[0]!.params).toEqual([30, 90]);
     });
   });
 
@@ -1137,13 +1152,14 @@ describe('ActionLogRepo', () => {
       expect(await repo.recordPrincipalVerdict(8, true, null)).toBe(false);
     });
 
-    it('countScored and findAllScored leave out expired rows', async () => {
+    // #2191: shadow rows are counterfactual and leave the evidence set alongside expired rows.
+    it('countScored and findAllScored leave out expired and shadow rows', async () => {
       const { pool, queries } = makeSequentialPool([[{ count: '0' }], []]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
       await repo.countScored();
       await repo.findAllScored();
-      expect(queries[0]!.sql).toContain("outcome <> 'expired'");
-      expect(queries[1]!.sql).toContain("outcome <> 'expired'");
+      expect(queries[0]!.sql).toContain("outcome NOT IN ('expired', 'shadow_evaluated')");
+      expect(queries[1]!.sql).toContain("outcome NOT IN ('expired', 'shadow_evaluated')");
     });
 
     it('findTerminalBetween reads newest first with a default limit of 1000', async () => {
