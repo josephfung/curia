@@ -635,25 +635,25 @@
       "unstubbed": 0,
       "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T04:08:04.546Z"
+      "recordedAt": "2026-10-20T13:40:59.805Z"
     },
     "signin email code from inbox": {
       "unstubbed": 0,
-      "runs": 3,
+      "runs": 2,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T03:46:51.651Z"
+      "recordedAt": "2026-10-20T13:39:20.723Z"
     },
     "signin session gone": {
       "unstubbed": 0,
-      "runs": 3,
+      "runs": 2,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T04:02:46.116Z"
+      "recordedAt": "2026-10-20T13:41:52.048Z"
     },
     "signin sms code over signal": {
       "unstubbed": 0,
-      "runs": 5,
+      "runs": 2,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-20T03:40:13.223Z"
+      "recordedAt": "2026-10-20T13:37:35.219Z"
     }
   }
 }
