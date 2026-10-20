@@ -262,8 +262,9 @@ export class EmailSendHandler implements ToolHandler {
         return { success: false, error: result.blockedReason ?? 'Email send failed' };
       }
 
-      // Register outbound context entry (best-effort, always fires).
-      await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
+      // Register outbound context entry (best-effort).
+      // A relay held for the digest never reached the principal: nothing for a reply to bind to (#1320).
+      if (!result.deferredToDigest) await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
         channelId: 'email',
         content: body,
         agentId: ctx.agentId ?? 'coordinator',

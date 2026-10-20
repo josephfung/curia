@@ -111,7 +111,9 @@ export class SmsSendHandler implements ToolHandler {
         };
       }
 
-      await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
+      // A relay held for the digest never reached the principal: nothing for a reply to bind to (#1320).
+
+      if (!result.deferredToDigest) await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
         channelId: 'sms',
         content: message,
         agentId: ctx.agentId ?? 'coordinator',

@@ -169,13 +169,17 @@ describe('slack-send relay budget (#1320)', () => {
 
   it('passes the task originator to the gateway and surfaces a relay-budget deferral', async () => {
     const send = vi.fn().mockResolvedValue({ success: true, deferredToDigest: true });
+    const outboundContext = { register: vi.fn().mockResolvedValue('entry-1'), release: vi.fn(), defaultExpiryHours: 6, explicitExpiryHours: 24, defaultExpiryHoursFor: () => 6 };
     const result = await new SlackSendHandler().execute(makeCtx({
       input: { recipient: 'principal', message: 'Hello' },
       outboundGateway: { send, resolveRecipientReference } as never,
       taskMetadata: OUTSIDER,
+      outboundContext: outboundContext as never,
     }));
     expect(send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ originator: OUTSIDER.originator }));
     expect(result.success).toBe(true);
+    // Nothing reached the principal, so no reply should bind to it.
+    expect(outboundContext.register).not.toHaveBeenCalled();
     if (result.success) expect(result.data).toMatchObject({ deferred_to_digest: true, note: expect.stringMatching(/digest/) });
   });
 });
