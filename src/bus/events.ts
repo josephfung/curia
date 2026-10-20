@@ -3,6 +3,7 @@ import type { ErrorType } from '../errors/types.js';
 import type { ContactTier, DedupConfidence, SystemRole, TrustLevel } from '../contacts/types.js';
 import type { Sensitivity, NodeType } from '../memory/types.js';
 import type { ActionRisk } from '../skills/types.js';
+import type { ReasoningEffort } from '../agents/llm/sampling-options.js';
 
 // -- Base event shape --
 // Every event on the bus shares these fields; parentEventId forms the causal chain.
@@ -663,6 +664,22 @@ interface LlmCallPayload {
    * cannot become ambiguous in audit_log.
    */
   temperature?: number | null;
+  /**
+   * Reasoning tokens the provider reported, a subset of `outputTokens`.
+   * `null` when the provider reported no count. Optional for test fixtures,
+   * like `temperature` (ADR-048).
+   */
+  reasoningTokens?: number | null;
+  /**
+   * Reasoning effort sent on the provider request. `null` means the request
+   * sent none, so the provider default applied.
+   */
+  reasoningEffort?: ReasoningEffort | null;
+  /**
+   * Upstream endpoint that served an OpenRouter call (OpenRouter's `provider`
+   * field, e.g. 'DeepSeek' or 'CoreWeave'). `null` for other providers.
+   */
+  upstreamProvider?: string | null;
 }
 
 // ModelFallbackEngagedPayload — emitted by the agent runtime when the primary

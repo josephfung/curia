@@ -17,6 +17,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Sign-in details with secrets** — `secret-capture-request` stores login URL and username; `list-user-secrets` returns them. (#2201)
 - **`listUserSecretDetails` capability** — new `ToolContext` field returning non-secret sign-in details per `user.*` key. (#2201)
+- **`llm.call` reasoning fields** — **public API:** optional `reasoningTokens`, `reasoningEffort`, `upstreamProvider` on the bus event. (#2044)
+- **Suite reasoning metrics** — smoke and scenarios print reasoning tokens and latency p50/p90 per agent. (#2044)
 - **Style scenarios** — seven cases score reply length, filler and register under a fixed office identity. (#2143)
 - **Report queue** — new `principal.report` bus event and `reports` tools collect digest items. (#2159)
 - **Weekly fallback digest** — sent when queued items go a week unreported. (#2159)

@@ -4,6 +4,13 @@
 
 import type { Logger } from '../../logger.js';
 
+/**
+ * Provider-neutral reasoning effort (ADR-048). Each provider maps it onto the
+ * model's own control. `none` asks for no reasoning where the model can turn
+ * it off cleanly.
+ */
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'max';
+
 /** Pure parse of `options.temperature` — no logging. */
 export type ParsedTemperature =
   | { kind: 'unset' }

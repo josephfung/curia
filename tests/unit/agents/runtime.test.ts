@@ -8079,6 +8079,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     // Agent calls send no temperature today — record the omission (#2038).
     expect(narrationCall.payload.temperature).toBeNull();
     expect(llmCalls[0]!.payload.temperature).toBeNull();
+    // No reasoning setting reaches agent calls yet, and the mock reports no
+    // reasoning or upstream endpoint (ADR-048 §5).
+    expect(narrationCall.payload).toMatchObject({ reasoningTokens: null, reasoningEffort: null, upstreamProvider: null });
     expect(narrationCall.archive?.response).toEqual({ type: 'text', content: narration });
     const promptMessages = (narrationCall.archive?.prompt as { messages: Array<{ role: string; content: unknown }> }).messages;
     expect(String(promptMessages.at(-1)!.content)).toMatch(/note_for_principal/);
@@ -8100,6 +8103,8 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       reasoning: 'The sender asked about venues.',
       reasoningTokens: 12,
     });
+    // The count is also on the event itself, so it survives archive pruning (ADR-048 §5).
+    expect(llmCalls[0]!.payload.reasoningTokens).toBe(12);
   });
 
   it('drops a model draft that leaks the registry id (#1860)', async () => {

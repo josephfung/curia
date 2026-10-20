@@ -29,6 +29,7 @@ import { createLlmCall, createOutboundJudge } from '../bus/events.js';
 import type { OutboundJudgeOutcome, OutboundJudgeReasonCode } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import { sentTemperature } from '../agents/llm/sampling-options.js';
+import { llmCallReasoningFields } from '../agents/llm/llm-call-reasoning.js';
 import type { FilterFinding, FilterRecipient } from './outbound-filter.js';
 import { JUDGE_SYSTEM_PROMPT, buildJudgeUserPrompt } from './outbound-judge-prompt.js';
 
@@ -277,6 +278,7 @@ export class OutboundLlmJudge implements OutboundJudge {
           { temperature: JUDGE_TEMPERATURE },
           this.modelRegistry.rejectsSamplingParams(provenance.requestedModel),
         ),
+        ...llmCallReasoningFields(usage, provenance),
         parentEventId: 'system',
         archive: {
           prompt: {

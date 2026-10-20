@@ -107,6 +107,12 @@ export interface LLMCallProvenance {
   actualModel: string;
   /** Anthropic: response.id (msg_xxx) — shown in Anthropic's console for support correlation. */
   providerRequestId: string;
+  /**
+   * OpenRouter only: the upstream endpoint that served the call (the response's
+   * top-level `provider`). Reasoning differs by endpoint at the same effort, so
+   * measurements are comparable only within one (ADR-048).
+   */
+  upstreamProvider?: string;
 }
 
 // Import and re-export ToolDefinition from the canonical location in skills/types.ts

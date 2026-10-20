@@ -614,3 +614,56 @@ describe('AnthropicProvider — stream', () => {
     expect(events.at(-1)).toMatchObject({ type: 'error' });
   });
 });
+
+describe('AnthropicProvider — reasoning tokens (ADR-048 §5)', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+    mockStream.mockReset();
+  });
+
+  const withThinkingTokens = (thinkingTokens: number | null) => ({
+    ...makeTextResponse(),
+    usage: {
+      input_tokens: 10,
+      output_tokens: 50,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      output_tokens_details: thinkingTokens === null ? null : { thinking_tokens: thinkingTokens },
+    },
+  });
+
+  it('reports output_tokens_details.thinking_tokens as reasoningTokens', async () => {
+    mockCreate.mockResolvedValue(withThinkingTokens(37));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }], model: 'claude-haiku-5-5' });
+    expect(result.type).toBe('text');
+    if (result.type !== 'text') return;
+    expect(result.usage.reasoningTokens).toBe(37);
+    expect(result.usage.outputTokens).toBe(50);
+  });
+
+  it('reports a zero count as 0', async () => {
+    mockCreate.mockResolvedValue(withThinkingTokens(0));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }], model: 'claude-haiku-5-5' });
+    expect(result.type === 'text' && result.usage.reasoningTokens).toBe(0);
+  });
+
+  it('leaves reasoningTokens unset when the API omits output_tokens_details', async () => {
+    mockCreate.mockResolvedValue(withThinkingTokens(null));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }], model: 'claude-sonnet-4-6' });
+    expect(result.type === 'text' && 'reasoningTokens' in result.usage).toBe(false);
+  });
+
+  it('reports thinking tokens from a streamed finalMessage()', async () => {
+    mockStream.mockReturnValue(makeStream([], withThinkingTokens(21)));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hi' }],
+      model: 'claude-haiku-5-5',
+    }));
+    const end = events.at(-1);
+    expect(end?.type === 'message_end' && end.usage.reasoningTokens).toBe(21);
+  });
+});

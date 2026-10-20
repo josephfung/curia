@@ -96,6 +96,16 @@ function extractOpenRouterProviderError(
   return { providerName, detail };
 }
 
+/**
+ * OpenRouter's top-level `provider` field names the upstream endpoint that
+ * served the call (e.g. 'DeepSeek', 'CoreWeave'). The OpenAI SDK types do not
+ * declare it, so read it defensively from the response body or a stream chunk.
+ */
+export function upstreamProviderFrom(carrier: object): string | undefined {
+  const value = (carrier as { provider?: unknown }).provider;
+  return typeof value === 'string' && value ? value : undefined;
+}
+
 /** Non-negative integer count, or 0 for anything else (absent, null, malformed). */
 function tokenCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -446,10 +456,12 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   private provenanceFromCompletion(response: ChatCompletion, requestedModel: string): LLMCallProvenance {
+    const upstreamProvider = upstreamProviderFrom(response);
     return {
       requestedModel,
       actualModel: response.model,
       providerRequestId: response.id,
+      ...(upstreamProvider !== undefined ? { upstreamProvider } : {}),
     };
   }
 
@@ -647,6 +659,7 @@ export class OpenRouterProvider implements LLMProvider {
       };
       let providerRequestId = '';
       let actualModel = model;
+      let upstreamProvider: string | undefined;
       let seenChunk = false;
       let finishReason: string | null = null;
       const toolCallDeltas = new Map<number, PendingToolCall>();
@@ -657,6 +670,7 @@ export class OpenRouterProvider implements LLMProvider {
         seenChunk = true;
         providerRequestId = chunk.id || providerRequestId;
         actualModel = chunk.model || actualModel;
+        upstreamProvider = upstreamProviderFrom(chunk) ?? upstreamProvider;
 
         if (chunk.usage) {
           usage = usageFromOpenRouter(chunk.usage);
@@ -713,6 +727,7 @@ export class OpenRouterProvider implements LLMProvider {
         requestedModel: model,
         actualModel,
         providerRequestId,
+        ...(upstreamProvider !== undefined ? { upstreamProvider } : {}),
       };
       const reasoning = reasoningFieldsFromParts(
         reasoningDirect,

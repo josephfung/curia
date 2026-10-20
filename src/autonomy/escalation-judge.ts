@@ -23,6 +23,7 @@ import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import { sentTemperature } from '../agents/llm/sampling-options.js';
+import { llmCallReasoningFields } from '../agents/llm/llm-call-reasoning.js';
 import type { ContactTier } from '../contacts/types.js';
 import {
   applyDisclosurePolicy,
@@ -371,6 +372,7 @@ export class EscalationJudge {
           { temperature: JUDGE_TEMPERATURE },
           this.modelRegistry.rejectsSamplingParams(result.provenance.requestedModel),
         ),
+        ...llmCallReasoningFields(result.usage, result.provenance),
         parentEventId: 'system',
         archive: {
           prompt: {

@@ -18,6 +18,7 @@ import type { ModelRegistry } from '../agents/llm/model-registry.js';
 import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
+import { llmCallReasoningFields } from '../agents/llm/llm-call-reasoning.js';
 import type { Logger } from '../logger.js';
 
 /**
@@ -207,6 +208,7 @@ export class InfraLlmService {
         responseHash,
         // Infra extract calls do not set temperature — record the omission.
         temperature: null,
+        ...llmCallReasoningFields(usage, provenance),
         parentEventId: scope.taskEventId ?? 'system',
         archive: {
           prompt: image

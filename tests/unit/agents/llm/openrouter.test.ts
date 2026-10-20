@@ -5,7 +5,7 @@
 // vi.mock to stub the SDK, and createSilentLogger for silent logging.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OpenRouterProvider, usageFromOpenRouter } from '../../../../src/agents/llm/openrouter.js';
+import { OpenRouterProvider, upstreamProviderFrom, usageFromOpenRouter } from '../../../../src/agents/llm/openrouter.js';
 import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import type { LLMStreamEvent } from '../../../../src/agents/llm/provider.js';
@@ -1189,5 +1189,61 @@ describe('OpenRouterProvider — reasoning (#2042)', () => {
     expect(omissionWarns).toHaveLength(2);
     expect(omissionWarns[0]?.[0]).toMatchObject({ model: 'deepseek/deepseek-v4-pro-0813', reasoningOmitted: 'empty' });
     expect(omissionWarns[1]?.[0]).toMatchObject({ model: 'deepseek/deepseek-v4-pro', reasoningOmitted: 'encrypted' });
+  });
+});
+
+describe('OpenRouterProvider — upstream endpoint (ADR-048 §5)', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  it('reads the provider field defensively', () => {
+    expect(upstreamProviderFrom({ provider: 'CoreWeave' })).toBe('CoreWeave');
+    expect(upstreamProviderFrom({ provider: '' })).toBeUndefined();
+    expect(upstreamProviderFrom({ provider: 7 })).toBeUndefined();
+    expect(upstreamProviderFrom({})).toBeUndefined();
+  });
+
+  it('carries the response provider on chat() provenance', async () => {
+    mockCreate.mockResolvedValue({ ...makeTextResponse(), provider: 'DeepSeek' });
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }], model: 'google/gemini-2.0-flash-001' });
+    expect(result.type === 'text' && result.provenance.upstreamProvider).toBe('DeepSeek');
+  });
+
+  it('omits upstreamProvider when the response has none', async () => {
+    mockCreate.mockResolvedValue(makeTextResponse());
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }], model: 'google/gemini-2.0-flash-001' });
+    expect(result.type === 'text' && 'upstreamProvider' in result.provenance).toBe(false);
+  });
+
+  it('carries the provider from stream chunks', async () => {
+    mockCreate.mockResolvedValue(makeStream([
+      {
+        id: 'gen-1',
+        model: 'deepseek/deepseek-v4.1-flash',
+        provider: 'CoreWeave',
+        choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop', logprobs: null }],
+        usage: null,
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+      {
+        id: 'gen-1',
+        model: 'deepseek/deepseek-v4.1-flash',
+        choices: [],
+        usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+    ]));
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hi' }],
+      model: 'deepseek/deepseek-v4.1-flash',
+    }));
+    const end = events.at(-1);
+    expect(end?.type === 'message_end' && end.provenance.upstreamProvider).toBe('CoreWeave');
   });
 });

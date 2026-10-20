@@ -11,6 +11,7 @@ import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
 import type { ModelRegistry } from './llm/model-registry.js';
 import { sentTemperature } from './llm/sampling-options.js';
+import { llmCallReasoningFields } from './llm/llm-call-reasoning.js';
 import { createHash } from 'node:crypto';
 import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import type { Logger } from '../logger.js';
@@ -3149,6 +3150,7 @@ export class AgentRuntime {
         promptHash,
         responseHash,
         temperature,
+        ...llmCallReasoningFields(response.usage, response.provenance),
         parentEventId: taskEvent.id,
         // Typed non-persisted archive — AuditLogger writes llm_call_archive atomically.
         archive: {

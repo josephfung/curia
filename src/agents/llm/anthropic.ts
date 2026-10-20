@@ -199,11 +199,16 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   private usageFromResponse(response: AnthropicMessage): LLMUsage {
+    // thinking_tokens is a subset of output_tokens, like OpenRouter's
+    // reasoning_tokens. output_tokens_details is null when the API omits it;
+    // leave reasoningTokens unset then so llm.call records "not reported".
+    const thinkingTokens = response.usage.output_tokens_details?.thinking_tokens;
     return {
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
       cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
       cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
+      ...(typeof thinkingTokens === 'number' ? { reasoningTokens: thinkingTokens } : {}),
     };
   }
 

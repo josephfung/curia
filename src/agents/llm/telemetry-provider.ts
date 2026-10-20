@@ -17,6 +17,7 @@ import { createEstimateCostUsd } from './pricing.js';
 import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';
 import { sentTemperature } from './sampling-options.js';
+import { llmCallReasoningFields } from './llm-call-reasoning.js';
 
 export class TelemetryLlmProvider implements LLMProvider {
   readonly id: string;
@@ -76,6 +77,7 @@ export class TelemetryLlmProvider implements LLMProvider {
         promptHash,
         responseHash,
         temperature,
+        ...llmCallReasoningFields(response.usage, response.provenance),
         parentEventId: 'system',
         archive: {
           prompt: {

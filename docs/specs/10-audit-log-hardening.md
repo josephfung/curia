@@ -136,6 +136,10 @@ interface LlmCallPayload {
   responseHash: string;         // SHA-256 of the full response content
   // Sampling — what was actually sent on the provider request (#2038)
   temperature?: number | null;  // finite number when set; null when the request omitted it
+  // Reasoning (ADR-048 §5)
+  reasoningTokens?: number | null;      // subset of outputTokens; null when the provider reported none
+  reasoningEffort?: ReasoningEffort | null; // effort sent; null when the request sent none (provider default)
+  upstreamProvider?: string | null;     // OpenRouter's serving endpoint (e.g. 'CoreWeave'); null elsewhere
 }
 ```
 
