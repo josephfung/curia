@@ -67,7 +67,7 @@ tool_stubs:
           [g1f0e2] checkbox "Remember this device"
           [g1f0e3] button "Continue"
           [g1f0e4] link "Send a new code"
-        verification_suspected: { page_domain: accounts.aircanada.com, signals: [one-time-code-input] }
+        verification_suspected: { page_domain: aircanada.com, signals: [one-time-code-input] }
     - match: { session_id: s-2, action: screenshot }
       return: *code_screen
     # A call with no action (keep_warm or screenshot alone) reads the page too.

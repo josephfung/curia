@@ -179,7 +179,8 @@ seeded rows, stubs, model calls and spend are found through its own case context
 | Sender contacts | `ContactService.createContact` + `linkIdentity` | Tagged in `notes`, deleted with their KG node after the run. A leftover from a crashed run is only removed if it carries the tag. |
 | Outbound-context entries | `OutboundContextService.register`, backdated to `sent_minutes_ago` | The Dispatcher's `getActive()` returns only this run's entries, each read through the real `getEntry` SQL. Deleted after the run. |
 | Bullpen threads | `BullpenService.openThread` | Runtimes see only this run's threads (the `wrapBullpenService` stack option). Deleted after the run. |
-| Sign-in verifications (#2017) | the verification runtime's `open`, then backdated (and closed, for a non-pending `status`) | The coordinator's "## Sign-in verifications" block, the Dispatcher's code tracking and the ExecutionLayer see only the run's rows (`scopedVerification`, the `wrapVerification` stack option), and only the run's sessions read as alive (`browserSessionAlive`). Cases seeding one site never run at once (one pending row per site). Deleted after the run. 24a, 24c and 24d send as the principal on Signal, so the database needs a principal Signal identity. |
+| Sign-in verifications (#2017) | the verification runtime's `open`, then backdated (and closed, for a non-pending `status`) | The coordinator's "## Sign-in verifications" block, the Dispatcher's code tracking and the ExecutionLayer see only the run's rows (`scopedVerification`, the `wrapVerification` stack option), and only the run's sessions read as alive (`browserSessionAlive`). Cases seeding one site never run at once (one pending row per site). Deleted after the run. |
+| Principal identities (#2017) | `seed.principal_identities`: a verified, active identity for the principal, added only when they have no active one on that channel | Labelled `scenario-fixture (#2017)`; cleanup deletes only the row its run added, and the sweep only labelled rows. Cases adding one on the same channel never run at once. A raw insert, so the principal's identity list in every agent's prompt (read at boot) is unchanged. |
 | The principal backlog (prompt trim PR 7) | `seed.backlog` counts | The Dispatcher's backlog line reads the run's own counts (`scopedPrincipalBacklog`), never the shared tables. A case stubs the list tools to show the items its counts promise. |
 | Scheduler jobs | the `scheduler-list` stub | Never written to the database. Within a run, a later list replays that run's stubbed creates, edits and cancels onto the stub. |
 | The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. |
@@ -347,6 +348,8 @@ seed:
       status: pending                     # optional; pending | expired | satisfied | abandoned
       requested_minutes_ago: 3            # optional; default 1 if pending, else 15
       session_alive: true                 # optional; default: alive while pending
+  principal_identities:                   # optional; for an inbound as the principal on a channel
+    - { channel: signal, identifier: "+15555550142" }   # the database's principal may lack (#2017)
   backlog:                                # optional; what the backlog line reports on a principal turn
     pending_approvals: 1                  #   decay_warnings, pending_approvals, principal_tasks;
     decay_warnings: 0                     #   absent counts are 0, and one must be positive

@@ -11,9 +11,13 @@ import {
   scopedOutboundContext,
   scopedPrincipalBacklog,
   scopedVerification,
+  SCENARIO_IDENTITY_LABEL,
+  removeSeededPrincipalIdentities,
   SeedScope,
   seedConflictKeys,
+  seedPrincipalIdentity,
 } from '../../scenarios/seed.js';
+import type { DbPool } from '../../../src/db/connection.js';
 import type { ScenarioCase } from '../../scenarios/types.js';
 
 type RunState = CaseAttempt & { scope: SeedScope };
@@ -206,6 +210,50 @@ describe('scopedVerification (#2017)', () => {
   });
 });
 
+describe('seed.principal_identities (#2017)', () => {
+  /** A pool over an in-memory identity table: just the three statements the seed issues. */
+  function fakePool(rows: Array<{ id: string; contact_id: string; channel: string; status: string; label: string | null }>) {
+    const pool = {
+      query: async (sql: string, params: unknown[]) => {
+        if (sql.startsWith('SELECT')) {
+          const [contactId, channel] = params as [string, string];
+          return { rows: rows.filter(r => r.contact_id === contactId && r.channel === channel && r.status === 'active') };
+        }
+        if (sql.startsWith('INSERT')) {
+          const [contactId, channel, , label] = params as [string, string, string, string];
+          const row = { id: `i-${rows.length}`, contact_id: contactId, channel, status: 'active', label };
+          rows.push(row);
+          return { rows: [{ id: row.id }] };
+        }
+        const [ids, label] = params as [string[], string];
+        const before = rows.length;
+        rows.splice(0, rows.length, ...rows.filter(r => !(ids.includes(r.id) && r.label === label)));
+        return { rows: [], rowCount: before - rows.length };
+      },
+    } as unknown as DbPool;
+    return pool;
+  }
+
+  it('adds a marked, verified identity only when the principal has none on the channel, and removes only that one', async () => {
+    const rows = [{ id: 'real-email', contact_id: 'p', channel: 'email', status: 'active', label: 'primary' }];
+    const pool = fakePool(rows);
+    const added = await seedPrincipalIdentity(pool, 'p', { channel: 'signal', identifier: '+15555550142' });
+    expect(added).toBe('i-1');
+    expect(rows[1]).toMatchObject({ channel: 'signal', label: SCENARIO_IDENTITY_LABEL });
+    // The principal's own identity on a channel is used as it is.
+    expect(await seedPrincipalIdentity(pool, 'p', { channel: 'email', identifier: 'x@example.test' })).toBeNull();
+    expect(rows).toHaveLength(2);
+
+    await removeSeededPrincipalIdentities(pool, ['i-1', 'real-email']);
+    expect(rows.map(r => r.id)).toEqual(['real-email']);
+  });
+
+  it('names the channel, so two cases adding an identity there never overlap', () => {
+    const scenario = { seed: { contacts: [], verifications: [], principalIdentities: [{ channel: 'signal', identifier: '+1' }] } } as unknown as ScenarioCase;
+    expect(seedConflictKeys(scenario)).toEqual(['principal-identity:signal']);
+  });
+});
+
 describe('seedConflictKeys', () => {
   const scenario = (
     contacts: Array<{ displayName: string; identifier: string }>,
@@ -216,6 +264,7 @@ describe('seedConflictKeys', () => {
       outboundContext: [],
       bullpen: [],
       verifications,
+      principalIdentities: [],
     },
   }) as unknown as ScenarioCase;
 

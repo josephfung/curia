@@ -25,6 +25,7 @@ import {
   type SeedBullpenThread,
   type SeedContact,
   type SeedOutboundEntry,
+  type SeedPrincipalIdentity,
   type SeedVerification,
   type ToolStub,
 } from './types.js';
@@ -63,7 +64,10 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
 }
 
 const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity'] as const;
-const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications'] as const;
+const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities'] as const;
+const PRINCIPAL_IDENTITY_KEYS = ['channel', 'identifier'] as const;
+/** Channels the resolver maps to the principal without an identity (seed.ts: PRINCIPAL_LOCAL_CHANNELS). */
+const PRINCIPAL_LOCAL_CHANNELS = ['cli', 'smoke-test', 'web'];
 const VERIFICATION_KEYS = ['key', 'site', 'page_domain', 'delivery', 'browser_session_id', 'task', 'status', 'requested_minutes_ago', 'session_alive'] as const;
 const VERIFICATION_DELIVERIES: readonly SeedVerification['delivery'][] = ['email', 'sms', 'app'];
 const VERIFICATION_STATUSES: readonly SeedVerification['status'][] = ['pending', 'expired', 'satisfied', 'abandoned'];
@@ -437,6 +441,27 @@ function parseVerifications(raw: Raw, file: string): SeedVerification[] {
   });
 }
 
+/** `seed.principal_identities` (#2017): one per channel, never a local one. */
+function parsePrincipalIdentities(raw: Raw, file: string): SeedPrincipalIdentity[] {
+  const seen = new Set<string>();
+  return list(raw, 'principal_identities', file).map((p, i) => {
+    const where = `seed.principal_identities[${i}]`;
+    onlyKeys(p, PRINCIPAL_IDENTITY_KEYS, file, where);
+    const channel = str(p, 'channel', file, where);
+    const identifier = str(p, 'identifier', file, where);
+    if (PRINCIPAL_LOCAL_CHANNELS.includes(channel)) {
+      throw new CaseError(file, `${where}: the principal needs no identity on '${channel}'`);
+    }
+    if (seen.has(channel)) throw new CaseError(file, `${where}: at most one per channel`);
+    seen.add(channel);
+    // A fixture must never collide with a real person's address.
+    if (channel === 'email' && !/@([a-z0-9-]+\.)*example\.test$/i.test(identifier)) {
+      throw new CaseError(file, `${where}: email identifiers must be under example.test`);
+    }
+    return { channel, identifier };
+  });
+}
+
 /** `seed.backlog`: each count a whole number, absent ones zero, at least one positive. */
 function parseBacklog(raw: Raw, file: string): PrincipalBacklogCounts | undefined {
   if (raw['backlog'] === undefined) return undefined;
@@ -687,6 +712,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     outboundContext: parseOutbound(seedRaw, file),
     bullpen: parseBullpen(seedRaw, file),
     verifications: parseVerifications(seedRaw, file),
+    principalIdentities: parsePrincipalIdentities(seedRaw, file),
     ...(backlog && { backlog }),
   };
 

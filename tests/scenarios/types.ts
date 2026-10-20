@@ -184,6 +184,17 @@ export interface SeedVerification {
 }
 
 /**
+ * A channel identity the principal needs for the run (#2017): a case that sends as the
+ * principal on a channel the database's principal may have no identity on. Seeding adds a
+ * verified, active one only when the principal has no active identity on the channel, and
+ * cleanup removes only that row.
+ */
+export interface SeedPrincipalIdentity {
+  channel: string;
+  identifier: string;
+}
+
+/**
  * The message the case's agent receives.
  * `from: principal` resolves through the stack's principal (channel `cli` by default;
  * any other channel uses the principal's own identity on it). `from: <contact key>`
@@ -286,6 +297,7 @@ export interface ScenarioCase {
     outboundContext: SeedOutboundEntry[];
     bullpen: SeedBullpenThread[];
     verifications: SeedVerification[];
+    principalIdentities: SeedPrincipalIdentity[];
     /**
      * What is waiting on the principal on this run's principal turn (prompt trim PR 7):
      * the counts the Dispatcher's backlog line reports. Absent means nothing is waiting.

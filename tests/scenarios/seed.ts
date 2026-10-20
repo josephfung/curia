@@ -26,7 +26,8 @@ import type { Verification } from '../../src/verification/types.js';
 import { cleanupConversation, sweepConversations } from '../shared/turn-capture.js';
 import { resolvePlaceholders } from './loader.js';
 import { SCENARIO_DELEGATE_PREFIX } from './stub-layer.js';
-import type { ScenarioCase, SeedContact } from './types.js';
+import type { DbPool } from '../../src/db/connection.js';
+import type { ScenarioCase, SeedContact, SeedPrincipalIdentity } from './types.js';
 
 /**
  * Stamped into `notes` on every seeded contact — contacts have no source column, and
@@ -267,6 +268,8 @@ export interface SeededRun {
   entryIds: string[];
   threads: Map<string, { threadId: string; messageId: string; topic: string; participants: string[] }>;
   verificationIds: string[];
+  /** Principal identities this run added (seed.principal_identities), and only those. */
+  principalIdentityIds: string[];
 }
 
 export interface SeedDeps {
@@ -279,16 +282,65 @@ export interface SeedDeps {
 const SCENARIO_VERIFICATION_ORIGIN = `${SCENARIO_ENTRY_ORIGIN}verification-`;
 
 /**
+ * `contact_channel_identities.label` of every principal identity the suite adds. Cleanup
+ * and the sweep delete only rows carrying it, so the principal's own identities survive.
+ */
+export const SCENARIO_IDENTITY_LABEL = 'scenario-fixture (#2017)';
+
+/**
+ * Give the principal `identity` for the run, unless they already have an active identity on
+ * that channel (theirs is then used as it is). Returns the added row's id, or null when
+ * nothing was added. A raw insert, not ContactService.linkIdentity: that refreshes the
+ * principal's identity list every agent's prompt is built from, mid-suite, for every run.
+ */
+export async function seedPrincipalIdentity(
+  pool: DbPool,
+  principalContactId: string,
+  identity: SeedPrincipalIdentity,
+): Promise<string | null> {
+  const existing = await pool.query<{ id: string }>(
+    `SELECT id FROM contact_channel_identities WHERE contact_id = $1 AND channel = $2 AND status = 'active'`,
+    [principalContactId, identity.channel],
+  );
+  if (existing.rows.length > 0) return null;
+  const added = await pool.query<{ id: string }>(
+    `INSERT INTO contact_channel_identities
+       (contact_id, channel, channel_identifier, label, verified, verified_at, source, status)
+     VALUES ($1, $2, $3, $4, true, now(), 'ceo_stated', 'active')
+     RETURNING id`,
+    [principalContactId, identity.channel, identity.identifier, SCENARIO_IDENTITY_LABEL],
+  );
+  return added.rows[0]!.id;
+}
+
+/** Remove principal identities a run added: only these ids, and only rows carrying the marker. */
+export async function removeSeededPrincipalIdentities(pool: DbPool, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await pool.query(
+    `DELETE FROM contact_channel_identities WHERE id = ANY($1::uuid[]) AND label = $2`,
+    [ids, SCENARIO_IDENTITY_LABEL],
+  );
+}
+
+/**
  * Create the case's rows. On any failure, removes what it already created before
  * rethrowing, so a half-seeded run never leaks into the next.
  */
 export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<SeededRun> {
   const { stack, outboundContext, scope } = deps;
-  const seeded: SeededRun = { refs: new Map(), contacts: [], entryIds: [], threads: new Map(), verificationIds: [] };
+  const seeded: SeededRun = {
+    refs: new Map(), contacts: [], entryIds: [], threads: new Map(), verificationIds: [], principalIdentityIds: [],
+  };
   if (stack.principalContactId) seeded.refs.set('principal_contact_id', stack.principalContactId);
 
   scope.backlog = scenario.seed.backlog;
   try {
+    for (const identity of scenario.seed.principalIdentities) {
+      if (!stack.principalContactId) throw new Error('No principal contact in this database');
+      const added = await seedPrincipalIdentity(stack.pool, stack.principalContactId, identity);
+      if (added) seeded.principalIdentityIds.push(added);
+    }
+
     for (const contact of scenario.seed.contacts) {
       const created = await seedContact(stack, contact);
       seeded.contacts.push(created);
@@ -511,6 +563,9 @@ export async function sweepLeftovers(stack: TestModeStack): Promise<Record<strin
   await count('bullpen_threads',
     `DELETE FROM bullpen_threads WHERE source_message_id LIKE $1`,
     [`${SCENARIO_THREAD_MARKER}%`]);
+  await count('principal_identities',
+    `DELETE FROM contact_channel_identities WHERE label = $1`,
+    [SCENARIO_IDENTITY_LABEL]);
   // Seeded verifications (scenario-origin-verification-…), and any opened in a run's conversation.
   await count('verifications',
     `DELETE FROM verifications WHERE conversation_id LIKE ANY($1::text[])`,
@@ -537,6 +592,9 @@ export function seedConflictKeys(scenario: ScenarioCase): string[] {
     // One pending verification per site (#2017). Every seeded row is opened as pending
     // before its status is set, so two runs seeding one site collide whatever the status.
     ...scenario.seed.verifications.map(v => `verification-site:${registrableDomain(v.site) ?? v.site.toLowerCase()}`),
+    // A principal identity a run adds is visible to every run while it lasts, and a second
+    // case adding one on the same channel could remove the first's mid-run.
+    ...scenario.seed.principalIdentities.map(p => `principal-identity:${p.channel}`),
   ];
 }
 
@@ -567,6 +625,7 @@ export async function cleanupRun(
   if (verificationIds.length > 0) {
     await attempt(() => stack.pool.query(`DELETE FROM verifications WHERE id = ANY($1::uuid[])`, [verificationIds]));
   }
+  await attempt(() => removeSeededPrincipalIdentities(stack.pool, seeded.principalIdentityIds));
   const threadIds = [...seeded.threads.values()].map(t => t.threadId);
   if (threadIds.length > 0) {
     // Messages and read watermarks cascade.

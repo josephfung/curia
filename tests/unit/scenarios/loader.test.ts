@@ -252,6 +252,23 @@ describe('loadScenarioCase', () => {
     expect(() => loadScenarioCase(write('two.yaml', body))).toThrow(/at most one verification per site/);
   });
 
+  it('parses seed.principal_identities (#2017)', () => {
+    const body = VALID.replace('seed:\n', 'seed:\n  principal_identities:\n    - { channel: signal, identifier: "+15555550142" }\n');
+    const c = loadScenarioCase(write('pid.yaml', body));
+    expect(c.seed.principalIdentities).toEqual([{ channel: 'signal', identifier: '+15555550142' }]);
+    expect(loadScenarioCase(write('none.yaml', VALID)).seed.principalIdentities).toEqual([]);
+  });
+
+  it.each([
+    ['a local channel the principal needs no identity on', '{ channel: cli, identifier: x }', /needs no identity/],
+    ['two on one channel', '{ channel: signal, identifier: "+1" }\n    - { channel: signal, identifier: "+2" }', /at most one per channel/],
+    ['an unknown key', '{ channel: signal, identifier: "+1", verified: true }', /unknown key\(s\) verified/],
+    ['an email outside example.test', '{ channel: email, identifier: a@gmail.com }', /under example.test/],
+  ])('rejects a principal identity with %s', (_label, entry, error) => {
+    const body = VALID.replace('seed:\n', `seed:\n  principal_identities:\n    - ${entry}\n`);
+    expect(() => loadScenarioCase(write('bad-pid.yaml', body))).toThrow(error);
+  });
+
   it('rejects a placeholder for an unseeded verification', () => {
     const body = VALID.replace('{{entry:offsite}}', '{{verification:missing}}');
     expect(() => loadScenarioCase(write('bad-ref.yaml', body))).toThrow(/names no seeded verification/);

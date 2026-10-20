@@ -9,6 +9,9 @@
 # web-browser is stubbed per action on the seeded session: reading the page shows the
 # code screen, typing fills it, and submitting lands on the policy page with the renewal
 # notice on it, so the errand can finish in this turn.
+#
+# The principal sends on Signal, so the case gives them a Signal identity for the run
+# (seed.principal_identities) when the database's principal has none.
 name: signin sms code over signal
 description: >
   Earlier the principal asked Curia to get their home-policy renewal notice from their
@@ -21,6 +24,8 @@ description: >
 tags: [verification, signin, browser]
 stub_sets: [human-channels]
 seed:
+  principal_identities:
+    - { channel: signal, identifier: "+15555550142" }
   verifications:
     - key: otp
       site: example-insurer.ca
@@ -48,7 +53,7 @@ tool_stubs:
           [g1f0e2] checkbox "Remember this device for 30 days"
           [g1f0e3] button "Verify"
           [g1f0e4] link "Resend code"
-        verification_suspected: { page_domain: login.example-insurer.ca, signals: [one-time-code-input] }
+        verification_suspected: { page_domain: example-insurer.ca, signals: [one-time-code-input] }
     - match: { session_id: s-1, action: screenshot }
       return: *code_screen
     # A call with no action (keep_warm or screenshot alone) reads the page too.
