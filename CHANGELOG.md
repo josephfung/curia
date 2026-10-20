@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Sign-in details with secrets** — `secret-capture-request` stores login URL and username; `list-user-secrets` returns them. (#2201)
+- **`listUserSecretDetails` capability** — new `ToolContext` field returning non-secret sign-in details per `user.*` key. (#2201)
 - **Style scenarios** — seven cases score reply length, filler and register under a fixed office identity. (#2143)
 - **Report queue** — new `principal.report` bus event and `reports` tools collect digest items. (#2159)
 - **Weekly fallback digest** — sent when queued items go a week unreported. (#2159)
@@ -38,6 +40,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`verification` open** — result now says the next step; email codes go through ceo-inbox. (#2201)
 - **Prompt tone directives** — "warm" and sample sentences removed; the office identity alone sets tone. (#2143)
 - **Specialist agents** — now get the office identity block, scoped so drafts in the principal's voice keep it. (#2143)
 - **`inspect-prompts.ts`** — snapshot gains `office_identity_writes_as_block` for curia-deploy's eval harness. (#2143)
@@ -85,6 +88,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Shadow pairing** — a shadow pairs only with a send within 72 hours; each send scores one shadow. (#2195)
+- **Budget-exhausted sign-ins** — turn-limit replies name the waiting sign-in instead of a generic error. (#2201)
+- **`web-browser` type** — fields covered by a floating label are focused directly instead of failing. (#2201)
 - **Autonomy scoring** — successful re-executions of approved actions no longer judged blind; past verdicts cleared. (#2196)
 - **`ceo-inbox-sent-observe`** — shadow pairs judged in small chunks; held-back pairs and long holds now reported. (#2191)
 - **Integration test cleanup** — contacts and knowledge-graph suites delete only their own rows, ending parallel FK races. (#2183)

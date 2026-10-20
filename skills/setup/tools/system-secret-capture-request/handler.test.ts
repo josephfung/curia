@@ -24,6 +24,9 @@ function fakeMinter(opts: { reject?: boolean; result?: Partial<MintResult> } = {
       if (opts.reject) throw new Error("'made_up' is not a declared skill secret nor a known channel credential key");
       return { rawToken: 'tok', secretName: 'anthropic_api_key', expiresAt: new Date(Date.now() + 30 * 60_000), ...opts.result };
     },
+    async setUserSecretDetails() {
+      throw new Error('user policy must not be used by the system skill');
+    },
   };
 }
 
@@ -113,6 +116,7 @@ function fakeMinterWithUserCalls(over: Partial<MintResult> = {}): SecretCaptureM
     userCalls, systemCalls,
     async mintUserSecret(args) { userCalls.push(args); return { rawToken: 'abc123', secretName: 'user.x', expiresAt: new Date(), ...over }; },
     async mintSystemSecret(args) { systemCalls.push(args); return { rawToken: 'abc123', secretName: 'channel.email.nylas_api_key', expiresAt: new Date(), ...over }; },
+    async setUserSecretDetails() { throw new Error('not used'); },
   };
 }
 

@@ -225,6 +225,45 @@ export async function humanClick(page: Page, locator: Locator, opts: BehaviorOpt
 }
 
 /**
+ * Focus a text field before typing (#2201): humanClick, unless an element over the field
+ * would take the click. A floating label or placeholder overlay (Gigya-style sign-in forms)
+ * sits on the input itself, so humanClick's recenter-and-retry never clears it and costs two
+ * full click timeouts; keystrokes only need focus. A trial click (actionability and hit-target
+ * checks, no click) finds the overlay in about two seconds, and the field is then focused
+ * directly. The fallback runs only for an editable field and only if focus actually lands on
+ * it; otherwise the click error surfaces as before.
+ */
+export async function humanFocusField(page: Page, locator: Locator, opts: BehaviorOptions = {}): Promise<void> {
+  try {
+    await locator.click({ trial: true, timeout: 2000 });
+  } catch (err) {
+    if (isPointerInterception(err) && (await focusCoveredField(locator, opts))) return;
+    // Not covered (slow to render, detached, disabled...): humanClick reports it properly.
+  }
+  try {
+    await humanClick(page, locator, opts);
+  } catch (err) {
+    // An overlay that appeared after the trial click.
+    if (isPointerInterception(err) && (await focusCoveredField(locator, opts))) return;
+    throw err;
+  }
+}
+
+/** Focus a field an overlay covers. True only when the field is editable and now focused. */
+async function focusCoveredField(locator: Locator, opts: BehaviorOptions): Promise<boolean> {
+  try {
+    if (!(await locator.isEditable({ timeout: 1000 }))) return false;
+    opts.log?.debug('humanFocusField: an overlay covers the field — focusing it directly');
+    await locator.focus({ timeout: 2000 });
+    // getRootNode, not document: a field inside a shadow root is its root's activeElement.
+    return await locator.evaluate((el) => (el.getRootNode() as unknown as { activeElement: unknown }).activeElement === el);
+  } catch (err) {
+    opts.log?.debug({ err }, 'humanFocusField: direct focus failed — surfacing the click error');
+    return false;
+  }
+}
+
+/**
  * True when a click failed because another element (a sticky bar, overlay, ad, or modal)
  * covers the target's click point. Playwright phrases this as "intercepts pointer events" in
  * the timeout error's call log — matching that phrase is the only signal it exposes for this

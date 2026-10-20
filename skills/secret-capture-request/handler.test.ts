@@ -6,12 +6,14 @@ import { SecretCaptureRequestHandler } from './handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import type { SecretCaptureMinter, MintResult } from '../../src/secrets/secret-capture-service.js';
 
-function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { userCalls: unknown[]; systemCalls: unknown[] } {
+function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { userCalls: unknown[]; systemCalls: unknown[]; detailCalls: unknown[] } {
   const userCalls: unknown[] = [];
   const systemCalls: unknown[] = [];
+  const detailCalls: unknown[] = [];
   return {
     userCalls,
     systemCalls,
+    detailCalls,
     async mintUserSecret(args) {
       userCalls.push(args);
       return { rawToken: 'abc123', secretName: 'user.flight', expiresAt: new Date(Date.now() + 30 * 60_000), reusedExisting: false, ...over };
@@ -19,6 +21,10 @@ function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { use
     async mintSystemSecret(args) {
       systemCalls.push(args);
       return { rawToken: 'abc123', secretName: 'anthropic_api_key', expiresAt: new Date(), ...over };
+    },
+    async setUserSecretDetails(rawName, details) {
+      detailCalls.push({ rawName, details });
+      return { secretName: 'user.flight' };
     },
   };
 }
@@ -184,5 +190,52 @@ describe('SecretCaptureRequestHandler', () => {
     const call = minter.userCalls[0]! as { origin: Record<string, unknown> };
     expect(call.origin.agentId).toBe('coordinator');
     expect(call.origin).not.toHaveProperty('resumeToken');
+  });
+});
+
+describe('SecretCaptureRequestHandler sign-in details (#2201)', () => {
+  it('passes validated login_url and username to the minter', async () => {
+    const minter = fakeMinter();
+    const ctx = makeCtx(
+      { secret_name: 'insurer password', login_url: ' https://id.example.com/ ', username: 'someone' },
+      { secretCapture: minter },
+    );
+    const result = await new SecretCaptureRequestHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    expect((minter.userCalls[0] as { details: unknown }).details).toEqual({
+      loginUrl: 'https://id.example.com/',
+      username: 'someone',
+    });
+  });
+
+  it('rejects a login_url that is not an http(s) URL', async () => {
+    const minter = fakeMinter();
+    const ctx = makeCtx({ secret_name: 'x', login_url: 'javascript:alert(1)' }, { secretCapture: minter });
+    const result = await new SecretCaptureRequestHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    expect(minter.userCalls).toHaveLength(0);
+  });
+
+  it('details_only saves details without minting a link', async () => {
+    const minter = fakeMinter();
+    const ctx = makeCtx(
+      { secret_name: 'user.flight', login_url: 'https://example.com/login', details_only: true },
+      { secretCapture: minter },
+    );
+    const result = await new SecretCaptureRequestHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.details_saved).toBe(true);
+    expect(data).not.toHaveProperty('capture_url');
+    expect(minter.userCalls).toHaveLength(0);
+    expect(minter.detailCalls).toEqual([{ rawName: 'user.flight', details: { loginUrl: 'https://example.com/login' } }]);
+  });
+
+  it('details_only with no details is an error', async () => {
+    const minter = fakeMinter();
+    const ctx = makeCtx({ secret_name: 'user.flight', details_only: true }, { secretCapture: minter });
+    const result = await new SecretCaptureRequestHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    expect(minter.detailCalls).toHaveLength(0);
   });
 });

@@ -11,6 +11,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/type
 import type { CaptureValueFormat } from '../../src/secrets/secret-capture-service.js';
 import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
+import { hasUserSecretDetails, parseUserSecretDetails, type UserSecretDetails } from '../../src/secrets/user-secret-details.js';
 
 /** Build the operator-facing magic-link URL. Prod uses ctx.appOrigin; dev falls back to the
  *  local SPA origin (Fastify serves the built console on httpPort). */
@@ -34,15 +35,48 @@ export class SecretCaptureRequestHandler implements ToolHandler {
       return { success: false, error: 'secret-capture-request requires the secretCapture capability in context.' };
     }
 
-    const { secret_name, label, value_format, resume_intent } = ctx.input as {
+    const { secret_name, label, value_format, resume_intent, login_url, username, details_only } = ctx.input as {
       secret_name?: unknown;
       label?: unknown;
       value_format?: unknown;
       resume_intent?: unknown;
+      login_url?: unknown;
+      username?: unknown;
+      details_only?: unknown;
     };
 
     if (typeof secret_name !== 'string' || secret_name.trim().length === 0) {
       return { success: false, error: 'secret_name is required and must be a non-empty string.' };
+    }
+
+    // Non-secret sign-in details (#2201): stored beside the key, returned by list-user-secrets.
+    let details: UserSecretDetails;
+    try {
+      details = parseUserSecretDetails({ login_url, username });
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+
+    if (details_only === true) {
+      // Record details on an already-stored key; no link, so the user isn't asked to re-enter it.
+      if (!hasUserSecretDetails(details)) {
+        return { success: false, error: 'details_only needs login_url, username, or both.' };
+      }
+      try {
+        const { secretName } = await ctx.secretCapture.setUserSecretDetails(secret_name, details);
+        return {
+          success: true,
+          data: {
+            secret_name: secretName,
+            details_saved: true,
+            summary: `Saved the sign-in details for "${secretName}". No link was minted; the stored secret is unchanged.`,
+          },
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        ctx.log.warn({ err }, 'secret-capture-request: details_only update failed');
+        return { success: false, error: message };
+      }
     }
     const labelStr = typeof label === 'string' && label.trim() ? label.trim() : secret_name.trim();
 
@@ -70,6 +104,7 @@ export class SecretCaptureRequestHandler implements ToolHandler {
         label: labelStr,
         valueFormat,
         origin,
+        ...(hasUserSecretDetails(details) ? { details } : {}),
       });
       const captureUrl = buildCaptureUrl(ctx, rawToken);
       const expiresLocal = toLocalIso(Math.floor(expiresAt.getTime() / 1000), ctx.timezone);

@@ -11,6 +11,7 @@ import {
 } from '../../../src/secrets/secret-capture-service.js';
 import { hashToken } from '../../../src/channels/http/session-auth.js';
 import type { Logger } from '../../../src/logger.js';
+import type { UserSecretDetails } from '../../../src/secrets/user-secret-details.js';
 
 /** A mock pool whose response is computed per-query from a handler, so a test can
  *  branch on the SQL (peek vs claim vs clear) and simulate races/empty results. */
@@ -33,14 +34,17 @@ function makePool(
 function makeSecretsPort(existingUserNames: string[] = []): CaptureSecretsPort & {
   setCalls: Array<{ name: string; value: string }>;
   setJSONCalls: Array<{ name: string; obj: unknown }>;
+  detailCalls: Array<{ name: string; details: UserSecretDetails }>;
   failNextWrite: () => void;
 } {
   const setCalls: Array<{ name: string; value: string }> = [];
   const setJSONCalls: Array<{ name: string; obj: unknown }> = [];
+  const detailCalls: Array<{ name: string; details: UserSecretDetails }> = [];
   let fail = false;
   return {
     setCalls,
     setJSONCalls,
+    detailCalls,
     failNextWrite() { fail = true; },
     async set(name: string, value: string) {
       if (fail) { fail = false; throw new Error('vault write failed'); }
@@ -52,6 +56,9 @@ function makeSecretsPort(existingUserNames: string[] = []): CaptureSecretsPort &
     },
     async listUserNames() {
       return existingUserNames;
+    },
+    async upsertUserDetails(name: string, details: UserSecretDetails) {
+      detailCalls.push({ name, details });
     },
   };
 }
@@ -203,6 +210,44 @@ describe('SecretCaptureService.mintUserSecret / mintSystemSecret', () => {
     const ok = await svc.mintSystemSecret({ rawName: 'anthropic_api_key' });
     expect(ok.secretName).toBe('anthropic_api_key');
     await expect(svc.mintSystemSecret({ rawName: 'not_a_real_key' })).rejects.toThrow();
+  });
+});
+
+describe('SecretCaptureService sign-in details (#2201)', () => {
+  it('mintUserSecret stores login details under the resolved key', async () => {
+    const { svc, secrets } = makeService();
+    const res = await svc.mintUserSecret({
+      rawName: 'Flight Site Password',
+      details: { loginUrl: 'https://example.com/login', username: 'traveller' },
+    });
+    expect(secrets.detailCalls).toEqual([
+      { name: res.secretName, details: { loginUrl: 'https://example.com/login', username: 'traveller' } },
+    ]);
+  });
+
+  it('mintUserSecret without details writes none', async () => {
+    const { svc, secrets } = makeService();
+    await svc.mintUserSecret({ rawName: 'x', details: {} });
+    expect(secrets.detailCalls).toEqual([]);
+  });
+
+  it('setUserSecretDetails updates an existing key without minting a token', async () => {
+    const { svc, secrets, queries } = makeService(undefined, ['user.insurer_password']);
+    const res = await svc.setUserSecretDetails('user.insurer_password', { loginUrl: 'https://id.example.com/' });
+    expect(res.secretName).toBe('user.insurer_password');
+    expect(secrets.detailCalls).toEqual([{ name: 'user.insurer_password', details: { loginUrl: 'https://id.example.com/' } }]);
+    expect(queries.some((q) => q.sql.includes('secret_capture_tokens'))).toBe(false);
+  });
+
+  it('setUserSecretDetails refuses a key that is not stored', async () => {
+    const { svc, secrets } = makeService(undefined, []);
+    await expect(svc.setUserSecretDetails('insurer password', { username: 'me' })).rejects.toThrow(/No stored secret/);
+    expect(secrets.detailCalls).toEqual([]);
+  });
+
+  it('setUserSecretDetails refuses an empty update', async () => {
+    const { svc } = makeService(undefined, ['user.insurer_password']);
+    await expect(svc.setUserSecretDetails('user.insurer_password', {})).rejects.toThrow(/login_url, username/);
   });
 });
 

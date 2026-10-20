@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  renderBudgetExhaustedVerificationReply,
   renderCeoInboxVerificationBlock,
   renderCoordinatorVerificationBlock,
   type VerificationView,
@@ -163,5 +164,34 @@ describe('renderCeoInboxVerificationBlock', () => {
     expect(block).toContain('aircanada.com');
     expect(block).toContain('satisfied');
     expect(block).toContain('may be labelled and archived as normal');
+  });
+});
+
+describe('renderBudgetExhaustedVerificationReply (#2201)', () => {
+  const opts = { conversationId: 'conv-1', timezone: TZ };
+
+  it('is null when nothing pending belongs to this conversation', () => {
+    expect(renderBudgetExhaustedVerificationReply([], opts)).toBeNull();
+    expect(renderBudgetExhaustedVerificationReply([view({ conversationId: 'other' })], opts)).toBeNull();
+    expect(renderBudgetExhaustedVerificationReply([view({ status: 'satisfied' })], opts)).toBeNull();
+  });
+
+  it('names the site and says the emailed code is waiting, with the local deadline', () => {
+    const reply = renderBudgetExhaustedVerificationReply([view({ delivery: 'email' })], opts)!;
+    expect(reply).toContain('aircanada.com');
+    expect(reply).toMatch(/emailed/);
+    expect(reply).toContain('10:10 AM');
+    expect(reply).not.toMatch(/unable to process/);
+  });
+
+  it('asks for an sms code to be sent', () => {
+    const reply = renderBudgetExhaustedVerificationReply([view({ delivery: 'sms' })], opts)!;
+    expect(reply).toMatch(/by text/);
+    expect(reply).toMatch(/Send it to me/);
+  });
+
+  it('says the page closed when the session is gone', () => {
+    const reply = renderBudgetExhaustedVerificationReply([view({ sessionAlive: false })], opts)!;
+    expect(reply).toMatch(/closed/);
   });
 });

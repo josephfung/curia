@@ -89,8 +89,12 @@ interface AgentBudget {
 // budget rises by exactly that delta (78,543 + 202).
 // verification pinned as a tool (#2017): delegated sign-in opens and closes code verifications:
 // 79,530 bytes over 72 local tools, measured after merging #2159's numbering changes.
+// #2201 sign-in follow-ups: secret-capture-request takes login_url, username and details_only,
+// list-user-secrets returns details, verification open returns next_step (the guidance itself
+// rides in the tool results, not the descriptions): +263 bytes, 79,793 over 72 local tools. The
+// budget rises by exactly that delta.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 79_600, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 79_793, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   { agent: 'calendar', alwaysOnPromptTokens: 6_200, localToolDefinitionBytes: 25_000, allowMcpPins: false },

@@ -94,6 +94,7 @@ import type { Page, Locator } from 'playwright';
 import {
   jitteredDelay,
   humanClick,
+  humanFocusField,
   humanType,
   simulateHumanPresence,
 } from '../../../src/browser/human-behavior.js';
@@ -229,6 +230,72 @@ describe('humanClick', () => {
       .rejects.toThrow('Target page closed');
     expect(evaluate).not.toHaveBeenCalled(); // not an interception — no recenter
     expect(click).toHaveBeenCalledTimes(1);  // and no retry
+  });
+});
+
+describe('humanFocusField', () => {
+  // The prod failure (#2201): a floating label covers the input, so every click is intercepted.
+  const labelIntercept = () => new Error(
+    'locator.click: Timeout 2000ms exceeded.\n  - Aeroplan number or email from <label> subtree intercepts pointer events');
+  const page = {
+    mouse: { move: vi.fn().mockResolvedValue(undefined) },
+    viewportSize: vi.fn().mockReturnValue({ width: 1280, height: 720 }),
+  } as unknown as Page;
+  const opts = { sleep: noopSleep, rng: () => 0.5 };
+
+  function fieldLocator(overrides: Record<string, unknown> = {}) {
+    return {
+      boundingBox: vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 }),
+      isVisible: vi.fn().mockResolvedValue(true),
+      click: vi.fn().mockRejectedValue(labelIntercept()),
+      isEditable: vi.fn().mockResolvedValue(true),
+      focus: vi.fn().mockResolvedValue(undefined),
+      evaluate: vi.fn().mockResolvedValue(true), // the focus check: activeElement === field
+      ...overrides,
+    };
+  }
+
+  it('clicks normally when nothing covers the field', async () => {
+    const locator = fieldLocator({ click: vi.fn().mockResolvedValue(undefined) });
+    await humanFocusField(page, locator as unknown as Locator, opts);
+    expect(locator.click).toHaveBeenNthCalledWith(1, { trial: true, timeout: 2000 });
+    expect(locator.click).toHaveBeenCalledTimes(2); // the trial, then the real click
+    expect(locator.focus).not.toHaveBeenCalled();
+  });
+
+  it('focuses a covered, editable field directly after the trial click, without real clicks', async () => {
+    const locator = fieldLocator();
+    await humanFocusField(page, locator as unknown as Locator, opts);
+    expect(locator.click).toHaveBeenCalledTimes(1); // only the trial: no 2 x 10s click timeouts
+    expect(locator.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces the click error for a covered field that is not editable', async () => {
+    const locator = fieldLocator({ isEditable: vi.fn().mockResolvedValue(false) });
+    await expect(humanFocusField(page, locator as unknown as Locator, opts)).rejects.toThrow('intercepts pointer events');
+    expect(locator.focus).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the click error when focus does not land on the field', async () => {
+    const locator = fieldLocator({ evaluate: vi.fn().mockResolvedValue(false) });
+    await expect(humanFocusField(page, locator as unknown as Locator, opts)).rejects.toThrow('intercepts pointer events');
+  });
+
+  it('falls back when an overlay appears after a clean trial click', async () => {
+    const click = vi.fn()
+      .mockResolvedValueOnce(undefined) // trial passes
+      .mockRejectedValue(labelIntercept()); // then the real click (and its recentered retry) is taken
+    const evaluate = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(true); // recenter, focus check
+    const locator = fieldLocator({ click, evaluate });
+    await humanFocusField(page, locator as unknown as Locator, opts);
+    expect(locator.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fall back for a non-interception failure', async () => {
+    const locator = fieldLocator({ click: vi.fn().mockRejectedValue(new Error('locator.click: Target page closed')) });
+    await expect(humanFocusField(page, locator as unknown as Locator, opts)).rejects.toThrow('Target page closed');
+    expect(locator.isEditable).not.toHaveBeenCalled();
+    expect(locator.focus).not.toHaveBeenCalled();
   });
 });
 

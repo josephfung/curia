@@ -188,8 +188,30 @@ export class VerificationToolHandler implements ToolHandler {
           : {}),
         ask_channel: runtime.askChannel(),
         email_wait_seconds: runtime.service.config.emailWaitSeconds,
+        next_step: nextStep(verification, runtime.askChannel(), timezone),
         displayTimezone,
       },
     };
   }
+}
+
+/**
+ * What to do now, in the result itself (#2201). The per-turn verification block carries
+ * the same rules, but it is built when a task starts, so a verification opened mid-task
+ * (the common case: the code screen comes after many browser steps) never saw it. A
+ * coordinator that searched email-list here read Curia's own mailbox, not the principal's.
+ */
+function nextStep(v: Verification, askChannel: string | null, timezone: string | undefined): string {
+  if (v.delivery === 'email') {
+    return (
+      `Delegate to ceo-inbox now: "Read the ${v.site} sign-in code emailed to the principal after ${toIso(v.requestedAt, timezone)}." ` +
+      "Don't use email-list: that is Curia's own mailbox, not the principal's. " +
+      `Type the code ceo-inbox returns into session ${v.browserSessionId}, then call satisfy. ` +
+      "If ceo-inbox says it hasn't arrived, delegate once more; if still nothing, tell the principal and offer SMS or a resend."
+    );
+  }
+  return (
+    `Ask the principal once${askChannel ? ` on ${askChannel}` : ''} to send the ${v.site} sign-in code, then end the turn. ` +
+    'Their reply arrives as a new turn with this verification in your Sign-in verifications block.'
+  );
 }

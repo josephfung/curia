@@ -14,6 +14,7 @@ import { delegationKey } from '../../../src/agents/delegation-guard.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { encodeResumeToken } from '../../../src/agents/resume-token.js';
 import type { TurnGuidanceKey } from '../../../src/agents/prompts/turn-guidance.js';
+import type { VerificationRuntime } from '../../../src/verification/index.js';
 
 // Minimal provenance block for mock LLM responses — satisfies the required field
 // without tying tests to specific model names.
@@ -3474,6 +3475,74 @@ describe('AgentRuntime error budget', () => {
     expect(agentResponses[0]?.payload.errorType).toBe('BUDGET_EXCEEDED');
     expect(agentResponses[0]?.payload.reason).toBe('maxTurns');
     expect(agentResponses[0]?.payload.retryable).toBe(false);
+  });
+
+  it('on maxTurns with a pending sign-in in this conversation, says the code is waiting (#2201)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let callId = 0;
+    const alwaysToolUseProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => ({
+        type: 'tool_use' as const,
+        toolCalls: [{ id: `call-${callId++}`, name: 'web-fetch', input: {} }],
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      })),
+    };
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+      getToolDefinitions: vi.fn().mockReturnValue([]),
+    } as unknown as ExecutionLayer;
+    const pending = {
+      id: 'ver-1', purpose: 'sign_in', kind: 'code', delivery: 'email',
+      site: 'insurer.example', pageDomain: 'insurer.example', browserSessionId: 'sess-1',
+      taskId: null, conversationId: 'conv-budget-ver', status: 'pending',
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 15 * 60_000), resolvedAt: null, metadata: {},
+    };
+    const verification = {
+      listActive: vi.fn(async () => [pending]),
+      askChannel: vi.fn(() => 'signal'),
+      tracker: { trackedIds: vi.fn(() => []) },
+    } as unknown as VerificationRuntime;
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider: alwaysToolUseProvider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [toolDef],
+      errorBudget: { maxTurns: 3, maxConsecutiveErrors: 10 },
+      verification,
+      browserSessionAlive: () => true,
+      timezone: 'America/Toronto',
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-budget-ver',
+      channelId: 'web',
+      senderId: 'user',
+      content: 'Sign in to my insurer',
+      parentEventId: 'parent-1',
+    }));
+
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]?.payload.isError).toBe(true);
+    expect(agentResponses[0]?.payload.errorType).toBe('BUDGET_EXCEEDED');
+    expect(agentResponses[0]?.payload.content).toContain('insurer.example');
+    expect(agentResponses[0]?.payload.content).toMatch(/emailed/);
+    expect(agentResponses[0]?.payload.content).not.toMatch(/unable to process/);
   });
 
   it('stops after maxConsecutiveErrors is exceeded', async () => {

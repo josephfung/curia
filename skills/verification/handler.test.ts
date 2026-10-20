@@ -248,6 +248,30 @@ describe('verification tool', () => {
     });
   });
 
+  it('open with email delivery says to delegate the read to ceo-inbox, not email-list (#2201)', async () => {
+    const result = await new VerificationToolHandler().execute(
+      makeCtx({ action: 'open', delivery: 'email', site: 'aircanada.com', browser_session_id: SESSION }, makeRuntime()),
+    );
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const nextStep = String((result.data as Data).next_step);
+    expect(nextStep).toMatch(/ceo-inbox/);
+    expect(nextStep).toMatch(/email-list/);
+    expect(nextStep).toContain(SESSION);
+    expect(nextStep).toContain('2026-10-19T11:00:00.000-04:00'); // requested_at, local time
+  });
+
+  it('open with sms delivery says to ask the principal on the ask channel', async () => {
+    const result = await new VerificationToolHandler().execute(
+      makeCtx({ action: 'open', delivery: 'sms', site: 'aircanada.com', browser_session_id: SESSION }, makeRuntime()),
+    );
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const nextStep = String((result.data as Data).next_step);
+    expect(nextStep).toMatch(/on signal/);
+    expect(nextStep).not.toMatch(/ceo-inbox/);
+  });
+
   it('open pins the browser session warm', async () => {
     const runtime = makeRuntime();
     const browser = makeBrowser();

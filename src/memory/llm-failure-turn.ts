@@ -12,8 +12,11 @@
 export const LLM_FAILURE_PROTOCOL = 'llm_failure';
 export const LLM_FAILURE_USER_MESSAGE =
   "I'm sorry, I was unable to process that request. Please try again.";
-export const LLM_FAILURE_TURN_CONTENT =
-  `{"_curia_protocol":"${LLM_FAILURE_PROTOCOL}","message":${JSON.stringify(LLM_FAILURE_USER_MESSAGE)}}`;
+/** The marker envelope carrying a specific user-facing failure message. */
+export function llmFailureTurnContent(message: string): string {
+  return `{"_curia_protocol":"${LLM_FAILURE_PROTOCOL}","message":${JSON.stringify(message)}}`;
+}
+export const LLM_FAILURE_TURN_CONTENT = llmFailureTurnContent(LLM_FAILURE_USER_MESSAGE);
 
 export function parseLlmFailureTurn(content: string): { message: string } | null {
   if (!content.includes(LLM_FAILURE_PROTOCOL)) return null;

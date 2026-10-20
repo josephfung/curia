@@ -21,7 +21,7 @@ import type { Page, Frame, Locator } from 'playwright';
 // its own module so the DOM lib it needs is scoped there, not leaked into this
 // server-side handler. See dom-extract.ts.
 import { extractFrameContent } from './dom-extract.js';
-import { jitteredDelay, simulateHumanPresence, humanClick, humanType } from '../../../../src/browser/human-behavior.js';
+import { jitteredDelay, simulateHumanPresence, humanClick, humanFocusField, humanType } from '../../../../src/browser/human-behavior.js';
 import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLanding } from '../../../../src/skills/_shared/google-workspace-url.js';
 import { isCodeShaped } from '../../../../src/verification/code-shape.js';
 import { registrableDomain, sameRegistrableDomain } from '../../../../src/verification/domain.js';
@@ -710,7 +710,9 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // The same for both the visible-text and secret_ref paths — registering the secret
       // above already gates the #973 redaction; scrubbing covers reflected content/URL,
       // not keystrokes. ControlOrMeta = Cmd on macOS (dev), Ctrl on Linux (prod). (#1053)
-      await humanClick(page, typeTarget, { log: ctx.log });
+      // humanFocusField focuses the field directly when an overlay such as a floating label
+      // takes the click (#2201).
+      await humanFocusField(page, typeTarget, { log: ctx.log });
       await page.keyboard.press('ControlOrMeta+a');
       await page.keyboard.press('Delete');
       await humanType(page, fillValue, { log: ctx.log });

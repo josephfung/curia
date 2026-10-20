@@ -76,3 +76,33 @@ export function renderCeoInboxVerificationBlock(
     'Once the verification is satisfied or expired, the code email may be labelled and archived as normal.',
   ].join('\n');
 }
+
+function clockTime(at: Date, timezone: string): string {
+  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: timezone }).format(at);
+}
+
+/**
+ * The principal-facing reply for a coordinator task that ran out of turns while a sign-in
+ * it opened is still waiting on a code (#2201). Replaces the generic "unable to process"
+ * reply, which hid that the challenge was live and how to finish it. Null when nothing
+ * pending belongs to this conversation, so the caller keeps the generic reply.
+ */
+export function renderBudgetExhaustedVerificationReply(
+  items: readonly VerificationView[],
+  opts: { conversationId: string; timezone: string },
+): string | null {
+  const mine = items.filter((v) => v.status === 'pending' && v.conversationId === opts.conversationId);
+  if (mine.length === 0) return null;
+  const lines = mine.map((v) => {
+    if (!v.sessionAlive) {
+      return `The ${v.site} sign-in reached its code screen, but the sign-in page has since closed. Ask me to sign in again and I'll start over.`;
+    }
+    const until = clockTime(v.expiresAt, opts.timezone);
+    return v.delivery === 'email'
+      ? `The ${v.site} sign-in is waiting on the code that was emailed to you. The page stays open until ${until}. ` +
+        `Reply "finish the ${v.site} sign-in" and I'll fetch the code from your inbox and complete it.`
+      : `The ${v.site} sign-in is waiting on the code sent to you by ${v.delivery === 'sms' ? 'text' : 'your authenticator app'}. ` +
+        `Send it to me before ${until} and I'll finish signing in.`;
+  });
+  return ['I ran out of steps before I could finish.', ...lines].join(' ');
+}

@@ -19,6 +19,7 @@ import type { Logger } from '../logger.js';
 import { hashToken } from '../channels/http/session-auth.js';
 import { randomBytes } from 'node:crypto';
 import { resolveUserSecretName } from './user-secret-name.js';
+import { hasUserSecretDetails, type UserSecretDetails } from './user-secret-details.js';
 
 export { resolveUserSecretName } from './user-secret-name.js';
 
@@ -53,6 +54,8 @@ export interface CaptureSecretsPort {
   set(name: string, value: string): Promise<void>;
   setJSON(name: string, obj: unknown): Promise<void>;
   listUserNames(): Promise<string[]>;
+  /** Non-secret sign-in details for a `user.*` key (#2201). */
+  upsertUserDetails(name: string, details: UserSecretDetails): Promise<void>;
 }
 
 /** The mint-only surface injected into skills as the `secretCapture` capability.
@@ -60,6 +63,8 @@ export interface CaptureSecretsPort {
 export interface SecretCaptureMinter {
   mintUserSecret(args: MintNameArgs): Promise<MintResult>;
   mintSystemSecret(args: MintNameArgs): Promise<MintResult>;
+  /** Record sign-in details on an already-stored `user.*` key without minting a link (#2201). */
+  setUserSecretDetails(rawName: string, details: UserSecretDetails): Promise<{ secretName: string }>;
 }
 
 /**
@@ -93,6 +98,8 @@ export interface MintNameArgs {
   valueFormat?: CaptureValueFormat;
   /** Origin routing context (#972), persisted so redeem can re-enter the agent. Optional. */
   origin?: CaptureOrigin;
+  /** Non-secret sign-in details stored with a user.* key (#2201). Ignored for system secrets. */
+  details?: UserSecretDetails;
   // NOTE: TTL is intentionally NOT caller-controlled. The lifetime is a fixed security
   // property of the feature (single-use + 30 min, per #971), so callers cannot mint links
   // that are already dead, absurdly long-lived, or NaN. See DEFAULT_CAPTURE_TTL_MINUTES.
@@ -209,7 +216,24 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const secretName = resolveUserSecretName(args.rawName, existing);
     const reusedExisting = existing.includes(secretName);
     const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string', args.origin);
+    if (args.details && hasUserSecretDetails(args.details)) {
+      await this.secrets.upsertUserDetails(secretName, args.details);
+    }
     return { rawToken, secretName, expiresAt, reusedExisting };
+  }
+
+  async setUserSecretDetails(rawName: string, details: UserSecretDetails): Promise<{ secretName: string }> {
+    if (!hasUserSecretDetails(details)) throw new Error('Give login_url, username, or both.');
+    const existing = await this.secrets.listUserNames();
+    const secretName = resolveUserSecretName(rawName, existing);
+    if (!existing.includes(secretName)) {
+      throw new Error(
+        `No stored secret matches '${rawName}'. Call list-user-secrets for the exact key, ` +
+        'or mint a capture link with these details instead.',
+      );
+    }
+    await this.secrets.upsertUserDetails(secretName, details);
+    return { secretName };
   }
 
   async mintSystemSecret(args: MintNameArgs): Promise<MintResult> {

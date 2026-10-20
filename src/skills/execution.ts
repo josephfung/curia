@@ -2800,6 +2800,12 @@ export class ExecutionLayer {
           const names = await this.secretsService.listUserNames();
           return names.filter(n => n.startsWith(USER_SECRET_PREFIX));
         };
+        ctx.listUserSecretDetails = async () => {
+          if (!this.secretsService) {
+            throw new Error('listUserSecretDetails: secrets service is not configured');
+          }
+          return this.secretsService.listUserDetails();
+        };
       } else {
         (ctx as unknown as Record<string, unknown>)[cap] = capabilityServices[cap];
       }

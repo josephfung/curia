@@ -1,7 +1,7 @@
 {
   "name": "verification",
   "description": "Track a sign-in code (open|satisfy|abandon|list). Call open as soon as a sign-in shows a code screen, BEFORE asking the principal or delegating an inbox read. Choose email delivery when offered unless the masked address isn't the principal's; tick 'remember this device'. Call satisfy once the site accepts the code. Never pass a code here.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "allowed_callers": [
@@ -32,6 +32,7 @@
     "note": "string? (open only: present when superseded is)",
     "ask_channel": "string? (open only: channel to ask the principal on, or null)",
     "email_wait_seconds": "number? (open only)",
+    "next_step": "string? (open only: do this next)",
     "displayTimezone": "string",
     "verifications": "object[]? (list only)"
   },

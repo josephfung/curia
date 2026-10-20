@@ -15,7 +15,8 @@ import { createHash } from 'node:crypto';
 import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
-import { historyForLlm, LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
+import { historyForLlm, llmFailureTurnContent, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
+import { renderBudgetExhaustedVerificationReply } from './prompts/verification-block.js';
 import {
   CONTACT_RECENT_HISTORY_TIER,
   contactRecentHistoryApplies,
@@ -3495,9 +3496,36 @@ export class AgentRuntime {
       timestamp: new Date(),
     };
     await this.publishAgentError(agentErr, taskEvent);
+    // A sign-in this task left waiting on a code is still finishable: say so instead of
+    // the generic failure, which hid the live challenge (#2201).
+    const verificationReply = await this.pendingVerificationBudgetReply(taskEvent.payload.conversationId);
     // Forward handoff so failedSkills from this run reach agent.response(isError)
     // and the scheduler can persist them (#1830 / maxConsecutiveErrors path).
-    await this.sendErrorResponse(taskEvent, agentErr, handoff);
+    await this.sendErrorResponse(taskEvent, agentErr, handoff, verificationReply ?? undefined);
+  }
+
+  /**
+   * The budget-exhausted reply naming this conversation's pending sign-in verifications
+   * (#2201), or null when there are none, the runtime has no verification source, or the
+   * lookup fails (the generic reply is then used; the lookup must never fail the reply).
+   */
+  private async pendingVerificationBudgetReply(conversationId: string): Promise<string | null> {
+    const verification = this.config.verification;
+    if (!verification) return null;
+    try {
+      const alive = this.config.browserSessionAlive ?? (() => false);
+      const items = (await verification.listActive()).map((v) => ({ ...v, sessionAlive: alive(v.browserSessionId) }));
+      return renderBudgetExhaustedVerificationReply(items, {
+        conversationId,
+        timezone: this.config.timezone?.trim() || 'UTC',
+      });
+    } catch (err) {
+      this.config.logger.warn(
+        { err, agentId: this.config.agentId, conversationId },
+        'Could not check pending sign-in verifications for the budget reply — using the generic reply',
+      );
+      return null;
+    }
   }
 
   /**
@@ -3637,6 +3665,8 @@ export class AgentRuntime {
       failedSkills: Array<{ name: string; error: string }>;
       failedSkillsOmittedRef: { count: number };
     },
+    /** User-facing text replacing the generic failure message (#2201). */
+    content: string = LLM_FAILURE_USER_MESSAGE,
   ): Promise<void> {
     const { agentId, bus } = this.config;
     const { conversationId } = taskEvent.payload;
@@ -3653,7 +3683,7 @@ export class AgentRuntime {
     const responseEvent = createAgentResponse({
       agentId,
       conversationId,
-      content: LLM_FAILURE_USER_MESSAGE,
+      content,
       // Mark as an error response so consumers (e.g. the delegate skill) can distinguish
       // a failure from a real specialist result and surface it as { success: false }.
       isError: true,
@@ -3666,7 +3696,7 @@ export class AgentRuntime {
     // error reply — maybeSummarize inside addTurn can issue an LLM call (#1767).
     // Must not throw: a memory failure here would re-enter handleTask's catch
     // and double-publish.
-    await this.persistLlmFailureTurn(conversationId, taskEvent.payload.content, taskEvent.payload.channelId);
+    await this.persistLlmFailureTurn(conversationId, taskEvent.payload.content, taskEvent.payload.channelId, content);
   }
 
   /**
@@ -3739,6 +3769,7 @@ export class AgentRuntime {
     conversationId: string,
     expectedUserContent: string,
     channelId: string,
+    message: string = LLM_FAILURE_USER_MESSAGE,
   ): Promise<void> {
     const { memory, agentId, logger } = this.config;
     if (!memory) return;
@@ -3756,7 +3787,7 @@ export class AgentRuntime {
       }
       await memory.addTurn(conversationId, agentId, {
         role: 'assistant',
-        content: LLM_FAILURE_TURN_CONTENT,
+        content: llmFailureTurnContent(message),
       }, {
         channelId,
       });

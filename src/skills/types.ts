@@ -333,6 +333,9 @@ export interface ToolContext {
    *  to skills declaring 'userSecretIndex' in capabilities AND on the execution-layer
    *  allowlist (#1497). Backed by SecretsService.listUserNames(), not list(). */
   listUserSecretNames?: () => Promise<string[]>;
+  /** Non-secret sign-in details (login URL, username) per `user.*` key (#2201). Granted with
+   *  listUserSecretNames under the same 'userSecretIndex' capability and allowlist. */
+  listUserSecretDetails?: () => Promise<Map<string, import('../secrets/user-secret-details.js').UserSecretDetails>>;
   /** Operator-facing origin of the console (e.g. "https://curia.example.com"), used by the
    *  capture skills to build the magic-link URL. Undefined in local dev — fall back to
    *  http://localhost:{httpPort}. Sourced from config.appOrigin. */

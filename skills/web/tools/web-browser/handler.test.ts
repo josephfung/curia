@@ -13,6 +13,7 @@ vi.mock('../../../../src/browser/human-behavior.js', () => ({
   jitteredDelay: vi.fn().mockResolvedValue(undefined),
   simulateHumanPresence: vi.fn().mockResolvedValue(undefined),
   humanClick: vi.fn().mockResolvedValue(undefined),
+  humanFocusField: vi.fn().mockResolvedValue(undefined),
   humanType: vi.fn().mockResolvedValue(undefined),
 }));
 

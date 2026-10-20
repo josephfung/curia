@@ -90,3 +90,30 @@ describe('ListUserSecretsHandler', () => {
     expect(secret).not.toHaveBeenCalled();
   });
 });
+
+describe('ListUserSecretsHandler sign-in details (#2201)', () => {
+  it('returns login_url and username for stored keys that have them', async () => {
+    const ctx = {
+      ...makeCtx(vi.fn().mockResolvedValue(['user.insurer_password', 'user.airline_password'])),
+      listUserSecretDetails: vi.fn().mockResolvedValue(new Map([
+        ['user.insurer_password', { loginUrl: 'https://id.example.com/', username: 'someone' }],
+        // A detail row for a capture that was never completed: not a stored key, never listed.
+        ['user.abandoned_password', { loginUrl: 'https://other.example.com/' }],
+      ])),
+    } as unknown as ToolContext;
+    const result = await new ListUserSecretsHandler().execute(ctx);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.details).toEqual({
+      'user.insurer_password': { login_url: 'https://id.example.com/', username: 'someone' },
+    });
+    expect(data.summary).toMatch(/login_url/);
+  });
+
+  it('still lists keys when no details capability is present', async () => {
+    const ctx = makeCtx(vi.fn().mockResolvedValue(['user.insurer_password']));
+    const result = await new ListUserSecretsHandler().execute(ctx);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.keys).toEqual(['user.insurer_password']);
+    expect(data.details).toEqual({});
+  });
+});
