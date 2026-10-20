@@ -250,7 +250,8 @@ describe('humanFocusField', () => {
       click: vi.fn().mockRejectedValue(labelIntercept()),
       isEditable: vi.fn().mockResolvedValue(true),
       focus: vi.fn().mockResolvedValue(undefined),
-      evaluate: vi.fn().mockResolvedValue(true), // the focus check: activeElement === field
+      // The decoration check (the cover is the field's own label), then the focus check.
+      evaluate: vi.fn().mockResolvedValue(true),
       ...overrides,
     };
   }
@@ -277,15 +278,22 @@ describe('humanFocusField', () => {
   });
 
   it('surfaces the click error when focus does not land on the field', async () => {
+    const locator = fieldLocator({ evaluate: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false) });
+    await expect(humanFocusField(page, locator as unknown as Locator, opts)).rejects.toThrow('intercepts pointer events');
+  });
+
+  it('does not focus a field a dialog or other non-decoration covers', async () => {
     const locator = fieldLocator({ evaluate: vi.fn().mockResolvedValue(false) });
     await expect(humanFocusField(page, locator as unknown as Locator, opts)).rejects.toThrow('intercepts pointer events');
+    expect(locator.isEditable).not.toHaveBeenCalled();
+    expect(locator.focus).not.toHaveBeenCalled();
   });
 
   it('falls back when an overlay appears after a clean trial click', async () => {
     const click = vi.fn()
       .mockResolvedValueOnce(undefined) // trial passes
       .mockRejectedValue(labelIntercept()); // then the real click (and its recentered retry) is taken
-    const evaluate = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(true); // recenter, focus check
+    const evaluate = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValue(true); // recenter, then decoration and focus checks
     const locator = fieldLocator({ click, evaluate });
     await humanFocusField(page, locator as unknown as Locator, opts);
     expect(locator.focus).toHaveBeenCalledTimes(1);

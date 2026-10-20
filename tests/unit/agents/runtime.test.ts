@@ -3477,72 +3477,96 @@ describe('AgentRuntime error budget', () => {
     expect(agentResponses[0]?.payload.retryable).toBe(false);
   });
 
-  it('on maxTurns with a pending sign-in in this conversation, says the code is waiting (#2201)', async () => {
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
+  describe('budget reply with a pending sign-in (#2201)', () => {
+    const principalOriginator = { contactId: 'ceo', systemRole: 'principal', channel: 'web', initiatedAt: 't' };
 
-    let callId = 0;
-    const alwaysToolUseProvider: LLMProvider = {
-      id: 'mock',
-      chat: vi.fn(async () => ({
-        type: 'tool_use' as const,
-        toolCalls: [{ id: `call-${callId++}`, name: 'web-fetch', input: {} }],
-        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
-        provenance: MOCK_PROVENANCE,
-      })),
-    };
-    const mockExecution = {
-      invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
-      getToolDefinitions: vi.fn().mockReturnValue([]),
-    } as unknown as ExecutionLayer;
-    const pending = {
-      id: 'ver-1', purpose: 'sign_in', kind: 'code', delivery: 'email',
-      site: 'insurer.example', pageDomain: 'insurer.example', browserSessionId: 'sess-1',
-      taskId: null, conversationId: 'conv-budget-ver', status: 'pending',
-      requestedAt: new Date(), expiresAt: new Date(Date.now() + 15 * 60_000), resolvedAt: null, metadata: {},
-    };
-    const verification = {
-      listActive: vi.fn(async () => [pending]),
-      askChannel: vi.fn(() => 'signal'),
-      tracker: { trackedIds: vi.fn(() => []) },
-    } as unknown as VerificationRuntime;
+    async function runToBudget(opts: { conversationId: string; channelId: string; metadata?: Record<string, unknown> }) {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      let callId = 0;
+      const alwaysToolUseProvider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn(async () => ({
+          type: 'tool_use' as const,
+          toolCalls: [{ id: `call-${callId++}`, name: 'web-fetch', input: {} }],
+          usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        })),
+      };
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+        getToolDefinitions: vi.fn().mockReturnValue([]),
+      } as unknown as ExecutionLayer;
+      const pending = {
+        id: 'ver-1', purpose: 'sign_in', kind: 'code', delivery: 'email',
+        site: 'insurer.example', pageDomain: 'insurer.example', browserSessionId: 'sess-1',
+        taskId: null, conversationId: opts.conversationId, status: 'pending',
+        requestedAt: new Date(), expiresAt: new Date(Date.now() + 15 * 60_000), resolvedAt: null, metadata: {},
+      };
+      const verification = {
+        listActive: vi.fn(async () => [pending]),
+        askChannel: vi.fn(() => 'signal'),
+        tracker: { trackedIds: vi.fn(() => []) },
+      } as unknown as VerificationRuntime;
+      const agentResponses: AgentResponseEvent[] = [];
+      bus.subscribe('agent.response', 'dispatch', (event) => {
+        agentResponses.push(event as AgentResponseEvent);
+      });
+      new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider: alwaysToolUseProvider,
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [toolDef],
+        errorBudget: { maxTurns: 3, maxConsecutiveErrors: 10 },
+        verification,
+        browserSessionAlive: () => true,
+        timezone: 'America/Toronto',
+      }).register();
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: opts.conversationId,
+        channelId: opts.channelId,
+        senderId: 'user',
+        content: 'Sign in to my insurer',
+        parentEventId: 'parent-1',
+        ...(opts.metadata ? { metadata: opts.metadata } : {}),
+      }));
+      expect(agentResponses).toHaveLength(1);
+      expect(agentResponses[0]?.payload.isError).toBe(true);
+      expect(agentResponses[0]?.payload.errorType).toBe('BUDGET_EXCEEDED');
+      return String(agentResponses[0]?.payload.content);
+    }
 
-    const agentResponses: AgentResponseEvent[] = [];
-    bus.subscribe('agent.response', 'dispatch', (event) => {
-      agentResponses.push(event as AgentResponseEvent);
+    it('tells the principal in a private thread that the code is waiting', async () => {
+      const content = await runToBudget({
+        conversationId: 'conv-budget-ver', channelId: 'web', metadata: { originator: principalOriginator },
+      });
+      expect(content).toContain('insurer.example');
+      expect(content).toMatch(/emailed/);
+      expect(content).not.toMatch(/unable to process/);
     });
 
-    const agent = new AgentRuntime({
-      agentId: 'coordinator',
-      systemPrompt: 'You are an assistant.',
-      provider: alwaysToolUseProvider,
-      resolvedModel: 'mock-model',
-      bus,
-      logger,
-      executionLayer: mockExecution,
-      skillToolDefs: [toolDef],
-      errorBudget: { maxTurns: 3, maxConsecutiveErrors: 10 },
-      verification,
-      browserSessionAlive: () => true,
-      timezone: 'America/Toronto',
+    it('keeps the generic reply for an outside sender sharing the conversation', async () => {
+      const content = await runToBudget({
+        conversationId: 'signal:+15555550100',
+        channelId: 'signal',
+        metadata: { originator: { ...principalOriginator, contactId: 'other', systemRole: 'contact', channel: 'signal' } },
+      });
+      expect(content).not.toContain('insurer.example');
+      expect(content).toMatch(/unable to process/);
     });
-    agent.register();
 
-    await bus.publish('dispatch', createAgentTask({
-      agentId: 'coordinator',
-      conversationId: 'conv-budget-ver',
-      channelId: 'web',
-      senderId: 'user',
-      content: 'Sign in to my insurer',
-      parentEventId: 'parent-1',
-    }));
-
-    expect(agentResponses).toHaveLength(1);
-    expect(agentResponses[0]?.payload.isError).toBe(true);
-    expect(agentResponses[0]?.payload.errorType).toBe('BUDGET_EXCEEDED');
-    expect(agentResponses[0]?.payload.content).toContain('insurer.example');
-    expect(agentResponses[0]?.payload.content).toMatch(/emailed/);
-    expect(agentResponses[0]?.payload.content).not.toMatch(/unable to process/);
+    it('keeps the generic reply in a group thread, even for the principal', async () => {
+      const content = await runToBudget({
+        conversationId: 'signal:group=abc', channelId: 'signal', metadata: { originator: principalOriginator },
+      });
+      expect(content).not.toContain('insurer.example');
+      expect(content).toMatch(/unable to process/);
+    });
   });
 
   it('stops after maxConsecutiveErrors is exceeded', async () => {

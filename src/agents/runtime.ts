@@ -3497,11 +3497,28 @@ export class AgentRuntime {
     };
     await this.publishAgentError(agentErr, taskEvent);
     // A sign-in this task left waiting on a code is still finishable: say so instead of
-    // the generic failure, which hid the live challenge (#2201).
-    const verificationReply = await this.pendingVerificationBudgetReply(taskEvent.payload.conversationId);
+    // the generic failure, which hid the live challenge (#2201). Only to the principal's side
+    // in a private thread: the reply names the site and deadline, and a group thread or an
+    // outside sender sharing the conversation must not learn either.
+    const verificationReply = this.budgetReplyReachesPrincipalAlone(taskEvent)
+      ? await this.pendingVerificationBudgetReply(taskEvent.payload.conversationId)
+      : null;
     // Forward handoff so failedSkills from this run reach agent.response(isError)
     // and the scheduler can persist them (#1830 / maxConsecutiveErrors path).
     await this.sendErrorResponse(taskEvent, agentErr, handoff, verificationReply ?? undefined);
+  }
+
+  /** True when the budget reply is read by the principal's side alone (#2201): the same
+   *  audience rule as the delegation-failure reply, plus a one-to-one thread. */
+  private budgetReplyReachesPrincipalAlone(taskEvent: AgentTaskEvent): boolean {
+    const { channelId, conversationId, metadata } = taskEvent.payload;
+    const audience = delegationFailureAudience({
+      originator: parseTaskOriginator(metadata?.originator),
+      channelId,
+      delegated: isDelegatedSpecialistTask(metadata),
+    });
+    return audience.audience === 'principal'
+      && contactRecentHistoryAudienceIsPrivate({ channelId, conversationId, metadata, selfEmails: this.config.selfEmails });
   }
 
   /**
