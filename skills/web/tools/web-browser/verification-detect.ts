@@ -11,8 +11,9 @@
 // the page does not have). It never reads input values, so nothing it returns or throws
 // can carry a typed code.
 
-import type { Page } from 'playwright';
+import type { Frame, Page } from 'playwright';
 import type { ToolContext } from '../../../../src/skills/types.js';
+import { registrableDomain } from '../../../../src/verification/domain.js';
 
 /** Signal names, in the order they are reported. */
 export const VERIFICATION_SIGNALS = [
@@ -76,14 +77,15 @@ export function collectVerificationSignals(): string[] {
 }
 
 /**
- * Detect a verification screen on the page's main frame. Returns the known signal names
- * found, or [] when there are none or the page could not be evaluated (a detached or
- * navigating page is ordinary, so that is logged at debug and never fails the call).
+ * Detect a verification screen in one document: the page's main frame, or a given frame.
+ * Returns the known signal names found, or [] when there are none or the document could
+ * not be evaluated (a detached or navigating page is ordinary, so that is logged at debug
+ * and never fails the call).
  */
-export async function detectVerificationScreen(page: Page, log?: ToolContext['log']): Promise<string[]> {
+export async function detectVerificationScreen(scope: Page | Frame, log?: ToolContext['log']): Promise<string[]> {
   let raw: unknown;
   try {
-    raw = await page.evaluate(collectVerificationSignals);
+    raw = await scope.evaluate(collectVerificationSignals);
   } catch (err) {
     // The in-page function reads no input values, so the message carries no code.
     log?.debug({ errMessage: err instanceof Error ? err.message : String(err) }, 'Verification screen detection failed — no hint');
@@ -92,4 +94,36 @@ export async function detectVerificationScreen(page: Page, log?: ToolContext['lo
   // The page can tamper with its own globals; accept only known signal names.
   if (!Array.isArray(raw)) return [];
   return raw.filter((s): s is VerificationSignal => typeof s === 'string' && KNOWN_SIGNALS.has(s));
+}
+
+/** Signals that mean "the code is typed into this document" (a delivery choice is not one). */
+const CODE_ENTRY_SIGNALS: ReadonlySet<string> = new Set<VerificationSignal>([
+  'one-time-code-input',
+  'short-numeric-input-with-code-wording',
+]);
+
+async function hasCodeEntry(scope: Page | Frame, log?: ToolContext['log']): Promise<boolean> {
+  return (await detectVerificationScreen(scope, log)).some((s) => CODE_ENTRY_SIGNALS.has(s));
+}
+
+/**
+ * The URL of the document the sign-in code will be typed into (#2017): the top-level page
+ * unless the main frame has no code input and a child frame on a website does (an
+ * identity provider embedded in the site's own page). The verification's page_domain is
+ * taken from it, and the browser guard judges a typed code by the field's own frame, so
+ * the two must agree. The main frame wins when both hold one, so an embedded widget
+ * cannot take over a page that has its own code input.
+ */
+export async function codeEntryPageUrl(page: Page, log?: ToolContext['log']): Promise<string> {
+  const topUrl = page.url();
+  const main = page.mainFrame();
+  if (await hasCodeEntry(main, log)) return topUrl;
+  for (const frame of page.frames()) {
+    if (frame === main) continue;
+    const url = frame.url();
+    // Only a website frame can carry a page_domain (no about:, data:, blob: or IP hosts).
+    if (!/^https?:/i.test(url) || registrableDomain(url) === null) continue;
+    if (await hasCodeEntry(frame, log)) return url;
+  }
+  return topUrl;
 }

@@ -57,8 +57,23 @@ function makeRuntime(overrides: Partial<VerificationRuntime> = {}) {
   };
 }
 
-function makeBrowser(url = 'https://aircanada.b2clogin.com/signin/verify') {
-  const session = { page: { url: () => url }, keepWarm: false };
+/** A frame whose in-page verification detection reports `signals`. */
+function fakeFrame(url: string, signals: string[] = []) {
+  return { url: () => url, evaluate: vi.fn(async () => signals) };
+}
+
+/**
+ * A session whose top page is `url`. `mainSignals` is what detection finds in the main
+ * frame; `childFrames` are the page's other frames.
+ */
+function makeBrowser(
+  url = 'https://aircanada.b2clogin.com/signin/verify',
+  mainSignals: string[] = [],
+  childFrames: Array<ReturnType<typeof fakeFrame>> = [],
+) {
+  const mainFrame = fakeFrame(url, mainSignals);
+  const page = { url: () => url, mainFrame: () => mainFrame, frames: () => [mainFrame, ...childFrames] };
+  const session = { page, keepWarm: false };
   const service = {
     getSession: vi.fn((id: string) => (id === SESSION ? session : undefined)),
   };
@@ -120,6 +135,59 @@ describe('verification tool', () => {
         pageDomain: 'https://aircanada.b2clogin.com/signin/verify',
       }),
     );
+  });
+
+  describe('page_domain when the code input lives in a child frame', () => {
+    const IDP_FRAME = 'https://manulife.b2clogin.com/mfa';
+    const input = { action: 'open', delivery: 'sms', site: 'manulife.ca', browser_session_id: SESSION };
+
+    it('takes the child frame holding the code input', async () => {
+      const runtime = makeRuntime();
+      const browser = makeBrowser('https://www.manulife.ca/signin', [], [
+        fakeFrame('https://ads.adnetwork.com/slot', []),
+        fakeFrame(IDP_FRAME, ['one-time-code-input']),
+      ]);
+      const result = await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
+
+      expect(result.success).toBe(true);
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: IDP_FRAME }));
+      if (result.success) expect((result.data as Data).page_domain).toBe('b2clogin.com');
+    });
+
+    it('also recognises a short numeric input with code wording', async () => {
+      const runtime = makeRuntime();
+      const browser = makeBrowser('https://www.manulife.ca/signin', [], [
+        fakeFrame(IDP_FRAME, ['short-numeric-input-with-code-wording']),
+      ]);
+      await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: IDP_FRAME }));
+    });
+
+    it('keeps the top-level url when the main frame holds the code input', async () => {
+      const runtime = makeRuntime();
+      const browser = makeBrowser('https://www.manulife.ca/signin', ['one-time-code-input'], [
+        fakeFrame(IDP_FRAME, ['one-time-code-input']),
+      ]);
+      await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: 'https://www.manulife.ca/signin' }));
+    });
+
+    it('keeps the top-level url when no frame holds a code input (a delivery choice is not one)', async () => {
+      const runtime = makeRuntime();
+      const browser = makeBrowser('https://www.manulife.ca/signin', [], [fakeFrame(IDP_FRAME, ['delivery-choice'])]);
+      await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: 'https://www.manulife.ca/signin' }));
+    });
+
+    it('ignores a child frame with no registrable domain', async () => {
+      const runtime = makeRuntime();
+      const browser = makeBrowser('https://www.manulife.ca/signin', [], [
+        fakeFrame('http://10.0.0.5/otp', ['one-time-code-input']),
+        fakeFrame('about:srcdoc', ['one-time-code-input']),
+      ]);
+      await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: 'https://www.manulife.ca/signin' }));
+    });
   });
 
   it('open pins the browser session warm', async () => {

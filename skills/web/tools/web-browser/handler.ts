@@ -647,6 +647,16 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       if (hasSecretRef && hasText) {
         return { ok: false, error: 'type accepts either text or secret_ref, not both' };
       }
+      if (!hasSecretRef && typeof text !== 'string') {
+        return { ok: false, error: 'type requires text (string) or secret_ref (string)' };
+      }
+
+      // Resolve the field first: the domain a value is typed on is the domain of the
+      // document holding the field, which may be a child frame (an identity provider, or a
+      // chat or ad widget) rather than the top page (#2017). Read before typing, so the
+      // tracking below keys on where the code went even if Enter navigates.
+      const { locator: typeTarget, scope: typeScope } = await resolveLocatorWithScope(page, selector, ctx.log);
+      const typedOnUrl = typeScope.url();
 
       let fillValue: string;
       if (hasSecretRef) {
@@ -664,20 +674,18 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
         // in that window (a batch call falls through to the screenshot block on a step throw).
         deps.markSecretInjected();
       } else {
+        // Checked before resolving; repeated so TypeScript narrows `text`.
         if (typeof text !== 'string') {
           return { ok: false, error: 'type requires text (string) or secret_ref (string)' };
         }
-        // Destination guard (#2017): a tracked sign-in code types only on its own page domain.
-        if (!trackedCodeAllowedOn(ctx, text, page.url())) {
+        // Destination guard (#2017): a tracked sign-in code types only on its own page
+        // domain, judged by the field's own document.
+        if (!trackedCodeAllowedOn(ctx, text, typedOnUrl)) {
           return { ok: false, error: TRACKED_CODE_REFUSAL };
         }
         fillValue = text;
       }
 
-      // The domain the value is typed on, read before typing (an Enter-less fill rarely
-      // navigates, but the tracking below must key on where the code actually went).
-      const typedOnUrl = page.url();
-      const typeTarget = await resolveLocator(page, selector, ctx.log);
       // Focus the field with a human cursor approach, clear any existing content
       // (humanType appends; we want replace semantics), then type with human cadence.
       // The same for both the visible-text and secret_ref paths — registering the secret
@@ -924,6 +932,22 @@ async function isLikelyEmpty(page: Page, log: ToolContext['log']): Promise<boole
  * unguarded: a detached main frame is a genuine failure the caller should surface.
  */
 async function resolveLocator(page: Page, selector: string, log: ToolContext['log']): Promise<Locator> {
+  return (await resolveLocatorWithScope(page, selector, log)).locator;
+}
+
+/** A resolved locator and the document it lives in: the page (main frame) or one child frame. */
+interface ScopedLocator {
+  locator: Locator;
+  /** Where the element lives; `scope.url()` is that document's URL, not necessarily the top page's. */
+  scope: Page | Frame;
+}
+
+/**
+ * resolveLocator, also returning the scope the match was found in. The sign-in code guard
+ * (#2017) needs it: a field resolved into a child frame (an identity provider, or a chat
+ * or ad widget) belongs to that frame's domain, not the top page's.
+ */
+async function resolveLocatorWithScope(page: Page, selector: string, log: ToolContext['log']): Promise<ScopedLocator> {
   // Ref fast-path: a ref token (g<epoch>f<frame>e<n>, emitted by extractFrameContent) names
   // exactly one element. Resolve by the unique attribute value and accept ONLY when exactly one
   // element carries it across the main frame and all eligible child frames — this is how the
@@ -950,13 +974,13 @@ async function resolveLocator(page: Page, selector: string, log: ToolContext['lo
       ...page.frames().filter((frame) => frame !== refMainFrame && !isBlockedFrameUrl(frame.url())),
     ];
     let total = 0;
-    let sole: Locator | null = null;
+    let sole: ScopedLocator | null = null;
     for (const scope of scopes) {
       try {
         const loc = scope.locator(attrSelector);
         const count = await loc.count();
         total += count;
-        if (count === 1 && sole === null) sole = loc.first();
+        if (count === 1 && sole === null) sole = { locator: loc.first(), scope };
       } catch (err) {
         log.debug({ err }, 'Skipping scope during ref resolution (detached/error)');
       }
@@ -984,7 +1008,7 @@ async function resolveLocator(page: Page, selector: string, log: ToolContext['lo
 
   // Main frame first (the common case, and the cheapest).
   const top = await resolveInScope(page, selector, log);
-  if (top) return top;
+  if (top) return { locator: top, scope: page };
 
   // Child frames eligible for interaction (exclude the main frame and private/internal
   // hosts). This is what lets click/type/hover/wait_for reach into legitimate iframes.
@@ -995,7 +1019,7 @@ async function resolveLocator(page: Page, selector: string, log: ToolContext['lo
   for (const frame of childFrames) {
     try {
       const inFrame = await resolveInScope(frame, selector, log);
-      if (inFrame) return inFrame;
+      if (inFrame) return { locator: inFrame, scope: frame };
     } catch (err) {
       log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during selector resolution (detached/error)');
     }
@@ -1005,12 +1029,12 @@ async function resolveLocator(page: Page, selector: string, log: ToolContext['lo
   // for an in-iframe element still resolves, which is exactly the JS-heavy-widget case).
   const mainCss = page.locator(selector);
   const mainCssCount = await mainCss.count();
-  if (mainCssCount > 0) return mainCssCount === 1 ? mainCss : mainCss.first();
+  if (mainCssCount > 0) return { locator: mainCssCount === 1 ? mainCss : mainCss.first(), scope: page };
   for (const frame of childFrames) {
     try {
       const frameCss = frame.locator(selector);
       const frameCssCount = await frameCss.count();
-      if (frameCssCount > 0) return frameCssCount === 1 ? frameCss : frameCss.first();
+      if (frameCssCount > 0) return { locator: frameCssCount === 1 ? frameCss : frameCss.first(), scope: frame };
     } catch (err) {
       log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during CSS fallback (detached/error)');
     }
@@ -1018,7 +1042,7 @@ async function resolveLocator(page: Page, selector: string, log: ToolContext['lo
 
   // Last resort: return the (non-matching) main-frame locator so the caller's action
   // throws a clear "element not found" error rather than silently succeeding.
-  return mainCss;
+  return { locator: mainCss, scope: page };
 }
 
 /**

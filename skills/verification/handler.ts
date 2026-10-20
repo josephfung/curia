@@ -12,6 +12,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { Verification, VerificationDelivery } from '../../src/verification/types.js';
 import { registrableDomain } from '../../src/verification/domain.js';
+import { codeEntryPageUrl } from '../web/tools/web-browser/verification-detect.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import { isUuid } from '../../src/util/uuid.js';
 
@@ -128,7 +129,10 @@ export class VerificationToolHandler implements ToolHandler {
       };
     }
 
-    const pageUrl = session.page.url();
+    // The document the code goes into: the top page, or an identity-provider frame inside
+    // it when that is where the code input is. web-browser judges a typed code by the
+    // field's own frame, so page_domain must name that frame's domain.
+    const pageUrl = await codeEntryPageUrl(session.page, ctx.log);
     if (registrableDomain(pageUrl) === null) {
       return {
         success: false,

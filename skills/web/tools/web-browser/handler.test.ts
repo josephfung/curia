@@ -1892,6 +1892,82 @@ describe('web-browser sign-in verification (#2017)', () => {
     expect(session.redactInjectedSecrets(CODE)).not.toContain(CODE);
   });
 
+  describe('a field inside a child frame is judged by that frame, not the top page', () => {
+    /**
+     * A page on `topUrl` whose only matching field lives in a child frame on `frameUrl`:
+     * every top-level locator misses, the child frame's role locator matches.
+     */
+    function framedCtx(topUrl: string, frameUrl: string, input: Record<string, unknown>, runtime: VerificationRuntime) {
+      const miss = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+      const hit = { count: vi.fn().mockResolvedValue(1), first: vi.fn().mockReturnThis(), isVisible: vi.fn().mockResolvedValue(true) };
+      const scope = (url: string, matches: boolean) => ({
+        url: vi.fn().mockReturnValue(url),
+        name: vi.fn().mockReturnValue(''),
+        evaluate: vi.fn().mockResolvedValue(''),
+        getByRole: vi.fn().mockReturnValue(matches ? hit : miss),
+        getByLabel: vi.fn().mockReturnValue(miss),
+        getByText: vi.fn().mockReturnValue(miss),
+        locator: vi.fn().mockReturnValue(miss),
+      });
+      const mainFrame = scope(topUrl, false);
+      const childFrame = scope(frameUrl, true);
+      const page = {
+        ...makeMockPage('page', vi.fn(), topUrl),
+        getByRole: vi.fn().mockReturnValue(miss),
+        getByLabel: vi.fn().mockReturnValue(miss),
+        getByText: vi.fn().mockReturnValue(miss),
+        locator: vi.fn().mockReturnValue(miss),
+        frames: vi.fn().mockReturnValue([mainFrame, childFrame]),
+        mainFrame: vi.fn().mockReturnValue(mainFrame),
+      };
+      const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+      const browserService = {
+        getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-1', session }),
+        closeSession: vi.fn().mockResolvedValue(undefined),
+      } as unknown as BrowserService;
+      return { input, log: logger, browserService, verification: runtime } as unknown as ToolContext;
+    }
+
+    it('refuses a tracked code whose field is in a third-party iframe on the right top page', async () => {
+      const v = verification({});
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE);
+
+      const result = await new WebBrowserHandler().execute(
+        framedCtx('https://www.aircanada.com/mfa', 'https://chat.widgetvendor.com/frame', { action: 'type', selector: 'code', text: CODE }, runtime),
+      );
+
+      expect(result).toEqual({ success: false, error: REFUSAL });
+      expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+    });
+
+    it('allows a tracked code into an identity-provider iframe the verification was opened on', async () => {
+      const v = verification({ site: 'manulife.ca', pageDomain: 'b2clogin.com' });
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE);
+
+      const result = await new WebBrowserHandler().execute(
+        framedCtx('https://www.manulife.ca/signin', 'https://manulife.b2clogin.com/mfa', { action: 'type', selector: 'code', text: CODE }, runtime),
+      );
+
+      expect(result.success).toBe(true);
+      expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), CODE, expect.anything());
+    });
+
+    it('tracks a typed code against the frame\'s domain', async () => {
+      const v = verification({ site: 'manulife.ca', pageDomain: 'b2clogin.com' });
+      const { runtime, tracker } = makeRuntime([v]);
+      const register = vi.spyOn(tracker, 'register');
+
+      const result = await new WebBrowserHandler().execute(
+        framedCtx('https://www.manulife.ca/signin', 'https://manulife.b2clogin.com/mfa', { action: 'type', selector: 'code', text: CODE }, runtime),
+      );
+
+      expect(result.success).toBe(true);
+      expect(register).toHaveBeenCalledWith('v-1', 'b2clogin.com', CODE);
+    });
+  });
+
   it('adds verification_suspected when the page shows a code-entry screen', async () => {
     const { runtime } = makeRuntime([]);
     const { ctx, page } = verifyCtx('https://login.aircanada.com/mfa', { action: 'get_content' }, runtime);
