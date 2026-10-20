@@ -88,8 +88,10 @@ describe('budgetedOriginator', () => {
 
   it('budgets an originator with no tier, as unknown (#1059 fails closed)', () => {
     expect(budgetedOriginator({ originator: originator({ tier: null }) })).not.toBeNull();
-    const { tier: _omit, ...noTier } = originator();
-    expect(budgetedOriginator({ originator: noTier as TaskOriginator })).not.toBeNull();
+    // Originators stamped before #950 carry no tier field at all.
+    const noTier = originator();
+    delete noTier.tier;
+    expect(budgetedOriginator({ originator: noTier })).not.toBeNull();
   });
 
   it.each(['trusted', 'principal'] as const)('never budgets a %s-tier originator', (tier) => {

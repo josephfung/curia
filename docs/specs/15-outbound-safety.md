@@ -52,8 +52,9 @@ message must pass through it regardless of origin.
 **Pipeline (in order):**
 1. **Blocked contact check** — reject immediately if the recipient is blocked
 2. **Content filter** — run the two-stage filter pipeline (see below)
-3. **Channel dispatch** — route to the appropriate channel client (`email` → Nylas, etc.)
-4. **Audit emission** — on successful wire-level delivery, emit `outbound.delivered`
+3. **Relay budget** — a send to the principal alone that an outside contact caused counts against that contact's hourly budget; over it, the message goes to the principal's digest instead (#1320, spec 14)
+4. **Channel dispatch** — route to the appropriate channel client (`email` → Nylas, etc.)
+5. **Audit emission** — on successful wire-level delivery, emit `outbound.delivered`
 
 The gateway fails closed: if the content filter crashes, the message is blocked. A channel
 client failure returns a structured error; it does not silently drop the message.

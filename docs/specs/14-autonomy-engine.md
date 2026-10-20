@@ -327,9 +327,24 @@ Under `band` the outbound filter's `contact-data-leak` rule and Stage 2.5 are of
 | unsupported claims or unneeded disclosures | bounce to the drafter once. On the recheck: at 80+ cut the quoted text, recheck the trimmed message for grounding, send with a `claim_trimmed` digest item, hold if it still fails; below 80 hold |
 | judge failure | 80+: send with a `sent_without_review` item, at most five an hour, then hold until a judge call succeeds and email the principal once; below 80: hold. A failure on the recheck of a bounced draft holds. |
 
-A bounce publishes `outbound.blocked`, so a relayed reply goes through the dispatcher's rewrite, and shows the drafter only text quoted verbatim from its message. A hold raises an approval through the send's `holdRecipe` (each send skill replays itself; relayed replies replay through `dispatcher-relay`) and never publishes `outbound.blocked`; a hold with no approval behind it queues a digest item. Sends the principal approved (`humanApproved`), system notifications and sends to the principal alone are not reviewed. A stored draft cannot be trimmed, so a draft the review would trim is held.
+A bounce publishes `outbound.blocked`, so a relayed reply goes through the dispatcher's rewrite, and shows the drafter only text quoted verbatim from its message. A hold raises an approval through the send's `holdRecipe` (each send skill replays itself; relayed replies replay through `dispatcher-relay`) and never publishes `outbound.blocked`; a hold with no approval behind it queues a digest item. Sends the principal approved (`humanApproved`), system notifications and sends to the principal alone are not reviewed; sends to the principal alone are capped by the relay budget instead (below). A stored draft cannot be trimmed, so a draft the review would trim is held.
 
 Relayed replies skip the dispatcher's tier Gate C (except #1059's missing-tier escalate) and get all four questions at the gateway.
+
+### Relay budget (`RelayBudget`, `src/autonomy/relay-budget.ts`) (#1320)
+
+Sends to the principal alone skip the review above, and Gate C allows them, so an outside contact who keeps writing could get Curia to message the principal without limit. The gateway counts those relays per originator and, past the budget, sends them to the digest. It applies under both `tier` and `band`.
+
+A send counts when the principal is its only recipient and the task's originator (passed by the send skills as `originator`) is an outside contact at `known`, `unknown` or `blocked`, or with no tier recorded. Never counted: system notifications (approval prompts included), sends the principal approved or directed, work the principal, the system or an agent started, `trusted` contacts, and sends with no originator.
+
+The budget is `autonomy.relay_budget.per_hour` (default 3; 0 turns it off) over a sliding hour, in memory. Over it:
+
+1. The relay becomes a `relay_deferred` digest item carrying the contact's name and the full redacted text. If that item cannot be recorded, the relay is sent after all.
+2. The first deferral in a window also sends the principal one line on the same channel: "[name] has more updates. I'm holding them for your digest."
+3. A warning log line and an `autonomy.relay_deferred` audit event record the originator's contact id, tier and channel, never the content.
+4. The skill gets `success` with `deferred_to_digest` and a note not to re-send the message another way.
+
+The budget runs after the content filter, so blocked content is never queued.
 
 ### Sampling and feedback (`src/autonomy/sample-pool.ts`, `src/reports/`)
 

@@ -123,7 +123,7 @@ from `ctx.taskMetadata.originator` through one shared helper next to `isPrincipa
   originator, principal not sole recipient) delivers normally; missing tier is budgeted;
   digest publish failure delivers the relay; notice failure still defers.
 - Unit, skills: each of the four passes `originator` and surfaces `deferredToDigest`.
-- Integration: a deferred relay appears in `ReportQueue.list()` with source `relay_deferred`.
+- Report queue: a `relay_deferred` row lists with its own source (unit, `report-queue.test.ts`). No integration test: `principal.report` already reaches `audit_log` through the audit logger like every other source, and the only new code on that path is the `SOURCE_KEYS` entry.
 
 ## Out of scope
 
