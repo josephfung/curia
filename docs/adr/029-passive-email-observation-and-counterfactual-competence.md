@@ -2,7 +2,7 @@
 
 Date: 2026-07-16
 Status: Accepted
-Amended: 2026-10-20 — shadow rows no longer feed the Phase 3 score or the error-rate guard (#2191)
+Amended: 2026-10-19 — shadow rows no longer feed the Phase 3 score or the error-rate guard (#2191)
 
 ## Context
 
@@ -77,7 +77,7 @@ Rationale for rejecting a parallel competence model (option 1): Phase 3 already 
 - **No new public memory API.** Skills and bus events are additive (`ceo.sent_observed`, new skills); the skill/handler surfaces grow, but knowledge-graph and task schemas do not gain parallel "learning" tables.
 - **Accepted trade-off:** shadow rows are judged by a batched LLM assessment of substantive decision/recommendation equivalence at reconciliation time, not by the live per-action scoring-pass judge. They arrive pre-scored, so the scoring-pass judge path never sees them directly. Operators must understand `scored_by = 'shadow-reconciler'` in audits.
 
-## Amendment (2026-10-20) — shadows leave the score (#2191)
+## Amendment (2026-10-19) — shadows leave the score (#2191)
 
 **Decision B is reversed.** Shadow rows are still captured, judged and written to
 `autonomy_action_log`, but they no longer feed the Phase 3 pass: `countScored`,

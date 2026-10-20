@@ -250,8 +250,8 @@ export class ActionLogRepo {
    * by the WHERE clause (competence_flag IS NOT NULL).
    *
    * The age bound matters because competence rows are sparse: a count-only window reached
-   * back five months in prod and kept old failures blocking increases (#2191). Shadow rows
-   * are left out for the same reason as in countScored.
+   * back five months in prod and kept old failures blocking increases (#2191). Expired and
+   * shadow rows are left out for the same reasons as in countScored.
    */
   async getRecentCompetenceErrorRate(window: number, maxAgeDays: number): Promise<number | null> {
     const result = await this.pool.query<{ total: string; errors: string }>(
@@ -262,7 +262,7 @@ export class ActionLogRepo {
          SELECT competence_flag
          FROM autonomy_action_log
          WHERE scored_by IS NOT NULL AND competence_flag IS NOT NULL
-           AND outcome <> 'shadow_evaluated'
+           AND outcome NOT IN ('expired', 'shadow_evaluated')
            AND created_at > now() - make_interval(days => $2)
          ORDER BY created_at DESC
          LIMIT $1

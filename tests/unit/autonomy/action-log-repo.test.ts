@@ -376,15 +376,16 @@ describe('ActionLogRepo', () => {
       expect(rate).toBeNull();
     });
 
-    // #2191: the window is bounded by age as well as count, and shadow rows are not evidence.
+    // #2191: the window is bounded by age as well as count, and expired and shadow rows are not
+    // evidence.
     // Both filters must sit inside the subquery, before the LIMIT, or old and shadow rows would
     // still take window slots.
-    it('bounds the window by age and leaves out shadow rows, before the limit applies', async () => {
+    it('bounds the window by age and leaves out expired and shadow rows, before the limit applies', async () => {
       const { pool, queries } = makePool([{ total: '0', errors: '0' }]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
       await repo.getRecentCompetenceErrorRate(30, 90);
       const sql = queries[0]!.sql;
-      expect(sql).toContain("outcome <> 'shadow_evaluated'");
+      expect(sql).toContain("outcome NOT IN ('expired', 'shadow_evaluated')");
       expect(sql).toContain('make_interval(days => $2)');
       expect(sql.indexOf('shadow_evaluated')).toBeLessThan(sql.indexOf('LIMIT'));
       expect(sql.indexOf('make_interval')).toBeLessThan(sql.indexOf('LIMIT'));

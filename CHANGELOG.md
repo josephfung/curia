@@ -70,7 +70,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`ceo-inbox-sent-observe`** — shadow pairs are judged in small chunks, so a truncated reply no longer stalls observation. (#2191)
+- **`ceo-inbox-sent-observe`** — shadow pairs judged in small chunks; held-back pairs and long holds now reported. (#2191)
 - **Integration test cleanup** — contacts and knowledge-graph suites delete only their own rows, ending parallel FK races. (#2183)
 - **Email signature** — the model's own sign-off is replaced by the configured signature, so emails sign once. (#2138)
 - **Requests no tool can do** — an empty `tool-registry` search says to reach whoever can, not research around it. (#2149)

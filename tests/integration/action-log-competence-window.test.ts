@@ -1,9 +1,9 @@
 // Competence evidence window against real Postgres (#2191): shadow rows and rows older than
 // the age bound stay out of the error-rate guard, the capability rows and the sample count.
 //
-// The error rate and the counts are computed over the whole table, so the suite runs inside a
-// transaction on one client, empties the table there, and rolls back: nothing outside it is
-// seen or touched.
+// The error rate and the counts are computed over the whole table, so each test runs inside a
+// transaction on one client that locks the table against other writers, empties it, and rolls
+// back: nothing outside it is seen or touched.
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import pg from 'pg';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
@@ -31,6 +31,10 @@ describeIf('action-log competence window (#2191)', () => {
     if (!onTestDb) return;
     client = await pool.connect();
     await client.query('BEGIN');
+    // READ COMMITTED takes a fresh snapshot per statement, so rows other test files commit
+    // mid-test would show up in the reads. This lock blocks their writes for the length of the
+    // short transaction, and taking it before the DELETE orders it ahead of any row locks.
+    await client.query('LOCK TABLE autonomy_action_log IN SHARE ROW EXCLUSIVE MODE');
     // Inside the transaction only: rolled back in afterEach. Bindings cascade.
     await client.query('DELETE FROM autonomy_action_log');
     // A PoolClient has the query() surface the repo uses.
@@ -80,6 +84,15 @@ describeIf('action-log competence window (#2191)', () => {
     expect(await repo.getRecentCompetenceErrorRate(30, 90)).toBe(0);
     // Widening the bound brings the old failure back.
     expect(await repo.getRecentCompetenceErrorRate(30, 200)).toBe(0.5);
+  });
+
+  // Rows scored before #2159 Phase 3 could carry competence on an expired approval; the score
+  // ignores them, so the guard must too.
+  it('leaves expired rows out of the error rate', async () => {
+    await seed('approved', 1, 1, 'deterministic');
+    await seed('expired', 0, 2, 'deterministic');
+
+    expect(await repo.getRecentCompetenceErrorRate(30, 90)).toBe(0);
   });
 
   it('returns null when every competence row is a shadow or too old', async () => {

@@ -424,7 +424,7 @@ own pairs. It then writes a **pre-scored** `autonomy_action_log` row:
 | `scored_by` | `'shadow-reconciler'` — `findUnscoredTerminal` skips it |
 | Markers | `skill_name: 'shadow-draft-eval'`, `action_risk: 'none'`, `payload.shadow: true`, `outcome: 'shadow_evaluated'` |
 
-**These rows do not feed the Phase 3 score** (amended 2026-10-20, #2191).
+**These rows do not feed the Phase 3 score** (amended 2026-10-19, #2191).
 `countScored`, `findAllScored` and the error-rate guard all leave out
 `outcome = 'shadow_evaluated'`. Shadows are drafted only for messages Curia chose to
 punt, so a disagreement mostly says the punt was right, not that an action was wrong; and

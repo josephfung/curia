@@ -425,7 +425,7 @@ describe('AutonomyScoringPass', () => {
       const result = await pass.run();
 
       expect(svc.setScore).not.toHaveBeenCalled();
-      expect(result.reason).toMatch(/no recent competence evidence/);
+      expect(result.reason).toMatch(/no competence evidence in the last 90d/);
     });
 
     it('blocks score increase when error rate exceeds threshold', async () => {

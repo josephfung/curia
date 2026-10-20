@@ -153,7 +153,7 @@ export class AutonomyScoringPass {
       // resolved approvals carry no flags, so the window can empty out; an increase then
       // needs evidence from principal decisions or judged actions first.
       if (errorRate === null) {
-        result.reason = 'no recent competence evidence — blocking increase';
+        result.reason = `no competence evidence in the last ${this.config.errorRateWindowDays}d — blocking increase`;
         this.logger.info('AutonomyScoringPass: ' + result.reason);
         return result;
       }
