@@ -393,19 +393,20 @@ describe('DelegateHandler sign-in code tracking from ceo-inbox (#2017)', () => {
     expect(JSON.stringify(result.data)).toContain('739204');
   });
 
-  it('registers against every pending-or-recent email verification and ignores other deliveries', async () => {
+  it('registers against every pending-or-recent email verification, never a satisfied one, and ignores other deliveries', async () => {
     useInboxRegistry();
     const { bus } = makeBus('Code: 739204');
     const { runtime, register, closed } = makeRuntime([
       makeVerification({ id: 'ver-1' }),
       makeVerification({ id: 'ver-2', pageDomain: 'idp.example.com' }),
       makeVerification({ id: 'ver-sms', delivery: 'sms' }),
+      makeVerification({ id: 'ver-late', status: 'expired' }),
       makeVerification({ id: 'ver-done', status: 'satisfied' }),
     ]);
     await new DelegateHandler().execute(makeCtx(bus, { input: inboxInput, verification: runtime }));
-    expect(register.mock.calls.map(c => c[0]).sort()).toEqual(['ver-1', 'ver-2', 'ver-done']);
+    expect(register.mock.calls.map(c => c[0]).sort()).toEqual(['ver-1', 'ver-2', 'ver-late']);
     // Only the already-closed row starts its TTL clock; pending rows stay open.
-    expect(closed.mock.calls.map(c => c[0])).toEqual(['ver-done']);
+    expect(closed.mock.calls.map(c => c[0])).toEqual(['ver-late']);
   });
 
   it.each(['expired', 'abandoned'] as const)(

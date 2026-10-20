@@ -27,6 +27,7 @@ import {
 } from '../agents/deferred-delegation.js';
 import { RESUMABLE_CONTINUATION_CREATED_BY } from '../agents/resumable-continuation.js';
 import type { TaskRepo } from '../db/task-repo.js';
+import type { VerificationRuntime } from '../verification/index.js';
 import {
   DISPOSITION_TURN_TOOLS,
   NEEDS_DISPOSITION_TAG,
@@ -434,6 +435,11 @@ export interface SchedulerConfig {
    * leave the task open (#1951). Absent in tests that do not model tasks.
    */
   taskRepo?: TaskRepo;
+  /**
+   * Delegated sign-in verification (#2017). When set, tracked sign-in codes are scrubbed
+   * from the run record this class stores (summary, error, failed skills). Absent: no-op.
+   */
+  verification?: VerificationRuntime;
 }
 
 /** Bookkeeping for an in-flight scheduler agent.task, keyed by that event's id. */
@@ -472,6 +478,7 @@ export class Scheduler {
   private principalContactId?: string;
   private ownsAgent: (agentId: string) => boolean;
   private readonly taskRepo?: TaskRepo;
+  private readonly verification?: VerificationRuntime;
   private readonly maxInFlight: number;
   /** Seeds dispatcher routing for a delegation-retry wake in the original conversation. */
   private externalRoutingRegistrar?: (
@@ -527,6 +534,7 @@ export class Scheduler {
     this.principalContactId = config.principalContactId;
     this.ownsAgent = config.ownsAgent;
     this.taskRepo = config.taskRepo;
+    this.verification = config.verification;
     const maxInFlight = config.maxInFlight ?? DEFAULT_MAX_IN_FLIGHT;
     if (!Number.isInteger(maxInFlight) || maxInFlight < 1) {
       throw new Error(`scheduler maxInFlight must be a positive integer, got: ${String(maxInFlight)}`);
@@ -540,6 +548,11 @@ export class Scheduler {
    */
   setExternalRoutingRegistrar(registrar: NonNullable<Scheduler['externalRoutingRegistrar']>): void {
     this.externalRoutingRegistrar = registrar;
+  }
+
+  /** A copy of `value` with tracked sign-in codes replaced, for what this class stores (#2017). */
+  private scrubStored<T>(value: T): T {
+    return this.verification ? this.verification.tracker.scrubDeep(value) : value;
   }
 
   /**
@@ -558,8 +571,12 @@ export class Scheduler {
       if (!responseEvent.parentEventId) return;
 
       const parentEventId = responseEvent.parentEventId;
-      const failedSkills = responseEvent.payload.failedSkills;
+      // The run record (last_run_summary, last_error, failed skills) is stored and shown
+      // later, so a tracked sign-in code is scrubbed from this copy (#2017). The event
+      // itself is untouched: other subscribers, the delegate among them, need it verbatim.
+      const failedSkills = this.scrubStored(responseEvent.payload.failedSkills);
       const failedSkillsOmitted = responseEvent.payload.failedSkillsOmitted;
+      const content = this.scrubStored(responseEvent.payload.content);
 
       if (responseEvent.payload.isError) {
         const stashed = this.pendingFailureMessages.get(parentEventId);
@@ -573,9 +590,9 @@ export class Scheduler {
             'scheduler: agent.response(isError) arrived with no preceding agent.error — last_error will use response content',
           );
         }
-        const errorMessage =
-          stashed
-          ?? (responseEvent.payload.content.slice(0, 500) || 'Agent error');
+        const errorMessage = stashed !== undefined
+          ? this.scrubStored(stashed)
+          : (content.slice(0, 500) || 'Agent error');
         this.handleCompletion(
           parentEventId,
           false,
@@ -592,7 +609,7 @@ export class Scheduler {
       this.pendingFailureMessages.delete(parentEventId);
       // Pass the agent's final text as a fallback summary (truncated to 500 chars).
       // completeJobRun() writes it via COALESCE — agent-provided scheduler-report wins.
-      const autoSummary = responseEvent.payload.content.slice(0, 500) || undefined;
+      const autoSummary = content.slice(0, 500) || undefined;
       this.handleCompletion(
         parentEventId,
         true,

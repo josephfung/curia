@@ -47,6 +47,8 @@ import {
 } from './task-escalation.js';
 import { LATE_SPECIALIST_RESULT_MARKER } from '../memory/synthetic-user-turn.js';
 import { sendsFromPayload, shapeSpecialistAnswer } from './specialist-answer.js';
+import type { VerificationRuntime } from '../verification/index.js';
+import { CEO_INBOX_AGENT, trackInboxCodes } from '../verification/track-codes.js';
 
 /** Mirrors CLARIFICATION_PROTOCOL in skills/request-clarification/handler.ts. Duplicated as a
  *  literal rather than imported so src/ does not depend on a tool handler module — the same
@@ -546,6 +548,12 @@ export interface HandleLateResponseOptions {
   knownAgents?: Set<string>;
   /** Seeds dispatcher routing for a wake whose origin can receive a reply. */
   registerRouting?: LateWakeRoutingRegistrar;
+  /**
+   * Delegated sign-in verification (#2017). A late ceo-inbox result's codes are tracked the
+   * same as on the live delegate path, and the review-task note is scrubbed of tracked codes.
+   * The wake brief keeps the result verbatim: the coordinator needs the code to type it.
+   */
+  verification?: Pick<VerificationRuntime, 'tracker' | 'listActive'>;
 }
 
 /**
@@ -588,6 +596,19 @@ export async function handleLateResponse(
   const sends = sendsFromPayload(responsePayload);
   const deliveredAtDisplay = formatDeliveredAt(opts.respondedAt, opts.timezone, logger);
 
+  // A sign-in code the inbox specialist read out of an email after the delegate wait gave up
+  // is tracked here, as the live delegate path does, before the coordinator is woken with it
+  // or any note is written (#2017). Never throws.
+  const verification = opts.verification;
+  if (verification && handle.targetAgent === CEO_INBOX_AGENT) {
+    await trackInboxCodes(verification, content, logger, {
+      targetAgent: handle.targetAgent,
+      delegateEventId: handle.delegateEventId,
+    });
+  }
+  // Review-task notes go straight to TaskRepo, past the execution layer's scrub.
+  const scrubNote = (note: string): string => (verification ? verification.tracker.scrubText(note) : note);
+
   // The deliver branch hands the result back to the originating agent and closes the review task
   // (or, with an outside sender waiting, keeps it open until they get a reply — #1991).
   // Every other disposition records the outcome on that task and leaves it open for a human.
@@ -605,8 +626,8 @@ export async function handleLateResponse(
       handle,
       classification,
       lateResponseEventId: responseEventId,
-      note: renderDeliveredNote(deliveredNoteParams),
-      awaitingReplyNote: renderDeliveredAwaitingReplyNote(deliveredNoteParams),
+      note: scrubNote(renderDeliveredNote(deliveredNoteParams)),
+      awaitingReplyNote: scrubNote(renderDeliveredAwaitingReplyNote(deliveredNoteParams)),
       parentEventId: responseEventId,
       wakeBrief: buildLateResultBrief({
         targetAgent: handle.targetAgent,
@@ -630,7 +651,7 @@ export async function handleLateResponse(
     handle,
     classification,
     lateResponseEventId: responseEventId,
-    note: renderLateNote({
+    note: scrubNote(renderLateNote({
       targetAgent: handle.targetAgent,
       // The deliverable branch returned above, so the disposition here is a recorded one.
       // LateResponseClassification is a single interface rather than a discriminated union, so
@@ -639,7 +660,7 @@ export async function handleLateResponse(
       content,
       deliveredAtDisplay,
       maxResultChars: opts.maxResultChars,
-    }),
+    })),
     parentEventId: responseEventId,
   });
 }

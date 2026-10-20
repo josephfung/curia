@@ -17,6 +17,9 @@ import {
   type AgentTaskEvent,
 } from '../../../src/bus/events.js';
 import { LateDelegationSubscriber } from '../../../src/agents/late-delegation-subscriber.js';
+import { CodeTracker } from '../../../src/verification/code-tracker.js';
+import type { VerificationRuntime } from '../../../src/verification/index.js';
+import type { Verification } from '../../../src/verification/types.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -727,5 +730,110 @@ describe('LateDelegationSubscriber — closing a review task once the waiting se
       expect(task.tags).not.toContain('reply-pending');
       expect(task.notes.at(-1)).toMatch(/Closing this review/);
     });
+  });
+});
+
+describe('LateDelegationSubscriber — sign-in codes on the late path (#2017)', () => {
+  const CODE = '739204';
+
+  function emailVerification(): Verification {
+    return {
+      id: 'ver-mail', purpose: 'sign_in', kind: 'code', delivery: 'email', site: 'aircanada.com',
+      pageDomain: 'aircanada.com', browserSessionId: 'sess-1', taskId: null, conversationId: null,
+      status: 'pending', requestedAt: new Date(), expiresAt: new Date(Date.now() + 600_000),
+      resolvedAt: null, metadata: {},
+    };
+  }
+
+  function handle(overrides: Record<string, unknown> = {}) {
+    return {
+      delegate_event_id: 'delegate-evt-1',
+      status: 'pending',
+      resolution: null,
+      origin_channel_id: 'signal',
+      origin_agent_id: 'coordinator',
+      origin_conversation_id: 'signal:+15551234567',
+      origin_sender_id: '+15551234567',
+      review_task_id: null,
+      target_agent: 'ceo-inbox',
+      delegate_task: 'Read the Air Canada sign-in code',
+      originator: null,
+      ...overrides,
+    };
+  }
+
+  function runtime() {
+    const tracker = new CodeTracker({ ttlMinutesAfterClose: 120 });
+    const listActive = vi.fn(async () => [emailVerification()]);
+    return { verification: { tracker, listActive } as unknown as VerificationRuntime, tracker, listActive };
+  }
+
+  it('tracks a code in a late ceo-inbox result before the coordinator is woken, and hands it over unchanged', async () => {
+    const { pool } = fakePool({ existingHandle: handle() });
+    const bus = new EventBus(logger);
+    const { verification, tracker } = runtime();
+    const scrubbedAtWake: string[] = [];
+    const wakes: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'system', (e) => {
+      wakes.push(e as AgentTaskEvent);
+      scrubbedAtWake.push(tracker.scrubText(CODE));
+    });
+    new LateDelegationSubscriber({
+      pool, bus, logger, taskRepo: startSubscriberTaskRepo(), ttlMinutes: 60, maxResultChars: 500, verification,
+    }).start();
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'ceo-inbox',
+      conversationId: 'delegate-conv-1',
+      content: `Found it: your Air Canada code is ${CODE}.`,
+      parentEventId: 'delegate-evt-1',
+    }));
+
+    expect(wakes).toHaveLength(1);
+    expect(scrubbedAtWake).toEqual(['[sign-in code]']);
+    expect(wakes[0]!.payload.content).toContain(CODE);
+  });
+
+  it('does not look up verifications for another specialist\'s late result', async () => {
+    const { pool } = fakePool({ existingHandle: handle({ target_agent: 'calendar' }) });
+    const bus = new EventBus(logger);
+    const { verification, listActive } = runtime();
+    new LateDelegationSubscriber({
+      pool, bus, logger, taskRepo: startSubscriberTaskRepo(), ttlMinutes: 60, maxResultChars: 500, verification,
+    }).start();
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'calendar', conversationId: 'delegate-conv-1', content: `Booked ref ${CODE}`, parentEventId: 'delegate-evt-1',
+    }));
+
+    expect(listActive).not.toHaveBeenCalled();
+  });
+
+  it('scrubs the code from the note it writes onto the review task', async () => {
+    const { pool } = fakePool({ existingHandle: handle({ review_task_id: 'review-1', origin_agent_id: 'retired-agent' }) });
+    const bus = new EventBus(logger);
+    const { verification } = runtime();
+    const updateTask = vi.fn(async () => null);
+    const taskRepo = {
+      getTask: vi.fn(async () => ({ id: 'review-1', status: 'open', tags: [], progress: {} })),
+      updateTask,
+      completeTask: vi.fn(async () => null),
+    } as unknown as TaskRepo;
+    new LateDelegationSubscriber({
+      pool, bus, logger, taskRepo, ttlMinutes: 60, maxResultChars: 500, verification,
+      knownAgents: new Set(['coordinator', 'ceo-inbox']),
+    }).start();
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'ceo-inbox',
+      conversationId: 'delegate-conv-1',
+      content: `Your Air Canada code is ${CODE}.`,
+      parentEventId: 'delegate-evt-1',
+    }));
+
+    expect(updateTask).toHaveBeenCalledTimes(1);
+    const note = (updateTask.mock.calls[0] as unknown as [string, { progressNote: string }])[1].progressNote;
+    expect(note).toContain('[sign-in code]');
+    expect(note).not.toContain(CODE);
   });
 });

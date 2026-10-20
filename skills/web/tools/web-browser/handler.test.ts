@@ -1709,8 +1709,17 @@ describe('web-browser sign-in verification (#2017)', () => {
       expect(lines.length).toBeGreaterThan(0);
       for (const line of lines) {
         for (const form of FORMS) expect(line).not.toContain(form);
-        // Also decoded, in case a field was logged in an encoded form we did not list.
-        expect(decodeURIComponent(line.replace(/\+/g, ' '))).not.toMatch(/482[ -]?913/);
+        // Also decoded, in case a field was logged in an encoded form we did not list. Decoded
+        // run by run, so a stray '%' in the line does not abort the check.
+        const decoded = line.replace(/\+/g, ' ').replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+          try {
+            return decodeURIComponent(run);
+          } catch (err) {
+            if (!(err instanceof URIError)) throw err;
+            return run;
+          }
+        });
+        expect(decoded).not.toMatch(/482[ -]?913/);
       }
     }
 
@@ -1758,6 +1767,27 @@ describe('web-browser sign-in verification (#2017)', () => {
       expect(blockLines).toHaveLength(2);
       for (const l of blockLines) expect(l).toContain('[sign-in code]');
     });
+
+    it.each(FORMS)('a failed action whose error quotes c=%s logs and returns no code', async (form) => {
+      const { log, lines } = capturingLogger();
+      const { ctx, page } = verifyCtx('https://login.aircanada.com/mfa', { action: 'navigate', url: `https://login.aircanada.com/verify?c=${form}` }, runtimeWithCode());
+      (ctx as unknown as { log: unknown }).log = log;
+      // Playwright quotes the URL it failed on, in its message and its stack; a stray '%'
+      // elsewhere in the text must not stop the encoded forms being found.
+      const err = new Error(`page.goto: net::ERR_ABORTED (100% fail) at https://login.aircanada.com/verify?c=${form}`);
+      err.stack = `${err.message}\n    at navigate (handler.ts:1:1)`;
+      page.goto.mockRejectedValueOnce(err);
+
+      const result = await new WebBrowserHandler().execute(ctx);
+
+      expect(result.success).toBe(false);
+      const failedLines = lines.filter((l) => l.includes('Browser action failed'));
+      expect(failedLines).toHaveLength(1);
+      expect(failedLines[0]).toContain('[sign-in code]');
+      expectNoCode(lines);
+      const returned = JSON.stringify(result);
+      for (const f of FORMS) expect(returned).not.toContain(f);
+    });
   });
 
   it('allows a tracked value in a navigate url to its own page_domain', async () => {
@@ -1784,18 +1814,34 @@ describe('web-browser sign-in verification (#2017)', () => {
     expect(session.redactInjectedSecrets('4821')).not.toContain('4821');
   });
 
-  it('registers a typed code against every matching pending or recent verification', async () => {
+  it('registers a typed code against every matching pending, expired or abandoned verification', async () => {
     const pending = verification({ id: 'v-new' });
-    const recent = verification({ id: 'v-old', status: 'satisfied', resolvedAt: new Date('2026-10-19T11:00:00Z') });
+    const expired = verification({ id: 'v-old', status: 'expired', resolvedAt: new Date('2026-10-19T11:00:00Z') });
+    const satisfied = verification({ id: 'v-done', status: 'satisfied', resolvedAt: new Date('2026-10-19T11:00:00Z') });
     const other = verification({ id: 'v-other', site: 'manulife.ca', pageDomain: 'manulife.ca' });
-    const { runtime, tracker } = makeRuntime([pending, recent, other]);
+    const { runtime, tracker } = makeRuntime([pending, expired, satisfied, other]);
     const register = vi.spyOn(tracker, 'register');
+    const closed = vi.spyOn(tracker, 'closed');
 
     await new WebBrowserHandler().execute(
       verifyCtx('https://login.aircanada.com/mfa', { action: 'type', selector: '#code', text: CODE }, runtime).ctx,
     );
 
     expect(register.mock.calls.map((c) => c[0]).sort()).toEqual(['v-new', 'v-old']);
+    // The expired row's values start aging at once.
+    expect(closed.mock.calls.map((c) => c[0])).toEqual(['v-old']);
+  });
+
+  it('typing a code on a page whose only verification is satisfied registers nothing', async () => {
+    const satisfied = verification({ id: 'v-done', status: 'satisfied', resolvedAt: new Date('2026-10-19T11:00:00Z') });
+    const { runtime, tracker } = makeRuntime([satisfied]);
+    const { ctx, session } = verifyCtx('https://login.aircanada.com/mfa', { action: 'type', selector: '#code', text: CODE }, runtime);
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(tracker.size()).toBe(0);
+    expect(session.redactInjectedSecrets(CODE)).toBe(CODE);
   });
 
   it('typing a non-code string registers nothing', async () => {

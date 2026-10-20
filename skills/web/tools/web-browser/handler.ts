@@ -26,6 +26,7 @@ import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLan
 import { isCodeShaped } from '../../../../src/verification/code-shape.js';
 import { registrableDomain, sameRegistrableDomain } from '../../../../src/verification/domain.js';
 import type { VerificationRuntime } from '../../../../src/verification/index.js';
+import { registerCodes } from '../../../../src/verification/track-codes.js';
 import type { Verification } from '../../../../src/verification/types.js';
 import { detectVerificationScreen } from './verification-detect.js';
 
@@ -310,7 +311,7 @@ export class WebBrowserHandler implements ToolHandler {
       }
 
       // A navigate URL can carry a tracked sign-in code (#2017): never log one.
-      const logUrl = typeof step.url === 'string' ? logSafeUrl(ctx, step.url) : step.url;
+      const logUrl = typeof step.url === 'string' ? logSafeText(ctx,step.url) : step.url;
       ctx.log.info({ action: stepAction, sessionId, url: logUrl, selector: step.selector, batchIndex: isBatch ? i : undefined }, 'Executing browser action');
 
       try {
@@ -343,9 +344,11 @@ export class WebBrowserHandler implements ToolHandler {
         // the backstop must cover error paths too — so we log the redacted message and a
         // redacted stack rather than the raw err object (whose .message/.stack are the
         // unredacted source). No `{ err }` here: pino would serialize the unscrubbed original.
-        // Tracked sign-in codes (#2017) are scrubbed too: one may be tracked before this session typed it.
-        const safeMessage = scrubTrackedCodes(ctx, session.redactInjectedSecrets(message));
-        const safeStack = err instanceof Error && err.stack ? scrubTrackedCodes(ctx, session.redactInjectedSecrets(err.stack)) : undefined;
+        // Tracked sign-in codes (#2017) are scrubbed too: one may be tracked before this session
+        // typed it. Same treatment as a logged URL, decoded forms included: Playwright errors
+        // quote the (possibly percent-encoded) URL they failed on.
+        const safeMessage = logSafeText(ctx, session.redactInjectedSecrets(message));
+        const safeStack = err instanceof Error && err.stack ? logSafeText(ctx, session.redactInjectedSecrets(err.stack)) : undefined;
         ctx.log.error({ action: stepAction, sessionId, errMessage: safeMessage, stack: safeStack, batchIndex: isBatch ? i : undefined }, 'Browser action failed');
         failure = { index: i, error: safeMessage, kind: 'execution' };
         break;
@@ -488,7 +491,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       try {
         parsedUrl = new URL(url);
       } catch {
-        return { ok: false, error: `Invalid URL: "${logSafeUrl(ctx, url)}"` };
+        return { ok: false, error: `Invalid URL: "${logSafeText(ctx,url)}"` };
       }
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
         return { ok: false, error: `Only http: and https: are allowed, got: ${parsedUrl.protocol}` };
@@ -503,7 +506,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       }
       // A tracked sign-in code in the URL may only travel to its own page domain (#2017).
       // Check the decoded forms too, so percent-encoding can't smuggle one past the matcher.
-      if (urlVariants(url, ctx.log).some((variant) => !trackedCodeAllowedOn(ctx, variant, parsedUrl.toString()))) {
+      if (textVariants(url).some((variant) => !trackedCodeAllowedOn(ctx, variant, parsedUrl.toString()))) {
         return { ok: false, error: TRACKED_CODE_REFUSAL };
       }
       const response = await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
@@ -536,7 +539,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // longer be representative after the recovery attempt). (#1053)
       let reloadResponse: Awaited<ReturnType<typeof page.reload>> | undefined;
       if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
-        ctx.log.info({ sessionId, url: logSafeUrl(ctx, parsedUrl.toString()), pageTitle }, 'Soft block suspected — dwelling and reloading once');
+        ctx.log.info({ sessionId, url: logSafeText(ctx,parsedUrl.toString()), pageTitle }, 'Soft block suspected — dwelling and reloading once');
         await jitteredDelay(1500, 3000);
         reloadResponse = await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch((err) => {
           ctx.log.debug({ err, sessionId }, 'Reload during soft-block recovery failed — proceeding with current DOM');
@@ -555,7 +558,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // Use the reload response status when available — it reflects the post-recovery state.
       const status = reloadResponse?.status() ?? response?.status();
       if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
-        ctx.log.warn({ sessionId, url: logSafeUrl(ctx, parsedUrl.toString()), status, pageTitle }, 'Navigation hit a hard edge block');
+        ctx.log.warn({ sessionId, url: logSafeText(ctx,parsedUrl.toString()), status, pageTitle }, 'Navigation hit a hard edge block');
         return {
           ok: false,
           error: `Site blocked automated access (HTTP ${status ?? '?'}${pageTitle ? `, "${pageTitle}"` : ''}). This site can't be driven from the server — hand off to the principal or draft the request instead.`,
@@ -721,11 +724,6 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
   }
 }
 
-/** `text` with tracked sign-in codes replaced, for logs and errors (#2017). Identity without the runtime. */
-function scrubTrackedCodes(ctx: ToolContext, text: string): string {
-  return ctx.verification ? ctx.verification.tracker.scrubText(text) : text;
-}
-
 /**
  * Destination guard (#2017): false when `value` contains a tracked sign-in code and
  * `destinationUrl` is not on the registrable domain of any verification that tracked it.
@@ -741,41 +739,52 @@ function trackedCodeAllowedOn(ctx: ToolContext, value: string, destinationUrl: s
   return false;
 }
 
-/** Stands in for a URL whose sign-in code could not be scrubbed out of every form. */
-const URL_WITHHELD = '[url withheld: contains a sign-in code]';
+/** Stands in for a URL or message whose sign-in code could not be scrubbed out of every form. */
+const TEXT_WITHHELD = '[withheld: contains a sign-in code]';
 
 /**
- * A URL safe to log or echo (#2017): unchanged when no form of it (raw, form-decoded,
- * percent-decoded) holds a tracked code; otherwise the first form that scrubs clean in
- * every one of its own forms (in practice the decoded one with the code replaced), or a
- * fixed placeholder. A plain scrub of the raw URL is not enough: `482%20913` and
- * `%34%38%32%39%31%33` only match once decoded, and URL.toString() percent-encodes.
+ * A URL, error message or stack safe to log or echo (#2017): unchanged when no form of it
+ * (raw, form-decoded, percent-decoded) holds a tracked code; otherwise the first form that
+ * scrubs clean in every one of its own forms (in practice the decoded one with the code
+ * replaced), or a fixed placeholder. A plain scrub of the raw text is not enough:
+ * `482%20913` and `%34%38%32%39%31%33` only match once decoded, URL.toString()
+ * percent-encodes, and Playwright errors quote the URL they failed on.
  */
-function logSafeUrl(ctx: ToolContext, url: string): string {
+function logSafeText(ctx: ToolContext, text: string): string {
   const tracker = ctx.verification?.tracker;
-  if (!tracker) return url;
-  const holdsCode = (u: string): boolean => urlVariants(u, ctx.log).some((v) => tracker.allowedDomainsFor(v) !== null);
-  if (!holdsCode(url)) return url;
-  for (const variant of urlVariants(url, ctx.log)) {
+  if (!tracker) return text;
+  const holdsCode = (t: string): boolean => textVariants(t).some((v) => tracker.allowedDomainsFor(v) !== null);
+  if (!holdsCode(text)) return text;
+  for (const variant of textVariants(text)) {
     const scrubbed = tracker.scrubText(variant);
     if (!holdsCode(scrubbed)) return scrubbed;
   }
-  return URL_WITHHELD;
+  return TEXT_WITHHELD;
 }
 
-/** A URL plus its percent-decoded and form-decoded forms, for the destination guard. */
-function urlVariants(url: string, log: ToolContext['log']): string[] {
-  const variants = new Set([url, url.replace(/\+/g, ' ')]);
-  for (const v of [...variants]) {
-    try {
-      variants.add(decodeURIComponent(v));
-    } catch (err) {
-      // Malformed percent-encoding: the raw form is still checked, and new URL() accepted it.
-      // Log the error kind only: the message would quote the URL, which may hold a code.
-      log.debug({ errName: err instanceof Error ? err.name : typeof err }, 'URL has malformed percent-encoding; checking its raw form only');
-    }
-  }
+/** A URL or text plus its form-decoded and percent-decoded forms, for the guard and the log scrub. */
+function textVariants(text: string): string[] {
+  const variants = new Set([text, text.replace(/\+/g, ' ')]);
+  for (const v of [...variants]) variants.add(decodePercentRuns(v));
   return [...variants];
+}
+
+/**
+ * Decode each run of percent-escapes on its own, so one malformed escape (a stray "100%"
+ * in an error message, a bad sequence in a URL) cannot stop the rest of the text from
+ * being decoded. A run that is not valid UTF-8 has its ASCII escapes decoded alone (a
+ * sign-in code is ASCII) and the rest left as written.
+ */
+function decodePercentRuns(text: string): string {
+  return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch (err) {
+      // Anything but a decoding failure is a bug: let it surface.
+      if (!(err instanceof URIError)) throw err;
+      return run.replace(/%([0-7][0-9A-Fa-f])/g, (_escape, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    }
+  });
 }
 
 /**
@@ -801,9 +810,14 @@ async function trackTypedCode(
     ctx.log.error({ sessionId, errMessage }, 'Could not list verifications; a typed code-shaped value was not tracked');
     return;
   }
-  const matching = active.filter((v) => sameRegistrableDomain(typedOnUrl, v.pageDomain));
+  // Pending, expired and abandoned rows only (a satisfied verification is finished);
+  // registerCodes starts the TTL clock for the non-pending ones.
+  const matching = registerCodes(
+    runtime,
+    active.filter((v) => sameRegistrableDomain(typedOnUrl, v.pageDomain)),
+    [value],
+  );
   if (matching.length === 0) return;
-  for (const v of matching) runtime.tracker.register(v.id, v.pageDomain, value);
   session.registerInjectedSecret(value);
   ctx.log.info({ sessionId, verificationIds: matching.map((v) => v.id) }, 'Typed sign-in code tracked for its verification(s)');
 }

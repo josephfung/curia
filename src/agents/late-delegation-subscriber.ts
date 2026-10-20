@@ -31,6 +31,7 @@ import {
   computeLateDeliveryExpiry,
   handleLateResponse,
   parseSchedulerJobId,
+  type HandleLateResponseOptions,
   type LateWakeRoutingRegistrar,
 } from './late-delegation.js';
 
@@ -58,6 +59,8 @@ export interface LateDelegationSubscriberOptions {
   knownAgents?: Set<string>;
   /** Seeds dispatcher routing so a woken agent's reply reaches the principal (#972 pattern). */
   registerRouting?: LateWakeRoutingRegistrar;
+  /** Delegated sign-in verification (#2017): code tracking and note scrub on the late path. */
+  verification?: HandleLateResponseOptions['verification'];
 }
 
 export class LateDelegationSubscriber {
@@ -196,6 +199,7 @@ export class LateDelegationSubscriber {
         ...(this.opts.timezone !== undefined && { timezone: this.opts.timezone }),
         ...(this.opts.knownAgents !== undefined && { knownAgents: this.opts.knownAgents }),
         ...(this.opts.registerRouting !== undefined && { registerRouting: this.opts.registerRouting }),
+        ...(this.opts.verification !== undefined && { verification: this.opts.verification }),
       });
     } catch (err) {
       // Leave the handle pending: the sweep finds this same response in audit_log on a later

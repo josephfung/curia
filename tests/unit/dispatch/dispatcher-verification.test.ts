@@ -123,14 +123,35 @@ describe('Dispatcher — principal-relayed sign-in codes (#2017)', () => {
     expect(tasks[0]!.payload.content).toContain('482 913');
   });
 
-  it('registers against every pending or recent sms/app verification', async () => {
+  it('registers against every pending, expired or abandoned sms/app verification, never a satisfied one', async () => {
     const { send, registerSpy } = buildHarness({
-      active: [verificationRow('v-sms', 'sms'), verificationRow('v-app', 'app', 'satisfied'), verificationRow('v-mail', 'email')],
+      active: [
+        verificationRow('v-sms', 'sms'),
+        verificationRow('v-app', 'app', 'expired'),
+        verificationRow('v-gone', 'sms', 'abandoned'),
+        verificationRow('v-done', 'app', 'satisfied'),
+        verificationRow('v-mail', 'email'),
+      ],
     });
     await send('code 482913');
 
     const ids = registerSpy.mock.calls.map((c) => c[0]).sort();
-    expect(ids).toEqual(['v-app', 'v-sms']);
+    expect(ids).toEqual(['v-app', 'v-gone', 'v-sms']);
+  });
+
+  it('starts the TTL clock for a non-pending row right after registering against it', async () => {
+    const { send, tracker } = buildHarness({
+      active: [verificationRow('v-sms', 'sms'), verificationRow('v-app', 'app', 'expired')],
+    });
+    const closedSpy = vi.spyOn(tracker, 'closed');
+    await send('code 482913');
+    expect(closedSpy.mock.calls.map((c) => c[0])).toEqual(['v-app']);
+  });
+
+  it('does not register when the only sms verification is already satisfied', async () => {
+    const { send, registerSpy } = buildHarness({ active: [verificationRow('v-done', 'sms', 'satisfied')] });
+    await send('code 482913');
+    expect(registerSpy).not.toHaveBeenCalled();
   });
 
   it('ignores quoted history and phone/date shapes', async () => {

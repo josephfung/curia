@@ -6,6 +6,8 @@ import {
 import { WAKE_DISPOSITION_INSTRUCTION } from '../../../src/scheduler/wake-disposition.js';
 import { Scheduler, POLL_INTERVAL_MS, WATCHDOG_INTERVAL_MS, computeRecoveryTimeout, MAX_PRIOR_SUMMARY_CHARS, MAX_PRIOR_CONTEXT_CHARS, TRUNCATED_MARKER, DEFAULT_MAX_IN_FLIGHT } from '../../../src/scheduler/scheduler.js';
 import type { AgentYamlConfig } from '../../../src/agents/loader.js';
+import { CodeTracker } from '../../../src/verification/code-tracker.js';
+import type { VerificationRuntime } from '../../../src/verification/index.js';
 
 // -- Mock helpers --
 
@@ -1634,6 +1636,93 @@ describe('Scheduler', () => {
       expect(schedulerService.completeJobRun).toHaveBeenCalledWith(
         'job-1', false, 'budget blown', undefined, undefined, undefined,
       );
+    });
+
+    describe('sign-in codes stay out of the stored run record (#2017)', () => {
+      function scrubbingScheduler() {
+        const tracker = new CodeTracker({ ttlMinutesAfterClose: 120 });
+        tracker.register('v-1', 'aircanada.com', '482913');
+        return new Scheduler({
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          pool: pool as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          bus: bus as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          logger: logger as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          schedulerService: schedulerService as any,
+          ownsAgent: () => true,
+          verification: { tracker } as unknown as VerificationRuntime,
+        });
+      }
+
+      async function fireAndGetHandlers(s: Scheduler) {
+        pool.query.mockResolvedValueOnce({ rows: [fakeDbRow()] });
+        pool.query.mockResolvedValueOnce(claimed());
+        await s.pollDueJobs();
+        const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
+        schedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+        s.start();
+        return {
+          taskEventId: taskEvent.id,
+          responseHandler: bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>,
+          errorHandler: bus.subscribe.mock.calls[1]?.[2] as (event: unknown) => Promise<void>,
+        };
+      }
+
+      it('scrubs a tracked code from the auto-summary and failed-skill errors', async () => {
+        const s = scrubbingScheduler();
+        const { taskEventId, responseHandler } = await fireAndGetHandlers(s);
+        await responseHandler({
+          id: 'resp-code', type: 'agent.response', sourceLayer: 'agent', parentEventId: taskEventId,
+          timestamp: new Date(),
+          payload: {
+            agentId: 'coordinator', conversationId: 'c1', content: 'Signed in to Air Canada with 482 913.',
+            failedSkills: [{ name: 'task-update', error: 'note "code 482913" rejected' }],
+          },
+        });
+        s.stop();
+        expect(schedulerService.completeJobRun).toHaveBeenCalledWith(
+          'job-1', true, undefined, 'Signed in to Air Canada with [sign-in code].',
+          [{ name: 'task-update', error: 'note "code [sign-in code]" rejected' }], undefined,
+        );
+      });
+
+      it('scrubs a tracked code from last_error, stashed or taken from the response', async () => {
+        const s = scrubbingScheduler();
+        const { taskEventId, responseHandler, errorHandler } = await fireAndGetHandlers(s);
+        await errorHandler({
+          id: 'err-code', type: 'agent.error', sourceLayer: 'agent', parentEventId: taskEventId,
+          timestamp: new Date(),
+          payload: {
+            agentId: 'coordinator', conversationId: 'c1', errorType: 'tool_error', source: 'runtime',
+            message: 'typing 482913 failed', retryable: false, context: {},
+          },
+        });
+        await responseHandler({
+          id: 'resp-err-code', type: 'agent.response', sourceLayer: 'agent', parentEventId: taskEventId,
+          timestamp: new Date(),
+          payload: { agentId: 'coordinator', conversationId: 'c1', content: 'fallback 482913', isError: true },
+        });
+        s.stop();
+        expect(schedulerService.completeJobRun).toHaveBeenCalledWith(
+          'job-1', false, 'typing [sign-in code] failed', undefined, undefined, undefined,
+        );
+      });
+
+      it('scrubs the response-content fallback for last_error when no agent.error was stashed', async () => {
+        const s = scrubbingScheduler();
+        const { taskEventId, responseHandler } = await fireAndGetHandlers(s);
+        await responseHandler({
+          id: 'resp-err-fallback', type: 'agent.response', sourceLayer: 'agent', parentEventId: taskEventId,
+          timestamp: new Date(),
+          payload: { agentId: 'coordinator', conversationId: 'c1', content: 'gave up after 482-913', isError: true },
+        });
+        s.stop();
+        expect(schedulerService.completeJobRun).toHaveBeenCalledWith(
+          'job-1', false, 'gave up after [sign-in code]', undefined, undefined, undefined,
+        );
+      });
     });
 
     it('persists failedSkills on a failed run from agent.response(isError) (#1830)', async () => {

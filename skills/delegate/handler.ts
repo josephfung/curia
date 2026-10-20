@@ -60,7 +60,7 @@ import {
 } from '../../src/agents/prompts/delegate-result-guidance.js';
 import { shapeSpecialistAnswer } from '../../src/agents/specialist-answer.js';
 import { buildInboundEmailIdentifierBlock, preambleAccountLabel, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
-import { extractCodeCandidates } from '../../src/verification/code-shape.js';
+import { CEO_INBOX_AGENT, trackInboxCodes } from '../../src/verification/track-codes.js';
 import {
   parseSpecialistDeclineMarker,
   SPECIALIST_DECLINE_REASON,
@@ -349,43 +349,6 @@ function formatStructuredFailureMessage(agent: string, reason: AgentResponseFail
   }
 }
 
-/** The specialist that reads the principal's inbox, where an emailed sign-in code lands. */
-const CEO_INBOX_AGENT = 'ceo-inbox';
-
-/**
- * Register every 6-8 character code in a ceo-inbox result against each pending or recent
- * `email` verification. 4-5 character codes are tracked only when typed by web-browser, so they are
- * not looked for here. The result is returned to the coordinator unchanged. Never logs a
- * value, and a failed lookup never fails the delegation (under-capture is logged, not fatal).
- */
-async function trackInboxCodes(ctx: ToolContext, agent: string, resultText: string): Promise<void> {
-  const runtime = ctx.verification;
-  if (!runtime) return;
-  const candidates = extractCodeCandidates(resultText);
-  if (candidates.length === 0) return;
-  try {
-    // listActive returns pending plus recently closed rows (design §1): a code can still
-    // arrive after the soft expiry, so every email row counts, whatever its status.
-    const active = (await runtime.listActive()).filter((v) => v.delivery === 'email');
-    if (active.length === 0) return;
-    for (const v of active) {
-      for (const value of candidates) runtime.tracker.register(v.id, v.pageDomain, value);
-      // Registering on an untracked id creates an entry with no closedAt; a row that is
-      // already closed must start its TTL clock now or the value would never age out.
-      if (v.status !== 'pending') runtime.tracker.closed(v.id);
-    }
-    ctx.log.info(
-      { targetAgent: agent, verificationIds: active.map((v) => v.id), candidateCount: candidates.length },
-      'Sign-in code(s) from the inbox specialist tracked for the pending or recent email verification(s)',
-    );
-  } catch (err) {
-    // The err message could in principle echo a value; log the error name only.
-    ctx.log.warn(
-      { targetAgent: agent, errName: err instanceof Error ? err.name : typeof err },
-      'Could not list verifications; a code in the inbox specialist result was not tracked',
-    );
-  }
-}
 
 export class DelegateHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -971,7 +934,7 @@ export class DelegateHandler implements ToolHandler {
       // A sign-in code the principal's inbox specialist read out of an email is tracked
       // here, before the result reaches the coordinator or any store (#2017).
       if (agent === CEO_INBOX_AGENT && ctx.verification) {
-        await trackInboxCodes(ctx, agent, response);
+        await trackInboxCodes(ctx.verification, response, ctx.log, { targetAgent: agent });
       }
 
       // Pull contact IDs out before the execution layer strips the

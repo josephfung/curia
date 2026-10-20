@@ -31,6 +31,7 @@ import {
   CLAIM_LEASE_SECONDS,
   expireLateDelegation,
   handleLateResponse,
+  type HandleLateResponseOptions,
   type LateWakeRoutingRegistrar,
 } from './late-delegation.js';
 
@@ -49,6 +50,8 @@ export interface LateDelegationSweepOptions {
   knownAgents?: Set<string>;
   /** Seeds dispatcher routing so a woken agent's reply reaches the principal. */
   registerRouting?: LateWakeRoutingRegistrar;
+  /** Delegated sign-in verification (#2017): code tracking and note scrub on the late path. */
+  verification?: HandleLateResponseOptions['verification'];
 }
 
 export interface LateDelegationSweepResult {
@@ -130,6 +133,7 @@ export class LateDelegationSweep {
             ...(this.opts.timezone !== undefined && { timezone: this.opts.timezone }),
             ...(this.opts.knownAgents !== undefined && { knownAgents: this.opts.knownAgents }),
             ...(this.opts.registerRouting !== undefined && { registerRouting: this.opts.registerRouting }),
+            ...(this.opts.verification !== undefined && { verification: this.opts.verification }),
           });
           if (outcome.resolved) {
             result.recovered += 1;
