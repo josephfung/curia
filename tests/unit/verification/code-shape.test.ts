@@ -116,7 +116,8 @@ describe('extractShortRelayedCodes', () => {
     ["It's 48213", ['48213']],
     ['code is 4821', ['4821']],
     ['  4821. ', ['4821']],
-    ['Here: 48213 thanks', ['48213']],
+    ['Here: 48213', ['48213']],
+    ["It's 4821", ['4821']],
     ['the code: 4821', ['4821']],
     ['PIN 0912 — then grab the notice for me please', ['0912']],
     ['otp=48213', ['48213']],
@@ -138,6 +139,16 @@ describe('extractShortRelayedCodes', () => {
     '482913',
     'the total was $4821.50 for the code review',
     'zip code 48213',
+    // Review round 3: questions, times, amounts and non-filler words around the number.
+    'ok 1430?',
+    'is 1430 ok',
+    "It's 1200",
+    'thanks 5000',
+    'promo  code 4821',
+    'yes 2pm',
+    'room 5021',
+    '4821?',
+    "It's 0930",
   ])('does not register %j', (text) => {
     expect(extractShortRelayedCodes(text)).toEqual([]);
   });

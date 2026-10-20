@@ -146,6 +146,14 @@ describe('Dispatcher — principal-relayed sign-in codes (#2017)', () => {
     expect(tracker.size()).toBe(0);
   });
 
+  it('a short reply naming a time or amount neither registers nor raises the code guidance', async () => {
+    const { send, tasks, tracker } = buildHarness({ active: [verificationRow('v-1', 'sms')] });
+    for (const text of ['ok 1430?', 'is 1430 ok', "It's 1200", 'thanks 5000']) await send(text);
+
+    expect(tracker.size()).toBe(0);
+    for (const task of tasks) expect(task.payload.turnGuidance ?? []).not.toContain('verification-code-received');
+  });
+
   it('registers against every pending, expired or abandoned sms/app verification, never a satisfied one', async () => {
     const { send, registerSpy } = buildHarness({
       active: [

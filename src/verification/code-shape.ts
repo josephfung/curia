@@ -138,21 +138,32 @@ export function extractCodeCandidates(text: string): string[] {
 /** Longest message (trimmed) still read as "just the code". */
 const SHORT_MESSAGE_MAX_LEN = 24;
 
-/** Words a "just the code" message may carry around the code: apostrophes removed, lowercased. */
+/**
+ * Words a "just the code" message may carry around the code: apostrophes removed,
+ * lowercased. Deliberately not "is", "ok" or "thanks": "is 1430 ok" and "thanks 5000" are
+ * answers about a time or an amount ("code is 4821" still registers through the keyword path).
+ */
 const SHORT_CODE_FILLER: ReadonlySet<string> = new Set([
-  'code', 'the', 'its', 'it', 'is', 'here', 'heres', 'my', 'ok', 'okay', 'thanks', 'thx',
+  'code', 'the', 'its', 'it', 'here', 'heres', 'my',
   'try', 'use', 'sign', 'in', 'signin', 'login', 'verification', 'otp', 'pin', 'passcode',
 ]);
 
 const SHORT_WORD = /[A-Za-z0-9]+(?:['\u2019][A-Za-z]+)?/g;
 
 // A code keyword, an optional "is"/"was" and separator, then a 4-5 character token that
-// is not glued to more text. Not after "zip"/"postal"/"promo", whose codes are not sign-in codes.
+// is not glued to more text. Not after "zip"/"postal"/"promo" (however spaced), whose codes
+// are not sign-in codes.
 const KEYWORD_SHORT_CODE =
-  /(?<![A-Za-z0-9])(?<!(?:zip|postal|promo)\s)(?:code|passcode|pin|otp)\s*(?:(?:is|was)\s*)?[:=#-]?\s*([A-Za-z0-9]{4,5})(?![A-Za-z0-9])(?![.,:/@_-][A-Za-z0-9])/gi;
+  /(?<![A-Za-z0-9])(?<!(?:zip|postal|promo)\s+)(?:code|passcode|pin|otp)\s*(?:(?:is|was)\s*)?[:=#-]?\s*([A-Za-z0-9]{4,5})(?![A-Za-z0-9])(?![.,:/@_-][A-Za-z0-9])/gi;
 
 function isShortCode(token: string): boolean {
   return token.length >= MIN_LEN_SHORT && token.length < MIN_LEN && isCodeShaped(token, { allowShort: true });
+}
+
+/** A four-digit token that reads as a 24-hour time (0000-2359): "1430", "1200", "0930". */
+function looksLikeTime(token: string): boolean {
+  const m = /^(\d\d)(\d\d)$/.exec(token);
+  return m !== null && Number(m[1]) <= 23 && Number(m[2]) <= 59;
 }
 
 /** A four-digit token that reads as a year (1900-2099). */
@@ -164,11 +175,12 @@ function looksLikeYear(token: string): boolean {
 
 /**
  * 4-5 character code candidates in a principal's own message, normalized and
- * de-duplicated, admitted only when (a) the trimmed message is at most 24 characters
- * and its one digit-bearing token is surrounded by filler alone ("4821", "It's 48213",
- * "code is 4821"), or (b) the token follows "code", "passcode", "pin" or "otp" ("the
- * code is 4821, then grab the notice"). A token that reads as a year (1900-2099) is
- * admitted only when it is the whole message. 6-8 character codes are
+ * de-duplicated, admitted only when (a) the trimmed message is at most 24 characters, is
+ * not a question, and its one digit-bearing token is surrounded by filler alone ("4821",
+ * "It's 48213", "the code: 4821"), or (b) the token follows "code", "passcode", "pin" or
+ * "otp" ("the code is 4821, then grab the notice"). A token that reads as a year
+ * (1900-2099) is admitted only as the whole message, and on path (a) so is one that reads
+ * as a 24-hour time ("It's 1200" is a time, "1200" alone may be a code). 6-8 character codes are
  * extractCodeCandidates' job and are never returned here.
  */
 export function extractShortRelayedCodes(text: string): string[] {
@@ -180,7 +192,7 @@ export function extractShortRelayedCodes(text: string): string[] {
   };
 
   // (a) The message is essentially just the code.
-  if (trimmed.length <= SHORT_MESSAGE_MAX_LEN) {
+  if (trimmed.length <= SHORT_MESSAGE_MAX_LEN && !trimmed.endsWith('?')) {
     const words = [...trimmed.matchAll(SHORT_WORD)];
     const digitWords = words.filter((m) => /\d/.test(m[0]));
     const onlyFiller = words.every(
@@ -190,8 +202,9 @@ export function extractShortRelayedCodes(text: string): string[] {
     if (sole && onlyFiller && isShortCode(sole[0])) {
       const before = trimmed.slice(0, sole.index);
       const wholeMessage = trimmed.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '') === sole[0];
-      // A currency sign makes it an amount; a year counts only as the whole message.
-      if (!/[$€£¥]\s*$/.test(before) && (wholeMessage || !looksLikeYear(sole[0]))) add(sole[0]);
+      // A currency sign makes it an amount; a year or a time counts only as the whole message.
+      const timeOrYear = looksLikeYear(sole[0]) || looksLikeTime(sole[0]);
+      if (!/[$€£¥]\s*$/.test(before) && (wholeMessage || !timeOrYear)) add(sole[0]);
     }
   }
 

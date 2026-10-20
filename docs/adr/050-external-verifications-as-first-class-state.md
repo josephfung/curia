@@ -87,8 +87,9 @@ Alternatives considered and rejected:
    - the dispatcher, from the principal's own new text on an inbound, only while an `sms` or
      `app` verification is pending or recent: 6–8 character code shapes anywhere, and a 4–5
      character one only when the message is essentially just the code (at most 24 characters,
-     one digit-bearing token among filler such as "code", "it's", "here") or the token follows
-     "code", "passcode", "pin" or "otp". A year-like 1900–2099 counts only as the whole message;
+     not a question, one digit-bearing token among filler such as "code", "it's", "here") or
+     the token follows "code", "passcode", "pin" or "otp". A year-like 1900–2099 counts only as
+     the whole message, and on the first path so does a time-like 0000–2359 ("It's 1200");
    - the `delegate` skill, from a ceo-inbox result, for `email` verifications.
 
    `ExecutionLayer.invoke` then replaces every tracked value with `[sign-in code]` in **every
