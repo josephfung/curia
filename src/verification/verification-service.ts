@@ -71,7 +71,7 @@ export class VerificationService {
 
   /**
    * Open a verification, or reuse the site's existing pending one (`reused: true`),
-   * refreshed to the caller's browser session and page domain. A pending row already
+   * refreshed to the caller's browser session, page domain, delivery and expiry. A pending row already
    * past its expiry is persisted as expired first, so a fresh sign-in attempt gets a
    * fresh record instead of a dead one.
    */
@@ -125,17 +125,30 @@ export class VerificationService {
     // caller's session and page: the stored session may have died (a restart, an expired
     // session) and the code-entry page may now sit on another registrable domain (an
     // identity provider). Keeping the old values would show a dead session as the one to
-    // type into and key the browser guard on the wrong domain. A missing task or
-    // conversation link is filled; an existing one is kept.
+    // type into and key the browser guard on the wrong domain. Delivery and expiry follow
+    // the caller too: a reopen after "the email never came, send it by text instead" is an
+    // SMS verification with a fresh code window, and the dispatcher only extracts codes from
+    // the principal's messages for sms/app rows. A missing task or conversation link is
+    // filled; an existing one is kept.
     const { rows } = await this.pool.query<VerificationRow>(
       `UPDATE verifications
          SET browser_session_id = $2,
              page_domain = $3,
              task_id = COALESCE(task_id, $4),
-             conversation_id = COALESCE(conversation_id, $5)
+             conversation_id = COALESCE(conversation_id, $5),
+             delivery = $6,
+             expires_at = $7
        WHERE site = $1 AND status = 'pending'
        RETURNING ${COLUMNS}`,
-      [site, input.browserSessionId, pageDomain, input.taskId ?? null, input.conversationId ?? null],
+      [
+        site,
+        input.browserSessionId,
+        pageDomain,
+        input.taskId ?? null,
+        input.conversationId ?? null,
+        input.delivery,
+        expiresAt,
+      ],
     );
     const existing = rows[0];
     if (!existing) {
@@ -143,7 +156,10 @@ export class VerificationService {
       // rather than loop; the caller's next turn opens a fresh record.
       throw new Error('Verification for this site changed while opening; retry');
     }
-    this.logger.info({ verificationId: existing.id, site, pageDomain }, 'Verification reused');
+    this.logger.info(
+      { verificationId: existing.id, site, pageDomain, delivery: existing.delivery },
+      'Verification reused',
+    );
     return { verification: toVerification(existing), reused: true };
   }
 

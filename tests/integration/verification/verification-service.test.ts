@@ -146,6 +146,27 @@ describeIf('VerificationService (#2017)', () => {
     expect((await service.get(first.verification.id))?.pageDomain).toBe('b2clogin.com');
   });
 
+  it('reuse switches delivery and refreshes expires_at (email never came, the principal is offered SMS)', async () => {
+    const site = newSite();
+    const first = await service.open(openInput(site, { expiresAt: new Date(Date.now() + 60 * 1000) }));
+    expect(first.verification.delivery).toBe('email');
+    const before = Date.now();
+    const second = await service.open(openInput(site, { delivery: 'sms' }));
+    expect(second.reused).toBe(true);
+    expect(second.verification.id).toBe(first.verification.id);
+    expect(second.verification.delivery).toBe('sms');
+    // No expiresAt given: the default window, counted from this open.
+    expect(second.verification.expiresAt.getTime()).toBeGreaterThanOrEqual(before + 10 * 60 * 1000 - 5000);
+    const stored = await service.get(first.verification.id);
+    expect(stored?.delivery).toBe('sms');
+    expect(stored?.expiresAt.getTime()).toBe(second.verification.expiresAt.getTime());
+
+    // An explicit expiresAt on the reopen is honoured too.
+    const expiresAt = new Date(Date.now() + 4 * 60 * 1000);
+    const third = await service.open(openInput(site, { delivery: 'sms', expiresAt }));
+    expect(third.verification.expiresAt.getTime()).toBe(expiresAt.getTime());
+  });
+
   it('reuse fills a missing task / conversation link but never overwrites one', async () => {
     const site = newSite();
     const taskId = randomUUID();
