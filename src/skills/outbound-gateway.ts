@@ -57,6 +57,7 @@ import { enrichGatewayApprovalPayload } from '../autonomy/approval-notification.
 import type { ApprovalDelivery } from '../autonomy/approval-delivery.js';
 import type { AutonomyGating } from '../autonomy/band-policy.js';
 import { budgetedOriginator, type RelayBudget } from '../autonomy/relay-budget.js';
+import { isUuid } from '../util/uuid.js';
 import { BAND_RULES, type BandReviewReport, type BandReviewSignals, type BandSendReview } from '../dispatch/band-send-review.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
@@ -381,6 +382,14 @@ interface SendRecipe {
 function redactId(value: string): string {
   if (value.length <= 6) return '***';
   return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+/**
+ * A relay originator's contact id, safe for logs (#1320). An unresolved sender's id is its raw
+ * address or number (stampOriginator), so it is redacted like any other recipient id.
+ */
+function loggableContactId(contactId: string): string {
+  return isUuid(contactId) ? contactId : redactId(contactId);
 }
 
 /**
@@ -1324,10 +1333,27 @@ export class OutboundGateway {
     const relayOriginator = principalIsSoleRecipient && this.relayBudget && !carriesAttachments
       ? budgetedOriginator(options)
       : null;
-    if (relayOriginator && this.relayBudget!.tryAcquire(relayOriginator.contactId) === 'over') {
-      const deferred = await this.deferRelay(request, redactedBody, redactedSubject, relayOriginator, options);
-      if (deferred) return deferred;
-      // The digest item could not be recorded: deliver after all. Noise beats a lost message.
+    // The originator whose slot this send took. Given back below if the send then fails, so a
+    // relay that never reached the principal doesn't count against the contact.
+    let relaySlot: string | null = null;
+    if (relayOriginator) {
+      if (this.relayBudget!.tryAcquire(relayOriginator.contactId) === 'allowed') {
+        relaySlot = relayOriginator.contactId;
+      } else {
+        const deferred = await this.deferRelay(request, redactedBody, redactedSubject, relayOriginator, options);
+        if (deferred) return deferred;
+        // The digest item could not be recorded: deliver after all. Noise beats a lost message.
+      }
+    } else if (
+      principalIsSoleRecipient && this.relayBudget && !options?.originator && options?.taskEventId
+      && !options.isSystemNotification && !options.humanApproved && !options.principalDirected && !options.postTurn
+    ) {
+      // A skill send (it has a task, and it isn't an adapter relay or a system notice) with no
+      // originator. Every send skill should pass one; without it the budget can't count this send.
+      this.log.warn(
+        { channel: request.channel, taskEventId: options.taskEventId },
+        'outbound-gateway: send to the principal alone has no originator — the relay budget cannot count it',
+      );
     }
 
     // ------------------------------------------------------------------
@@ -1430,6 +1456,7 @@ export class OutboundGateway {
         if (sampled) await this.recordSentAction({ ...sampleArgs, preview: toSend.subject || toSend.body });
       }
       if (bandReport && result.success) await this.publishBandReport(bandReport, options);
+      if (relaySlot && !result.success) this.relayBudget!.release(relaySlot);
       return result;
     }
 
@@ -1452,6 +1479,7 @@ export class OutboundGateway {
         if (sampled) await this.recordSentAction({ ...sampleArgs, preview: redactedBody });
       }
       if (bandReport && result.success) await this.publishBandReport(bandReport, options);
+      if (relaySlot && !result.success) this.relayBudget!.release(relaySlot);
       return result;
     }
 
@@ -1473,6 +1501,7 @@ export class OutboundGateway {
         if (sampled) await this.recordSentAction({ ...sampleArgs, preview: redactedBody });
       }
       if (bandReport && result.success) await this.publishBandReport(bandReport, options);
+      if (relaySlot && !result.success) this.relayBudget!.release(relaySlot);
       return result;
     }
 
@@ -1501,6 +1530,7 @@ export class OutboundGateway {
         if (sampled) await this.recordSentAction({ ...sampleArgs, preview: redactedBody });
       }
       if (bandReport && result.success) await this.publishBandReport(bandReport, options);
+      if (relaySlot && !result.success) this.relayBudget!.release(relaySlot);
       return result;
     }
   }
@@ -2059,18 +2089,20 @@ export class OutboundGateway {
       }));
     } catch (err) {
       this.log.error(
-        { err, originatorContactId: originator.contactId, channel: request.channel },
+        { err, originatorContactId: loggableContactId(originator.contactId), channel: request.channel },
         'outbound-gateway: relay over budget, but its digest item could not be recorded — delivering it now',
       );
       return null;
     }
 
-    const noticeSent = this.relayBudget!.shouldNotify(originator.contactId)
+    // Marked only once delivered: a notice that failed is tried again on the next deferral.
+    const noticeSent = this.relayBudget!.noticeDue(originator.contactId)
       ? await this.sendRelayNotice(request, name ?? 'A contact', options)
       : false;
+    if (noticeSent) this.relayBudget!.markNotified(originator.contactId);
     const tier = originator.tier ?? 'unknown';
     this.log.warn(
-      { originatorContactId: originator.contactId, tier, channel: request.channel, count: this.relayBudget!.count(originator.contactId), noticeSent },
+      { originatorContactId: loggableContactId(originator.contactId), tier, channel: request.channel, count: this.relayBudget!.count(originator.contactId), noticeSent },
       'outbound-gateway: relay budget reached — relay held for the digest',
     );
     try {
@@ -2084,7 +2116,7 @@ export class OutboundGateway {
       }, options?.taskEventId));
     } catch (err) {
       // The relay is already safe in the digest; only the audit row is missing.
-      this.log.error({ err, originatorContactId: originator.contactId }, 'AUDIT FAILURE: autonomy.relay_deferred could not be published');
+      this.log.error({ err, originatorContactId: loggableContactId(originator.contactId) }, 'AUDIT FAILURE: autonomy.relay_deferred could not be published');
     }
     return { success: true, deferredToDigest: true };
   }
@@ -2114,8 +2146,15 @@ export class OutboundGateway {
     }
   }
 
-  /** The originator's display name, or null when there is none or the lookup fails. Never throws. */
+  /**
+   * The originator's display name, or null when there is none or the lookup fails. Never throws.
+   * An unresolved sender has no contact: stampOriginator uses its raw address as the id, and that
+   * address is the best name the principal can be given.
+   */
   private async originatorName(contactId: string): Promise<string | null> {
+    // Trimmed before the check: isUuid() is a type guard, and narrows a non-UUID string to never.
+    const raw = contactId.trim();
+    if (!isUuid(contactId)) return raw || null;
     try {
       const name = (await this.contactService.getContact(contactId))?.displayName?.trim();
       return name ? name : null;

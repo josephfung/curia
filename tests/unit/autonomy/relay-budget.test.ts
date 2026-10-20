@@ -47,23 +47,37 @@ describe('RelayBudget', () => {
     expect(budget.trackedCount()).toBe(0);
   });
 
-  it('notifies once per window per originator', () => {
+  it('a notice is due once per window per originator, counted from when one was delivered', () => {
     const c = clock();
     const budget = new RelayBudget({ perHour: 1, now: c.now });
-    expect(budget.shouldNotify('a')).toBe(true);
-    expect(budget.shouldNotify('a')).toBe(false);
-    expect(budget.shouldNotify('b')).toBe(true);
+    expect(budget.noticeDue('a')).toBe(true);
+    // Not delivered yet (or delivery failed): still due, so the next deferral tries again.
+    expect(budget.noticeDue('a')).toBe(true);
+    budget.markNotified('a');
+    expect(budget.noticeDue('a')).toBe(false);
+    expect(budget.noticeDue('b')).toBe(true);
     c.advance(RELAY_BUDGET_WINDOW_MS - 1);
-    expect(budget.shouldNotify('a')).toBe(false);
+    expect(budget.noticeDue('a')).toBe(false);
     c.advance(1);
-    expect(budget.shouldNotify('a')).toBe(true);
+    expect(budget.noticeDue('a')).toBe(true);
+  });
+
+  it('release gives back the slot of a relay that was not delivered', () => {
+    const c = clock();
+    const budget = new RelayBudget({ perHour: 1, now: c.now });
+    expect(budget.tryAcquire('a')).toBe('allowed');
+    budget.release('a');
+    expect(budget.count('a')).toBe(0);
+    expect(budget.tryAcquire('a')).toBe('allowed');
+    budget.release('nobody'); // nothing to release: no-op
+    expect(budget.trackedCount()).toBe(1);
   });
 
   it('forgets originators that have gone quiet for a window', () => {
     const c = clock();
     const budget = new RelayBudget({ perHour: 3, now: c.now });
     budget.tryAcquire('a');
-    budget.shouldNotify('a');
+    budget.markNotified('a');
     budget.tryAcquire('b');
     expect(budget.trackedCount()).toBe(2);
     c.advance(RELAY_BUDGET_WINDOW_MS);

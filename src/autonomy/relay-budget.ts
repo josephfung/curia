@@ -74,15 +74,29 @@ export class RelayBudget {
   }
 
   /**
-   * True for the first over-budget relay in a window: the principal gets one line saying more
-   * updates are waiting in the digest. False again until a full window has passed.
+   * True when no "holding them for your digest" line has reached the principal about this
+   * originator in the last window. Doesn't change anything: the caller calls markNotified()
+   * once the line is delivered, so a notice that failed is tried again on the next deferral.
    */
-  shouldNotify(contactId: string): boolean {
-    const t = this.now();
+  noticeDue(contactId: string): boolean {
     const last = this.notices.get(contactId);
-    if (last !== undefined && t - last < RELAY_BUDGET_WINDOW_MS) return false;
-    this.notices.set(contactId, t);
-    return true;
+    return last === undefined || this.now() - last >= RELAY_BUDGET_WINDOW_MS;
+  }
+
+  /** The notice reached the principal: none is due again for a window. */
+  markNotified(contactId: string): void {
+    this.notices.set(contactId, this.now());
+  }
+
+  /**
+   * Give back the newest slot: the relay tryAcquire() allowed was not delivered (the send
+   * failed), so it should not count against the originator. No-op when nothing is recorded.
+   */
+  release(contactId: string): void {
+    const stamps = this.stamps.get(contactId);
+    if (!stamps || stamps.length === 0) return;
+    stamps.pop();
+    if (stamps.length === 0) this.stamps.delete(contactId);
   }
 
   /** Relays counted for this originator in the current window. */

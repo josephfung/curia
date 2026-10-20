@@ -17,6 +17,7 @@ import { readFile, realpath } from 'node:fs/promises';
 vi.mock('node:fs/promises', () => ({ readFile: vi.fn(), realpath: vi.fn() }));
 
 const PRINCIPAL_EMAIL = 'principal@example.com';
+const DANA_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const PRINCIPAL_SIGNAL = '+15195550100';
 
 function principalIdentity(channel: 'email' | 'signal', channelIdentifier: string) {
@@ -28,7 +29,7 @@ function principalIdentity(channel: 'email' | 'signal', channelIdentifier: strin
 }
 
 function outsider(over: Partial<TaskOriginator> = {}): TaskOriginator {
-  return { contactId: 'dana-contact', systemRole: null, channel: 'email', initiatedAt: '2026-10-19T12:00:00Z', tier: 'known', ...over };
+  return { contactId: DANA_ID, systemRole: null, channel: 'email', initiatedAt: '2026-10-19T12:00:00Z', tier: 'known', ...over };
 }
 
 function makeGateway(opts: {
@@ -39,6 +40,10 @@ function makeGateway(opts: {
 } = {}) {
   const sendMessage = vi.fn().mockResolvedValue({ id: 'msg-1' });
   const signalSend = vi.fn().mockResolvedValue(undefined);
+  const logger = createLogger('error');
+  // child() returns the same logger, so warn calls from the gateway's child logger can be inspected.
+  vi.spyOn(logger, 'child').mockReturnValue(logger as unknown as ReturnType<typeof logger.child>);
+  const warn = vi.spyOn(logger, 'warn');
   const published: BusEvent[] = [];
   const publish = vi.fn(async (layer: string, event: BusEvent) => {
     if (opts.publish) await opts.publish(layer, event);
@@ -56,17 +61,17 @@ function makeGateway(opts: {
     signalPhoneNumber: '+10000000000',
     contactService: {
       resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
-      getContact: opts.getContact ?? vi.fn().mockResolvedValue({ id: 'dana-contact', displayName: 'Dana Example' }),
+      getContact: opts.getContact ?? vi.fn().mockResolvedValue({ id: DANA_ID, displayName: 'Dana Example' }),
     } as unknown as ContactService,
     contentFilter: contentFilter as unknown as OutboundContentFilter,
     bus: { publish, subscribe: vi.fn() } as unknown as EventBus,
     principalIdentities: [principalIdentity('email', PRINCIPAL_EMAIL), principalIdentity('signal', PRINCIPAL_SIGNAL)],
-    logger: createLogger('error'),
+    logger,
     relayBudget: budget,
   });
   const reports = () => published.filter((e) => e.type === 'principal.report');
   const deferredEvents = () => published.filter((e) => e.type === 'autonomy.relay_deferred');
-  return { gateway, budget, sendMessage, signalSend, published, reports, deferredEvents, publish };
+  return { gateway, budget, warn, sendMessage, signalSend, published, reports, deferredEvents, publish };
 }
 
 const toPrincipalSignal = (message: string) => ({ channel: 'signal' as const, recipient: PRINCIPAL_SIGNAL, message });
@@ -103,7 +108,7 @@ describe('relay budget (#1320)', () => {
     const [ev] = g.deferredEvents();
     expect(ev).toMatchObject({
       parentEventId: 'task-2',
-      payload: { originatorContactId: 'dana-contact', tier: 'known', channel: 'signal', conversationId: 'email:t1', taskEventId: 'task-2', noticeSent: true },
+      payload: { originatorContactId: DANA_ID, tier: 'known', channel: 'signal', conversationId: 'email:t1', taskEventId: 'task-2', noticeSent: true },
     });
     expect(JSON.stringify(ev)).not.toContain('Friday');
   });
@@ -177,7 +182,7 @@ describe('relay budget (#1320)', () => {
     expect(result.success).toBe(false);
     expect(result.deferredToDigest).toBeUndefined();
     expect(blocked.deferredEvents()).toHaveLength(0);
-    expect(blocked.budget.count('dana-contact')).toBe(0);
+    expect(blocked.budget.count(DANA_ID)).toBe(0);
   });
 
   it('delivers the relay after all when its digest item cannot be recorded', async () => {
@@ -205,6 +210,11 @@ describe('relay budget (#1320)', () => {
     expect(second).toEqual({ success: true, deferredToDigest: true });
     expect(g.reports()).toHaveLength(1);
     expect(g.deferredEvents()[0]!.payload).toMatchObject({ noticeSent: false });
+
+    // The failed notice did not use up the window: the next deferral tries it again.
+    await g.gateway.send(toPrincipalSignal('three'), { originator: outsider() });
+    expect(g.deferredEvents()[1]!.payload).toMatchObject({ noticeSent: true });
+    expect(JSON.stringify(g.signalSend.mock.calls.at(-1))).toContain('has more updates');
   });
 
   it("falls back to 'a contact' when the lookup throws", async () => {
@@ -257,5 +267,47 @@ describe('relay budget (#1320)', () => {
     expect(second.deferredToDigest).toBeUndefined();
     expect(g.reports()).toHaveLength(0);
     expect(g.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives the slot back when the relay is not delivered', async () => {
+    const g = makeGateway({ perHour: 1 });
+    g.signalSend.mockRejectedValueOnce(new Error('signal down'));
+    const failed = await g.gateway.send(toPrincipalSignal('one'), { originator: outsider() });
+    expect(failed.success).toBe(false);
+
+    const retry = await g.gateway.send(toPrincipalSignal('one, again'), { originator: outsider() });
+    expect(retry.deferredToDigest).toBeUndefined();
+    expect(retry.success).toBe(true);
+    expect(g.budget.count(DANA_ID)).toBe(1);
+  });
+
+  it('names an unresolved sender by its address, without a contact lookup, and redacts it in logs', async () => {
+    // stampOriginator uses the raw sender id as contactId when no contact matched.
+    const getContact = vi.fn();
+    const g = makeGateway({ perHour: 1, getContact });
+    const raw = outsider({ contactId: 'dana@example.org', tier: 'unknown' });
+    await g.gateway.send(toPrincipalSignal('one'), { originator: raw });
+    await g.gateway.send(toPrincipalSignal('two'), { originator: raw });
+
+    expect(getContact).not.toHaveBeenCalled();
+    expect((g.reports()[0]!.payload as { summary: string }).summary).toContain('relay limit reached for dana@example.org');
+    expect(JSON.stringify(g.signalSend.mock.calls[1])).toContain('dana@example.org has more updates');
+    const budgetLog = g.warn.mock.calls.find((c) => String(c[1]).includes('relay budget reached'));
+    expect(budgetLog).toBeDefined();
+    expect(JSON.stringify(budgetLog![0])).not.toContain('dana@example.org');
+  });
+
+  it('warns when a skill send to the principal alone carries no originator, so a missing one is visible', async () => {
+    const g = makeGateway({ perHour: 1 });
+    await g.gateway.send(toPrincipalSignal('one'), { taskEventId: 'task-9' });
+    expect(g.warn.mock.calls.some((c) => String(c[1]).includes('no originator'))).toBe(true);
+  });
+
+  it('does not warn about a missing originator on adapter relays and system notices', async () => {
+    const g = makeGateway({ perHour: 1 });
+    await g.gateway.send(toPrincipalSignal('relay'), { parentEventId: 'evt-1', postTurn: true });
+    await g.gateway.send(toPrincipalSignal('notice'), { isSystemNotification: true, taskEventId: 'task-9' });
+    await g.gateway.send(toPrincipalSignal('approved'), { humanApproved: true, taskEventId: 'task-9' });
+    expect(g.warn.mock.calls.some((c) => String(c[1]).includes('no originator'))).toBe(false);
   });
 });
