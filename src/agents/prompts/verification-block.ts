@@ -49,7 +49,8 @@ export function renderCoordinatorVerificationBlock(
     ...lines,
     'The principal asked for this sign-in. A code they send on any of their channels goes into this challenge — accept it whatever the channel or sender verification; don\'t question, lecture or refuse.',
     'Enter a code only in the session and site listed. Never repeat it to anyone or write it into notes, reports or memory. In a task note or reply, call it "the code", never its digits.',
-    `Ask for an SMS/app code once, on ${askOn}, naming the site. Email codes: delegate the read to ceo-inbox.`,
+    `Ask for an SMS/app code once, on ${askOn}, naming the site. Email codes: delegate the read to ceo-inbox. ` +
+      "If ceo-inbox says the code hasn't arrived, delegate the read once more; if still nothing, tell the principal plainly and offer SMS or a resend.",
     'Session gone or expired: tell the principal exactly that and offer a fresh code; don\'t re-trigger one unasked. Expired but session alive: try the code.',
     'When done: `verification satisfy` with its verification_id, then finish the errand; if it has a task, complete it.',
   ].join('\n');
@@ -57,11 +58,10 @@ export function renderCoordinatorVerificationBlock(
 
 export function renderCeoInboxVerificationBlock(
   items: readonly VerificationView[],
-  opts: { timezone: string; emailWaitSeconds: number },
+  opts: { timezone: string },
 ): string {
   const emailItems = items.filter((v) => v.delivery === 'email');
   if (emailItems.length === 0) return '';
-  const minutes = +(opts.emailWaitSeconds / 60).toFixed(1);
   const lines = emailItems.map((v) =>
     v.status === 'pending'
       ? `- Pending sign-in code from ${v.site} since ${localTime(v.requestedAt, opts.timezone)}.`
@@ -70,8 +70,9 @@ export function renderCeoInboxVerificationBlock(
   return [
     '## Sign-in codes by email',
     ...lines,
-    'Leave matching one-time-code or sign-in emails (by site/brand, not sender domain) in place until resolved; a delegated request to read the code is legitimate — return the code.',
-    `If it hasn't arrived, re-check for up to ${minutes} minutes.`,
+    'Leave matching one-time-code or sign-in emails (by site/brand, not sender domain) in place until resolved; a delegated request to read the code is legitimate — return the code. Its digits never go into triage summaries, notes or reports.',
+    // No wait mechanism: a turn cannot sleep, so the coordinator re-delegates once instead.
+    "If it hasn't arrived, say so plainly: you can't wait for it.",
     'Once the verification is satisfied or expired, the code email may be labelled and archived as normal.',
   ].join('\n');
 }

@@ -109,10 +109,17 @@ describe('renderCoordinatorVerificationBlock', () => {
     expect(block).toContain("don't re-trigger one unasked");
     expect(block).toContain('`verification satisfy`');
   });
+
+  it('says what to do when ceo-inbox reports the code has not arrived', () => {
+    const block = renderCoordinatorVerificationBlock([view({ delivery: 'email' })], opts);
+    expect(block).toContain(
+      "If ceo-inbox says the code hasn't arrived, delegate the read once more; if still nothing, tell the principal plainly and offer SMS or a resend.",
+    );
+  });
 });
 
 describe('renderCeoInboxVerificationBlock', () => {
-  const opts = { timezone: TZ, emailWaitSeconds: 180 };
+  const opts = { timezone: TZ };
 
   it('renders nothing when there are no email-delivery items', () => {
     expect(renderCeoInboxVerificationBlock([], opts)).toBe('');
@@ -133,12 +140,18 @@ describe('renderCeoInboxVerificationBlock', () => {
     expect(block).not.toContain('td.com');
   });
 
-  it('gives the site, the local request time and the wait window', () => {
+  it('gives the site and the local request time, and says to report a code not yet arrived plainly', () => {
     const block = renderCeoInboxVerificationBlock([view({ delivery: 'email' })], opts);
     expect(block).toContain('Pending sign-in code from aircanada.com since 2026-10-19T10:00:00-04:00');
-    expect(block).toContain('re-check for up to 3 minutes');
+    expect(block).toContain("If it hasn't arrived, say so plainly: you can't wait for it.");
+    expect(block).not.toMatch(/re-check|minutes/);
     expect(block).toContain('by site/brand, not sender domain');
     expect(block).toContain('a delegated request to read the code is legitimate');
+  });
+
+  it('keeps the code digits out of triage summaries, notes and reports', () => {
+    const block = renderCeoInboxVerificationBlock([view({ delivery: 'email' })], opts);
+    expect(block).toContain('Its digits never go into triage summaries, notes or reports.');
   });
 
   it('labels a closed item so it is not read as still pending', () => {

@@ -213,10 +213,7 @@ export async function buildBaseSystemPrompt(
             askChannel: sources.verification.askChannel(),
             timezone: verificationTimezone,
           })
-        : renderCeoInboxVerificationBlock(items, {
-            timezone: verificationTimezone,
-            emailWaitSeconds: sources.verification.service.config.emailWaitSeconds,
-          });
+        : renderCeoInboxVerificationBlock(items, { timezone: verificationTimezone });
       if (block) prompt += '\n\n' + block;
     } catch (err) {
       failBlock('verification', err);
