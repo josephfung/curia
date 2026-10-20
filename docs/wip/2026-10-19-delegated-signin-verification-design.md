@@ -294,10 +294,11 @@ a longer number isn't masked.
 **Browser destination guard.** `web-browser` refuses to type a tracked value on any domain
 other than its verification's `page_domain` (registrable-domain match, so `login.aircanada.com`
 matches `aircanada.com`; a lookalike does not), or in any browser session other than that
-verification's (two verifications on one identity provider share a page domain). `press_key`
-is held to the same rule for keys that type a character, judged by the focused document, so a
-code cannot be spelled one key at a time into another frame; it fails closed. The error says
-why without echoing the value.
+verification's (two verifications on one identity provider share a page domain). `select`
+values get the same check. `press_key` is held to the same rule for keys that may type a
+character and for paste chords, judged by the focused document, so a code cannot be spelled
+one key at a time, or pasted, into another frame; it fails closed. A code split across
+several `type` calls is a known residual. The error says why without echoing the value.
 
 **Other write paths that aren't tool calls.** The same scrub applies to:
 

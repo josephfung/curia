@@ -1710,6 +1710,44 @@ describe('web-browser sign-in verification (#2017)', () => {
     });
   });
 
+  describe('select is held to the same guard as type', () => {
+    function selectLocator(page: ReturnType<typeof verifyCtx>['page']) {
+      return page.getByRole('combobox', { name: 'x' }) as unknown as { selectOption: ReturnType<typeof vi.fn> };
+    }
+
+    it('refuses a tracked code as a select value off its page domain', async () => {
+      const v = verification({});
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE, v.browserSessionId);
+      const { ctx, page } = verifyCtx('https://evil.example/form', { action: 'select', selector: 'Code', value: CODE }, runtime);
+
+      expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: REFUSAL });
+      expect(selectLocator(page).selectOption).not.toHaveBeenCalled();
+    });
+
+    it('refuses a tracked code as a select value in another session', async () => {
+      const v = verification({});
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE, v.browserSessionId);
+      const { ctx, page } = verifyCtx('https://login.aircanada.com/mfa', { action: 'select', selector: 'Code', value: CODE }, runtime, 'sess-2');
+
+      expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: REFUSAL });
+      expect(selectLocator(page).selectOption).not.toHaveBeenCalled();
+    });
+
+    it('allows it on its own page domain in its session, and any untracked value anywhere', async () => {
+      const v = verification({});
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE, v.browserSessionId);
+      const own = verifyCtx('https://login.aircanada.com/mfa', { action: 'select', selector: 'Code', value: CODE }, runtime);
+      expect((await new WebBrowserHandler().execute(own.ctx)).success).toBe(true);
+      expect(selectLocator(own.page).selectOption).toHaveBeenCalledWith(CODE);
+
+      const other = verifyCtx('https://evil.example/form', { action: 'select', selector: 'Country', value: 'Canada' }, runtime);
+      expect((await new WebBrowserHandler().execute(other.ctx)).success).toBe(true);
+    });
+  });
+
   it('refuses a tracked value inside a batch as a failed action', async () => {
     const v = verification({});
     const { runtime, tracker } = makeRuntime([v]);
@@ -2266,7 +2304,7 @@ describe('web-browser sign-in verification (#2017)', () => {
     it('always allows named non-printing keys and Control/Meta chords, without a lookup', async () => {
       const { runtime, listActive } = trackedRuntime();
       const keys = [
-        'Enter', 'Tab', 'Backspace', 'ArrowLeft', 'ArrowDown', 'Escape', 'Control+a', 'Control+A', 'Meta+V',
+        'Enter', 'Tab', 'Backspace', 'ArrowLeft', 'ArrowDown', 'Escape', 'Control+a', 'Control+A', 'Meta+C',
         'ControlOrMeta+a', 'ControlLeft+Digit4', 'Shift+Tab', 'Shift', 'AltRight', 'F5', 'PageDown',
       ];
       const { ctx, page } = focusCtx({
@@ -2280,6 +2318,51 @@ describe('web-browser sign-in verification (#2017)', () => {
       expect((await new WebBrowserHandler().execute(ctx)).success).toBe(true);
       expect(page.keyboard.press.mock.calls.map((c) => c[0])).toEqual(keys);
       expect(listActive).not.toHaveBeenCalled();
+    });
+
+    it.each(['Control+V', 'Meta+V', 'ControlOrMeta+v', 'MetaLeft+KeyV', 'Shift+Insert'])(
+      'refuses the paste chord %s into a third-party frame while a code is tracked',
+      async (key) => {
+        const { runtime } = trackedRuntime();
+        const { ctx, page } = focusCtx({
+          topUrl: 'https://login.aircanada.com/mfa',
+          childUrl: 'https://chat.widgetvendor.com/frame',
+          focusIn: 'child',
+          input: { action: 'press_key', key },
+          runtime,
+        });
+
+        expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: KEY_REFUSAL });
+        expect(page.keyboard.press).not.toHaveBeenCalled();
+      },
+    );
+
+    it('allows a paste chord on the verification\'s own page in its session', async () => {
+      const { runtime } = trackedRuntime();
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'main',
+        input: { action: 'press_key', key: 'Meta+V' },
+        runtime,
+      });
+
+      expect((await new WebBrowserHandler().execute(ctx)).success).toBe(true);
+      expect(page.keyboard.press).toHaveBeenCalledWith('Meta+V');
+    });
+
+    it('refuses a paste chord when focus cannot be resolved', async () => {
+      const { runtime } = trackedRuntime();
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'unresolvable',
+        input: { action: 'press_key', key: 'Control+V' },
+        runtime,
+      });
+
+      expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: KEY_REFUSAL });
+      expect(page.keyboard.press).not.toHaveBeenCalled();
     });
 
     it('presses characters freely while no code is tracked', async () => {

@@ -98,9 +98,9 @@ Alternatives considered and rejected:
    becomes a knowledge-graph fact), log and error paths of the timestamp normalizer and the
    browser, and the coordinator's replies.
 6. **`web-browser` is the one exemption and guards itself.** It receives the real value but
-   refuses to `type` it, or `navigate` to a URL containing it (including percent-encoded forms),
-   anywhere but the registrable domain of a verification that tracked it, and only in that
-   verification's browser session. The match is by registrable domain, so `login.aircanada.com`
+   refuses to `type` it, `select` it, or `navigate` to a URL containing it (including
+   percent-encoded forms), anywhere but the registrable domain of a verification that tracked
+   it, and only in that verification's browser session. The match is by registrable domain, so `login.aircanada.com`
    matches `aircanada.com` and a lookalike does not; the session tells apart two verifications
    whose challenges sit on one identity provider (both on `b2clogin.com`). The binding is exact
    for a typed code, which registers only against the verifications waiting in the session it
@@ -108,11 +108,15 @@ Alternatives considered and rejected:
    against every open verification of its delivery and the binding is best-effort when two
    sign-ins share an identity-provider domain. A reused verification moves its tracked values
    to its new session.
-   `press_key` gets the same guard, failing closed: while any value is tracked, a key that
-   types a character is pressed only when the focused document is on such a verification's
-   page domain in its session, so a code cannot be spelled one key at a time into a
-   third-party frame. Enter, Tab, Backspace and arrows always pass. URLs are made log-safe
-   before they are logged or echoed.
+   `press_key` gets the same guard, failing closed: while any value is tracked, a single key
+   that may type a character, or a paste chord (Control/Meta+V, Shift+Insert), is pressed only
+   when the focused document is on the page domain of a verification in this session, so a
+   code cannot be spelled one key at a time, or pasted, into a third-party frame. Named
+   non-printing keys and other Control/Meta shortcuts always pass. What is guarded is exactly
+   that: a whole tracked value in one `type`, `select` or `navigate`, a single printable key,
+   and a paste chord. **Residual:** a code split across several `type` calls ("482" then
+   "913") is not recognised, because no single call carries a tracked value. URLs are made
+   log-safe before they are logged or echoed.
 7. **Reply scrubbing sits in the dispatcher, not the outbound filter.** The design called for a
    value-aware rule in Stage 1. The filter only blocks, and the principal chose replace over
    block, so `Dispatcher.handleAgentResponse` scrubs the reply and the note for the principal

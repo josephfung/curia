@@ -629,7 +629,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // a character goes only into a field on a verification's own page in this session.
       // Listed non-printing keys (Enter, Tab, Backspace, arrows, …) and Control/Meta
       // shortcuts always pass; every other key name counts as typing (typesCharacter).
-      if (typesCharacter(key) && !(await characterKeyAllowed(page, ctx, sessionId))) {
+      // A paste chord is held to the same rule: the clipboard may hold a code.
+      if ((typesCharacter(key) || isPasteChord(key)) && !(await characterKeyAllowed(page, ctx, sessionId))) {
         return { ok: false, error: TRACKED_CODE_KEY_REFUSAL };
       }
       // Keyboard nav is often the only reliable way through calendar grids and
@@ -731,7 +732,12 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       }
       // Use resolveLocator for consistency with click/type — the LLM can use
       // natural language ("Country dropdown") and it will resolve via role/label/text.
-      const selectTarget = await resolveLocator(page, selector, ctx.log);
+      const { locator: selectTarget, scope: selectScope } = await resolveLocatorWithScope(page, selector, ctx.log);
+      // Destination guard (#2017), as for type: a tracked code is a select value only on
+      // its verification's page domain, judged by the field's own document, in its session.
+      if (!trackedCodeAllowedOn(ctx, value, documentSiteUrl(page, selectScope), sessionId)) {
+        return { ok: false, error: TRACKED_CODE_REFUSAL };
+      }
       await selectTarget.selectOption(value);
       return { ok: true };
     }
@@ -790,22 +796,28 @@ const NON_PRINTING_KEYS: ReadonlySet<string> = new Set([
  * Digit4, Numpad4, KeyA, Minus, Space, ShiftLeft+4, AltRight+Digit4) goes through the guard.
  */
 function typesCharacter(key: string): boolean {
-  // "+" is the key itself; "Shift++" is Shift with "+".
-  let base: string;
-  let modifiers: string[];
-  if (key === '+') {
-    base = '+';
-    modifiers = [];
-  } else if (key.endsWith('++')) {
-    base = '+';
-    modifiers = key.slice(0, -2).split('+');
-  } else {
-    const parts = key.split('+');
-    base = parts[parts.length - 1]!;
-    modifiers = parts.slice(0, -1);
-  }
+  const { base, modifiers } = parseKey(key);
   if (modifiers.some((m) => SHORTCUT_MODIFIERS.has(m))) return false;
   return !NON_PRINTING_KEYS.has(base);
+}
+
+/**
+ * True for a paste chord: Control/Meta/ControlOrMeta (any side) with V, or Shift+Insert.
+ * It types nothing itself but drops the clipboard, which may hold a code, into the focused
+ * field, so it goes through the same guard as a character key.
+ */
+function isPasteChord(key: string): boolean {
+  const { base, modifiers } = parseKey(key);
+  if (modifiers.some((m) => SHORTCUT_MODIFIERS.has(m)) && (base === 'v' || base === 'V' || base === 'KeyV')) return true;
+  return base === 'Insert' && modifiers.some((m) => m === 'Shift' || m === 'ShiftLeft' || m === 'ShiftRight');
+}
+
+/** A Playwright key or chord split into its base key and modifiers: "+" is the key itself, "Shift++" is Shift with "+". */
+function parseKey(key: string): { base: string; modifiers: string[] } {
+  if (key === '+') return { base: '+', modifiers: [] };
+  if (key.endsWith('++')) return { base: '+', modifiers: key.slice(0, -2).split('+') };
+  const parts = key.split('+');
+  return { base: parts[parts.length - 1]!, modifiers: parts.slice(0, -1) };
 }
 
 /**
