@@ -1,7 +1,7 @@
 {
   "name": "email-reply",
   "description": "Reply to an existing email thread. By default, replies to all participants (reply-all). Provide the Nylas message ID to reply to and the reply body. Pass account from the Account line on the inbound email preamble; omit it to use the primary account.",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
@@ -17,7 +17,9 @@
     "message_id": "string",
     "to": "string",
     "subject": "string",
-    "cc": "string"
+    "cc": "string",
+    "deferred_to_digest": "boolean? (true when the relay budget held this message for the principal's digest instead of sending it)",
+    "note": "string? (with deferred_to_digest: the message is queued, so do not re-send it another way)"
   },
   "permissions": [],
   "secrets": [],

@@ -44,6 +44,12 @@ describe('originatorOption (#1320)', () => {
     expect(originatorOption({ taskMetadata: undefined })).toEqual({});
     expect(originatorOption({ taskMetadata: {} })).toEqual({});
   });
+
+  it('is empty when the originator has no usable contact id, so unrelated sends never share one budget', () => {
+    expect(originatorOption({ taskMetadata: { originator: { systemRole: null, tier: 'known' } } })).toEqual({});
+    expect(originatorOption({ taskMetadata: { originator: { contactId: '  ', systemRole: null } } })).toEqual({});
+    expect(originatorOption({ taskMetadata: { originator: 'contact-1' } })).toEqual({});
+  });
 });
 
 describe('relayDeferredData (#1320)', () => {

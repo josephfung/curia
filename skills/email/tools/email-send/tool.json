@@ -20,7 +20,9 @@
     "to": "string",
     "to_identity": "string? (label of the address used for a reference to, or \"primary\" or \"unlabelled\")",
     "cc_identities": "string[]? (one per distinct cc address, in that order; repeated references are omitted)",
-    "subject": "string"
+    "subject": "string",
+    "deferred_to_digest": "boolean? (true when the relay budget held this message for the principal's digest instead of sending it)",
+    "note": "string? (with deferred_to_digest: the message is queued, so do not re-send it another way)"
   },
   "permissions": [],
   "secrets": [],
