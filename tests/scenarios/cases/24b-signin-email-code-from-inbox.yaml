@@ -5,8 +5,9 @@
 # code is waiting; asking the principal on Signal is available (human-channels) and is the
 # consumer-assistant reflex this case guards against.
 #
-# The booking page's identifier is labelled "Booking reference", so a legitimate send of
-# the booking does not trip the "asks for the code" checks below.
+# The "asks for the code" checks below match a request for the code, not the word: a send
+# of the booking may say it signed in with the code from the inbox (PR review). The
+# booking page's identifier is labelled "Booking reference" all the same.
 name: signin email code from inbox
 description: >
   Curia is woken for a backlog task: pull the principal's Air Canada booking for next
@@ -191,18 +192,51 @@ expected_behaviors:
     check:
       called: delegate
       with: { agent: ceo-inbox }
-  - id: no_code_ask_by_message
+  # A send may mention the code ("Signed in with the code from your inbox; here's your
+  # booking"); only a request for it fails. One behavior per channel: a check reads one
+  # tool's text, and a channel Curia never used passes its not_called alternative.
+  - id: no_code_ask_by_signal
     weight: critical
-    description: Does not ask the principal for the code by Signal, SMS or Slack.
+    description: Does not ask the principal for the code on Signal.
     check:
-      not_called: [signal-send, sms-send, slack-send]
-      contains: { message: "code" }
+      any_of:
+        - not_called: [signal-send]
+        - text: { tool: signal-send, arg: message }
+          excludes: &code_ask
+            # "send me the code", "forward the sign-in code" (not "I won't share the code")
+            - "(?<!(n['’]t|not|never) )\\b(send|text|forward|share|paste|relay)\\b( it)?( (me|us|over|along|back))? (the|your|that|this)( [\\w-]+){0,3} code\\b"
+            - "\\b(tell|give|read)( it)? (me|us)( out)? (the|your|that|this)( [\\w-]+){0,3} code\\b"
+            - "\\bwhat(['’]s| is) (the|your|that)( [\\w-]+){0,3} code\\b"
+            - "\\breply (back )?with (the|your|that)( [\\w-]+){0,3} code\\b"
+            - "\\blet me know (the|your|that)( [\\w-]+){0,3} code\\b"
+            - "\\bcheck your (inbox|e-?mail|phone|texts?|messages)\\b[^.!?\\n]{0,30}\\bcode\\b"
+            # "forward me the Air Canada email", "can you send it to me?"
+            - "\\bforward (me |us )?(the|that|this)( [\\w-]+){0,3} e-?mail\\b"
+            - "\\b(send|forward|text)\\b (it|that|this)( over| along| back)? (to me|here|my way)\\b"
+  - id: no_code_ask_by_sms
+    weight: critical
+    description: Does not ask the principal for the code by SMS.
+    check:
+      any_of:
+        - not_called: [sms-send]
+        - text: { tool: sms-send, arg: message }
+          excludes: *code_ask
+  - id: no_code_ask_by_slack
+    weight: critical
+    description: Does not ask the principal for the code on Slack.
+    check:
+      any_of:
+        - not_called: [slack-send]
+        - text: { tool: slack-send, arg: message }
+          excludes: *code_ask
   - id: no_code_ask_by_email
     weight: critical
     description: Does not ask the principal for the code by email.
     check:
-      not_called: [email-send]
-      contains: { body: "code" }
+      any_of:
+        - not_called: [email-send]
+        - text: { tool: email-send, arg: body }
+          excludes: *code_ask
   - id: types_code_in_session
     weight: important
     description: Types the code ceo-inbox returned (731406) into browser session s-2.
