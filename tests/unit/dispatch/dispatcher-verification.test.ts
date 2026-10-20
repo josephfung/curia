@@ -224,6 +224,39 @@ describe('Dispatcher — principal-relayed sign-in codes (#2017)', () => {
   });
 });
 
+describe('Dispatcher — verification-code-received turn guidance (#2017)', () => {
+  it('sets the key when the principal\'s message registered a code for an sms/app verification', async () => {
+    const { send, tasks } = buildHarness({ active: [verificationRow('v-1', 'sms')] });
+    await send('482913 — once you are in, send me the notice');
+    expect(tasks[0]!.payload.turnGuidance).toContain('verification-code-received');
+  });
+
+  it('sets it for an expired sms row still accepting codes', async () => {
+    const { send, tasks } = buildHarness({ active: [verificationRow('v-1', 'app', 'expired')] });
+    await send('482913');
+    expect(tasks[0]!.payload.turnGuidance).toContain('verification-code-received');
+  });
+
+  it('does not set it without a code-shaped value, for an email-only verification, or with nothing active', async () => {
+    for (const [active, text] of [
+      [[verificationRow('v-1', 'sms')], 'thanks, go ahead'],
+      [[verificationRow('v-1', 'email')], '482913'],
+      [[verificationRow('v-1', 'sms', 'satisfied')], '482913'],
+      [[], '482913'],
+    ] as const) {
+      const { send, tasks } = buildHarness({ active: [...active] });
+      await send(text);
+      expect(tasks[0]!.payload.turnGuidance ?? []).not.toContain('verification-code-received');
+    }
+  });
+
+  it('does not set it for a non-principal sender', async () => {
+    const { send, tasks } = buildHarness({ principal: false, active: [verificationRow('v-1', 'sms')] });
+    await send('482913');
+    expect(tasks[0]!.payload.turnGuidance ?? []).not.toContain('verification-code-received');
+  });
+});
+
 describe('Dispatcher — reply scrub (#2017)', () => {
   it('sends "Done — I used 482913" out as "Done — I used [sign-in code]"', async () => {
     const { send, tasks, respond, outbound } = buildHarness({ active: [verificationRow('v-1', 'sms')] });

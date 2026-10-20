@@ -32,7 +32,8 @@ import { sanitizeOutput } from '../skills/sanitize.js';
 import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { splitRelayNote } from './principal-note.js';
 import { stripOutboundContextPreamble } from '../dispatch/outbound-context.js';
-import { parseTurnGuidanceKeys, renderTurnGuidance } from './prompts/turn-guidance.js';
+import { parseTurnGuidanceKeys, renderTurnGuidance, verificationCodeReceivedLines } from './prompts/turn-guidance.js';
+import { acceptsCodes } from '../verification/track-codes.js';
 import { turnLengthReminder } from '../identity/length.js';
 import { parsePrincipalBacklog, renderBacklogLine } from './prompts/backlog-line.js';
 import { renderSenderLine, UNRESOLVED_SENDER_HEAD } from './prompts/sender-line.js';
@@ -474,6 +475,30 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * The named verification-code-received lines (#2017): each sms/app verification that
+   * still accepts codes and now holds a tracked value, which the dispatcher registered
+   * from this message. Empty (so the generic text renders) without a runtime, with no
+   * such row, or when the lookup fails; never the digits.
+   */
+  private async verificationCodeReceivedLines(conversationId: string): Promise<string[]> {
+    const verification = this.config.verification;
+    if (!verification) return [];
+    try {
+      const tracked = new Set(verification.tracker.trackedIds());
+      const rows = (await verification.listActive()).filter(
+        (v) => (v.delivery === 'sms' || v.delivery === 'app') && acceptsCodes(v) && tracked.has(v.id),
+      );
+      return verificationCodeReceivedLines(rows);
+    } catch (err) {
+      this.config.logger.warn(
+        { err, agentId: this.config.agentId, conversationId },
+        'Could not name the verification a relayed sign-in code is for — using the generic guidance',
+      );
+      return [];
+    }
+  }
+
   private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
     const { agentId, provider, bus, logger, memory, executionLayer, skillToolDefs } = this.config;
     const originalContent = taskEvent.payload.content;
@@ -489,10 +514,14 @@ export class AgentRuntime {
     }
     // The backlog line (prompt trim PR 7) follows the guidance; re-validated like the keys.
     const backlog = parsePrincipalBacklog(taskEvent.payload.principalBacklog);
+    const named = turnGuidanceKeys.includes('verification-code-received')
+      ? { 'verification-code-received': await this.verificationCodeReceivedLines(taskEvent.payload.conversationId) }
+      : undefined;
     const turnGuidance = renderTurnGuidance(
       turnGuidanceKeys,
       backlog ? renderBacklogLine(backlog) : null,
       this.lengthReminder(taskEvent),
+      named,
     );
     let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
     const { conversationId } = taskEvent.payload;

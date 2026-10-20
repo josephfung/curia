@@ -150,6 +150,7 @@ describe('parseTurnGuidanceKeys', () => {
   it('lists every key in the render order', () => {
     const keys: TurnGuidanceKey[] = [
       'principal-reply-shaped',
+      'verification-code-received',
       'non-principal-reply-shaped',
       'spot-check-reply',
       'outbound-context',

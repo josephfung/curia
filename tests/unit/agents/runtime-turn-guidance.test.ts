@@ -15,6 +15,9 @@ import { createLogger } from '../../../src/logger.js';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
 import type { OfficeIdentityService } from '../../../src/identity/service.js';
 import { turnLengthReminder } from '../../../src/identity/length.js';
+import { CodeTracker } from '../../../src/verification/code-tracker.js';
+import type { VerificationRuntime } from '../../../src/verification/index.js';
+import type { Verification } from '../../../src/verification/types.js';
 
 const PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock' } as const;
 
@@ -38,6 +41,7 @@ async function runTurn(payload: {
   toolAllowlist?: string[];
   /** The office identity's Detail setting; absent means the agent has no identity service. */
   verbosity?: number;
+  verification?: VerificationRuntime;
 }) {
   const logger = createLogger('error');
   const bus = new EventBus(logger);
@@ -52,6 +56,7 @@ async function runTurn(payload: {
     bus,
     logger,
     memory,
+    ...(payload.verification && { verification: payload.verification }),
     ...(payload.verbosity !== undefined && {
       officeIdentityService: {
         get: () => ({ tone: { style: 'Dry.', verbosity: payload.verbosity } }),
@@ -133,6 +138,59 @@ describe('AgentRuntime turn guidance (#1959)', () => {
   it('skips the scheduler delivery guidance on a tool-allowlisted turn', async () => {
     const { messages } = await runTurn({ content: 'Dispose of the task.', channelId: 'scheduler', toolAllowlist: ['task-complete'] });
     expect(messages[messages.length - 1]!.content).toBe('Dispose of the task.');
+  });
+});
+
+describe('AgentRuntime verification-code-received guidance (#2017)', () => {
+  const row = (over: Partial<Verification>): Verification => ({
+    id: 'ver-1', purpose: 'sign_in', kind: 'code', delivery: 'sms', site: 'example-insurer.ca',
+    pageDomain: 'example-insurer.ca', browserSessionId: 's-1', taskId: null, conversationId: null,
+    status: 'pending', requestedAt: new Date(), expiresAt: new Date(Date.now() + 600_000), resolvedAt: null,
+    metadata: {}, ...over,
+  });
+  function runtimeWith(rows: Verification[], trackedFor: string[]): VerificationRuntime {
+    const tracker = new CodeTracker({ ttlMinutesAfterClose: 120 });
+    for (const id of trackedFor) tracker.register(id, 'example-insurer.ca', '482913');
+    return { tracker, listActive: vi.fn(async () => rows) } as unknown as VerificationRuntime;
+  }
+  const guidanceOf = (messages: Message[]) => {
+    const content = String(messages[messages.length - 1]!.content);
+    return content.slice(0, content.lastIndexOf('\n\n'));
+  };
+
+  it('names the site, session and verification the code is for, never the digits', async () => {
+    const { messages } = await runTurn({
+      content: '482913 — once you are in, send me the notice',
+      turnGuidance: ['principal-reply-shaped', 'verification-code-received'],
+      verification: runtimeWith(
+        [row({}), row({ id: 'ver-mail', delivery: 'email', site: 'other.example' }), row({ id: 'ver-untracked', site: 'third.example' })],
+        ['ver-1', 'ver-mail'],
+      ),
+    });
+    const guidance = guidanceOf(messages);
+    expect(guidance).toContain("The principal's message contains the sign-in code for example-insurer.ca.");
+    expect(guidance).toContain('Enter it now in session s-1 (verification ver-1)');
+    expect(guidance).toMatch(/don't ask for it again/);
+    expect(guidance).not.toContain('other.example');
+    expect(guidance).not.toContain('third.example');
+    expect(guidance).not.toMatch(/\d{4,}/);
+  });
+
+  it('falls back to a generic line when the lookup fails or names nothing', async () => {
+    for (const verification of [
+      runtimeWith([], []),
+      { tracker: new CodeTracker({ ttlMinutesAfterClose: 120 }), listActive: vi.fn(async () => { throw new Error('db down'); }) } as unknown as VerificationRuntime,
+      undefined,
+    ]) {
+      const { messages } = await runTurn({
+        content: '482913',
+        turnGuidance: ['verification-code-received'],
+        ...(verification && { verification }),
+      });
+      const guidance = guidanceOf(messages);
+      expect(guidance).toMatch(/message contains the sign-in code/);
+      expect(guidance).not.toMatch(/\d{4,}/);
+    }
   });
 });
 

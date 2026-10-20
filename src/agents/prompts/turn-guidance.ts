@@ -21,6 +21,7 @@
 /** A trigger the dispatcher detected for this turn. Rendering order is TURN_GUIDANCE_ORDER. */
 export type TurnGuidanceKey =
   | 'principal-reply-shaped'
+  | 'verification-code-received'
   | 'non-principal-reply-shaped'
   | 'spot-check-reply'
   | 'outbound-context'
@@ -43,6 +44,29 @@ const PRINCIPAL_REPLY_SHAPED = [
   'replying to before acting ("I lost the thread — what are you replying to?"). A self-contained',
   'request needs no clarification.',
 ];
+
+/**
+ * The principal's message carried a code-shaped value the dispatcher registered for a
+ * pending or recent sms/app sign-in verification (#2017). Without it the model sometimes
+ * read past the code (in an email such as "482913 — once you're in, send me the notice")
+ * and asked for it again. The runtime renders the named form
+ * (verificationCodeReceivedLines) with the site, session and verification id; this
+ * generic form is its fallback when that lookup fails. Neither ever holds the digits.
+ */
+const VERIFICATION_CODE_RECEIVED = [
+  'The principal\'s message contains the sign-in code for the verification in your Sign-in',
+  'verifications block. Enter it now in that session; don\'t ask for it again.',
+];
+
+/** The named verification-code-received lines: one per verification the code was registered for. */
+export function verificationCodeReceivedLines(
+  items: ReadonlyArray<{ site: string; browserSessionId: string; id: string }>,
+): string[] {
+  return items.flatMap((v) => [
+    `The principal's message contains the sign-in code for ${v.site}.`,
+    `Enter it now in session ${v.browserSessionId} (verification ${v.id}); don't ask for it again.`,
+  ]);
+}
 
 /**
  * Any inbound from someone other than the principal (outbound context is withheld). The
@@ -217,6 +241,7 @@ const SCHEDULER_DELIVERY = [
 
 const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
   'principal-reply-shaped': PRINCIPAL_REPLY_SHAPED,
+  'verification-code-received': VERIFICATION_CODE_RECEIVED,
   'non-principal-reply-shaped': NON_PRINCIPAL_REPLY_SHAPED,
   'spot-check-reply': SPOT_CHECK_REPLY,
   'outbound-context': OUTBOUND_CONTEXT,
@@ -236,6 +261,8 @@ const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
  */
 export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
   'principal-reply-shaped',
+  // Straight after the reply-shaped note: a bare code is not a reply needing clarification.
+  'verification-code-received',
   'non-principal-reply-shaped',
   'spot-check-reply',
   'outbound-context',
@@ -262,7 +289,8 @@ export function parseTurnGuidanceKeys(raw: unknown): TurnGuidanceKey[] {
 
 /**
  * The guidance block for these keys, in TURN_GUIDANCE_ORDER whatever order they were
- * given in, each at most once. The backlog line (src/agents/prompts/backlog-line.ts), when
+ * given in, each at most once. `named` replaces a key's fixed text with lines the runtime
+ * resolved for this turn (verification-code-received names its verification). The backlog line (src/agents/prompts/backlog-line.ts), when
  * given, follows them; the reply's length reminder (src/identity/length.ts,
  * turnLengthReminder), when given, closes the block, nearest the message it applies to.
  * Null when there is nothing to render.
@@ -271,6 +299,7 @@ export function renderTurnGuidance(
   keys: readonly TurnGuidanceKey[],
   backlogLine?: string | null,
   lengthReminder?: string | null,
+  named?: Partial<Record<TurnGuidanceKey, readonly string[]>>,
 ): string | null {
   const wanted = new Set(keys);
   let out = TURN_GUIDANCE_HEADER;
@@ -280,7 +309,8 @@ export function renderTurnGuidance(
     // The outbound-context sub-rules continue that block's bullet list, so they join with
     // a single newline; every other section is its own paragraph.
     const continuesList = key.startsWith('outbound-context-') && previous?.startsWith('outbound-context') === true;
-    out += (continuesList ? '\n' : '\n\n') + TURN_GUIDANCE[key].join('\n');
+    const lines = named?.[key]?.length ? named[key] : TURN_GUIDANCE[key];
+    out += (continuesList ? '\n' : '\n\n') + lines.join('\n');
     previous = key;
   }
   const closing = [backlogLine, lengthReminder].filter((line): line is string => typeof line === 'string' && line !== '');
