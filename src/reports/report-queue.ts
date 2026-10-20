@@ -42,6 +42,7 @@ const SOURCE_KEYS: Record<PrincipalReportSource, true> = {
   gate_proceeded: true,
   sent_without_review: true,
   claim_trimmed: true,
+  relay_deferred: true,
 };
 const SOURCES: ReadonlySet<string> = new Set(Object.keys(SOURCE_KEYS));
 

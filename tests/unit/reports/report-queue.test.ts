@@ -87,6 +87,22 @@ describe('ReportQueue.list', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('lists relay_deferred items without relabelling them (#1320)', async () => {
+    const { queue, warn } = makeQueue({
+      pages: [{
+        rows: [
+          { seq: '30', row: row('f', '2026-10-19T09:00:00.000Z', { summary: 'Held for your digest (relay limit reached for Dana Example):\nSigned.', urgency: 'digest', source: 'relay_deferred' }) },
+        ],
+        hasMore: false,
+      }],
+    });
+
+    const batch = await queue.list();
+
+    expect(batch.items.map((i) => i.source)).toEqual(['relay_deferred']);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('keeps an item with an unknown source as an agent item, with a warning', async () => {
     const { queue, warn } = makeQueue({
       pages: [{ rows: [{ seq: '30', row: row('f', '2026-10-18T12:00:00.000Z', { summary: 'From a newer build.', urgency: 'digest', source: 'future_source' }) }], hasMore: false }],

@@ -908,6 +908,20 @@ interface AutonomySendBlockedPayload {
   taskEventId?: string;
 }
 
+// AutonomyRelayDeferredPayload — published by the outbound gateway when a relay to the
+// principal that an outside contact caused was over that contact's relay budget and went to
+// the digest instead (#1320). Names the originator, never the message.
+export interface AutonomyRelayDeferredPayload {
+  originatorContactId: string;
+  /** The originator's tier; a missing tier is reported as 'unknown'. */
+  tier: ContactTier;
+  channel: string;
+  conversationId?: string;
+  taskEventId?: string;
+  /** Whether the once-per-window "holding them for your digest" line went out with it. */
+  noticeSent: boolean;
+}
+
 // HumanDecisionPayload — emitted by the dispatch layer when a human approves, denies, or
 // reviews an agent action. Captures the full decision context for compliance and audit.
 // Spec 10 (audit log hardening): required by EU AI Act Article 14, HITL audit standards.
@@ -1513,7 +1527,8 @@ export type PrincipalReportSource =
   | 'approval_expired'
   | 'gate_proceeded'       // band gating let through an action the tier policy would have held (#2159)
   | 'sent_without_review'  // the judge was unavailable at 80+, so the send went out unreviewed (#2159)
-  | 'claim_trimmed';       // unverified statements were cut from a send after one bounce (#2159)
+  | 'claim_trimmed'        // unverified statements were cut from a send after one bounce (#2159)
+  | 'relay_deferred';      // an outside contact used up their relay budget; the relay waits here (#1320)
 export interface PrincipalReportPayload {
   /** One or two sentences, written for the principal. */
   summary: string;
@@ -1558,6 +1573,14 @@ export interface AutonomySendBlockedEvent extends BaseEvent {
   type: 'autonomy.send_blocked';
   sourceLayer: 'dispatch';
   payload: AutonomySendBlockedPayload;
+}
+
+// AutonomyRelayDeferredEvent — the gateway held a relay to the principal for the digest
+// because its outside originator was over the relay budget (#1320).
+export interface AutonomyRelayDeferredEvent extends BaseEvent {
+  type: 'autonomy.relay_deferred';
+  sourceLayer: 'dispatch';
+  payload: AutonomyRelayDeferredPayload;
 }
 
 interface ConversationCheckpointPayload {
@@ -1777,6 +1800,7 @@ export type BusEvent =
   | PrincipalReportEvent     // #2159: an item for the principal's digest (report queue)
   | AutonomyToolBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
+  | AutonomyRelayDeferredEvent // #1320: a relay to the principal went to the digest (relay budget)
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
   | EmbeddingErrorEvent        // #434: failed embedding call — used by HealthService for health tracking
   | TaskCreatedEvent           // Tasks v1: task created via task-create skill (#835)
@@ -2500,6 +2524,20 @@ export function createAutonomySendBlocked(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'autonomy.send_blocked',
+    sourceLayer: 'dispatch',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createAutonomyRelayDeferred(
+  payload: AutonomyRelayDeferredPayload,
+  parentEventId?: string,
+): AutonomyRelayDeferredEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'autonomy.relay_deferred',
     sourceLayer: 'dispatch',
     payload,
     parentEventId,

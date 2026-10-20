@@ -40,6 +40,17 @@ describe('principal.report', () => {
     expect(sys.payload.actionShortRef).toBe('abcd1234');
   });
 
+  it('accepts the relay_deferred source from dispatch (#1320)', () => {
+    const ev = createPrincipalReport({
+      summary: 'Held for your digest (relay limit reached for Dana Example):\nThe contract is signed.',
+      urgency: 'digest',
+      source: 'relay_deferred',
+      parentEventId: 'task-4',
+      sourceLayer: 'dispatch',
+    });
+    expect(ev.payload.source).toBe('relay_deferred');
+  });
+
   it('accepts the execution layer and the band-gating sources (#2159)', () => {
     for (const source of ['gate_proceeded', 'sent_without_review', 'claim_trimmed'] as const) {
       const ev = createPrincipalReport({
