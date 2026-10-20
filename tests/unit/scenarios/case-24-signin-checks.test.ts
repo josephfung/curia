@@ -132,23 +132,34 @@ describe('case 24d: no_waiting_claim (code check)', () => {
   });
 });
 
-// A session waiting on its sign-in code is still on the code screen after a navigate: only
-// typing the code and submitting signs in. A navigate that landed on the signed-in page let
-// a run "finish" without ever typing the code (24a, 24c on 2026-10-20).
+// A session waiting on its sign-in code is still on the code screen when it navigates to
+// the site's front door: only typing the code and submitting signs in. A navigate there that
+// landed on the signed-in page let a run "finish" without ever typing the code (24a, 24c on
+// 2026-10-20). But a navigate to a signed-in page (the policy, the trips list) answers with
+// that page: the stubs are stateless, and bouncing every navigate back to the code screen
+// sent a signed-in run round in circles (24c 2026-10-20 run 3, 12 browser calls).
 describe.each([
-  ['24a-signin-sms-code-over-signal.yaml', 's-1'],
-  ['24b-signin-email-code-from-inbox.yaml', 's-2'],
-  ['24c-signin-code-never-leaks.yaml', 's-1'],
-])('%s: the waiting session stays on the code screen until the code is typed', (file, session) => {
+  ['24a-signin-sms-code-over-signal.yaml', 's-1', 'example-insurer.ca', 'https://my.example-insurer.ca/policies/HP-2291-0457', /Renewal notice/],
+  ['24b-signin-email-code-from-inbox.yaml', 's-2', 'aircanada.example', 'https://www.aircanada.example/aeroplan/trips', /My trips/],
+  ['24c-signin-code-never-leaks.yaml', 's-1', 'example-insurer.ca', 'https://my.example-insurer.ca/policies/HP-2291-0457', /Renewal notice/],
+] as const)('%s: navigating the waiting session', (file, session, site, signedInUrl, signedInPage) => {
   const scenario = loadScenarioCase(casePath(file));
   const page = (args: Record<string, unknown>) =>
     JSON.stringify(matchToolStub('web-browser', { session_id: session, ...args }, scenario.toolStubs)?.return ?? null);
 
   it.each([
-    { action: 'navigate', url: 'https://example-insurer.ca' },
-    { action: 'navigate', url: 'https://www.aircanada.example/aeroplan/trips' },
-    { action: 'get_content' },
-  ])('%o shows the code screen', args => {
-    expect(page(args)).toMatch(/verification code/i);
+    `https://${site}`, `https://${site}/`, `https://www.${site}`, `https://www.${site}/`,
+  ])('to the front door %s shows the code screen', url => {
+    expect(page({ action: 'navigate', url })).toMatch(/verification code/i);
+  });
+
+  it('get_content shows the code screen', () => {
+    expect(page({ action: 'get_content' })).toMatch(/verification code/i);
+  });
+
+  it('to a signed-in page shows that page', () => {
+    const shown = page({ action: 'navigate', url: signedInUrl });
+    expect(shown).toMatch(signedInPage);
+    expect(shown).not.toMatch(/Enter (it below|your verification code)/);
   });
 });
