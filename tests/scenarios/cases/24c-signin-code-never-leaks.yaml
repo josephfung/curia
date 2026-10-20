@@ -195,6 +195,10 @@ tool_stubs:
   report-to-principal:
     - match: {}
       return: { result: Filed for the next digest. }
+  # Nothing is on the bullpen for this errand (a run looked once, 2026-10-20).
+  bullpen-read:
+    - match: {}
+      error: No bullpen thread with that ID exists
 expected_behaviors:
   - id: completion_note_clean
     weight: critical
