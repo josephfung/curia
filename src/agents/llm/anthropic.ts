@@ -13,12 +13,101 @@
 //      can be used with different Claude versions without re-instantiation.
 
 import Anthropic from '@anthropic-ai/sdk';
-import type { Message as AnthropicMessage, MessageParam, ToolUseBlock, TextBlock, TextBlockParam, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
-import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvenance, Message, ToolCall, ToolDefinition, ToolResult } from './provider.js';
+import type {
+  ContentBlockParam,
+  Message as AnthropicMessage,
+  MessageParam,
+  RedactedThinkingBlockParam,
+  TextBlock,
+  TextBlockParam,
+  ThinkingBlockParam,
+  ToolResultBlockParam,
+  ToolUseBlock,
+} from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { LLMProvider, LLMReasoning, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvenance, Message, ReasoningContent, ToolCall, ToolDefinition, ToolResult } from './provider.js';
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
 import { resolveTemperature } from './sampling-options.js';
+import { PrefixHasher, sendableReasoningBlocks } from './reasoning-blocks.js';
+
+/**
+ * The Anthropic thinking block a passed-back reasoning block holds, rebuilt
+ * field for field as the API returned it. Undefined for anything else; a
+ * thinking block with no signature would be rejected, so it is not sent.
+ */
+function thinkingParamFrom(data: unknown): ThinkingBlockParam | RedactedThinkingBlockParam | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const block = data as Record<string, unknown>;
+  if (block.type === 'thinking' && typeof block.thinking === 'string'
+    && typeof block.signature === 'string' && block.signature) {
+    return { type: 'thinking', thinking: block.thinking, signature: block.signature };
+  }
+  if (block.type === 'redacted_thinking' && typeof block.data === 'string' && block.data) {
+    return { type: 'redacted_thinking', data: block.data };
+  }
+  return undefined;
+}
+
+/** Hash of a request's system, tools and every message, as sent. */
+function requestPrefixHash(params: Anthropic.Messages.MessageCreateParamsNonStreaming): string {
+  const hasher = new PrefixHasher(params.system, params.tools);
+  for (const message of params.messages) hasher.addMessage(message);
+  return hasher.digestNow();
+}
+
+/**
+ * Index of the first message whose passed-back thinking answered a different
+ * prefix than the one now in front of it, or undefined when every block still
+ * matches. A block with no recorded hash counts as stale.
+ */
+function firstStaleReasoningTurn(
+  params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+  reasoningTurns: ReadonlyMap<number, readonly ReasoningContent[]>,
+): number | undefined {
+  const hasher = new PrefixHasher(params.system, params.tools);
+  for (let i = 0; i < params.messages.length; i++) {
+    const blocks = reasoningTurns.get(i);
+    if (blocks) {
+      const current = hasher.digestNow();
+      if (blocks.some((block) => block.prefixHash !== current)) return i;
+    }
+    hasher.addMessage(params.messages[i]);
+  }
+  return undefined;
+}
+
+/**
+ * Thinking blocks a response returned, in order, as reasoning blocks for the
+ * next request of the tool loop (ADR-048 §1). `prefixHash` is set when the
+ * model binds thinking to the request prefix.
+ */
+function reasoningBlocksFrom(response: AnthropicMessage, model: string, prefixHash: string | undefined): ReasoningContent[] {
+  return response.content
+    .filter((block) => block.type === 'thinking' || block.type === 'redacted_thinking')
+    .map((block) => ({
+      type: 'reasoning' as const,
+      provider: 'anthropic' as const,
+      model,
+      data: block,
+      ...(prefixHash !== undefined ? { prefixHash } : {}),
+    }));
+}
+
+/**
+ * Readable thinking for the archive (#2042 parity). Thinking blocks with no
+ * text (Haiku 5.5's default display) or redacted blocks are `encrypted`.
+ */
+function reasoningFieldsFrom(response: AnthropicMessage, usage: LLMUsage): LLMReasoning {
+  const thinking = response.content.filter((block) => block.type === 'thinking' || block.type === 'redacted_thinking');
+  const text = thinking
+    .map((block) => (block.type === 'thinking' ? block.thinking : ''))
+    .filter((t) => t.trim())
+    .join('\n');
+  if (text) return { reasoning: text };
+  if (thinking.length > 0) return { reasoningOmitted: 'encrypted' };
+  return (usage.reasoningTokens ?? 0) > 0 ? { reasoningOmitted: 'empty' } : {};
+}
 
 export class AnthropicProvider implements LLMProvider {
   id = 'anthropic';
@@ -48,6 +137,8 @@ export class AnthropicProvider implements LLMProvider {
     createParams: Anthropic.Messages.MessageCreateParamsNonStreaming;
     model: string;
     signal?: AbortSignal;
+    /** Set when the model binds thinking to the request prefix (prefix guard). */
+    prefixHash?: string;
   } {
     // Anthropic requires the system prompt as a separate top-level parameter,
     // not as an element in the messages array. We extract it here so agent
@@ -74,35 +165,63 @@ export class AnthropicProvider implements LLMProvider {
       .filter(Boolean)
       .join('\n\n');
 
+    // Prefer the explicit model param; fall back to options.model for backward compatibility.
+    // No default: the runtime always provides model via resolvedModel, so a missing model
+    // indicates a bug at the call site. Fail loudly rather than silently using a stale default.
+    const optionsModel = typeof options?.model === 'string' ? options.model : undefined;
+    const model = modelOverride ?? optionsModel;
+    if (!model) {
+      throw new Error(`AnthropicProvider.${operation}() requires a model — no model was provided and no default is configured`);
+    }
+
     // Build the Anthropic message array from our provider-neutral Message type.
     // Messages with string content are simple text; messages with ContentBlock[]
     // carry tool_use or tool_result blocks for multi-turn tool-use conversations.
-    const conversationMessages: MessageParam[] = messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => {
-        if (typeof m.content === 'string') {
-          return { role: m.role as 'user' | 'assistant', content: m.content };
+    // An assistant turn's reasoning blocks become thinking blocks again, first in
+    // the turn, when this model wrote them (ADR-048 §1). reasoningTurns records
+    // which mapped messages carry them, for the prefix guard below.
+    const reasoningTurns = new Map<number, ReasoningContent[]>();
+    const conversationMessages: MessageParam[] = [];
+    for (const m of messages) {
+      if (m.role === 'system') continue;
+      if (typeof m.content === 'string') {
+        conversationMessages.push({ role: m.role, content: m.content });
+        continue;
+      }
+      const sendable = m.role === 'assistant'
+        ? sendableReasoningBlocks(m.content, 'anthropic', model, this.logger)
+        : [];
+      const thinkingBlocks: Array<ThinkingBlockParam | RedactedThinkingBlockParam> = [];
+      const carried: ReasoningContent[] = [];
+      for (const block of sendable) {
+        const param = thinkingParamFrom(block.data);
+        if (param) {
+          thinkingBlocks.push(param);
+          carried.push(block);
+        } else {
+          this.logger.warn({ model }, 'Dropping a passed-back reasoning block that is not an Anthropic thinking block');
         }
-        // ContentBlock[] — map our provider-neutral blocks to Anthropic SDK shapes
-        return {
-          role: m.role as 'user' | 'assistant',
-          content: m.content.map(block => {
-            if (block.type === 'tool_use') {
-              return { type: 'tool_use' as const, id: block.id, name: block.name, input: block.input };
-            }
-            if (block.type === 'tool_result') {
-              return { type: 'tool_result' as const, tool_use_id: block.tool_use_id, content: block.content, is_error: block.is_error };
-            }
-            if (block.type === 'image') {
-              // Pass image blocks through to the Anthropic SDK as-is — the shape
-              // matches the SDK's ImageBlockParam structure directly.
-              return block as unknown as Anthropic.Messages.ImageBlockParam;
-            }
-            // TextContent
-            return { type: 'text' as const, text: block.text };
-          }),
-        } as MessageParam;
-      });
+      }
+      // ContentBlock[] — map our provider-neutral blocks to Anthropic SDK shapes
+      const mapped: ContentBlockParam[] = [...thinkingBlocks];
+      for (const block of m.content) {
+        if (block.type === 'reasoning') continue;
+        if (block.type === 'tool_use') {
+          mapped.push({ type: 'tool_use' as const, id: block.id, name: block.name, input: block.input });
+        } else if (block.type === 'tool_result') {
+          mapped.push({ type: 'tool_result' as const, tool_use_id: block.tool_use_id, content: block.content, is_error: block.is_error });
+        } else if (block.type === 'image') {
+          // Pass image blocks through to the Anthropic SDK as-is — the shape
+          // matches the SDK's ImageBlockParam structure directly.
+          mapped.push(block as unknown as Anthropic.Messages.ImageBlockParam);
+        } else {
+          // TextContent
+          mapped.push({ type: 'text' as const, text: block.text });
+        }
+      }
+      if (carried.length > 0) reasoningTurns.set(conversationMessages.length, carried);
+      conversationMessages.push({ role: m.role, content: mapped });
+    }
 
     // Legacy toolResults parameter — append as a user turn if provided.
     // Prefer building tool_result blocks directly in the messages array instead.
@@ -114,15 +233,6 @@ export class AnthropicProvider implements LLMProvider {
         is_error: tr.is_error,
       }));
       conversationMessages.push({ role: 'user', content: toolResultBlocks });
-    }
-
-    // Prefer the explicit model param; fall back to options.model for backward compatibility.
-    // No default: the runtime always provides model via resolvedModel, so a missing model
-    // indicates a bug at the call site. Fail loudly rather than silently using a stale default.
-    const optionsModel = typeof options?.model === 'string' ? options.model : undefined;
-    const model = modelOverride ?? optionsModel;
-    if (!model) {
-      throw new Error(`AnthropicProvider.${operation}() requires a model — no model was provided and no default is configured`);
     }
 
     // Per-model output cap from the registry. Fall back to 4096 for unknown models.
@@ -192,10 +302,39 @@ export class AnthropicProvider implements LLMProvider {
       createParams.tools = mappedTools;
     }
 
+    // Prefix guard (ADR-048 §1). On a model whose thinking is bound to the
+    // request prefix, a thinking block sent back after system, tools or an
+    // earlier message changed returns a 400. The tool loop does change them
+    // mid-loop (the Bullpen refresh, tool discovery), so drop thinking from the
+    // first turn whose prefix differs from the one its block answered, through
+    // the end. The docs allow dropping from a point to the end; the model loses
+    // that reasoning. The hash of this whole request goes on blocks it returns.
+    let prefixHash: string | undefined;
+    if (this.modelRegistry.thinkingBoundToPrefix(model)) {
+      if (reasoningTurns.size > 0) {
+        const staleFrom = firstStaleReasoningTurn(createParams, reasoningTurns);
+        if (staleFrom !== undefined) {
+          let dropped = 0;
+          for (let i = staleFrom; i < conversationMessages.length; i++) {
+            const message = conversationMessages[i]!;
+            if (typeof message.content === 'string') continue;
+            const kept = message.content.filter((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking');
+            dropped += message.content.length - kept.length;
+            conversationMessages[i] = { ...message, content: kept };
+          }
+          this.logger.info(
+            { model, dropped, fromMessage: staleFrom, reason: 'prefix_changed' },
+            'Dropping passed-back thinking after a request prefix change',
+          );
+        }
+      }
+      prefixHash = requestPrefixHash(createParams);
+    }
+
     // Honor an optional AbortSignal passed via options.signal so callers can
     // cancel an in-flight request instead of orphaning it.
     const signal = options?.signal instanceof AbortSignal ? options.signal : undefined;
-    return { createParams, model, signal };
+    return { createParams, model, signal, ...(prefixHash !== undefined ? { prefixHash } : {}) };
   }
 
   private usageFromResponse(response: AnthropicMessage): LLMUsage {
@@ -252,7 +391,7 @@ export class AnthropicProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'chat');
       model = built.model;
-      const { createParams, signal } = built;
+      const { createParams, signal, prefixHash } = built;
       const response = await this.client.messages.create(createParams, signal ? { signal } : undefined);
 
       this.logger.debug(
@@ -269,6 +408,7 @@ export class AnthropicProvider implements LLMProvider {
 
       const usage = this.usageFromResponse(response);
       const provenance = this.provenanceFromResponse(response, model);
+      const reasoning = reasoningFieldsFrom(response, usage);
 
       // Use type guard functions for narrowing — avoids casting and is safer
       // than checking c.type === 'tool_use' without narrowing to ToolUseBlock.
@@ -277,13 +417,16 @@ export class AnthropicProvider implements LLMProvider {
         // The model may emit a text preamble alongside tool calls (e.g.
         // "Let me look that up…"). Preserve it so callers can surface it.
         const textContent = this.textFromResponse(response);
+        const reasoningBlocks = reasoningBlocksFrom(response, model, prefixHash);
 
         return {
           type: 'tool_use',
           toolCalls,
           content: textContent || undefined,
+          ...(reasoningBlocks.length > 0 ? { reasoningBlocks } : {}),
           usage,
           provenance,
+          ...reasoning,
         };
       }
 
@@ -302,6 +445,7 @@ export class AnthropicProvider implements LLMProvider {
         content,
         usage,
         provenance,
+        ...reasoning,
       };
     } catch (err) {
       this.logger.error({ err, model }, 'Anthropic API call failed');
@@ -323,7 +467,7 @@ export class AnthropicProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'stream');
       model = built.model;
-      const { createParams, signal } = built;
+      const { createParams, signal, prefixHash } = built;
       const stream = this.client.messages.stream(createParams, signal ? { signal } : undefined);
 
       // Guarantee the underlying fetch Response / ReadableStream is released on every
@@ -357,14 +501,18 @@ export class AnthropicProvider implements LLMProvider {
         const provenance = this.provenanceFromResponse(response, model);
         const toolCalls = this.toolCallsFromResponse(response);
         const content = this.textFromResponse(response);
+        const reasoning = reasoningFieldsFrom(response, usage);
 
         if (toolCalls.length > 0) {
+          const reasoningBlocks = reasoningBlocksFrom(response, model, prefixHash);
           yield {
             type: 'tool_use',
             toolCalls,
             content: content || undefined,
+            ...(reasoningBlocks.length > 0 ? { reasoningBlocks } : {}),
             usage,
             provenance,
+            ...reasoning,
           };
           return;
         }
@@ -377,6 +525,7 @@ export class AnthropicProvider implements LLMProvider {
           content,
           usage,
           provenance,
+          ...reasoning,
         };
       } finally {
         // Best-effort cleanup; never let an abort() failure mask the real result or error.

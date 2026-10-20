@@ -659,3 +659,57 @@ describe('llmResponseAsStream (#1563)', () => {
     expect(errEvents).toEqual([{ type: 'error', error: err }]);
   });
 });
+
+describe('reasoning pass-back through the tool loop (ADR-048 §1)', () => {
+  const reasoning = { type: 'reasoning' as const, provider: 'openrouter' as const, model: 'fake', data: { reasoning_details: [{ type: 'reasoning.text', text: 'plan' }] } };
+  const call: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
+
+  it('llmResponseAsStream forwards reasoning blocks on tool_use', async () => {
+    const events: LLMStreamEvent[] = [];
+    for await (const event of llmResponseAsStream({ type: 'tool_use', toolCalls: [call], reasoningBlocks: [reasoning], usage, provenance })) {
+      events.push(event);
+    }
+    expect(events).toEqual([{ type: 'tool_use', toolCalls: [call], content: undefined, reasoningBlocks: [reasoning], usage, provenance }]);
+  });
+
+  it('the next round sees the reasoning first in the assistant turn (chat adapter path)', async () => {
+    const seen: StreamingTurnOpenStreamParams[] = [];
+    const responses: LLMResponse[] = [
+      { type: 'tool_use', toolCalls: [call], content: 'Looking.', reasoningBlocks: [reasoning], usage, provenance },
+      { type: 'text', content: 'Done.', usage, provenance },
+    ];
+    const result = await runStreamingToolLoop([{ role: 'user', content: 'Hi' }], {
+      provider: new NoStreamProvider(),
+      model: 'fake',
+      maxRounds: 4,
+      signal: new AbortController().signal,
+      logger,
+      invokeTool: async () => ({ content: 'ok' }),
+      openStream: (params) => {
+        seen.push(params);
+        return llmResponseAsStream(responses[seen.length - 1]!);
+      },
+    });
+    expect(result.stopReason).toBe('message_end');
+    const assistant = seen[1]!.messages[1]!;
+    expect(assistant).toEqual(buildAssistantToolUseMessage([call], 'Looking.', [reasoning]));
+    expect((assistant.content as Array<{ type: string }>)[0]!.type).toBe('reasoning');
+  });
+
+  it('carries reasoning from a provider stream (voice path)', async () => {
+    const provider = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [call], reasoningBlocks: [reasoning], usage, provenance }],
+      [{ type: 'message_end', content: 'Done.', usage, provenance }],
+    ]);
+    const result = await runStreamingToolLoop([{ role: 'user', content: 'Hi' }], {
+      provider,
+      model: 'fake',
+      maxRounds: 4,
+      signal: new AbortController().signal,
+      logger,
+      invokeTool: async () => ({ content: 'ok' }),
+    });
+    expect(result.messages[1]).toEqual(buildAssistantToolUseMessage([call], undefined, [reasoning]));
+    expect(result.messages[2]).toEqual(buildUserToolResultMessage([{ id: 'call_1', content: 'ok' }]));
+  });
+});

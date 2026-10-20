@@ -59,7 +59,28 @@ export interface ImageContent {
       };
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | ImageContent;
+/**
+ * Reasoning a provider returned beside tool calls, carried back verbatim on the
+ * next request of the same tool loop (ADR-048 §1). `data` is provider-native and
+ * opaque: OpenRouter's `reasoning_details` (or bare `reasoning` string), or one
+ * Anthropic `thinking` / `redacted_thinking` block. Never rebuilt from the
+ * archive, which stores only a marker for it.
+ */
+export interface ReasoningContent {
+  type: 'reasoning';
+  provider: 'openrouter' | 'anthropic';
+  /** Model the request named. A provider drops blocks from any other model. */
+  model: string;
+  data: unknown;
+  /**
+   * Anthropic only: hash of the request this block answered (system, tools and
+   * every message, as sent). Set for models whose thinking is bound to the
+   * request prefix, so a later request can tell when the block went stale.
+   */
+  prefixHash?: string;
+}
+
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | ImageContent | ReasoningContent;
 
 export interface Message {
   role: 'system' | 'user' | 'assistant';
@@ -145,12 +166,12 @@ export interface ToolResult {
 // Error paths omit provenance: when the API fails there is no response body to extract from.
 export type LLMResponse =
   | ({ type: 'text'; content: string; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
-  | ({ type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
+  | ({ type: 'tool_use'; toolCalls: ToolCall[]; content?: string; reasoningBlocks?: ReasoningContent[]; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
   | { type: 'error'; error: AgentError; usage?: LLMUsage };
 
 export type LLMStreamEvent =
   | { type: 'text_delta'; text: string }
-  | ({ type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
+  | ({ type: 'tool_use'; toolCalls: ToolCall[]; content?: string; reasoningBlocks?: ReasoningContent[]; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
   | ({ type: 'message_end'; content: string; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
   | { type: 'error'; error: AgentError; usage?: LLMUsage };
 

@@ -43,6 +43,7 @@ import type {
   LLMResponse,
   LLMStreamEvent,
   Message,
+  ReasoningContent,
   ToolCall,
   ToolDefinition,
 } from './provider.js';
@@ -221,6 +222,7 @@ export async function* llmResponseAsStream(
       type: 'tool_use',
       toolCalls: response.toolCalls,
       content: response.content,
+      ...(response.reasoningBlocks?.length ? { reasoningBlocks: response.reasoningBlocks } : {}),
       usage: response.usage,
       provenance: response.provenance,
       ...(response.reasoning ? { reasoning: response.reasoning } : {}),
@@ -310,7 +312,7 @@ export async function runStreamingToolLoop(
           options: { signal },
         });
 
-    let toolUse: { toolCalls: ToolCall[]; content?: string } | undefined;
+    let toolUse: { toolCalls: ToolCall[]; content?: string; reasoningBlocks?: ReasoningContent[] } | undefined;
     let messageEnd: { content: string } | undefined;
     let streamError: AgentError | undefined;
 
@@ -325,7 +327,7 @@ export async function runStreamingToolLoop(
           await config.hooks.onTextDelta(event.text);
         }
       } else if (event.type === 'tool_use') {
-        toolUse = { toolCalls: event.toolCalls, content: event.content };
+        toolUse = { toolCalls: event.toolCalls, content: event.content, reasoningBlocks: event.reasoningBlocks };
         break;
       } else if (event.type === 'message_end') {
         messageEnd = { content: event.content };
@@ -419,9 +421,10 @@ export async function runStreamingToolLoop(
       }
 
       // Assistant turn must carry tool_use blocks so the following tool_result
-      // blocks can reference their ids (Anthropic requirement).
+      // blocks can reference their ids (Anthropic requirement), and the reasoning
+      // that chose them so the next round sees it (ADR-048 §1).
       workingMessages.push(
-        buildAssistantToolUseMessage(toolUse.toolCalls, toolUse.content),
+        buildAssistantToolUseMessage(toolUse.toolCalls, toolUse.content, toolUse.reasoningBlocks),
       );
 
       const toolResults: Array<{ id: string; content: string; isError?: boolean }> = [];

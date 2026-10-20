@@ -58,6 +58,13 @@ export interface ModelMetadata {
    * reasoning policy (#2077).
    */
   thinksByDefault?: boolean;
+  /**
+   * A thinking block from this model is valid only while everything sent before
+   * it is unchanged; sending one back after `system`, `tools` or an earlier
+   * message changed returns a 400. AnthropicProvider drops passed-back thinking
+   * from the first changed prefix onward (ADR-048 §1, prefix guard).
+   */
+  thinkingBoundToPrefix?: boolean;
 }
 
 // Keyed by model name prefix. OpenRouter models added by #379.
@@ -119,6 +126,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
     capabilities: ['vision', 'coding', 'streaming', 'tools'],
     rejectsSamplingParams: true,
     thinksByDefault: true,
+    thinkingBoundToPrefix: true,
   },
 
   // OpenRouter models — non-Claude models routed via OpenRouter's OpenAI-compatible API.
@@ -356,6 +364,11 @@ export class ModelRegistry {
   /** True when the model thinks unless the request disables it. False for unknown models. */
   thinksByDefault(modelId: string): boolean {
     return this.getModel(modelId)?.thinksByDefault === true;
+  }
+
+  /** True when the model rejects thinking sent back after a prefix change. False for unknown models. */
+  thinkingBoundToPrefix(modelId: string): boolean {
+    return this.getModel(modelId)?.thinkingBoundToPrefix === true;
   }
 
   /** Returns true if the model is in the registry (prefix match). */

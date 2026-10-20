@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AnthropicProvider } from '../../../../src/agents/llm/anthropic.js';
 import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
 import { createSilentLogger } from '../../../../src/logger.js';
-import type { LLMStreamEvent } from '../../../../src/agents/llm/provider.js';
+import type { LLMStreamEvent, Message } from '../../../../src/agents/llm/provider.js';
+import { buildAssistantToolUseMessage, buildUserToolResultMessage } from '../../../../src/agents/llm/tool-loop-messages.js';
 
 // vi.mock is hoisted above variable declarations, so mockCreate must be
 // declared with vi.hoisted() to be available inside the mock factory.
@@ -665,5 +666,178 @@ describe('AnthropicProvider — reasoning tokens (ADR-048 §5)', () => {
     }));
     const end = events.at(-1);
     expect(end?.type === 'message_end' && end.usage.reasoningTokens).toBe(21);
+  });
+});
+
+describe('AnthropicProvider — reasoning pass-back (ADR-048 §1)', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+    mockStream.mockReset();
+  });
+
+  const tools = [{ name: 'lookup', description: 'Look up', input_schema: { type: 'object' as const, properties: {} } }];
+  const thinking = { type: 'thinking', thinking: 'Check the calendar first.', signature: 'sig-1' };
+  const redacted = { type: 'redacted_thinking', data: 'ENCRYPTED' };
+
+  function toolUseResponse(model: string, reasoning: unknown[], id = 'toolu_1') {
+    return {
+      id: `msg_${id}`,
+      model,
+      content: [...reasoning, { type: 'text', text: 'Looking.' }, { type: 'tool_use', id, name: 'lookup', input: {} }],
+      usage: { input_tokens: 10, output_tokens: 20, cache_creation_input_tokens: null, cache_read_input_tokens: null },
+      stop_reason: 'tool_use',
+    };
+  }
+
+  /** Run one round: the response for `messages`, and the messages for the next request. */
+  async function round(provider: AnthropicProvider, model: string, messages: Message[], system = 'You are Curia.', roundTools = tools) {
+    const result = await provider.chat({ messages: [{ role: 'system', content: system }, ...messages], tools: roundTools, model });
+    if (result.type !== 'tool_use') throw new Error(`expected tool_use, got ${result.type}`);
+    const call = result.toolCalls[0]!;
+    return {
+      result,
+      next: [
+        ...messages,
+        buildAssistantToolUseMessage(result.toolCalls, result.content, result.reasoningBlocks),
+        buildUserToolResultMessage([{ id: call.id, content: 'result' }]),
+      ],
+    };
+  }
+
+  /** Content block types of each assistant message in a captured request. */
+  function assistantBlockTypes(callIndex: number): string[][] {
+    const params = mockCreate.mock.calls[callIndex]![0] as { messages: Array<{ role: string; content: Array<{ type: string }> | string }> };
+    return params.messages
+      .filter((m) => m.role === 'assistant' && Array.isArray(m.content))
+      .map((m) => (m.content as Array<{ type: string }>).map((b) => b.type));
+  }
+
+  it('captures thinking and redacted_thinking in order, and sends them back first and unmodified', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    mockCreate.mockResolvedValueOnce(toolUseResponse('claude-sonnet-4-6', [thinking, redacted]));
+    const first = await round(provider, 'claude-sonnet-4-6', [{ role: 'user', content: 'Plan my day' }]);
+    expect(first.result.reasoningBlocks?.map((b) => b.data)).toEqual([thinking, redacted]);
+    expect(first.result.reasoning).toBe('Check the calendar first.');
+
+    mockCreate.mockResolvedValueOnce(makeTextResponse());
+    await provider.chat({ messages: first.next, tools, model: 'claude-sonnet-4-6' });
+    const sent = mockCreate.mock.calls[1]![0] as { messages: Array<{ role: string; content: unknown }> };
+    const assistant = sent.messages[1]!.content as unknown[];
+    expect(assistant.slice(0, 2)).toEqual([thinking, redacted]);
+    expect(assistantBlockTypes(1)).toEqual([['thinking', 'redacted_thinking', 'text', 'tool_use']]);
+  });
+
+  it('drops reasoning written by another model', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    mockCreate.mockResolvedValueOnce(toolUseResponse('claude-sonnet-4-6', [thinking]));
+    const first = await round(provider, 'claude-sonnet-4-6', [{ role: 'user', content: 'Plan my day' }]);
+
+    mockCreate.mockResolvedValueOnce(makeTextResponse());
+    await provider.chat({ messages: first.next, tools, model: 'claude-opus-4-6' });
+    expect(assistantBlockTypes(1)).toEqual([['text', 'tool_use']]);
+  });
+
+  it('records signature-only thinking as encrypted reasoning for the archive', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [{ type: 'thinking', thinking: '', signature: 'sig' }]));
+    const { result } = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+    expect(result.reasoning).toBeUndefined();
+    expect(result.reasoningOmitted).toBe('encrypted');
+  });
+
+  describe('prefix guard', () => {
+    it('stamps blocks from a prefix-bound model with the request hash, and not others', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking]));
+      const bound = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+      expect(bound.result.reasoningBlocks?.[0]?.prefixHash).toMatch(/^[0-9a-f]{64}$/);
+
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-sonnet-4-6', [thinking]));
+      const unbound = await round(provider, 'claude-sonnet-4-6', [{ role: 'user', content: 'Hi' }]);
+      expect(unbound.result.reasoningBlocks?.[0]?.prefixHash).toBeUndefined();
+    });
+
+    it('sends every block while the prefix is unchanged', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_1'));
+      const r1 = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_2'));
+      const r2 = await round(provider, 'claude-haiku-5-5', r1.next);
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      await provider.chat({ messages: [{ role: 'system', content: 'You are Curia.' }, ...r2.next], tools, model: 'claude-haiku-5-5' });
+      expect(assistantBlockTypes(2)).toEqual([
+        ['thinking', 'text', 'tool_use'],
+        ['thinking', 'text', 'tool_use'],
+      ]);
+    });
+
+    it('drops every block after the system prompt changes', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_1'));
+      const r1 = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_2'));
+      const r2 = await round(provider, 'claude-haiku-5-5', r1.next);
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      // The Bullpen refresh replaces a system message between rounds.
+      await provider.chat({ messages: [{ role: 'system', content: 'You are Curia.\n[Bullpen] new thread' }, ...r2.next], tools, model: 'claude-haiku-5-5' });
+      expect(assistantBlockTypes(2)).toEqual([['text', 'tool_use'], ['text', 'tool_use']]);
+    });
+
+    it('drops every block after the tool list changes', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking]));
+      const r1 = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      // Tool discovery adds a tool mid-loop.
+      const discovered = [...tools, { name: 'calendar', description: 'Calendar', input_schema: { type: 'object' as const, properties: {} } }];
+      await provider.chat({ messages: [{ role: 'system', content: 'You are Curia.' }, ...r1.next], tools: discovered, model: 'claude-haiku-5-5' });
+      expect(assistantBlockTypes(1)).toEqual([['text', 'tool_use']]);
+    });
+
+    it('keeps blocks before an edited message and drops the ones after it', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_1'));
+      const r1 = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_2'));
+      const r2 = await round(provider, 'claude-haiku-5-5', r1.next);
+      // Edit the first tool result, which sits between the two assistant turns.
+      const edited = r2.next.map((m, i) => (i === 2 ? buildUserToolResultMessage([{ id: 'toolu_1', content: 'shortened' }]) : m));
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      await provider.chat({ messages: [{ role: 'system', content: 'You are Curia.' }, ...edited], tools, model: 'claude-haiku-5-5' });
+      expect(assistantBlockTypes(2)).toEqual([['thinking', 'text', 'tool_use'], ['text', 'tool_use']]);
+    });
+
+    it('does not check models that do not bind thinking to the prefix', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-sonnet-4-6', [thinking]));
+      const r1 = await round(provider, 'claude-sonnet-4-6', [{ role: 'user', content: 'Hi' }]);
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      await provider.chat({ messages: [{ role: 'system', content: 'Changed system' }, ...r1.next], tools, model: 'claude-sonnet-4-6' });
+      expect(assistantBlockTypes(1)).toEqual([['thinking', 'text', 'tool_use']]);
+    });
+
+    it('treats a block with no recorded hash as stale on a prefix-bound model', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      const unstamped = buildAssistantToolUseMessage(
+        [{ id: 'toolu_1', name: 'lookup', input: {} }],
+        undefined,
+        [{ type: 'reasoning', provider: 'anthropic', model: 'claude-haiku-5-5', data: thinking }],
+      );
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      await provider.chat({
+        messages: [{ role: 'user', content: 'Hi' }, unstamped, buildUserToolResultMessage([{ id: 'toolu_1', content: 'r' }])],
+        tools,
+        model: 'claude-haiku-5-5',
+      });
+      expect(assistantBlockTypes(0)).toEqual([['tool_use']]);
+    });
+  });
+
+  it('carries thinking from a streamed tool_use turn', async () => {
+    mockStream.mockReturnValue(makeStream([], toolUseResponse('claude-sonnet-4-6', [thinking])));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({ messages: [{ role: 'user', content: 'Hi' }], tools, model: 'claude-sonnet-4-6' }));
+    const toolUse = events.at(-1);
+    expect(toolUse?.type === 'tool_use' && toolUse.reasoningBlocks?.map((b) => b.data)).toEqual([thinking]);
   });
 });

@@ -13,6 +13,7 @@ import type { Logger } from '../logger.js';
 import { scrubPii } from '../pii/scrubber.js';
 import { createSecretPatterns } from '../security/secret-patterns.js';
 import { stripNullBytes } from './strip-null-bytes.js';
+import { markReasoningBlocksForArchive } from '../agents/llm/reasoning-blocks.js';
 
 export type { LlmCallArchiveContent };
 
@@ -116,7 +117,9 @@ export async function writeLlmCallArchive(
 
   try {
     // Strip before redaction so a NUL cannot split a secret across a pattern.
-    prompt = redactArchiveContent(stripNullBytes(content.prompt));
+    // Passed-back reasoning blocks become markers first: encrypted reasoning and
+    // signatures never reach the archive, whatever includeReasoning says (ADR-048).
+    prompt = redactArchiveContent(stripNullBytes(markReasoningBlocksForArchive(content.prompt)));
     response = redactArchiveContent(
       stripNullBytes(withoutReasoningText(content.response, includeReasoning)),
     );

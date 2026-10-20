@@ -11,6 +11,7 @@
 import type {
   ContentBlock,
   Message,
+  ReasoningContent,
   TextContent,
   ToolCall,
   ToolResultContent,
@@ -20,12 +21,16 @@ import type {
 /**
  * Build the assistant turn that carries tool_use blocks (plus optional text preamble).
  * The next user turn's tool_result blocks must reference these ids.
+ *
+ * Reasoning blocks go first: Anthropic requires an assistant turn to begin with
+ * its thinking, and the next request of the loop carries them back (ADR-048 §1).
  */
 export function buildAssistantToolUseMessage(
   toolCalls: ToolCall[],
   content?: string,
+  reasoningBlocks?: readonly ReasoningContent[],
 ): Message {
-  const blocks: ContentBlock[] = [];
+  const blocks: ContentBlock[] = [...(reasoningBlocks ?? [])];
   if (content !== undefined && content.length > 0) {
     blocks.push({ type: 'text', text: content } satisfies TextContent);
   }

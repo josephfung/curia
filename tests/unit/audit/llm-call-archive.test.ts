@@ -55,6 +55,30 @@ describe('writeLlmCallArchive', () => {
     expect(serialized).toContain('"description":"ab"');
   });
 
+  it('stores a marker for each passed-back reasoning block, never its data (ADR-048)', async () => {
+    const { client, queries } = capturingClient();
+    await writeLlmCallArchive(client, 'evt-r', {
+      prompt: {
+        messages: [{
+          role: 'assistant',
+          content: [
+            { type: 'reasoning', provider: 'anthropic', model: 'claude-haiku-5-5', data: { type: 'thinking', thinking: 'plan', signature: 'SIG-DO-NOT-STORE' }, prefixHash: 'abc' },
+            { type: 'reasoning', provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash', data: { reasoning_details: [{ type: 'reasoning.encrypted', data: 'CIPHERTEXT' }] } },
+            { type: 'tool_use', id: 't1', name: 'lookup', input: {} },
+          ],
+        }],
+      },
+      response: { type: 'text', content: 'ok' },
+    }, createSilentLogger(), { includeReasoning: true });
+
+    const serialized = (queries[0]?.params ?? []).map((p) => typeof p === 'string' ? p : JSON.stringify(p)).join('\n');
+    expect(serialized).not.toContain('SIG-DO-NOT-STORE');
+    expect(serialized).not.toContain('CIPHERTEXT');
+    expect(serialized).not.toContain('plan');
+    expect(serialized).toContain('{"type":"reasoning","provider":"anthropic","model":"claude-haiku-5-5","omitted":true}');
+    expect(serialized).toContain('"type":"tool_use"');
+  });
+
   it('redacts a secret that a null byte had split', async () => {
     const { client, queries } = capturingClient();
     await writeLlmCallArchive(client, 'evt-2', {

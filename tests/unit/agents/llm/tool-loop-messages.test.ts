@@ -79,3 +79,13 @@ describe('tool-loop message shape contract (#1552)', () => {
     expect(resultIds).toEqual(useIds);
   });
 });
+
+describe('reasoning blocks in the assistant tool_use turn (ADR-048 §1)', () => {
+  it('puts reasoning blocks first, before text and tool_use', () => {
+    const reasoning = { type: 'reasoning' as const, provider: 'anthropic' as const, model: 'claude-haiku-5-5', data: { type: 'thinking', thinking: 'plan', signature: 's' } };
+    const msg = buildAssistantToolUseMessage(TOOL_CALLS, 'Let me check.', [reasoning]);
+    const blocks = msg.content as unknown as Array<Record<string, unknown>>;
+    expect(blocks.map((b) => b.type)).toEqual(['reasoning', 'text', 'tool_use', 'tool_use']);
+    expect(blocks[0]).toBe(reasoning);
+  });
+});

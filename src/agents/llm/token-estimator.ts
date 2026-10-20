@@ -10,6 +10,7 @@
 // API response after the call.
 
 import type { ContentBlock, Message, ToolDefinition } from './provider.js';
+import { reasoningBlockChars } from './reasoning-blocks.js';
 
 /** Characters-per-token ratio used for all estimates. */
 const CHARS_PER_TOKEN = 3.5;
@@ -47,6 +48,10 @@ export function estimateTokens(content: string | ContentBlock[]): number {
         // ~500-token placeholder (1,750 chars at 3.5 chars/token) regardless of
         // source type — estimating from base64 data length massively over-counts.
         totalChars += 1_750;
+        break;
+      case 'reasoning':
+        // Passed-back reasoning is part of the next prompt (ADR-048 §1).
+        totalChars += reasoningBlockChars(block);
         break;
       default: {
         // Exhaustiveness guard — if ContentBlock union is extended, this line
