@@ -198,9 +198,19 @@ export function scopedVerification(real: VerificationRuntime, currentScope: Curr
     open: async (input) => {
       const scope = currentScope();
       if (!scope) throw new Error('scenario harness: a verification was opened outside every run');
-      const result = await real.open(input);
       // Another run's pending row, or a real instance's, for the same site: production
-      // would reuse it, which here would hand this run someone else's challenge.
+      // would reuse it, which here would hand this run someone else's challenge. Refuse
+      // before open(): its reuse rewrites the row's session, page domain, delivery and
+      // expiry, so refusing afterwards would already have changed the other run's row.
+      const site = registrableDomain(input.site);
+      const foreign = site === null
+        ? undefined
+        : (await real.listActive()).find(v => v.status === 'pending' && v.site === site && !scope.verificationIds.has(v.id));
+      if (foreign) {
+        throw new Error(`scenario harness: ${foreign.site} already has a pending verification outside this run`);
+      }
+      const result = await real.open(input);
+      // Backstop: a row that turned pending between the check and the open.
       if (result.reused && !scope.verificationIds.has(result.verification.id)) {
         throw new Error(`scenario harness: ${result.verification.site} already has a pending verification outside this run`);
       }

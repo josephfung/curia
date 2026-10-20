@@ -8,13 +8,17 @@
 # The "asks for the code" checks below match a request for the code, not the word: a send
 # of the booking may say it signed in with the code from the inbox (PR review). The
 # booking page's identifier is labelled "Booking reference" all the same.
+#
+# The site is aircanada.example (a reserved TLD), not the real aircanada.com: the seed opens
+# a pending verification for it, and a real instance's pending row for a real site must
+# never be the one this case reuses or refuses on.
 name: signin email code from inbox
 description: >
   Curia is woken for a backlog task: pull the principal's Air Canada booking for next
   week's Vancouver trip and send them the details. Its progress note says it signed in to
-  aircanada.com with the stored password, the site offered to send a sign-in code by email
+  aircanada.example with the stored password, the site offered to send a sign-in code by email
   or text, it chose email, and browser session s-2 is on the code screen. A pending email
-  verification for aircanada.com is in its sign-in block. Curia asks ceo-inbox for the code
+  verification for aircanada.example is in its sign-in block. Curia asks ceo-inbox for the code
   (the code went to the principal's inbox), types it into session s-2, marks the
   verification satisfied and sends the principal the booking, without asking the principal
   for the code.
@@ -23,8 +27,8 @@ stub_sets: [human-channels]
 seed:
   verifications:
     - key: mail
-      site: aircanada.com
-      page_domain: accounts.aircanada.com
+      site: aircanada.example
+      page_domain: accounts.aircanada.example
       delivery: email
       browser_session_id: s-2
       task: 3d8f1a6b-2c4e-4b7a-9f0d-5e6a7b8c9d0e
@@ -40,7 +44,7 @@ inbound:
     notes:
       - at: "{{at:now-2m}}"
         note: >
-          Signed in to aircanada.com with the stored Aeroplan password. The site asked for
+          Signed in to aircanada.example with the stored Aeroplan password. The site asked for
           a sign-in code and offered email or text; I chose email. Browser session s-2 is
           on the code screen.
 tool_stubs:
@@ -50,7 +54,7 @@ tool_stubs:
         agent: ceo-inbox
         response: >
           Found it: "Your Air Canada sign-in code" from Air Canada
-          <no-reply@notifications.aircanada.ca>, received a minute ago. The code is
+          <no-reply@notifications.aircanada.example>, received a minute ago. The code is
           731406; it expires 10 minutes after it was sent. I've left the email in the inbox.
     - match: {}
       error: That specialist can't help with this.
@@ -59,7 +63,7 @@ tool_stubs:
       return: &code_screen
         session_id: s-2
         session_reused: true
-        url: https://accounts.aircanada.com/verify
+        url: https://accounts.aircanada.example/verify
         content: |
           Air Canada — Enter your verification code
           We sent a 6-digit code to j•••@example.test. It expires in 10 minutes.
@@ -68,7 +72,7 @@ tool_stubs:
           [g1f0e2] checkbox "Remember this device"
           [g1f0e3] button "Continue"
           [g1f0e4] link "Send a new code"
-        verification_suspected: { page_domain: aircanada.com, signals: [one-time-code-input] }
+        verification_suspected: { page_domain: aircanada.example, signals: [one-time-code-input] }
     - match: { session_id: s-2, action: screenshot }
       return: *code_screen
     # A call with no action (keep_warm or screenshot alone) reads the page too.
@@ -78,7 +82,7 @@ tool_stubs:
       return:
         session_id: s-2
         session_reused: true
-        url: https://accounts.aircanada.com/verify
+        url: https://accounts.aircanada.example/verify
         content: |
           Air Canada — Enter your verification code
           We sent a 6-digit code to j•••@example.test. It expires in 10 minutes.
@@ -91,7 +95,7 @@ tool_stubs:
       return:
         session_id: s-2
         session_reused: true
-        url: https://www.aircanada.com/aeroplan/trips
+        url: https://www.aircanada.example/aeroplan/trips
         content: |
           Air Canada — My trips
           Toronto (YYZ) → Vancouver (YVR) · Booking reference: QZ7K2P
@@ -104,8 +108,8 @@ tool_stubs:
       return:
         verifications:
           - verification_id: "{{verification:mail}}"
-            site: aircanada.com
-            page_domain: aircanada.com
+            site: aircanada.example
+            page_domain: aircanada.example
             delivery: email
             status: pending
             browser_session_id: s-2
@@ -116,8 +120,8 @@ tool_stubs:
     - match: { action: satisfy, verification_id: "{{verification:mail}}" }
       return:
         verification_id: "{{verification:mail}}"
-        site: aircanada.com
-        page_domain: aircanada.com
+        site: aircanada.example
+        page_domain: aircanada.example
         delivery: email
         status: satisfied
         browser_session_id: s-2
@@ -128,8 +132,8 @@ tool_stubs:
     - match: { action: open }
       return:
         verification_id: "{{verification:mail}}"
-        site: aircanada.com
-        page_domain: aircanada.com
+        site: aircanada.example
+        page_domain: aircanada.example
         delivery: email
         status: pending
         browser_session_id: s-2

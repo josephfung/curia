@@ -145,6 +145,7 @@ describe('scopedVerification (#2017)', () => {
   function fakeRuntime() {
     const rows = new Map([['v-a', row('v-a', 'a.ca')], ['v-real', row('v-real', 'real.ca')]]);
     const closed: string[] = [];
+    const opened: string[] = [];
     let listed = 0;
     const real = {
       service: {
@@ -154,6 +155,7 @@ describe('scopedVerification (#2017)', () => {
       },
       tracker: {},
       open: async (input: { site: string }) => {
+        opened.push(input.site);
         const existing = [...rows.values()].find(r => r.site === input.site && r.status === 'pending');
         if (existing) return { verification: existing, reused: true };
         rows.set('v-new', row('v-new', input.site));
@@ -163,7 +165,7 @@ describe('scopedVerification (#2017)', () => {
       close: async (id: string) => { closed.push(id); return rows.get(id) ?? null; },
       askChannel: () => 'signal',
     } as unknown as VerificationRuntime;
-    return { view: scopedVerification(real, currentScope), closed, listed: () => listed };
+    return { view: scopedVerification(real, currentScope), closed, opened, listed: () => listed };
   }
   const openInput = (site: string) =>
     ({ purpose: 'sign_in', kind: 'code', delivery: 'sms', site, pageDomain: site, browserSessionId: 's' }) as const;
@@ -199,6 +201,20 @@ describe('scopedVerification (#2017)', () => {
     });
     expect([...state.scope.verificationIds]).toEqual(['v-new']);
     await expect(view.open(openInput('x.ca'))).rejects.toThrow(/outside every run/);
+  });
+
+  it('refuses another\'s pending row for the site before production open touches it', async () => {
+    // Production's reuse refreshes the row's session, page domain, delivery and expiry, so
+    // refusing only after open() would already have rewritten another run's challenge.
+    const { view, opened } = fakeRuntime();
+    await context.run(run('A', [], [], ['v-a']), async () => {
+      await expect(view.open(openInput('real.ca'))).rejects.toThrow(/already has a pending verification outside this run/);
+      // Matched by registrable domain, so a URL or subdomain for the site is refused too.
+      await expect(view.open(openInput('https://login.real.ca/mfa'))).rejects.toThrow(/outside this run/);
+      // The run's own pending row is reused through production as before.
+      expect((await view.open(openInput('a.ca'))).reused).toBe(true);
+    });
+    expect(opened).toEqual(['a.ca']);
   });
 
   it('reads only the run\'s seeded sessions as alive', async () => {
