@@ -2,6 +2,7 @@
 
 Date: 2026-10-08
 Status: Accepted
+Amended: 2026-10-20 — unset is the provider default on every model; call sites state `none`; Anthropic reasoning is adaptive thinking plus effort; stale passed-back thinking is dropped (#2044, #2077)
 
 ## Context
 
@@ -75,6 +76,16 @@ OpenRouter takes reasoning back as `reasoning`, `reasoning_content` or `reasonin
 
 **Routing caveat.** Production's standard tier is pinned to CoreWeave's endpoint, an operator choice made for responsiveness and price. The production figures above are CoreWeave's. DeepSeek's first-party endpoint reasons differently at the same effort (`high`: 1,336 against CoreWeave's 2,681 tokens on the puzzle). Measurements are therefore only comparable within one endpoint, and `llm.call` does not record the endpoint today.
 
+**What changed after the decision (amendment, 2026-10-20).** #2157 moved the core default fast tier and both default judges to `claude-haiku-5-5`, and curia-deploy#301 moved production's fast tier to it. Voice stays on `claude-haiku-4-5` through `channels.voice.model`, because Haiku 5.5's first token was slower. #2157 kept Haiku 4.5's behavior: Curia sends Haiku 5.5 `thinking: {type: "disabled"}` and no sampling parameters. Anthropic's docs, read on 2026-10-20, say this about Haiku 5.5:
+- **Thinking.** Adaptive thinking is on by default, and `thinking: {type: "enabled", budget_tokens}` returns a 400. `disabled` is accepted at effort `high` or below; at `xhigh` and `max` the request must use adaptive thinking.
+- **Effort.** `low`, `medium`, `high`, `xhigh` and `max` are accepted, and `medium` is the default. Effort shapes every output token, so it applies with thinking off as well.
+- **Display.** Thinking blocks come back with an empty `thinking` field and only a signature, unless the request sets `display: "summarized"`.
+- **Prefix binding.** A thinking block is valid only while everything sent before it is unchanged. Passing one back after a change to `system`, `tools` or an earlier message returns a 400. This holds on accounts created on or after 2026-08-31 and, on older accounts, on requests that opt in. Dropping thinking blocks from some point to the end of the history is valid; the model loses that reasoning. The check also applies to Sonnet 5.5, Opus 5.5 and Fable 5.1, and not to the 4.6 models.
+
+Curia's text tool loop is not append-only. `refreshBullpenContext` replaces the Bullpen system message each round, and tool discovery adds tools mid-loop. Anthropic models in the registry also carry no `maxOutputTokens`, so their calls are capped at 4,096 output tokens, which thinking would share with the reply.
+
+Sources: [Haiku 5.5 migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide), [Effort](https://platform.claude.com/docs/en/build-with-claude/effort), [Preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking).
+
 **Temperature.**
 - DeepSeek's API reference says temperature "has no effect in thinking mode", which is on by default.
 - Anthropic rejects `temperature` (and `top_k`) while thinking.
@@ -90,6 +101,8 @@ Within one task's tool loop, each assistant turn carries the reasoning that prod
 
 It is never rebuilt from the archive's redacted copy. Each block is tagged with the model that wrote it and is dropped when the loop continues on a different model (tier fallback, #813).
 
+**Prefix guard (amendment, 2026-10-20).** For models whose thinking is bound to the prefix (Haiku 5.5 today, flagged in the model registry), each Anthropic block also records a hash of the request it answered: `system`, `tools` and every earlier message, as the provider sent them. Before a request goes out, the provider recomputes that hash for each assistant turn that carries a block. At the first turn whose hash differs, it drops that turn's block and every later one, and logs the drop. The docs allow dropping from a point to the end, so the request succeeds; the model loses the reasoning written before the change. Making the loop append-only would keep it, but that changes how Bullpen context and discovered tools reach the model, so it is a separate change.
+
 There is no setting. Every model Curia can route to either requires pass-back (DeepSeek with tools, Anthropic with thinking, Gemini and OpenAI reasoning models with tools) or does not reason at all. Today Curia depends on OpenRouter quietly tolerating a request DeepSeek documents as invalid.
 
 Reasoning is **not** carried across user turns in conversation history. History is stored as text. Anthropic strips earlier turns' thinking itself, and OpenRouter accepted the omission in the probe. DeepSeek's docs ask for earlier turns' reasoning too, so this is a deliberate deviation. The behavior gate is the check.
@@ -101,31 +114,36 @@ Risks the issue raised, and how this decision bounds them:
 
 ### 2. Reasoning is supported on every provider through one provider-neutral setting
 
-Curia expresses reasoning as one setting: `reasoning.effort`, with the values `low`, `medium`, `high` and `max`. Call sites may also send `none`; tiers may not (see 3). Each provider maps it onto the model's own control. A structured `reasoning` entry in the model registry describes which control the model uses and which efforts it honors.
+Curia expresses reasoning as one setting: `reasoning.effort`, with the values `none`, `low`, `medium`, `high` and `max`. Each provider maps it onto the model's own control. A structured `reasoning` entry in the model registry describes which control the model uses and which efforts it honors.
+
+**`none` means "no reasoning, where the model can turn it off cleanly"** (amendment, 2026-10-20). The registry lists `none` only for those models: the Anthropic models, where it maps to `thinking: disabled`. DeepSeek V4.1 Flash and Gemini 3.1 Flash-Lite do not list it. On DeepSeek, `none` makes the model write its working into the reply; on Gemini it would turn off the `minimal` thinking the judges run with today. A call site that sends `none` to a model that does not list it gets the provider default, and a debug log.
 - **OpenRouter:** sends `reasoning: { effort }`. OpenRouter maps it to DeepSeek's effort, Gemini's thinking level, OpenAI's `reasoning_effort` and Anthropic's budget. This covers OpenAI parity, because OpenAI chat models reach Curia only through OpenRouter.
-- **Anthropic direct, models with adaptive thinking (Sonnet 4.6, Opus 4.6):** sends `thinking: { type: "adaptive" }` and `output_config.effort`.
-- **Anthropic direct, budget-only models (Haiku 4.5):** sends `thinking: { type: "enabled", budget_tokens }`. The budget comes from the effort ratio of `max_tokens` that OpenRouter uses (low 20%, medium 50%, high 80%, max 95%). It is clamped to at least 1,024 and strictly below `max_tokens`.
+- **Anthropic direct:** an effort sends `thinking: { type: "adaptive", display: "summarized" }` and `output_config.effort`. This covers Haiku 5.5, Sonnet 4.6 and Opus 4.6. `display: "summarized"` keeps readable reasoning in the archive on Haiku 5.5, which would otherwise return only signatures. `none` sends `thinking: { type: "disabled" }` and no effort. Unset sends neither key.
+
+*Amended 2026-10-20.* The original decision also mapped effort to `budget_tokens` for budget-only models (Haiku 4.5). That path is dropped. Haiku 5.5 rejects `budget_tokens`, and Haiku 4.5 now serves only voice, which never inherits a setting. Haiku 4.5 gets no registry `reasoning` entry, so a tier effort on it fails at boot.
 
 Anthropic's constraints are handled where they bite:
-- **Temperature.** Thinking rejects `temperature`. If a call sets both, the explicit temperature wins, thinking is omitted with a warning, and `llm.call` records what was actually sent.
-- **`max_tokens`.** The thinking budget counts against it. A call whose `max_tokens` cannot hold the 1,024 minimum (the infra classifier sends 10) does not think.
+- **Temperature.** On models that accept `temperature` with thinking off (Sonnet and Opus 4.6), thinking rejects it. If a call sets both, the explicit temperature wins, thinking is omitted with a warning, and `llm.call` records what was actually sent. Haiku 5.5 is never sent a temperature (#2077), so it has no conflict.
+- **`max_tokens`.** Thinking counts against it. When a request will think (it sets an effort, or it leaves reasoning unset on a model that thinks by default, as Haiku 5.5 does) and the caller set no `max_tokens`, the cap rises from the model's default to 32,768, the cap the OpenRouter reasoning models already use. A caller that sets an effort with `max_tokens` below 1,024 does not think, and a warning is logged. A caller with a small `max_tokens` on a model that thinks by default must send `none`; the infra classifier does (see 3).
 - **Caching.** Changing thinking settings invalidates cached prefixes. The setting is static per tier, so it costs one cache miss when an operator changes it.
+- **Prefix binding.** Handled by the prefix guard (see 1).
 - **Voice latency.** Voice turns never inherit a reasoning setting (see 3).
-
-Haiku 4.5 does not interleave thinking between tool calls. On the fast tier, thinking helps only the start of each assistant turn, so any fast-tier A/B should expect less than on adaptive models.
 
 ### 3. Effort is a per-tier setting that applies to agent turns, unset by default
 
 The setting is `model_routing.tiers.<tier>.reasoning.effort`, and it is optional.
-- **Unset means the provider's default.** DeepSeek thinks at `high`, Anthropic does not think, Gemini thinks at `minimal`. A deployment that sets nothing changes nothing.
-- **Validated at boot.** `ModelRouter` rejects a tier effort its model's registry entry does not list, the same way it rejects an unknown tier model. It also rejects `none` on a tier, because on a hard task the model then writes its reasoning into the user-visible reply.
+- **Unset means the provider's default**, as an unset `temperature` does. DeepSeek thinks at `high`, Gemini thinks at `minimal`, the 4.6 Anthropic models do not think, and Haiku 5.5 thinks adaptively at `medium`.
+- **Haiku 5.5 agent turns change** (amendment, 2026-10-20). #2077 sends Haiku 5.5 `thinking: {type: "disabled"}` on every request, to keep its behavior equal to Haiku 4.5's until this policy was decided. That provider rule is removed, so fast-tier agent turns in production (contacts, research-analyst, digest) start thinking. This is a behavior change, so the release carrying it waits on a fast-tier A/B (see below).
+- **Validated at boot.** `ModelRouter` rejects a tier effort its model's registry entry does not list, the same way it rejects an unknown tier model. That covers `none` on DeepSeek, where the model would write its reasoning into the user-visible reply; `none` on an Anthropic tier is accepted.
 - **Agent turns only.** The tier setting applies to agent turns. A fallback call uses the fallback tier's own setting.
-- **Other call sites set their own.** The judges, infra skills, scoring pass, summarization, drift detector and voice state their own reasoning, as they state their own temperature. None of them sends one today, so their behavior is unchanged.
+- **Other call sites set their own.** The judges, infra skills, scoring pass, summarization, drift detector and voice state their own reasoning, as they state their own temperature. Each sends `none` (amendment, 2026-10-20). On Haiku 5.5 that is the `thinking: disabled` #2077 sends today, which the 10-token classifier and the judges' verdict caps depend on. On models that do not list `none` nothing is sent, so the production judges on Gemini are unchanged. Every non-agent request stays as it is today; the rule moves from a hidden provider default to a stated call-site choice.
 
 The value for each tier comes from an A/B, not from this ADR. Production's standard tier runs three arms on the behavior gate: unset (`high`), `low` and `max`.
 - `low` ships if it clears the gate on every run with scores inside unset's run-to-run spread.
 - `max` ships only if it beats that spread and its latency cost is acceptable.
 - Otherwise the tier stays unset.
+
+The fast tier gets its own check before the release that removes #2077's rule (amendment, 2026-10-20): Haiku 5.5 unset (adaptive at `medium`) against `none` (today's requests), varying only `tiers.fast`, on the contacts scenarios. Unset ships if it clears the gate within `none`'s spread and its latency is acceptable. Otherwise curia-deploy sets `tiers.fast.reasoning.effort: none`.
 
 ### 4. Agent calls send no temperature
 
@@ -152,7 +170,12 @@ The behavior suites print reasoning tokens and latency per agent, so every A/B a
 - **Leaving Anthropic without reasoning support**, or enabling it only on the fast tier. Other installations run every tier on Anthropic. Parity through one setting costs less than an exception per provider.
 - **A per-agent effort in agent YAML.** It would be a public schema change with no evidence yet that agents on one tier need different efforts. It is revisited only if the tier A/B passes for some agents and fails for others. **No decision here changes the agent YAML schema.**
 - **Per-call-site effort as the main control.** Agent turns are where the volume is, and a tier setting reaches them in one place (ADR-046's "one place per decision").
-- **`effort: none` on agent tiers.** The model writes its reasoning into the visible reply instead.
+- **`effort: none` on every agent tier.** On DeepSeek the model writes its reasoning into the visible reply instead. *Amended 2026-10-20:* `none` stays rejected where the registry does not list it, and is accepted on Anthropic tiers, where it is a clean `thinking: disabled`.
+- **Unset keeps #2077's `thinking: disabled` on Haiku 5.5** (amendment, 2026-10-20). It would change nothing in production, but unset would then mean "Curia's choice" on one model and "the provider's default" everywhere else. Call sites that need thinking off say so instead.
+- **A `budget_tokens` mapping for budget-only Anthropic models** (amendment, 2026-10-20). Haiku 5.5 rejects it, and the only model that needs it, Haiku 4.5, serves voice alone.
+- **`xhigh` in the effort vocabulary** (amendment, 2026-10-20). Haiku 5.5 and OpenRouter accept it, but no tier needs it yet. It can be added later as a registry entry and enum value.
+- **Anthropic's `drop_block` prefix-mismatch behavior** (amendment, 2026-10-20). It needs a beta header, the docs call it a stopgap, and they measured up to 67% more output tokens. The provider guard drops the same blocks without it.
+- **An append-only tool loop, as part of this policy** (amendment, 2026-10-20). Bullpen updates would become appended messages and discovered tools would use inline tool additions. It keeps reasoning after a change, but it changes what the model sees mid-loop and needs its own A/B. It is a follow-up.
 - **A per-tier temperature.** It does nothing on the production model and conflicts with thinking elsewhere.
 
 ## Consequences
@@ -173,3 +196,7 @@ The behavior suites print reasoning tokens and latency per agent, so every A/B a
   `docs/wip/2026-10-08-reasoning-policy-design.md` has the design and the A/B protocol.
 - **Effort A/Bs run on the endpoint production uses** (CoreWeave as of 2026-10-08). `upstreamProvider` shows which endpoint every measurement came from, so a later routing change is visible in the data.
 - **If the effort A/B finds no winner, the tiers stay unset.** The plumbing still lets any installation choose an effort per tier, including thinking on Anthropic.
+- **Providers without a registry `reasoning` entry stay out** (amendment, 2026-10-20). A tier effort on such a model fails at boot. This covers the Bedrock provider proposed in #2148 until it maps Converse's reasoning fields itself.
+- **The prefix guard costs reasoning on Haiku 5.5 after a Bullpen refresh or a tool discovery.** It applies to fast-tier agent turns from the release that removes #2077's rule. The provider logs each drop, so the fast-tier A/B measures its rate.
+- **Unset Haiku 5.5 reasoning is not readable in the archive.** With no `thinking` key, Haiku 5.5 returns thinking blocks without text. `llm.call` and the archive still record the reasoning tokens, with `reasoningOmitted: "encrypted"`. A tier that sets an effort gets summarized text.
+- **`thinksByDefault` stays in the registry as a fact.** It no longer changes the request; it sizes `max_tokens` (see 2).

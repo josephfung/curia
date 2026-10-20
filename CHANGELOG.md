@@ -41,6 +41,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`verification` open** — result now says the next step; email codes go through ceo-inbox. (#2201)
+- **ADR-048 amended** — unset reasoning means provider default; Haiku 5.5 adaptive thinking; stale thinking dropped. (#2044)
 - **Prompt tone directives** — "warm" and sample sentences removed; the office identity alone sets tone. (#2143)
 - **Specialist agents** — now get the office identity block, scoped so drafts in the principal's voice keep it. (#2143)
 - **`inspect-prompts.ts`** — snapshot gains `office_identity_writes_as_block` for curia-deploy's eval harness. (#2143)
