@@ -80,6 +80,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Sign-in code scrub** — tracked codes become `[sign-in code]` in notes, reports, memory, sends and replies. (#2017)
 - **Browser code guard** — `web-browser` refuses to type or navigate a sign-in code off its own site. (#2017)
+- **Digest tools** — tasks an outside contact started can't read or acknowledge the principal's digest. (#1320)
 
 ### Fixed
 

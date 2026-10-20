@@ -335,16 +335,18 @@ Relayed replies skip the dispatcher's tier Gate C (except #1059's missing-tier e
 
 Sends to the principal alone skip the review above, and Gate C allows them, so an outside contact who keeps writing could get Curia to message the principal without limit. The gateway counts those relays per originator and, past the budget, sends them to the digest. It applies under both `tier` and `band`.
 
-A send counts when the principal is its only recipient and the task's originator (passed by the send skills as `originator`) is an outside contact at `known`, `unknown` or `blocked`, or with no tier recorded. Never counted: system notifications (approval prompts included), sends the principal approved or directed, work the principal, the system or an agent started, `trusted` contacts, sends with no originator, and emails with attachments (a digest item holds text only).
+A send counts when the principal is its only recipient and the task's originator is an outside contact at `known`, `unknown` or `blocked`, or with no tier recorded. The send skills that can reach the principal (`email-send`, `email-reply`, `signal-send`, `slack-send`, `sms-send`) pass the originator as `originator`; one without a usable contact id is not passed, so unrelated sends never share a count. Never counted: system notifications (approval prompts included), sends the principal approved or directed, work the principal, the system or an agent started, `trusted` contacts, sends with no originator, and emails with attachments (a digest item holds text only). A skill send to the principal alone that arrives with no originator logs a warning, so a send skill that stops passing one is visible.
 
-The budget is `autonomy.relay_budget.per_hour` (default 3; 0 turns it off) over a sliding hour, in memory. Over it:
+The budget is `autonomy.relay_budget.per_hour` (default 3; 0 turns it off) over a sliding hour, in memory. A relay that is let through but then fails to send gives its slot back. Over the budget:
 
 1. The relay becomes a `relay_deferred` digest item carrying the contact's name and the full redacted text. If that item cannot be recorded, the relay is sent after all.
-2. The first deferral in a window also sends the principal one line on the same channel: "[name] has more updates. I'm holding them for your digest, or ask me for them anytime." The coordinator can list held items on request (`list-principal-reports`), which matters on installs whose only digest is the weekly fallback.
-3. A warning log line and an `autonomy.relay_deferred` audit event record the originator's contact id, tier and channel, never the content.
-4. The skill gets `success` with `deferred_to_digest` and a note not to re-send the message another way.
+2. The principal also gets one line on the same channel: "[name] has more updates. I'm holding them for your digest, or ask me for them anytime." At most one goes out per contact per hour; a notice that fails to send is tried again on the next deferral. The coordinator can list held items when the principal asks (`list-principal-reports`), which matters on installs whose only digest is the weekly fallback.
+3. A warning log line and an `autonomy.relay_deferred` audit event record the originator's contact id, tier and channel, never the content. An unresolved sender's id is its raw address (`stampOriginator`): the notice and digest item name the sender by it, and the log line redacts it.
+4. The skill gets `success` with `deferred_to_digest` and a note not to re-send the message another way, and registers no outbound context, so no reply binds to a message the principal never saw.
 
 The budget runs after the content filter, so blocked content is never queued.
+
+The digest tools (`list-principal-reports`, `ack-principal-reports`, `list-spot-checks`) refuse a task an outside contact started: held items carry other contacts' messages, and an acknowledgement would clear the principal's queue. The principal's own turns and Curia's scheduled digest jobs are unaffected.
 
 ### Sampling and feedback (`src/autonomy/sample-pool.ts`, `src/reports/`)
 

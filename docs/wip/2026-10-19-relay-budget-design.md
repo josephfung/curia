@@ -134,3 +134,21 @@ from `ctx.taskMetadata.originator` through one shared helper next to `isPrincipa
   rate limiter caps per-sender volume per minute; revisit with #2193's numbers.
 - A durable counter.
 - Tuning `per_hour`: #2193's two-week metrics feed that.
+
+## Changes after review (2026-10-20)
+
+Folded into this PR rather than filed as follow-ups. Spec 14's "Relay budget" section is the
+current description.
+
+- Emails with attachments are never budgeted (a digest item holds text only).
+- The notice adds "or ask me for them anytime"; it is marked sent only once delivered, so a
+  failed notice is retried on the next deferral.
+- A relay that is let through but then fails to send gives its slot back.
+- Skills register no outbound context for a held relay; `email-reply` is budgeted too.
+- `originatorOption` drops an originator with no usable contact id; the gateway warns when a
+  skill send to the principal alone carries none.
+- An unresolved sender (raw-address contact id) is named by its address, with no contact
+  lookup, and redacted in logs.
+- `list-principal-reports`, `ack-principal-reports` and `list-spot-checks` refuse a task an
+  outside contact started.
+- The send skills' `tool.json` outputs list `deferred_to_digest` and `note`.
