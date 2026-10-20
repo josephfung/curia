@@ -50,6 +50,9 @@ A send is **budgeted** when all of these hold:
 A send with no `originator` at all is not budgeted. Only the four send skills set it; adapter
 relays and system paths don't, and none of those reach the principal on an outsider's behalf.
 
+An email with attachments is never budgeted either: a digest item holds text only, so holding
+it would lose the files (found in the final review).
+
 The bypass ladder does not interfere: it downgrades only principal and system lineage to
 `agent`, never an external originator, so a woken task working for an outsider still counts
 against that outsider.
@@ -80,7 +83,7 @@ The gateway does not deliver the relay. Instead, in this order:
    message.
 2. **One notice per window.** When `shouldNotify` is true, sends one line on the same channel
    to the same principal address, as a system notification:
-   `[Contact name] has more updates. I'm holding them for your digest.`
+   `[Contact name] has more updates. I'm holding them for your digest, or ask me for them anytime.`
    Built from the relay's request with the body replaced, threading and attachments removed,
    and, for email, the subject set to `Holding updates from [Contact name]`. A failed notice
    logs a warning; the relay is still deferred.
