@@ -24,7 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Judge brief** — escalation judge answers purpose, speaks-as-principal, grounding and necessity from the turn's lookups. (#2159)
 - **ADR-049** — band-driven autonomy replaces the tier escalation policy. (#2159)
 - **Spot-check pool** — autonomous sends and actions are logged for sampling; never graded by the LLM judge. (#2159)
-- **Relay budget** — outside contacts can trigger at most three immediate principal messages hourly; extras go to the digest. (#1320)
+- **Relay budget** — caps hourly immediate principal messages per outside contact; extras go to the digest. (#1320)
 - **`autonomy.relay_deferred` event** — new bus event and `relay_deferred` digest source when the relay budget holds a message. (#1320)
 - **Spot checks in the digest** — up to three weighted samples of autonomous actions, numbered, never IDs. (#2159)
 - **`list-spot-checks`** — returns the digest's spot-check block and remembers which number means which action. (#2159)
