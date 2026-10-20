@@ -14,6 +14,7 @@ import {
   readNumberedCompletionDigest,
   writeCompletionDigest,
   writeDigestHighWater,
+  maxDigestNumber,
   pruneExpiredCompletionDigest,
   assignDigestNumbers,
   usableCompletionDigestCreatedAt,
@@ -209,14 +210,16 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
       // then drop aged siblings as part of the write this run already owns. Do not write
       // solely to prune — that race belongs to a read that should stay a read.
       // The high-water mark keeps a resolved top item's number out of reuse. An empty digest is
-      // the one point numbering restarts at 1 (highWater 0).
+      // the one point numbering restarts at 1 (highWater 0). The floor also takes the stored items'
+      // numbers BEFORE pruning, so an aged-out top item's number is not handed out again either.
       const { map: storedNumbered, highWater } = await readNumberedCompletionDigest(store, ctx.log);
+      const floor = Math.max(highWater, maxDigestNumber(storedNumbered));
       const digestMap: CompletionDigestMap = pruneExpiredCompletionDigest(storedNumbered, Date.now(), ctx.log);
       const nowIso = new Date().toISOString();
-      // New items are numbered here, above every live number and the mark, in processing order. They
-      // share `nowIso`, so leaving this to assignDigestNumbers would order them by task id and the
-      // notification would read "3, 2". The map is already numbered, so the max is the live max.
-      let nextN = Math.max(highWater, ...Object.values(digestMap).map((i) => i.n ?? 0)) + 1;
+      // New items are numbered here, above the floor, in processing order. They share `nowIso`,
+      // so leaving this to assignDigestNumbers would order them by task id and the notification
+      // would read "3, 2".
+      let nextN = floor + 1;
       for (const item of digestAdds) {
         // Keep a usable original clock when this task is already on the digest (a retry
         // overwrites the note identically). A missing clock, or one that is not a
@@ -228,23 +231,26 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
         const n = digestMap[item.taskId]?.n ?? nextN++;
         digestMap[item.taskId] = { ...item, createdAt, n };
       }
-      numberedDigest = assignDigestNumbers(digestMap, highWater);
+      numberedDigest = assignDigestNumbers(digestMap, floor);
       // Advance the mark BEFORE the digest write: if the digest write then fails, the mark has only
-      // skipped numbers (harmless). The reverse order could hand out a number twice. A mark that
-      // won't store degrades to numbering above the live max, so warn and carry on.
-      const newHighWater = Math.max(highWater, ...Object.values(numberedDigest).map((i) => i.n ?? 0));
+      // skipped numbers (harmless). A mark that won't store blocks the digest write the same way a
+      // digest soft-reject does: publishing numbers above a mark that never landed would let the
+      // next run reissue them, so nothing is completed, consumed or announced and all retry.
+      const newHighWater = Math.max(floor, maxDigestNumber(numberedDigest));
       if (!(await writeDigestHighWater(store, newHighWater))) {
+        digestStored = false;
         ctx.log.warn(
           { highWater: newHighWater },
-          'task-completion-from-sent: digest high-water mark write soft-rejected — a resolved top item number may be reused',
+          'task-completion-from-sent: digest high-water mark write soft-rejected — digest not written, so no completions were applied and no candidates consumed; all retry next run',
         );
-      }
-      digestStored = await writeCompletionDigest(store, numberedDigest);
-      if (!digestStored) {
-        ctx.log.warn(
-          {},
-          'task-completion-from-sent: digest write soft-rejected — digest not durable, so no completions were applied and no candidates consumed; all retry next run',
-        );
+      } else {
+        digestStored = await writeCompletionDigest(store, numberedDigest);
+        if (!digestStored) {
+          ctx.log.warn(
+            {},
+            'task-completion-from-sent: digest write soft-rejected — digest not durable, so no completions were applied and no candidates consumed; all retry next run',
+          );
+        }
       }
     }
 

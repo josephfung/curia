@@ -1,11 +1,14 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
+import type { Logger } from '../../../../src/logger.js';
 import { CONFIG_NAMESPACE as VOICE_NS, DISMISSED_KEY } from '../voice-learn/handler.js';
 import {
   readVoiceProposal,
   writeVoiceProposal,
   readNumberedCompletionDigest,
   writeCompletionDigest,
+  writeDigestHighWater,
+  maxDigestNumber,
   pruneExpiredCompletionDigest,
   type CompletionDigestItem,
   type CompletionDigestMap,
@@ -94,6 +97,30 @@ function itemName(item: CompletionDigestItem): string {
 }
 
 /** The `number` input as a positive integer. Accepts a digit string because models relay "2" as text. */
+/**
+ * Drop one resolved item and persist the rest. The mark is advanced to the full numbered map's top
+ * number FIRST: legacy items get their numbers on read and no writer has recorded them yet, so
+ * resolving the derived top item would otherwise free its number for the next new item. A mark that
+ * won't store fails the clear (the item is kept for a retry), so nothing leaves the digest under a
+ * number the writer could hand out again.
+ */
+async function clearDigestItem(
+  store: ConfigStore,
+  digestMap: CompletionDigestMap,
+  highWater: number,
+  taskId: string,
+  log: Logger,
+): Promise<boolean> {
+  const top = maxDigestNumber(digestMap);
+  if (top > highWater && !(await writeDigestHighWater(store, top))) {
+    log.warn({ highWater: top }, 'resolve-learning-digest: high-water mark write soft-rejected — digest item kept for retry');
+    return false;
+  }
+  const { [taskId]: _removed, ...rest } = digestMap;
+  void _removed;
+  return writeCompletionDigest(store, pruneExpiredCompletionDigest(rest, Date.now(), log));
+}
+
 function parseItemNumber(raw: unknown): number | null {
   if (typeof raw === 'number') return Number.isInteger(raw) && raw > 0 ? raw : null;
   if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
@@ -219,7 +246,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
     const store = new ConfigStore(ctx.entityMemory, ctx.log);
     // Number before resolving, on the full stored map, so legacy entries without `n` get the same
     // numbers list-learning-digest showed. The clearing writes below persist this numbering.
-    const { map: digestMap } = await readNumberedCompletionDigest(store, ctx.log);
+    const { map: digestMap, highWater } = await readNumberedCompletionDigest(store, ctx.log);
     const resolved =
       itemNumber !== null
         ? resolveDigestNumber(digestMap, itemNumber)
@@ -240,9 +267,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       if (!item) {
         return { success: false, error: `No completion-digest item for task ${taskId}` };
       }
-      const { [taskId]: _removed, ...rest } = digestMap;
-      void _removed;
-      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest, Date.now(), ctx.log));
+      const cleared = await clearDigestItem(store, digestMap, highWater, taskId, ctx.log);
       if (!cleared) {
         return {
           success: false,
@@ -309,9 +334,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       // status is 'done' (just reopened) or 'open' (already reopened) — clear the digest item. A
       // soft-reject on the clear only means the item may reappear; a retry re-checks status and
       // clears idempotently.
-      const { [taskId]: _removed, ...rest } = digestMap;
-      void _removed;
-      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest, Date.now(), ctx.log));
+      const cleared = await clearDigestItem(store, digestMap, highWater, taskId, ctx.log);
       if (!cleared) {
         return {
           success: false,
@@ -338,9 +361,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       // Task completion (if needed) already happened above; a soft-reject on the clear only
       // means the digest item may reappear — completing an already-done task next retry is a
       // no-op (the `task.status !== 'done'` guard above skips it).
-      const { [taskId]: _removed, ...rest } = digestMap;
-      void _removed;
-      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest, Date.now(), ctx.log));
+      const cleared = await clearDigestItem(store, digestMap, highWater, taskId, ctx.log);
       if (!cleared) {
         return {
           success: false,

@@ -316,6 +316,11 @@ export async function writeDigestHighWater(store: ConfigStore, n: number): Promi
   return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_HIGH_WATER_KEY, JSON.stringify(n))).stored;
 }
 
+/** The highest item number in a numbered digest map, 0 when it holds none. */
+export function maxDigestNumber(map: CompletionDigestMap): number {
+  return Math.max(0, ...Object.values(map).map((i) => i.n ?? 0));
+}
+
 /**
  * Read the digest numbered the one way the writer, `list-learning-digest` and
  * `resolve-learning-digest` all number it, so the principal sees and replies with the same numbers

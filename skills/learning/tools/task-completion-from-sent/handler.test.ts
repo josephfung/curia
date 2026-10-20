@@ -295,6 +295,42 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(ctx.__mem.__values.get(COMPLETION_DIGEST_HIGH_WATER_KEY)).toBe('1');
   });
 
+  it('does not publish the digest, complete, consume or notify when the high-water mark write soft-rejects', async () => {
+    const ctx = makeCtx();
+    (ctx.__mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+      async (p: { label: string; properties?: Record<string, unknown> }) => {
+        if (p.label === COMPLETION_DIGEST_HIGH_WATER_KEY) return { stored: false, action: 'conflict' as const };
+        ctx.__mem.__values.set(p.label, String(p.properties?.value ?? ''));
+        return { stored: true, action: 'created' as const };
+      },
+    );
+    expect((await handler.execute(ctx)).success).toBe(true);
+    // Publishing items numbered above a mark that never landed is the reuse this mark prevents.
+    expect(ctx.__mem.__values.has(COMPLETION_DIGEST_KEY)).toBe(false);
+    expect(ctx.__completed).toEqual([]);
+    expect(ctx.__sendNotification).not.toHaveBeenCalled();
+    expect(JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!)).toEqual(CANDIDATE_MAP);
+  });
+
+  it('numbers above an aged-out top item even with no stored mark, and records it in the mark', async () => {
+    const ctx = makeCtx();
+    const taskId = '33333333-3333-4333-8333-333333333333';
+    ctx.__mem.__values.set(COMPLETION_CANDIDATES_KEY, JSON.stringify({ [taskId]: CANDIDATE_MAP[taskId]! }));
+    ctx.__mem.__values.set(
+      COMPLETION_DIGEST_KEY,
+      JSON.stringify({
+        keep: { kind: 'confirm', taskId: 'keep', taskTitle: 'K', note: 'n', n: 1, createdAt: new Date().toISOString() },
+        // Shown as 2, now past the 90-day window: this write prunes it.
+        old: { kind: 'confirm', taskId: 'old', taskTitle: 'O', note: 'n', n: 2, createdAt: new Date(Date.now() - COMPLETION_DIGEST_MAX_AGE_MS - 86_400_000).toISOString() },
+      }),
+    );
+    expect((await handler.execute(ctx)).success).toBe(true);
+    const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest.old).toBeUndefined();
+    expect(digest[taskId].n).toBe(3);
+    expect(ctx.__mem.__values.get(COMPLETION_DIGEST_HIGH_WATER_KEY)).toBe('3');
+  });
+
   it('keeps an existing digest createdAt when the same task is written again', async () => {
     const ctx = makeCtx();
     const taskId = '33333333-3333-4333-8333-333333333333';

@@ -5,6 +5,7 @@ import { CONFIG_NAMESPACE, DISMISSED_KEY } from '../voice-learn/handler.js';
 import {
   VOICE_PROPOSAL_KEY,
   COMPLETION_DIGEST_KEY,
+  COMPLETION_DIGEST_HIGH_WATER_KEY,
   type CompletionDigestMap,
 } from '../../../_shared/learning-state.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
@@ -937,6 +938,50 @@ describe('ResolveLearningDigestHandler', () => {
         const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
         expect(updated[FULL_A]).toEqual(digestMap[FULL_A]);
       }
+    });
+  });
+
+  describe('digest number high-water mark (#2159 Phase 3)', () => {
+    // Three legacy items with no stored n and no mark: every reader derives 1, 2, 3 by createdAt.
+    const legacyDigest = (): string =>
+      JSON.stringify({
+        t1: { kind: 'confirm', taskId: 't1', taskTitle: 'One', note: 'n', createdAt: new Date(Date.now() - 3000).toISOString() },
+        t2: { kind: 'confirm', taskId: 't2', taskTitle: 'Two', note: 'n', createdAt: new Date(Date.now() - 2000).toISOString() },
+        t3: { kind: 'confirm', taskId: 't3', taskTitle: 'Three', note: 'n', createdAt: new Date(Date.now() - 1000).toISOString() },
+      });
+    const dismissCtx = (mem: ReturnType<typeof makeMem>, number: number) =>
+      ({
+        input: { action: 'dismiss_completion', number },
+        entityMemory: mem,
+        executiveProfileService: { get: vi.fn(), update: vi.fn() },
+        taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      }) as unknown as ToolContext;
+
+    it('advances the mark to the derived top number before resolving it, so the writer cannot reissue it', async () => {
+      const mem = makeMem();
+      mem.__values.set(COMPLETION_DIGEST_KEY, legacyDigest());
+      const result = await new ResolveLearningDigestHandler().execute(dismissCtx(mem, 3));
+      expect(result.success).toBe(true);
+      const digest = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+      expect(Object.keys(digest).sort()).toEqual(['t1', 't2']);
+      expect(mem.__values.get(COMPLETION_DIGEST_HIGH_WATER_KEY)).toBe('3');
+    });
+
+    it('fails and leaves the digest untouched when the mark write soft-rejects', async () => {
+      const mem = makeMem();
+      const original = legacyDigest();
+      mem.__values.set(COMPLETION_DIGEST_KEY, original);
+      (mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+        async (p: { label: string; properties?: Record<string, unknown> }) => {
+          if (p.label === COMPLETION_DIGEST_HIGH_WATER_KEY) return { stored: false, action: 'conflict' as const };
+          mem.__values.set(p.label, String(p.properties?.value ?? ''));
+          return { stored: true, action: 'created' as const };
+        },
+      );
+      const result = await new ResolveLearningDigestHandler().execute(dismissCtx(mem, 3));
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('could not be cleared') });
+      expect(mem.__values.get(COMPLETION_DIGEST_KEY)).toBe(original);
     });
   });
 });
