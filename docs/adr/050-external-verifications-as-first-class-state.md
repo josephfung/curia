@@ -102,8 +102,12 @@ Alternatives considered and rejected:
    anywhere but the registrable domain of a verification that tracked it, and only in that
    verification's browser session. The match is by registrable domain, so `login.aircanada.com`
    matches `aircanada.com` and a lookalike does not; the session tells apart two verifications
-   whose challenges sit on one identity provider (both on `b2clogin.com`), so one's code never
-   lands in the other's. A reused verification moves its tracked values to its new session.
+   whose challenges sit on one identity provider (both on `b2clogin.com`). The binding is exact
+   for a typed code, which registers only against the verifications waiting in the session it
+   was typed in. A relayed or inbox code cannot be attributed to one session, so it registers
+   against every open verification of its delivery and the binding is best-effort when two
+   sign-ins share an identity-provider domain. A reused verification moves its tracked values
+   to its new session.
    `press_key` gets the same guard, failing closed: while any value is tracked, a key that
    types a character is pressed only when the focused document is on such a verification's
    page domain in its session, so a code cannot be spelled one key at a time into a

@@ -884,7 +884,8 @@ function decodePercentRuns(text: string): string {
 
 /**
  * Register a code-shaped value typed on `typedOnUrl` against every pending or recent
- * verification whose page domain it matches, and have the session scrub it from what it
+ * verification waiting in this browser session whose page domain it matches, and have the
+ * session scrub it from what it
  * reads back. Never logs the value. A failed lookup still scrubs the session's own output
  * (under-capture is the failure to avoid) and does not fail the type, which already ran.
  */
@@ -906,10 +907,12 @@ async function trackTypedCode(
     return;
   }
   // Pending, expired and abandoned rows only (a satisfied verification is finished);
-  // registerCodes starts the TTL clock for the non-pending ones.
+  // registerCodes starts the TTL clock for the non-pending ones. Only this session's rows:
+  // a code typed for B must not become enterable in A's session because both challenges
+  // sit on one identity provider.
   const matching = registerCodes(
     runtime,
-    active.filter((v) => sameRegistrableDomain(typedOnUrl, v.pageDomain)),
+    active.filter((v) => v.browserSessionId === sessionId && sameRegistrableDomain(typedOnUrl, v.pageDomain)),
     [value],
   );
   if (matching.length === 0) return;

@@ -1677,6 +1677,26 @@ describe('web-browser sign-in verification (#2017)', () => {
       expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), CODE_A, expect.anything());
     });
 
+    it('a code typed in B\'s session is tracked for B only, so it is then refused in A\'s session', async () => {
+      const a = verification({ id: 'v-a', site: 'manulife.ca', pageDomain: 'b2clogin.com', browserSessionId: 'sess-a' });
+      const b = verification({ id: 'v-b', site: 'sunlife.ca', pageDomain: 'b2clogin.com', browserSessionId: 'sess-b' });
+      const { runtime, tracker } = makeRuntime([a, b]);
+      const register = vi.spyOn(tracker, 'register');
+
+      const typed = await new WebBrowserHandler().execute(
+        verifyCtx('https://sunlife.b2clogin.com/mfa', { action: 'type', selector: '#code', text: CODE_B }, runtime, 'sess-b').ctx,
+      );
+      expect(typed.success).toBe(true);
+      expect(register.mock.calls.map((c) => c[0])).toEqual(['v-b']);
+
+      vi.mocked(humanType).mockClear();
+      const refused = await new WebBrowserHandler().execute(
+        verifyCtx('https://manulife.b2clogin.com/mfa', { action: 'type', selector: '#code', text: CODE_B }, runtime, 'sess-a').ctx,
+      );
+      expect(refused).toEqual({ success: false, error: REFUSAL });
+      expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+    });
+
     it('refuses a navigate carrying A\'s code in B\'s session, and allows it in A\'s', async () => {
       const runtime = twoOnB2c();
       const url = `https://manulife.b2clogin.com/verify?c=${CODE_A}`;
