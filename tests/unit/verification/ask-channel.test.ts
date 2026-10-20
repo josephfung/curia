@@ -13,6 +13,7 @@ const config: VerificationConfig = {
   recentWindowMinutes: 120,
   codeTtlMinutesAfterClose: 120,
   emailWaitSeconds: 180,
+  identityProviderDomains: ['b2clogin.com'],
 };
 
 function identity(channel: string, overrides: Partial<ChannelIdentity> = {}): ChannelIdentity {

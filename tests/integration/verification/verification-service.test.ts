@@ -24,6 +24,7 @@ const CONFIG: VerificationConfig = {
   recentWindowMinutes: 120,
   codeTtlMinutesAfterClose: 120,
   emailWaitSeconds: 180,
+  identityProviderDomains: ['b2clogin.com'],
 };
 
 describeIf('VerificationService (#2017)', () => {

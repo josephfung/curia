@@ -5,6 +5,7 @@ import { parseSensitivityRules, type SensitivityRule } from './memory/sensitivit
 import { parseProxyConfig } from './browser/proxy-config.js';
 import { AUTONOMY_GATINGS, type AutonomyGating } from './autonomy/band-policy.js';
 import type { VerificationConfig } from './verification/types.js';
+import { registrableDomain } from './verification/domain.js';
 
 // ---------------------------------------------------------------------------
 // Multi-account email config types
@@ -220,12 +221,27 @@ const VERIFICATION_NUMERIC_KEYS = [
   'emailWaitSeconds',
 ] as const;
 
+/**
+ * Identity providers whose embedded sign-in frame may receive a sign-in code. Deliberately
+ * short and well-known; a deployment extends it with verification.identityProviderDomains.
+ */
+export const DEFAULT_IDENTITY_PROVIDER_DOMAINS = [
+  'b2clogin.com',
+  'microsoftonline.com',
+  'okta.com',
+  'auth0.com',
+  'onelogin.com',
+  'pingidentity.com',
+  'duosecurity.com',
+] as const;
+
 const DEFAULT_VERIFICATION_CONFIG: VerificationConfig = {
   askChannelOrder: [...VERIFICATION_ASK_CHANNELS],
   defaultExpiryMinutes: 10,
   recentWindowMinutes: 120,
   codeTtlMinutesAfterClose: 120,
   emailWaitSeconds: 180,
+  identityProviderDomains: [...DEFAULT_IDENTITY_PROVIDER_DOMAINS],
 };
 
 /** Resolve the optional YAML verification block to a fully-populated config. */
@@ -236,6 +252,8 @@ export function resolveVerificationConfig(yaml: YamlConfig['verification']): Ver
     recentWindowMinutes: yaml?.recentWindowMinutes ?? DEFAULT_VERIFICATION_CONFIG.recentWindowMinutes,
     codeTtlMinutesAfterClose: yaml?.codeTtlMinutesAfterClose ?? DEFAULT_VERIFICATION_CONFIG.codeTtlMinutesAfterClose,
     emailWaitSeconds: yaml?.emailWaitSeconds ?? DEFAULT_VERIFICATION_CONFIG.emailWaitSeconds,
+    identityProviderDomains: (yaml?.identityProviderDomains ?? DEFAULT_VERIFICATION_CONFIG.identityProviderDomains)
+      .map((d) => d.toLowerCase()),
   };
 }
 
@@ -730,6 +748,11 @@ export interface YamlConfig {
     codeTtlMinutesAfterClose?: number;
     /** Seconds to wait for an emailed code before asking the principal. Default: 180. */
     emailWaitSeconds?: number;
+    /**
+     * Registrable domains of identity providers whose embedded frame may receive a sign-in
+     * code. Replaces the default list (DEFAULT_IDENTITY_PROVIDER_DOMAINS).
+     */
+    identityProviderDomains?: string[];
   };
 
   /** Meeting debrief agent configuration (spec §17-meeting-debrief.md). */
@@ -1396,7 +1419,23 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         `verification must be a YAML mapping, got: ${Array.isArray(config.verification) ? 'list' : typeof config.verification}`,
       );
     }
-    const { askChannelOrder, ...numeric } = config.verification;
+    const { askChannelOrder, identityProviderDomains, ...numeric } = config.verification;
+    if (identityProviderDomains !== undefined) {
+      if (!Array.isArray(identityProviderDomains)) {
+        throw new Error(
+          `verification.identityProviderDomains must be a list of domains, got: ${typeof identityProviderDomains}`,
+        );
+      }
+      for (const entry of identityProviderDomains as unknown[]) {
+        // A bare registrable domain only (okta.com): not a URL, a subdomain, a public
+        // suffix or an IP, so the entry means exactly the provider it names.
+        if (typeof entry !== 'string' || registrableDomain(entry) !== entry.toLowerCase()) {
+          throw new Error(
+            `verification.identityProviderDomains entry ${JSON.stringify(entry)} must be a registrable domain such as okta.com`,
+          );
+        }
+      }
+    }
     if (askChannelOrder !== undefined) {
       if (!Array.isArray(askChannelOrder)) {
         throw new Error(`verification.askChannelOrder must be a list of channel names, got: ${typeof askChannelOrder}`);

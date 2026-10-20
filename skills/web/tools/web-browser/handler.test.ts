@@ -1941,6 +1941,33 @@ describe('web-browser sign-in verification (#2017)', () => {
       expect(vi.mocked(humanType)).not.toHaveBeenCalled();
     });
 
+    it('refuses a tracked code into a hostile iframe when the verification kept the top-level domain', async () => {
+      // What verification open records for a code input in an iframe that is neither the
+      // site nor a configured identity provider: page_domain stays the top page's.
+      const v = verification({ site: 'manulife.ca', pageDomain: 'manulife.ca' });
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE);
+
+      const result = await new WebBrowserHandler().execute(
+        framedCtx('https://www.manulife.ca/signin', 'https://ads.example/slot', { action: 'type', selector: 'code', text: CODE }, runtime),
+      );
+
+      expect(result).toEqual({ success: false, error: REFUSAL });
+      expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+    });
+
+    it('allows a tracked code into a same-site child frame', async () => {
+      const v = verification({ site: 'manulife.ca', pageDomain: 'manulife.ca' });
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE);
+
+      const result = await new WebBrowserHandler().execute(
+        framedCtx('https://www.manulife.ca/signin', 'https://login.manulife.ca/otp', { action: 'type', selector: 'code', text: CODE }, runtime),
+      );
+
+      expect(result.success).toBe(true);
+    });
+
     it('allows a tracked code into an identity-provider iframe the verification was opened on', async () => {
       const v = verification({ site: 'manulife.ca', pageDomain: 'b2clogin.com' });
       const { runtime, tracker } = makeRuntime([v]);

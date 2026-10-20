@@ -43,6 +43,18 @@ describe('resolveVerificationConfig', () => {
     expect(config.defaultExpiryMinutes).toBe(10);
   });
 
+  it('defaults identityProviderDomains to a short list of well-known identity providers', () => {
+    expect(resolveVerificationConfig(undefined).identityProviderDomains).toEqual([
+      'b2clogin.com', 'microsoftonline.com', 'okta.com', 'auth0.com', 'onelogin.com', 'pingidentity.com', 'duosecurity.com',
+    ]);
+  });
+
+  it('a configured identityProviderDomains list replaces the default, lowercased', () => {
+    const config = resolveVerificationConfig({ identityProviderDomains: ['Okta.com', 'idp.example'] });
+    expect(config.identityProviderDomains).toEqual(['okta.com', 'idp.example']);
+    expect(resolveVerificationConfig({ identityProviderDomains: [] }).identityProviderDomains).toEqual([]);
+  });
+
   it('returns a fresh askChannelOrder array each call', () => {
     const a = resolveVerificationConfig(undefined);
     a.askChannelOrder.push('mutated');
@@ -68,6 +80,38 @@ verification:
       emailWaitSeconds: 120,
     });
   });
+
+  it('accepts identityProviderDomains of bare registrable domains, and an empty list', () => {
+    writeLocalYaml(`
+verification:
+  identityProviderDomains: [okta.com, auth.example]
+`);
+    expect(loadYamlConfig(tempDir).verification).toEqual({ identityProviderDomains: ['okta.com', 'auth.example'] });
+    writeLocalYaml(`
+verification:
+  identityProviderDomains: []
+`);
+    expect(loadYamlConfig(tempDir).verification).toEqual({ identityProviderDomains: [] });
+  });
+
+  it('rejects a non-list identityProviderDomains', () => {
+    writeLocalYaml(`
+verification:
+  identityProviderDomains: okta.com
+`);
+    expect(() => loadYamlConfig(tempDir)).toThrow(/verification\.identityProviderDomains must be a list/);
+  });
+
+  it.each(['https://okta.com', 'login.okta.com', 'com', '10.0.0.1', '""', '7'])(
+    'rejects identityProviderDomains entry %s (not a bare registrable domain)',
+    (bad) => {
+      writeLocalYaml(`
+verification:
+  identityProviderDomains: [${bad}]
+`);
+      expect(() => loadYamlConfig(tempDir)).toThrow(/verification\.identityProviderDomains entry .* must be a registrable domain/);
+    },
+  );
 
   it('rejects askChannelOrder: [pigeon]', () => {
     writeLocalYaml(`

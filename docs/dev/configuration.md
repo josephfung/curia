@@ -229,9 +229,12 @@ verification:
   recentWindowMinutes: 120        # a closed verification still counts as recent, and still tracks codes, for this long
   codeTtlMinutesAfterClose: 120   # a tracked code value is scrubbed this long after its verification closes
   emailWaitSeconds: 180           # how long ceo-inbox waits for an emailed code before the coordinator asks the principal
+  identityProviderDomains: [b2clogin.com, microsoftonline.com, okta.com, auth0.com, onelogin.com, pingidentity.com, duosecurity.com]
 ```
 
 `askChannelOrder` takes `signal`, `sms`, `slack` and `email`, and the configured order alone decides where to ask. The channel the errand arrived on plays no part, because the principal often hands things over by email or voice to be done later. The four numbers must be positive integers. A bad value fails at startup.
+
+`identityProviderDomains` decides which embedded frame may receive a sign-in code. When the sign-in page's own frame has no code input, a child frame that holds one becomes the verification's page domain only if it is on the site's own domain or one of these providers, and only if it is the sole such frame. Otherwise the top page stays the destination, and a code typed into any other frame is refused. Each entry must be a bare registrable domain (`okta.com`, not `https://login.okta.com`). Setting the list replaces the default, so repeat the defaults when you add a provider.
 
 ---
 

@@ -32,7 +32,12 @@ function makeVerification(overrides: Partial<Verification> = {}): Verification {
 
 function makeRuntime(overrides: Partial<VerificationRuntime> = {}) {
   const runtime = {
-    service: { config: { emailWaitSeconds: 180 } },
+    service: {
+      config: {
+        emailWaitSeconds: 180,
+        identityProviderDomains: ['b2clogin.com', 'microsoftonline.com', 'okta.com', 'auth0.com', 'onelogin.com', 'pingidentity.com', 'duosecurity.com'],
+      },
+    },
     open: vi.fn(async (input: { site: string; pageDomain: string; delivery: Verification['delivery'] }) => ({
       // Mirror the service: site and pageDomain are stored as registrable domains.
       verification: makeVerification({
@@ -177,6 +182,48 @@ describe('verification tool', () => {
       const browser = makeBrowser('https://www.manulife.ca/signin', [], [fakeFrame(IDP_FRAME, ['delivery-choice'])]);
       await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
       expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: 'https://www.manulife.ca/signin' }));
+    });
+
+    it('keeps the top-level url for a third-party iframe with a code input (neither the site nor an identity provider)', async () => {
+      const runtime = makeRuntime();
+      const browser = makeBrowser('https://www.manulife.ca/signin', [], [fakeFrame('https://ads.example/slot', ['one-time-code-input'])]);
+      const result = await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
+      expect(result.success).toBe(true);
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: 'https://www.manulife.ca/signin' }));
+      if (result.success) expect((result.data as Data).page_domain).toBe('manulife.ca');
+    });
+
+    it('takes a same-site child frame holding the code input', async () => {
+      const runtime = makeRuntime();
+      const browser = makeBrowser('https://www.manulife.ca/signin', [], [fakeFrame('https://login.manulife.ca/otp', ['one-time-code-input'])]);
+      await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: 'https://login.manulife.ca/otp' }));
+    });
+
+    it('keeps the top-level url when more than one child frame qualifies', async () => {
+      const runtime = makeRuntime();
+      const browser = makeBrowser('https://www.manulife.ca/signin', [], [
+        fakeFrame(IDP_FRAME, ['one-time-code-input']),
+        fakeFrame('https://login.manulife.ca/otp', ['one-time-code-input']),
+      ]);
+      await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: 'https://www.manulife.ca/signin' }));
+    });
+
+    it('trusts only the configured identity providers', async () => {
+      const runtime = makeRuntime();
+      (runtime.service.config as { identityProviderDomains: string[] }).identityProviderDomains = ['okta.com'];
+      const browser = makeBrowser('https://www.manulife.ca/signin', [], [fakeFrame(IDP_FRAME, ['one-time-code-input'])]);
+      await new VerificationToolHandler().execute(makeCtx(input, runtime, browser));
+      expect(runtime.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: 'https://www.manulife.ca/signin' }));
+
+      const okta = makeRuntime();
+      (okta.service.config as { identityProviderDomains: string[] }).identityProviderDomains = ['okta.com'];
+      const oktaFrame = 'https://manulife.okta.com/mfa';
+      await new VerificationToolHandler().execute(
+        makeCtx(input, okta, makeBrowser('https://www.manulife.ca/signin', [], [fakeFrame(oktaFrame, ['one-time-code-input'])])),
+      );
+      expect(okta.open).toHaveBeenCalledWith(expect.objectContaining({ pageDomain: oktaFrame }));
     });
 
     it('ignores a child frame with no registrable domain', async () => {

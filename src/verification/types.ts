@@ -51,4 +51,10 @@ export interface VerificationConfig {
   /** How long a tracked code value lives after its verification closes. */
   codeTtlMinutesAfterClose: number;
   emailWaitSeconds: number;
+  /**
+   * Registrable domains of identity providers a site may embed its sign-in in. A child
+   * frame holding the code input becomes the verification's page_domain only when it is
+   * on the site's own domain or one of these.
+   */
+  identityProviderDomains: string[];
 }

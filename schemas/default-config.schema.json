@@ -401,7 +401,12 @@
         "defaultExpiryMinutes": { "type": "integer", "minimum": 1 },
         "recentWindowMinutes": { "type": "integer", "minimum": 1 },
         "codeTtlMinutesAfterClose": { "type": "integer", "minimum": 1 },
-        "emailWaitSeconds": { "type": "integer", "minimum": 1 }
+        "emailWaitSeconds": { "type": "integer", "minimum": 1 },
+        "identityProviderDomains": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
       }
     },
     "debrief": {
