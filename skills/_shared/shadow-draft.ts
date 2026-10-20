@@ -82,10 +82,10 @@ export function buildShadowJudgePrompt(pairs: ShadowJudgePair[]): string {
  * Strict, all-or-nothing parse of the judge output. Returns a map keyed by source_message_id
  * ONLY when the response is a JSON array that covers `expectedIds` exactly — one well-formed
  * verdict per expected pair, no malformed entries, no duplicates, no missing, no extras.
- * Otherwise returns null, and the caller treats the whole batch as unreconciled (holds the
- * watermark, retries next run). This is simpler than salvaging partial responses and, for a
- * single-tenant daily run that near-always fits one call, costs at most a day of latency in a
- * rare failure mode.
+ * Otherwise returns null, and the caller treats that whole chunk as unreconciled (holds the
+ * watermark, retries next run). This is simpler than salvaging partial responses; the caller
+ * keeps chunks small (JUDGE_CHUNK_SIZE in sent-observe) so a rejected response holds back only
+ * a few pairs, and the chunks that land shrink the retry set (#2191).
  */
 export function parseShadowJudgeResult(
   text: string,

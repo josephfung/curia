@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-sent-observe",
   "description": "Poll the principal's Sent folder since a stored watermark, match new sends to Curia draft snapshots and open owner=ceo tasks, append evidence to OKF, and advance the watermark. Read-only against Nylas; never drafts, archives, or sends. Intended for the daily ceo-inbox sent-observe cron — do not fold into triage.",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -12,7 +12,12 @@
     "draft_matches": "number",
     "task_candidates": "number",
     "shadow_reconciled": "number",
+    "shadow_judge_failed": "number (shadow pairs whose judge chunk returned an unusable response; they retry next run)",
+    "shadow_deferred": "number (shadow pairs past the per-run judge limit; they retry next run)",
+    "shadow_fetch_failed": "number (shadow pairs whose sent body could not be fetched; they retry next run)",
+    "shadow_record_failed": "number (judged shadow pairs whose row insert or reconciled mark failed; they retry next run)",
     "watermark_advanced_to": "number|null (unix seconds)",
+    "watermark_held": "boolean (true when this run saw mail but kept the watermark so the same mail is re-observed next run)",
     "backfill_active": "boolean (true when an oldest-first backlog drain is still underway after this run — the watermark stays pinned to its floor until the drain completes)",
     "tasks_truncated": "boolean (true when the open principal-task set exceeded the pagination safety ceiling, so task-completion matching ran against a partial set)",
     "skipped_backoff": "boolean"

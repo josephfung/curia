@@ -76,6 +76,10 @@ export const MAX_JUDGE_PAIRS = 40;
  *  retried the same oversized batch. Small chunks shrink the retry set as chunks land. */
 export const JUDGE_CHUNK_SIZE = 8;
 
+/** A watermark held longer than this logs at error, not warn (#2191). The cron is daily, so
+ *  this is about three consecutive failed runs. */
+const HELD_WATERMARK_ERROR_DAYS = 3;
+
 /** Safety ceiling on messages scanned per run — a daily Sent volume never reaches
  *  this, but it bounds a runaway mailbox. Truncation is handled by holding the
  *  watermark (see watermark-advance below), not by silently dropping the tail. */
@@ -373,6 +377,13 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     let draftEvidenceComplete = true;
     let taskCandidates = 0;
     let shadowReconciled = 0;
+    // Shadow pairs held back this run, by cause (#2191). They go into the result and the run log:
+    // for a month, a reconcile that failed every day showed up only as success with
+    // shadow_reconciled 0.
+    let shadowJudgeFailed = 0;
+    let shadowDeferred = 0;
+    let shadowFetchFailed = 0;
+    let shadowRecordFailed = 0;
     let maxDate = watermark;
     // Oldest message actually processed this run. Diagnostics only: it's surfaced as
     // `oldestScannedAt` in the truncation warning so an operator can see where the
@@ -391,8 +402,8 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     const shadows = shadowDocs
       .map((d) => parseShadowDoc(d))
       .filter((s): s is NonNullable<typeof s> => s !== null);
-    // (shadow, sent) pairs collected during the message loop below, judged in a
-    // single batched LLM call after the loop instead of one call per pair.
+    // (shadow, sent) pairs collected during the message loop below, judged in chunked LLM
+    // calls after the loop instead of one call per pair.
     // Idempotency across runs is the shadow doc's reconciled_at marker (parseShadowDoc returns
     // null once set); within a run each shadow doc is yielded once by listByPrefix, so no in-run
     // claim set is needed — two distinct shadows answered by one principal send are both scored.
@@ -459,7 +470,6 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // below can hold the watermark too.
     let shadowReconcileOk = true;
     if (ctx.actionLogRepo) {
-      let overflow = 0;
       for (const shadow of shadows) {
         const send = selectShadowSend(shadow, messages);
         if (!send) continue;
@@ -469,7 +479,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
         // Overflow shadows keep reconciled_at unset; hold the watermark so their sends are
         // re-observed next run.
         if (judgePairs.length >= MAX_JUDGE_PAIRS) {
-          overflow += 1;
+          shadowDeferred += 1;
           shadowReconcileOk = false;
           continue;
         }
@@ -490,12 +500,13 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
               { err, messageId: send.id, sourceMessageId: shadow.sourceMessageId },
               'ceo-inbox-sent-observe: getMessage failed for shadow reconcile — not scoring, holding watermark',
             );
+            shadowFetchFailed += 1;
             shadowReconcileOk = false;
             continue;
           }
         }
-        // Don't score inline — collect the pair and judge everything in one batched LLM
-        // call after this loop (see below).
+        // Don't score inline — collect the pair and judge it in the chunked LLM calls after
+        // this loop (see below).
         judgePairs.push({
           sourceMessageId: shadow.sourceMessageId,
           subject: send.subject || shadow.subject,
@@ -503,9 +514,9 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
           sentBody,
         });
       }
-      if (overflow > 0) {
+      if (shadowDeferred > 0) {
         ctx.log.warn(
-          { judged: judgePairs.length, deferred: overflow, max: MAX_JUDGE_PAIRS },
+          { judged: judgePairs.length, deferred: shadowDeferred, max: MAX_JUDGE_PAIRS },
           'sent-observe: more shadow pairs than the per-run judge limit — the rest retry next run',
         );
       }
@@ -531,23 +542,41 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       // No maxTokens override: the infraLlm default leaves room for the model's reasoning
       // tokens, which the old 1500 cap did not (#2191).
       const verdicts = await Promise.all(
-        chunks.map(async (chunk) => {
+        chunks.map(async (chunk, chunkIndex) => {
           const res = await infraLlm.extract(buildShadowJudgePrompt(chunk));
           const judged = res.ok
             ? parseShadowJudgeResult(res.text, chunk.map((p) => p.sourceMessageId))
             : null;
-          return { chunk, judged, error: res.ok ? 'malformed-or-incomplete-response' : res.error };
+          return {
+            chunk,
+            chunkIndex,
+            judged,
+            error: res.ok ? 'malformed-or-incomplete-response' : res.error,
+            // Diagnostics for a rejected response without logging its text (the reasons
+            // paraphrase email content): a reply that doesn't end in ']' was cut off, one that
+            // does dropped or rewrote an id.
+            responseChars: res.ok ? res.text.length : null,
+            endsWithBracket: res.ok ? res.text.trimEnd().endsWith(']') : null,
+          };
         }),
       );
 
-      for (const { chunk: batch, judged, error } of verdicts) {
+      for (const { chunk: batch, chunkIndex, judged, error, responseChars, endsWithBracket } of verdicts) {
         // All-or-nothing per chunk: an LLM error, or a malformed / duplicate-id / incomplete
         // response, fails that WHOLE chunk — write none of its rows, hold the watermark, retry next
         // run. Other chunks are unaffected.
         if (judged === null) {
+          shadowJudgeFailed += batch.length;
           shadowReconcileOk = false;
           ctx.log.warn(
-            { count: batch.length, error },
+            {
+              chunkIndex,
+              chunkCount: chunks.length,
+              sourceMessageIds: batch.map((p) => p.sourceMessageId),
+              error,
+              responseChars,
+              endsWithBracket,
+            },
             'sent-observe: shadow judge failed or returned an unusable response — holding watermark',
           );
         } else {
@@ -575,6 +604,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
                 scoredBy: 'shadow-reconciler',
               });
             } catch (err) {
+              shadowRecordFailed += 1;
               shadowReconcileOk = false;
               ctx.log.error(
                 { err, sourceMessageId: j.sourceMessageId },
@@ -587,6 +617,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
             const path = `${SHADOW_SCRATCH_PREFIX}/${j.sourceMessageId}.md`;
             const doc = await ctx.workingDocs.read(path);
             if (!doc) {
+              shadowRecordFailed += 1;
               shadowReconcileOk = false;
               ctx.log.warn(
                 { sourceMessageId: j.sourceMessageId },
@@ -603,6 +634,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
               expectedVersion: doc.version,
             });
             if (!upd.ok) {
+              shadowRecordFailed += 1;
               shadowReconcileOk = false;
               ctx.log.warn(
                 { sourceMessageId: j.sourceMessageId },
@@ -842,17 +874,27 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
           : !shadowReconcileOk
             ? 'ceo-inbox-sent-observe: shadow reconcile failed — holding watermark for retry'
             : 'ceo-inbox-sent-observe: guard write failed — holding watermark for retry';
-      ctx.log.warn(
-        {
-          path: PENDING_DIFFS_PATH,
-          evidencePersisted,
-          shadowReconcileOk,
-          draftEvidenceComplete,
-          matchedGuardPersisted,
-          askedGuardPersisted,
-        },
-        holdReason,
-      );
+      // One held run is routine (it retries tomorrow); a watermark held for days is a stuck
+      // observer. #2191 sat at warn for a month, so escalate once the hold outlives a few runs.
+      const heldDays = watermark > 0 ? (nowMs / 1000 - watermark) / 86_400 : 0;
+      const holdFields = {
+        path: PENDING_DIFFS_PATH,
+        evidencePersisted,
+        shadowReconcileOk,
+        draftEvidenceComplete,
+        matchedGuardPersisted,
+        askedGuardPersisted,
+        heldDays: Math.round(heldDays),
+        shadowJudgeFailed,
+        shadowDeferred,
+        shadowFetchFailed,
+        shadowRecordFailed,
+      };
+      if (heldDays > HELD_WATERMARK_ERROR_DAYS) {
+        ctx.log.error(holdFields, `${holdReason} (watermark held ${Math.round(heldDays)} days)`);
+      } else {
+        ctx.log.warn(holdFields, holdReason);
+      }
     }
 
     // Truncation is loud until the backlog is drained (#1431). With a real floor it means a drain is
@@ -899,7 +941,12 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
         draftMatches,
         taskCandidates,
         shadowReconciled,
+        shadowJudgeFailed,
+        shadowDeferred,
+        shadowFetchFailed,
+        shadowRecordFailed,
         watermarkAdvancedTo,
+        watermarkHeld: messages.length > 0 && !advanceOk,
         backfillStillActive,
       },
       'ceo-inbox-sent-observe: run complete',
@@ -912,7 +959,14 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
         draft_matches: draftMatches,
         task_candidates: taskCandidates,
         shadow_reconciled: shadowReconciled,
+        // Shadow pairs held back this run, by cause (#2191); each retries next run.
+        shadow_judge_failed: shadowJudgeFailed,
+        shadow_deferred: shadowDeferred,
+        shadow_fetch_failed: shadowFetchFailed,
+        shadow_record_failed: shadowRecordFailed,
         watermark_advanced_to: watermarkAdvancedTo,
+        // True when this run saw mail but kept the watermark so it re-observes it next run.
+        watermark_held: messages.length > 0 && !advanceOk,
         backfill_active: backfillStillActive,
         // True when the open-task set exceeded the pagination safety ceiling, so task-completion
         // matching this run considered only a partial set (#1433).

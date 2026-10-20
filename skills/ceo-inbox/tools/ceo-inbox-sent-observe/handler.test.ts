@@ -1516,8 +1516,10 @@ describe('CeoInboxSentObserveHandler', () => {
           : { ok: true as const, text: verdictsFor(prompt) },
       );
       const ctx = buildCtx({
+        // Watermark five days behind "now": a hold this old must log at error, not warn.
+        seed: { [WATERMARK_KEY]: '1720000000' },
         force: true,
-        nowMs: 1_720_100_000_000,
+        nowMs: 1_720_000_000_000 + 5 * 86_400_000,
         infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
         withActionLogRepo: true,
         snapshots,
@@ -1539,9 +1541,23 @@ describe('CeoInboxSentObserveHandler', () => {
       for (const i of [8, 9]) {
         expect(ctx.__docs.get(shadowDraftPath(`src-${i}`))?.frontmatter.reconciled_at).toBeUndefined();
       }
-      const data = (result as { data: { watermark_advanced_to: number | null; shadow_reconciled: number } }).data;
+      const data = (result as {
+        data: { watermark_advanced_to: number | null; shadow_reconciled: number; shadow_judge_failed: number; watermark_held: boolean };
+      }).data;
       expect(data.shadow_reconciled).toBe(8);
       expect(data.watermark_advanced_to).toBeNull();
+      // The failure is visible in the result, not only in a warn log.
+      expect(data.shadow_judge_failed).toBe(2);
+      expect(data.watermark_held).toBe(true);
+      // The failed chunk's log names its pairs; the long hold escalates to error.
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceMessageIds: ['src-8', 'src-9'], endsWithBracket: false }),
+        expect.stringContaining('shadow judge failed'),
+      );
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ heldDays: 5, shadowJudgeFailed: 2 }),
+        expect.stringContaining('watermark held 5 days'),
+      );
     });
 
     it('stops fetching sent bodies at the per-run judge limit and holds the watermark for the rest', async () => {
@@ -1562,9 +1578,11 @@ describe('CeoInboxSentObserveHandler', () => {
       expect(fetchedBodies).toHaveLength(MAX_JUDGE_PAIRS);
       expect(extract).toHaveBeenCalledTimes(Math.ceil(MAX_JUDGE_PAIRS / JUDGE_CHUNK_SIZE));
       expect(ctx.__actionLog).toHaveLength(MAX_JUDGE_PAIRS);
-      const data = (result as { data: { watermark_advanced_to: number | null } }).data;
+      const data = (result as { data: { watermark_advanced_to: number | null; shadow_deferred: number; watermark_held: boolean } }).data;
       // The deferred shadow's send must be re-observed next run.
       expect(data.watermark_advanced_to).toBeNull();
+      expect(data.shadow_deferred).toBe(1);
+      expect(data.watermark_held).toBe(true);
     });
   });
 
