@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeCode, isCodeShaped, extractCodeCandidates } from '../../../src/verification/code-shape.js';
+import { normalizeCode, isCodeShaped, extractCodeCandidates, extractShortRelayedCodes } from '../../../src/verification/code-shape.js';
 
 describe('normalizeCode', () => {
   it('uppercases and strips one internal space or dash', () => {
@@ -104,5 +104,41 @@ describe('extractCodeCandidates', () => {
 
   it('returns an empty list for empty text', () => {
     expect(extractCodeCandidates('')).toEqual([]);
+  });
+});
+
+// A 4-5 character code the principal relays (R4): tracked from their own text only when the
+// message is essentially just the code, or the token follows a code keyword, so years,
+// times and amounts stay out.
+describe('extractShortRelayedCodes', () => {
+  it.each([
+    ['4821', ['4821']],
+    ["It's 48213", ['48213']],
+    ['code is 4821', ['4821']],
+    ['  4821. ', ['4821']],
+    ['Here: 48213 thanks', ['48213']],
+    ['the code: 4821', ['4821']],
+    ['PIN 0912 — then grab the notice for me please', ['0912']],
+    ['otp=48213', ['48213']],
+    ['2026', ['2026']],
+  ])('registers %j', (text, expected) => {
+    expect(extractShortRelayedCodes(text)).toEqual(expected);
+  });
+
+  it.each([
+    'see you at 1430 tomorrow',
+    'back in 2026',
+    'meeting at 10:30',
+    'code is 2026',
+    'It\'s 2026',
+    'pay 4821 now',
+    'call 4821 and 5521',
+    'room 4821',
+    '482',
+    '482913',
+    'the total was $4821.50 for the code review',
+    'zip code 48213',
+  ])('does not register %j', (text) => {
+    expect(extractShortRelayedCodes(text)).toEqual([]);
   });
 });

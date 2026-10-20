@@ -2,8 +2,9 @@
 //
 // A "code-shaped" value is 6-8 characters (after removing at most one internal
 // space or dash) that are all digits, or alphanumeric with at least one digit.
-// 4-5 character values are only admitted when the caller opts in (the value
-// was typed by web-browser, so there is no free-text ambiguity).
+// 4-5 character values are only admitted when the caller opts in: the value was
+// typed by web-browser, or extractShortRelayedCodes found it in a message that is
+// essentially just the code (or names it after a code keyword).
 //
 // Nothing here logs: code values must never reach logs or error messages.
 
@@ -123,6 +124,81 @@ export function extractCodeCandidates(text: string): string[] {
     if (!gluedBefore && !isGlued(a.after) && isCodeShaped(a.text)) {
       add(normalizeCode(a.text));
     }
+  }
+  return found;
+}
+
+// ── 4-5 character codes the principal relays (#2017) ─────────────────────────────────
+//
+// Free-text extraction stops at 6 characters because shorter shapes collide with years,
+// times and amounts. A principal answering "send me the code" with a 4- or 5-digit code is
+// still the common case, so two narrow shapes are admitted on top: a message that is
+// essentially just the code, and a token right after a code keyword.
+
+/** Longest message (trimmed) still read as "just the code". */
+const SHORT_MESSAGE_MAX_LEN = 24;
+
+/** Words a "just the code" message may carry around the code: apostrophes removed, lowercased. */
+const SHORT_CODE_FILLER: ReadonlySet<string> = new Set([
+  'code', 'the', 'its', 'it', 'is', 'here', 'heres', 'my', 'ok', 'okay', 'thanks', 'thx',
+  'try', 'use', 'sign', 'in', 'signin', 'login', 'verification', 'otp', 'pin', 'passcode',
+]);
+
+const SHORT_WORD = /[A-Za-z0-9]+(?:['\u2019][A-Za-z]+)?/g;
+
+// A code keyword, an optional "is"/"was" and separator, then a 4-5 character token that
+// is not glued to more text. Not after "zip"/"postal"/"promo", whose codes are not sign-in codes.
+const KEYWORD_SHORT_CODE =
+  /(?<![A-Za-z0-9])(?<!(?:zip|postal|promo)\s)(?:code|passcode|pin|otp)\s*(?:(?:is|was)\s*)?[:=#-]?\s*([A-Za-z0-9]{4,5})(?![A-Za-z0-9])(?![.,:/@_-][A-Za-z0-9])/gi;
+
+function isShortCode(token: string): boolean {
+  return token.length >= MIN_LEN_SHORT && token.length < MIN_LEN && isCodeShaped(token, { allowShort: true });
+}
+
+/** A four-digit token that reads as a year (1900-2099). */
+function looksLikeYear(token: string): boolean {
+  if (!/^\d{4}$/.test(token)) return false;
+  const n = Number(token);
+  return n >= 1900 && n <= 2099;
+}
+
+/**
+ * 4-5 character code candidates in a principal's own message, normalized and
+ * de-duplicated, admitted only when (a) the trimmed message is at most 24 characters
+ * and its one digit-bearing token is surrounded by filler alone ("4821", "It's 48213",
+ * "code is 4821"), or (b) the token follows "code", "passcode", "pin" or "otp" ("the
+ * code is 4821, then grab the notice"). A token that reads as a year (1900-2099) is
+ * admitted only when it is the whole message. 6-8 character codes are
+ * extractCodeCandidates' job and are never returned here.
+ */
+export function extractShortRelayedCodes(text: string): string[] {
+  const trimmed = text.trim();
+  const found: string[] = [];
+  const add = (token: string): void => {
+    const code = normalizeCode(token);
+    if (!found.includes(code)) found.push(code);
+  };
+
+  // (a) The message is essentially just the code.
+  if (trimmed.length <= SHORT_MESSAGE_MAX_LEN) {
+    const words = [...trimmed.matchAll(SHORT_WORD)];
+    const digitWords = words.filter((m) => /\d/.test(m[0]));
+    const onlyFiller = words.every(
+      (m) => /\d/.test(m[0]) || SHORT_CODE_FILLER.has(m[0].replace(/['\u2019]/g, '').toLowerCase()),
+    );
+    const sole = digitWords.length === 1 ? digitWords[0]! : null;
+    if (sole && onlyFiller && isShortCode(sole[0])) {
+      const before = trimmed.slice(0, sole.index);
+      const wholeMessage = trimmed.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '') === sole[0];
+      // A currency sign makes it an amount; a year counts only as the whole message.
+      if (!/[$€£¥]\s*$/.test(before) && (wholeMessage || !looksLikeYear(sole[0]))) add(sole[0]);
+    }
+  }
+
+  // (b) The token follows a code keyword.
+  for (const m of text.matchAll(KEYWORD_SHORT_CODE)) {
+    const token = m[1]!;
+    if (isShortCode(token) && !looksLikeYear(token)) add(token);
   }
   return found;
 }

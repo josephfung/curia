@@ -83,10 +83,12 @@ Alternatives considered and rejected:
    a comment, following the precedent of #2159.
 5. **A default-deny value scrub.** An in-memory `CodeTracker` holds the code values of live
    verifications, with a TTL of 120 minutes after close. Values are registered from three places:
-   - `web-browser` typing a code-shaped value on a verification's `page_domain` (exact, and the
-     only source for 4–5 character codes);
+   - `web-browser` typing a code-shaped value on a verification's `page_domain` (exact);
    - the dispatcher, from the principal's own new text on an inbound, only while an `sms` or
-     `app` verification is pending or recent, and only 6–8 character code shapes;
+     `app` verification is pending or recent: 6–8 character code shapes anywhere, and a 4–5
+     character one only when the message is essentially just the code (at most 24 characters,
+     one digit-bearing token among filler such as "code", "it's", "here") or the token follows
+     "code", "passcode", "pin" or "otp". A year-like 1900–2099 counts only as the whole message;
    - the `delegate` skill, from a ceo-inbox result, for `email` verifications.
 
    `ExecutionLayer.invoke` then replaces every tracked value with `[sign-in code]` in **every
@@ -126,8 +128,9 @@ Alternatives considered and rejected:
   failing the turn.
 - **Over-capture is accepted; under-capture is the failure to avoid.** A stray 6–8 character
   number in the same reply as an SMS code is masked in a note. A code the tracker has not seen yet
-  is not masked: a 4–5 character code the principal relays is tracked only once the browser types
-  it, so a note written before that can carry it.
+  is not masked: a 4–5 character code the principal relays inside a longer message, with no code
+  keyword before it, is tracked only once the browser types it, so a note written before that
+  can carry it.
 - **A restart loses tracked values.** A value registered before a restart is no longer scrubbed
   afterwards. The same restart kills the browser session the value belongs to, and the record
   tells the next turn the session is gone, so the window is small. Moving to several processes

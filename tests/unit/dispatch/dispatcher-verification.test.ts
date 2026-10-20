@@ -123,6 +123,29 @@ describe('Dispatcher — principal-relayed sign-in codes (#2017)', () => {
     expect(tasks[0]!.payload.content).toContain('482 913');
   });
 
+  it('a bare 4-digit reply registers it for the pending sms verification and sets the guidance', async () => {
+    const { send, tasks, tracker } = buildHarness({ active: [verificationRow('v-1', 'sms')] });
+    await send('4821');
+
+    expect(tracker.scrubText('typed 4821')).toBe('typed [sign-in code]');
+    expect(tasks[0]!.payload.turnGuidance).toContain('verification-code-received');
+  });
+
+  it('a short code in an email reply is found under its Subject line', async () => {
+    const { send, tracker } = buildHarness({ active: [verificationRow('v-1', 'app')] });
+    await send('Subject: Re: sign-in\n\n48213', 'email', 'joseph@example.com');
+
+    expect(tracker.scrubText('48213')).toBe('[sign-in code]');
+  });
+
+  it('a 4-digit time or year in a longer message is not registered', async () => {
+    const { send, tracker } = buildHarness({ active: [verificationRow('v-1', 'sms')] });
+    await send('see you at 1430 tomorrow');
+    await send('back in 2026');
+
+    expect(tracker.size()).toBe(0);
+  });
+
   it('registers against every pending, expired or abandoned sms/app verification, never a satisfied one', async () => {
     const { send, registerSpy } = buildHarness({
       active: [

@@ -271,9 +271,11 @@ precise:
 
 **Code-shaped** means 6–8 characters *(my call)*: all digits, or digit-bearing
 alphanumerics, optionally split by one space or dash (`123 456`, `G-123456`), on token
-boundaries. 4- and 5-digit codes exist but collide with years, times and amounts; they are
-registered only from source 1 (an exact typed value), never extracted from free text. Phone
-numbers, dates and times in recognisable formats are excluded.
+boundaries. 4- and 5-character codes collide with years, times and amounts, so source 2
+takes one only when the message is essentially just the code (≤ 24 characters, one
+digit-bearing token among filler) or it follows "code"/"passcode"/"pin"/"otp", and a
+1900–2099 year only as the whole message; otherwise only source 1 (an exact typed value)
+tracks them. Phone numbers, dates and times in recognisable formats are excluded.
 
 Over-capture is acceptable within this narrow window (a stray 6-digit number in the same
 SMS-code reply gets masked in a note); under-capture is the failure to avoid.
@@ -367,7 +369,8 @@ asked for it.
   still registering values) for **2h**; tracked-value TTL **2h after close**; email wait
   **~3 min**.
 - Codes are extracted from free text only while an **SMS/app** verification is pending or
-  recent, only from the principal's own new text, and only **6–8 character** shapes;
+  recent, only from the principal's own new text, and only **6–8 character** shapes (4–5
+  only in a message that is just the code, or after a code keyword);
   every code actually typed is tracked exactly.
 - Email is preferred only when the masked destination (if shown) matches one of the
   principal's addresses.
