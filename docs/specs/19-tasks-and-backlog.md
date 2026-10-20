@@ -592,6 +592,22 @@ retried.
 A milestone subtask whose due date has already passed at creation wakes immediately to be worked,
 rather than being treated as already complete.
 
+### 16.1 Sign-in verifications suppress the reply binding (#2017)
+
+A task-wake turn that signs in somewhere can hit a second factor and ask the principal for a
+code. The binding above would route that reply through `task-wake-reply` into the task and wake
+it on the next BacklogHeartbeat, hours after any code expires. So while a **pending verification
+carries this `task_id`**, a send from the task's turn skips the binding entirely: no auto-bind,
+and no merge of the task binding into an explicit `context_bridge`. The check keys on the
+verification row, not on a flag the model must remember to set. The principal's reply then
+arrives as an ordinary live turn, which the per-turn `## Sign-in verifications` block equips to
+type the code into the waiting browser session. A failed lookup binds as before. The turn that
+finishes the errand completes the task with a note that says what was done and carries no code
+(the execution layer scrubs tracked codes from the note regardless); if it cannot finish, it
+updates the task to say exactly that, so the next heartbeat does not re-run the sign-in on stale
+assumptions. See [ADR-050](../adr/050-external-verifications-as-first-class-state.md) and
+[spec 03](03-tools-and-execution.md#sign-in-code-scrub-2017).
+
 ---
 
 ## 17. Configuration

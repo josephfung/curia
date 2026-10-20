@@ -218,6 +218,23 @@ Notes, block notices and approval mentions go to the principal's digest queue (`
 
 ---
 
+### `verification`
+
+Delegated sign-in with external verification (a code the site sends the principal; [ADR-050](../adr/050-external-verifications-as-first-class-state.md)). Every field is optional; the defaults are shown.
+
+```yaml
+verification:
+  askChannelOrder: [signal, sms, slack, email]  # where to ask the principal for an SMS/app code: first enabled channel with a verified principal identity
+  defaultExpiryMinutes: 10        # a pending verification is treated as expired after this (a hint, not a cliff)
+  recentWindowMinutes: 120        # a closed verification still counts as recent, and still tracks codes, for this long
+  codeTtlMinutesAfterClose: 120   # a tracked code value is scrubbed this long after its verification closes
+  emailWaitSeconds: 180           # how long ceo-inbox waits for an emailed code before the coordinator asks the principal
+```
+
+`askChannelOrder` takes `signal`, `sms`, `slack` and `email`, and never asks on the channel the errand came in on. The four numbers must be positive integers. A bad value fails at startup.
+
+---
+
 ### `debrief`
 
 Configures the meeting-debrief specialist agent (see [spec 17](../specs/17-meeting-debrief.md)). The agent itself is defined in `agents/meeting-debrief.yaml`; this block controls the prompt-channel and reply-correlation knobs.

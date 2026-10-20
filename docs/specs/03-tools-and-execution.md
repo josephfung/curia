@@ -252,7 +252,7 @@ Skills are invoked directly by `AgentRuntime` via `ExecutionLayer.invoke(toolNam
 Invocation flow:
 
 1. **Resolve** — look up skill in registry by name (local or MCP)
-2. **Normalize inputs** — convert timestamp inputs to UTC-offset ISO strings using the configured local timezone
+2. **Normalize inputs** — convert timestamp inputs to UTC-offset ISO strings using the configured local timezone, then replace every tracked sign-in code in the input with `[sign-in code]` for every tool except `web-browser` (see *Sign-in code scrub* below)
 3. **Validate elevation** — if `sensitivity: elevated`, reject unless this is a **live principal turn** (`isLivePrincipalTurn`: the distinct `options.liveTurn` flag — forwarded from `agent.task.payload.liveTurn` — plus principal lineage on the effective metadata). System, agent, scheduled, and woken/inherited principal-lineage contexts all fail — a wake is never a live turn; a synchronous delegation inside a live turn is (#1126). This is the sole enforcement point; no handler re-check duplicates it. (Distinct from the autonomy principal-bypass, which uses *lineage* via the ladder — see [14-autonomy-engine.md](14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks).)
 4. **Validate caller** — if `allowed_callers` is set on the manifest, reject unless the calling agent is in the list (CEO-approved re-executions bypass this gate)
 5. **Build context** — assemble `ToolContext` with scoped secrets, logger, and per-skill service grants
@@ -271,6 +271,19 @@ All skill results are sanitized before being included in the agent's LLM context
 - Error strings are wrapped in a structured format (`<tool_error>...</tool_error>`) to prevent them from being interpreted as instructions
 
 **Value-aware secret redaction (v0.35.0).** Secrets injected into the browser by reference (`web-browser` `secret_ref`) are tracked per browser session and scrubbed — both the raw value and its URL- and HTML-encoded variants — from returned content, the page URL, and error messages, so a hostile page cannot reflect an injected credential back into the LLM. Screenshots are suppressed on any action that fills a secret (an image cannot be value-redacted). The manifest field `skip_secret_redaction` is a narrow opt-out of only the broad generic-hex scrub (see Skill Manifest above) — it does not affect value-aware redaction or the structured credential patterns.
+
+### Sign-in code scrub (#2017)
+
+A delegated sign-in can pass a one-time code through the system, and nothing it touches should remember it. While a sign-in verification is pending or recently closed, the in-memory `CodeTracker` (`src/verification/`) holds the code values of those verifications. `ExecutionLayer.invoke` replaces every tracked value with `[sign-in code]` in **every string of every tool input**, after timestamp normalization and before the elevation gate, approval payloads, audit rows or the handler see it. The rule is default-deny: it covers task and scheduled-job notes, documents, `report-to-principal`, `memory-store`, every send skill and MCP tools without listing them, and it works on a copy so the caller's object is untouched. Matching is on token boundaries, case-insensitive, and covers a code split by one space or dash. The one exemption is `web-browser`, which must receive the real value to type it and guards its own destinations (below). Values are never written to the `verifications` table, to logs or to error messages. See [ADR-050](../adr/050-external-verifications-as-first-class-state.md) and [spec 15](15-outbound-safety.md#sign-in-code-scrub-2017).
+
+The tracker is in memory, so a process restart drops every tracked value (the browser sessions they belong to die with it). Values are registered from `web-browser` typing, the dispatcher (the principal's own new text while an `sms` or `app` verification is open) and the `delegate` skill (a ceo-inbox result while an `email` verification is open); they age out `verification.codeTtlMinutesAfterClose` minutes after the verification closes.
+
+**`web-browser` and verifications.** With the verification runtime wired, `web-browser`:
+
+- refuses to `type` a tracked code, or `navigate` to a URL containing one (raw, form-decoded or percent-decoded), on any page that is not on the registrable domain of the verification that tracked it. `login.aircanada.com` matches `aircanada.com`; a lookalike does not, and a page with no registrable domain (`about:blank`, an IP) never matches. The refusal does not echo the value;
+- tracks a code-shaped literal it types on a verification's `page_domain` (the only source for 4–5 character codes), and scrubs it from what the session reads back;
+- adds `verification_suspected: { page_domain, signals[] }` to its page state when the page carries a one-time-code input, a short numeric input beside code-entry wording, or a delivery-choice screen. It is a nudge, not a decision;
+- logs navigate URLs through a log-safe form, with a code replaced or the URL withheld.
 
 ### Resource Boundaries
 
@@ -317,6 +330,7 @@ The framework ships with these skills (in `skills/` as part of core):
 - `delegate` — route a sub-task to a specialist agent via the bus
 - `web-fetch` — HTTP GET with configurable timeouts and size limits
 - `web-browser` — Playwright-backed browser for JS-rendered pages. v0.35.0 added: secret-by-reference fill (`secret_ref` — a `user.*` secret name; the value is filled server-side and never shown to the LLM), incognito sessions (`incognito: true` — ephemeral, isolated context off the principal's persistent profile), opt-in ad-blocking (`block_ads: true`, off by default — keep off for auth/login/form-fill flows), new interaction actions (`scroll`, `hover`, `press_key`, `wait_for`), iframe awareness with per-frame SSRF gating (private/internal child frames are skipped), a persistent profile (shared cookies/storage across sessions), and fingerprint hardening (real Chrome channel + stealth, no stale UA override)
+- `verification` — coordinator-only (`action_risk: low`): `open | satisfy | abandon | list` records for pending sign-in verifications in the `verifications` table (spec 19 and [ADR-050](../adr/050-external-verifications-as-first-class-state.md)). One pending row per site; `open` takes the page domain from the browser session's own URL and returns the channel to ask the principal on (`verification.askChannelOrder`, default signal, sms, slack, email; never the channel the errand arrived on). Never takes a code value. The coordinator and ceo-inbox see live records in a per-turn block, not in their always-on prompts
 - `web-search` — web search via Tavily API
 - `scheduler-create` / `scheduler-list` / `scheduler-cancel` — create and manage scheduled jobs
 - `email-send` / `email-reply` — outbound email via Nylas (multi-account aware)

@@ -32,6 +32,7 @@ the CEO, or exfiltrate internal data to an external party.
 | **Accidental context leakage** | LLM naturally includes a third party's email address in a reply | Content filter — contact data leakage rule (`autonomy.gating: tier`); band send review's *necessity* question (`band`) |
 | **Over-disclosure to an untrusted recipient** | Reply shares the CEO's availability or another contact's details with an unknown-tier recipient | Content filter — Stage 2.5 tier-keyed disclosure gate (`tier`); band send review (`band`, [spec 14](14-autonomy-engine.md#band-gating-2159)) |
 | **A false claim in the principal's voice** | Reply tells a counterparty the principal is away when they are not | Band send review's *grounding* question (`band` only) |
+| **A sign-in code written down or sent on** | A one-time code the principal relays lands in a task note, a report, memory, a document or a message | Sign-in code scrub — tracked values replaced by `[sign-in code]` in every tool input and every reply (below) |
 | **Skill-layer bypass** | Prompt injection tricks LLM into calling `email-send` directly, circumventing the dispatcher filter | Outbound gateway — all `nylasClient.sendMessage()` calls go through it |
 | **Impersonation of CEO** | Attacker sends email claiming to be the CEO, triggers a high-sensitivity action | Caller verification — cross-channel challenge/response for elevated skills |
 | **Display name spoofing** | Reply-To header set to `Jane Doe <attacker@evil.com>` | Display name sanitization — strip or flag mismatched display names |
@@ -268,6 +269,18 @@ raw plus its URL- and HTML-encoded variants — from the returned page content, 
 and any error messages, so a hostile page cannot reflect the injected credential back into the
 model's context. Screenshots are suppressed on any action that fills a secret, since an image
 cannot be value-redacted. See [spec 03 — Output Sanitization](03-tools-and-execution.md#output-sanitization).
+
+### Sign-in code scrub (#2017)
+
+A one-time sign-in code is not something the content filter can catch. Stage 1 `SECRET_PATTERNS` do not match a six-digit code, and the Stage 2 judge is skipped when the principal is the sole recipient and fails open when unreachable. So the judge is no longer the only line for these codes, and the scrub below does not depend on it. It exists because a delegated sign-in ([ADR-050](../adr/050-external-verifications-as-first-class-state.md)) legitimately moves a code through the coordinator, and the code must go only into the challenge that asked for it.
+
+An in-memory tracker holds the code values of live sign-in verifications (registered when `web-browser` types one, when the principal relays one on an inbound while an `sms` or `app` verification is open, and when ceo-inbox returns one for an `email` verification). Every tracked value is then **replaced with `[sign-in code]`, not blocked**, on three paths:
+
+- **Tool inputs.** The execution layer scrubs every string of every tool's input, default-deny, except `web-browser` ([spec 03](03-tools-and-execution.md#sign-in-code-scrub-2017)). That covers progress notes, scheduled-job payloads, documents, reports to the principal, memory writes and every send skill. A send containing a code goes out with `[sign-in code]` in its place; the turn does not fail.
+- **Replies.** The dispatcher scrubs the coordinator's reply and its note for the principal once, at the top of `handleAgentResponse`, so every relay path built from them (rewrites, approvals, bullpen filing, no-reply audit records) carries the scrubbed text. **This is a deliberate deviation from the design's "outbound filter Stage 1" placement.** Stage 1 only blocks, and the principal chose replace-not-block, so the rule lives where the reply is still editable. Stage 1 is unchanged.
+- **Extraction.** The checkpoint transcript is scrubbed before fact and relationship extraction, so a code never becomes a knowledge-graph fact.
+
+The raw stored message record (working memory, `audit_log`, `llm_call_archive`) is not scrubbed: the principal accepts single-use codes there. Over-capture within the narrow window of an open verification is accepted (a stray 6–8 character number in the code reply is masked); under-capture is the failure to avoid. The tracker is in memory, so a restart drops tracked values.
 
 ### Bulk Export Gates (#201)
 

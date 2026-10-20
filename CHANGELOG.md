@@ -29,6 +29,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`record-spot-check`** — the principal answers spot checks by number; verdicts feed the autonomy score. (#2159)
 - **Spot-check verdict trigger** — a principal reply starting "2 bad" points the coordinator at record-spot-check. (#2159)
 - **`approval_number`** — new nullable column on `autonomy_action_log` (migration 098). (#2159)
+- **`verification` tool** — coordinator tracks pending sign-in codes per site in a new `verifications` table. (#2017)
+- **Sign-in verification config** — `verification` section sets ask-channel order, expiry and code lifetimes. (#2017)
+- **Scenarios 24a–24d** — sign-in codes by SMS and email, no leaks, lost session. (#2017)
+- **ADR-050** — external verifications are first-class state; spec 03, 15 and 19 updated. (#2017)
 
 ### Changed
 
@@ -62,11 +66,18 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Approval tools** — `short_ref` accepts the approval number; `list-pending-actions` and `list-learning-digest` return numbers. (#2159)
 - **Shadow drafts** — still judged and recorded, but no longer count toward the autonomy score. ADR-029. (#2191)
 - **Error-rate guard** — its last-30 window now also stops at 90 days (`errorRateWindowDays`). (#2191)
+- **Task reply binding** — skipped while a sign-in verification is pending for that task. (#2017)
+- **Coordinator tool budget** — raised 78,745 → 79,600 for the `verification` tool. (#2017)
 
 ### Removed
 
 - **Decision posture** — gone from identity, wizard and console; the autonomy level decides act-vs-ask. (#2143)
 - **`weakExpiredWeight`** — scoring setting retired and ignored if set; safe to delete from configs. (#2159)
+
+### Security
+
+- **Sign-in code scrub** — tracked codes become `[sign-in code]` in notes, reports, memory, sends and replies. (#2017)
+- **Browser code guard** — `web-browser` refuses to type or navigate a sign-in code off its own site. (#2017)
 
 ### Fixed
 
