@@ -47,15 +47,16 @@ const PRINCIPAL_REPLY_SHAPED = [
 
 /**
  * The principal's message carried a code-shaped value the dispatcher registered for a
- * pending or recent sms/app sign-in verification (#2017). Without it the model sometimes
+ * pending sms/app sign-in verification (#2017). Hedged ("appears to"): the value is only
+ * code-shaped, and could be a booking reference. Without it the model sometimes
  * read past the code (in an email such as "482913 — once you're in, send me the notice")
  * and asked for it again. The runtime renders the named form
  * (verificationCodeReceivedLines) with the site, session and verification id; this
  * generic form is its fallback when that lookup fails. Neither ever holds the digits.
  */
 const VERIFICATION_CODE_RECEIVED = [
-  'The principal\'s message contains the sign-in code for the verification in your Sign-in',
-  'verifications block. Enter it now in that session; don\'t ask for it again.',
+  'The principal\'s message appears to contain the sign-in code for the verification in your',
+  'Sign-in verifications block. If so, enter it now in that session; don\'t ask for it again.',
 ];
 
 /** The named verification-code-received lines: one per verification the code was registered for. */
@@ -63,8 +64,8 @@ export function verificationCodeReceivedLines(
   items: ReadonlyArray<{ site: string; browserSessionId: string; id: string }>,
 ): string[] {
   return items.flatMap((v) => [
-    `The principal's message contains the sign-in code for ${v.site}.`,
-    `Enter it now in session ${v.browserSessionId} (verification ${v.id}); don't ask for it again.`,
+    `The principal's message appears to contain the sign-in code for ${v.site}.`,
+    `If so, enter it now in session ${v.browserSessionId} (verification ${v.id}); don't ask for it again.`,
   ]);
 }
 

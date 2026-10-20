@@ -1404,7 +1404,10 @@ export class Dispatcher {
    * verification that is pending, expired or abandoned (#2017; never a satisfied one).
    * A non-pending row starts its TTL clock as it is registered against. Best-effort: a
    * failed lookup costs only the tracking, and the log carries no message content.
-   * True when at least one candidate was registered against at least one row.
+   * True when at least one candidate was registered against a *pending* row: what the
+   * verification-code-received guidance keys on. Expired and abandoned rows still take the
+   * value (over-capture only scrubs), but a code-shaped token in a later message, such as a
+   * booking reference or postal code, must not be announced as a code for a dead session.
    */
   private async trackPrincipalRelayedCodes(content: string, channelId: string, conversationId: string): Promise<boolean> {
     const verification = this.verification;
@@ -1414,7 +1417,8 @@ export class Dispatcher {
         (v) => (v.delivery === 'sms' || v.delivery === 'app') && acceptsCodes(v),
       );
       if (open.length === 0) return false;
-      return registerCodes(verification, open, extractCodeCandidates(personTurnSourceText(content))).length > 0;
+      const registered = registerCodes(verification, open, extractCodeCandidates(personTurnSourceText(content)));
+      return registered.some((v) => v.status === 'pending');
     } catch (err) {
       this.logger.warn(
         { err, channelId, conversationId },

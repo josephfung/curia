@@ -33,7 +33,6 @@ import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { splitRelayNote } from './principal-note.js';
 import { stripOutboundContextPreamble } from '../dispatch/outbound-context.js';
 import { parseTurnGuidanceKeys, renderTurnGuidance, verificationCodeReceivedLines } from './prompts/turn-guidance.js';
-import { acceptsCodes } from '../verification/track-codes.js';
 import { turnLengthReminder } from '../identity/length.js';
 import { parsePrincipalBacklog, renderBacklogLine } from './prompts/backlog-line.js';
 import { renderSenderLine, UNRESOLVED_SENDER_HEAD } from './prompts/sender-line.js';
@@ -476,9 +475,9 @@ export class AgentRuntime {
   }
 
   /**
-   * The named verification-code-received lines (#2017): each sms/app verification that
-   * still accepts codes and now holds a tracked value, which the dispatcher registered
-   * from this message. Empty (so the generic text renders) without a runtime, with no
+   * The named verification-code-received lines (#2017): each pending sms/app verification
+   * that now holds a tracked value, which the dispatcher registered from this message. An
+   * expired row is the verification block's job ("Expired but session alive: try the code"). Empty (so the generic text renders) without a runtime, with no
    * such row, or when the lookup fails; never the digits.
    */
   private async verificationCodeReceivedLines(conversationId: string): Promise<string[]> {
@@ -487,7 +486,7 @@ export class AgentRuntime {
     try {
       const tracked = new Set(verification.tracker.trackedIds());
       const rows = (await verification.listActive()).filter(
-        (v) => (v.delivery === 'sms' || v.delivery === 'app') && acceptsCodes(v) && tracked.has(v.id),
+        (v) => (v.delivery === 'sms' || v.delivery === 'app') && v.status === 'pending' && tracked.has(v.id),
       );
       return verificationCodeReceivedLines(rows);
     } catch (err) {

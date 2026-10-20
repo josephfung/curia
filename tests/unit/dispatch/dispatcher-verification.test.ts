@@ -231,8 +231,20 @@ describe('Dispatcher — verification-code-received turn guidance (#2017)', () =
     expect(tasks[0]!.payload.turnGuidance).toContain('verification-code-received');
   });
 
-  it('sets it for an expired sms row still accepting codes', async () => {
-    const { send, tasks } = buildHarness({ active: [verificationRow('v-1', 'app', 'expired')] });
+  it('does not set it when only expired or abandoned rows took the value (still tracked for scrubbing)', async () => {
+    for (const status of ['expired', 'abandoned'] as const) {
+      const { send, tasks, registerSpy } = buildHarness({ active: [verificationRow('v-1', 'sms', status)] });
+      // A postal code or booking reference in a later message, shaped like a code.
+      await send('Ship it to M5H 1A1, booking 482913');
+      expect(registerSpy).toHaveBeenCalled();
+      expect(tasks[0]!.payload.turnGuidance ?? []).not.toContain('verification-code-received');
+    }
+  });
+
+  it('sets it when a pending row took the value, even beside an expired one', async () => {
+    const { send, tasks } = buildHarness({
+      active: [verificationRow('v-old', 'sms', 'expired'), verificationRow('v-1', 'app')],
+    });
     await send('482913');
     expect(tasks[0]!.payload.turnGuidance).toContain('verification-code-received');
   });

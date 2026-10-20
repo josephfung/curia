@@ -163,16 +163,23 @@ describe('AgentRuntime verification-code-received guidance (#2017)', () => {
       content: '482913 — once you are in, send me the notice',
       turnGuidance: ['principal-reply-shaped', 'verification-code-received'],
       verification: runtimeWith(
-        [row({}), row({ id: 'ver-mail', delivery: 'email', site: 'other.example' }), row({ id: 'ver-untracked', site: 'third.example' })],
-        ['ver-1', 'ver-mail'],
+        [
+          row({}),
+          row({ id: 'ver-mail', delivery: 'email', site: 'other.example' }),
+          row({ id: 'ver-untracked', site: 'third.example' }),
+          row({ id: 'ver-expired', status: 'expired', site: 'expired.example', resolvedAt: new Date() }),
+        ],
+        ['ver-1', 'ver-mail', 'ver-expired'],
       ),
     });
     const guidance = guidanceOf(messages);
-    expect(guidance).toContain("The principal's message contains the sign-in code for example-insurer.ca.");
-    expect(guidance).toContain('Enter it now in session s-1 (verification ver-1)');
+    expect(guidance).toContain("The principal's message appears to contain the sign-in code for example-insurer.ca.");
+    expect(guidance).toContain('If so, enter it now in session s-1 (verification ver-1)');
     expect(guidance).toMatch(/don't ask for it again/);
     expect(guidance).not.toContain('other.example');
     expect(guidance).not.toContain('third.example');
+    // An expired row is the verification block's job ("Expired but session alive: try the code").
+    expect(guidance).not.toContain('expired.example');
     expect(guidance).not.toMatch(/\d{4,}/);
   });
 
@@ -188,7 +195,7 @@ describe('AgentRuntime verification-code-received guidance (#2017)', () => {
         ...(verification && { verification }),
       });
       const guidance = guidanceOf(messages);
-      expect(guidance).toMatch(/message contains the sign-in code/);
+      expect(guidance).toMatch(/message appears to contain the sign-in code/);
       expect(guidance).not.toMatch(/\d{4,}/);
     }
   });
