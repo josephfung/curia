@@ -167,6 +167,17 @@ export const SECRET_RESOLVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['web-
 // Hard-allowlisted to list-user-secrets: declaring userSecretIndex elsewhere has no effect.
 export const USER_SECRET_INDEX_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['list-user-secrets']);
 
+/**
+ * The one tool whose input skips the default-deny sign-in-code scrub (#2017): it must
+ * receive the real code to type it, and its own destination guard decides where.
+ */
+const SIGN_IN_CODE_SCRUB_EXEMPT_TOOL = 'web-browser';
+
+/** Gate advisory tail when the blocked call carries a sign-in code (#2017). */
+const NO_APPROVAL_FOR_SIGN_IN_CODE =
+  'No approval request was created: this call carries a sign-in code, and a sign-in code is never ' +
+  'stored for approval. Tell the principal the sign-in could not be finished at the current autonomy level.';
+
 /** Appended when an object result is too large and collapsed to a string (#1487). */
 const OBJECT_OUTPUT_TRUNCATED_MARKER = '[truncated — output exceeded limit]';
 
@@ -631,6 +642,20 @@ export class ExecutionLayer {
   }
 
   /**
+   * True when `input` still carries a tracked sign-in code (#2017). Only the scrub-exempt
+   * tool can: every other tool's input was scrubbed on entry. Such an input is never queued
+   * for approval, because an approval stores the input verbatim (and re-runs it on approve)
+   * and shows it to the approver: the code would land in the approval row, the digest
+   * mention and the approval message. Scrubbing the stored copy is no answer either: the
+   * approved call would then type "[sign-in code]".
+   */
+  private holdsUnscrubbedCode(toolName: string, input: Record<string, unknown>): boolean {
+    const tracker = this.verification?.tracker;
+    if (!tracker || toolName !== SIGN_IN_CODE_SCRUB_EXEMPT_TOOL) return false;
+    return JSON.stringify(tracker.scrubDeep(input)) !== JSON.stringify(input);
+  }
+
+  /**
    * Build the advisory error message for a gate block, optionally triggering
    * an approval request via ApprovalTriggerService.
    *
@@ -651,6 +676,8 @@ export class ExecutionLayer {
     const baseMsg =
       `Tool '${toolName}' blocked — autonomy score is ${currentScore}, ` +
       `but this skill (action_risk: ${String(actionRisk)}) requires ${requiredScore}. `;
+
+    if (this.holdsUnscrubbedCode(toolName, input)) return baseMsg + NO_APPROVAL_FOR_SIGN_IN_CODE;
 
     // Approval trigger — only if wired and task context is available.
     if (this.approvalTrigger && options?.taskEventId) {
@@ -708,6 +735,8 @@ export class ExecutionLayer {
       ? `Tool '${toolName}' needs the principal's approval: ${bandReason}. `
       : `Tool '${toolName}' blocked — the initiating contact's tier ('${initiatingTier}') ` +
         `does not permit ${String(actionRisk)}-risk actions without approval. `;
+
+    if (this.holdsUnscrubbedCode(toolName, input)) return baseMsg + NO_APPROVAL_FOR_SIGN_IN_CODE;
 
     if (this.approvalTrigger && options?.taskEventId) {
       try {
@@ -826,6 +855,8 @@ export class ExecutionLayer {
   ): Promise<string> {
     const itemSummary = ExportControlServiceClass.formatItemSummary(items);
     const baseMsg = `${message}\n\nItems:\n${itemSummary}\n`;
+
+    if (this.holdsUnscrubbedCode(toolName, input)) return baseMsg + NO_APPROVAL_FOR_SIGN_IN_CODE;
 
     if (this.approvalTrigger && options?.taskEventId) {
       try {
@@ -1461,7 +1492,12 @@ export class ExecutionLayer {
       }
       return await this.escalationJudge.review({
         questions,
-        message: buildActionDescription(toolName, manifest, input),
+        // The judge needs the action, not a sign-in code the scrub-exempt tool still carries (#2017).
+        message: buildActionDescription(
+          toolName,
+          manifest,
+          this.verification && toolName === SIGN_IN_CODE_SCRUB_EXEMPT_TOOL ? this.verification.tracker.scrubDeep(input) : input,
+        ),
         recipients: [],
         band: AutonomyService.bandForScore(currentScore),
         evidence,
@@ -1547,6 +1583,9 @@ export class ExecutionLayer {
     // would qualify; a read cannot be told from a write by name; and the generic "Run <tool>"
     // summary gives the principal nothing to grade.
     if (this.registry.isMcpSourced(toolName)) return;
+    // The pool row keeps the input and a summary built from it, so an input still carrying a
+    // sign-in code (only the scrub-exempt tool's can, #2017) never enters it.
+    if (this.holdsUnscrubbedCode(toolName, input)) return;
     try {
       // Inside the try: isSampledTool → minScoreForActionRisk throws on an unknown risk label,
       // and invoke()'s outer catch would turn the action's success into a failure. The action
@@ -1705,9 +1744,10 @@ export class ExecutionLayer {
     // Default-deny scrub of sign-in codes (#2017). Everything below — gates, approval
     // payloads, audit rows and the handler itself — sees the scrubbed input. web-browser
     // is the one tool that must receive the real value (its own guard decides where a
-    // tracked code may be typed). MCP tools come through here too. scrubDeep returns a
-    // copy, so the caller's object is never mutated.
-    if (this.verification && toolName !== 'web-browser') {
+    // tracked code may be typed). Its input is therefore never queued for approval while it
+    // holds a code (holdsUnscrubbedCode). MCP tools come through here too. scrubDeep returns
+    // a copy, so the caller's object is never mutated.
+    if (this.verification && toolName !== SIGN_IN_CODE_SCRUB_EXEMPT_TOOL) {
       input = this.verification.tracker.scrubDeep(input);
     }
 

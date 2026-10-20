@@ -1,8 +1,10 @@
 // The execution layer scrubs tracked sign-in codes out of every tool input
 // (default deny, #2017): a code that reached the principal's reply must not be
 // persisted by whichever tool an agent hands it to.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
+import type { AutonomyService } from '../../../src/autonomy/autonomy-service.js';
+import type { EventBus } from '../../../src/bus/bus.js';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { ToolContext, ToolHandler, ToolManifest, ToolResult } from '../../../src/skills/types.js';
@@ -94,6 +96,51 @@ describe('execution layer sign-in code scrub (#2017)', () => {
     }
     expect(lines.length).toBeGreaterThan(0);
     expect(lines.join('\n')).not.toContain('482913');
+  });
+
+  describe('a gated web-browser call never queues an approval carrying a code', () => {
+    // web-browser is exempt from the scrub above, and an approval re-runs the stored input,
+    // so a code would be stored in the approval row and shown to the approver. Refused instead.
+    function gatedBrowser() {
+      const registry = new ToolRegistry();
+      const handler = new CapturingHandler();
+      registry.register({ ...manifest('web-browser', { action: 'string', text: 'string?' }), action_risk: 'medium' }, handler);
+      const request = vi.fn(async () => ({ created: true as const, shortRef: 'ab12cd34' }));
+      const autonomyService = {
+        getConfig: vi.fn(async () => ({ score: 65, band: 'draft-only', updatedAt: new Date(), updatedBy: 'test' })),
+      } as unknown as AutonomyService;
+      const layer = new ExecutionLayer(registry, logger, {
+        verification: runtime(trackerWithCode()),
+        autonomyService,
+        approvalTrigger: { request } as never,
+        bus: { publish: vi.fn(async () => undefined) } as unknown as EventBus,
+      });
+      return { layer, handler, request };
+    }
+
+    it('refuses to queue an approval for a web-browser input holding a tracked code', async () => {
+      const { layer, handler, request } = gatedBrowser();
+      const result = await layer.invoke(
+        'web-browser', { action: 'type', text: '482 913' }, undefined, { taskEventId: 'task-1' },
+      );
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/sign-in code/);
+        expect(result.error).toMatch(/no approval request was created/i);
+        expect(result.error).not.toMatch(/482[ -]?913/);
+      }
+      expect(request).not.toHaveBeenCalled();
+      expect(handler.seen).toBeUndefined();
+    });
+
+    it('still queues an approval for a web-browser input with no tracked code', async () => {
+      const { layer, request } = gatedBrowser();
+      const result = await layer.invoke(
+        'web-browser', { action: 'type', text: 'hello' }, undefined, { taskEventId: 'task-1' },
+      );
+      expect(result.success).toBe(false);
+      expect(request).toHaveBeenCalledOnce();
+    });
   });
 
   it('does not touch the caller\'s input object', async () => {
