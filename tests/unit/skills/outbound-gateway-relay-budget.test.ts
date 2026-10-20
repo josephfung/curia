@@ -11,6 +11,10 @@ import type { OutboundContentFilter } from '../../../src/dispatch/outbound-filte
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { BusEvent } from '../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
+import { readFile, realpath } from 'node:fs/promises';
+
+// Attachment reads go through node:fs; stubbed so an email with an attachment can be sent.
+vi.mock('node:fs/promises', () => ({ readFile: vi.fn(), realpath: vi.fn() }));
 
 const PRINCIPAL_EMAIL = 'principal@example.com';
 const PRINCIPAL_SIGNAL = '+15195550100';
@@ -92,7 +96,7 @@ describe('relay budget (#1320)', () => {
 
     // One notice instead of the relay, on the same channel, as a system notification.
     expect(g.signalSend).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(g.signalSend.mock.calls[1])).toContain("Dana Example has more updates. I'm holding them for your digest.");
+    expect(JSON.stringify(g.signalSend.mock.calls[1])).toContain("Dana Example has more updates. I'm holding them for your digest, or ask me for them anytime.");
     expect(JSON.stringify(g.signalSend.mock.calls[1])).not.toContain('Friday');
 
     // The audit event names the originator, not the content.
@@ -210,7 +214,7 @@ describe('relay budget (#1320)', () => {
 
     expect(second.deferredToDigest).toBe(true);
     expect((g.reports()[0]!.payload as { summary: string }).summary).toContain('relay limit reached for a contact');
-    expect(JSON.stringify(g.signalSend.mock.calls[1])).toContain("A contact has more updates. I'm holding them for your digest.");
+    expect(JSON.stringify(g.signalSend.mock.calls[1])).toContain("A contact has more updates. I'm holding them for your digest, or ask me for them anytime.");
   });
 
   it('the notice is sent once and is not itself budgeted', async () => {
@@ -235,5 +239,23 @@ describe('relay budget (#1320)', () => {
     });
     for (let i = 0; i < 3; i++) await bare.send(toPrincipalSignal(`m${i}`), { originator: outsider() });
     expect(g.signalSend).toHaveBeenCalledTimes(3);
+  });
+
+  it('never defers an email that carries attachments: the digest cannot hold them', async () => {
+    vi.stubEnv('CURIA_TEMPFILE_DIR', '/tmp');
+    (realpath as ReturnType<typeof vi.fn>).mockImplementation(async (p: string) => p);
+    (readFile as ReturnType<typeof vi.fn>).mockResolvedValue(Buffer.from('signed pdf'));
+    const g = makeGateway({ perHour: 1 });
+    const relay = {
+      channel: 'email' as const, to: PRINCIPAL_EMAIL, subject: 'Signed contract', body: 'Attached.',
+      attachments: [{ fileUrl: 'file:///tmp/contract.pdf', filename: 'contract.pdf', contentType: 'application/pdf' }],
+    };
+    await g.gateway.send(relay, { originator: outsider() });
+    const second = await g.gateway.send(relay, { originator: outsider() });
+    vi.unstubAllEnvs();
+
+    expect(second.deferredToDigest).toBeUndefined();
+    expect(g.reports()).toHaveLength(0);
+    expect(g.sendMessage).toHaveBeenCalledTimes(2);
   });
 });

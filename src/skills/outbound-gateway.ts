@@ -1318,8 +1318,12 @@ export class OutboundGateway {
     // An outside contact can only cause so many immediate messages to the principal. Sends to
     // the principal alone skip the band review below, so this is the only limit on them. Over
     // budget, the relay goes to the digest. Runs after the content filter, so blocked content is
-    // never queued and the digest gets redacted text.
-    const relayOriginator = principalIsSoleRecipient && this.relayBudget ? budgetedOriginator(options) : null;
+    // never queued and the digest gets redacted text. An email with attachments is never held:
+    // a digest item carries text only, so the files would be lost.
+    const carriesAttachments = request.channel === 'email' && (request.attachments?.length ?? 0) > 0;
+    const relayOriginator = principalIsSoleRecipient && this.relayBudget && !carriesAttachments
+      ? budgetedOriginator(options)
+      : null;
     if (relayOriginator && this.relayBudget!.tryAcquire(relayOriginator.contactId) === 'over') {
       const deferred = await this.deferRelay(request, redactedBody, redactedSubject, relayOriginator, options);
       if (deferred) return deferred;
@@ -2091,7 +2095,7 @@ export class OutboundGateway {
     name: string,
     options: { taskEventId?: string; conversationId?: string } | undefined,
   ): Promise<boolean> {
-    const notice = relayNoticeRequest(request, `${name} has more updates. I'm holding them for your digest.`, `Holding updates from ${name}`);
+    const notice = relayNoticeRequest(request, `${name} has more updates. I'm holding them for your digest, or ask me for them anytime.`, `Holding updates from ${name}`);
     try {
       // A system notification: never budgeted, so this cannot recurse into another deferral.
       const result = await this.send(notice, {
