@@ -1452,7 +1452,7 @@ describe('CeoInboxSentObserveHandler', () => {
     // n shadows, each on its own thread, each answered by one send. Bodies are served for every
     // send; `fetchedBodies` records which ones the handler pulled.
     function setupShadows(n: number): {
-      snapshots: Parameters<typeof buildCtx>[0]['snapshots'];
+      snapshots: NonNullable<NonNullable<Parameters<typeof buildCtx>[0]>['snapshots']>;
       fetchedBodies: string[];
     } {
       const sends = Array.from({ length: n }, (_, i) => ({
