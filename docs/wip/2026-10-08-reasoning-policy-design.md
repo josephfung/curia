@@ -196,7 +196,7 @@ the code reads.
   - An effort sends `thinking: { type: 'adaptive', display: 'summarized' }` and `output_config: { effort }`.
   - `none` sends `thinking: { type: 'disabled' }` and no effort.
   - Unset sends neither key. #2157's `thinksByDefault → disabled` rule is removed, so Haiku 5.5 thinks adaptively at `medium`.
-  - **`max_tokens`:** a request will think when it sends an effort, or when it is unset on a model flagged `thinksByDefault`. If it will think and the caller set no `max_tokens`, the cap is 32,768 instead of the registry's (or the 4,096 fallback).
+  - **`max_tokens`:** a request will think when it sends an effort, or when it is unset on a model flagged `thinksByDefault`. If it will think and the caller set no `max_tokens`, the cap is 16,384 instead of the registry's (or the 4,096 fallback). It stays below the SDK's non-streaming limit (about 21,333, the ten-minute rule), since agent turns use `chat()`.
   - A caller that sends an effort with `max_tokens` below 1,024 keeps thinking off, with a warning. An unset request with `max_tokens` below 1,024 on a `thinksByDefault` model is sent as-is with a warning: the call site should send `none`, and the call-site test catches the ones in `src/`.
   - **Temperature:** a finite `temperature` that would actually be sent (the model does not reject sampling parameters) wins over thinking. Thinking is omitted and a warning is logged. On Haiku 5.5 no temperature is sent, so thinking goes on.
   - **A model without a registry `reasoning` entry** gets a warning and nothing is sent, as on OpenRouter.
@@ -214,8 +214,8 @@ the code reads.
 - `ModelRouter` rejects an effort a model does not list, including `none` on DeepSeek, and accepts `none` on Haiku 5.5.
 - Unset sends no `reasoning` and no `thinking` key, on both providers, Haiku 5.5 included.
 - The OpenRouter params shape.
-- The Anthropic adaptive shape, `display: 'summarized'`, the 32,768 cap and the 1,024 floor.
-- Haiku 5.5: unset sends no `thinking` key and gets the 32,768 cap; an effort sends adaptive; `none` sends disabled with the registry cap.
+- The Anthropic adaptive shape, `display: 'summarized'`, the 16,384 cap and the 1,024 floor.
+- Haiku 5.5: unset sends no `thinking` key and gets the 16,384 cap; an effort sends adaptive; `none` sends disabled with the registry cap.
 - The temperature conflict.
 - Fallback uses the fallback tier's setting.
 - Every non-agent call site sends `NO_REASONING`, and its request on Haiku 5.5 and on Gemini equals `main`'s.
