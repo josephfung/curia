@@ -102,7 +102,10 @@ Why, from three months of prod data:
 The rows stay useful as draft-quality evidence: the learning checkup reads their
 disagreement reasons. If shadows return to the score, it should be after the pairing is
 bounded (a send close to capture, one send per shadow) and the judge sees the inbound
-message, and probably at a reduced weight.
+message, and probably at a reduced weight. The pairing was bounded in #2195: a shadow
+pairs only with a same-thread send within 72 hours of capture, and each send scores
+only the shadow captured closest before it. The judge still does not see the inbound
+message.
 
 The same change bounds the error-rate window by age (`errorRateWindowDays`, default 90)
 as well as count. Competence rows are sparse, so "the last 30" had reached back five

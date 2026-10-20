@@ -10,6 +10,7 @@ import {
   HELD_SINCE_KEY,
   MAX_JUDGE_PAIRS,
   JUDGE_CHUNK_SIZE,
+  SHADOW_SEND_WINDOW_SEC,
 } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
@@ -1294,6 +1295,131 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(mockFetch.mock.calls.some((c: unknown[]) => String(c[0]).includes('/messages/msg-s1'))).toBe(true);
     expect(mockFetch.mock.calls.some((c: unknown[]) => String(c[0]).includes('/messages/msg-s2'))).toBe(false);
     expect((result as { data: { shadow_reconciled: number } }).data.shadow_reconciled).toBe(1);
+  });
+
+  describe('#2195 shadow pairing bounds', () => {
+    const common = {
+      thread_id: 'thread-1',
+      subject: 'Re: Hello',
+      from: [{ email: 'ceo@example.com' }],
+      to: [{ email: 'alice@example.com' }],
+      cc: [],
+      unread: false,
+      folders: ['SENT'],
+      attachments: [],
+    };
+    // 2024-07-03T00:00:00Z
+    const CAPTURE_SEC = 1_719_964_800;
+
+    function shadowDoc(id: string, createdAt: string) {
+      return {
+        path: shadowDraftPath(id),
+        type: SHADOW_DOC_TYPE,
+        frontmatter: {
+          source_message_id: id,
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          recipients: ['alice@example.com'],
+          created_at: createdAt,
+        },
+        body: `shadow ${id}`,
+      };
+    }
+
+    function serveSend(id: string, date: number): void {
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+        const u = String(url);
+        if (u.includes(`/messages/${id}`)) {
+          return new Response(
+            JSON.stringify({ data: { ...common, id, date, body: '<p>reply</p>', snippet: 'reply', bcc: [], labels: [] } }),
+            { status: 200 },
+          );
+        }
+        if (u.includes('/messages?')) {
+          return new Response(JSON.stringify({ data: [{ ...common, id, snippet: 'reply', date }] }), { status: 200 });
+        }
+        throw new Error(`unexpected ${u}`);
+      });
+    }
+
+    it('never pairs a send that lands after the window', async () => {
+      // One second past the window: a later follow-up on the thread, not the reply to the punt.
+      serveSend('msg-late', CAPTURE_SEC + SHADOW_SEND_WINDOW_SEC + 1);
+      const extract = vi.fn();
+      const ctx = buildCtx({
+        force: true,
+        nowMs: 1_721_000_000_000,
+        infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+        withActionLogRepo: true,
+        snapshots: [shadowDoc('src-1', '2024-07-03T00:00:00.000Z')],
+        tasks: [],
+      });
+
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+
+      expect(extract).not.toHaveBeenCalled();
+      expect(ctx.__actionLog).toHaveLength(0);
+      // Left unreconciled, so it ages out on the idle-TTL sweep as before.
+      expect(ctx.__docs.get(shadowDraftPath('src-1'))?.frontmatter.reconciled_at).toBeUndefined();
+      const data = (result as { data: { shadow_reconciled: number; watermark_held: boolean } }).data;
+      expect(data.shadow_reconciled).toBe(0);
+      expect(data.watermark_held).toBe(false);
+    });
+
+    it('pairs a send inside the window', async () => {
+      serveSend('msg-in', CAPTURE_SEC + SHADOW_SEND_WINDOW_SEC);
+      const extract = vi.fn(async () => ({
+        ok: true as const,
+        text: '[{"source_message_id":"src-1","same_decision":true,"reason":"same"}]',
+      }));
+      const ctx = buildCtx({
+        force: true,
+        nowMs: 1_721_000_000_000,
+        infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+        withActionLogRepo: true,
+        snapshots: [shadowDoc('src-1', '2024-07-03T00:00:00.000Z')],
+        tasks: [],
+      });
+
+      const result = await handler.execute(ctx);
+      expect((result as { data: { shadow_reconciled: number } }).data.shadow_reconciled).toBe(1);
+    });
+
+    it('scores one send against only the shadow captured closest before it', async () => {
+      // src-early and src-late were captured an hour apart on thread-1; one reply follows both.
+      serveSend('msg-reply', CAPTURE_SEC + 2 * 3600);
+      let capturedPrompt = '';
+      const extract = vi.fn(async (prompt: string) => {
+        capturedPrompt = prompt;
+        return {
+          ok: true as const,
+          text: '[{"source_message_id":"src-late","same_decision":true,"reason":"same"}]',
+        };
+      });
+      const ctx = buildCtx({
+        force: true,
+        nowMs: 1_721_000_000_000,
+        infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+        withActionLogRepo: true,
+        snapshots: [
+          shadowDoc('src-early', '2024-07-03T00:00:00.000Z'),
+          shadowDoc('src-late', '2024-07-03T01:00:00.000Z'),
+        ],
+        tasks: [],
+      });
+
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+
+      expect(extract).toHaveBeenCalledTimes(1);
+      expect(capturedPrompt).toContain('src-late');
+      expect(capturedPrompt).not.toContain('src-early');
+      expect(ctx.__actionLog).toHaveLength(1);
+      expect(ctx.__docs.get(shadowDraftPath('src-late'))?.frontmatter.reconciled_at).toBeTruthy();
+      expect(ctx.__docs.get(shadowDraftPath('src-early'))?.frontmatter.reconciled_at).toBeUndefined();
+      expect((result as { data: { shadow_reconciled: number } }).data.shadow_reconciled).toBe(1);
+    });
   });
 
   it('holds the watermark and skips scoring when the sent body cannot be fetched (F7)', async () => {

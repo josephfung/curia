@@ -138,39 +138,53 @@ function isoToUnixSeconds(iso: string): number | null {
 
 /** Strip a leading Re:/Fwd: and normalize whitespace/case for loose subject comparison. */
 
+/** Latest a send may land after shadow capture and still count as the reply to the punted
+ *  message (#2195). In the #2191 investigation a send 7 days out was a later follow-up. */
+export const SHADOW_SEND_WINDOW_SEC = 72 * 60 * 60;
+
+/** Clock skew tolerated between capture and send, mirroring matchDraftToSent. */
+const SHADOW_SKEW_SEC = 120;
+
 /**
- * Pick the send that corresponds to a shadow draft (#1426). The principal's reply to a punted message
- * near-always shares its thread, and an unmatched shadow is simply retried on later runs (then
- * TTL-swept after 7 idle days), so a simple two-rule match is enough:
- *   (a) exact `id === sourceMessageId` fast path;
- *   (b) otherwise the nearest-in-time same-thread send at/after capture (2-min clock skew,
- *       mirroring matchDraftToSent).
- * Newest-first iteration would otherwise score the shadow against a newer, unrelated same-thread
- * send. Returns null when no eligible send exists (the shadow retries next run).
+ * Pair shadow drafts with the sends that answered them (#1426, #2195). The principal's reply to a
+ * punted message near-always shares its thread, so each shadow takes the nearest same-thread send
+ * at or after capture, within SHADOW_SEND_WINDOW_SEC. A shadow whose capture time can't be parsed
+ * is never paired: the window can't be checked.
+ *
+ * Each send answers at most one shadow, the one captured closest before it. When two shadows on a
+ * thread precede one reply, the earlier shadow is left unpaired instead of scoring one decision
+ * twice. An unpaired shadow retries on later runs and is TTL-swept after 7 idle days.
+ *
+ * There is no `id === sourceMessageId` match: the source id is an inbound message, never a Sent id.
+ * Returns pairs in `shadows` order.
  */
-function selectShadowSend(
-  shadow: ShadowSnapshot,
+function pairShadowsToSends(
+  shadows: ShadowSnapshot[],
   messages: NylasMessageSummary[],
-): NylasMessageSummary | null {
-  const exact = messages.find((m) => m.id === shadow.sourceMessageId);
-  if (exact) return exact;
-
-  const createdSec = isoToUnixSeconds(shadow.createdAt);
-  const SKEW_SEC = 120;
-
-  // Nearest same-thread send at/after capture (newest when capture time is unparseable).
-  let best: NylasMessageSummary | null = null;
-  let bestDelta = Number.POSITIVE_INFINITY;
-  for (const m of messages) {
-    if (!(shadow.threadId && m.threadId && shadow.threadId === m.threadId)) continue;
-    if (createdSec !== null && m.date + SKEW_SEC < createdSec) continue;
-    const delta = createdSec !== null ? Math.abs(m.date - createdSec) : -m.date;
-    if (delta < bestDelta) {
-      best = m;
-      bestDelta = delta;
+): Array<{ shadow: ShadowSnapshot; send: NylasMessageSummary }> {
+  const candidates: Array<{ shadow: ShadowSnapshot; send: NylasMessageSummary; createdSec: number }> = [];
+  for (const shadow of shadows) {
+    const createdSec = isoToUnixSeconds(shadow.createdAt);
+    if (createdSec === null || !shadow.threadId) continue;
+    let best: NylasMessageSummary | null = null;
+    for (const m of messages) {
+      if (m.threadId !== shadow.threadId) continue;
+      if (m.date + SHADOW_SKEW_SEC < createdSec) continue;
+      if (m.date > createdSec + SHADOW_SEND_WINDOW_SEC) continue;
+      if (!best || m.date < best.date) best = m;
     }
+    if (best) candidates.push({ shadow, send: best, createdSec });
   }
-  return best;
+
+  // Per send, keep the latest-captured shadow. Ties go to the first in `shadows` order.
+  const winnerBySend = new Map<string, (typeof candidates)[number]>();
+  for (const c of candidates) {
+    const current = winnerBySend.get(c.send.id);
+    if (!current || c.createdSec > current.createdSec) winnerBySend.set(c.send.id, c);
+  }
+  return candidates
+    .filter((c) => winnerBySend.get(c.send.id) === c)
+    .map(({ shadow, send }) => ({ shadow, send }));
 }
 
 async function ensureDoc(
@@ -409,8 +423,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // (shadow, sent) pairs collected during the message loop below, judged in chunked LLM
     // calls after the loop instead of one call per pair.
     // Idempotency across runs is the shadow doc's reconciled_at marker (parseShadowDoc returns
-    // null once set); within a run each shadow doc is yielded once by listByPrefix, so no in-run
-    // claim set is needed — two distinct shadows answered by one principal send are both scored.
+    // null once set); within a run pairShadowsToSends gives each send to at most one shadow.
     const judgePairs: ShadowJudgePair[] = [];
 
     // Full sent bodies fetched during the message loop (for draft diffs), keyed by
@@ -474,10 +487,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // below can hold the watermark too.
     let shadowReconcileOk = true;
     if (ctx.actionLogRepo) {
-      for (const shadow of shadows) {
-        const send = selectShadowSend(shadow, messages);
-        if (!send) continue;
-
+      for (const { shadow, send } of pairShadowsToSends(shadows, messages)) {
         // Cap pairs BEFORE fetching bodies: past the per-run judge limit a pair would be fetched
         // only to be dropped, and each fetch is a sequential Nylas call against the tool timeout.
         // Overflow shadows keep reconciled_at unset; hold the watermark so their sends are
