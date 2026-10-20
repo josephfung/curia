@@ -452,7 +452,9 @@ checkup. Shadow drafts never create approvals or notifications.
 **Pairing (#2195).** A shadow pairs with the earliest same-thread send at or after its
 capture (2-minute skew allowed) and no more than 72 hours after it
 (`SHADOW_SEND_WINDOW_SEC`). Each send answers at most one shadow, the one captured
-closest before it. An earlier shadow on the same thread is left unpaired, not scored a
-second time against the same reply. An unpaired shadow retries on later runs and is
-TTL-swept after 7 idle days. Learning-checkup readouts of rows judged before #2195 can
+closest before it. An earlier shadow on the same thread is not scored against the same
+reply a second time. It is stamped `superseded_at` / `superseded_by` and never paired
+again, so a later follow-up can't stand in for its reply. A failed stamp is logged
+(`shadow_supersede_failed`) but does not hold the watermark. A shadow with no send in
+its window retries on later runs and is TTL-swept after 7 idle days. Learning-checkup readouts of rows judged before #2195 can
 include a send days after capture, or two shadows scored against one reply.

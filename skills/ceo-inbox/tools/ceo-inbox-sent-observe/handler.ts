@@ -26,6 +26,7 @@ import {
   buildShadowJudgePrompt,
   parseShadowJudgeResult,
   SHADOW_SCRATCH_PREFIX,
+  shadowDraftPath,
   type ShadowJudgePair,
   type ShadowSnapshot,
 } from '../../../_shared/shadow-draft.js';
@@ -152,8 +153,9 @@ const SHADOW_SKEW_SEC = 120;
  * is never paired: the window can't be checked.
  *
  * Each send answers at most one shadow, the one captured closest before it. When two shadows on a
- * thread precede one reply, the earlier shadow is left unpaired instead of scoring one decision
- * twice. An unpaired shadow retries on later runs and is TTL-swept after 7 idle days.
+ * thread precede one reply, the earlier one is returned in `superseded` instead of scoring one
+ * decision twice; the caller marks it so it can't pair with a later follow-up either. A shadow
+ * with no send in the window retries on later runs and is TTL-swept after 7 idle days.
  *
  * There is no `id === sourceMessageId` match: the source id is an inbound message, never a Sent id.
  * Returns pairs in `shadows` order.
@@ -161,7 +163,10 @@ const SHADOW_SKEW_SEC = 120;
 function pairShadowsToSends(
   shadows: ShadowSnapshot[],
   messages: NylasMessageSummary[],
-): Array<{ shadow: ShadowSnapshot; send: NylasMessageSummary }> {
+): {
+  pairs: Array<{ shadow: ShadowSnapshot; send: NylasMessageSummary }>;
+  superseded: Array<{ shadow: ShadowSnapshot; by: ShadowSnapshot }>;
+} {
   const candidates: Array<{ shadow: ShadowSnapshot; send: NylasMessageSummary; createdSec: number }> = [];
   for (const shadow of shadows) {
     const createdSec = isoToUnixSeconds(shadow.createdAt);
@@ -182,9 +187,40 @@ function pairShadowsToSends(
     const current = winnerBySend.get(c.send.id);
     if (!current || c.createdSec > current.createdSec) winnerBySend.set(c.send.id, c);
   }
-  return candidates
-    .filter((c) => winnerBySend.get(c.send.id) === c)
-    .map(({ shadow, send }) => ({ shadow, send }));
+  const pairs: Array<{ shadow: ShadowSnapshot; send: NylasMessageSummary }> = [];
+  const superseded: Array<{ shadow: ShadowSnapshot; by: ShadowSnapshot }> = [];
+  for (const c of candidates) {
+    const winner = winnerBySend.get(c.send.id)!;
+    if (winner === c) pairs.push({ shadow: c.shadow, send: c.send });
+    else superseded.push({ shadow: c.shadow, by: winner.shadow });
+  }
+  return { pairs, superseded };
+}
+
+/** Stamp a shadow doc superseded so parseShadowDoc skips it from now on (#2195). Retries a
+ *  version conflict like appendAndTrimDoc; returns false when the doc is gone or every attempt
+ *  lost the race. */
+async function markShadowSuperseded(
+  ctx: ToolContext,
+  shadow: ShadowSnapshot,
+  by: ShadowSnapshot,
+): Promise<boolean> {
+  const repo = ctx.workingDocs!;
+  const path = shadowDraftPath(shadow.sourceMessageId);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const doc = await repo.read(path);
+    if (!doc) return false;
+    const upd = await repo.update(path, {
+      frontmatter: {
+        ...doc.frontmatter,
+        superseded_at: new Date().toISOString(),
+        superseded_by: by.sourceMessageId,
+      },
+      expectedVersion: doc.version,
+    });
+    if (upd.ok) return true;
+  }
+  return false;
 }
 
 async function ensureDoc(
@@ -402,6 +438,9 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     let shadowDeferred = 0;
     let shadowFetchFailed = 0;
     let shadowRecordFailed = 0;
+    // Shadows left unscored because a later shadow on the thread took their reply (#2195).
+    let shadowSuperseded = 0;
+    let shadowSupersedeFailed = 0;
     let maxDate = watermark;
     // Oldest message actually processed this run. Diagnostics only: it's surfaced as
     // `oldestScannedAt` in the truncation warning so an operator can see where the
@@ -487,7 +526,23 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // below can hold the watermark too.
     let shadowReconcileOk = true;
     if (ctx.actionLogRepo) {
-      for (const { shadow, send } of pairShadowsToSends(shadows, messages)) {
+      const { pairs, superseded } = pairShadowsToSends(shadows, messages);
+
+      // A failed mark logs but does NOT hold the watermark: on a retry the winning shadow is
+      // already reconciled, so the loser would pair with the very send it lost.
+      for (const { shadow, by } of superseded) {
+        if (await markShadowSuperseded(ctx, shadow, by)) {
+          shadowSuperseded += 1;
+        } else {
+          shadowSupersedeFailed += 1;
+          ctx.log.warn(
+            { sourceMessageId: shadow.sourceMessageId, supersededBy: by.sourceMessageId },
+            'sent-observe: could not mark shadow superseded — it may pair with a later send',
+          );
+        }
+      }
+
+      for (const { shadow, send } of pairs) {
         // Cap pairs BEFORE fetching bodies: past the per-run judge limit a pair would be fetched
         // only to be dropped, and each fetch is a sequential Nylas call against the tool timeout.
         // Overflow shadows keep reconciled_at unset; hold the watermark so their sends are
@@ -969,6 +1024,8 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
         shadowDeferred,
         shadowFetchFailed,
         shadowRecordFailed,
+        shadowSuperseded,
+        shadowSupersedeFailed,
         watermarkAdvancedTo,
         watermarkHeld: messages.length > 0 && !advanceOk,
         backfillStillActive,
@@ -988,6 +1045,9 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
         shadow_deferred: shadowDeferred,
         shadow_fetch_failed: shadowFetchFailed,
         shadow_record_failed: shadowRecordFailed,
+        // Shadows a later shadow on the same thread superseded (#2195); never scored.
+        shadow_superseded: shadowSuperseded,
+        shadow_supersede_failed: shadowSupersedeFailed,
         watermark_advanced_to: watermarkAdvancedTo,
         // True when this run saw mail but kept the watermark so it re-observes it next run.
         watermark_held: messages.length > 0 && !advanceOk,

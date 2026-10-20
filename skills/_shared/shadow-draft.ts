@@ -28,6 +28,7 @@ export function parseShadowDoc(doc: {
   const sourceMessageId = typeof fm.source_message_id === 'string' ? fm.source_message_id : '';
   if (!sourceMessageId) return null;
   if (fm.reconciled_at) return null; // already scored
+  if (fm.superseded_at) return null; // a later shadow on the thread took its reply (#2195)
   return {
     sourceMessageId,
     threadId: typeof fm.thread_id === 'string' ? fm.thread_id : '',

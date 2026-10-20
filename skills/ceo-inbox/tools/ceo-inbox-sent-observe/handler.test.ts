@@ -1418,7 +1418,78 @@ describe('CeoInboxSentObserveHandler', () => {
       expect(ctx.__actionLog).toHaveLength(1);
       expect(ctx.__docs.get(shadowDraftPath('src-late'))?.frontmatter.reconciled_at).toBeTruthy();
       expect(ctx.__docs.get(shadowDraftPath('src-early'))?.frontmatter.reconciled_at).toBeUndefined();
-      expect((result as { data: { shadow_reconciled: number } }).data.shadow_reconciled).toBe(1);
+      const early = ctx.__docs.get(shadowDraftPath('src-early'))?.frontmatter;
+      expect(early?.superseded_at).toBeTruthy();
+      expect(early?.superseded_by).toBe('src-late');
+      const data = (result as { data: { shadow_reconciled: number; shadow_superseded: number } }).data;
+      expect(data.shadow_reconciled).toBe(1);
+      expect(data.shadow_superseded).toBe(1);
+    });
+
+    function twoShadowCtx(extract: ReturnType<typeof vi.fn>) {
+      return buildCtx({
+        force: true,
+        nowMs: 1_721_000_000_000,
+        infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+        withActionLogRepo: true,
+        snapshots: [
+          shadowDoc('src-early', '2024-07-03T00:00:00.000Z'),
+          shadowDoc('src-late', '2024-07-03T01:00:00.000Z'),
+        ],
+        tasks: [],
+      });
+    }
+
+    it('never pairs a superseded shadow with a later follow-up', async () => {
+      const extract = vi.fn(async () => ({
+        ok: true as const,
+        text: '[{"source_message_id":"src-late","same_decision":true,"reason":"same"}]',
+      }));
+      const ctx = twoShadowCtx(extract);
+
+      serveSend('msg-reply', CAPTURE_SEC + 2 * 3600);
+      await handler.execute(ctx);
+      expect(ctx.__actionLog).toHaveLength(1);
+
+      // A follow-up on the thread a day later, inside src-early's window. Before the superseded
+      // mark, src-early would pair with it on this run.
+      serveSend('msg-followup', CAPTURE_SEC + 24 * 3600);
+      const r2 = await handler.execute(ctx);
+      expect(r2.success).toBe(true);
+      expect(extract).toHaveBeenCalledTimes(1);
+      expect(ctx.__actionLog).toHaveLength(1);
+      expect((r2 as { data: { shadow_reconciled: number } }).data.shadow_reconciled).toBe(0);
+    });
+
+    it('does not hold the watermark when the superseded mark fails', async () => {
+      const extract = vi.fn(async () => ({
+        ok: true as const,
+        text: '[{"source_message_id":"src-late","same_decision":true,"reason":"same"}]',
+      }));
+      const ctx = twoShadowCtx(extract);
+      serveSend('msg-reply', CAPTURE_SEC + 2 * 3600);
+
+      const realUpdate = ctx.workingDocs!.update;
+      ctx.workingDocs!.update = vi.fn(async (path: string, params: { frontmatter?: Record<string, unknown>; body?: string; expectedVersion: number }) => {
+        if (path === shadowDraftPath('src-early')) {
+          return { ok: false as const, conflict: true as const, document: ctx.__docs.get(path)! };
+        }
+        return realUpdate(path, params);
+      }) as typeof realUpdate;
+
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      const data = (result as {
+        data: { shadow_reconciled: number; shadow_supersede_failed: number; watermark_held: boolean; watermark_advanced_to: number | null };
+      }).data;
+      expect(data.shadow_reconciled).toBe(1);
+      expect(data.shadow_supersede_failed).toBe(1);
+      expect(data.watermark_held).toBe(false);
+      expect(data.watermark_advanced_to).toBe(CAPTURE_SEC + 2 * 3600 + 1);
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceMessageId: 'src-early', supersededBy: 'src-late' }),
+        expect.stringContaining('could not mark shadow superseded'),
+      );
     });
   });
 
