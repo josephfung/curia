@@ -1301,7 +1301,7 @@ Executed subagent-driven as four stacked PRs: A #2185, B #2186, C #2187, D. Each
 - An email reply resolves only by its thread; chat replies use the latest delivered digest within 24 h, refused if a newer set was drawn after it. Cost: an extra clarifying question.
 - `record-spot-check` is `action_risk: none` and refuses woken turns, mirroring the elevated gate.
 **Numbers (PR D)**
-- Learning items: allocated max+1, never reused while any item is live; commands are "confirm/dismiss/undo task N"; resolution names the item. Residual: the top number can be reissued once it alone is resolved.
+- Learning items: allocated above both the live max and a stored high-water mark (`sent_observe.completion_digest_high_water`), so no number is reused while any item is live, including a resolved top item (closed after CodeRabbit on #2189). Numbering restarts at 1 only once the digest is empty. Commands are "confirm/dismiss/undo task N"; resolution names the item.
 - Approvals: allocated under an advisory lock at explicit READ COMMITTED, not reused for 7 days.
 - Reaction binding requires the notification's exact fingerprint (`Approval N`/`Reference: x` line directly above its `Expires:` line, case-sensitive), the approval's exact millisecond expiry, and a principal recipient. Cost: a reformatted notification isn't 👍-bindable; "approve N" still works.
 - Approval tools accept only `short_ref`; any other reference key, or an unusable value, fails closed. "#3" and "Approval 3" normalise to 3. No error invites a retry without a reference.
