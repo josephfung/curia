@@ -10,7 +10,7 @@
 // with the table; close() already starts the tracker clock, so it is not repeated.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import type { Verification, VerificationDelivery } from '../../src/verification/types.js';
+import type { OpenVerificationResult, Verification, VerificationDelivery } from '../../src/verification/types.js';
 import { registrableDomain } from '../../src/verification/domain.js';
 import { codeEntryPageUrl } from '../web/tools/web-browser/verification-detect.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
@@ -145,7 +145,7 @@ export class VerificationToolHandler implements ToolHandler {
       };
     }
 
-    let result: { verification: Verification; reused: boolean };
+    let result: OpenVerificationResult;
     try {
       result = await runtime.open({
         purpose: 'sign_in',
@@ -167,9 +167,9 @@ export class VerificationToolHandler implements ToolHandler {
     // logged-in page survives until the code arrives, possibly on a later wake.
     session.keepWarm = true;
 
-    const { verification, reused } = result;
+    const { verification, reused, superseded } = result;
     ctx.log.info(
-      { verificationId: verification.id, site: verification.site, delivery, reused },
+      { verificationId: verification.id, site: verification.site, delivery, reused, supersededVerificationId: superseded?.id },
       'verification: opened',
     );
     return {
@@ -177,6 +177,15 @@ export class VerificationToolHandler implements ToolHandler {
       data: {
         ...present(verification, timezone),
         reused,
+        // The site's pending verification belonged to another task: this challenge replaced it.
+        ...(superseded
+          ? {
+              superseded: { verification_id: superseded.id, task_id: superseded.taskId, status: superseded.status },
+              note:
+                `A pending verification on ${verification.site} for another task (${superseded.taskId ?? 'none'}) ` +
+                'was abandoned: this new challenge replaces it. That task will need its own sign-in later.',
+            }
+          : {}),
         ask_channel: runtime.askChannel(),
         email_wait_seconds: runtime.service.config.emailWaitSeconds,
         displayTimezone,

@@ -148,6 +148,20 @@ describe('VerificationRuntime tracker aging (cross-task ruling)', () => {
     expect(rt.tracker.allowedDomainsFor('482913')).toEqual(new Set(['b2clogin.com']));
   });
 
+  it('open() superseding another task\'s row starts that row\'s TTL clock, even if the reconcile cannot list', async () => {
+    const rt = runtimeFor([], []);
+    rt.tracker.register('old', 'accounts.example.com', '482913');
+    const closed = vi.spyOn(rt.tracker, 'closed');
+    const fresh = row('fresh', 'pending');
+    vi.spyOn(rt.service, 'open').mockResolvedValue({ verification: fresh, reused: false, superseded: row('old', 'abandoned') });
+    vi.spyOn(rt.service, 'listActive').mockRejectedValue(new Error('db down'));
+    await expect(rt.open({
+      purpose: 'sign_in', kind: 'code', delivery: 'sms', site: 'example.com',
+      pageDomain: 'accounts.example.com', browserSessionId: 's', taskId: 't-new',
+    })).rejects.toThrow('db down');
+    expect(closed.mock.calls.map(c => c[0])).toEqual(['old']);
+  });
+
   it('close() marks the tracker closed', async () => {
     const rt = runtimeFor([], []);
     const closed = vi.spyOn(rt.tracker, 'closed');

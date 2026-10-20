@@ -174,11 +174,50 @@ describeIf('VerificationService (#2017)', () => {
     const first = await service.open(openInput(site));
     expect(first.verification.taskId).toBeNull();
     const second = await service.open(openInput(site, { taskId, conversationId: 'conv-a' }));
+    expect(second.reused).toBe(true);
     expect(second.verification.taskId).toBe(taskId);
     expect(second.verification.conversationId).toBe('conv-a');
-    const third = await service.open(openInput(site, { taskId: randomUUID(), conversationId: 'conv-b' }));
+    // A caller with no task (a concurrent turn of the same errand) reuses and keeps the task.
+    const third = await service.open(openInput(site, { conversationId: 'conv-b' }));
+    expect(third.reused).toBe(true);
+    expect(third.verification.id).toBe(first.verification.id);
     expect(third.verification.taskId).toBe(taskId);
     expect(third.verification.conversationId).toBe('conv-a');
+    // The same task again reuses too.
+    const fourth = await service.open(openInput(site, { taskId }));
+    expect(fourth.reused).toBe(true);
+    expect(fourth.verification.id).toBe(first.verification.id);
+    expect(fourth.superseded).toBeUndefined();
+  });
+
+  it('a different task supersedes the pending row: it is abandoned and a fresh row opens for the new task', async () => {
+    const site = newSite();
+    const taskA = randomUUID();
+    const taskB = randomUUID();
+    const first = await service.open(openInput(site, { taskId: taskA, browserSessionId: 'session-a' }));
+    const before = Date.now();
+    const second = await service.open(openInput(site, { taskId: taskB, browserSessionId: 'session-b' }));
+
+    expect(second.reused).toBe(false);
+    expect(second.verification.id).not.toBe(first.verification.id);
+    expect(second.verification.status).toBe('pending');
+    expect(second.verification.taskId).toBe(taskB);
+    expect(second.verification.browserSessionId).toBe('session-b');
+    expect(second.superseded?.id).toBe(first.verification.id);
+    expect(second.superseded?.status).toBe('abandoned');
+
+    // The old row keeps task A and its own session: it is never refreshed to the new caller.
+    const old = await service.get(first.verification.id);
+    expect(old?.status).toBe('abandoned');
+    expect(old?.taskId).toBe(taskA);
+    expect(old?.browserSessionId).toBe('session-a');
+    expect(old?.resolvedAt?.getTime()).toBeGreaterThanOrEqual(before - 5000);
+
+    const { rows } = await pool.query(`SELECT 1 FROM verifications WHERE site = $1 AND status = 'pending'`, [site]);
+    expect(rows).toHaveLength(1);
+    // Task A no longer has a live verification to suppress its reply binding.
+    expect((await service.pendingForTask(taskA))).toBeNull();
+    expect((await service.pendingForTask(taskB))?.id).toBe(second.verification.id);
   });
 
   it('concurrent opens for one site produce a single pending row', async () => {

@@ -42,6 +42,17 @@ export interface OpenVerificationInput {
   metadata?: Record<string, unknown>;
 }
 
+export interface OpenVerificationResult {
+  verification: Verification;
+  /** True when the site's pending row for the same errand was returned (refreshed). */
+  reused: boolean;
+  /**
+   * The site's pending row for a different task, closed as `abandoned` because this
+   * open superseded it. Absent when nothing was superseded.
+   */
+  superseded?: Verification;
+}
+
 export interface VerificationConfig {
   /** Channels to ask the principal on, in preference order. */
   askChannelOrder: string[];

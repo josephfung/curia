@@ -283,6 +283,37 @@ describe('verification tool', () => {
     expect((second.data as Data).verification_id).toBe((first.data as Data).verification_id);
   });
 
+  it('open for another task\'s site returns the fresh row, reused: false, and says the old one was abandoned', async () => {
+    const OTHER_TASK = '99999999-8888-4777-8666-555555555555';
+    const fresh = makeVerification({ id: 'ver-new', taskId: TASK_ID });
+    const old = makeVerification({ id: 'ver-old', taskId: OTHER_TASK, status: 'abandoned', resolvedAt: new Date('2026-10-19T15:01:00Z') });
+    const runtime = makeRuntime({
+      open: vi.fn(async () => ({ verification: fresh, reused: false, superseded: old })),
+    } as Partial<VerificationRuntime>);
+    const result = await new VerificationToolHandler().execute(
+      makeCtx({ action: 'open', delivery: 'sms', site: 'aircanada.com', browser_session_id: SESSION, task_id: TASK_ID }, runtime),
+    );
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as Data;
+    expect(data.verification_id).toBe('ver-new');
+    expect(data.reused).toBe(false);
+    expect(data.superseded).toEqual({ verification_id: 'ver-old', task_id: OTHER_TASK, status: 'abandoned' });
+    expect(String(data.note)).toContain('abandoned');
+    expect(String(data.note)).toContain(OTHER_TASK);
+  });
+
+  it('open without a superseded row carries no superseded field or note', async () => {
+    const runtime = makeRuntime();
+    const result = await new VerificationToolHandler().execute(
+      makeCtx({ action: 'open', delivery: 'sms', site: 'aircanada.com', browser_session_id: SESSION }, runtime),
+    );
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data as Data).not.toHaveProperty('superseded');
+    expect(result.data as Data).not.toHaveProperty('note');
+  });
+
   it('open rejects a site with no registrable domain before touching the runtime', async () => {
     const runtime = makeRuntime();
     const result = await new VerificationToolHandler().execute(

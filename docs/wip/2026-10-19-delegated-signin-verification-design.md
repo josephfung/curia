@@ -132,8 +132,10 @@ New table (migration `099_*`, renumbered from 098 when #2159 took it):
 The code value is **never stored** in this table.
 
 **One live verification per site** — a unique partial index on `(site) WHERE status =
-'pending'`. Opening a second returns the existing record instead of creating one, so a
-concurrent or later turn reuses the pending challenge rather than triggering a new code.
+'pending'`. Opening a second for the same errand (same `task_id`, or no task on either side)
+returns the existing record instead of creating one, so a concurrent or later turn reuses the
+pending challenge rather than triggering a new code. Opening one for a different task
+supersedes: the old record is abandoned and a fresh one opens for the new task.
 Keyed on `site`, not `page_domain`, so two unrelated sites sharing an identity provider
 don't collide; and on site alone (not task + site) because there is one principal and a
 sign-in may have no task. *(My call.)*

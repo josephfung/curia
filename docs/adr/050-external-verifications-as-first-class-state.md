@@ -58,9 +58,12 @@ Alternatives considered and rejected:
    session, the optional task, status `pending → satisfied | expired | abandoned`, and expiry.
    "Approval" is avoided on purpose: ADR-018 uses it for Curia asking the principal's
    permission, the opposite direction. The code value is never stored in the table.
-2. **One pending row per `site`**, enforced by a unique partial index. Opening a second returns
-   the existing one, so a later turn reuses the challenge instead of triggering a new code.
-   Expiry is a soft 10-minute hint, and closed rows stay "recent" for 120 minutes, still
+2. **One pending row per `site`**, enforced by a unique partial index. Opening a second for the
+   same errand (the same `task_id`, or no task on either side) returns the existing one, so a
+   later or concurrent turn reuses the challenge instead of triggering a new code. Opening one
+   for a *different* task supersedes: the old row is closed as `abandoned` (its tracked values
+   start aging) and a fresh row opens for the new task, so one task's code never satisfies
+   another's record; `open` says so in its result. Expiry is a soft 10-minute hint, and closed rows stay "recent" for 120 minutes, still
    injected and still registering values, so a code sent at minute 12 is tried rather than
    refused.
 3. **The coordinator `verification` tool** (`open | satisfy | abandon | list`, pinned,
@@ -130,7 +133,8 @@ Alternatives considered and rejected:
   that matches a tracked code gets `[sign-in code]` instead. `web-browser` is the only exemption,
   and it is destination-guarded.
 - The per-site uniqueness rule means a sign-in that asks again while one is pending reuses the
-  record and does not trigger a second code.
+  record and does not trigger a second code. A second task signing in to the same site while
+  the first waits replaces the first's challenge; the first task has to sign in again.
 - The model generalizes to `kind: approval` (tap-to-approve on a phone) and `purpose: payment`
   (an in-app card authorization) with a new `delivery`, not a new design. The invariant that
   stays: the request to sign in or pay comes from the principal, and whatever verification comes

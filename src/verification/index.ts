@@ -9,7 +9,7 @@ import type { Logger } from '../logger.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import { CodeTracker } from './code-tracker.js';
 import { VerificationService } from './verification-service.js';
-import type { OpenVerificationInput, Verification, VerificationConfig } from './types.js';
+import type { OpenVerificationInput, OpenVerificationResult, Verification, VerificationConfig } from './types.js';
 
 /**
  * Identity channels that can reach the principal on a given ask channel. An `sms` ask
@@ -29,12 +29,14 @@ export interface VerificationRuntime {
   readonly service: VerificationService;
   readonly tracker: CodeTracker;
   /**
-   * Open a verification (or reuse the pending one for the site, refreshed to this
-   * session and page domain; tracked values are retargeted to the new page domain). The
-   * service expires a site's stale pending row silently on the way in; this then starts
-   * the TTL clock for any tracked values whose verification is no longer pending.
+   * Open a verification (or reuse the pending one for the site and errand, refreshed to
+   * this session and page domain; tracked values are retargeted to the new page domain).
+   * A pending row for a different task is superseded: closed as abandoned and its values'
+   * TTL clock started here. The service expires a site's stale pending row silently on the
+   * way in; this then starts the TTL clock for any tracked values whose verification is no
+   * longer pending.
    */
-  open(input: OpenVerificationInput): Promise<{ verification: Verification; reused: boolean }>;
+  open(input: OpenVerificationInput): Promise<OpenVerificationResult>;
   /**
    * Pending plus recently closed verifications. Every tracked verification that is not
    * a returned `pending` row (closed, lazily expired, or aged out of the recent window
@@ -91,6 +93,9 @@ export function createVerificationRuntime(
       // A reused row was refreshed to the caller's page domain; values already tracked
       // for it must follow, or the browser guard would refuse the code on the new page.
       if (result.reused) tracker.retarget(result.verification.id, result.verification.pageDomain);
+      // A superseded row is closed: its values age out from now, before (and whatever
+      // happens to) the reconcile below.
+      if (result.superseded) tracker.closed(result.superseded.id);
       // The pending set after open is the (possibly new) row alone for this site, but
       // other sites may have pending rows too, so ask the table rather than guess.
       await reconcile();

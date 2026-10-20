@@ -1,7 +1,8 @@
 // src/verification/verification-service.ts
 //
 // Owns all reads and writes on the verifications table (#2017). One pending row
-// per site (partial unique index): opening a second returns the existing one.
+// per site (partial unique index): opening a second for the same errand returns the
+// existing one; one for a different task supersedes it.
 // The code value is never stored here, logged or put in an error.
 
 import type { DbPool } from '../db/connection.js';
@@ -9,6 +10,7 @@ import type { Logger } from '../logger.js';
 import { registrableDomain } from './domain.js';
 import type {
   OpenVerificationInput,
+  OpenVerificationResult,
   Verification,
   VerificationConfig,
   VerificationDelivery,
@@ -74,8 +76,15 @@ export class VerificationService {
    * refreshed to the caller's browser session, page domain, delivery and expiry. A pending row already
    * past its expiry is persisted as expired first, so a fresh sign-in attempt gets a
    * fresh record instead of a dead one.
+   *
+   * Reuse is for the same errand: the caller's task equals the row's, or either has none
+   * (concurrent turns of one errand, which must not trigger a second code). When both name
+   * a task and they differ, the newer challenge supersedes: the old row is closed as
+   * `abandoned` (returned as `superseded`, so the caller can start its tracked values' TTL)
+   * and a fresh row opens for the new task. Otherwise the second task's code ask would be
+   * answered into the first task's record, and the first task's reply would stay unbound.
    */
-  async open(input: OpenVerificationInput): Promise<{ verification: Verification; reused: boolean }> {
+  async open(input: OpenVerificationInput): Promise<OpenVerificationResult> {
     const site = registrableDomain(input.site);
     if (site === null) {
       throw new Error('Cannot open a verification: site has no registrable domain');
@@ -90,6 +99,76 @@ export class VerificationService {
 
     await this.expireStaleForSite(site, requestedAt);
 
+    const inserted = await this.insertPending(input, site, pageDomain, requestedAt, expiresAt);
+    if (inserted) return { verification: inserted, reused: false };
+
+    // Unique violation: another pending row exists for this site. Reuse it when it is the
+    // same errand, pointed at the caller's session and page: the stored session may have
+    // died (a restart, an expired session) and the code-entry page may now sit on another
+    // registrable domain (an identity provider). Keeping the old values would show a dead
+    // session as the one to type into and key the browser guard on the wrong domain.
+    // Delivery and expiry follow the caller too: a reopen after "the email never came, send
+    // it by text instead" is an SMS verification with a fresh code window, and the
+    // dispatcher only extracts codes from the principal's messages for sms/app rows. A
+    // missing task or conversation link is filled; an existing one is kept.
+    const taskId = input.taskId ?? null;
+    const { rows } = await this.pool.query<VerificationRow>(
+      `UPDATE verifications
+         SET browser_session_id = $2,
+             page_domain = $3,
+             task_id = COALESCE(task_id, $4::uuid),
+             conversation_id = COALESCE(conversation_id, $5),
+             delivery = $6,
+             expires_at = $7
+       WHERE site = $1 AND status = 'pending'
+         AND (task_id IS NULL OR $4::uuid IS NULL OR task_id = $4::uuid)
+       RETURNING ${COLUMNS}`,
+      [
+        site,
+        input.browserSessionId,
+        pageDomain,
+        taskId,
+        input.conversationId ?? null,
+        input.delivery,
+        expiresAt,
+      ],
+    );
+    const existing = rows[0];
+    if (existing) {
+      this.logger.info(
+        { verificationId: existing.id, site, pageDomain, delivery: existing.delivery },
+        'Verification reused',
+      );
+      return { verification: toVerification(existing), reused: true };
+    }
+
+    // No reusable row: the pending one belongs to another task (supersede it), or it closed
+    // between the failed insert and the update (surface that rather than loop; the caller's
+    // next turn opens a fresh record).
+    const superseded = taskId === null ? null : await this.abandonOtherTasksPending(site, taskId);
+    if (!superseded) {
+      throw new Error('Verification for this site changed while opening; retry');
+    }
+    const fresh = await this.insertPending(input, site, pageDomain, requestedAt, expiresAt);
+    if (!fresh) {
+      // A concurrent open took the freed site first.
+      throw new Error('Verification for this site changed while opening; retry');
+    }
+    this.logger.info(
+      { verificationId: fresh.id, supersededVerificationId: superseded.id, site, pageDomain, delivery: fresh.delivery },
+      'Verification for another task superseded',
+    );
+    return { verification: fresh, reused: false, superseded };
+  }
+
+  /** Insert a pending row; null when the site already has one (the unique partial index). */
+  private async insertPending(
+    input: OpenVerificationInput,
+    site: string,
+    pageDomain: string,
+    requestedAt: Date,
+    expiresAt: Date,
+  ): Promise<Verification | null> {
     try {
       const { rows } = await this.pool.query<VerificationRow>(
         `INSERT INTO verifications
@@ -116,51 +195,22 @@ export class VerificationService {
         { verificationId: verification.id, site, pageDomain, delivery: verification.delivery },
         'Verification opened',
       );
-      return { verification, reused: false };
+      return verification;
     } catch (err) {
-      if (!isUniqueViolation(err)) throw err;
+      if (isUniqueViolation(err)) return null;
+      throw err;
     }
+  }
 
-    // Unique violation: another pending row exists for this site. Reuse it, pointed at the
-    // caller's session and page: the stored session may have died (a restart, an expired
-    // session) and the code-entry page may now sit on another registrable domain (an
-    // identity provider). Keeping the old values would show a dead session as the one to
-    // type into and key the browser guard on the wrong domain. Delivery and expiry follow
-    // the caller too: a reopen after "the email never came, send it by text instead" is an
-    // SMS verification with a fresh code window, and the dispatcher only extracts codes from
-    // the principal's messages for sms/app rows. A missing task or conversation link is
-    // filled; an existing one is kept.
+  /** Close the site's pending row as abandoned when it names a task other than `taskId`. */
+  private async abandonOtherTasksPending(site: string, taskId: string): Promise<Verification | null> {
     const { rows } = await this.pool.query<VerificationRow>(
-      `UPDATE verifications
-         SET browser_session_id = $2,
-             page_domain = $3,
-             task_id = COALESCE(task_id, $4),
-             conversation_id = COALESCE(conversation_id, $5),
-             delivery = $6,
-             expires_at = $7
-       WHERE site = $1 AND status = 'pending'
+      `UPDATE verifications SET status = 'abandoned', resolved_at = $3
+       WHERE site = $1 AND status = 'pending' AND task_id IS NOT NULL AND task_id <> $2::uuid
        RETURNING ${COLUMNS}`,
-      [
-        site,
-        input.browserSessionId,
-        pageDomain,
-        input.taskId ?? null,
-        input.conversationId ?? null,
-        input.delivery,
-        expiresAt,
-      ],
+      [site, taskId, new Date()],
     );
-    const existing = rows[0];
-    if (!existing) {
-      // The pending row closed between the failed insert and this update. Surface it
-      // rather than loop; the caller's next turn opens a fresh record.
-      throw new Error('Verification for this site changed while opening; retry');
-    }
-    this.logger.info(
-      { verificationId: existing.id, site, pageDomain, delivery: existing.delivery },
-      'Verification reused',
-    );
-    return { verification: toVerification(existing), reused: true };
+    return rows[0] ? toVerification(rows[0]) : null;
   }
 
   async get(id: string): Promise<Verification | null> {
