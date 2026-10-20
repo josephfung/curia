@@ -231,7 +231,7 @@ verification:
   emailWaitSeconds: 180           # how long ceo-inbox waits for an emailed code before the coordinator asks the principal
 ```
 
-`askChannelOrder` takes `signal`, `sms`, `slack` and `email`, and never asks on the channel the errand came in on. The four numbers must be positive integers. A bad value fails at startup.
+`askChannelOrder` takes `signal`, `sms`, `slack` and `email`, and the configured order alone decides where to ask. The channel the errand arrived on plays no part, because the principal often hands things over by email or voice to be done later. The four numbers must be positive integers. A bad value fails at startup.
 
 ---
 

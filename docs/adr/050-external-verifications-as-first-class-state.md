@@ -19,7 +19,7 @@ password was in the vault. The site wanted a second factor, and the errand faile
 - A reply to an ask sent from a backlog-task turn is auto-bound to the task and routed through
   `task-wake-reply`, which the heartbeat picks up hours later, long after any code expires.
 - The refusals were written into a task progress note, and nothing would have stopped a code
-  going the same way. The principal's "wince list" forbids that: a code anywhere it would be read
+  going the same way. The principal's stated no-go list forbids that: a code anywhere it would be read
   later (notes, reports, memory, knowledge-graph facts), or sent to anyone, including the
   principal.
 
@@ -67,7 +67,8 @@ Alternatives considered and rejected:
    `action_risk: low`) opens and closes records. `open` takes `page_domain` from the browser
    session's own URL, not from the model, and returns the channel to ask the principal on from
    `verification.askChannelOrder` (`[signal, sms, slack, email]`: the first enabled channel with
-   a verified principal identity, never the channel the errand arrived on). `web-browser` adds a
+   a verified principal identity; the channel the errand arrived on plays no part, because the
+   principal often hands things over by email or voice to be done later). `web-browser` adds a
    `verification_suspected` hint to its page state when the page looks like a code screen.
 4. **Per-turn injection over always-on prompt.** While a verification is pending or recent,
    `buildBaseSystemPrompt` appends a `## Sign-in verifications` block to coordinator turns and a
