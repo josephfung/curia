@@ -30,6 +30,7 @@ import { registerCodes } from '../../../../src/verification/track-codes.js';
 import type { Verification } from '../../../../src/verification/types.js';
 import { detectVerificationScreen } from './verification-detect.js';
 import { isBlockedFrameUrl, isPrivateHost } from './frame-url.js';
+import { focusedFrame } from './focus-frame.js';
 
 // Maximum cleaned DOM content length before truncation.
 // Prevents token blowout on content-heavy pages.
@@ -102,6 +103,13 @@ const MAX_BATCH_ACTIONS = 50;
 const TRACKED_CODE_REFUSAL =
   'refused: this page or frame is not the sign-in page this code belongs to, so it was not entered. ' +
   'Enter it only in the code field of the sign-in page the verification was opened on.';
+
+// The same guard for press_key (#2017): one character per press could spell a tracked code
+// into a field the type guard would refuse. Never names the key or a code.
+const TRACKED_CODE_KEY_REFUSAL =
+  'refused: a sign-in code is being handled and the focused field is not on the sign-in page of a ' +
+  'verification in this browser session, so no character was typed. Enter a code with type ' +
+  '(selector and text) on the sign-in page instead.';
 
 /** One step in a batched call — the same per-action fields as a single invocation, minus
  *  the call-level fields (session_id/incognito/block_ads/screenshot), which apply to the
@@ -617,6 +625,12 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       if (!key || typeof key !== 'string') {
         return { ok: false, error: 'press_key requires key (string — e.g. "Enter", "Tab", "ArrowRight", "Escape")' };
       }
+      // Destination guard for keys (#2017): while a sign-in code is tracked, a key that types
+      // a character goes only into a field on a verification's own page in this session.
+      // Enter, Tab, Backspace, arrows and shortcuts type nothing and always pass.
+      if (typesCharacter(key) && !(await characterKeyAllowed(page, ctx, sessionId))) {
+        return { ok: false, error: TRACKED_CODE_KEY_REFUSAL };
+      }
       // Keyboard nav is often the only reliable way through calendar grids and
       // custom comboboxes. Presses against the currently focused element.
       await page.keyboard.press(key);
@@ -750,6 +764,47 @@ function trackedCodeAllowedOn(ctx: ToolContext, value: string, destinationUrl: s
   return allowed.some(
     (target) => target.browserSessionId === sessionId && sameRegistrableDomain(destinationUrl, target.pageDomain),
   );
+}
+
+/**
+ * True when a Playwright key name types a character: a single character ("4", "a", "+"),
+ * a key code that types one (KeyA, Digit4, Numpad4), alone or with Shift and/or Alt. Named
+ * keys (Enter, Tab, Backspace, ArrowLeft) and Control/Meta shortcuts type nothing.
+ */
+function typesCharacter(key: string): boolean {
+  if ([...key].length === 1) return true;
+  // "Shift++" presses "+": the last segment of a key ending in "+" is "+" itself.
+  const parts = key.endsWith('++') ? [...key.slice(0, -2).split('+'), '+'] : key.split('+');
+  const base = parts[parts.length - 1]!;
+  const modifiers = parts.slice(0, -1);
+  if (!modifiers.every((m) => m === 'Shift' || m === 'Alt')) return false;
+  return [...base].length === 1 || /^(?:Key[A-Z]|Digit\d|Numpad\d)$/.test(base);
+}
+
+/**
+ * Whether a character key may be pressed (#2017): yes while no code is tracked; otherwise
+ * only when the document holding keyboard focus (judged like a typed field: the nearest
+ * website frame) is on the registrable domain of a pending or recent verification whose
+ * browser session is this call's. Fails closed: focus that cannot be followed, or a
+ * verification lookup that fails, refuses the key.
+ */
+async function characterKeyAllowed(page: Page, ctx: ToolContext, sessionId: string): Promise<boolean> {
+  const runtime = ctx.verification;
+  if (!runtime || runtime.tracker.size() === 0) return true;
+  try {
+    const frame = await focusedFrame(page);
+    if (!frame) {
+      ctx.log.warn({ sessionId }, 'press_key refused: keyboard focus could not be followed while a sign-in code is tracked');
+      return false;
+    }
+    const focusedUrl = documentSiteUrl(page, frame);
+    const active = await runtime.listActive();
+    return active.some((v) => v.browserSessionId === sessionId && sameRegistrableDomain(focusedUrl, v.pageDomain));
+  } catch (err) {
+    const errMessage = logSafeText(ctx, err instanceof Error ? err.message : String(err));
+    ctx.log.warn({ sessionId, errMessage }, 'press_key refused: could not check the focused field while a sign-in code is tracked');
+    return false;
+  }
 }
 
 /** Stands in for a URL or message whose sign-in code could not be scrubbed out of every form. */

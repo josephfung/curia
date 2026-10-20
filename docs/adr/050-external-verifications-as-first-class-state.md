@@ -104,7 +104,11 @@ Alternatives considered and rejected:
    matches `aircanada.com` and a lookalike does not; the session tells apart two verifications
    whose challenges sit on one identity provider (both on `b2clogin.com`), so one's code never
    lands in the other's. A reused verification moves its tracked values to its new session.
-   URLs are made log-safe before they are logged or echoed.
+   `press_key` gets the same guard, failing closed: while any value is tracked, a key that
+   types a character is pressed only when the focused document is on such a verification's
+   page domain in its session, so a code cannot be spelled one key at a time into a
+   third-party frame. Enter, Tab, Backspace and arrows always pass. URLs are made log-safe
+   before they are logged or echoed.
 7. **Reply scrubbing sits in the dispatcher, not the outbound filter.** The design called for a
    value-aware rule in Stage 1. The filter only blocks, and the principal chose replace over
    block, so `Dispatcher.handleAgentResponse` scrubs the reply and the note for the principal

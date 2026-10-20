@@ -32,6 +32,7 @@ import type { BrowserContext, Page } from 'playwright';
 import { CodeTracker } from '../../../../src/verification/code-tracker.js';
 import type { VerificationRuntime } from '../../../../src/verification/index.js';
 import type { Verification } from '../../../../src/verification/types.js';
+import { focusProbe, isFocusedFrameHost } from './focus-frame.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -2062,6 +2063,211 @@ describe('web-browser sign-in verification (#2017)', () => {
 
       expect(result.success).toBe(true);
       expect(register).toHaveBeenCalledWith('v-1', 'b2clogin.com', CODE, 'sess-1');
+    });
+  });
+
+  describe('press_key cannot spell a tracked code into the wrong frame', () => {
+    const KEY_REFUSAL =
+      'refused: a sign-in code is being handled and the focused field is not on the sign-in page of a ' +
+      'verification in this browser session, so no character was typed. Enter a code with type ' +
+      '(selector and text) on the sign-in page instead.';
+    const DIGITS = ['4', '8', '2', '9', '1', '3'];
+
+    /**
+     * A page on `topUrl` with one child frame on `childUrl`. `focusIn` says where keyboard
+     * focus sits: the main frame's document, the child frame's, or somewhere the probe
+     * cannot follow (a focused frame host no child frame claims).
+     */
+    function focusCtx(opts: {
+      topUrl: string;
+      childUrl: string;
+      focusIn: 'main' | 'child' | 'unresolvable';
+      input: Record<string, unknown>;
+      runtime: VerificationRuntime;
+      sessionId?: string;
+    }) {
+      const host = {
+        evaluate: vi.fn(async (fn: unknown) => fn === isFocusedFrameHost && opts.focusIn === 'child'),
+        dispose: vi.fn().mockResolvedValue(undefined),
+      };
+      const base = makeMockPage('page', vi.fn(), opts.topUrl);
+      const mainFrame = {
+        ...(base.mainFrame() as Record<string, unknown>),
+        url: vi.fn().mockReturnValue(opts.topUrl),
+        evaluate: vi.fn(async (fn: unknown) => (fn === focusProbe ? (opts.focusIn === 'main' ? 'element' : 'frame') : 'page')),
+        parentFrame: vi.fn().mockReturnValue(null),
+        childFrames: vi.fn(),
+      };
+      const childFrame = {
+        url: vi.fn().mockReturnValue(opts.childUrl),
+        name: vi.fn().mockReturnValue(''),
+        evaluate: vi.fn(async (fn: unknown) => (fn === focusProbe ? 'element' : '')),
+        frameElement: vi.fn().mockResolvedValue(host),
+        parentFrame: vi.fn().mockReturnValue(mainFrame),
+        childFrames: vi.fn().mockReturnValue([]),
+      };
+      mainFrame.childFrames.mockReturnValue([childFrame]);
+      const page = { ...base, frames: vi.fn().mockReturnValue([mainFrame, childFrame]), mainFrame: vi.fn().mockReturnValue(mainFrame) };
+      const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+      const browserService = {
+        getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: opts.sessionId ?? 'sess-1', session }),
+        closeSession: vi.fn().mockResolvedValue(undefined),
+      } as unknown as BrowserService;
+      const ctx = { input: opts.input, log: logger, browserService, verification: opts.runtime } as unknown as ToolContext;
+      return { ctx, page };
+    }
+
+    function trackedRuntime() {
+      const v = verification({});
+      const made = makeRuntime([v]);
+      made.tracker.register(v.id, v.pageDomain, CODE, v.browserSessionId);
+      return made;
+    }
+
+    const keysBatch = (keys: string[]) => keys.map((key) => ({ action: 'press_key', key }));
+
+    it('refuses at the first key when focus is in a third-party iframe', async () => {
+      const { runtime } = trackedRuntime();
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'child',
+        input: { actions: [{ action: 'click', selector: 'chat message box' }, ...keysBatch(DIGITS)] },
+        runtime,
+      });
+
+      const result = await new WebBrowserHandler().execute(ctx);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { actions_completed: number; failed_action: number; action_error: string };
+        expect(data.actions_completed).toBe(1);
+        expect(data.failed_action).toBe(1);
+        expect(data.action_error).toBe(KEY_REFUSAL);
+      }
+      expect(page.keyboard.press).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain(CODE);
+    });
+
+    it('allows the same keys on the verification\'s own page in its session', async () => {
+      const { runtime } = trackedRuntime();
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'main',
+        input: { actions: keysBatch(DIGITS) },
+        runtime,
+      });
+
+      const result = await new WebBrowserHandler().execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(page.keyboard.press.mock.calls.map((c) => c[0])).toEqual(DIGITS);
+    });
+
+    it('allows keys into an identity-provider frame the verification was opened on', async () => {
+      const v = verification({ site: 'manulife.ca', pageDomain: 'b2clogin.com' });
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE, v.browserSessionId);
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://www.manulife.ca/signin',
+        childUrl: 'https://manulife.b2clogin.com/mfa',
+        focusIn: 'child',
+        input: { action: 'press_key', key: '4' },
+        runtime,
+      });
+
+      expect((await new WebBrowserHandler().execute(ctx)).success).toBe(true);
+      expect(page.keyboard.press).toHaveBeenCalledWith('4');
+    });
+
+    it('refuses on the right page in another browser session', async () => {
+      const { runtime } = trackedRuntime();
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'main',
+        input: { action: 'press_key', key: '4' },
+        runtime,
+        sessionId: 'sess-2',
+      });
+
+      expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: KEY_REFUSAL });
+      expect(page.keyboard.press).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when focus cannot be resolved', async () => {
+      const { runtime } = trackedRuntime();
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'unresolvable',
+        input: { action: 'press_key', key: '4' },
+        runtime,
+      });
+
+      expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: KEY_REFUSAL });
+      expect(page.keyboard.press).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the verification lookup fails', async () => {
+      const { runtime, listActive } = trackedRuntime();
+      listActive.mockRejectedValueOnce(new Error('db down'));
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'main',
+        input: { action: 'press_key', key: '4' },
+        runtime,
+      });
+
+      expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: KEY_REFUSAL });
+      expect(page.keyboard.press).not.toHaveBeenCalled();
+    });
+
+    it.each(['Shift+4', 'Digit4', 'Numpad4', 'KeyA', 'a', 'Shift+A', '+', 'Shift++'])('treats %s as a character', async (key) => {
+      const { runtime } = trackedRuntime();
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'child',
+        input: { action: 'press_key', key },
+        runtime,
+      });
+
+      expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: KEY_REFUSAL });
+      expect(page.keyboard.press).not.toHaveBeenCalled();
+    });
+
+    it('always allows Enter, Tab, Backspace and arrows, without a lookup', async () => {
+      const { runtime, listActive } = trackedRuntime();
+      const keys = ['Enter', 'Tab', 'Backspace', 'ArrowLeft', 'Escape', 'Control+a'];
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'child',
+        input: { actions: keysBatch(keys) },
+        runtime,
+      });
+
+      expect((await new WebBrowserHandler().execute(ctx)).success).toBe(true);
+      expect(page.keyboard.press.mock.calls.map((c) => c[0])).toEqual(keys);
+      expect(listActive).not.toHaveBeenCalled();
+    });
+
+    it('presses characters freely while no code is tracked', async () => {
+      const { runtime, listActive } = makeRuntime([verification({})]);
+      const { ctx, page } = focusCtx({
+        topUrl: 'https://login.aircanada.com/mfa',
+        childUrl: 'https://chat.widgetvendor.com/frame',
+        focusIn: 'child',
+        input: { action: 'press_key', key: '4' },
+        runtime,
+      });
+
+      expect((await new WebBrowserHandler().execute(ctx)).success).toBe(true);
+      expect(page.keyboard.press).toHaveBeenCalledWith('4');
+      expect(listActive).not.toHaveBeenCalled();
     });
   });
 
