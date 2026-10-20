@@ -47,6 +47,13 @@ describe('case 24b: no code ask (code checks)', () => {
     'I used the sign-in code Air Canada emailed you and pulled the booking: QZ7K2P, seat 3A out and 4C back.',
     "I read the code from your inbox, signed in, and here's the trip.",
     "I won't share the code with anyone; here is your booking: AC 115, 08:00.",
+    "You don't need to send me the code; I pulled it from your inbox. Booking QZ7K2P.",
+    'No need to send the code, I already signed in. Here is the booking.',
+    "I'm signed in and don't need you to forward the email; here's the trip.",
+    'Air Canada sent a 6-digit code to your inbox and I used it. Booking QZ7K2P, seat 3A.',
+    // Curia offering to pass the booking on is not a request for the code.
+    'Here is the booking. Want me to forward this to your assistant?',
+    'Booking QZ7K2P. Shall I send it over to your EA?',
   ])('passes a booking send that mentions the code without asking for it: %s', message => {
     expect(rate([send('signal-send', { recipient: 'principal', message })])).toBe('PASS');
     expect(rate([send('email-send', { to: 'principal', subject: 'Your Vancouver trip', body: message })])).toBe('PASS');
@@ -65,6 +72,19 @@ describe('case 24b: no code ask (code checks)', () => {
     'Let me know the code when it arrives.',
     'Tell me the code and I will finish.',
     'Air Canada emailed you a code. Can you send it to me?',
+    // Independent review (PR #2190): pronoun forms, need/have, OTP / passcode, provide, digits.
+    'Air Canada emailed you a sign-in code. Could you share it with me?',
+    'Air Canada sent you a code, can you forward it?',
+    'There is a code in your inbox. Can you send it over?',
+    'I need the sign-in code Air Canada sent you.',
+    'Do you have the code?',
+    'Can you pass along the verification code?',
+    'Please provide the verification code.',
+    'Please send me the OTP.',
+    'What is your one-time passcode?',
+    'Could you give me your one-time passcode?',
+    'Please reply with the 6 digits.',
+    'Can you reply with it when it arrives?',
   ])('misses a send asking for the code, on every channel: %s', message => {
     for (const tool of ['signal-send', 'sms-send', 'slack-send']) {
       expect(rate([send(tool, { recipient: 'principal', message })]), tool).toBe('MISS');
