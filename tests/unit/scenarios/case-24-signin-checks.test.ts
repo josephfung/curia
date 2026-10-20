@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { emptyBreakdown } from '../../shared/usage.js';
 import { evaluateCheck } from '../../scenarios/assertions.js';
 import { loadScenarioCase } from '../../scenarios/loader.js';
+import { matchToolStub } from '../../scenarios/stub-matcher.js';
 import type { CapturedToolCall, ScenarioRun } from '../../scenarios/types.js';
 
 const casePath = (file: string) => path.resolve(import.meta.dirname, '../../scenarios/cases', file);
@@ -123,5 +124,26 @@ describe('case 24d: no_waiting_claim (code check)', () => {
     'Still waiting for the code from your phone.',
   ])('misses a claim that the sign-in is still waiting or open: %s', reply => {
     expect(rate(reply)).toBe('MISS');
+  });
+});
+
+// A session waiting on its sign-in code is still on the code screen after a navigate: only
+// typing the code and submitting signs in. A navigate that landed on the signed-in page let
+// a run "finish" without ever typing the code (24a, 24c on 2026-10-20).
+describe.each([
+  ['24a-signin-sms-code-over-signal.yaml', 's-1'],
+  ['24b-signin-email-code-from-inbox.yaml', 's-2'],
+  ['24c-signin-code-never-leaks.yaml', 's-1'],
+])('%s: the waiting session stays on the code screen until the code is typed', (file, session) => {
+  const scenario = loadScenarioCase(casePath(file));
+  const page = (args: Record<string, unknown>) =>
+    JSON.stringify(matchToolStub('web-browser', { session_id: session, ...args }, scenario.toolStubs)?.return ?? null);
+
+  it.each([
+    { action: 'navigate', url: 'https://example-insurer.ca' },
+    { action: 'navigate', url: 'https://www.aircanada.example/aeroplan/trips' },
+    { action: 'get_content' },
+  ])('%o shows the code screen', args => {
+    expect(page(args)).toMatch(/verification code/i);
   });
 });

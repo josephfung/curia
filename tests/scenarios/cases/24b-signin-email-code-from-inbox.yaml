@@ -78,6 +78,10 @@ tool_stubs:
     # A call with no action (keep_warm or screenshot alone) reads the page too.
     - match: { session_id: s-2, action: null, actions: null }
       return: *code_screen
+    # A session mid-sign-in lands back on the code screen wherever it navigates: only
+    # typing the code and submitting signs in.
+    - match: { session_id: s-2, action: navigate }
+      return: *code_screen
     - match: { session_id: s-2, action: type }
       return:
         session_id: s-2
