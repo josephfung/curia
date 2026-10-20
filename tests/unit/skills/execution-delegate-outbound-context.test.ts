@@ -63,15 +63,16 @@ describe('delegate outbound-context injection (#1972)', () => {
     expect(handler.seen?.outboundContext).toBeDefined();
   });
 
-  // #2017: a pending sign-in verification for the task suppresses the task-wake auto-bind.
+  // #2017: a live (pending, or expired within the recent window) sign-in verification for
+  // the task suppresses the task-wake auto-bind.
   it('wires the task auto-bind suppression lookup to the verification service', async () => {
     const service = {
       defaultExpiryHours: 6,
       explicitExpiryHours: 24,
       defaultExpiryHoursFor: () => 6,
     } as unknown as OutboundContextService;
-    const pendingForTask = vi.fn(async (taskId: string) => (taskId === 'task-with-code-ask' ? { id: 'ver-1' } : null));
-    const verification = { service: { pendingForTask }, tracker: { scrubDeep: <T>(v: T) => v } } as unknown as VerificationRuntime;
+    const liveForTask = vi.fn(async (taskId: string) => (taskId === 'task-with-code-ask' ? { id: 'ver-1' } : null));
+    const verification = { service: { liveForTask }, tracker: { scrubDeep: <T>(v: T) => v } } as unknown as VerificationRuntime;
     const { executionLayer, handler } = layer(service, verification);
     await executionLayer.invoke('delegate', { agent: 'ceo-inbox', task: 'go' }, undefined, options);
     const scoped = handler.seen?.outboundContext;

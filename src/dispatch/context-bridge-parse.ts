@@ -69,7 +69,7 @@ export function parseContextBridge(raw: unknown, log: Logger): ContextBridgeInpu
 }
 
 
-/** Whether a pending verification suppresses task binding. A lookup error binds (today's behaviour). */
+/** Whether a live verification suppresses task binding. A lookup error binds (today's behaviour). */
 async function taskBindSuppressed(
   outboundContext: OutboundContextCapability,
   taskId: string,
@@ -119,7 +119,8 @@ export async function registerOutboundContext(
     // one the system supplied, and the log would credit the agent for both.
     const agentChoseTtl = bridge?.expires_in_hours != null;
 
-    // A pending sign-in verification for the task skips binding altogether (#2017): the
+    // A live sign-in verification for the task (pending, or expired within the recent
+    // window: a late code can still work) skips binding altogether (#2017): the
     // principal's reply is the code, and it must reach the coordinator, not be persisted
     // onto the task. Covers both branches below — an explicit bridge would otherwise have
     // the binding merged into it. A failed lookup falls back to today's behaviour (bind).

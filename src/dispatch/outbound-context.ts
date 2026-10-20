@@ -138,7 +138,8 @@ export interface OutboundContextCapability {
   releaseUnlessKeptOpen(entryId: string, taskEventId: string): Promise<'released' | 'kept_open' | 'not_active'>;
   /**
    * True when a task-wake send for this task must not bind the principal's reply to it:
-   * a sign-in verification is pending for the task, and the principal's reply is the code,
+   * a sign-in verification for the task is pending, or expired within the recent window (a
+   * late code can still work), and the principal's reply is the code,
    * which has to reach the coordinator (and the code tracker), not be persisted onto the
    * task (#2017). Optional: absent means never suppressed.
    */
@@ -560,8 +561,8 @@ export class ScopedOutboundContext implements OutboundContextCapability {
     // Optional so callers without an agent roster still work; every production
     // invocation passes it, which is what makes the attribution code-owned.
     private attribution?: OutboundAttribution,
-    // Optional lookup: is a verification pending for this task? Wired by the execution
-    // layer when the verification runtime exists (#2017).
+    // Optional lookup: is a verification live for this task (pending, or expired within the
+    // recent window)? Wired by the execution layer when the verification runtime exists (#2017).
     private pendingVerificationForTask?: (taskId: string) => Promise<boolean>,
   ) {}
 

@@ -151,7 +151,7 @@ describe('scopedVerification (#2017)', () => {
       service: {
         config: { emailWaitSeconds: 180 },
         get: async (id: string) => rows.get(id) ?? null,
-        pendingForTask: async () => rows.get('v-real')!,
+        liveForTask: async () => rows.get('v-real')!,
       },
       tracker: {},
       open: async (input: { site: string }) => {
@@ -184,7 +184,7 @@ describe('scopedVerification (#2017)', () => {
     const { view, closed } = fakeRuntime();
     await context.run(run('A', [], [], ['v-a']), async () => {
       expect(await view.service.get('v-real')).toBeNull();
-      expect(await view.service.pendingForTask('t-1')).toBeNull();
+      expect(await view.service.liveForTask('t-1')).toBeNull();
       expect(await view.close('v-real', 'satisfied')).toBeNull();
       expect(await view.close('v-a', 'satisfied')).toMatchObject({ id: 'v-a' });
     });

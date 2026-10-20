@@ -261,13 +261,22 @@ export class VerificationService {
     return rows.map(toVerification);
   }
 
-  async pendingForTask(taskId: string): Promise<Verification | null> {
+  /**
+   * The task's newest verification that can still take a code: pending (past its expiry or
+   * not), or expired within `recentWindowMinutes`. Expiry is a hint, so a code the principal
+   * sends late still has to reach a live turn, not the task's reply binding. Satisfied and
+   * abandoned rows never count: nothing is waiting on a code for them. Read-only: it does
+   * not persist lazy expiry.
+   */
+  async liveForTask(taskId: string, now: Date = new Date()): Promise<Verification | null> {
+    const windowStart = new Date(now.getTime() - this.config.recentWindowMinutes * 60_000);
     const { rows } = await this.pool.query<VerificationRow>(
       `SELECT ${COLUMNS} FROM verifications
-       WHERE task_id = $1 AND status = 'pending'
+       WHERE task_id = $1
+         AND (status = 'pending' OR (status = 'expired' AND resolved_at > $2))
        ORDER BY requested_at DESC
        LIMIT 1`,
-      [taskId],
+      [taskId, windowStart],
     );
     return rows[0] ? toVerification(rows[0]) : null;
   }

@@ -236,8 +236,8 @@ neutralised so the code doesn't go down the slow path:
   task (`context-bridge-parse.ts` ~L107–125, 168h TTL), which routes the reply through
   `task-wake-reply` and writes it into the task's progress note. While the turn has an open
   verification for that task, the code ask **skips the auto-bind** — keyed on a pending
-  verification with this `task_id`, not on a flag the model must remember to set *(my
-  call)*. The reply then arrives as an ordinary live turn, which the injection block equips.
+  (or expired, still recent) verification with this `task_id`, not on a flag the model must
+  remember to set *(my call)*. The reply then arrives as an ordinary live turn, which the injection block equips.
 - **Closing the task.** The turn that enters the code and finishes the errand also
   completes the task (`task-complete`), with a note that says what was done and contains no
   code (§5 scrubs it regardless). If it can't finish — session gone, code rejected — it

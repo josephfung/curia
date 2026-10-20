@@ -216,8 +216,8 @@ describeIf('VerificationService (#2017)', () => {
     const { rows } = await pool.query(`SELECT 1 FROM verifications WHERE site = $1 AND status = 'pending'`, [site]);
     expect(rows).toHaveLength(1);
     // Task A no longer has a live verification to suppress its reply binding.
-    expect((await service.pendingForTask(taskA))).toBeNull();
-    expect((await service.pendingForTask(taskB))?.id).toBe(second.verification.id);
+    expect((await service.liveForTask(taskA))).toBeNull();
+    expect((await service.liveForTask(taskB))?.id).toBe(second.verification.id);
   });
 
   it('concurrent opens for one site produce a single pending row', async () => {
@@ -322,12 +322,32 @@ describeIf('VerificationService (#2017)', () => {
     expect((await service.listActive(outsideWindow)).map((v) => v.id)).not.toContain(verification.id);
   });
 
-  it('pendingForTask returns the pending row for the task, null after close', async () => {
+  it('liveForTask returns the pending row for the task, null after close', async () => {
     const taskId = randomUUID();
     const { verification } = await service.open(openInput(newSite(), { taskId }));
-    expect((await service.pendingForTask(taskId))?.id).toBe(verification.id);
+    expect((await service.liveForTask(taskId))?.id).toBe(verification.id);
     await service.close(verification.id, 'satisfied');
-    expect(await service.pendingForTask(taskId)).toBeNull();
-    expect(await service.pendingForTask(randomUUID())).toBeNull();
+    expect(await service.liveForTask(taskId)).toBeNull();
+    expect(await service.liveForTask(randomUUID())).toBeNull();
+  });
+
+  it('liveForTask still returns a row expired within the recent window, not one expired before it', async () => {
+    // A late code can still arrive after soft expiry, so the task's reply binding stays off.
+    const taskId = randomUUID();
+    const { verification } = await service.open(openInput(newSite(), { taskId, expiresAt: new Date(Date.now() - 1000) }));
+    // Past expiry but not yet persisted as expired: still pending, still live.
+    expect((await service.liveForTask(taskId))?.id).toBe(verification.id);
+    await service.listActive();
+    expect((await service.get(verification.id))?.status).toBe('expired');
+    expect((await service.liveForTask(taskId))?.id).toBe(verification.id);
+    expect((await service.liveForTask(taskId, new Date(Date.now() + 119 * 60 * 1000)))?.id).toBe(verification.id);
+    expect(await service.liveForTask(taskId, new Date(Date.now() + 121 * 60 * 1000))).toBeNull();
+  });
+
+  it('liveForTask ignores an abandoned row, even within the recent window', async () => {
+    const taskId = randomUUID();
+    const { verification } = await service.open(openInput(newSite(), { taskId }));
+    await service.close(verification.id, 'abandoned');
+    expect(await service.liveForTask(taskId)).toBeNull();
   });
 });

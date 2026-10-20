@@ -596,8 +596,10 @@ rather than being treated as already complete.
 
 A task-wake turn that signs in somewhere can hit a second factor and ask the principal for a
 code. The binding above would route that reply through `task-wake-reply` into the task and wake
-it on the next BacklogHeartbeat, hours after any code expires. So while a **pending verification
-carries this `task_id`**, a send from the task's turn skips the binding entirely: no auto-bind,
+it on the next BacklogHeartbeat, hours after any code expires. So while a verification carrying
+this `task_id` **is pending, or expired within the recent window** (expiry is a soft hint and a
+late code can still work; satisfied and abandoned rows do not count), a send from the task's
+turn skips the binding entirely: no auto-bind,
 and no merge of the task binding into an explicit `context_bridge`. The check keys on the
 verification row, not on a flag the model must remember to set. The principal's reply then
 arrives as an ordinary live turn, which the per-turn `## Sign-in verifications` block equips to

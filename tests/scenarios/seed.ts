@@ -187,7 +187,7 @@ export function scopedVerification(real: VerificationRuntime, currentScope: Curr
   const owned = (v: Verification | null): Verification | null => (v && owning(v.id) ? v : null);
   const service = Object.assign(Object.create(real.service) as VerificationRuntime['service'], {
     get: async (id: string) => (owning(id) ? real.service.get(id) : null),
-    pendingForTask: async (taskId: string) => owned(await real.service.pendingForTask(taskId)),
+    liveForTask: async (taskId: string, now?: Date) => owned(await real.service.liveForTask(taskId, now)),
     open: async () => { throw new Error('scenario harness: open verifications through the runtime, not its service'); },
     listActive: async () => { throw new Error('scenario harness: list verifications through the runtime, not its service'); },
     close: async () => { throw new Error('scenario harness: close verifications through the runtime, not its service'); },

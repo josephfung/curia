@@ -108,11 +108,13 @@ Alternatives considered and rejected:
    block, so `Dispatcher.handleAgentResponse` scrubs the reply and the note for the principal
    once, up front, and every relay path built from them (rewrites, approvals, bullpen filing,
    no-reply audit records) carries the scrubbed text. Stage 1 is unchanged.
-8. **Task replies are not auto-bound while a verification is pending for the task.** The
-   auto-bind of a principal's reply to a task-wake send, and the merge of that binding into an
-   explicit context bridge, are both skipped, so the reply arrives as an ordinary live turn that
-   the injection block equips, not through the heartbeat's hours-long path. A failed lookup
-   binds as before.
+8. **Task replies are not auto-bound while a verification for the task can still take a
+   code:** pending, or expired within the recent window (expiry is a hint, so a late code must
+   still reach a live turn). Satisfied and abandoned rows do not count. The auto-bind of a
+   principal's reply to a task-wake send, and the merge of that binding into an explicit
+   context bridge, are both skipped, so the reply arrives as an ordinary live turn that the
+   injection block equips, not through the heartbeat's hours-long path. A failed lookup binds
+   as before.
 9. **Single-process assumption.** The tracker is in memory, the same assumption as browser
    sessions. A restart drops tracked values, and the sessions die with it.
 

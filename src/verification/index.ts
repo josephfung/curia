@@ -22,7 +22,7 @@ const IDENTITY_CHANNELS_FOR: Readonly<Record<string, readonly string[]>> = {
 
 export interface VerificationRuntime {
   /**
-   * The table-owning service. Use it for `get` and `pendingForTask`. Do NOT call its
+   * The table-owning service. Use it for `get` and `liveForTask`. Do NOT call its
    * `open`, `listActive` or `close` directly: use the passthroughs below, which keep
    * the tracker's value TTL in step with the table.
    */

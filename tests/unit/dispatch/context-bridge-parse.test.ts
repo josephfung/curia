@@ -295,7 +295,7 @@ describe('registerOutboundContext task auto-bind suppression (#2017)', () => {
     }));
   });
 
-  it('ScopedOutboundContext delegates to the injected pendingForTask-style lookup', async () => {
+  it('ScopedOutboundContext delegates to the injected liveForTask-style lookup', async () => {
     const service = { defaultExpiryHours: 6, explicitExpiryHours: 24 } as unknown as OutboundContextService;
     const lookup = vi.fn().mockResolvedValue(true);
     const scoped = new ScopedOutboundContext(service, 'conv-1', undefined, lookup);
