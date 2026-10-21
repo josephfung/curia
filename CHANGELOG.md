@@ -105,6 +105,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`ceo-inbox-draft-compose`** — recipients follow subject and body, so order-enforcing endpoints stop dropping the To line. (#2209)
 - **Optional capabilities** — a non-array declaration is dropped so the registry drawer still opens. (#2028)
 - **WIP citation scan** — XML fixtures are scanned like other text. (#2208)
 - **Shadow pairing** — a shadow pairs only with a send within 72 hours; each send scores one shadow. (#2195)

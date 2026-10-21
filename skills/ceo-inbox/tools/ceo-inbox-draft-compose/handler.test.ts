@@ -9,6 +9,8 @@ import {
   type DraftRecipientFixture,
 } from '../../../_shared/ceo-draft-recipients-test-helpers.js';
 import { readFile, realpath } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -495,5 +497,23 @@ describe('CeoInboxDraftComposeHandler', () => {
       expect((result as { error: string }).error).toContain('Attachment error');
       expect(mockFetch).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('ceo-inbox-draft-compose manifest', () => {
+  // Some OpenRouter upstreams for the standard tier (Morph, Wafer) decode tool arguments
+  // in schema property order. A model that opens with `subject` can then never go back
+  // to an optional field listed before it, so recipients listed first were dropped and
+  // the draft had no To line in half of case 30g's runs (#2209). Required fields first,
+  // recipients after.
+  it('lists subject and body before the recipient fields', () => {
+    const manifest = JSON.parse(readFileSync(join(import.meta.dirname, 'tool.json'), 'utf8')) as {
+      inputs: Record<string, string>;
+    };
+    const keys = Object.keys(manifest.inputs);
+    const lastRequired = Math.max(keys.indexOf('subject'), keys.indexOf('body'));
+    for (const field of ['to', 'cc', 'to_addresses', 'cc_addresses']) {
+      expect(keys.indexOf(field), field).toBeGreaterThan(lastRequired);
+    }
   });
 });
