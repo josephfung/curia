@@ -511,6 +511,8 @@ describe('ceo-inbox-draft-compose manifest', () => {
       inputs: Record<string, string>;
     };
     const keys = Object.keys(manifest.inputs);
+    expect(keys).toContain('subject');
+    expect(keys).toContain('body');
     const lastRequired = Math.max(keys.indexOf('subject'), keys.indexOf('body'));
     for (const field of ['to', 'cc', 'to_addresses', 'cc_addresses']) {
       expect(keys.indexOf(field), field).toBeGreaterThan(lastRequired);
