@@ -63,10 +63,13 @@ browser:
   sweepIntervalMs: 120000 # How often the session cleanup sweep runs (ms). Default: 2 minutes.
   profileDir: ""          # Persistent profile directory. Empty → ${HOME}/.curia/browser-profile. Mount on a volume in production so logins survive restarts.
   channel: ""             # "chrome" for real Chrome (must be installed in the image), empty for the bundled Playwright Chromium.
-  locale: "en-US"         # Context locale (BCP 47), part of fingerprint hardening.
+  locale: "en-US"         # Browser locale (BCP 47), part of fingerprint hardening.
+  languages: []           # Ordered navigator.languages / Accept-Language, e.g. [en-CA, en-US, en]. Empty → [locale].
 ```
 
-Raise `sessionTtlMs` if skills that open browser sessions are timing out mid-task. Lower it to free resources faster on memory-constrained deployments. `sessionTtlMs` and `sweepIntervalMs` are validated at startup (a non-positive value is a hard failure); `profileDir`, `channel`, and `locale` must be strings.
+Raise `sessionTtlMs` if skills that open browser sessions are timing out mid-task. Lower it to free resources faster on memory-constrained deployments. `sessionTtlMs` and `sweepIntervalMs` are validated at startup (a non-positive value is a hard failure); `profileDir`, `channel`, and `locale` must be strings, and `languages` a list of language tags.
+
+`locale` and `languages` are applied natively as Chrome's `--lang` / `--accept-lang` flags and the browser's `LANG`, not Playwright emulation, so `navigator.languages` and the `Accept-Language` header carry the same full list. `locale` is always first in that list. Set them to match the principal's country and the egress IP.
 
 > **`block_ads` is not a config knob.** Ad-blocking is a per-call input on the `web-browser` skill (`block_ads`, off by default), not a global `browser.*` setting. Keep it **off** for auth / login / form-fill flows — the blocker is fingerprinted as a privacy extension and triggers bot detection.
 

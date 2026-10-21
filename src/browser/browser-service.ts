@@ -45,6 +45,12 @@ import { BrowserSession } from './browser-session.js';
 import type { SessionId } from './types.js';
 import { parseProxyConfig, type ProxyConfig } from './proxy-config.js';
 
+// Xvfb screen and browser window geometry. The window must fit inside the screen: a
+// window bigger than its screen is a fingerprint inconsistency no real device shows.
+// The window is kept short of full-screen so screenshots stay a moderate size. (#2221)
+export const SCREEN_SIZE = { width: 1920, height: 1080 } as const;
+export const WINDOW_SIZE = { width: 1440, height: 900 } as const;
+
 interface BrowserServiceOptions {
   logger: Logger;
   /** Session idle TTL in ms. Default: 1_800_000 (30 minutes) — long enough that a multi-page
@@ -68,6 +74,8 @@ interface BrowserServiceOptions {
   proxy?: string;
   /** Context locale (BCP 47). Default 'en-US'. */
   locale?: string;
+  /** Ordered navigator.languages / Accept-Language list. `locale` is always first. */
+  languages?: string[];
   /** IANA timezone for the context, aligned to the principal. */
   timezone?: string;
   /**
@@ -88,6 +96,7 @@ export class BrowserService {
   // the WebRTC-leak launch flag. Undefined → direct egress.
   private proxy: ProxyConfig | undefined;
   private locale: string;
+  private languages: string[];
   private timezone: string | undefined;
   private contextFactory: () => Promise<BrowserContext>;
 
@@ -127,6 +136,7 @@ export class BrowserService {
     this.channel = options.channel && options.channel.length > 0 ? options.channel : undefined;
     this.proxy = parseProxyConfig(options.proxy);
     this.locale = options.locale && options.locale.length > 0 ? options.locale : 'en-US';
+    this.languages = [...new Set([this.locale, ...(options.languages ?? [])])];
     this.timezone = options.timezone;
     this.contextFactory = options.contextFactory ?? (() => this.launchPersistentContext());
   }
@@ -438,11 +448,17 @@ export class BrowserService {
    * The proxy (when configured) is spread here so it applies to BOTH the persistent context
    * (launchPersistentContext) and any incognito context (browser.newContext) — routing all
    * browser egress through, e.g., a residential home-network exit. (residential-proxy support)
+   *
+   * viewport and locale are deliberately absent too (#2221). A Playwright viewport is CDP
+   * device-metrics emulation, which also forces `screen` to the viewport size, so the window
+   * read bigger than its own screen. With no viewport, the page takes the real window
+   * (WINDOW_SIZE) on the real Xvfb screen (SCREEN_SIZE). Playwright's `locale` collapses
+   * navigator.languages to one entry; the --lang / --accept-lang launch flags set the
+   * full list natively instead, and they also cover incognito contexts.
    */
   private buildContextOptions(): BrowserContextOptions {
     return {
-      viewport: { width: 1280, height: 720 },
-      locale: this.locale,
+      viewport: null,
       colorScheme: 'light',
       ...(this.timezone ? { timezoneId: this.timezone } : {}),
       ...(this.proxy ? { proxy: this.proxy } : {}),
@@ -499,7 +515,18 @@ export class BrowserService {
         // a browser-process-level flag, so it also covers incognito contexts spun off this
         // launch. Only added when a proxy is set. (residential-proxy support)
         ...(this.proxy ? ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] : []),
+        // A desktop-sized window that sits inside the larger Xvfb screen, so
+        // screen >= availHeight >= outerHeight > innerHeight holds the way it does on a
+        // real device. (#2221)
+        `--window-size=${WINDOW_SIZE.width},${WINDOW_SIZE.height}`,
+        // Locale natively: --lang sets the UI/Intl locale, --accept-lang sets
+        // navigator.languages and the Accept-Language header to the same ordered list. (#2221)
+        `--lang=${this.locale}`,
+        `--accept-lang=${this.languages.join(',')}`,
       ],
+      // On Linux, Chrome takes its ICU (Intl) locale from LANG, not --lang, so without
+      // this Intl reports en-US beside an en-CA navigator.language. (#2221)
+      env: { ...process.env, LANG: `${this.locale.replace('-', '_')}.UTF-8` },
       ...this.buildContextOptions(),
     };
 
@@ -569,7 +596,7 @@ export class BrowserService {
     clearStaleX11Lock({ displayNum: 99, logger: this.logger });
 
     this.logger.info('Spawning Xvfb virtual display on :99');
-    this.xvfbProcess = spawn('Xvfb', [':99', '-screen', '0', '1280x720x24'], {
+    this.xvfbProcess = spawn('Xvfb', [':99', '-screen', '0', `${SCREEN_SIZE.width}x${SCREEN_SIZE.height}x24`], {
       stdio: 'ignore',
       detached: false,
     });

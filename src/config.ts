@@ -496,6 +496,11 @@ export interface YamlConfig {
     proxy?: string;
     /** Context locale (BCP 47). Default "en-US". */
     locale?: string;
+    /**
+     * Ordered languages for navigator.languages and Accept-Language, e.g.
+     * ["en-CA", "en-US", "en"]. `locale` is always first. Empty/absent → [locale].
+     */
+    languages?: string[];
   };
   agents?: {
     coordinator?: { config_path?: string };
@@ -1107,7 +1112,7 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   // reach BrowserService and schedule near-continuous sweeps. Reject malformed values here.
   const browser = config.browser;
   if (browser !== undefined) {
-    const { sessionTtlMs, sweepIntervalMs, profileDir, channel, proxy, locale } = browser;
+    const { sessionTtlMs, sweepIntervalMs, profileDir, channel, proxy, locale, languages } = browser;
     if (sessionTtlMs !== undefined && (!Number.isInteger(sessionTtlMs) || sessionTtlMs <= 0)) {
       throw new Error(`browser.sessionTtlMs must be a positive integer, got: ${sessionTtlMs}`);
     }
@@ -1121,6 +1126,13 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (value !== undefined && typeof value !== 'string') {
         throw new Error(`browser.${key} must be a string, got: ${typeof value}`);
       }
+    }
+    // Joined into Chrome's --accept-lang flag, so a comma inside one entry would split it.
+    if (languages !== undefined && (
+      !Array.isArray(languages)
+      || !languages.every(l => typeof l === 'string' && /^[A-Za-z0-9-]+$/.test(l))
+    )) {
+      throw new Error('browser.languages must be a list of language tags (e.g. ["en-CA", "en-US", "en"])');
     }
     // Fail closed on a misconfigured proxy: browser.proxy exists so the web-browser skill
     // egresses through a residential exit instead of the datacenter IP. A non-empty but

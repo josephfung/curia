@@ -58,8 +58,11 @@ browser:
   # (e.g. "http://browser-proxy:8888"). Empty → direct egress. Set this per-deployment
   # to route the browser through a residential exit and avoid a datacenter-IP bot signal.
   proxy: ""
-  # Context locale (BCP 47).
+  # Browser locale (BCP 47).
   locale: "en-US"
+  # Ordered navigator.languages / Accept-Language list, locale first (e.g. [en-CA, en-US, en]).
+  # Empty → [locale]. Match these to the principal's country and the egress IP.
+  languages: []
 
 agents:
   coordinator:

@@ -1105,6 +1105,7 @@ async function main(): Promise<void> {
       // present a datacenter IP to anti-bot systems. Empty in core; set per-deployment.
       proxy: browserConfig?.proxy,
       locale: browserConfig?.locale,
+      languages: browserConfig?.languages,
       // Align the browser timezone with the principal's configured timezone.
       timezone: config.timezone,
     });

@@ -9,7 +9,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isXServerBinary } from '../../../src/browser/browser-service.js';
+import { chromium } from 'patchright';
+import {
+  BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isXServerBinary, SCREEN_SIZE, WINDOW_SIZE,
+} from '../../../src/browser/browser-service.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -328,6 +331,67 @@ describe('BrowserService (unit — mocked browser)', () => {
 
     const opts = mockBrowser.newContext.mock.calls[0]![0] as { proxy?: unknown };
     expect(opts.proxy).toBeUndefined();
+  });
+
+  // #2221: a Playwright viewport forces `screen` to the viewport size (window bigger than
+  // its screen), and Playwright's `locale` collapses navigator.languages to one entry.
+  // Neither may reach any context; the launch flags carry geometry and languages instead.
+  it('sets no viewport or locale emulation in context options', async () => {
+    const incognitoContext = { newPage: vi.fn().mockResolvedValue(makeMockPage()), close: vi.fn().mockResolvedValue(undefined), browser: vi.fn().mockReturnValue(mockBrowser), on: vi.fn() };
+    mockBrowser.newContext.mockResolvedValue(incognitoContext as never);
+
+    await service.getOrCreateSession(undefined, { incognito: true });
+
+    const opts = mockBrowser.newContext.mock.calls[0]![0] as Record<string, unknown>;
+    expect(opts.viewport).toBeNull();
+    expect(opts).not.toHaveProperty('locale');
+  });
+
+  describe('launch flags (#2221)', () => {
+    let profileDir: string;
+    beforeEach(() => {
+      profileDir = mkdtempSync(join(tmpdir(), 'curia-profile-'));
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+      rmSync(profileDir, { recursive: true, force: true });
+    });
+
+    async function launchArgs(opts: { locale?: string; languages?: string[] }): Promise<{ args: string[]; viewport: unknown; locale: unknown }> {
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockResolvedValue(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
+      const svc = new BrowserService({ logger, profileDir, ...opts });
+      await svc.start();
+      await svc.stop();
+      const options = launch.mock.calls[0]![1] as { args: string[]; viewport: unknown; locale?: unknown };
+      return { args: options.args, viewport: options.viewport, locale: options.locale };
+    }
+
+    it('sizes the window inside the Xvfb screen', async () => {
+      expect(WINDOW_SIZE.width).toBeLessThan(SCREEN_SIZE.width);
+      expect(WINDOW_SIZE.height).toBeLessThan(SCREEN_SIZE.height);
+      const { args, viewport } = await launchArgs({});
+      expect(args).toContain(`--window-size=${WINDOW_SIZE.width},${WINDOW_SIZE.height}`);
+      expect(viewport).toBeNull();
+    });
+
+    it('passes the locale and ordered language list as native flags', async () => {
+      const { args, locale } = await launchArgs({ locale: 'en-CA', languages: ['en-CA', 'en-US', 'en'] });
+      expect(args).toContain('--lang=en-CA');
+      expect(args).toContain('--accept-lang=en-CA,en-US,en');
+      expect(locale).toBeUndefined();
+    });
+
+    it('puts the locale first and drops duplicates', async () => {
+      const { args } = await launchArgs({ locale: 'en-CA', languages: ['en-US', 'en-CA', 'en'] });
+      expect(args).toContain('--accept-lang=en-CA,en-US,en');
+    });
+
+    it('defaults to en-US alone', async () => {
+      const { args } = await launchArgs({});
+      expect(args).toContain('--lang=en-US');
+      expect(args).toContain('--accept-lang=en-US');
+    });
   });
 
   it('does not restart the browser when a disconnect fires after stop()', async () => {

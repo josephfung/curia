@@ -43,6 +43,22 @@ describe('loadYamlConfig: browser block validation', () => {
     expect(() => loadYamlConfig(dir)).toThrow('browser.channel');
   });
 
+  it('accepts a languages list', () => {
+    const dir = writeTempConfig(`browser:\n  locale: en-CA\n  languages: [en-CA, en-US, en]\n`);
+    expect(loadYamlConfig(dir).browser?.languages).toEqual(['en-CA', 'en-US', 'en']);
+  });
+
+  it('rejects languages given as a string', () => {
+    const dir = writeTempConfig(`browser:\n  languages: "en-CA,en-US"\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('browser.languages');
+  });
+
+  // Entries are joined into Chrome's comma-separated --accept-lang flag.
+  it('rejects a languages entry containing a comma', () => {
+    const dir = writeTempConfig(`browser:\n  languages: ["en-CA,en-US"]\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('browser.languages');
+  });
+
   it('accepts a valid proxy', () => {
     const dir = writeTempConfig(`browser:\n  proxy: "http://browser-wg:8888"\n`);
     expect(loadYamlConfig(dir).browser?.proxy).toBe('http://browser-wg:8888');
