@@ -6,16 +6,18 @@
 // - PDF: pdf-parse text extraction, then optional LLM structuring
 // - HTML: tag stripping, then optional LLM structuring
 // - ICS: deterministic calendar invite field extraction
+// - XML, plain text, Markdown: UTF-8 decode, no XML parser (external entities stay inert)
 //
 // All LLM calls go through the constrained InfraLlm service (classify + extract
 // only) so costs and latency are tracked by the telemetry infrastructure.
 
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { Node, HTMLElement as HtmlElement } from 'node-html-parser';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { InfraLlm } from '../../src/skills/infra-llm.js';
+import { DOCUMENT_MIME_TYPES, effectiveDocumentMime, filenameExtension } from '../_shared/document-types.js';
+import { resolveTempFileUrl } from '../_shared/temp-file-url.js';
 
 // CJS-only deps: load via createRequire so the CJS build is used reliably under
 // Node ESM + tsx/vitest (Vite's ESM/CJS interop can lose named exports).
@@ -24,21 +26,6 @@ const { PDFParse } = require('pdf-parse') as typeof import('pdf-parse');
 const { parse, NodeType } = require('node-html-parser') as typeof import('node-html-parser');
 import { parseCsv } from './csv.js';
 import { getExtractionPrompt, type ExtractAs } from './prompts.js';
-
-// MIME types we support, mapped to our internal content categories.
-const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html' | 'ics'> = {
-  'text/csv': 'csv',
-  'application/pdf': 'pdf',
-  'image/jpeg': 'image',
-  'image/jpg': 'image',
-  'image/png': 'image',
-  'image/webp': 'image',
-  'image/gif': 'image',
-  'text/html': 'html',
-  'text/calendar': 'ics',
-  'application/ics': 'ics',
-  'text/x-vcalendar': 'ics',
-};
 
 // extract_as is open-ended: 'receipt', 'bank_statement', 'invoice' have tailored prompts;
 // 'raw' opts out of LLM extraction; any other non-empty string gets a generic prompt.
@@ -59,6 +46,7 @@ export class FileParseHandler implements ToolHandler {
       ? ctx.input.temp_file_url.trim() : '';
     const mimeType = typeof ctx.input.mime_type === 'string'
       ? ctx.input.mime_type.trim().toLowerCase().split(';')[0]!.trim() : '';
+    const filename = typeof ctx.input.filename === 'string' ? ctx.input.filename.trim() : '';
     const extractAs = typeof ctx.input.extract_as === 'string'
       ? ctx.input.extract_as.trim().toLowerCase() as ExtractAs : 'raw';
 
@@ -66,7 +54,7 @@ export class FileParseHandler implements ToolHandler {
     // disk. This bridges the gap with ceo-inbox-download-attachment which omits
     // content_base64 when temp storage is available (to avoid output size limits).
     if (!contentBase64 && tempFileUrl) {
-      const resolved = await this.resolveTempFileUrl(tempFileUrl);
+      const resolved = await resolveTempFileUrl(tempFileUrl);
       if (!resolved) {
         ctx.log.warn({ tempFileUrl }, 'file-parse: rejected temp_file_url — must be file:// under allowed prefix');
         return { success: false, error: 'Invalid temp_file_url: must be a file:// URL under the temp store directory' };
@@ -95,13 +83,19 @@ export class FileParseHandler implements ToolHandler {
     if (!contentBase64) {
       return { success: false, error: 'Missing required input: content_base64 (or provide temp_file_url)' };
     }
-    if (!mimeType) {
-      return { success: false, error: 'Missing required input: mime_type' };
-    }
 
-    const contentType = MIME_MAP[mimeType];
+    // A specific reported type wins. Extension is only a fallback for the generic
+    // or missing type mail clients put on .md / .txt / .xml attachments.
+    const effectiveMime = effectiveDocumentMime(mimeType, filename);
+    const contentType = DOCUMENT_MIME_TYPES[effectiveMime];
     if (!contentType) {
-      return { success: false, error: `Unsupported mime_type: ${mimeType}. Supported: ${Object.keys(MIME_MAP).join(', ')}` };
+      const shownMime = mimeType || '(none)';
+      const ext = filenameExtension(filename) || '(none)';
+      const supported = Object.keys(DOCUMENT_MIME_TYPES).join(', ');
+      return {
+        success: false,
+        error: `Unsupported mime_type: ${shownMime} (filename extension: ${ext}). Supported: ${supported}`,
+      };
     }
     // Only reject empty strings — any non-empty extract_as is valid.
     // Known schemas get tailored prompts; unknown strings get a generic prompt.
@@ -116,13 +110,17 @@ export class FileParseHandler implements ToolHandler {
         case 'csv':
           return this.handleCsv(buffer);
         case 'image':
-          return await this.handleImage(ctx, infraLlm, contentBase64, mimeType, extractAs);
+          return await this.handleImage(ctx, infraLlm, contentBase64, effectiveMime, extractAs);
         case 'pdf':
           return await this.handlePdf(ctx, infraLlm, buffer, extractAs);
         case 'html':
           return await this.handleHtml(ctx, infraLlm, buffer, extractAs);
         case 'ics':
           return this.handleIcs(buffer, extractAs);
+        case 'text':
+        case 'xml':
+        case 'markdown':
+          return await this.handleText(ctx, infraLlm, buffer, contentType, extractAs);
       }
     } catch (err) {
       ctx.log.error({ err, mimeType }, 'file-parse: unexpected error');
@@ -144,6 +142,29 @@ export class FileParseHandler implements ToolHandler {
         confidence: 1.0,
       },
     };
+  }
+
+  // --- XML, plain text, Markdown: UTF-8 bytes, no parser, no LLM when raw ---
+  //
+  // XML is returned as text on purpose. A parser that resolved DTDs or external
+  // entities would turn a DMARC report into an XXE read; the model can read the
+  // markup itself.
+
+  private async handleText(
+    ctx: ToolContext,
+    infraLlm: InfraLlm,
+    buffer: Buffer,
+    kind: 'text' | 'xml' | 'markdown',
+    extractAs: ExtractAs,
+  ): Promise<ToolResult> {
+    let rawText = buffer.toString('utf-8');
+    if (rawText.charCodeAt(0) === 0xfeff) rawText = rawText.slice(1);
+
+    if (extractAs === 'raw') {
+      return { success: true, data: { type: kind, raw_text: rawText, structured: null, confidence: 1.0 } };
+    }
+
+    return await this.extractStructured(ctx, infraLlm, kind, rawText, extractAs);
   }
 
   // --- ICS: deterministic calendar invite parsing ---
@@ -278,7 +299,7 @@ export class FileParseHandler implements ToolHandler {
   private async extractStructured(
     ctx: ToolContext,
     infraLlm: InfraLlm,
-    type: 'pdf' | 'html',
+    type: 'pdf' | 'html' | 'text' | 'xml' | 'markdown',
     rawText: string,
     extractAs: ExtractAs,
   ): Promise<ToolResult> {
@@ -310,7 +331,7 @@ export class FileParseHandler implements ToolHandler {
 
   private buildResult(
     ctx: ToolContext,
-    type: 'csv' | 'pdf' | 'image' | 'html',
+    type: 'csv' | 'pdf' | 'image' | 'html' | 'text' | 'xml' | 'markdown',
     llmText: string,
     extractAs: ExtractAs,
     isStructured: boolean,
@@ -356,69 +377,6 @@ export class FileParseHandler implements ToolHandler {
     }
   }
 
-  /**
-   * Validate and resolve a file:// URL to an absolute filesystem path.
-   * Only allows paths under known temp store directories to prevent path traversal.
-   * Resolves symlinks to prevent symlink-based escape from the allowed directory.
-   * Returns null if the URL is invalid or points outside the allowed directories.
-   */
-  private async resolveTempFileUrl(url: string): Promise<string | null> {
-    if (!url.startsWith('file://')) return null;
-
-    const filePath = path.resolve(url.slice('file://'.length));
-
-    // Allow paths under the production tmpfs mount or the /tmp fallback (local dev).
-    // Both are restricted directories where only TempFileStore writes.
-    // Include CURIA_TEMPFILE_DIR if set, so this stays in sync with TempFileStore config.
-    const allowedPrefixes = ['/run/curia-tempfiles/', '/tmp/curia-tempfiles/'];
-    const customDir = process.env.CURIA_TEMPFILE_DIR;
-    if (customDir) {
-      const normalized = path.resolve(customDir);
-      allowedPrefixes.push(normalized.endsWith('/') ? normalized : normalized + '/');
-    }
-    const logicallyAllowed = allowedPrefixes.some((prefix) => filePath.startsWith(prefix));
-    if (!logicallyAllowed) return null;
-
-    // Resolve symlinks to prevent a symlink inside the allowed directory from
-    // pointing to files outside it (e.g. ln -s /etc/shadow /tmp/curia-tempfiles/x).
-    let realPath: string;
-    try {
-      realPath = await fs.realpath(filePath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        // File doesn't exist — return the logical path and let the
-        // caller's fs.readFile produce the "expired" error message.
-        return filePath;
-      }
-      // EACCES, EIO, etc. — can't verify the real path, reject the URL.
-      // Don't fall back to the logical path since that would bypass the
-      // symlink check on a path we couldn't resolve.
-      return null;
-    }
-
-    // Resolve the prefix directories too — on macOS /tmp is a symlink to
-    // /private/tmp, so both sides of the comparison must be resolved.
-    const resolvedPrefixes = await Promise.all(
-      allowedPrefixes.map(async (prefix) => {
-        try {
-          // realpath the directory (without trailing slash), then re-add it
-          return await fs.realpath(prefix.slice(0, -1)) + '/';
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            // Unexpected error resolving a prefix dir — fall back to the
-            // original string rather than failing the entire validation.
-            // This is less security-critical since we control the prefix values.
-          }
-          return prefix;
-        }
-      }),
-    );
-    const allPrefixes = [...new Set([...allowedPrefixes, ...resolvedPrefixes])];
-    const reallyAllowed = allPrefixes.some((prefix) => realPath.startsWith(prefix));
-    if (!reallyAllowed) return null;
-
-    return realPath;
-  }
 }
 
 interface IcsProperty {

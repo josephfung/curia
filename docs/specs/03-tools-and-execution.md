@@ -350,6 +350,8 @@ The framework ships with these skills (in `skills/` as part of core):
 
 > **Removed from scope:** `file-reader` and `file-writer` were originally planned but removed after security review. General-purpose filesystem access from LLM-driven agents on a single-tenant VPS creates an unacceptable prompt-injection-to-file-exfiltration attack vector. Email attachments (the primary use case) are handled in-memory via the Nylas SDK's streaming/buffer APIs. Agent-created documents should use the knowledge graph. If a narrowly-scoped filesystem need arises later, build a purpose-specific skill rather than a general reader/writer.
 
+> **Purpose-specific exception:** `archive-extract` opens `.zip` and single-member `.gz` attachments (including DMARC `.xml.gz`) into temp-store files for `file-parse`. It is not a filesystem reader. Entry names are display labels only — path segments and control characters are stripped, and bytes are written only through the temp-file store. Nested archives are returned as files and not opened. Limits, enforced in the handler: 10 MB uncompressed per entry, 25 MB uncompressed per archive, a 100:1 compression ratio measured on bytes actually inflated (archive headers are not trusted), at most 20 entries, and no encrypted entries. Directories, symlinks, and other non-regular entries are skipped. A failure returns a specific error and leaves no extracted files. `file-parse` reads XML, plain text, and Markdown as UTF-8 with no XML parser, so a `<!DOCTYPE>` or external entity stays inert text. When `mime_type` is missing or `application/octet-stream`, both tools take the type from the filename extension; a specific MIME type always wins.
+
 ---
 
 ## Recommended MCP Servers

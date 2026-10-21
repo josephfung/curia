@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.27.0"
+version: "0.28.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -200,6 +200,7 @@ pinned_skills:
   - contact-update
   - contact-create
   - file-parse
+  - archive-extract
   - tool-registry
   - activity-log
   - secret-capture-request

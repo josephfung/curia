@@ -1,18 +1,19 @@
 {
   "name": "file-parse",
-  "description": "Parse a document (CSV, PDF, HTML, image, or calendar ICS invite) and extract structured data. Accepts base64-encoded content OR a temp_file_url (file:// URL from ceo-inbox-download-attachment), plus a MIME type. Optionally provide extract_as to get structured fields (receipt, bank_statement, invoice, calendar_invite) instead of raw text. CSV and ICS parsing are direct and deterministic. For images, PDFs, and HTML, uses Claude for text extraction and structuring. Returns a confidence score (0–1) for LLM-extracted results.",
-  "version": "1.1.1",
+  "description": "Parse a document (CSV, PDF, HTML, image, ICS, XML, plain text, or Markdown). Pass content_base64 or a temp_file_url, the reported mime_type, and filename. Always pass filename from the download tool or from archive-extract. When mime_type is missing or application/octet-stream, the filename extension selects the parser (.xml, .txt, .md, .markdown, .csv, .pdf, .html, .htm, .ics, and image extensions). A specific mime_type wins over the extension. extract_as structures the result; raw XML, text, Markdown, CSV, and ICS need no model call.",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "provenance_source": true,
   "inputs": {
     "content_base64": "string? (base64-encoded file content — required unless temp_file_url is provided)",
     "temp_file_url": "string? (file:// URL pointing to a temp file on disk — alternative to content_base64; use the temp_file_url returned by ceo-inbox-download-attachment or email-download-attachment)",
-    "mime_type": "string (MIME type, e.g. 'text/csv', 'application/pdf', 'image/jpeg', 'text/html', 'text/calendar', 'application/ics')",
+    "mime_type": "string? (reported MIME type, e.g. 'text/csv', 'application/pdf', 'image/jpeg', 'text/html', 'text/calendar', 'application/xml', 'text/xml', 'text/plain', 'text/markdown', 'text/x-markdown', 'application/octet-stream'. Pass what the download tool reported, even when it is application/octet-stream.)",
+    "filename": "string? (original filename with its extension — always pass this. The download tools and archive-extract both return it. Required for .md, .txt, and .xml attachments that arrive as application/octet-stream. Ignored when mime_type is a specific type.)",
     "extract_as": "string? (optional extraction schema hint; defaults to 'raw'. Known schemas with tailored prompts: 'receipt', 'bank_statement', 'invoice'; 'calendar_invite' on ICS returns deterministic invite fields. Use 'raw' to skip LLM structuring. Any other non-empty string (e.g. 'purchase_order', 'business_card') triggers a generic extraction prompt using the schema name as a hint.)"
   },
   "outputs": {
-    "type": "string (detected content category: 'csv', 'pdf', 'image', 'html', 'calendar_invite')",
+    "type": "string (detected content category: 'csv', 'pdf', 'image', 'html', 'calendar_invite', 'xml', 'text', 'markdown')",
     "raw_text": "string (extracted plain text content)",
     "structured": "object (extracted fields per extract_as schema; null when extract_as is 'raw' or omitted)",
     "confidence": "number (0–1 confidence in the extraction; 1.0 for deterministic CSV parsing)"

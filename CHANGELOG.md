@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **`llm.call` prefix-guard drops** — **public API:** optional `reasoningBlocksDropped`; suites also print serving endpoints. (#2044)
+- **`archive-extract`** — opens zip and gzip attachments within size and path limits. (#2208)
 - **Sign-in details with secrets** — `secret-capture-request` stores login URL and username; `list-user-secrets` returns them. (#2201)
 - **`listUserSecretDetails` capability** — new `ToolContext` field returning non-secret sign-in details per `user.*` key. (#2201)
 - **Tier reasoning effort** — **public API (config):** `model_routing.tiers.<tier>.reasoning.effort` for agent turns, validated at boot. (#2044)
@@ -45,6 +46,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **ADR-048 outcomes** — effort A/B found no winner; the standard tier stays at the model default. (#2044)
+- **`file-parse`** — reads XML, text and Markdown, including by filename extension. (#2208)
+- **Inbox attachments** — zip and gzip files are extracted before they are parsed. (#2208)
+- **Prompt budgets** — coordinator and ceo-inbox rise to fit archive-extract. (#2208)
 - **`verification` open** — result now says the next step; email codes go through ceo-inbox. (#2201)
 - **Haiku 5.5 agent turns** — unset reasoning now uses the model default, so fast-tier agents think. (#2044)
 - **Non-agent LLM calls** — judges, infra, scoring, summarization and voice state no reasoning explicitly. (#2044)
@@ -90,6 +94,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Archive extraction** — bombs, zip-slip, encryption and nested archives fail closed. (#2208)
 - **Sign-in code scrub** — tracked codes become `[sign-in code]` in notes, reports, memory, sends and replies. (#2017)
 - **Browser code guard** — `web-browser` refuses to type or navigate a sign-in code off its own site. (#2017)
 - **Digest tools** — tasks an outside contact started can't read or acknowledge the principal's digest. (#1320)

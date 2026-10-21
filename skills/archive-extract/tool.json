@@ -1,0 +1,20 @@
+{
+  "name": "archive-extract",
+  "description": "Extract a .zip or .gz attachment (including .xml.gz) into temp files for file-parse. Pass temp_file_url from a download tool, plus mime_type and filename so the format can be chosen. Returns one entry per file — filename, mime_type, size_bytes, temp_file_url — and does not return file contents. Nested archives are listed, not opened; call this tool again to open one. Directories and symlinks are skipped. Encrypted entries, archives over 20 entries, and output past 10 MB per file, 25 MB per archive, or a 100:1 compression ratio fail with a specific error and no partial files.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "temp_file_url": "string (file:// URL of the archive, from ceo-inbox-download-attachment, email-download-attachment, or a previous archive-extract entry)",
+    "mime_type": "string? (reported MIME type, e.g. 'application/zip', 'application/x-zip-compressed', 'application/gzip', 'application/x-gzip', or 'application/octet-stream'. A specific zip or gzip type wins over the filename.)",
+    "filename": "string? (original filename with extension, e.g. 'report.zip' or 'report.xml.gz'. Used when mime_type is missing or application/octet-stream, and as the name of a gzip member after .gz is removed.)"
+  },
+  "outputs": {
+    "entries": "object[] ({ filename, mime_type, size_bytes, temp_file_url } for each regular file, including a nested archive's own bytes)",
+    "skipped": "object[] ({ filename, reason } for directories, symlinks, and other non-regular entries)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["tempFileStore"]
+}

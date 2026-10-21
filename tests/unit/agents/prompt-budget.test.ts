@@ -93,14 +93,20 @@ interface AgentBudget {
 // list-user-secrets returns details, verification open returns next_step (the guidance itself
 // rides in the tool results, not the descriptions): +263 bytes, 79,793 over 72 local tools. The
 // budget rises by exactly that delta.
+// archive-extract pinned, and file-parse's description now covers XML, text, Markdown and the
+// filename argument (#2208): +1,831 bytes, 81,624 over 73 local tools. The budget rises by
+// exactly that delta.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 79_793, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 81_624, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   { agent: 'calendar', alwaysOnPromptTokens: 6_200, localToolDefinitionBytes: 25_000, allowMcpPins: false },
   // ceo-inbox: YAML 60,090 → 49,037 chars (~16,416 → ~13,653 tokens always-on with its SKILL.md bodies),
   // its task-wake steps now riding on the wake; 43,469 bytes over 41 local tools.
-  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 44_800, allowMcpPins: false },
+  // archive-extract plus the longer file-parse description (#2208) is +1,831 bytes, the same
+  // delta as the coordinator. Measured 45,301 bytes over 45 local tools; the prior total sat
+  // under the 44,800 ceiling.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 45_301, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
   // 35,311 bytes over its local tools.
   { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_400, allowMcpPins: false },

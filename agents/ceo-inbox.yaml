@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.22.0"
+version: "0.23.0"
 role: specialist
 description: >
   Manages the principal's personal email inbox. Handles standing-rule management,
@@ -24,6 +24,7 @@ inject_specialists: true
 pinned_skills:
   - ceo-inbox
   - file-parse
+  - archive-extract
   # Email-observation learning producers (#1419) — polymorphic tool pins so the
   # digest review tools stay with the coordinator (ADR-032 / #1494).
   - task-completion-from-sent
@@ -463,12 +464,13 @@ system_prompt: |
 
   ### 4d. Process attachments
 
-  After reading a message with ceo-inbox-read, check the `attachments` array.
-  If non-empty, the email has file attachments. For messages classified as
-  ✅ Handled or ✍️ Drafted where the attachment is relevant, use
-  `ceo-inbox-download-attachment` with the attachment's `id` and the message's
-  `id`. Then pass `content_base64` and `content_type` to `file-parse` for
-  structured extraction (e.g. `extract_as: "receipt"` for invoices).
+  After ceo-inbox-read, if `attachments` is non-empty and the file matters
+  (a standing rule needs it, or the message is ✅ Handled or ✍️ Drafted),
+  download it with `ceo-inbox-download-attachment`. When it is a `.zip` or
+  `.gz` (or a zip/gzip MIME type), call `archive-extract` on `temp_file_url`,
+  then `file-parse` each entry. Otherwise call `file-parse` on the attachment.
+  Always pass `filename` with `mime_type` and `temp_file_url` (or
+  `content_base64` when there is no temp file).
 
   ### 4d-invite. Formal meeting invitation path
 

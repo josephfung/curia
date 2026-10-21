@@ -57,6 +57,7 @@ tools:
   - delegate
   - async-offramp
   - file-parse
+  - archive-extract
   - request-clarification
   # Delegated sign-in verification (#2017): coordinator-only code-screen tracking.
   - verification

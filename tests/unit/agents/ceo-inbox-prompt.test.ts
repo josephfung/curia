@@ -391,6 +391,12 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     expect(prompt).toMatch(/a question,\s+not work from the principal/);
   });
 
+  it('extracts archives and tells the agent to pass filename', () => {
+    const prompt = loadCeoInboxPrompt();
+    expect(prompt).toMatch(/`archive-extract` on `temp_file_url`/);
+    expect(prompt).toMatch(/Always pass `filename`/);
+  });
+
   it('bumps the ceo-inbox version for the peer-request capability', () => {
     // Exact-version tripwire, matching calendar-prompt.test.ts's convention.
     // 0.17.0 = answers a generic PEER REQUEST, a new capability, so minor.
@@ -406,8 +412,10 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     //          sections removed from the always-on prompt (#2025).
     // 0.22.0 = the consult-timeout, inbox-drain and inbox-follow-up steps ride on the task
     //          wake by tag (#2025).
+    // 0.23.0 = archive-extract joins the pinned tools so standing rules can read
+    //          zip and gzip attachments (#2208).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.22.0');
+    expect(config.version).toBe('0.23.0');
   });
 });
 

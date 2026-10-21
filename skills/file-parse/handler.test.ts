@@ -699,4 +699,147 @@ describe('FileParseHandler', () => {
       if (!result.success) expect(result.error).toMatch(/temp_file_url/);
     });
   });
+
+  describe('XML, plain text, and Markdown', () => {
+    const handler = new FileParseHandler();
+    const xxe = [
+      '<?xml version="1.0"?>',
+      '<!DOCTYPE foo [',
+      '  <!ENTITY xxe SYSTEM "file:///etc/passwd">',
+      ']>',
+      '<feedback>&xxe;</feedback>',
+    ].join('\n');
+
+    it.each([
+      ['application/xml', 'xml'],
+      ['text/xml', 'xml'],
+      ['text/plain', 'text'],
+      ['text/markdown', 'markdown'],
+      ['text/x-markdown', 'markdown'],
+    ] as const)('returns raw_text for %s with no LLM call', async (mime, kind) => {
+      const infraLlm = makeInfraLlm('{}');
+      const body = mime.includes('xml') ? xxe : 'Hello from the attachment.';
+      const result = await handler.execute(makeCtx({
+        content_base64: Buffer.from(body).toString('base64'),
+        mime_type: mime,
+      }, infraLlm));
+      expect(result.success).toBe(true);
+      expect(infraLlm.extract).not.toHaveBeenCalled();
+      expect(infraLlm.classify).not.toHaveBeenCalled();
+      if (result.success) {
+        const data = result.data as { type: string; raw_text: string; structured: unknown; confidence: number };
+        expect(data.type).toBe(kind);
+        expect(data.raw_text).toBe(body);
+        expect(data.structured).toBeNull();
+        expect(data.confidence).toBe(1);
+      }
+    });
+
+    it('returns an XML external entity as inert text', async () => {
+      const infraLlm = makeInfraLlm('{}');
+      const result = await handler.execute(makeCtx({
+        content_base64: Buffer.from(xxe).toString('base64'),
+        mime_type: 'application/xml',
+      }, infraLlm));
+      expect(result.success).toBe(true);
+      expect(infraLlm.extract).not.toHaveBeenCalled();
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).toContain('<!DOCTYPE');
+        expect(data.raw_text).toContain('&xxe;');
+        expect(data.raw_text).not.toMatch(/root:/);
+      }
+    });
+
+    it('sends plain text through infraLlm when extract_as asks for structure', async () => {
+      const infraLlm = makeInfraLlm('{"vendor":"Acme"}');
+      const result = await handler.execute(makeCtx({
+        content_base64: Buffer.from('Total 12.00').toString('base64'),
+        mime_type: 'text/plain',
+        extract_as: 'receipt',
+      }, infraLlm));
+      expect(infraLlm.extract).toHaveBeenCalledOnce();
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { type: string; structured: unknown };
+        expect(data.type).toBe('text');
+        expect(data.structured).toEqual({ vendor: 'Acme' });
+      }
+    });
+  });
+
+  describe('filename extension fallback', () => {
+    const handler = new FileParseHandler();
+
+    it.each([
+      ['.md', '# Notes', 'markdown'],
+      ['.txt', 'plain words', 'text'],
+      ['.xml', '<feedback/>', 'xml'],
+    ] as const)('parses a %s file when mime_type is application/octet-stream', async (ext, body, kind) => {
+      const infraLlm = makeInfraLlm('{}');
+      const result = await handler.execute(makeCtx({
+        content_base64: Buffer.from(body).toString('base64'),
+        mime_type: 'application/octet-stream',
+        filename: `report${ext}`,
+      }, infraLlm));
+      expect(result.success).toBe(true);
+      expect(infraLlm.extract).not.toHaveBeenCalled();
+      if (result.success) {
+        const data = result.data as { type: string; raw_text: string };
+        expect(data.type).toBe(kind);
+        expect(data.raw_text).toBe(body);
+      }
+    });
+
+    it('parses .txt when mime_type is empty', async () => {
+      const result = await handler.execute(makeCtx({
+        content_base64: Buffer.from('from the extension').toString('base64'),
+        mime_type: '',
+        filename: 'note.txt',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { type: string; raw_text: string };
+        expect(data.type).toBe('text');
+        expect(data.raw_text).toBe('from the extension');
+      }
+    });
+
+    it('ignores the extension when mime_type is specific', async () => {
+      const csv = 'vendor,amount\nAcme,50';
+      const result = await handler.execute(makeCtx({
+        content_base64: Buffer.from(csv).toString('base64'),
+        mime_type: 'text/csv',
+        filename: 'report.xml',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { type: string; structured: Array<Record<string, string>> };
+        expect(data.type).toBe('csv');
+        expect(data.structured).toEqual([{ vendor: 'Acme', amount: '50' }]);
+      }
+    });
+
+    it('names both the mime type and the extension when neither is supported', async () => {
+      const result = await handler.execute(makeCtx({
+        content_base64: Buffer.from('MZ').toString('base64'),
+        mime_type: 'application/x-msdownload',
+        filename: 'setup.exe',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('application/x-msdownload');
+        expect(result.error).toContain('.exe');
+      }
+    });
+
+    it('tool.json tells the agent to pass filename', async () => {
+      const manifest = JSON.parse(await fs.readFile(new URL('./tool.json', import.meta.url), 'utf8')) as {
+        description: string;
+        inputs: { filename?: string };
+      };
+      expect(manifest.inputs.filename).toMatch(/pass/i);
+      expect(manifest.description).toMatch(/filename/);
+    });
+  });
 });
