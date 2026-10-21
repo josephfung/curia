@@ -3,6 +3,7 @@
 Date: 2026-10-08
 Status: Accepted
 Amended: 2026-10-20 — unset is the provider default on every model; call sites state `none`; Anthropic reasoning is adaptive thinking plus effort; stale passed-back thinking is dropped (#2044, #2077)
+Amended: 2026-10-21 — consequences record the A/B outcomes: pass-back ships, the fast tier ships at the model default, the standard tier stays at the default (#2044)
 
 ## Context
 
@@ -143,7 +144,9 @@ The value for each tier comes from an A/B, not from this ADR. Production's stand
 - `max` ships only if it beats that spread and its latency cost is acceptable.
 - Otherwise the tier stays unset.
 
-The fast tier gets its own check before the release that removes #2077's rule (amendment, 2026-10-20): Haiku 5.5 unset (adaptive at `medium`) against `none` (today's requests), varying only `tiers.fast`, on the contacts scenarios. Unset ships if it clears the gate within `none`'s spread and its latency is acceptable. Otherwise curia-deploy sets `tiers.fast.reasoning.effort: none`.
+*Result, 2026-10-21:* no winner, so the standard tier stays unset. See Consequences.
+
+The fast tier gets its own check before the release that removes #2077's rule (amendment, 2026-10-20): Haiku 5.5 unset (adaptive at `medium`) against `none` (today's requests), varying only `tiers.fast`, on the contacts scenarios. Unset ships if it clears the gate within `none`'s spread and its latency is acceptable. Otherwise curia-deploy sets `tiers.fast.reasoning.effort: none`. *Result, 2026-10-21:* unset ships. See Consequences.
 
 ### 4. Agent calls send no temperature
 
@@ -194,9 +197,21 @@ The behavior suites print reasoning tokens and latency per agent, so every A/B a
   5. The effort A/B and any resulting curia-deploy change.
 
   `docs/wip/2026-10-08-reasoning-policy-design.md` has the design and the A/B protocol.
-- **Effort A/Bs run on the endpoint production uses** (CoreWeave as of 2026-10-08). `upstreamProvider` shows which endpoint every measurement came from, so a later routing change is visible in the data.
+- **Effort A/Bs were meant to run on one pinned endpoint** (CoreWeave, as of 2026-10-08). In the 2026-10-21 runs they did not. OpenRouter split every arm across about seven endpoints: InferenceNet took about half the calls, with Morph, Wafer, DeepInfra and Decart, and a few StreamLake and CoreWeave calls. The mix was similar in every arm, so the arms stay comparable with each other. Whether production's standard tier is still pinned should be read from `llm.call.upstreamProvider` in `audit_log`, not assumed; the suites print the same breakdown on their `endpoints` line.
 - **If the effort A/B finds no winner, the tiers stay unset.** The plumbing still lets any installation choose an effort per tier, including thinking on Anthropic.
 - **Providers without a registry `reasoning` entry stay out** (amendment, 2026-10-20). A tier effort on such a model fails at boot. This covers the Bedrock provider proposed in #2148 until it maps Converse's reasoning fields itself.
 - **The prefix guard costs reasoning on Haiku 5.5 after a Bullpen refresh or a tool discovery.** It applies to fast-tier agent turns from the release that removes #2077's rule. The provider logs each drop, so the fast-tier A/B measures its rate.
 - **Unset Haiku 5.5 reasoning is not readable in the archive.** With no `thinking` key, Haiku 5.5 returns thinking blocks without text. `llm.call` and the archive still record the reasoning tokens, with `reasoningOmitted: "encrypted"`. A tier that sets an effort gets summarized text.
 - **`thinksByDefault` stays in the registry as a fact.** It no longer changes the request; it sizes `max_tokens` (see 2).
+
+### Outcomes (2026-10-21)
+
+All three A/Bs ran on `deepseek/deepseek-v4.1-flash`, except the fast-tier check, which ran on `claude-haiku-5-5`. Each run had its own copy of the scenario database. Full records are in the design doc's Results section.
+
+- **Pass-back (§1) ships.** On one run per arm it had no provider errors, critical behaviors at or above `main`'s once rechecked, and a weighted score of 99.3% against 98.8% (#2205).
+- **The fast tier ships at the model's default** (§3, Haiku 5.5 adaptive at `medium`). Rerun on the post-review head, the default passed 10/10 cases at 100% weighted, with contacts at p50/p90 1.2s / 2.0s. `fast=none` passed 7/10 at 94%, missing six critical behaviors. Cost was the same, $0.19 per arm. No curia-deploy pin.
+- **The standard tier stays at the model's default** (§3). Neither `low` nor `max` met its ship rule, so there is no curia-deploy change.
+  - **`max` was out after one pass.** The coordinator's p90 was 162–201s, with 182 stall retries and widespread timeouts. Smoke passed 18/47 and scenarios scored 75.7% weighted, at $11.09 for one pass.
+  - **`low` failed all three parts of the rule.** Its second pass failed both gates. Ten critical behaviors fell below the default's worse pass, though five went the other way. Its weighted scores (99.1% on both passes) sat below the default's spread of 99.4–99.6%. It saved about a quarter of the reasoning tokens in scenarios, at similar latency and cost. Reduced effort showed most in urgency classification: across `low`'s two smoke passes, urgency cases failed or needed a retry three times.
+- **The default fails the gate on its own.** It failed all four of its suite runs here, and `main` failed in #2205's A/B too. At 5 runs per case, the 80% bar flags one-off misses. These A/Bs therefore judged on two-pass spread rather than any single gate result. The gate itself is tracked in #2209.
+- **The setting stays.** Any installation can still choose an effort per tier. Production sets none.

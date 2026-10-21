@@ -44,6 +44,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **ADR-048 outcomes** — effort A/B found no winner; the standard tier stays at the model default. (#2044)
 - **`verification` open** — result now says the next step; email codes go through ceo-inbox. (#2201)
 - **Haiku 5.5 agent turns** — unset reasoning now uses the model default, so fast-tier agents think. (#2044)
 - **Non-agent LLM calls** — judges, infra, scoring, summarization and voice state no reasoning explicitly. (#2044)

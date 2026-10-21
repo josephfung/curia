@@ -17,11 +17,13 @@ first; the implementation PRs start when they are scheduled.
 | PR | Delivers | A/B |
 |---|---|---|
 | 0 | ADR-048, this design, and the trim plan's temperature note (#2079, merged) | none (docs only) |
-| 0b | ADR-048's 2026-10-20 amendment and this update | none (docs only) |
-| 1 | `llm.call` gains `reasoningTokens`, `reasoningEffort`, `upstreamProvider`; the suites print reasoning tokens and latency per agent | none (telemetry only; no request changes) |
-| 2 | Reasoning pass-back on both providers | main vs branch |
-| 3 | The `reasoning.effort` setting: registry, config, providers, runtime, and the suites' `--reasoning-effort` flag | none (no default changes; unit tests prove an unset setting sends nothing) |
-| 4 | The effort A/B on the standard tier, and the ADR's consequences updated with the result | unset vs `low` vs `max` |
+| 0b | ADR-048's 2026-10-20 amendment and this update (#2203) | none (docs only) |
+| 1 | `llm.call` gains `reasoningTokens`, `reasoningEffort`, `upstreamProvider`; the suites print reasoning tokens and latency per agent (#2204) | none (telemetry only; no request changes) |
+| 2 | Reasoning pass-back on both providers (#2205) | main vs branch: **passed** |
+| 3 | The `reasoning.effort` setting: registry, config, providers, runtime, and the suites' `--reasoning-effort` flag (#2206) | fast tier, unset vs `none`: **unset ships** |
+| 4 | The effort A/B on the standard tier, and the ADR's consequences updated with the result | unset vs `low` vs `max`: **no winner** |
+
+All four A/Bs are done; the results are below.
 
 Each PR updates `CHANGELOG.md`. PR 1 calls out the bus-event change as a public API change.
 
@@ -230,8 +232,8 @@ The model is production's standard-tier model, `deepseek/deepseek-v4.1-flash`.
 - Run smoke and scenarios side by side, smoke first, as the release behavior gate does.
 
 **Endpoint.**
-- Note which upstream endpoint served the calls, from PR 1's `upstreamProvider`.
-- Arms are compared only within one endpoint. If the routing pin changes between arms, rerun the earlier arm.
+- Note which upstream endpoint served the calls, from the suites' `endpoints` line (PR 1's `upstreamProvider`).
+- Arms are compared only within one endpoint, or on a similar mix. In the 2026-10-21 runs, OpenRouter spread every arm across about seven endpoints with similar mixes, and no single pin held. If one arm's mix differs markedly, rerun it.
 
 **Recorded per arm.**
 - Gate result, critical behaviors, and weighted score per scenario.
@@ -261,6 +263,7 @@ agent turns, so PR 3 does not ship in a release until this passes.
 
 **PR 4 (effort).**
 - Arms: unset (`high`), `low` and `max`, all on `main` after PR 3. Six runs. At the 2026-10-14 scenario cost (77 cases, about 38 minutes and $2.87 estimated per run) plus smoke, budget about $25 and four hours.
+- Command: `--model deepseek/deepseek-v4.1-flash --reasoning-effort standard=<effort>`. A bare `--reasoning-effort <effort>` sets every tier, but the change under test sets only `tiers.standard.reasoning`.
 - **`low` ships** under PR 2's rule. Its benefit is latency and cost.
 - **`max` ships** only if it beats unset beyond `main`'s spread (for example, a `known_failure` flips to pass) and the latency per agent is acceptable to the principal.
 - **Otherwise** the tier stays unset, and ADR-048's consequences record the result.
@@ -268,6 +271,53 @@ agent turns, so PR 3 does not ship in a release until this passes.
 
 **Fast tier efforts beyond the default.** Optional, and not part of #2044's acceptance: the PR 3
 check above compares only unset and `none`. Other efforts on Haiku 5.5 use the same command.
+
+## Results (2026-10-21)
+
+Run by the maintainer on `deepseek/deepseek-v4.1-flash`; the fast-tier check ran on `claude-haiku-5-5`. Each run had its own copy of the scenario database. ADR-048's Consequences summarise the outcome.
+
+### PR 2: pass-back (#2205)
+
+Run 2026-10-20: the branch at `2d7cda78` against `main` at `cd5d66ee`. One run per arm, with the two-run requirement relaxed as a per-run choice.
+
+| Arm | Smoke (pass / PASS*) | Scenarios gate | Criticals below threshold | Weighted | Est. cost |
+|---|---|---|---|---|---|
+| pr2 | 47/47 / 3 | FAIL (1 case) | `no_unbacked_promise` 60%, 10/10 on recheck | 99.3% | $4.06 |
+| main | 47/47 / 4 | FAIL (4 cases) | `principal_hears`, `raises_oldest_item`, `both_timezones` 60%; `composes_by_contact_id` 20% | 98.8% | $4.09 |
+
+**Passed.** No provider errors. The three behaviors where pr2 trailed `main` by one run each reached 10/10 on both arms when rerun ten times. `main`'s four failures are #2209. The `main` arm also carried #2195, which reaches none of those cases.
+
+### PR 3: fast tier
+
+Rerun on `5773da35`, the head after review.
+
+| Arm | Gate | Cases passed | Weighted | contacts p50/p90 | Output tokens (reasoning) | Cost |
+|---|---|---|---|---|---|---|
+| unset (default) | PASS | 10/10 | 100% | 1.2s / 2.0s | 21.6k (4.2k) | $0.19 |
+| `fast=none` | FAIL | 7/10 | 94% | 1.4s / 2.1s | 19.7k (0) | $0.19 |
+
+**Unset ships.** `fast=none` missed six critical behaviors across three cases.
+
+### PR 4: standard-tier effort
+
+On `5773da35`, with `--reasoning-effort standard=<effort>`; the default arm passed no flag.
+
+| Arm | Pass | Smoke (pass / PASS*) | Scenarios gate | Criticals below threshold | Weighted | Coordinator p50/p90 | Reasoning tokens (scenarios) | Est. cost |
+|---|---|---|---|---|---|---|---|---|
+| low | 1 | 47/47 / 4 | PASS | none | 99.1% | 1.9s / 4.8s | 343k | $3.89 |
+| default | 1 | 45/47 / 4 | FAIL | `no_retry_loop` 60% | 99.4% | 2.1s / 5.1s | 413k | $3.98 |
+| max | 1 | 18/47 / — | FAIL | widespread timeouts; 62/87 cases pass | 75.7% | 11.7s / 162s | 7.6M | $11.09 |
+| default | 2 | 46/47 / 4 | FAIL | `composes_by_contact_id` 60% | 99.6% | 1.8s / 5.2s | 482k | $3.94 |
+| low | 2 | 45/47 / 2 | FAIL | `both_timezones` 60% | 99.1% | 1.9s / 5.0s | 353k | $3.70 |
+
+**No winner; the tier stays unset.**
+- **`max`** is out on latency and quality. The calls that stalled made no progress for 100–205s while the model reasoned; none were request errors.
+- **`low`** misses all three parts of the ship rule:
+  - Its second pass fails the gate.
+  - Ten critical behaviors fall below the default's worse pass, against five that beat it. The default scored 1.0 on both passes for all ten.
+  - Its weighted score is below the default's 99.4–99.6% spread.
+
+The comparison spent about $26.60, against the budgeted $22; `max`'s scenarios run accounts for the overrun.
 
 ## Out of scope
 
