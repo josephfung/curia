@@ -124,6 +124,8 @@ export class BrowserService {
   private sessions: Map<SessionId, BrowserSession> = new Map();
   private sweepTimer: NodeJS.Timeout | null = null;
   private xvfbProcess: ChildProcess | null = null;
+  // Window manager + panel running on our Xvfb display (see startDesktopSession).
+  private desktopProcesses: ChildProcess[] = [];
 
   constructor(options: BrowserServiceOptions) {
     this.logger = options.logger.child({ service: 'BrowserService' });
@@ -160,8 +162,7 @@ export class BrowserService {
       // must clean up after itself for callers that don't call stop() on failure.
       if (this.xvfbProcess) {
         this.logger.error({ err }, 'Persistent context launch failed — killing the Xvfb display started for it');
-        this.xvfbProcess.kill();
-        this.xvfbProcess = null;
+        this.stopDisplay();
       }
       throw err;
     }
@@ -268,10 +269,7 @@ export class BrowserService {
       }
     }
 
-    if (this.xvfbProcess) {
-      this.xvfbProcess.kill();
-      this.xvfbProcess = null;
-    }
+    this.stopDisplay();
 
     this.logger.info('BrowserService stopped');
   }
@@ -636,6 +634,63 @@ export class BrowserService {
       setTimeout(() => { cleanup(); resolve(); }, 500);
     });
     this.logger.info('Xvfb started on DISPLAY=:99');
+
+    await this.startDesktopSession();
+  }
+
+  /**
+   * Run a window manager and a panel on our Xvfb display (#2221). Bare Xvfb has no work
+   * area, so screen.availHeight equals screen.height — the `noTaskbar` tell CreepJS counts
+   * toward "like headless". openbox publishes _NET_WORKAREA minus the strut tint2's bottom
+   * panel reserves, and Chrome reports that as the available screen.
+   *
+   * Best-effort: without the binaries the browser still works, just with the tell, so a
+   * failure warns instead of failing start().
+   */
+  private async startDesktopSession(): Promise<void> {
+    const programs: Array<[string, string[]]> = [['openbox', ['--sm-disable']], ['tint2', []]];
+    for (const [command, args] of programs) {
+      const proc = await this.spawnDesktopProcess(command, args);
+      // No point starting the panel without a WM: nothing would turn its strut into a work area.
+      if (!proc) return;
+      this.desktopProcesses.push(proc);
+    }
+    this.logger.info('Window manager and panel started on DISPLAY=:99');
+  }
+
+  /** Spawn one desktop program; resolve it if still running after 500ms, else warn and resolve null. */
+  private spawnDesktopProcess(command: string, args: string[]): Promise<ChildProcess | null> {
+    const proc = spawn(command, args, { stdio: 'ignore', detached: false });
+    return new Promise(resolve => {
+      const settle = (result: ChildProcess | null) => {
+        clearTimeout(timer);
+        proc.off('error', onError);
+        proc.off('close', onClose);
+        resolve(result);
+      };
+      const fail = (reason: string) => {
+        this.logger.warn(
+          { command, reason },
+          'Desktop session program failed to start — screen.availHeight will equal screen.height (a headless fingerprint tell); is it installed in the image?',
+        );
+        settle(null);
+      };
+      const onError = (err: Error) => fail(err.message);
+      const onClose = (code: number | null) => fail(`exited during startup (code ${code ?? 'null'})`);
+      proc.once('error', onError);
+      proc.once('close', onClose);
+      const timer = setTimeout(() => settle(proc), 500);
+    });
+  }
+
+  /** Kill the desktop session and the Xvfb display we spawned, if any. */
+  private stopDisplay(): void {
+    for (const proc of this.desktopProcesses) proc.kill();
+    this.desktopProcesses = [];
+    if (this.xvfbProcess) {
+      this.xvfbProcess.kill();
+      this.xvfbProcess = null;
+    }
   }
 }
 
