@@ -140,7 +140,14 @@ overrides:
   #   - GHSA-qw65-cvwx-89v3 / CVE-2026-84292 (HIGH): authority injection via unvalidated port
   #   - GHSA-jvvf-x445-j334 / CVE-2026-86818 (MED, <4.1.5): mailto header injection
   #   - GHSA-hrr3-gc8f-f4qj / CVE-2026-86472 (MED, <4.1.5): inconsistent host case normalization
-  fast-uri: '>=4.2.1'
+  # Raised off >=4.2.1 (#2216): 4.2.1-4.2.2 carry four more, published only on
+  # fastify/fast-uri (absent from GitHub's global DB), all fixed in 4.2.3. Not a
+  # backstop: resolution was 4.2.1, so the exposure was live.
+  #   - GHSA-w74x-v6f9-j3xg / CVE-2026-110306 (MED): scheme spoofing via percent-encoded scheme
+  #   - GHSA-wjr9-j795-jxcr / CVE-2026-110180 (MED): host confusion via WHATWG host canonicalization
+  #   - GHSA-333x-w4r6-6crp / CVE-2026-110725 (LOW): scheme injection via first-segment colon
+  #   - GHSA-xhq7-xmqj-769h / CVE-2026-110095 (LOW): path equivalence in relative-ref normalization
+  fast-uri: '>=4.2.3'
   # Raised off >=8.0.16 (#2032): that floor admitted 8.0.16-8.1.5, 8.2.0-8.2.2
   # and 8.3.0-8.3.2, which carry three advisories published only on vitejs/vite
   # (absent from GitHub's global advisory DB, so Dependabot raises no alert). Not a

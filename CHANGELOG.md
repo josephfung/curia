@@ -98,6 +98,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`fast-uri` floor** — raised to `>=4.2.3`, clearing four upstream-only advisories on the resolved 4.2.1. (#2216)
 - **Archive extraction** — bombs, zip-slip, encryption and nested archives fail closed. (#2208)
 - **Sign-in code scrub** — tracked codes become `[sign-in code]` in notes, reports, memory, sends and replies. (#2017)
 - **Browser code guard** — `web-browser` refuses to type or navigate a sign-in code off its own site. (#2017)
