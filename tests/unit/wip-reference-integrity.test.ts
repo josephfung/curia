@@ -50,13 +50,14 @@ function isSkippedDir(full: string, name: string): boolean {
 // Every hand-written text format in the durable trees. `.sh` and `.py` are here because
 // the durable trees really do contain them — the CI and docker test harnesses under
 // `tests/`, and skill fixture scripts — and a comment in one can cite a design doc exactly
-// like a comment in a `.ts` file can. Binary formats (`.pdf`) are excluded; they carry no
-// hand-written citations.
+// like a comment in a `.ts` file can. `.xml` is fixture text (the DMARC report), and a
+// comment in it can cite a design doc the same way. Binary formats (`.pdf`) are excluded;
+// they carry no hand-written citations.
 //
 // This list is not maintained by hand alone: the census test below walks the durable trees
 // and fails if any format present is neither matched here nor waived in
 // UNSCANNED_EXTENSIONS. Case-insensitive so `README.MD` is scanned like `readme.md`.
-const SCANNED_EXTENSION = /\.(?:[cm]?tsx?|js|mjs|cjs|sql|md|ya?ml|json|sh|py|pin)$/i;
+const SCANNED_EXTENSION = /\.(?:[cm]?tsx?|js|mjs|cjs|sql|md|ya?ml|json|sh|py|pin|xml)$/i;
 
 /** Extensions deliberately not scanned, with the reason. Asserted against the repo below. */
 const UNSCANNED_EXTENSIONS = new Set([
