@@ -49,34 +49,6 @@ function thinkingParamFrom(data: unknown): ThinkingBlockParam | RedactedThinking
   return undefined;
 }
 
-/** Hash of a request's system, tools and every message, as sent. */
-function requestPrefixHash(params: Anthropic.Messages.MessageCreateParamsNonStreaming): string {
-  const hasher = new PrefixHasher(params.system, params.tools);
-  for (const message of params.messages) hasher.addMessage(message);
-  return hasher.digestNow();
-}
-
-/**
- * Index of the first message whose passed-back thinking answered a different
- * prefix than the one now in front of it, or undefined when every block still
- * matches. A block with no recorded hash counts as stale.
- */
-function firstStaleReasoningTurn(
-  params: Anthropic.Messages.MessageCreateParamsNonStreaming,
-  reasoningTurns: ReadonlyMap<number, readonly ReasoningContent[]>,
-): number | undefined {
-  const hasher = new PrefixHasher(params.system, params.tools);
-  for (let i = 0; i < params.messages.length; i++) {
-    const blocks = reasoningTurns.get(i);
-    if (blocks) {
-      const current = hasher.digestNow();
-      if (blocks.some((block) => block.prefixHash !== current)) return i;
-    }
-    hasher.addMessage(params.messages[i]);
-  }
-  return undefined;
-}
-
 /**
  * Thinking blocks a response returned, in order, as reasoning blocks for the
  * next request of the tool loop (ADR-048 §1). `prefixHash` is set when the
@@ -305,30 +277,39 @@ export class AnthropicProvider implements LLMProvider {
     // Prefix guard (ADR-048 §1). On a model whose thinking is bound to the
     // request prefix, a thinking block sent back after system, tools or an
     // earlier message changed returns a 400. The tool loop does change them
-    // mid-loop (the Bullpen refresh, tool discovery), so drop thinking from the
-    // first turn whose prefix differs from the one its block answered, through
-    // the end. The docs allow dropping from a point to the end; the model loses
-    // that reasoning. The hash of this whole request goes on blocks it returns.
+    // mid-loop (the Bullpen refresh, tool discovery). So each turn's blocks are
+    // checked against the prefix as this request will send it, with earlier
+    // drops already applied: a block that answered a different prefix is
+    // dropped, and so is every later block written before the change, since
+    // its prefix held the dropped content. Blocks written after a change
+    // answered the reduced prefix, so they still match and go back. The hash
+    // of this whole request goes on the blocks it returns.
     let prefixHash: string | undefined;
     if (this.modelRegistry.thinkingBoundToPrefix(model)) {
-      if (reasoningTurns.size > 0) {
-        const staleFrom = firstStaleReasoningTurn(createParams, reasoningTurns);
-        if (staleFrom !== undefined) {
-          let dropped = 0;
-          for (let i = staleFrom; i < conversationMessages.length; i++) {
-            const message = conversationMessages[i]!;
-            if (typeof message.content === 'string') continue;
+      const hasher = new PrefixHasher(createParams.system, createParams.tools);
+      let dropped = 0;
+      let fromMessage: number | undefined;
+      for (let i = 0; i < conversationMessages.length; i++) {
+        const blocks = reasoningTurns.get(i);
+        const message = conversationMessages[i]!;
+        if (blocks && typeof message.content !== 'string') {
+          const current = hasher.digestNow();
+          if (blocks.some((block) => block.prefixHash !== current)) {
             const kept = message.content.filter((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking');
             dropped += message.content.length - kept.length;
             conversationMessages[i] = { ...message, content: kept };
+            fromMessage ??= i;
           }
-          this.logger.info(
-            { model, dropped, fromMessage: staleFrom, reason: 'prefix_changed' },
-            'Dropping passed-back thinking after a request prefix change',
-          );
         }
+        hasher.addMessage(conversationMessages[i]);
       }
-      prefixHash = requestPrefixHash(createParams);
+      if (dropped > 0) {
+        this.logger.info(
+          { model, dropped, fromMessage, reason: 'prefix_changed' },
+          'Dropping passed-back thinking after a request prefix change',
+        );
+      }
+      prefixHash = hasher.digestNow();
     }
 
     // Honor an optional AbortSignal passed via options.signal so callers can

@@ -783,6 +783,42 @@ describe('AnthropicProvider — reasoning pass-back (ADR-048 §1)', () => {
       expect(assistantBlockTypes(2)).toEqual([['text', 'tool_use'], ['text', 'tool_use']]);
     });
 
+    it('sends back the blocks written after a change on the rounds that follow', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      const changed = 'You are Curia.\n[Bullpen] new thread';
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_1'));
+      const r1 = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+      // The prefix changes here: r1's block is stale, and r2's block answers the reduced prefix.
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_2'));
+      const r2 = await round(provider, 'claude-haiku-5-5', r1.next, changed);
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_3'));
+      const r3 = await round(provider, 'claude-haiku-5-5', r2.next, changed);
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      await provider.chat({ messages: [{ role: 'system', content: changed }, ...r3.next], tools, model: 'claude-haiku-5-5' });
+
+      expect(assistantBlockTypes(1)).toEqual([['text', 'tool_use']]);
+      expect(assistantBlockTypes(2)).toEqual([['text', 'tool_use'], ['thinking', 'text', 'tool_use']]);
+      expect(assistantBlockTypes(3)).toEqual([
+        ['text', 'tool_use'],
+        ['thinking', 'text', 'tool_use'],
+        ['thinking', 'text', 'tool_use'],
+      ]);
+    });
+
+    it('keeps each kept block on the exact prefix it answered when the prefix changes back', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      const changed = 'You are Curia.\n[Bullpen] new thread';
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_1'));
+      const r1 = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_2'));
+      const r2 = await round(provider, 'claude-haiku-5-5', r1.next, changed);
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      // Back to the original system prompt: r1's block matches again, and r2's,
+      // written while r1's was gone, no longer does.
+      await provider.chat({ messages: [{ role: 'system', content: 'You are Curia.' }, ...r2.next], tools, model: 'claude-haiku-5-5' });
+      expect(assistantBlockTypes(2)).toEqual([['thinking', 'text', 'tool_use'], ['text', 'tool_use']]);
+    });
+
     it('drops every block after the tool list changes', async () => {
       const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
       mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking]));

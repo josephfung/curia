@@ -106,9 +106,9 @@ The `tool_use` variants of `LLMResponse` and `LLMStreamEvent` gain
 - **Model mismatch:** blocks from another model are dropped.
 - **Prefix guard** (ADR-048 §1, amended). The registry gains `thinkingBoundToPrefix: true`, set on `claude-haiku-5-5`.
   - **Capture:** for a flagged model, every captured block gets `prefixHash`, the SHA-256 of the mapped `system`, `tools` and `messages` the request sent.
-  - **Send:** for a flagged model, walk the assistant turns that carry Anthropic blocks in order. For the turn at index `i`, hash the mapped `system`, `tools` and `messages[0..i)` of the request being built. At the first turn whose hash differs from its block's `prefixHash` (or has none), drop that turn's blocks and every later turn's blocks.
+  - **Send:** for a flagged model, walk the messages in order with one incremental hash of the mapped `system`, `tools` and messages so far, with any drops already applied. At each turn that carries Anthropic blocks, a block whose `prefixHash` differs from that hash (or that has none) is dropped. Blocks written after a change answered the reduced prefix, so they match and go back on later rounds (#2205 review).
   - **Log:** one `info` line per request that drops blocks, with the model, the number dropped and `reason: 'prefix_changed'`.
-  - **Today's triggers:** `refreshBullpenContext` replacing the Bullpen system message, and tool discovery adding tools. Both change the prefix, so the turns after them lose the earlier reasoning.
+  - **Today's triggers:** `refreshBullpenContext` replacing the Bullpen system message, and tool discovery adding tools. Both change the prefix, so the reasoning written before the change is lost, and reasoning written after it is kept.
   - **Not flagged:** the 4.6 models do not run the check, so their blocks always go back.
 
 Until PR 3 there is nothing to capture here, because thinking is off. The code ships now so that turning thinking on cannot produce the 400 that a missing or stale thinking block causes.
