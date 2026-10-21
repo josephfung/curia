@@ -7,6 +7,10 @@ import { Sidebar } from '../components/Sidebar.js';
 import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
+import {
+  emptyFilter, filterOptions, isFilterActive, matchesFilter, toggleFilterValue,
+} from './kg-filters.js';
+import type { KgFilter, KgFilterAxis, KgFilterable } from './kg-filters.js';
 
 // Register fcose layout plugin once at module scope.
 cytoscape.use(fcose);
@@ -91,19 +95,20 @@ const DECAY_SCORE: Record<string, number> = {
 // nearby. High-traffic entity types need more space to avoid crowding.
 function nodeRepulsionFn(node: cytoscape.NodeSingular): number {
   const type = node.data('type') as string;
-  if (type === 'fact') return 1_000;
-  if (type === 'person' || type === 'organization' || type === 'event') return 7_500;
-  return 4_500; // project, decision, concept — fCoSE default
+  if (type === 'fact') return 3_000;
+  if (type === 'person' || type === 'organization' || type === 'event') return 20_000;
+  return 12_000; // project, decision, concept
 }
 
 // Fact edges stay short so attributes cluster against their parent entity.
-// Strong relationship pairs sit visually adjacent; generic edges settle at 80px.
+// Strong relationship pairs sit visually adjacent; generic edges settle at 150px.
+// Lengths are sized against the 90px label width so neighbours' labels don't collide.
 function idealEdgeLengthFn(edge: cytoscape.EdgeSingular): number {
   const srcType = edge.source().data('type') as string;
   const tgtType = edge.target().data('type') as string;
-  if (srcType === 'fact' || tgtType === 'fact') return 40;
-  if (STRONG_EDGES.has(edge.data('label') as string)) return 60;
-  return 80;
+  if (srcType === 'fact' || tgtType === 'fact') return 70;
+  if (STRONG_EDGES.has(edge.data('label') as string)) return 110;
+  return 150;
 }
 
 // Strong relationships attract hard (0.9). For others: weight by confidence
@@ -117,12 +122,21 @@ function edgeElasticityFn(edge: cytoscape.EdgeSingular): number {
   return Math.max(0.1, conf * Math.min(srcScore, tgtScore) * 0.7);
 }
 
+// Shared spacing options. nodeDimensionsIncludeLabels makes fCoSE treat each
+// node's label as part of its footprint, which is what stops labels overlapping;
+// the lower gravity lets components spread instead of being pulled into a ball.
+const FCOSE_SPACING = {
+  nodeDimensionsIncludeLabels: true,
+  nodeSeparation: 120,
+  gravity: 0.1,
+};
+
 // fcose layout options per the issue spec.
 const FCOSE_FULL = {
   name: 'fcose',
   animate: false,
   fit: true,
-  nodeSeparation: 80,
+  ...FCOSE_SPACING,
   randomize: true,
   idealEdgeLength: idealEdgeLengthFn,
   nodeRepulsion: nodeRepulsionFn,
@@ -133,7 +147,7 @@ const FCOSE_EXPAND = {
   name: 'fcose',
   animate: true,
   fit: false,
-  nodeSeparation: 80,
+  ...FCOSE_SPACING,
   randomize: false,
   animationDuration: 400,
   idealEdgeLength: idealEdgeLengthFn,
@@ -181,6 +195,8 @@ const CY_STYLE = [
   { selector: 'node[type="fact"]:selected', style: { 'font-size': 9 } },
   // Focal node: white border on the most recently tapped node.
   { selector: 'node.focal', style: { 'border-width': 3, 'border-color': '#FAFAFA', 'border-opacity': 0.9 } },
+  // Filter panel (#351): display:none also hides every edge touching the node.
+  { selector: 'node.filtered-out', style: { display: 'none' } },
   {
     selector: 'edge',
     style: {
@@ -254,6 +270,36 @@ function applyColorMode(cy: cytoscape.Core, mode: ColorMode) {
   } else {
     cy.nodes().removeStyle('background-color');
   }
+}
+
+// Hide nodes that don't match the filter (their edges follow) and show the
+// rest. Runs after every cy.add() so expanded nodes respect active filters.
+function applyFilter(cy: cytoscape.Core, filter: KgFilter) {
+  cy.batch(() => {
+    cy.nodes().forEach(node => {
+      const visible = matchesFilter(
+        { type: node.data('type') as string, sensitivity: node.data('sensitivity') as string },
+        filter,
+      );
+      node.toggleClass('filtered-out', !visible);
+    });
+  });
+}
+
+// Re-apply the active filter and report the canvas's type/sensitivity mix for
+// the checklist options. Call after every add/remove of elements.
+function syncFilter(cy: cytoscape.Core, filter: KgFilter, setFacets: (f: KgFilterable[]) => void) {
+  applyFilter(cy, filter);
+  setFacets(cy.nodes().map(n => ({
+    type: n.data('type') as string,
+    sensitivity: n.data('sensitivity') as string,
+  })));
+}
+
+function graphStatus(cy: cytoscape.Core): string {
+  const hidden = cy.nodes('.filtered-out').length;
+  const base = `${cy.nodes().length} nodes · ${cy.edges().length} edges`;
+  return hidden > 0 ? `${base} · ${hidden} hidden by filters` : base;
 }
 
 async function errorMessage(res: Response): Promise<string> {
@@ -384,12 +430,18 @@ export default function KgPage() {
   const [search, setSearch] = useState(initialQ ?? '');
   const [selectedNode, setSelectedNode] = useState<ApiKgNode | null>(null);
   const [colorMode, setColorMode] = useState<ColorMode>('type');
+  const [filter, setFilter] = useState<KgFilter>(emptyFilter);
+  // type/sensitivity of every node on the canvas — feeds the filter checklists.
+  const [canvasFacets, setCanvasFacets] = useState<KgFilterable[]>([]);
   const [status, setStatus] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Track color mode in a ref so the cytoscape event handlers can read the
   // latest value without capturing a stale closure.
   const colorModeRef = useRef<ColorMode>('type');
+  // Same reason for the filter: renderGraph/expandNeighborhood run from the
+  // mount-time tap handler and must apply the current filter to new nodes.
+  const filterRef = useRef<KgFilter>(emptyFilter());
 
   // Mirror search state in a ref so the single-mount Cytoscape tap handler
   // can always read the current value without a stale closure.
@@ -447,7 +499,7 @@ export default function KgPage() {
       const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
       if (cy.destroyed()) return;
       renderGraph(cy, data);
-      setStatus(`${data.nodes.length} nodes · ${data.edges.length} edges`);
+      setStatus(graphStatus(cy));
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] hero graph load failed:', err);
@@ -468,6 +520,7 @@ export default function KgPage() {
     cy.resize();
     cy.layout(FCOSE_FULL as unknown as cytoscape.LayoutOptions).run();
     applyColorMode(cy, colorModeRef.current);
+    syncFilter(cy, filterRef.current, setCanvasFacets);
   }
 
   // ── Load a node's neighborhood and replace canvas ─────────────────────────
@@ -522,7 +575,7 @@ export default function KgPage() {
       syncUrl(searchRef.current, focused?.id);
       cy.elements().removeClass('focal');
       if (focused) cy.getElementById(focused.id).addClass('focal');
-      setStatus(`${data.nodes.length} nodes · ${data.edges.length} edges`);
+      setStatus(graphStatus(cy));
       return { ok: true };
     } catch (err) {
       // Another load took over neighborhoodAbortRef — do not hero-fallback (#1881 review).
@@ -557,6 +610,7 @@ export default function KgPage() {
         if (!cy.destroyed()) {
           cy.getElementById(nodeId).remove();
           updateDegrees(cy);
+          syncFilter(cy, filterRef.current, setCanvasFacets);
         }
         setSelectedNode(null);
         syncUrl(searchRef.current, undefined);
@@ -576,6 +630,7 @@ export default function KgPage() {
         cy.add(newElements);
         updateDegrees(cy);
         applyColorMode(cy, colorModeRef.current);
+        syncFilter(cy, filterRef.current, setCanvasFacets);
         // randomize: false warms fCoSE from current positions without hard-pinning
         // existing nodes, so the graph re-settles globally instead of squeezing
         // new nodes into whatever gaps remain.
@@ -585,7 +640,7 @@ export default function KgPage() {
       cy.elements().removeClass('focal');
       cy.getElementById(nodeId).addClass('focal');
 
-      setStatus(`${cy.nodes().length} nodes · ${cy.edges().length} edges`);
+      setStatus(graphStatus(cy));
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] expand failed:', err);
@@ -696,6 +751,43 @@ export default function KgPage() {
     if (cy) applyColorMode(cy, mode);
   }
 
+  // ── Filter panel ───────────────────────────────────────────────────────────
+
+  function updateFilter(next: KgFilter) {
+    setFilter(next);
+    filterRef.current = next;
+    const cy = cyRef.current;
+    if (cy) {
+      applyFilter(cy, next);
+      setStatus(graphStatus(cy));
+    }
+  }
+
+  const options = filterOptions(canvasFacets, filter);
+  const filterActive = isFilterActive(filter);
+  // Search results respect the filter too, so the list never offers a node
+  // the canvas would hide.
+  const visibleSidebarNodes = sidebarNodes.filter(n => matchesFilter(n, filter));
+
+  function renderFilterAxis(axis: KgFilterAxis, legend: string, opts: typeof options.types) {
+    return (
+      <fieldset className="kg-filter-axis">
+        <legend>{legend}</legend>
+        {opts.map(opt => (
+          <label key={opt.value} className="kg-filter-option">
+            <input
+              type="checkbox"
+              checked={filter[axis].has(opt.value)}
+              onChange={() => updateFilter(toggleFilterValue(filterRef.current, axis, opt.value))}
+            />
+            <span className="kg-filter-option-name">{opt.value}</span>
+            <span className="kg-filter-option-count">{opt.count}</span>
+          </label>
+        ))}
+      </fieldset>
+    );
+  }
+
   // ── Sidebar search ─────────────────────────────────────────────────────────
 
   function handleSearch(q: string) {
@@ -768,17 +860,32 @@ export default function KgPage() {
                   />
                   <button onClick={submitSearch}>Search</button>
                 </div>
+                <details className="kg-filters" open>
+                  <summary>
+                    Filters{filterActive ? ` (${filter.types.size + filter.sensitivities.size})` : ''}
+                    {filterActive && (
+                      <button
+                        className="kg-filters-clear"
+                        onClick={e => { e.preventDefault(); updateFilter(emptyFilter()); }}
+                      >
+                        Clear filters
+                      </button>
+                    )}
+                  </summary>
+                  {renderFilterAxis('types', 'Type', options.types)}
+                  {renderFilterAxis('sensitivities', 'Sensitivity', options.sensitivities)}
+                </details>
                 <div className="kg-sidebar-list">
                   {loadError ? (
                     <p style={{ fontSize: 12, color: 'var(--app-destructive)', margin: 0 }}>
                       {loadError}
                     </p>
-                  ) : sidebarNodes.length === 0 ? (
+                  ) : visibleSidebarNodes.length === 0 ? (
                     <p style={{ fontSize: 12, color: 'var(--app-fg-muted)', margin: 0 }}>
-                      No matching nodes.
+                      {sidebarNodes.length > 0 ? 'No nodes match the active filters.' : 'No matching nodes.'}
                     </p>
                   ) : (
-                    sidebarNodes.map(node => (
+                    visibleSidebarNodes.map(node => (
                       <button
                         key={node.id}
                         className="kg-node-card"

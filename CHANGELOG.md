@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **KG explorer filter panel** — type and sensitivity checklists hide non-matching nodes and filter search results. (#351)
 - **`llm.call` prefix-guard drops** — **public API:** optional `reasoningBlocksDropped`; suites also print serving endpoints. (#2044)
 - **`archive-extract`** — opens zip and gzip attachments within size and path limits. (#2208)
 - **Sign-in details with secrets** — `secret-capture-request` stores login URL and username; `list-user-secrets` returns them. (#2201)
@@ -46,6 +47,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **KG explorer layout** — nodes spread further apart and labels no longer overlap. (#351)
 - **Console registry** — shows optional capabilities beside a tool's required ones. (#2028)
 - **ADR-048 outcomes** — effort A/B found no winner; the standard tier stays at the model default. (#2044)
 - **`file-parse`** — reads XML, text and Markdown, including by filename extension. (#2208)

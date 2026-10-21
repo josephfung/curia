@@ -33,10 +33,20 @@ If `WEB_APP_BOOTSTRAP_SECRET` is missing, the KG API routes are not registered a
 
 The graph view uses a **physics-aware layout** so the structure of the graph is legible rather than a uniform hairball:
 
-- **Per-type node repulsion** — node types repel at different strengths (facts ~1,000; person/org/event ~7,500), so high-level entities spread out while their facts cluster near them.
-- **Per-edge ideal length** — edges have type-dependent rest lengths (facts ~40px; strong relationships ~60px).
+- **Per-type node repulsion** — node types repel at different strengths (facts ~3,000; project/decision/concept ~12,000; person/org/event ~20,000), so high-level entities spread out while their facts cluster near them.
+- **Per-edge ideal length** — edges have type-dependent rest lengths (facts ~70px; strong relationships ~110px; other edges ~150px), sized against the label width so neighbouring labels don't collide.
+- **Label-aware spacing** — node footprints include their labels and gravity is low (0.1), so labels don't overlap and components spread out.
 - **Per-edge elasticity** — edge stiffness scales with the edge's strength/confidence, so stronger relationships pull their endpoints closer.
 - **Degree-based node sizing** — more-connected nodes render larger.
 - **Viewport centering** — the view centers on the focal node.
+
+## Filter panel
+
+The left sidebar has a **filter panel** with two checklist axes, populated from the nodes on the canvas (#351):
+
+- **Type** — every node type present, with counts.
+- **Sensitivity** — `public`, `internal`, `confidential`, `restricted`, always listed.
+
+Values are OR'd within an axis and AND'd across axes; an axis with nothing checked is unconstrained. Filtering is client-side: non-matching nodes and their edges are hidden without re-fetching, nodes added by neighborhood expansion are filtered immediately, and the sidebar search results only list matching nodes. **Clear filters** resets to show-all.
 
 On default mount, the explorer loads the **principal's 2-hop neighborhood** so the most relevant subgraph is visible without a manual search.
