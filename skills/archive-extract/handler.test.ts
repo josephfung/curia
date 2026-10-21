@@ -22,6 +22,8 @@ interface ZipMember {
   encrypted?: boolean;
   /** Unix mode, e.g. 0o120777 for a symlink. Sets the "made by Unix" version too. */
   unixMode?: number;
+  /** Made-by host for a `unixMode` entry. Defaults to 3 (Unix); 19 is OS X/Darwin. */
+  madeByHost?: number;
 }
 
 function buildZip(members: ZipMember[]): Buffer {
@@ -36,7 +38,7 @@ function buildZip(members: ZipMember[]): Buffer {
     let flags = 0x800;
     if (member.encrypted) flags |= 0x1;
     const uncompressedSize = member.declaredUncompressedSize ?? member.data.length;
-    const versionMadeBy = member.unixMode != null ? ((3 << 8) | 20) : 20;
+    const versionMadeBy = member.unixMode != null ? (((member.madeByHost ?? 3) << 8) | 20) : 20;
     const external = member.unixMode != null ? (member.unixMode << 16) >>> 0 : 0;
 
     const local = Buffer.alloc(30 + nameBuf.length + payload.length);
@@ -429,6 +431,32 @@ describe('ArchiveExtractHandler', () => {
     ]);
     expect(extractCtx.writeTempFile).toHaveBeenCalledTimes(1);
     expect(extractCtx.writeTempFile.mock.calls[0]?.[1]).toBe('keep.txt');
+  });
+
+  it('reads Unix mode bits from OS X (made-by host 19) entries too', async () => {
+    const zip = buildZip([
+      { name: 'mac-link', data: Buffer.from('outside-target'), unixMode: 0o120755, madeByHost: 19 },
+      { name: 'mac-fifo', data: Buffer.alloc(0), method: 'store', unixMode: 0o010644, madeByHost: 19 },
+      { name: 'mac.txt', data: Buffer.from('kept'), unixMode: 0o100644, madeByHost: 19 },
+    ]);
+    const extractCtx = ctx({
+      temp_file_url: await stage(zip, 'mac.zip'),
+      mime_type: 'application/zip',
+      filename: 'mac.zip',
+    });
+    const extracted = await handler.execute(extractCtx);
+    expect(extracted.success).toBe(true);
+    if (!extracted.success) return;
+    const data = extracted.data as {
+      entries: Array<{ filename: string }>;
+      skipped: Array<{ filename: string; reason: string }>;
+    };
+    expect(data.entries.map((entry) => entry.filename)).toEqual(['mac.txt']);
+    expect(data.skipped).toEqual([
+      { filename: 'mac-link', reason: 'symlink' },
+      { filename: 'mac-fifo', reason: 'not a regular file' },
+    ]);
+    expect(extractCtx.writeTempFile).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an archive total past 25 MB uncompressed', async () => {

@@ -273,7 +273,8 @@ function zipFailure(err: unknown): ArchiveExtractError {
 function classifyEntry(entry: YauzlEntry, rawName: string): 'file' | 'directory' | 'symlink' | 'not a regular file' {
   if (rawName.endsWith('/') || rawName.endsWith('\\')) return 'directory';
   const host = entry.versionMadeBy >>> 8;
-  if (host === 3) {
+  // 3 = Unix, 19 = OS X/Darwin (APPNOTE 4.4.2.2); both store Unix mode bits in the high word.
+  if (host === 3 || host === 19) {
     const mode = (entry.externalFileAttributes >>> 16) & 0xffff;
     const type = mode & 0o170000;
     if (type === 0o040000) return 'directory';
