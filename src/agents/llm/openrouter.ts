@@ -128,13 +128,15 @@ export function usageFromOpenRouter(usage: CompletionUsage | null | undefined): 
   const cacheCreationInputTokens = tokenCount(details.cache_write_tokens);
   // reasoning_tokens is a subset of completion_tokens, so it stays inside
   // outputTokens. The split is what lets an archive explain a large bill.
-  const reasoningTokens = tokenCount(usage?.completion_tokens_details?.reasoning_tokens);
+  // Left unset when the response carries no count, so llm.call records null
+  // ("not reported") rather than a reported zero.
+  const rawReasoningTokens = usage?.completion_tokens_details?.reasoning_tokens;
   return {
     inputTokens: Math.max(0, promptTokens - cacheReadInputTokens - cacheCreationInputTokens),
     outputTokens: tokenCount(usage?.completion_tokens),
     cacheCreationInputTokens,
     cacheReadInputTokens,
-    reasoningTokens,
+    ...(typeof rawReasoningTokens === 'number' ? { reasoningTokens: tokenCount(rawReasoningTokens) } : {}),
   };
 }
 
@@ -655,7 +657,6 @@ export class OpenRouterProvider implements LLMProvider {
         outputTokens: 0,
         cacheCreationInputTokens: 0,
         cacheReadInputTokens: 0,
-        reasoningTokens: 0,
       };
       let providerRequestId = '';
       let actualModel = model;

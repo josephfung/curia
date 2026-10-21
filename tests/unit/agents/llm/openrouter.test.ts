@@ -93,7 +93,6 @@ describe('OpenRouterProvider', () => {
       outputTokens: 5,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 0,
-      reasoningTokens: 0,
     });
 
     // Provenance
@@ -499,7 +498,6 @@ describe('usageFromOpenRouter', () => {
       outputTokens: 60,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 10318,
-      reasoningTokens: 0,
     });
   });
 
@@ -519,7 +517,6 @@ describe('usageFromOpenRouter', () => {
       outputTokens: 5,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 0,
-      reasoningTokens: 0,
     });
   });
 
@@ -535,13 +532,22 @@ describe('usageFromOpenRouter', () => {
     expect(usage.cacheCreationInputTokens).toBe(8);
   });
 
+  it('leaves reasoningTokens unset when the response reports no count, and keeps a reported zero', () => {
+    expect(usageFromOpenRouter({ prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 })).not.toHaveProperty('reasoningTokens');
+    expect(usageFromOpenRouter({
+      prompt_tokens: 3,
+      completion_tokens: 1,
+      total_tokens: 4,
+      completion_tokens_details: { reasoning_tokens: 0 },
+    }).reasoningTokens).toBe(0);
+  });
+
   it('returns zeros for missing usage', () => {
     expect(usageFromOpenRouter(undefined)).toEqual({
       inputTokens: 0,
       outputTokens: 0,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 0,
-      reasoningTokens: 0,
     });
   });
 
@@ -635,7 +641,6 @@ describe('OpenRouterProvider — cache usage', () => {
       outputTokens: 40,
       cacheCreationInputTokens: 600,
       cacheReadInputTokens: 4000,
-      reasoningTokens: 0,
     });
   });
 });
@@ -685,7 +690,7 @@ describe('OpenRouterProvider — stream', () => {
       {
         type: 'message_end',
         content: 'hello',
-        usage: { inputTokens: 12, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, reasoningTokens: 0 },
+        usage: { inputTokens: 12, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
         provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-123' },
       },
     ]);
@@ -753,7 +758,7 @@ describe('OpenRouterProvider — stream', () => {
       type: 'tool_use',
       toolCalls: [{ id: 'call_1', name: 'search', input: { query: 'curia' } }],
       content: 'Checking. ',
-      usage: { inputTokens: 22, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, reasoningTokens: 0 },
+      usage: { inputTokens: 22, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
       provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-tool' },
     });
   });
