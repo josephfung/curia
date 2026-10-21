@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { emptyFilter, filterOptions, isFilterActive, matchesFilter, toggleFilterValue } from './kg-filters.js';
+import { emptyFilter, filterOptions, isFilterActive, matchesFilter, normalizeSensitivity, toggleFilterValue } from './kg-filters.js';
 import type { KgFilter } from './kg-filters.js';
 
 const filter = (types: string[], sensitivities: string[]): KgFilter => ({
@@ -88,5 +88,19 @@ describe('filterOptions', () => {
     const opts = filterOptions(nodes, filter(['project'], ['secret']));
     expect(opts.types).toContainEqual({ value: 'project', count: 0 });
     expect(opts.sensitivities.at(-1)).toEqual({ value: 'secret', count: 0 });
+  });
+});
+
+describe('normalizeSensitivity', () => {
+  it('maps an empty or missing sensitivity to internal, matching the canvas elements', () => {
+    expect(normalizeSensitivity('')).toBe('internal');
+    expect(normalizeSensitivity(null)).toBe('internal');
+    expect(normalizeSensitivity(undefined)).toBe('internal');
+    expect(normalizeSensitivity('restricted')).toBe('restricted');
+  });
+
+  it('lets an empty-sensitivity node pass an internal filter', () => {
+    const f = { types: new Set<string>(), sensitivities: new Set(['internal']) };
+    expect(matchesFilter({ type: 'person', sensitivity: normalizeSensitivity('') }, f)).toBe(true);
   });
 });

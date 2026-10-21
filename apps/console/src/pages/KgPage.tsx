@@ -8,7 +8,7 @@ import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 import {
-  emptyFilter, filterOptions, isFilterActive, matchesFilter, toggleFilterValue,
+  emptyFilter, filterOptions, isFilterActive, matchesFilter, normalizeSensitivity, toggleFilterValue,
 } from './kg-filters.js';
 import type { KgFilter, KgFilterAxis, KgFilterable } from './kg-filters.js';
 
@@ -125,7 +125,11 @@ function edgeElasticityFn(edge: cytoscape.EdgeSingular): number {
 // Shared spacing options. nodeDimensionsIncludeLabels makes fCoSE treat each
 // node's label as part of its footprint, which is what stops labels overlapping;
 // the lower gravity lets components spread instead of being pulled into a ball.
+// 'proof' quality is the documented requirement for both
+// nodeDimensionsIncludeLabels and the expansion layout's randomize: false;
+// its slower cooling also settles the spread-out layout more fully.
 const FCOSE_SPACING = {
+  quality: 'proof',
   nodeDimensionsIncludeLabels: true,
   nodeSeparation: 120,
   gravity: 0.1,
@@ -226,7 +230,7 @@ function nodeToElement(n: ApiKgNode): cytoscape.ElementDefinition {
       type: n.type,
       confidence: n.confidence ?? 0.5,
       decayClass: n.decayClass || 'permanent',
-      sensitivity: n.sensitivity || 'internal',
+      sensitivity: normalizeSensitivity(n.sensitivity),
       properties: n.properties ?? {},
       source: n.source ?? '',
       createdAt: n.createdAt ?? '',
@@ -767,7 +771,8 @@ export default function KgPage() {
   const filterActive = isFilterActive(filter);
   // Search results respect the filter too, so the list never offers a node
   // the canvas would hide.
-  const visibleSidebarNodes = sidebarNodes.filter(n => matchesFilter(n, filter));
+  const visibleSidebarNodes = sidebarNodes.filter(n =>
+    matchesFilter({ type: n.type, sensitivity: normalizeSensitivity(n.sensitivity) }, filter));
 
   function renderFilterAxis(axis: KgFilterAxis, legend: string, opts: typeof options.types) {
     return (

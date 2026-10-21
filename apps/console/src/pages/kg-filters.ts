@@ -25,6 +25,15 @@ export interface KgFilterOption {
 // Canonical order for sensitivity levels, least to most sensitive.
 export const SENSITIVITY_LEVELS = ['public', 'internal', 'confidential', 'restricted'] as const;
 
+// The API can return an empty sensitivity; the explorer treats that as
+// `internal`. Canvas elements and sidebar results must normalise the same way
+// or the two can disagree about whether a node passes the filter.
+export const DEFAULT_SENSITIVITY = 'internal';
+
+export function normalizeSensitivity(sensitivity: string | null | undefined): string {
+  return sensitivity || DEFAULT_SENSITIVITY;
+}
+
 export function emptyFilter(): KgFilter {
   return { types: new Set(), sensitivities: new Set() };
 }
