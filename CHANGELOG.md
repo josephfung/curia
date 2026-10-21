@@ -102,6 +102,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Optional capabilities** — a non-array declaration is dropped so the registry drawer still opens. (#2028)
 - **WIP citation scan** — XML fixtures are scanned like other text. (#2208)
 - **Shadow pairing** — a shadow pairs only with a send within 72 hours; each send scores one shadow. (#2195)
 - **Budget-exhausted sign-ins** — turn-limit replies name the waiting sign-in instead of a generic error. (#2201)

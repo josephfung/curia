@@ -108,6 +108,14 @@ export function parseToolDiscoveryDir(
     const requiresSecrets = Array.isArray(rawRequires)
       ? rawRequires.filter((s): s is string => typeof s === 'string')
       : undefined;
+    // Same boundary for optional_capabilities (#2028). A string would reach the
+    // registry API and throw in the drawer's `.join()`, taking the drawer down.
+    // Non-array → undefined; non-string entries are dropped. The raw manifest is
+    // left alone so an enabled tool still fails closed at load time.
+    const rawOptional: unknown = manifest.optional_capabilities;
+    const optionalCapabilities = Array.isArray(rawOptional)
+      ? rawOptional.filter((s): s is string => typeof s === 'string')
+      : undefined;
     if (entryName !== manifest.name) {
       logger?.warn(
         { dir, manifestName: manifest.name },
@@ -125,7 +133,7 @@ export function parseToolDiscoveryDir(
         actionRisk: manifest.action_risk,
         sensitivity: manifest.sensitivity,
         capabilities: manifest.capabilities,
-        optionalCapabilities: manifest.optional_capabilities,
+        optionalCapabilities,
         // PR2 (#939): surface the install-time secrets gate to the registry UI + service.
         // Normalized above to a clean string[] | undefined.
         requiresSecrets,

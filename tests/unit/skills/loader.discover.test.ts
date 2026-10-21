@@ -114,6 +114,20 @@ describe('discoverToolManifests', () => {
     expect(found[0]!.metadata?.optionalCapabilities).toEqual(['taskRepo']);
   });
 
+  it('drops a non-array optional_capabilities and non-string entries (#2028)', () => {
+    writeSkill(dir, 'string-opt', {
+      name: 'string-opt', description: 'd', version: '1.0.0', action_risk: 'none',
+      optional_capabilities: 'taskRepo',
+    }, 'throw new Error("should not import");');
+    writeSkill(dir, 'mixed-opt', {
+      name: 'mixed-opt', description: 'd', version: '1.0.0', action_risk: 'none',
+      optional_capabilities: ['taskRepo', 1, null, 'verification'],
+    }, 'throw new Error("should not import");');
+    const found = discoverToolManifests(dir);
+    expect(found.find(d => d.name === 'string-opt')?.metadata?.optionalCapabilities).toBeUndefined();
+    expect(found.find(d => d.name === 'mixed-opt')?.metadata?.optionalCapabilities).toEqual(['taskRepo', 'verification']);
+  });
+
   it('leaves optionalCapabilities unset when the manifest omits optional_capabilities (#2028)', () => {
     writeSkill(dir, 'plain', {
       name: 'plain', description: 'd', version: '1.0.0', action_risk: 'none',
