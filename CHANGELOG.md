@@ -106,7 +106,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Browser fingerprint** — window fits a 1920×1080 screen with a desktop panel; new `browser.languages` fallback list. (#2221)
+- **Browser fingerprint** — window fits a 1920×1080 screen with a desktop panel. (#2221)
+- **`browser.languages`** — ordered `navigator.languages` and `Accept-Language` list; `locale` goes first. (#2221)
 
 - **`ceo-inbox-draft-compose`** — recipients follow subject and body, so order-enforcing endpoints stop dropping the To line. (#2209)
 - **Optional capabilities** — a non-array declaration is dropped so the registry drawer still opens. (#2028)
