@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRows, collateralPins, registryPathSegment, uninstallBlockedReason } from './registry-rows.js';
+import { buildRows, collateralPins, formatCapabilities, registryPathSegment, uninstallBlockedReason } from './registry-rows.js';
 import type { RegistryEntry } from './registry-rows.js';
 
 const entry = (name: string, over: Partial<RegistryEntry> = {}): RegistryEntry => ({
@@ -170,5 +170,25 @@ describe('uninstallBlockedReason — must mirror the server, not exceed it', () 
     expect(
       uninstallBlockedReason(bundle('ceo-inbox', ['ceo-inbox-list'], [], 'enabled')),
     ).not.toBeNull();
+  });
+});
+
+describe('formatCapabilities (#2028)', () => {
+  it('labels skill-activate taskRepo as optional beside its required capability', () => {
+    expect(formatCapabilities(['skillRegistry'], ['taskRepo']))
+      .toBe('skillRegistry · Optional: taskRepo');
+  });
+
+  it('renders a tool with no optional capabilities as it does today', () => {
+    expect(formatCapabilities(['skillRegistry'], undefined)).toBe('skillRegistry');
+    expect(formatCapabilities(['skillRegistry'], [])).toBe('skillRegistry');
+    expect(formatCapabilities(['bus', 'agentRegistry'], undefined)).toBe('bus, agentRegistry');
+    expect(formatCapabilities([], undefined)).toBe('—');
+    expect(formatCapabilities(undefined, undefined)).toBeNull();
+  });
+
+  it('shows an optional-only list without a required prefix', () => {
+    expect(formatCapabilities(undefined, ['taskRepo'])).toBe('Optional: taskRepo');
+    expect(formatCapabilities([], ['taskRepo', 'verification'])).toBe('Optional: taskRepo, verification');
   });
 });

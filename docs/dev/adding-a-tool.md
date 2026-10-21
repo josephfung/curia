@@ -200,7 +200,7 @@ Services NOT in this list (`contactService`, `entityContextAssembler`, `agentPer
 
 #### `optional_capabilities` (optional)
 
-The same names, for a service the skill uses when the deployment has it and can do without. A required capability that is not configured refuses the call; an optional one is simply not injected, so the handler must check for it (`if (ctx.taskRepo) …`). The allowlist rules above still apply. A name may not appear in both lists. `skill-activate` declares `taskRepo` here: it persists a task's active skills when a task store exists, and still activates skills where none does (the test-mode stack).
+The same names, for a service the skill uses when the deployment has it and can do without. A required capability that is not configured refuses the call; an optional one is simply not injected, so the handler must check for it (`if (ctx.taskRepo) …`). The allowlist rules above still apply. A name may not appear in both lists. `skill-activate` declares `taskRepo` here: it persists a task's active skills when a task store exists, and still activates skills where none does (the test-mode stack). The console Registry page shows these beside the tool's required capabilities, labelled optional. A missing optional service does not block enrolment.
 
 ```json
 "optional_capabilities": ["taskRepo"]

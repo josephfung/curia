@@ -45,6 +45,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Console registry** — shows optional capabilities beside a tool's required ones. (#2028)
 - **ADR-048 outcomes** — effort A/B found no winner; the standard tier stays at the model default. (#2044)
 - **`file-parse`** — reads XML, text and Markdown, including by filename extension. (#2208)
 - **Inbox attachments** — zip and gzip files are extracted before they are parsed. (#2208)

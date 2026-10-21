@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { reconcileRegistries } from '../../../src/registry/reconcile.js';
+import * as path from 'node:path';
+import { reconcileRegistries, toolManifestsFromDiscovery } from '../../../src/registry/reconcile.js';
 import type { IRegistryRepo, RegistryRow } from '../../../src/registry/types.js';
+import { parseToolDiscoveryDir } from '../../../src/skills/loader.js';
 import { createLogger } from '../../../src/logger.js';
 
 class FakeRepo implements IRegistryRepo {
@@ -299,5 +301,34 @@ describe('reconcileRegistries', () => {
       await run({ tools: [], agents: [], skills: ['calendar'] }, disk, [], []);
       expect((await toolRepo.getRow('calendar-list-events'))?.enabled).toBe(true);
     });
+  });
+
+  it('enrolls a tool whose optional capability is unconfigured (#2028)', async () => {
+    const disc = parseToolDiscoveryDir(
+      path.resolve(import.meta.dirname, '../../../skills/skill-activate'),
+      'skill-activate',
+    );
+    const optional = disc?.metadata?.optionalCapabilities ?? [];
+    expect(optional).toContain('taskRepo');
+    const manifests = toolManifestsFromDiscovery(disc ? [disc] : []);
+    const info = manifests.get('skill-activate');
+    expect(info?.capabilities).toEqual(disc?.metadata?.capabilities ?? []);
+    expect(Object.keys(info ?? {}).sort()).toEqual(['capabilities', 'requiresSecrets']);
+    for (const cap of optional) expect(info?.capabilities).not.toContain(cap);
+
+    await reconcileRegistries({
+      toolRepo,
+      agentRepo,
+      skillRepo,
+      toolManifests: manifests,
+      agentDiscoveryNames: new Set(),
+      skillDiscoveryNames: new Set(),
+      bundleMembers: new Map(),
+      secrets: { list: async () => [] },
+      unavailableCapabilities: new Set(optional),
+      defaults: { tools: ['skill-activate'], agents: [] },
+      logger,
+    });
+    expect((await toolRepo.getRow('skill-activate'))?.enabled).toBe(true);
   });
 });

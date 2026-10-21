@@ -17,7 +17,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import pino from 'pino';
-import { discoverToolManifests, loadToolsFromDirectory, validateAllowedCallers } from '../../../src/skills/loader.js';
+import { discoverToolManifests, loadToolsFromDirectory, parseToolDiscoveryDir, validateAllowedCallers } from '../../../src/skills/loader.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { createLogger } from '../../../src/logger.js';
 
@@ -101,6 +101,36 @@ describe('discoverToolManifests', () => {
       dir: path.join(dir, 'dir-name'),
       manifestName: 'manifest-name',
     });
+  });
+
+  it('copies optional_capabilities onto discovery metadata (#2028)', () => {
+    writeSkill(dir, 'opt', {
+      name: 'opt', description: 'd', version: '1.0.0', action_risk: 'none',
+      capabilities: ['skillRegistry'],
+      optional_capabilities: ['taskRepo'],
+    }, 'throw new Error("should not import");');
+    const found = discoverToolManifests(dir);
+    expect(found[0]!.metadata?.capabilities).toEqual(['skillRegistry']);
+    expect(found[0]!.metadata?.optionalCapabilities).toEqual(['taskRepo']);
+  });
+
+  it('leaves optionalCapabilities unset when the manifest omits optional_capabilities (#2028)', () => {
+    writeSkill(dir, 'plain', {
+      name: 'plain', description: 'd', version: '1.0.0', action_risk: 'none',
+      capabilities: ['bus'],
+    }, 'throw new Error("should not import");');
+    const found = discoverToolManifests(dir);
+    expect(found[0]!.metadata?.capabilities).toEqual(['bus']);
+    expect(found[0]!.metadata?.optionalCapabilities).toBeUndefined();
+  });
+
+  it('discovers skill-activate with taskRepo optional (#2028)', () => {
+    const disc = parseToolDiscoveryDir(
+      path.resolve(import.meta.dirname, '../../../skills/skill-activate'),
+      'skill-activate',
+    );
+    expect(disc?.metadata?.capabilities).toEqual(['skillRegistry']);
+    expect(disc?.metadata?.optionalCapabilities).toEqual(['taskRepo']);
   });
 
   it('does not warn when directory name matches manifest.name', () => {

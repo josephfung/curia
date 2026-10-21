@@ -6,7 +6,7 @@ import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 // Types + row-tree builder live in registry-rows.ts, shared with its unit tests
 // (mirrors src/registry/types.ts RegistryEntry).
-import { buildRows, collateralPins, registryPathSegment, uninstallBlockedReason, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
+import { buildRows, collateralPins, formatCapabilities, registryPathSegment, uninstallBlockedReason, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
 
 // Map each DerivedState to one of the existing .status-pill modifier classes
 // (app.css) so no new CSS is needed:
@@ -226,6 +226,11 @@ function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
     return window.confirm(lines.join('\n'));
   }, [row, agents, entry.name, entry.kind]);
 
+  const capabilityLine = formatCapabilities(
+    entry.metadata?.capabilities,
+    entry.metadata?.optionalCapabilities,
+  );
+
   return (
     <aside className="drawer">
       <div className="drawer-header">
@@ -291,10 +296,10 @@ function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
                   </div>
                 </>
               )}
-              {entry.metadata.capabilities && (
+              {capabilityLine !== null && (
                 <div className="form-field">
                   <label>Capabilities</label>
-                  <div>{entry.metadata.capabilities.join(', ') || '—'}</div>
+                  <div>{capabilityLine}</div>
                 </div>
               )}
             </>

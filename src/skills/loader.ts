@@ -125,6 +125,7 @@ export function parseToolDiscoveryDir(
         actionRisk: manifest.action_risk,
         sensitivity: manifest.sensitivity,
         capabilities: manifest.capabilities,
+        optionalCapabilities: manifest.optional_capabilities,
         // PR2 (#939): surface the install-time secrets gate to the registry UI + service.
         // Normalized above to a clean string[] | undefined.
         requiresSecrets,

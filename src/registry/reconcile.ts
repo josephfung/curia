@@ -64,7 +64,9 @@ export function bundleMembersFromDiscovery(
 export interface ToolGateInfo {
   /** install.requires_secrets — vault keys that must all exist. */
   requiresSecrets: readonly string[];
-  /** Declared capabilities — checked against ReconcileDeps.unavailableCapabilities. */
+  /** Required capabilities — checked against ReconcileDeps.unavailableCapabilities.
+   *  optionalCapabilities are not copied: a missing optional service must not
+   *  hold the tool back (#2028). */
   capabilities: readonly string[];
 }
 
@@ -74,13 +76,21 @@ export type ToolManifests = ReadonlyMap<string, ToolGateInfo | null>;
 export function toolManifestsFromDiscovery(
   discovery: ReadonlyArray<{
     name: string;
-    metadata: { requiresSecrets?: string[]; capabilities?: string[] } | null;
+    metadata: {
+      requiresSecrets?: string[];
+      capabilities?: string[];
+      optionalCapabilities?: string[];
+    } | null;
   }>,
 ): Map<string, ToolGateInfo | null> {
   return new Map(discovery.map(d => [
     d.name,
     d.metadata
-      ? { requiresSecrets: d.metadata.requiresSecrets ?? [], capabilities: d.metadata.capabilities ?? [] }
+      ? {
+          requiresSecrets: d.metadata.requiresSecrets ?? [],
+          // optionalCapabilities stay off this object (#2028).
+          capabilities: d.metadata.capabilities ?? [],
+        }
       : null,
   ]));
 }
@@ -116,7 +126,8 @@ export interface ReconcileDeps {
  * - install.requires_secrets must all be in the vault — the same check an admin enable
  *   runs (RegistryService.assertSecretsConfigured). Vault keys only: env vars and user.*
  *   keys are not consulted, matching the admin path.
- * - No declared capability may be in unavailableCapabilities.
+ * - No required capability may be in unavailableCapabilities. Optional capabilities
+ *   are not on the gate (see toolManifestsFromDiscovery).
  *
  * Each tool is judged once per pass, so a tool in two bundles logs once.
  */

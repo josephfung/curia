@@ -11,6 +11,8 @@ export interface ManifestMetadata {
   actionRisk?: string | number;
   sensitivity?: string;
   capabilities?: string[];
+  /** From optional_capabilities. Shown beside required capabilities; absent when unset. */
+  optionalCapabilities?: string[];
   role?: string;
   modelTier?: string;
   // PR2 (#939): vault keys a skill declares in install.requires_secrets. Cross-referenced
@@ -51,6 +53,26 @@ export interface Row {
   /** Enabled agents that pin this bundle while it is not enabled. Non-empty = broken:
    *  those agents boot with the bundle's tools missing from their function list. */
   unresolvedFor: string[];
+}
+
+/**
+ * Capabilities line for the registry drawer.
+ *
+ * Required names render as they do today. Optional names (#2028) are appended
+ * on the same line and labelled, so an operator can see every privileged
+ * service a tool may reach. Returns null when the tool declares neither list,
+ * which keeps the field hidden.
+ */
+export function formatCapabilities(
+  capabilities: readonly string[] | undefined,
+  optionalCapabilities: readonly string[] | undefined,
+): string | null {
+  const optional = optionalCapabilities ?? [];
+  if (capabilities === undefined && optional.length === 0) return null;
+  const requiredText = capabilities && capabilities.length > 0 ? capabilities.join(', ') : null;
+  if (optional.length === 0) return requiredText ?? '—';
+  const optionalText = `Optional: ${optional.join(', ')}`;
+  return requiredText ? `${requiredText} · ${optionalText}` : optionalText;
 }
 
 /**

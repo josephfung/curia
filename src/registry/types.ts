@@ -30,6 +30,9 @@ export interface ManifestMetadata {
   actionRisk?: ActionRisk;
   sensitivity?: string;
   capabilities?: string[];
+  /** From `optional_capabilities` (#2024). Injected when the deployment has the
+   *  service; a missing one never refuses the call or blocks enrolment. */
+  optionalCapabilities?: string[];
   /** Vault keys the skill's install block declares it needs (install.requires_secrets).
    *  Surfaced to the registry UI and consulted by the install/enable secrets gate. */
   requiresSecrets?: string[];
