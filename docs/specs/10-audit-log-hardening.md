@@ -140,6 +140,7 @@ interface LlmCallPayload {
   reasoningTokens?: number | null;      // subset of outputTokens; null when the provider reported none
   reasoningEffort?: ReasoningEffort | null; // effort sent; null when the request sent none (provider default)
   upstreamProvider?: string | null;     // OpenRouter's serving endpoint (e.g. 'CoreWeave'); null elsewhere
+  reasoningBlocksDropped?: number;      // passed-back blocks the prefix guard dropped; 0 when none
 }
 ```
 

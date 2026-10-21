@@ -680,6 +680,11 @@ interface LlmCallPayload {
    * field, e.g. 'DeepSeek' or 'CoreWeave'). `null` for other providers.
    */
   upstreamProvider?: string | null;
+  /**
+   * Passed-back reasoning blocks the provider dropped from this request because
+   * the request prefix changed (ADR-048 §1, prefix guard). 0 when none.
+   */
+  reasoningBlocksDropped?: number;
 }
 
 // ModelFallbackEngagedPayload — emitted by the agent runtime when the primary

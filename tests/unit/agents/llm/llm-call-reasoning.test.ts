@@ -58,8 +58,8 @@ function recordingBus(): { bus: EventBus; llmCallPayloads: () => Array<Record<st
   };
 }
 
-const reported = { reasoningTokens: 42, reasoningEffort: null, upstreamProvider: 'CoreWeave' };
-const unreported = { reasoningTokens: null, reasoningEffort: null, upstreamProvider: null };
+const reported = { reasoningTokens: 42, reasoningEffort: null, upstreamProvider: 'CoreWeave', reasoningBlocksDropped: 0 };
+const unreported = { reasoningTokens: null, reasoningEffort: null, upstreamProvider: null, reasoningBlocksDropped: 0 };
 
 describe('llmCallReasoningFields', () => {
   it('carries the reported reasoning tokens and upstream endpoint', () => {
@@ -68,6 +68,10 @@ describe('llmCallReasoningFields', () => {
 
   it('records a reported zero as 0, not null', () => {
     expect(llmCallReasoningFields(usage(0), provenance()).reasoningTokens).toBe(0);
+  });
+
+  it('carries the prefix-guard drop count', () => {
+    expect(llmCallReasoningFields(usage(), { ...provenance(), reasoningBlocksDropped: 3 }).reasoningBlocksDropped).toBe(3);
   });
 
   it('records null for fields the provider did not report', () => {

@@ -10,6 +10,7 @@ export interface LlmCallReasoningFields {
   reasoningTokens: number | null;
   reasoningEffort: ReasoningEffort | null;
   upstreamProvider: string | null;
+  reasoningBlocksDropped: number;
 }
 
 /**
@@ -26,5 +27,6 @@ export function llmCallReasoningFields(
     reasoningTokens: usage.reasoningTokens ?? null,
     reasoningEffort: provenance.reasoningEffort ?? null,
     upstreamProvider: provenance.upstreamProvider ?? null,
+    reasoningBlocksDropped: provenance.reasoningBlocksDropped ?? 0,
   };
 }

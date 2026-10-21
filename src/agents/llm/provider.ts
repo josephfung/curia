@@ -140,6 +140,12 @@ export interface LLMCallProvenance {
    * checked it against the model (ADR-048 §5). Absent when it sent none.
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Passed-back reasoning blocks the provider dropped from this request because
+   * the request prefix changed since they were written (ADR-048 §1, prefix
+   * guard). Absent when it dropped none.
+   */
+  reasoningBlocksDropped?: number;
 }
 
 // Import and re-export ToolDefinition from the canonical location in skills/types.ts

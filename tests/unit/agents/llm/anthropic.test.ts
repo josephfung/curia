@@ -793,8 +793,11 @@ describe('AnthropicProvider — reasoning pass-back (ADR-048 §1)', () => {
       const r2 = await round(provider, 'claude-haiku-5-5', r1.next);
       mockCreate.mockResolvedValueOnce(makeTextResponse());
       // The Bullpen refresh replaces a system message between rounds.
-      await provider.chat({ messages: [{ role: 'system', content: 'You are Curia.\n[Bullpen] new thread' }, ...r2.next], tools, model: 'claude-haiku-5-5' });
+      const third = await provider.chat({ messages: [{ role: 'system', content: 'You are Curia.\n[Bullpen] new thread' }, ...r2.next], tools, model: 'claude-haiku-5-5' });
       expect(assistantBlockTypes(2)).toEqual([['text', 'tool_use'], ['text', 'tool_use']]);
+      // The count reaches llm.call, so the suites and audit_log can see it.
+      expect(third.type === 'text' && third.provenance.reasoningBlocksDropped).toBe(2);
+      expect(r2.result.provenance.reasoningBlocksDropped).toBeUndefined();
     });
 
     it('sends back the blocks written after a change on the rounds that follow', async () => {

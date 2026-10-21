@@ -125,6 +125,8 @@ export class AnthropicProvider implements LLMProvider {
     prefixHash?: string;
     /** The effort the request carries, when it sends one (`none` = thinking disabled). */
     reasoningEffort?: ReasoningEffort;
+    /** Passed-back thinking blocks the prefix guard dropped from this request. */
+    reasoningBlocksDropped: number;
   } {
     // Anthropic requires the system prompt as a separate top-level parameter,
     // not as an element in the messages array. We extract it here so agent
@@ -340,9 +342,9 @@ export class AnthropicProvider implements LLMProvider {
     // answered the reduced prefix, so they still match and go back. The hash
     // of this whole request goes on the blocks it returns.
     let prefixHash: string | undefined;
+    let reasoningBlocksDropped = 0;
     if (this.modelRegistry.thinkingBoundToPrefix(model)) {
       const hasher = new PrefixHasher(createParams.system, createParams.tools);
-      let dropped = 0;
       let fromMessage: number | undefined;
       for (let i = 0; i < conversationMessages.length; i++) {
         const blocks = reasoningTurns.get(i);
@@ -351,16 +353,16 @@ export class AnthropicProvider implements LLMProvider {
           const current = hasher.digestNow();
           if (blocks.some((block) => block.prefixHash !== current)) {
             const kept = message.content.filter((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking');
-            dropped += message.content.length - kept.length;
+            reasoningBlocksDropped += message.content.length - kept.length;
             conversationMessages[i] = { ...message, content: kept };
             fromMessage ??= i;
           }
         }
         hasher.addMessage(conversationMessages[i]);
       }
-      if (dropped > 0) {
+      if (reasoningBlocksDropped > 0) {
         this.logger.info(
-          { model, dropped, fromMessage, reason: 'prefix_changed' },
+          { model, dropped: reasoningBlocksDropped, fromMessage, reason: 'prefix_changed' },
           'Dropping passed-back thinking after a request prefix change',
         );
       }
@@ -376,6 +378,7 @@ export class AnthropicProvider implements LLMProvider {
       signal,
       ...(prefixHash !== undefined ? { prefixHash } : {}),
       ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+      reasoningBlocksDropped,
     };
   }
 
@@ -397,12 +400,14 @@ export class AnthropicProvider implements LLMProvider {
     response: AnthropicMessage,
     requestedModel: string,
     reasoningEffort: ReasoningEffort | undefined,
+    reasoningBlocksDropped: number,
   ): LLMCallProvenance {
     return {
       requestedModel,
       actualModel: response.model,
       providerRequestId: response.id,
       ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+      ...(reasoningBlocksDropped > 0 ? { reasoningBlocksDropped } : {}),
     };
   }
 
@@ -438,7 +443,7 @@ export class AnthropicProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'chat');
       model = built.model;
-      const { createParams, signal, prefixHash, reasoningEffort } = built;
+      const { createParams, signal, prefixHash, reasoningEffort, reasoningBlocksDropped } = built;
       const response = await this.client.messages.create(createParams, signal ? { signal } : undefined);
 
       this.logger.debug(
@@ -454,7 +459,7 @@ export class AnthropicProvider implements LLMProvider {
       );
 
       const usage = this.usageFromResponse(response);
-      const provenance = this.provenanceFromResponse(response, model, reasoningEffort);
+      const provenance = this.provenanceFromResponse(response, model, reasoningEffort, reasoningBlocksDropped);
       const reasoning = reasoningFieldsFrom(response, usage);
 
       // Use type guard functions for narrowing — avoids casting and is safer
@@ -514,7 +519,7 @@ export class AnthropicProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'stream');
       model = built.model;
-      const { createParams, signal, prefixHash, reasoningEffort } = built;
+      const { createParams, signal, prefixHash, reasoningEffort, reasoningBlocksDropped } = built;
       const stream = this.client.messages.stream(createParams, signal ? { signal } : undefined);
 
       // Guarantee the underlying fetch Response / ReadableStream is released on every
@@ -545,7 +550,7 @@ export class AnthropicProvider implements LLMProvider {
         );
 
         const usage = this.usageFromResponse(response);
-        const provenance = this.provenanceFromResponse(response, model, reasoningEffort);
+        const provenance = this.provenanceFromResponse(response, model, reasoningEffort, reasoningBlocksDropped);
         const toolCalls = this.toolCallsFromResponse(response);
         const content = this.textFromResponse(response);
         const reasoning = reasoningFieldsFrom(response, usage);

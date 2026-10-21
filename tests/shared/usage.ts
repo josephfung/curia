@@ -4,8 +4,9 @@
 // estimatedCostUsd, priced by the model registry). The judge is not an agent and publishes
 // nothing, so the judge code meters its own responses into the same ledger.
 //
-// Reasoning tokens and latency come from the same llm.call payloads (ADR-048), so an A/B
-// can compare them per agent. The judge's latency is not metered.
+// Reasoning tokens, latency, the serving endpoint and prefix-guard drops come from the
+// same llm.call payloads (ADR-048), so an A/B can compare them per agent and check that
+// every arm ran on one endpoint. The judge's latency and endpoint are not metered.
 //
 // Every figure is an ESTIMATE: registry list prices, not OpenRouter's bill. Two known gaps:
 // - OpenRouter cache reads are reported as zero (#1962), so cached input is priced as
@@ -25,6 +26,10 @@ export interface UsageTotals {
   reasoningTokens: number;
   /** One latency sample per call that reported one, for p50/p90. */
   latenciesMs: number[];
+  /** Calls per upstream endpoint (OpenRouter's `provider`), for calls that reported one. */
+  upstreamProviders: Record<string, number>;
+  /** Passed-back reasoning blocks the prefix guard dropped (ADR-048 §1). */
+  reasoningBlocksDropped: number;
 }
 
 /** One case's (or one run's) spend, split by who made the calls. */
@@ -47,6 +52,10 @@ export interface CallUsage {
   reasoningTokens?: number | null;
   /** llm.call's latencyMs. LLM responses carry none. */
   latencyMs?: number;
+  /** llm.call's upstreamProvider. */
+  upstreamProvider?: string | null;
+  /** llm.call's reasoningBlocksDropped. */
+  reasoningBlocksDropped?: number;
 }
 
 export function emptyTotals(): UsageTotals {
@@ -59,6 +68,8 @@ export function emptyTotals(): UsageTotals {
     estimatedCostUsd: 0,
     reasoningTokens: 0,
     latenciesMs: [],
+    upstreamProviders: {},
+    reasoningBlocksDropped: 0,
   };
 }
 
@@ -77,6 +88,10 @@ function addCall(totals: UsageTotals, usage: CallUsage, costUsd: number): void {
   if (typeof usage.latencyMs === 'number' && Number.isFinite(usage.latencyMs)) {
     totals.latenciesMs.push(usage.latencyMs);
   }
+  if (usage.upstreamProvider) {
+    totals.upstreamProviders[usage.upstreamProvider] = (totals.upstreamProviders[usage.upstreamProvider] ?? 0) + 1;
+  }
+  totals.reasoningBlocksDropped += usage.reasoningBlocksDropped ?? 0;
 }
 
 function addTotals(into: UsageTotals, from: UsageTotals): void {
@@ -86,9 +101,13 @@ function addTotals(into: UsageTotals, from: UsageTotals): void {
   into.cacheReadInputTokens += from.cacheReadInputTokens;
   into.cacheCreationInputTokens += from.cacheCreationInputTokens;
   into.estimatedCostUsd += from.estimatedCostUsd;
-  // Results saved before ADR-048's telemetry lack both fields; rejudge sums those too.
+  // Results saved before ADR-048's telemetry lack these fields; rejudge sums those too.
   into.reasoningTokens += from.reasoningTokens ?? 0;
   into.latenciesMs.push(...(from.latenciesMs ?? []));
+  for (const [endpoint, calls] of Object.entries(from.upstreamProviders ?? {})) {
+    into.upstreamProviders[endpoint] = (into.upstreamProviders[endpoint] ?? 0) + calls;
+  }
+  into.reasoningBlocksDropped += from.reasoningBlocksDropped ?? 0;
 }
 
 /** Accumulates one case's calls as they happen. */
@@ -166,5 +185,28 @@ export function formatUsageLines(usage: UsageBreakdown): string[] {
   const all: Array<[string, UsageTotals]> = [...Object.entries(usage.byAgent), ['judge', usage.judge]];
   const parts = all.filter(([, t]) => t.calls > 0);
   parts.sort((a, b) => b[1].estimatedCostUsd - a[1].estimatedCostUsd);
-  return [line('total (estimate)', usage.total), ...parts.map(([label, t]) => line(`  ${label}`, t))];
+  return [
+    line('total (estimate)', usage.total),
+    ...parts.map(([label, t]) => line(`  ${label}`, t)),
+    `${'endpoints'.padEnd(18)} ${formatEndpoints(usage.total.upstreamProviders)}`,
+    `${'prefix-guard drops'.padEnd(18)} ${formatDrops(usage)}`,
+  ];
+}
+
+/** "CoreWeave 712, DeepSeek 3" by call count, or a note when no call reported one. */
+export function formatEndpoints(endpoints: Readonly<Record<string, number>> | undefined): string {
+  const entries = Object.entries(endpoints ?? {}).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return 'none reported (no OpenRouter calls, or results from before ADR-048)';
+  return entries.map(([endpoint, calls]) => `${endpoint} ${calls}`).join(', ');
+}
+
+/** "4 (contacts 3, calendar 1)", or "0". */
+function formatDrops(usage: UsageBreakdown): string {
+  const total = usage.total.reasoningBlocksDropped ?? 0;
+  if (total === 0) return '0';
+  const byAgent = Object.entries(usage.byAgent)
+    .filter(([, t]) => (t.reasoningBlocksDropped ?? 0) > 0)
+    .sort((a, b) => b[1].reasoningBlocksDropped - a[1].reasoningBlocksDropped)
+    .map(([agent, t]) => `${agent} ${t.reasoningBlocksDropped}`);
+  return `${total} (${byAgent.join(', ')})`;
 }

@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   emptyBreakdown,
+  formatEndpoints,
   formatLatency,
   formatUsageLines,
   percentile,
@@ -89,5 +90,36 @@ describe('formatUsageLines', () => {
     expect(total).toContain('(1.5k reasoning)');
     expect(coordinator).toContain('coordinator');
     expect(coordinator).toContain('p50/p90 2.0s / 4.0s');
+  });
+});
+
+describe('endpoints and prefix-guard drops', () => {
+  it('counts calls per endpoint and drops per agent', () => {
+    const ledger = new UsageLedger();
+    ledger.addAgentCall('coordinator', call({ upstreamProvider: 'CoreWeave' }), 0);
+    ledger.addAgentCall('coordinator', call({ upstreamProvider: 'CoreWeave', reasoningBlocksDropped: 0 }), 0);
+    ledger.addAgentCall('contacts', call({ upstreamProvider: null, reasoningBlocksDropped: 2 }), 0);
+    ledger.addAgentCall('calendar', call({ upstreamProvider: 'DeepSeek' }), 0);
+    const usage = ledger.snapshot();
+    expect(usage.total.upstreamProviders).toEqual({ CoreWeave: 2, DeepSeek: 1 });
+    expect(usage.byAgent['contacts']!.reasoningBlocksDropped).toBe(2);
+    const lines = formatUsageLines(usage);
+    expect(lines.at(-2)).toMatch(/^endpoints\s+CoreWeave 2, DeepSeek 1$/);
+    expect(lines.at(-1)).toMatch(/^prefix-guard drops\s+2 \(contacts 2\)$/);
+  });
+
+  it('sums across breakdowns, including results saved without the fields', () => {
+    const a = new UsageLedger();
+    a.addAgentCall('coordinator', call({ upstreamProvider: 'CoreWeave', reasoningBlocksDropped: 1 }), 0);
+    const old = JSON.parse(JSON.stringify(emptyBreakdown())) as UsageBreakdown;
+    delete (old.total as Partial<typeof old.total>).upstreamProviders;
+    delete (old.total as Partial<typeof old.total>).reasoningBlocksDropped;
+    const sum = sumBreakdowns([a.snapshot(), old]);
+    expect(sum.total).toMatchObject({ upstreamProviders: { CoreWeave: 1 }, reasoningBlocksDropped: 1 });
+  });
+
+  it('says when no call reported an endpoint', () => {
+    expect(formatEndpoints({})).toMatch(/^none reported/);
+    expect(formatUsageLines(emptyBreakdown()).at(-1)).toMatch(/^prefix-guard drops\s+0$/);
   });
 });
