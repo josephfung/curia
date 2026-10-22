@@ -1,14 +1,21 @@
 #!/usr/bin/env tsx
 // scripts/spikes/voice-brain-parity/run.ts
 //
-// Research harness for #1595 / ADR-038 (Proposed). Runs a frozen voice-turn
-// fixture against three prompt arms on the real voice model
+// Research harness for #1595 / ADR-038, extended for #1968. Runs a frozen
+// voice-turn fixture against prompt arms on the real voice model
 // (claude-haiku-4-5 + stream()):
-//   baseline          — today's buildVoiceSystemPrompt (+ date-resolve module
-//                       already composed in production)
-//   shared-hardening  — slim brain + shared guardrails + async off-ramp
+//   baseline           — today's buildVoiceSystemPrompt (production voice prompt)
+//   shared-hardening   — baseline + the held routing and pronoun modules
+//   slim-core          — the coordinator's production system string
+//                        (assembleAgent + buildBaseSystemPrompt) with a voice
+//                        module heading the caller's message as turn guidance
+//   slim-core-system   — the same core with the voice module and outbound
+//                        context appended to the system string instead
 //   full-consolidation — coordinator.yaml system_prompt + spoken addendum
+//                        (ADR-038's arm; off by default since #1968, ARMS= to run)
 //
+// Every arm gets the production specialist roster and voice's real tool
+// definitions (VOICE_TOOL_NAMES, #1968), not hand-written stand-ins.
 // Tools are load-bearing: calendar delegate rejects briefs lacking the ISO
 // date that date-resolve should have produced. async-offramp invokes the
 // real handler (skills/async-offramp) against a fake bus — not a mock (#1614).
@@ -16,11 +23,26 @@
 //
 // Usage:
 //   ANTHROPIC_API_KEY=... pnpm exec tsx scripts/spikes/voice-brain-parity/run.ts
-//   ARM=shared-hardening CASE=date-next-tuesday pnpm exec tsx ...
+//   ARM=slim-core CASE=date-next-tuesday pnpm exec tsx ...
+//   ARMS=baseline,full-consolidation REPS=5 pnpm exec tsx ...
+//   VOICE_SPIKE_MODEL=claude-haiku-5-5 REPS=5 pnpm exec tsx ...   (writes variance.<model>.json)
+//   VOICE_SPIKE_EFFORT=none ...   (sends voice's reasoning setting; writes variance.<model>.effort-none.json)
+//
+// Every LLM call's usage is metered per arm and priced from the model registry;
+// the totals land in the variance file under `spend`.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as yaml from 'js-yaml';
+import {
+  loadProductionVoiceContext,
+  meterProvider,
+  modelArtifactPath,
+  renderVoiceSystemModule,
+  spikeReasoningEffort,
+  renderVoiceTurnGuidance,
+  type ProductionVoiceContext,
+} from './production-context.js';
 import { AnthropicProvider } from '../../../src/agents/llm/anthropic.js';
 import { ModelRegistry } from '../../../src/agents/llm/model-registry.js';
 import { estimateTokens } from '../../../src/agents/llm/token-estimator.js';
@@ -28,7 +50,7 @@ import {
   DEFAULT_STREAMING_MAX_ROUNDS,
   runStreamingToolLoop,
 } from '../../../src/agents/llm/streaming-turn.js';
-import type { Message, ToolCall, ToolDefinition } from '../../../src/agents/llm/provider.js';
+import type { LLMProvider, Message, ToolCall } from '../../../src/agents/llm/provider.js';
 import {
   DATE_RESOLVE_GUARDRAIL,
   PRONOUN_RESOLUTION_GUARDRAIL,
@@ -54,13 +76,18 @@ import pino from 'pino';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 const FIXTURES_PATH = resolve(import.meta.dirname, 'fixtures.json');
-const RESULTS_PATH = resolve(import.meta.dirname, 'results.json');
+
 const COORDINATOR_YAML = resolve(REPO_ROOT, 'agents/coordinator.yaml');
 const VOICE_MODEL = process.env.VOICE_SPIKE_MODEL ?? 'claude-haiku-4-5';
 const ARM_FILTER = process.env.ARM?.trim() || null;
+const ALL_ARMS = ['baseline', 'shared-hardening', 'slim-core', 'slim-core-system', 'full-consolidation'] as const;
+const DEFAULT_ARMS: ArmId[] = ['baseline', 'shared-hardening', 'slim-core', 'slim-core-system'];
+const ARMS_ENV = process.env.ARMS?.split(',').map(a => a.trim()).filter(Boolean) ?? null;
 const CASE_FILTER = process.env.CASE?.trim() || null;
 const REPS = Math.max(1, Number(process.env.REPS ?? 1) || 1);
-const VARIANCE_PATH = resolve(import.meta.dirname, 'variance.json');
+const EFFORT = spikeReasoningEffort();
+const VARIANCE_PATH = modelArtifactPath(import.meta.dirname, 'variance', VOICE_MODEL, EFFORT);
+const RESULTS_PATH = modelArtifactPath(import.meta.dirname, 'results', VOICE_MODEL, EFFORT);
 
 interface HistoryTurn {
   role: 'user' | 'assistant';
@@ -108,7 +135,16 @@ interface Fixtures {
   cases: FixtureCase[];
 }
 
-type ArmId = 'baseline' | 'shared-hardening' | 'full-consolidation';
+type ArmId = (typeof ALL_ARMS)[number];
+
+/** One arm's prompt: the system string, plus turn guidance heading the caller's message (slim-core). */
+interface ArmPrompt {
+  system: string;
+  /** Prepended to the current user turn only, never to history — as AgentRuntime does (#1959). */
+  turnGuidance: string | null;
+  /** Outbound context heads the user turn on the text path; the voice prompts carry it in the system string. */
+  outboundInUserTurn: string | null;
+}
 
 interface ToolTrace {
   name: string;
@@ -141,13 +177,19 @@ function loadCoordinatorSystemPrompt(): string {
   return `${doc.system_prompt}\n\n${DATE_RESOLVE_GUARDRAIL}`;
 }
 
-function buildPrompts(fixtures: Fixtures, outbound: string | null): Record<ArmId, string> {
+async function buildPrompts(
+  fixtures: Fixtures,
+  outbound: string | null,
+  ctx: ProductionVoiceContext,
+): Promise<Record<ArmId, ArmPrompt>> {
   const now = new Date(fixtures.anchor.iso);
   const timeBlock = formatTimeContextBlock(fixtures.anchor.timezone, now);
+  // The roster production builds from agents/ — what prod voice gets via specialistSummary().
+  const roster = ctx.specialistRoster;
 
   const baseline = buildVoiceSystemPrompt({
     identityBlock: fixtures.identityBlock,
-    specialistRoster: fixtures.specialistRoster,
+    specialistRoster: roster,
     outboundContextBlock: outbound,
     timeContextBlock: timeBlock,
     audience: { liveTurn: true },
@@ -166,7 +208,7 @@ function buildPrompts(fixtures: Fixtures, outbound: string | null): Record<ArmId
     PRONOUN_RESOLUTION_GUARDRAIL,
     DATE_RESOLVE_GUARDRAIL,
     VOICE_ASYNC_OFFRAMP_GUIDANCE,
-    VOICE_DELEGATION_GUIDANCE + '\n\n## Available Specialists\n' + fixtures.specialistRoster,
+    VOICE_DELEGATION_GUIDANCE + '\n\n## Available Specialists\n' + roster,
     ...(outbound ? [outbound] : []),
     timeBlock,
   ].join('\n\n');
@@ -180,60 +222,54 @@ function buildPrompts(fixtures: Fixtures, outbound: string | null): Record<ArmId
     VOICE_SYSTEM_ADDENDUM,
     VOICE_TOOL_RESULT_POLICY,
     VOICE_ASYNC_OFFRAMP_GUIDANCE,
-    '## Available Specialists\n' + fixtures.specialistRoster,
+    '## Available Specialists\n' + roster,
     ...(outbound ? [outbound] : []),
     timeBlock,
   ].join('\n\n');
 
+  // Slim core (#1968): the coordinator's production system string — identity,
+  // security, contact blocks, YAML body + pinned SKILL.md bodies, roster, date
+  // guardrail, time, turn budget — unchanged, so one cached prefix serves every
+  // channel. The voice module rides the user turn as turn guidance (#1959), and
+  // outbound context heads the user turn as the dispatcher puts it on text turns.
+  const coreSystem = await ctx.coordinatorSystemPrompt(now);
+  const slimCore: ArmPrompt = {
+    system: coreSystem,
+    turnGuidance: renderVoiceTurnGuidance(),
+    outboundInUserTurn: outbound,
+  };
+  // Slim core, voice-owned system string: what a voice migration would most likely
+  // ship. The voice module and outbound context sit where the voice prompt keeps
+  // them — in the system string — and the caller's message is just the utterance.
+  const slimCoreSystem: ArmPrompt = {
+    system: [coreSystem, renderVoiceSystemModule(), ...(outbound ? [outbound] : [])].join('\n\n'),
+    turnGuidance: null,
+    outboundInUserTurn: null,
+  };
+
+  const voicePrompt = (system: string): ArmPrompt => ({ system, turnGuidance: null, outboundInUserTurn: null });
   return {
-    baseline,
-    'shared-hardening': sharedHardening,
-    'full-consolidation': fullConsolidation,
+    baseline: voicePrompt(baseline),
+    'shared-hardening': voicePrompt(sharedHardening),
+    'slim-core': slimCore,
+    'slim-core-system': slimCoreSystem,
+    'full-consolidation': voicePrompt(fullConsolidation),
   };
 }
 
-const TOOL_DEFS: ToolDefinition[] = [
-  {
-    name: 'date-resolve',
-    description:
-      "Verify or resolve dates deterministically. Use for day-of-week or relative dates ('next Monday', 'tomorrow').",
-    input_schema: {
-      type: 'object',
-      properties: {
-        date: { type: 'string' },
-        relative: { type: 'string' },
-        expected_day: { type: 'string' },
-      },
-    },
-  },
-  {
-    name: 'delegate',
-    description:
-      'Delegate work to a specialist. target is the specialist name (calendar, contacts, ceo-inbox, research-analyst). brief is the task — include resolved ISO dates and entry_id when routing outbound-context replies.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        target: { type: 'string' },
-        brief: { type: 'string' },
-        entry_id: { type: 'string' },
-      },
-      required: ['target', 'brief'],
-    },
-  },
-  {
-    name: 'async-offramp',
-    description:
-      'Hand a heavyweight request off the live call to the async coordinator path. Use after the principal agrees to a follow-up, or when the ask is clearly async-shaped. brief: what to do; follow_up_channel: signal|email.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        brief: { type: 'string' },
-        follow_up_channel: { type: 'string' },
-      },
-      required: ['brief'],
-    },
-  },
-];
+/**
+ * delegate's real arguments are `agent` / `task` / `outbound_entry_id` (skills/delegate);
+ * ADR-038's hand-written stand-in used `target` / `brief` / `entry_id`. Read either, so
+ * scoring means the same thing across the two harness generations.
+ */
+function delegateFields(input: Record<string, unknown>): { target: string; brief: string; entryId: string | null } {
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  return {
+    target: str(input.agent) ?? str(input.target) ?? '',
+    brief: str(input.task) ?? str(input.brief) ?? '',
+    entryId: str(input.outbound_entry_id) ?? str(input.entry_id),
+  };
+}
 
 /** Map relative expressions / known dates → ISO for load-bearing calendar checks. */
 function resolveExpectedIso(call: ToolCall, fixtures: Fixtures): string | null {
@@ -351,13 +387,11 @@ function defaultToolResult(
   }
 
   if (call.name === 'delegate') {
-    const target = String(call.input.target ?? '').toLowerCase();
-    const brief = String(call.input.brief ?? '');
+    const fields = delegateFields(call.input);
+    const target = fields.target.toLowerCase();
+    const brief = fields.brief;
     const briefLower = brief.toLowerCase();
-    const entryId =
-      typeof call.input.entry_id === 'string'
-        ? call.input.entry_id
-        : (brief.match(/entry-[a-z0-9-]+/i)?.[0] ?? null);
+    const entryId = fields.entryId ?? (brief.match(/entry-[a-z0-9-]+/i)?.[0] ?? null);
 
     // Load-bearing calendar: require a resolved calendar date (ISO or the
     // natural form date-resolve returns) that date-resolve already produced.
@@ -440,6 +474,12 @@ function defaultToolResult(
     };
   }
 
+  // The rest of voice's list (tasks, memory) is not load-bearing in any fixture: a
+  // plain success, so a stray call costs a round but does not derail the turn.
+  if (call.name.startsWith('task-') || call.name.startsWith('memory-')) {
+    return { content: JSON.stringify({ success: true, data: { ok: true, items: [] } }) };
+  }
+
   return { content: JSON.stringify({ success: false, error: `unknown tool ${call.name}` }), is_error: true };
 }
 
@@ -496,8 +536,8 @@ function scoreCase(
 
   if (exp.delegateTargetHint) {
     const del = [...tools].reverse().find(t => t.name === 'delegate');
-    const target = String(del?.input.target ?? '').toLowerCase();
-    const brief = String(del?.input.brief ?? '').toLowerCase();
+    const target = (del ? delegateFields(del.input).target : '').toLowerCase();
+    const brief = (del ? delegateFields(del.input).brief : '').toLowerCase();
     const ok = !!del && (target.includes(exp.delegateTargetHint) || brief.includes(exp.delegateTargetHint));
     checks.push({
       id: 'delegate-target',
@@ -510,7 +550,7 @@ function scoreCase(
 
   if (exp.delegateBriefMustContain) {
     const del = [...tools].reverse().find(t => t.name === 'delegate');
-    const hay = `${String(del?.input.brief ?? '')} ${String(del?.input.entry_id ?? '')}`;
+    const hay = del ? `${delegateFields(del.input).brief} ${delegateFields(del.input).entryId ?? ''}` : '';
     const needle = exp.delegateBriefMustContain;
     const ok = !!del && (
       hay.includes(needle) ||
@@ -588,7 +628,7 @@ function scoreCase(
 
   if (exp.delegateBriefMustMentionPrincipal) {
     const del = [...tools].reverse().find(t => t.name === 'delegate');
-    const brief = String(del?.input.brief ?? '').toLowerCase();
+    const brief = (del ? delegateFields(del.input).brief : '').toLowerCase();
     const ok = !!del && /(principal|ceo|joseph|executive|the (user|caller)'s)/.test(brief);
     checks.push({
       id: 'pronoun-principal',
@@ -599,7 +639,7 @@ function scoreCase(
 
   if (exp.delegateBriefMustNotAssumePrincipal) {
     const del = [...tools].reverse().find(t => t.name === 'delegate');
-    const brief = String(del?.input.brief ?? '').toLowerCase();
+    const brief = (del ? delegateFields(del.input).brief : '').toLowerCase();
     const assumedPrincipal =
       !!del &&
       /principal'?s? calendar|ceo'?s? calendar/.test(brief) &&
@@ -691,18 +731,22 @@ function scoreCase(
 
 async function runCase(
   arm: ArmId,
-  systemPrompt: string,
+  prompt: ArmPrompt,
   fixture: FixtureCase,
   fixtures: Fixtures,
-  provider: AnthropicProvider,
+  provider: LLMProvider,
+  ctx: ProductionVoiceContext,
 ): Promise<CaseResult> {
   // Fresh dedup map per case so real async-offramp enqueues don't collide across fixtures.
   resetAsyncOfframpDedupForTests();
 
+  const userTurn = [prompt.turnGuidance, prompt.outboundInUserTurn, fixture.utterance]
+    .filter((part): part is string => !!part)
+    .join('\n\n');
   const messages: Message[] = [
-    { role: 'system', content: systemPrompt },
+    { role: 'system', content: prompt.system },
     ...(fixture.history ?? []).map(h => ({ role: h.role, content: h.content }) as Message),
-    { role: 'user', content: fixture.utterance },
+    { role: 'user', content: userTurn },
   ];
 
   const toolTrace: ToolTrace[] = [];
@@ -712,9 +756,10 @@ async function runCase(
   const result = await runStreamingToolLoop(messages, {
     provider,
     model: VOICE_MODEL,
-    tools: TOOL_DEFS,
+    tools: ctx.voiceToolDefs,
     maxRounds: DEFAULT_STREAMING_MAX_ROUNDS,
     signal: AbortSignal.timeout(120_000),
+    ...(EFFORT ? { requestOptions: { reasoning: { effort: EFFORT } } } : {}),
     hooks: {
       onTextDelta: () => {
         if (ttftMs === null) ttftMs = Date.now() - started;
@@ -736,7 +781,7 @@ async function runCase(
     arm,
     caseId: fixture.id,
     category: fixture.category,
-    promptTokensEst: estimateTokens(systemPrompt),
+    promptTokensEst: estimateTokens(prompt.system + (prompt.turnGuidance ?? '')),
     ttftMs,
     fullTurnMs,
     toolRounds: result.toolRounds,
@@ -760,7 +805,7 @@ function summarize(results: CaseResult[]) {
     failsByCategory: Record<string, number>;
   }> = {};
 
-  for (const arm of ['baseline', 'shared-hardening', 'full-consolidation'] as ArmId[]) {
+  for (const arm of ALL_ARMS) {
     const rows = results.filter(r => r.arm === arm);
     if (rows.length === 0) continue;
     const fulls = rows.map(r => r.fullTurnMs).sort((a, b) => a - b);
@@ -780,6 +825,53 @@ function summarize(results: CaseResult[]) {
       p50FullTurnMs: fulls[Math.floor(fulls.length / 2)]!,
       promptTokensEst: rows[0]!.promptTokensEst,
       failsByCategory,
+    };
+  }
+  return byArm;
+}
+
+/** Nearest-rank percentile of an ascending list. */
+function percentile(sorted: number[], p: number): number | null {
+  if (sorted.length === 0) return null;
+  return sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)]!;
+}
+
+/**
+ * Stops where the turn failed rather than finished: the harness catch ('error'), a
+ * provider failure ('stream_error'), the 120 s timeout ('aborted') and an empty stream.
+ * Their timings are of a failure, not of a turn. 'exhausted' (round cap) stays in: the
+ * principal waits through it.
+ */
+const FAILED_STOPS: ReadonlySet<string> = new Set(['error', 'stream_error', 'aborted', 'empty_stream']);
+
+/**
+ * Per-arm turn latency over every rep, failed turns left out (`excluded` counts them,
+ * so `n` alone shows nothing was dropped silently). `ttft` is the pause
+ * before the first spoken text, after any tool rounds that came first; that is the
+ * silence the principal hears. Unlike the microbench, it covers real utterances.
+ */
+function turnLatency(results: CaseResult[]) {
+  const byArm: Record<string, {
+    n: number;
+    excluded: number;
+    ttftP50: number | null;
+    ttftP90: number | null;
+    fullP50: number | null;
+    fullP90: number | null;
+  }> = {};
+  for (const arm of ALL_ARMS) {
+    const armRows = results.filter(r => r.arm === arm);
+    const rows = armRows.filter(r => !FAILED_STOPS.has(r.stopReason));
+    if (rows.length === 0) continue;
+    const ttfts = rows.map(r => r.ttftMs).filter((n): n is number => n !== null).sort((a, b) => a - b);
+    const fulls = rows.map(r => r.fullTurnMs).sort((a, b) => a - b);
+    byArm[arm] = {
+      n: rows.length,
+      excluded: armRows.length - rows.length,
+      ttftP50: percentile(ttfts, 0.5),
+      ttftP90: percentile(ttfts, 0.9),
+      fullP50: percentile(fulls, 0.5),
+      fullP90: percentile(fulls, 0.9),
     };
   }
   return byArm;
@@ -909,6 +1001,14 @@ function aggregateVariance(reps: RepSummary[], arms: ArmId[]) {
     { key: 'shared-hardening−baseline', a: 'shared-hardening', b: 'baseline' },
     { key: 'shared-hardening−full-consolidation', a: 'shared-hardening', b: 'full-consolidation' },
     { key: 'baseline−full-consolidation', a: 'baseline', b: 'full-consolidation' },
+    // #1968: does the slim coordinator core tie or beat the voice prompts?
+    { key: 'slim-core−shared-hardening', a: 'slim-core', b: 'shared-hardening' },
+    { key: 'slim-core−baseline', a: 'slim-core', b: 'baseline' },
+    { key: 'slim-core−full-consolidation', a: 'slim-core', b: 'full-consolidation' },
+    // Placement: does moving the voice module into the system string rescue slim-core?
+    { key: 'slim-core-system−baseline', a: 'slim-core-system', b: 'baseline' },
+    { key: 'slim-core-system−shared-hardening', a: 'slim-core-system', b: 'shared-hardening' },
+    { key: 'slim-core-system−slim-core', a: 'slim-core-system', b: 'slim-core' },
   ];
   const pairs = allPairs.filter(p => arms.includes(p.a) && arms.includes(p.b));
 
@@ -999,11 +1099,15 @@ async function main(): Promise<void> {
   const fixtures = JSON.parse(readFileSync(FIXTURES_PATH, 'utf8')) as Fixtures;
   const cases = fixtures.cases.filter(c => !CASE_FILTER || c.id === CASE_FILTER);
   const logger = createSilentLogger();
-  const provider = new AnthropicProvider(apiKey, logger, new ModelRegistry(logger));
+  const { provider, meter } = meterProvider(new AnthropicProvider(apiKey, logger, new ModelRegistry(logger)), VOICE_MODEL);
 
-  // Prompt size sample (no outbound) for the summary header.
-  const samplePrompts = buildPrompts(fixtures, fixtures.defaultOutboundContextBlock);
-  const arms = (Object.keys(samplePrompts) as ArmId[]).filter(a => !ARM_FILTER || a === ARM_FILTER);
+  const ctx = loadProductionVoiceContext({
+    identityBlock: fixtures.identityBlock,
+    timezone: fixtures.anchor.timezone,
+  });
+  const unknownArms = (ARMS_ENV ?? []).filter(a => !(ALL_ARMS as readonly string[]).includes(a));
+  if (unknownArms.length > 0) throw new Error(`unknown ARMS: ${unknownArms.join(', ')}`);
+  const arms = ((ARMS_ENV as ArmId[] | null) ?? DEFAULT_ARMS).filter(a => !ARM_FILTER || a === ARM_FILTER);
   const allResults: CaseResult[] = [];
   const repSummaries: RepSummary[] = [];
 
@@ -1021,11 +1125,12 @@ async function main(): Promise<void> {
         fixture.outboundContextBlock !== undefined
           ? fixture.outboundContextBlock
           : fixtures.defaultOutboundContextBlock;
-      const prompts = buildPrompts(fixtures, outbound);
+      const prompts = await buildPrompts(fixtures, outbound, ctx);
       for (const arm of arms) {
         process.stderr.write(`  [r${rep}:${arm}] ${fixture.id} ... `);
+        meter.bucket = arm;
         try {
-          const row = await runCase(arm, prompts[arm], fixture, fixtures, provider);
+          const row = await runCase(arm, prompts[arm], fixture, fixtures, provider, ctx);
           results.push(row);
           const mark = row.score.failed === 0 ? 'PASS' : `FAIL(${row.score.failed}/${row.score.passed + row.score.failed})`;
           process.stderr.write(
@@ -1042,7 +1147,7 @@ async function main(): Promise<void> {
             arm,
             caseId: fixture.id,
             category: fixture.category,
-            promptTokensEst: estimateTokens(prompts[arm]),
+            promptTokensEst: estimateTokens(prompts[arm].system + (prompts[arm].turnGuidance ?? '')),
             ttftMs: null,
             fullTurnMs: 0,
             toolRounds: 0,
@@ -1087,6 +1192,7 @@ async function main(): Promise<void> {
   const out = {
     generatedAt: new Date().toISOString(),
     model: VOICE_MODEL,
+    reasoningEffort: EFFORT ?? 'model-default',
     reps: REPS,
     fixturesPath: 'scripts/spikes/voice-brain-parity/fixtures.json',
     countingNote:
@@ -1098,7 +1204,14 @@ async function main(): Promise<void> {
   };
   writeFileSync(RESULTS_PATH, JSON.stringify(out, null, 2));
   if (variance) {
-    writeFileSync(VARIANCE_PATH, JSON.stringify({ generatedAt: out.generatedAt, model: VOICE_MODEL, ...variance }, null, 2));
+    writeFileSync(
+      VARIANCE_PATH,
+      JSON.stringify(
+        { generatedAt: out.generatedAt, model: VOICE_MODEL, reasoningEffort: out.reasoningEffort, ...variance, turnLatency: turnLatency(allResults), spend: { totalUsd: meter.totalUsd(), byArm: meter.totals } },
+        null,
+        2,
+      ),
+    );
     process.stderr.write(`\nWrote ${VARIANCE_PATH}\n`);
     process.stderr.write(JSON.stringify(variance.overall, null, 2) + '\n');
     process.stderr.write('paired check-rate deltas (a−b):\n');
@@ -1119,14 +1232,15 @@ async function main(): Promise<void> {
           `  ${cat}/${arm}: mean=${stats.checkPassRateMean} [${stats.checkPassRateMin},${stats.checkPassRateMax}]${sep}\n`,
         );
       }
-      const pairedSb = variance.paired.byCategory[cat]?.['shared-hardening−baseline'];
-      if (pairedSb) {
-        process.stderr.write(
-          `  ${cat} paired shared−baseline: mean=${pairedSb.mean} win=${pairedSb.pairedWin}\n`,
-        );
+      for (const key of ['shared-hardening−baseline', 'slim-core−shared-hardening', 'slim-core−baseline', 'slim-core-system−baseline', 'slim-core-system−slim-core']) {
+        const paired = variance.paired.byCategory[cat]?.[key];
+        if (paired) {
+          process.stderr.write(`  ${cat} paired ${key}: mean=${paired.mean} win=${paired.pairedWin}\n`);
+        }
       }
     }
   }
+  process.stderr.write(`\nSpend (estimated from registry pricing): $${meter.totalUsd()} ${JSON.stringify(meter.totals)}\n`);
   process.stderr.write(`\nWrote ${RESULTS_PATH}\n`);
   process.stderr.write(JSON.stringify(summary, null, 2) + '\n');
 }

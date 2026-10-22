@@ -24,6 +24,7 @@ import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
 import { logUnsentReasoningEffort, resolveReasoning, resolveTemperature, type ReasoningEffort } from './sampling-options.js';
 import { sendableReasoningBlocks } from './reasoning-blocks.js';
+import { isCallerCancellation } from './cancellation.js';
 
 /**
  * Best-effort message extraction, mirroring classify.ts's own logic so the
@@ -1111,7 +1112,12 @@ export class OpenRouterProvider implements LLMProvider {
         ...reasoning,
       };
     } catch (err) {
-      this.logger.error({ err, model }, 'OpenRouter streaming API call failed');
+      if (isCallerCancellation(params.options)) {
+        // A barge-in or hang-up, not a failure (#1968); see anthropic.ts.
+        this.logger.debug({ model }, 'OpenRouter stream cancelled by caller');
+      } else {
+        this.logger.error({ err, model }, 'OpenRouter streaming API call failed');
+      }
       yield { type: 'error', error: this.classifyProviderError(err) };
     } finally {
       // Best-effort cleanup; never let an abort() failure mask the real result or error.

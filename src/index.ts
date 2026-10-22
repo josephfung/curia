@@ -95,6 +95,8 @@ import { VoiceAdapter } from './channels/voice/voice-adapter.js';
 import { VoiceSessionBridge } from './channels/voice/session-bridge.js';
 import { VoiceSessionStore } from './channels/voice/session-store.js';
 import { VoiceRuntime } from './channels/voice/voice-runtime.js';
+import { VOICE_TOOL_NAMES } from './channels/voice/voice-tools.js';
+import { invokeVoiceToolAudited } from './channels/voice/voice-tool-audit.js';
 import { evaluateVoiceModelCapabilities } from './channels/voice/voice-model-capabilities.js';
 import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './speech/index.js';
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
@@ -2719,7 +2721,6 @@ async function main(): Promise<void> {
     workingDocsRepo,
     taskRepo,
   };
-  const assembledAgents: AssembledAgent[] = [];
   for (const agentConfig of agentConfigs) {
     let assembled: AssembledAgent;
     try {
@@ -2731,7 +2732,6 @@ async function main(): Promise<void> {
       );
       process.exit(1);
     }
-    assembledAgents.push(assembled);
     if (assembled.pinResolution.heartbeatEligible) {
       taskManagementAgents.add(agentConfig.name);
     }
@@ -2763,26 +2763,15 @@ async function main(): Promise<void> {
           'Voice runtime started without tool wiring — resolved model lacks tools capability',
         );
       } else {
-      // Reuse the coordinator's assembled pins rather than resolving them a second
-      // time. Copy — the array below is extended with voice-only tools and must not
-      // alias the text runtime's pinnedTools.
-      const coordinatorAgent = assembledAgents.find(
-        a => a.agentConfig.role === 'coordinator' || a.agentConfig.name === 'coordinator',
-      );
-      const voiceToolNames = [...(coordinatorAgent?.pinnedToolNames ?? [])];
-      // Keep discovery tools available when the coordinator allows discovery.
-      if (coordinatorAgent?.agentConfig.allow_discovery) {
-        for (const discoveryTool of ['tool-registry', 'skill-activate'] as const) {
-          if (!voiceToolNames.includes(discoveryTool)) voiceToolNames.push(discoveryTool);
-        }
+      // Voice's own tool list (#1968), not the coordinator's pin set: those 73
+      // definitions rode every spoken round. It includes the voice-only async
+      // off-ramp (#1614 / ADR-038), which is NOT a coordinator pin — the
+      // coordinator is the async destination and must not advertise it.
+      const voiceToolDefs = toolRegistry.toToolDefinitions([...VOICE_TOOL_NAMES]);
+      const missingVoiceTools = VOICE_TOOL_NAMES.filter(name => !voiceToolDefs.some(d => d.name === name));
+      if (missingVoiceTools.length > 0) {
+        logger.warn({ missingVoiceTools }, 'Voice tools not registered; spoken turns run without them');
       }
-      // Voice-only async off-ramp (#1614 / ADR-038): NOT a coordinator pin — the
-      // coordinator is the async destination and must not advertise (or re-call)
-      // an off-ramp tool on text/async turns. Injected here beside discovery tools.
-      if (!voiceToolNames.includes('async-offramp')) {
-        voiceToolNames.push('async-offramp');
-      }
-      const voiceToolDefs = toolRegistry.toToolDefinitions(voiceToolNames);
       runtime.configureTools({
         resolveVoiceTools: () => voiceToolDefs,
         // Coordinator context providers for spoken-turn brain parity (#1551).
@@ -2816,18 +2805,27 @@ async function main(): Promise<void> {
             memory,
             logger,
           });
-          const result = await executionLayer.invoke(call.name, call.input, executionCaller, {
-            agentId: 'coordinator',
-            channelId: 'voice',
+          // tool.invoke / tool.result around the call, as a text turn records them (#1968).
+          const result = await invokeVoiceToolAudited({
+            bus,
+            call,
             conversationId: ctx.conversationId,
-            taskEventId: ctx.sessionId,
-            liveTurn: sessionCaller.liveTurn,
-            turnDateResolveResults: ctx.turnDateResolveResults,
-            taskMetadata: {
-              originator: sessionCaller.originator,
-              voiceSessionId: ctx.sessionId,
-            },
-            identifierSources,
+            sessionId: ctx.sessionId,
+            turnEventId: ctx.turnEventId,
+            invoke: (invokeEventId) => executionLayer.invoke(call.name, call.input, executionCaller, {
+              agentId: 'coordinator',
+              channelId: 'voice',
+              conversationId: ctx.conversationId,
+              taskEventId: ctx.sessionId,
+              parentEventId: invokeEventId,
+              liveTurn: sessionCaller.liveTurn,
+              turnDateResolveResults: ctx.turnDateResolveResults,
+              taskMetadata: {
+                originator: sessionCaller.originator,
+                voiceSessionId: ctx.sessionId,
+              },
+              identifierSources,
+            }),
           });
           if (result.success) {
             const data = result.data;

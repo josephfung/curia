@@ -30,6 +30,7 @@ import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
 import { logUnsentReasoningEffort, resolveReasoning, resolveTemperature, type ReasoningEffort } from './sampling-options.js';
 import { PrefixHasher, sendableReasoningBlocks } from './reasoning-blocks.js';
+import { isCallerCancellation } from './cancellation.js';
 
 /**
  * Output cap for a request that will think and set no max_tokens (ADR-048 §2).
@@ -598,7 +599,13 @@ export class AnthropicProvider implements LLMProvider {
         }
       }
     } catch (err) {
-      this.logger.error({ err, model }, 'Anthropic streaming API call failed');
+      if (isCallerCancellation(params.options)) {
+        // A barge-in or hang-up, not a failure (#1968). The caller still gets the
+        // error event so its loop stops; TelemetryLlmProvider does not count it.
+        this.logger.debug({ model }, 'Anthropic stream cancelled by caller');
+      } else {
+        this.logger.error({ err, model }, 'Anthropic streaming API call failed');
+      }
       yield { type: 'error', error: classifyError(err, 'anthropic') };
     }
   }

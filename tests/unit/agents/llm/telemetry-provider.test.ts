@@ -152,3 +152,69 @@ describe('TelemetryLlmProvider — stream cleanup propagation', () => {
     });
   });
 });
+
+describe('TelemetryLlmProvider — caller cancellation (#1968)', () => {
+  const abortedError: LLMStreamEvent = {
+    type: 'error',
+    error: {
+      type: 'UNKNOWN',
+      source: 'anthropic',
+      message: 'Request was aborted.',
+      retryable: false,
+      context: {},
+      timestamp: new Date(),
+    },
+  };
+
+  function setup() {
+    const inner: LLMProvider = {
+      id: 'anthropic',
+      chat: vi.fn(),
+      async *stream() {
+        yield abortedError;
+      },
+    };
+    const publish = vi.fn();
+    const provider = new TelemetryLlmProvider(
+      inner,
+      { publish } as unknown as EventBus,
+      createSilentLogger(),
+      'voice-turn',
+      new ModelRegistry(createSilentLogger()),
+    );
+    return { provider, publish };
+  }
+
+  async function drain(provider: TelemetryLlmProvider, signal?: AbortSignal): Promise<LLMStreamEvent[]> {
+    const events: LLMStreamEvent[] = [];
+    for await (const e of provider.stream({ messages: [{ role: 'user', content: 'hi' }], model: 'm', options: { signal } })) {
+      events.push(e);
+    }
+    return events;
+  }
+
+  it('publishes no llm.error when the caller aborted the stream (barge-in, hang-up)', async () => {
+    const { provider, publish } = setup();
+    const controller = new AbortController();
+    controller.abort();
+    const events = await drain(provider, controller.signal);
+    // The caller still sees the error event, so its loop stops.
+    expect(events).toEqual([abortedError]);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('still publishes llm.error when the signal fired because the request timed out', async () => {
+    const { provider, publish } = setup();
+    const controller = new AbortController();
+    controller.abort(new DOMException('timed out', 'TimeoutError'));
+    await drain(provider, controller.signal);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish.mock.calls[0]![1].type).toBe('llm.error');
+  });
+
+  it('still publishes llm.error for a failure with no abort', async () => {
+    const { provider, publish } = setup();
+    await drain(provider, new AbortController().signal);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+});

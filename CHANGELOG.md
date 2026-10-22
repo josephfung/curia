@@ -62,6 +62,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`emitOkfDocument`** — writes the body verbatim instead of appending a trailing newline, so parsing inverts it. (#1823)
 - **OpenRouter retries** — logged per attempt and counted on `llm.call`, instead of the SDK retrying silently. (#1915)
+- **Voice toolset** — spoken turns get nine voice tools, not the coordinator's 73; cold first-token 110–170ms faster. (#1968)
+- **Voice brain parity spike** — adds slim-core arms, three models, reasoning effort, real tools, metered spend, cold/warm latency. (#1968)
 - **KG explorer layout** — nodes spread further apart and labels no longer overlap. (#351)
 - **Console registry** — shows optional capabilities beside a tool's required ones. (#2028)
 - **ADR-048 outcomes** — effort A/B found no winner; the standard tier stays at the model default. (#2044)
@@ -124,6 +126,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Empty answers at the output cap** — OpenRouter responses that reasoned to `max_tokens` with no answer are retried. (#1915)
+- **Voice tool audit** — spoken-turn tool calls now record `tool.invoke` and `tool.result`, like text turns. (#1968)
+- **Voice barge-ins** — a stream the caller cancels no longer records an `llm.error` or logs an error. (#1968)
 - **Test-mode autonomy gating** — suites now describe autonomy bands per `autonomy.gating`, as production does.
 - **Health canaries** — run daily again; boot cancelled the job, so no canary ran or pinged heartbeats. (#2229)
 - **`google_workspace` / `tavily` canaries** — make a live call each instead of always skipping, so heartbeats fire. (#2242)

@@ -13,6 +13,7 @@ import type { EventBus } from '../../bus/bus.js';
 import type { ModelRegistry } from './model-registry.js';
 import { buildLlmArchiveResponse } from '../../audit/llm-archive-response.js';
 import { createLlmCall, createLlmError } from '../../bus/events.js';
+import { isCallerCancellation } from './cancellation.js';
 import { createEstimateCostUsd } from './pricing.js';
 import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';
@@ -173,7 +174,7 @@ export class TelemetryLlmProvider implements LLMProvider {
     // Publish llm.error on failed responses so HealthService can track tier health
     // without billed probe calls. Fire-and-forget inside try-catch — telemetry
     // failure must never propagate to the system service.
-    if (response.type === 'error') {
+    if (response.type === 'error' && !isCallerCancellation(params.options)) {
       await this.publishError(params, response.error.type);
     }
 
@@ -199,7 +200,9 @@ export class TelemetryLlmProvider implements LLMProvider {
       for await (const event of this.inner.stream(params)) {
         if (event.type === 'message_end' || event.type === 'tool_use') {
           await this.publishCall(params, event, Date.now() - start);
-        } else if (event.type === 'error') {
+        } else if (event.type === 'error' && !isCallerCancellation(params.options)) {
+          // A caller cancellation (voice barge-in, hang-up) is not a provider
+          // failure: HealthService and audit_log must not count it (#1968).
           await this.publishError(params, event.error.type);
         }
         yield event;
@@ -212,7 +215,7 @@ export class TelemetryLlmProvider implements LLMProvider {
         'TelemetryLlmProvider: inner.stream() threw unexpectedly',
       );
       const error = classifyError(err, this.inner.id);
-      await this.publishError(params, error.type);
+      if (!isCallerCancellation(params.options)) await this.publishError(params, error.type);
       yield { type: 'error', error };
     }
   }

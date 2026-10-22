@@ -360,6 +360,8 @@ export interface VoiceRuntimeConfig {
       /** Resolved caller identity — required so the fallback path cannot drop authorization context. */
       caller: VoiceCallerContext;
       turnDateResolveResults?: readonly import('../../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
+      /** The turn's inbound.message id — the parent of its tool audit events (#1968). */
+      turnEventId?: string;
     },
   ) => Promise<{ content: string; is_error?: boolean }>;
   /**
@@ -409,6 +411,8 @@ export interface VoiceToolBridge {
       /** Resolved caller identity for this session — drives liveTurn/originator at the execution layer. */
       caller: VoiceCallerContext;
       turnDateResolveResults?: readonly import('../../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
+      /** The turn's inbound.message id — the parent of its tool audit events (#1968). */
+      turnEventId?: string;
     },
   ) => Promise<{ content: string; is_error?: boolean }>;
   /**
@@ -755,6 +759,8 @@ export class VoiceRuntime {
       }) => Message[];
       /** Wire coordinator tools + filler (user turns). Greeting passes false. */
       withTools: boolean;
+      /** The user turn's inbound.message id, passed to the tool bridge for audit (#1968). */
+      turnEventId?: string;
       /** Persist a completed spoken reply (in-process + working_memory). */
       persistSuccess: (finalText: string) => Promise<void>;
       /**
@@ -836,6 +842,7 @@ export class VoiceRuntime {
               sessionId: session.sessionId,
               caller: session.caller,
               turnDateResolveResults: turnDateResolveTracker.snapshot(),
+              turnEventId: opts.turnEventId,
             });
             if (call.name === 'date-resolve') {
               turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
@@ -849,6 +856,7 @@ export class VoiceRuntime {
                 sessionId: session.sessionId,
                 caller: session.caller,
                 turnDateResolveResults: turnDateResolveTracker.snapshot(),
+                turnEventId: opts.turnEventId,
               });
               if (call.name === 'date-resolve') {
                 turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
@@ -1349,18 +1357,26 @@ export class VoiceRuntime {
 
     // Publish the final user transcript for bus audit. The dispatcher skips
     // agent.task creation for channelId 'voice' (VoiceRuntime owns the turn).
+    // Its id parents the turn's tool audit events (#1968).
+    const inbound = createInboundMessage({
+      conversationId: session.conversationId,
+      channelId: 'voice',
+      senderId: session.caller.senderId,
+      content: sanitizeOutput(utterance),
+    });
+    // publish() rejects only before or in the audit write-ahead, so a failed publish
+    // means no audit row for this id. Tool audit then parents on the session instead
+    // of pointing at a missing row. The tools still run: each call's own tool.invoke is
+    // written ahead, and a call whose invoke cannot be written does not run.
+    let turnEventId: string | undefined = inbound.id;
     try {
-      await this.config.bus.publish(
-        'channel',
-        createInboundMessage({
-          conversationId: session.conversationId,
-          channelId: 'voice',
-          senderId: session.caller.senderId,
-          content: sanitizeOutput(utterance),
-        }),
-      );
+      await this.config.bus.publish('channel', inbound);
     } catch (err) {
-      this.log.warn({ sessionId: session.sessionId, err }, 'failed to publish voice inbound.message');
+      turnEventId = undefined;
+      this.log.warn(
+        { sessionId: session.sessionId, err },
+        'failed to publish voice inbound.message — this turn\'s tool audit parents on the session',
+      );
     }
 
     // Single authoritative history (#1551): reload prior turns from working_memory
@@ -1404,6 +1420,7 @@ export class VoiceRuntime {
       priorHistory: turnContext.history,
       contactRecent: turnContext.contactRecent,
       withTools: true,
+      turnEventId,
       persistIncomplete: (spokenText) => this.persistIncompleteAssistantTurn(session, {
         inProcessContent: utterance,
         storedContent: storedUserContent,
