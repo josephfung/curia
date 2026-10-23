@@ -16,7 +16,7 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import type { PrincipalEmailRef } from '../../contacts/types.js';
 import { resolvePrincipalEmail } from '../../contacts/types.js';
 import type { ConfigStore } from '../../memory/config-store.js';
-import { convertNylasMessage } from './message-converter.js';
+import { convertNylasMessage, normalizeForComparison } from './message-converter.js';
 import {
   createInboundMessage,
   createChannelPoll,
@@ -39,24 +39,6 @@ const MAX_REPLY_BODY_LENGTH = 50_000;
 const POLL_STATE_NAMESPACE = 'system:email-poll-state';
 function lastSeenKey(accountId: string): string {
   return `${accountId}.last_seen_at`;
-}
-
-// ---------------------------------------------------------------------------
-// Address normalization helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Normalize an email address for self-identity comparison.
- * Strips plus-addressing (local+tag@domain → local@domain) and lowercases.
- * This catches send-as alias variations and plus-address routing tricks that
- * could otherwise bypass the self-email loop filter.
- */
-function normalizeForComparison(email: string): string {
-  const at = email.lastIndexOf('@');
-  if (at === -1) return email.toLowerCase();
-  const local = email.slice(0, at).replace(/\+.*$/, '');
-  const domain = email.slice(at);
-  return local.toLowerCase() + domain.toLowerCase();
 }
 
 export interface EmailAdapterConfig {

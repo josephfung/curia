@@ -10,8 +10,11 @@
 --
 -- recipient_messages: messages a recipient sent while the entry was active, stamped by the
 -- dispatcher so a later principal turn or task wake can see them. A JSON array of
--- {at, from, preview}, holding the first message and the latest two: the first is most often
--- the answer, and a later "can you resend the address?" must not replace it.
+-- {at, from, contact_id, preview, risk_score}, holding the first three messages and the
+-- latest three: an early one is most often the answer, and a later "can you resend the
+-- address?" must not replace it. contact_id is the sender's, which a wake an outside contact
+-- started filters on so it lists only their own messages; risk_score is the inbound's
+-- injection-scan score.
 -- last_recipient_message_at orders and filters entries for task wakes.
 
 -- Up Migration

@@ -178,6 +178,20 @@ describe('convertNylasMessage — otherRecipientCount', () => {
     expect(result.metadata.otherRecipientCount).toBe(0);
   });
 
+  // The adapter's reply-all drops a plus-address of its own mailbox, so it is not a second person.
+  it('is 0 when the email reached only a plus-address of Curia\'s mailbox', () => {
+    const result = convertNylasMessage(mockMessage({ from, to: [{ email: 'Curia+Lunch@example.com', name: 'Curia' }], cc: [] }), SELF);
+    expect(result.metadata.otherRecipientCount).toBe(0);
+    expect(result.metadata.curiaRole).toBe('to');
+  });
+
+  it('still counts another person beside a plus-address of Curia', () => {
+    const result = convertNylasMessage(mockMessage({
+      from, to: [{ email: 'curia+lunch@example.com', name: 'Curia' }], cc: [{ email: 'jeff@example.com', name: 'Jeff' }],
+    }), SELF);
+    expect(result.metadata.otherRecipientCount).toBe(1);
+  });
+
   it('does not count the sender copying themselves', () => {
     const result = convertNylasMessage(mockMessage({ from, to: [{ email: SELF, name: 'Curia' }], cc: [{ email: 'xiaopu@example.com', name: 'Xiaopu' }] }), SELF);
     expect(result.metadata.otherRecipientCount).toBe(0);
@@ -278,6 +292,22 @@ describe('convertNylasMessage — curiaRole and primaryRecipientEmails', () => {
       'curia@example.com',
     );
     expect(result.metadata.curiaRole).toBe('cc');
+  });
+
+  it('treats a plus-address of selfEmail as Curia (#2261)', () => {
+    const cc = convertNylasMessage(
+      mockMessage({ to: [{ email: 'nik@example.com' }], cc: [{ email: 'curia+lunch@example.com' }] }),
+      SELF_EMAIL,
+    );
+    expect(cc.metadata.curiaRole).toBe('cc');
+    expect(cc.metadata.primaryRecipientEmails).toEqual(['nik@example.com']);
+
+    const to = convertNylasMessage(
+      mockMessage({ to: [{ email: 'curia+lunch@example.com' }, { email: 'nik@example.com' }], cc: [] }),
+      SELF_EMAIL,
+    );
+    expect(to.metadata.curiaRole).toBe('to');
+    expect(to.metadata.primaryRecipientEmails).toEqual(['nik@example.com']);
   });
 
   it('defaults curiaRole to "to" when selfEmail is not found in To or CC (BCC fallback)', () => {

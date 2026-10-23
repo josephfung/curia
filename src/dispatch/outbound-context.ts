@@ -736,8 +736,10 @@ export interface RecordedReplyView {
 
 /**
  * The task-wake view of entries with recipient messages; rows without any are skipped.
- * `onlyFromContactId` keeps only that contact's own messages, for a wake an outside contact
- * started: an entry sent to them and to others can hold the others' words (#2261).
+ * `onlyFromContactId` scopes the view for a wake an outside contact started, which can message
+ * them (#2261): it keeps only that contact's own messages (an entry sent to them and to others
+ * can hold the others' words) and drops `expected_reply`, Curia's own note, which the live
+ * recipient block withholds too and which can name the other recipients.
  */
 export function recordedReplyViews(
   rows: readonly OutboundContextRow[],
@@ -754,7 +756,7 @@ export function recordedReplyViews(
         entry_id: r.id,
         sent: `${timeAgo(r.createdAt)} via ${r.channelId}`,
         message: r.contentPreview.replace(/\n/g, ' '),
-        ...(r.expectedReply ? { expected_reply: r.expectedReply } : {}),
+        ...(r.expectedReply && target === undefined ? { expected_reply: r.expectedReply } : {}),
         ...(taskId !== undefined && r.metadata?.[TASK_WAKE_TASK_ID_KEY] === taskId ? { asked_by_this_task: true as const } : {}),
         messages_back: r.recipientMessages.map((m) => ({
           from: m.from,

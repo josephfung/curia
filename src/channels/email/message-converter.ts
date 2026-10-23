@@ -141,9 +141,24 @@ export function parseSenderVerified(headers?: Array<{ name: string; value: strin
 }
 
 /**
+ * Normalize an email address for self-identity comparison.
+ * Strips plus-addressing (local+tag@domain → local@domain) and lowercases.
+ * This catches send-as alias variations and plus-address routing tricks that
+ * could otherwise bypass the self-email loop filter.
+ */
+export function normalizeForComparison(email: string): string {
+  const at = email.lastIndexOf('@');
+  if (at === -1) return email.toLowerCase();
+  const local = email.slice(0, at).replace(/\+.*$/, '');
+  const domain = email.slice(at);
+  return local.toLowerCase() + domain.toLowerCase();
+}
+
+/**
  * Determine Curia's role in the email (To vs CC) and collect the primary recipients.
  *
- * Case-insensitive comparison — email addresses are case-insensitive per RFC 5321.
+ * Self is matched with normalizeForComparison, as the adapter's loop filter does, so
+ * `curia+tag@` is Curia (#2261).
  *
  * Returns 'to' as the fail-safe default when selfEmail is absent or not found in
  * either To or CC (e.g. genuine BCC, which is not currently detectable).
@@ -153,18 +168,18 @@ function resolveCuriaRole(
   ccList: Array<{ email: string }>,
   selfEmail: string,
 ): { curiaRole: 'to' | 'cc' | 'bcc'; primaryRecipientEmails: string[] } {
-  const self = selfEmail.toLowerCase();
+  const self = normalizeForComparison(selfEmail);
 
-  const inTo = toList.some((p) => p.email.toLowerCase() === self);
+  const inTo = toList.some((p) => normalizeForComparison(p.email) === self);
   if (inTo) {
     // Curia is a primary recipient — other To addresses (if any) are also primary.
     const primaryRecipientEmails = toList
       .map((p) => p.email)
-      .filter((e) => e.toLowerCase() !== self);
+      .filter((e) => normalizeForComparison(e) !== self);
     return { curiaRole: 'to', primaryRecipientEmails };
   }
 
-  const inCc = ccList.some((p) => p.email.toLowerCase() === self);
+  const inCc = ccList.some((p) => normalizeForComparison(p.email) === self);
   if (inCc) {
     // Curia was copied — the To addresses are the true primary recipients.
     const primaryRecipientEmails = toList.map((p) => p.email);
@@ -177,11 +192,17 @@ function resolveCuriaRole(
   return { curiaRole: 'to', primaryRecipientEmails: [] };
 }
 
-/** Distinct addresses in `recipients` that are not in `exclude` (case-insensitive). */
-function countOtherRecipients(recipients: Array<{ email: string }>, exclude: readonly string[]): number {
-  const excluded = new Set(exclude.map((e) => e.toLowerCase()));
+/**
+ * Distinct addresses in `recipients` other than the sender (case-insensitive) and Curia
+ * (normalizeForComparison, so `curia+tag@` is Curia: the adapter's reply-all drops it too).
+ */
+function countOtherRecipients(recipients: Array<{ email: string }>, selfEmail: string, fromEmail: string): number {
+  const self = normalizeForComparison(selfEmail);
+  const from = fromEmail.toLowerCase();
   const others = new Set(
-    recipients.map((p) => p.email.toLowerCase()).filter((e) => e.length > 0 && !excluded.has(e)),
+    recipients
+      .map((p) => p.email.toLowerCase())
+      .filter((e) => e.length > 0 && e !== from && normalizeForComparison(e) !== self),
   );
   return others.size;
 }
@@ -256,7 +277,7 @@ export function convertNylasMessage(msg: NylasMessage, selfEmail?: string): Conv
 
   // Everyone else the email reached, for the dispatcher's one-to-one test (#2261).
   const otherRecipientCount = selfEmail
-    ? countOtherRecipients([...msg.to, ...msg.cc], [selfEmail, fromEmail])
+    ? countOtherRecipients([...msg.to, ...msg.cc], selfEmail, fromEmail)
     : undefined;
 
   // Message-derived auto-generated classification (#1734). Uses headers,

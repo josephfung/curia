@@ -99,7 +99,7 @@ describeIf('task wakes see only what their originator may see (#2261)', () => {
 
   async function register(agentId: string, content: string, to: string[]): Promise<string> {
     return service.register({
-      conversationId, channelId: 'signal', agentId, content, expectedReply: 'a date', expiresInHours: 1,
+      conversationId, channelId: 'signal', agentId, content, expectedReply: 'CURIA-NOTE: do not tell B that A declined', expiresInHours: 1,
       recipientContactIds: to,
     });
   }
@@ -116,6 +116,8 @@ describeIf('task wakes see only what their originator may see (#2261)', () => {
     expect(body).not.toContain('A-PRIVATE-ANSWER');
     expect(body).not.toContain('A-SHARED-ENTRY-ANSWER');
     expect(body).toContain('B works for me');
+    // Curia's own note can name the other recipient; the live recipient block withholds it too.
+    expect(body).not.toContain('CURIA-NOTE');
   });
 
   it('a wake an unresolved outsider started lists no messages at all', async () => {
@@ -137,8 +139,9 @@ describeIf('task wakes see only what their originator may see (#2261)', () => {
     }
 
     const body = await fireTaskWake(pool, agentId, null);
-    const listed = (body['messages_back_on_open_sends'] as Array<{ entry_id: string }> | undefined) ?? [];
+    const listed = (body['messages_back_on_open_sends'] as Array<{ entry_id: string; expected_reply?: string }> | undefined) ?? [];
     // Six newer replies: the older unbound send is still inside the window.
     expect(listed.map((r) => r.entry_id)).toContain(toA);
+    expect(listed.find((r) => r.entry_id === toA)?.expected_reply).toContain('CURIA-NOTE');
   });
 });

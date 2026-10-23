@@ -280,6 +280,7 @@ describe('Scheduler task-wake disposition (#1951)', () => {
       expect(getActiveWithReplies).toHaveBeenCalledWith('meeting-debrief', { taskId: 'task-abc' });
       expect(content['messages_back_on_open_sends']).toEqual([expect.objectContaining({
         entry_id: reply.id,
+        expected_reply: 'which lunch dates Xiaopu can join',
         asked_by_this_task: true,
         messages_back: [{ from: 'Xiaopu Fung', received: '16 hours ago', text: 'Thur Nov 5' }],
       })]);
@@ -312,6 +313,9 @@ describe('Scheduler task-wake disposition (#1951)', () => {
       const raw = (await fire({ originator: outsider(XIAOPU) })).payload.content;
       expect(raw).not.toContain('A-PRIVATE-ANSWER');
       expect(raw).toContain('Thur Nov 5');
+      // Curia's own note stays off a wake that can message the contact, as on their live turn.
+      expect(raw).not.toContain('expected_reply');
+      expect(raw).not.toContain('which lunch dates Xiaopu can join');
     });
 
     it('lists nothing for a wake an unresolved outsider started', async () => {
