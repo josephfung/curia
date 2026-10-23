@@ -167,7 +167,19 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-23T15:13:58.673Z"
+      "recordedAt": "2026-10-23T19:35:06.762Z"
+    },
+    "contact answers one of two questions": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-23T19:36:52.609Z"
+    },
+    "contact writes without answering": {
+      "unstubbed": 0,
+      "runs": 15,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-23T19:20:36.525Z"
     },
     "contacts ambiguous name with a wrong role": {
       "unstubbed": 0,
