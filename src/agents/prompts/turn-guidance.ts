@@ -220,10 +220,11 @@ const RECIPIENT_OUTBOUND_CONTEXT = [
   '- Any other answered entry: do the work the question was for. If a task is waiting on this',
   '  answer (task-list), record it there with task-update. Then call `context-bridge-release`',
   '  with the entry_id.',
-  'After acting on an answer, your final response is a short acknowledgment to the sender: not',
-  'NO_REPLY, and not a separate send. A message that answers none of them (thanks, "I\'ll get',
-  'back to you", a new question) is not an answer: call no context-bridge-release, leave every',
-  'entry open, and handle the message as you would without this block.',
+  'Your final response is your only reply to the sender; never a separate send. After acting on',
+  'an answer, it is a short acknowledgment, not NO_REPLY. A message that answers none of them',
+  '(thanks, "I\'ll get back to you", a new question) is not an answer: call no',
+  'context-bridge-release, leave every entry open, and handle the message as you would without',
+  'this block.',
 ];
 
 /**
