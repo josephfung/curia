@@ -159,8 +159,9 @@ export function verificationCodeReceivedLines(
 
 /**
  * Any inbound from someone other than the principal (outbound context is limited to what
- * was sent to this sender, #2261). The first paragraph is every non-principal turn's reply contract, moved out of the always-on
- * prompt (prompt trim PR 4): principal turns never need it, and auto-generated mail, the
+ * was sent to this sender, #2261). The first paragraph is every non-principal turn's reply
+ * contract, moved out of the always-on prompt (prompt trim PR 4): principal turns never
+ * need it, and auto-generated mail, the
  * one non-principal turn without this block, has its own NO_REPLY preamble and never relays.
  * Anything for the principal goes in a note block, which the runtime cuts out of the reply
  * and the dispatcher emails to them (prompt trim PR 5, src/agents/principal-note.ts).
@@ -203,7 +204,7 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
 /**
  * A non-principal sender's turn carries a block of the messages Curia sent to them (#2261,
  * Fix B of #1848). Without it, "Thur Nov 5" from someone asked to pick a date read as a stray
- * message and got NO_REPLY (2026-10-21), and the answer was lost. The bullets mirror the
+ * message and got NO_REPLY, and the answer was lost. The bullets mirror the
  * principal block's routing (OUTBOUND_CONTEXT, OUTBOUND_CONTEXT_TASK_WAKE) for a reply from
  * the recipient, including its match step: act on the entry the message answers, leave the
  * others open. The NO_REPLY override applies only to an answer; a message that answers no
@@ -251,10 +252,11 @@ const SPOT_CHECK_REPLY = [
 ];
 
 /**
- * The [ACTIVE OUTBOUND CONTEXT] block is in this message (principal turns only). The
- * `delegation:` bullet is the transfer-ownership reply rule, moved here from the always-on
- * prompt (prompt trim PR 4): only this block carries a delegation hint, and only principal
- * turns get the block (#1848), so a third party's reply never reaches this rule.
+ * The principal's [ACTIVE OUTBOUND CONTEXT] block is in this message: every active entry,
+ * on a principal turn (#1848). The `delegation:` bullet is the transfer-ownership reply
+ * rule, moved here from the always-on prompt (prompt trim PR 4). A third party's turn gets
+ * only the entries sent to them, under `recipient-outbound-context`, which carries its own
+ * version of this routing (#2261); this key is never added to such a turn.
  */
 const OUTBOUND_CONTEXT = [
   'The [ACTIVE OUTBOUND CONTEXT] block lists messages you sent that may receive replies.',

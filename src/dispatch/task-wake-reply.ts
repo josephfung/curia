@@ -97,10 +97,14 @@ export async function recordTaskWakeReply(options: {
     const progressNote = `${options.repliedBy ?? 'principal'} replied: ${reply.slice(0, 1500)}`;
     const updates: Parameters<TaskRepo['updateTask']>[1] = { progressNote };
 
-    if (task.owner === 'ceo') {
+    // The principal answering hands their task back to Curia (#1299). A contact's answer
+    // does not (#2261): a task the principal owns stays theirs, in its status, with the
+    // answer noted. Curia's own parked task resumes, since the answer is what it waited on.
+    const byPrincipal = options.repliedBy === undefined;
+    if (byPrincipal && task.owner === 'ceo') {
       updates.owner = 'curia';
     }
-    if (task.status === 'waiting' || task.status === 'blocked') {
+    if ((byPrincipal || task.owner !== 'ceo') && (task.status === 'waiting' || task.status === 'blocked')) {
       updates.status = 'in_progress';
     }
 

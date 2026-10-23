@@ -385,23 +385,25 @@ describe('EmailReplyHandler', () => {
       });
     });
 
-    it('registers the To and CC recipients that are contacts, so their reply sees the entry (#2261)', async () => {
+    it('registers the To and CC recipients that are verified contacts, so their reply sees the entry (#2261)', async () => {
       const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Got it, thanks' });
       (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
         from: [{ email: 'alice@example.com' }],
         to: [],
-        cc: [{ email: 'bob@example.com' }, { email: 'stranger@example.com' }],
+        cc: [{ email: 'bob@example.com' }, { email: 'stranger@example.com' }, { email: 'shared@other.example' }],
         subject: 'Quick note',
         body: '',
         date: 0,
       });
       (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-1' });
-      const contacts: Record<string, string> = {
-        'alice@example.com': '11111111-1111-4111-8111-111111111111',
-        'bob@example.com': '22222222-2222-4222-8222-222222222222',
+      // shared@other.example matches only an unverified identity some other contact holds:
+      // crediting it would show them an entry for mail sent to someone else.
+      const contacts: Record<string, { contactId: string; verified: boolean }> = {
+        'alice@example.com': { contactId: '11111111-1111-4111-8111-111111111111', verified: true },
+        'bob@example.com': { contactId: '22222222-2222-4222-8222-222222222222', verified: true },
+        'shared@other.example': { contactId: '33333333-3333-4333-8333-333333333333', verified: false },
       };
-      const resolveByChannelIdentity = vi.fn(async (_channel: string, address: string) =>
-        contacts[address] ? { contactId: contacts[address] } : null);
+      const resolveByChannelIdentity = vi.fn(async (_channel: string, address: string) => contacts[address] ?? null);
       const mockRegister = vi.fn().mockResolvedValue('entry-1');
       Object.assign(ctx as unknown as Record<string, unknown>, {
         agentId: 'coordinator',

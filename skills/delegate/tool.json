@@ -9,7 +9,7 @@
     "task": "string",
     "conversation_id": "string?",
     "resume_token": "string?",
-    "outbound_entry_id": "string? (When this delegation routes the principal's reply to an [ACTIVE OUTBOUND CONTEXT] entry, that entry's entry_id. The platform releases the entry when the delegation ends, and keeps it only when routing the reply again could still work; the result's outbound_entry says which. Do not call context-bridge-release for it yourself.)"
+    "outbound_entry_id": "string? (When this delegation routes a reply to an [ACTIVE OUTBOUND CONTEXT] entry, that entry's entry_id. The platform releases the entry when the delegation ends, and keeps it only when routing the reply again could still work; the result's outbound_entry says which. Do not call context-bridge-release for it yourself.)"
   },
   "outputs": {
     "response": "string?",

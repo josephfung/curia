@@ -5,8 +5,13 @@
 // CONTEXT] block — and returns the actual released set so the coordinator can
 // confirm exactly what was cleared. Access is controlled by pinning (no
 // allowed_callers), matching the context-bridge-release convention.
+//
+// Refused outright on a turn an outside contact started (#2261): it releases by subject
+// across every active entry, not only the ones sent to that contact, so there is no
+// scoped form of it. Clearing debrief prompts is the principal's request.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { outsiderOriginatorContactId } from '../../../../src/dispatch/outbound-entry-access.js';
 
 export class ContextBridgeClearHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -36,6 +41,16 @@ export class ContextBridgeClearHandler implements ToolHandler {
       return {
         success: false,
         error: 'context-bridge-clear requires outboundContext capability.',
+      };
+    }
+
+    if (outsiderOriginatorContactId(ctx.taskMetadata) !== null) {
+      ctx.log.warn({ subjects: subjects.length }, 'context-bridge-clear refused — this turn was started by an outside contact');
+      return {
+        success: false,
+        error:
+          'context-bridge-clear is not available on a turn someone other than the principal started: ' +
+          'it clears entries sent to anyone. Release only an entry shown in this turn\'s block, with context-bridge-release.',
       };
     }
 

@@ -148,3 +148,18 @@ describe('sms-send relay budget (#1320)', () => {
     if (result.success) expect(result.data).toMatchObject({ deferred_to_digest: true, note: expect.stringMatching(/digest/) });
   });
 });
+
+// #2261: the entry records who the message went to, so their reply sees it.
+describe('sms-send outbound-context recipients (#2261)', () => {
+  it('registers the resolved contact as the entry\'s recipient', async () => {
+    const send = vi.fn().mockResolvedValue({ success: true, messageId: 'sms-1' });
+    const register = vi.fn().mockResolvedValue('entry-1');
+    const result = await new SmsSendHandler().execute(makeCtx({
+      input: { recipient: 'principal', message: 'Which day works?' },
+      outboundGateway: { send, resolveRecipientReference } as never,
+      outboundContext: { register, release: vi.fn(), defaultExpiryHours: 6, explicitExpiryHours: 24, defaultExpiryHoursFor: () => 6 } as never,
+    }));
+    expect(result.success).toBe(true);
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({ recipientContactIds: ['principal-id'] }));
+  });
+});

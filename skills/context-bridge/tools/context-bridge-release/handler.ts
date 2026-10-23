@@ -13,7 +13,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { isTaskWakeReplyBinding, recordTaskWakeReply } from '../../../../src/dispatch/task-wake-reply.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 import { delegationHintOwner, rosterFromRegistry } from '../../../../src/dispatch/delegation-hint.js';
-import { isEntryAddressedTo } from '../../../../src/dispatch/outbound-context.js';
+import { isEntryAddressedTo, type OutboundContextRow } from '../../../../src/dispatch/outbound-context.js';
 import { outsiderOriginatorContactId } from '../../../../src/dispatch/outbound-entry-access.js';
 
 /**
@@ -39,6 +39,17 @@ function ownedEntryError(entryId: string, owner: string): string {
     `releases the entry when ${owner} returns, unless ${owner} keeps the exchange open. If delegate ` +
     `reported outbound_entry status kept, ${owner} could not take the reply: route it again or tell the principal.`
   );
+}
+
+/**
+ * The name to credit a contact's answer to: the latest message this contact recorded on the
+ * entry (the dispatcher records it before their turn runs). Not simply the latest message,
+ * which on an entry sent to several people can be someone else's (#2261).
+ */
+function repliedByName(entry: OutboundContextRow, contactId: string): string {
+  const target = contactId.toLowerCase();
+  const own = entry.recipientMessages.filter((m) => m.contactId?.toLowerCase() === target);
+  return own.at(-1)?.from ?? 'the recipient';
 }
 
 export class ContextBridgeReleaseHandler implements ToolHandler {
@@ -99,7 +110,7 @@ export class ContextBridgeReleaseHandler implements ToolHandler {
             outboundContext: ctx.outboundContext,
             logger: ctx.log,
             // The dispatcher stamped the sender's name on the entry before this turn ran.
-            ...(outsider !== null ? { repliedBy: entry.recipientMessages.at(-1)?.from ?? 'the recipient' } : {}),
+            ...(outsider !== null ? { repliedBy: repliedByName(entry, outsider) } : {}),
           });
           if (!result.persisted) {
             return { success: false, error: result.error ?? 'failed to record task-wake reply' };

@@ -166,6 +166,44 @@ describe('convertNylasMessage', () => {
 });
 
 // ---------------------------------------------------------------------------
+// otherRecipientCount — who else an email reached (#2261)
+// ---------------------------------------------------------------------------
+
+describe('convertNylasMessage — otherRecipientCount', () => {
+  const SELF = 'curia@example.com';
+  const from = [{ email: 'xiaopu@example.com', name: 'Xiaopu' }];
+
+  it('is 0 when the email reached only Curia, case-insensitively', () => {
+    const result = convertNylasMessage(mockMessage({ from, to: [{ email: 'Curia@Example.com', name: 'Curia' }], cc: [] }), SELF);
+    expect(result.metadata.otherRecipientCount).toBe(0);
+  });
+
+  it('does not count the sender copying themselves', () => {
+    const result = convertNylasMessage(mockMessage({ from, to: [{ email: SELF, name: 'Curia' }], cc: [{ email: 'xiaopu@example.com', name: 'Xiaopu' }] }), SELF);
+    expect(result.metadata.otherRecipientCount).toBe(0);
+  });
+
+  it('counts each distinct other To and CC address', () => {
+    const result = convertNylasMessage(mockMessage({
+      from,
+      to: [{ email: SELF, name: 'Curia' }, { email: 'jeff@example.com', name: 'Jeff' }],
+      cc: [{ email: 'JEFF@example.com', name: 'Jeff' }, { email: 'ann@example.com', name: 'Ann' }],
+    }), SELF);
+    expect(result.metadata.otherRecipientCount).toBe(2);
+  });
+
+  it('counts the To recipients of a mail Curia was not visibly sent (BCC)', () => {
+    const result = convertNylasMessage(mockMessage({ from, to: [{ email: 'jeff@example.com', name: 'Jeff' }], cc: [] }), SELF);
+    expect(result.metadata.otherRecipientCount).toBe(1);
+  });
+
+  it('is omitted when the adapter does not know its own address', () => {
+    const result = convertNylasMessage(mockMessage({ from, to: [{ email: SELF, name: 'Curia' }], cc: [] }));
+    expect(result.metadata).not.toHaveProperty('otherRecipientCount');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // curiaRole and primaryRecipientEmails — CC role detection
 // ---------------------------------------------------------------------------
 

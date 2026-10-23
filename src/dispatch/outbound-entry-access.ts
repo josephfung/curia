@@ -28,6 +28,28 @@ export function inboundSenderAuthenticated(
 }
 
 /**
+ * True when this inbound is a one-to-one conversation, so the turn's reply reaches only the
+ * sender (#2261). The recipient block shows what Curia sent one person; in a Signal group, a
+ * Slack channel, or an email with anyone else on To or CC (Curia's replies go to all of
+ * them), it would reach people it was never sent to, and their messages would be recorded as
+ * that person's. Each test reads the adapter's own metadata and fails closed when it is
+ * missing: Signal `isGroup: false`, Slack `isDm: true` (an IM channel; group DMs are not
+ * delivered on that path), email `curiaRole: 'to'` and `otherRecipientCount: 0` (set only
+ * when the adapter knows its own address).
+ */
+export function inboundIsOneToOne(
+  channelId: string,
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (channelId === 'signal') return metadata?.['isGroup'] === false && !metadata['groupId'];
+  if (channelId === 'slack') return metadata?.['isDm'] === true;
+  if (channelId === 'email') {
+    return metadata?.['curiaRole'] === 'to' && metadata['otherRecipientCount'] === 0;
+  }
+  return false;
+}
+
+/**
  * The contact ID of the outside sender a task was started by, or null when the principal,
  * the system or an agent started it. An outsider originator without a usable contact ID
  * (an unresolved sender) returns an empty string, which matches no entry.

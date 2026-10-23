@@ -89,8 +89,11 @@ async function resolveCcList(
 
 /**
  * Contact IDs of a reply's To and CC addresses, for the outbound-context entry (#2261).
- * Best-effort: an address with no contact is skipped, and a lookup failure only means the
- * entry is not shown when that person replies; the send has already gone out.
+ * Only a verified identity counts, as for the send skills' recipient references (ADR-047):
+ * an unverified identity naming someone else's address would make its contact a recipient
+ * of mail sent to that person, and show them the entry. Best-effort: an address with no
+ * verified contact is skipped, and a lookup failure only means the entry is not shown when
+ * that person replies; the send has already gone out.
  */
 async function replyRecipientContactIds(
   ctx: ToolContext,
@@ -101,7 +104,7 @@ async function replyRecipientContactIds(
   for (const address of addresses) {
     try {
       const contact = await ctx.contactService.resolveByChannelIdentity('email', address);
-      if (contact) ids.push(contact.contactId);
+      if (contact?.verified) ids.push(contact.contactId);
     } catch (err) {
       ctx.log.warn({ err }, 'email-reply: recipient contact lookup failed — a reply from them will not see this entry');
     }

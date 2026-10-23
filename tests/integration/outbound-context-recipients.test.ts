@@ -12,6 +12,7 @@ import pg from 'pg';
 import { OutboundContextService } from '../../src/dispatch/outbound-context.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
+import { ContactService } from '../../src/contacts/contact-service.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -83,16 +84,18 @@ describeIf('outbound-context recipients and recorded replies (#2261)', () => {
     expect(ids).not.toContain(expired);
   });
 
+  const from = (contactId: string, content: string, name = 'Xiaopu Fung') => ({ from: name, contactId, content });
+
   it('records the message on active entries only, and the waking agent sees it', async () => {
     const asked = await register('Any of these work for you: Tue Oct 27, Thu Nov 5?', [xiaopu]);
     const released = await register('Old ask', [xiaopu]);
     await service.releaseEntry(released);
 
-    await service.recordReply([asked, released], { from: 'Xiaopu Fung', content: 'Thur\n Nov 5' });
+    await service.recordReply([asked, released], { ...from(xiaopu, 'Thur\n Nov 5'), riskScore: 0.2 });
 
     const entry = await service.getEntry(asked);
     expect(entry?.recipientMessages).toHaveLength(1);
-    expect(entry?.recipientMessages[0]).toMatchObject({ from: 'Xiaopu Fung', preview: 'Thur Nov 5' });
+    expect(entry?.recipientMessages[0]).toMatchObject({ from: 'Xiaopu Fung', contactId: xiaopu, preview: 'Thur Nov 5', riskScore: 0.2 });
     expect(entry?.recipientMessages[0]?.at).toBeInstanceOf(Date);
     const { rows } = await pool.query<{ last_recipient_message_at: Date | null; recipient_messages: unknown[] }>(
       'SELECT last_recipient_message_at, recipient_messages FROM outbound_context WHERE id = $1', [released],
@@ -104,21 +107,21 @@ describeIf('outbound-context recipients and recorded replies (#2261)', () => {
     expect(withMessages.map((e) => e.id)).toContain(asked);
     expect(await service.getActiveWithReplies(`someone-else-${randomUUID()}`)).toEqual([]);
 
-    // The principal's block shows it on the entry.
+    // The principal's block shows it on the entry, as an untrusted JSON string.
     const block = service.formatInjectionBlock([entry!], 'Any luck with Xiaopu?');
-    expect(block).toContain('  - Xiaopu Fung, just now: "Thur Nov 5"');
+    expect(block).toContain('  - from "Xiaopu Fung", just now, flagged by the injection scan (risk 0.20): "Thur Nov 5"');
   });
 
-  it('keeps the first message and the latest two, so a follow-up never replaces the answer', async () => {
+  it('keeps the first three messages and the latest three, so neither an early answer nor the latest is lost', async () => {
     const asked = await register('Which day works for lunch?', [xiaopu]);
-    for (const content of ['Thur Nov 5', 'Can you resend the address?', 'Is it the one on Elgin?', 'Thanks!']) {
-      await service.recordReply([asked], { from: 'Xiaopu Fung', content });
-    }
+    // An answer second, after a non-answer: still kept after six more messages.
+    const sent = ['one sec', 'Thur Nov 5', 'thanks!', 'is Jeff coming?', 'resend the address?', 'Elgin?', 'see you then', 'bye'];
+    for (const content of sent) await service.recordReply([asked], from(xiaopu, content));
     const previews = (await service.getEntry(asked))?.recipientMessages.map((m) => m.preview);
-    expect(previews).toEqual(['Thur Nov 5', 'Is it the one on Elgin?', 'Thanks!']);
+    expect(previews).toEqual(['one sec', 'Thur Nov 5', 'thanks!', 'Elgin?', 'see you then', 'bye']);
   });
 
-  it('lists the waking task\'s own sends first, ahead of newer messages on other sends', async () => {
+  it('lists the waking task\'s own sends first, and an unbound send survives six newer ones', async () => {
     const taskId = randomUUID();
     // A separate agent id so other tests' entries do not share the wake's cap.
     const wakeAgent = `coordinator-${randomUUID()}`;
@@ -127,18 +130,97 @@ describeIf('outbound-context recipients and recorded replies (#2261)', () => {
       recipientContactIds: [xiaopu], ...(metadata ? { metadata } : {}),
     });
     const ownAsk = await reg('Which day works for lunch?', { bind_reply: true, task_id: taskId });
-    await service.recordReply([ownAsk], { from: 'Xiaopu Fung', content: 'Thur Nov 5' });
-    const others: string[] = [];
-    for (let i = 0; i < 5; i++) {
+    await service.recordReply([ownAsk], from(xiaopu, 'Thur Nov 5'));
+    const unbound = await reg('Did the photos come through?');
+    await service.recordReply([unbound], from(xiaopu, 'yes, thanks'));
+    for (let i = 0; i < 10; i++) {
       const id = await reg(`Other ask ${i}`);
-      await service.recordReply([id], { from: 'Xiaopu Fung', content: `answer ${i}` });
-      others.push(id);
+      await service.recordReply([id], from(xiaopu, `answer ${i}`));
+      if (i === 5) {
+        // Six newer replied entries: an unbound send is still inside the 10-entry window.
+        expect((await service.getActiveWithReplies(wakeAgent, { taskId })).map((e) => e.id)).toContain(unbound);
+      }
     }
 
-    const forTask = await service.getActiveWithReplies(wakeAgent, taskId);
+    const forTask = await service.getActiveWithReplies(wakeAgent, { taskId });
     expect(forTask[0]?.id).toBe(ownAsk);
-    expect(forTask).toHaveLength(5);
-    // Without the task, the cap keeps the five newest and the older ask drops out.
+    expect(forTask).toHaveLength(10);
+    // Without the task, the cap keeps the ten newest and the older ask drops out.
     expect((await service.getActiveWithReplies(wakeAgent)).map((e) => e.id)).not.toContain(ownAsk);
+  });
+
+  // A wake an outside contact started can message them, so it reads only entries sent to them.
+  it('scopes a wake read to the entries sent to one contact', async () => {
+    const wakeAgent = `coordinator-${randomUUID()}`;
+    const reg = (content: string, to: string[]) => service.register({
+      conversationId, channelId: 'signal', agentId: wakeAgent, content, expiresInHours: 1, recipientContactIds: to,
+    });
+    const toJeff = await reg('Jeff: does Thu Nov 5 work?', [jeff]);
+    await service.recordReply([toJeff], from(jeff, 'JEFF-PRIVATE-ANSWER', 'Jeff Henry'));
+    const toXiaopu = await reg('Xiaopu: does Thu Nov 5 work?', [xiaopu]);
+    await service.recordReply([toXiaopu], from(xiaopu, 'Thur Nov 5'));
+
+    const forXiaopu = await service.getActiveWithReplies(wakeAgent, { recipientContactId: xiaopu });
+    expect(forXiaopu.map((e) => e.id)).toEqual([toXiaopu]);
+    expect(JSON.stringify(forXiaopu)).not.toContain('JEFF-PRIVATE-ANSWER');
+    expect((await service.getActiveWithReplies(wakeAgent)).map((e) => e.id).sort()).toEqual([toJeff, toXiaopu].sort());
+  });
+});
+
+describeIf('a contact merge re-points outbound_context recipients (#2261)', () => {
+  let pool: pg.Pool;
+  let outbound: OutboundContextService;
+  let contacts: ContactService;
+  const contactIds: string[] = [];
+  const conversationId = `test-merge-recipients-${randomUUID()}`;
+  let dbVerified = false;
+
+  async function makeContact(name: string): Promise<string> {
+    const { rows } = await pool.query<{ id: string }>(
+      `INSERT INTO contacts (display_name, kg_node_id) VALUES ($1, NULL) RETURNING id`, [name]);
+    contactIds.push(rows[0]!.id);
+    return rows[0]!.id;
+  }
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
+    dbVerified = true;
+    outbound = new OutboundContextService(pool, createSilentLogger());
+    // No entity memory: mergeContacts skips the KG merge, which this test does not need.
+    contacts = ContactService.createWithPostgres(pool, undefined, createSilentLogger());
+  });
+
+  afterAll(async () => {
+    if (dbVerified) {
+      await pool.query('DELETE FROM outbound_context WHERE conversation_id = $1', [conversationId]);
+      await pool.query('DELETE FROM contacts WHERE id = ANY($1::uuid[])', [contactIds]);
+    }
+    await pool.end();
+  });
+
+  it('an entry sent to the absorbed contact matches the survivor, once, with their messages re-pointed', async () => {
+    const survivor = await makeContact('Merge survivor');
+    const absorbed = await makeContact('Merge absorbed');
+    const other = randomUUID();
+    const toAbsorbed = await outbound.register({
+      conversationId, channelId: 'signal', agentId: 'coordinator', content: 'Does Thu Nov 5 work?', expiresInHours: 1,
+      recipientContactIds: [absorbed, other],
+    });
+    const toBoth = await outbound.register({
+      conversationId, channelId: 'email', agentId: 'coordinator', content: 'Lunch at Wildcraft?', expiresInHours: 1,
+      recipientContactIds: [survivor, absorbed],
+    });
+    await outbound.recordReply([toAbsorbed], { from: 'Absorbed', contactId: absorbed, content: 'Thur Nov 5' });
+    await outbound.recordReply([toAbsorbed], { from: 'Other', contactId: other, content: 'not me' });
+
+    await contacts.mergeContacts(survivor, absorbed);
+
+    expect((await outbound.getActiveForRecipient(survivor)).map((e) => e.id).sort()).toEqual([toAbsorbed, toBoth].sort());
+    expect(await outbound.getActiveForRecipient(absorbed)).toEqual([]);
+    expect((await outbound.getEntry(toAbsorbed))?.recipientContactIds?.sort()).toEqual([survivor, other].sort());
+    // De-duplicated: the survivor is listed once on an entry sent to both.
+    expect((await outbound.getEntry(toBoth))?.recipientContactIds).toEqual([survivor]);
+    expect((await outbound.getEntry(toAbsorbed))?.recipientMessages.map((m) => m.contactId)).toEqual([survivor, other]);
   });
 });

@@ -308,14 +308,42 @@ describe('ContextBridgeReleaseHandler', () => {
     const OTHER = '6e99314b-f9b5-4515-bafb-1a52d45b706b';
     const outsider = { originator: { contactId: XIAOPU, systemRole: null, channel: 'signal', initiatedAt: '2026-10-21T21:29:59.973Z', tier: 'trusted' } };
 
-    function entry(recipientContactIds: string[] | null, metadata: Record<string, unknown> | null = null) {
+    const message = (from: string, contactId: string, preview: string) => ({ at: new Date(), from, contactId, preview, riskScore: 0 });
+
+    function entry(
+      recipientContactIds: string[] | null,
+      metadata: Record<string, unknown> | null = null,
+      recipientMessages = [message('Xiaopu Fung', XIAOPU, 'Thur Nov 5')],
+    ) {
       return {
         id: ENTRY_ID, conversationId: 'signal:+15196161377', channelId: 'signal', agentId: 'coordinator',
         contentPreview: 'Any of these work for you?', expectedReply: null, delegationHint: null, metadata,
         createdAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000), released: false,
-        recipientContactIds, recipientMessages: [{ at: new Date(), from: 'Xiaopu Fung', preview: 'Thur Nov 5' }],
+        recipientContactIds, recipientMessages,
       };
     }
+
+    // On an entry sent to several people the latest message can be someone else's.
+    it('credits the answer to this sender, not to whoever wrote last on the entry', async () => {
+      const taskRepo = {
+        getTask: vi.fn().mockResolvedValue({ id: TASK_ID, status: 'waiting', owner: 'curia' }),
+        updateTask: vi.fn().mockResolvedValue({ id: TASK_ID }),
+      };
+      const ctx = makeCtx(
+        { entry_id: ENTRY_ID, reply: 'Thur Nov 5' },
+        { taskMetadata: outsider, taskRepo: taskRepo as unknown as TaskRepo } as Partial<ToolContext>,
+      );
+      (ctx.outboundContext!.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue(entry(
+        [XIAOPU, OTHER],
+        { bind_reply: true, task_id: TASK_ID },
+        [message('Xiaopu Fung', XIAOPU, 'Thur Nov 5'), message('Jeff Henry', OTHER, 'works for me too')],
+      ));
+      await handler.execute(ctx);
+
+      expect(taskRepo.updateTask).toHaveBeenCalledWith(
+        TASK_ID, expect.objectContaining({ progressNote: 'Xiaopu Fung replied: Thur Nov 5' }), 'coordinator',
+      );
+    });
 
     it('releases an entry sent to that sender', async () => {
       const ctx = makeCtx({ entry_id: ENTRY_ID }, { taskMetadata: outsider } as Partial<ToolContext>);

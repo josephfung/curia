@@ -147,13 +147,18 @@ export function scopedOutboundContext(real: OutboundContextService, currentScope
       const owned = entryIds.filter(id => owning(id));
       if (owned.length > 0) await real.recordReply(owned, reply);
     },
-    getActiveWithReplies: async (agentId: string, taskId?: string, limit = 5): Promise<OutboundContextRow[]> => {
+    getActiveWithReplies: async (
+      agentId: string,
+      opts: { taskId?: string; recipientContactId?: string; limit?: number } = {},
+    ): Promise<OutboundContextRow[]> => {
       const scope = currentScope();
       if (!scope) return [];
+      const { taskId, recipientContactId, limit = 10 } = opts;
       const forTask = (e: OutboundContextRow): number =>
         taskId !== undefined && e.metadata?.['task_id'] === taskId ? 1 : 0;
       return readScoped(scope, rows => rows
         .filter(e => e.recipientMessages.length > 0 && e.agentId === agentId)
+        .filter(e => recipientContactId === undefined || isEntryAddressedTo(e, recipientContactId))
         .sort((a, b) => forTask(b) - forTask(a) || lastMessageAt(b) - lastMessageAt(a))
         .slice(0, limit));
     },

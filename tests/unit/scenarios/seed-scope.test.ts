@@ -79,7 +79,10 @@ describe('scoped views with overlapping runs', () => {
       expect(await view.getActiveForRecipient('6e99314b-f9b5-4515-bafb-1a52d45b706b')).toEqual([]);
       expect((await view.getActiveWithReplies('coordinator')).map(r => r.id)).toEqual(['e-a']);
       expect(await view.getActiveWithReplies('ceo-inbox')).toEqual([]);
-      await view.recordReply(['e-a', 'e-real'], { from: 'X', content: 'c' });
+      // Scoped to one contact, as production scopes a wake an outside contact started.
+      expect((await view.getActiveWithReplies('coordinator', { recipientContactId: XIAOPU })).map(r => r.id)).toEqual(['e-a']);
+      expect(await view.getActiveWithReplies('coordinator', { recipientContactId: '6e99314b-f9b5-4515-bafb-1a52d45b706b' })).toEqual([]);
+      await view.recordReply(['e-a', 'e-real'], { from: 'X', contactId: XIAOPU, content: 'c' });
     });
     expect(recorded).toEqual([['e-a']]);
     expect(await view.getActiveForRecipient(XIAOPU)).toEqual([]);

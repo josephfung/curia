@@ -269,17 +269,18 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
       recipientMessages: [],
     });
 
+    // A one-to-one Signal message, as the adapter publishes it (isGroup: false).
     async function sendFromContact(
       harness: ReturnType<typeof buildHarness>,
       content = 'Thur Nov 5',
-      metadata?: Record<string, unknown>,
+      metadata: Record<string, unknown> = {},
     ) {
       await harness.bus.publish('channel', createInboundMessage({
         conversationId: 'signal:+15195040098',
         channelId: 'signal',
         senderId: '+15195040098',
         content,
-        ...(metadata ? { metadata } : {}),
+        metadata: { isGroup: false, ...metadata },
       }));
     }
 
@@ -305,7 +306,24 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
 
       expect(harness.recordReply).toHaveBeenCalledWith(
         ['efc521b3-4ef1-40ca-a34f-63f18629fe21'],
-        { from: 'Other Contact', content: 'Thur Nov 5' },
+        { from: 'Other Contact', contactId: 'contact-other-1', content: 'Thur Nov 5' },
+      );
+    });
+
+    it('records an email without its Subject line and the quoted thread', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      harness.getActiveForRecipient.mockResolvedValueOnce([lunchAsk]);
+      await harness.bus.publish('channel', createInboundMessage({
+        conversationId: 'email:thread-lunch',
+        channelId: 'email',
+        senderId: 'xiaopu@example.com',
+        content: 'Subject: Re: Lunch\n\nThur Nov 5 works.\n\nOn Tue, Oct 20, 2026 at 9:00 AM Curia <curia@example.com> wrote:\n> Which day works?',
+        metadata: { senderVerified: true, curiaRole: 'to', otherRecipientCount: 0 },
+      }));
+
+      expect(harness.recordReply).toHaveBeenCalledWith(
+        ['efc521b3-4ef1-40ca-a34f-63f18629fe21'],
+        expect.objectContaining({ content: 'Thur Nov 5 works.' }),
       );
     });
 
@@ -344,7 +362,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
           channelId: 'email',
           senderId: 'xiaopu@example.com',
           content: 'Thur Nov 5',
-          metadata: { senderVerified },
+          metadata: { senderVerified, curiaRole: 'to', otherRecipientCount: 0 },
         }));
 
       const forged = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
@@ -372,6 +390,59 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
 
       expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
       expect(harness.recordReply).not.toHaveBeenCalled();
+    });
+
+    // The block shows what Curia sent one person. Where the reply reaches anyone else, they
+    // would see it, and their chatter would be recorded as that person's message.
+    describe('only in a one-to-one conversation', () => {
+      async function expectNoBlock(message: Parameters<typeof createInboundMessage>[0]) {
+        const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+        harness.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+        await harness.bus.publish('channel', createInboundMessage(message));
+        expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
+        expect(harness.recordReply).not.toHaveBeenCalled();
+        expect(harness.tasks[0]!.payload.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
+        expect(harness.tasks[0]!.payload.content).not.toContain('efc521b3');
+      }
+
+      it('not in a Signal group', () => expectNoBlock({
+        conversationId: 'signal:group=Z3JvdXAtaWQ=', channelId: 'signal', senderId: '+15195040098',
+        content: 'hey all, what time does the offsite start?', metadata: { isGroup: true, groupId: 'Z3JvdXAtaWQ=' },
+      }));
+
+      it('not for a Signal message whose adapter metadata is missing', () => expectNoBlock({
+        conversationId: 'signal:+15195040098', channelId: 'signal', senderId: '+15195040098', content: 'Thur Nov 5',
+      }));
+
+      it('not in a Slack channel thread', () => expectNoBlock({
+        conversationId: 'slack:C123:1700000000.000100', channelId: 'slack', senderId: 'U123',
+        content: 'Thur Nov 5', metadata: { isDm: false, slackChannel: 'C123', eventType: 'app_mention' },
+      }));
+
+      it('not on an email where Curia is only CC\'d', () => expectNoBlock({
+        conversationId: 'email:thread-cc', channelId: 'email', senderId: 'xiaopu@example.com',
+        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'cc', otherRecipientCount: 1 },
+      }));
+
+      it('not on an email with anyone else on To or CC', () => expectNoBlock({
+        conversationId: 'email:thread-group', channelId: 'email', senderId: 'xiaopu@example.com',
+        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'to', otherRecipientCount: 2 },
+      }));
+
+      it('not on an email whose recipient count is unknown', () => expectNoBlock({
+        conversationId: 'email:thread-unknown', channelId: 'email', senderId: 'xiaopu@example.com',
+        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'to' },
+      }));
+
+      it('in a Slack DM', async () => {
+        const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+        harness.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+        await harness.bus.publish('channel', createInboundMessage({
+          conversationId: 'slack:D123', channelId: 'slack', senderId: 'U123', content: 'Thur Nov 5',
+          metadata: { isDm: true, slackChannel: 'D123', eventType: 'message' },
+        }));
+        expect(harness.getActiveForRecipient).toHaveBeenCalledWith('contact-other-1');
+      });
     });
 
     it('does not read entries for an unresolved sender', async () => {
