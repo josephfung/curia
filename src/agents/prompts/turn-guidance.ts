@@ -221,8 +221,9 @@ const RECIPIENT_OUTBOUND_CONTEXT = [
   '  answer (task-list), record it there with task-update. Then call `context-bridge-release`',
   '  with the entry_id.',
   'After acting on an answer, your final response is a short acknowledgment to the sender: not',
-  'NO_REPLY, and not a separate send. A message that answers none of them (thanks, a new',
-  'question) leaves every entry open; handle it as you would without this block.',
+  'NO_REPLY, and not a separate send. A message that answers none of them (thanks, "I\'ll get',
+  'back to you", a new question) is not an answer: call no context-bridge-release, leave every',
+  'entry open, and handle the message as you would without this block.',
 ];
 
 /**
