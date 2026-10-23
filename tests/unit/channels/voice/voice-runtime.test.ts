@@ -983,7 +983,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000),
     released: false,
     recipientContactIds: null,
-    lastReply: null,
+    recipientMessages: [],
   };
 
   /**
@@ -1750,7 +1750,7 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000),
       released: false,
       recipientContactIds: null,
-      lastReply: null,
+      recipientMessages: [],
     };
     const real = new OutboundContextService(
       { query: async () => ({ rows: [] }) } as never,

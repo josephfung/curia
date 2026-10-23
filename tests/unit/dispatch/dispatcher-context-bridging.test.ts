@@ -38,7 +38,7 @@ function makeActiveEntry(overrides: Partial<OutboundContextRow> = {}): OutboundC
     expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
     released: false,
     recipientContactIds: null,
-    lastReply: null,
+    recipientMessages: [],
     ...overrides,
   };
 }
@@ -266,7 +266,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
       delegationHint: null,
       metadata: null,
       recipientContactIds: ['contact-other-1'],
-      lastReply: null,
+      recipientMessages: [],
     });
 
     async function sendFromContact(
@@ -330,6 +330,45 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
     it('does not read entries for an unverified contact', async () => {
       const harness = buildHarness(makeResolver({ systemRole: null, tier: 'known', verified: false }));
       await sendFromContact(harness);
+
+      expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
+      expect(harness.recordReply).not.toHaveBeenCalled();
+    });
+
+    // A verified identity says the address is the contact's, not that this message is from
+    // them: a forged From of a verified address must not get the block or a recorded message.
+    it('reads entries for email only when SPF, DKIM and DMARC passed', async () => {
+      const send = (harness: ReturnType<typeof buildHarness>, senderVerified: boolean) =>
+        harness.bus.publish('channel', createInboundMessage({
+          conversationId: 'email:thread-lunch',
+          channelId: 'email',
+          senderId: 'xiaopu@example.com',
+          content: 'Thur Nov 5',
+          metadata: { senderVerified },
+        }));
+
+      const forged = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      forged.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+      await send(forged, false);
+      expect(forged.getActiveForRecipient).not.toHaveBeenCalled();
+      expect(forged.recordReply).not.toHaveBeenCalled();
+      expect(forged.tasks[0]!.payload.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
+
+      const authenticated = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      authenticated.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+      await send(authenticated, true);
+      expect(authenticated.getActiveForRecipient).toHaveBeenCalledWith('contact-other-1');
+    });
+
+    it('does not read entries for SMS, whose From is spoofable (ADR-036)', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      harness.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+      await harness.bus.publish('channel', createInboundMessage({
+        conversationId: 'sms:+15195040098',
+        channelId: 'sms',
+        senderId: '+15195040098',
+        content: 'Thur Nov 5',
+      }));
 
       expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
       expect(harness.recordReply).not.toHaveBeenCalled();

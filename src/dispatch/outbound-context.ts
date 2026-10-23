@@ -11,6 +11,7 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import { attributeOutboundEntry, type DelegationHintRoster } from './delegation-hint.js';
 import { isUuid } from '../util/uuid.js';
+import { TASK_WAKE_TASK_ID_KEY, isTaskWakeReplyBinding } from './task-wake-reply.js';
 
 const MAX_PREVIEW_LENGTH = 300;
 // Metadata carries structured delegation context (e.g. resume_tokens for
@@ -20,6 +21,8 @@ const MAX_PREVIEW_LENGTH = 300;
 // context fields while still preventing runaway payloads.
 const MAX_METADATA_LENGTH = 16_000;
 const MAX_FIELD_LENGTH = 500;
+/** Recipient messages kept per entry: the first and the latest two (#2261, see recordReply). */
+const MAX_RECIPIENT_MESSAGES = 3;
 /** Metadata key a delegated specialist's keep-open mark is stored under (#1972). */
 export const EXCHANGE_OPEN_KEY = 'exchange_open';
 
@@ -113,11 +116,21 @@ export interface OutboundContextRow {
   released: boolean;
   /** Contact IDs the message was sent to; null for rows written before #2261. */
   recipientContactIds: string[] | null;
-  /** The latest message a recipient sent while the entry was active (#2261), or null. */
-  lastReply: { at: Date; from: string; preview: string } | null;
+  /**
+   * Messages a recipient sent while the entry was active (#2261), oldest first: the first
+   * and the latest two. Any message from them, so not necessarily an answer to this entry.
+   */
+  recipientMessages: RecipientMessage[];
 }
 
-/** Who wrote a reply and what it said, as the dispatcher stamps it on entries (#2261). */
+/** One message a recipient sent while an entry was active (#2261). */
+export interface RecipientMessage {
+  at: Date;
+  from: string;
+  preview: string;
+}
+
+/** Who wrote a message and what it said, as the dispatcher stamps it on entries (#2261). */
 export interface RecordedReply {
   /** The sender's display name. */
   from: string;
@@ -217,14 +230,20 @@ function normalizeRecipients(ids: readonly string[] | undefined): string[] | nul
   return out.length > 0 ? out : null;
 }
 
-function mapLastReply(row: Record<string, unknown>): OutboundContextRow['lastReply'] {
-  const at = row.last_reply_at;
-  if (!(at instanceof Date)) return null;
-  return {
-    at,
-    from: (row.last_reply_from as string | null) ?? 'a recipient',
-    preview: (row.last_reply_preview as string | null) ?? '',
-  };
+/** The stored JSON array, keeping only well-formed messages (the column is written by SQL). */
+function mapRecipientMessages(value: unknown): RecipientMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((m: unknown) => {
+    if (typeof m !== 'object' || m === null) return [];
+    const { at, from, preview } = m as Record<string, unknown>;
+    const date = typeof at === 'string' ? new Date(at) : null;
+    if (!date || Number.isNaN(date.getTime())) return [];
+    return [{
+      at: date,
+      from: typeof from === 'string' && from !== '' ? from : 'a recipient',
+      preview: typeof preview === 'string' ? preview : '',
+    }];
+  });
 }
 
 /** True when the entry was sent to this contact (#2261). Legacy rows have no recipients. */
@@ -247,7 +266,7 @@ function mapRow(row: Record<string, unknown>): OutboundContextRow {
     expiresAt: row.expires_at as Date,
     released: row.released as boolean,
     recipientContactIds: (row.recipient_contact_ids as string[] | null | undefined) ?? null,
-    lastReply: mapLastReply(row),
+    recipientMessages: mapRecipientMessages(row.recipient_messages),
   };
 }
 
@@ -359,7 +378,7 @@ export class OutboundContextService {
     const result = await this.pool.query(
       `SELECT * FROM outbound_context
        WHERE released = false AND expires_at > now()
-         AND $1::uuid = ANY(recipient_contact_ids)
+         AND recipient_contact_ids @> ARRAY[$1::uuid]
        ORDER BY created_at DESC
        LIMIT $2`,
       [contactId, limit],
@@ -368,37 +387,50 @@ export class OutboundContextService {
   }
 
   /**
-   * Active entries sent on one agent's behalf that a recipient has written back on, newest
-   * reply first (#2261). For that agent's task wakes, which have no inbound to correlate and
-   * no thread to read: without this a wake reports "no reply yet" when one arrived on
-   * another conversation. Scoped to the agent so a wake sees replies to its own messages only.
+   * Active entries sent on one agent's behalf that a recipient has written back on (#2261).
+   * For that agent's task wakes, which have no inbound to correlate and no thread to read:
+   * without this a wake reports "no reply yet" when one arrived on another conversation.
+   * Scoped to the agent so a wake sees messages about its own sends only. Entries bound to
+   * `taskId` (a task-wake send's `task_id`) come first, so the cap never hides the one the
+   * waking task asked; the rest follow, newest message first.
    */
-  async getActiveWithReplies(agentId: string, limit = 5): Promise<OutboundContextRow[]> {
+  async getActiveWithReplies(agentId: string, taskId?: string, limit = 5): Promise<OutboundContextRow[]> {
     const result = await this.pool.query(
       `SELECT * FROM outbound_context
-       WHERE released = false AND expires_at > now() AND last_reply_at IS NOT NULL
+       WHERE released = false AND expires_at > now() AND last_recipient_message_at IS NOT NULL
          AND agent_id = $1
-       ORDER BY last_reply_at DESC
-       LIMIT $2`,
-      [agentId, limit],
+       ORDER BY (metadata ->> $2::text) IS NOT DISTINCT FROM $3::text DESC, last_recipient_message_at DESC
+       LIMIT $4`,
+      [agentId, TASK_WAKE_TASK_ID_KEY, taskId ?? null, limit],
     );
     return result.rows.map(mapRow);
   }
 
   /**
    * Stamp a recipient's message on the entries shown on their turn (#2261). Deterministic
-   * on purpose: whether or not the coordinator acts on the reply, a later principal turn
-   * or task wake can see that the recipient wrote back and what they said. Only the
-   * latest message is kept.
+   * on purpose: whether or not the coordinator acts on it, a later principal turn or task
+   * wake can see that the recipient wrote back and what they said. The dispatcher cannot
+   * tell which entry a message answers, so it goes on every entry shown and is rendered as
+   * a message back, not a reply; the reader judges. Each entry keeps the first message and
+   * the latest two (MAX_RECIPIENT_MESSAGES): the first is most often the answer, and a later
+   * follow-up must not replace it.
    */
   async recordReply(entryIds: readonly string[], reply: RecordedReply): Promise<void> {
     if (entryIds.length === 0) return;
     const preview = truncatePreview(reply.content.replace(/\s+/g, ' ').trim());
     await this.pool.query(
-      `UPDATE outbound_context
-          SET last_reply_at = now(), last_reply_from = $2, last_reply_preview = $3
+      `UPDATE outbound_context oc
+          SET last_recipient_message_at = now(),
+              recipient_messages = (
+                SELECT jsonb_agg(m ORDER BY ord)
+                  FROM jsonb_array_elements(
+                         oc.recipient_messages
+                         || jsonb_build_array(jsonb_build_object('at', now(), 'from', $2::text, 'preview', $3::text))
+                       ) WITH ORDINALITY AS t(m, ord)
+                 WHERE ord = 1 OR ord > jsonb_array_length(oc.recipient_messages) + 1 - ($4::int - 1)
+              )
         WHERE id = ANY($1::uuid[]) AND released = false`,
-      [entryIds, truncateField(reply.from, MAX_FIELD_LENGTH), preview],
+      [entryIds, truncateField(reply.from, MAX_FIELD_LENGTH), preview, MAX_RECIPIENT_MESSAGES],
     );
   }
 
@@ -577,9 +609,12 @@ export class OutboundContextService {
    * Format the [ACTIVE OUTBOUND CONTEXT] injection block for the coordinator.
    * Returns null when there are no active entries (caller uses original content).
    *
-   * `audience` (#2261): `principal` is every active entry, with any recorded reply on it.
-   * `recipient` is a non-principal sender's own entries: the header says so, and the
-   * recorded reply is left out (it is this sender's own earlier message).
+   * `audience` (#2261): `principal` is every active entry, with any recipient messages on it.
+   * `recipient` is a non-principal sender's own entries, and that turn's final response goes
+   * to the sender: the header says so, the recipient messages are left out (they are the
+   * sender's own), and the raw `context` JSON is replaced by the one field the guidance names
+   * (`bind_reply`). The JSON holds task ids and resume tokens (a specialist's whole brief),
+   * which must not be one echo away from an outside sender.
    */
   formatInjectionBlock(
     entries: OutboundContextRow[],
@@ -599,11 +634,16 @@ export class OutboundContextService {
       ];
       if (e.expectedReply) lines.push(`expected reply: ${e.expectedReply}`);
       if (e.delegationHint) lines.push(`delegation: ${e.delegationHint}`);
-      if (e.metadata) lines.push(`context: ${JSON.stringify(e.metadata)}`);
-      if (audience === 'principal' && e.lastReply) {
-        // Any message from a recipient while the entry is active, related or not: "latest
-        // message back", not "reply", so the coordinator still judges whether it answers.
-        lines.push(`latest message back from ${e.lastReply.from}, ${timeAgo(e.lastReply.at)}: "${e.lastReply.preview}"`);
+      if (audience === 'recipient') {
+        if (isTaskWakeReplyBinding(e.metadata)) lines.push('bind_reply: true');
+      } else {
+        if (e.metadata) lines.push(`context: ${JSON.stringify(e.metadata)}`);
+        if (e.recipientMessages.length > 0) {
+          // Any message from a recipient while the entry is active, related or not: "messages
+          // back", not "reply", so the coordinator still judges whether one answers it.
+          lines.push('messages back from its recipients since it was sent (not necessarily answers to it):');
+          for (const m of e.recipientMessages) lines.push(`  - ${m.from}, ${timeAgo(m.at)}: "${m.preview}"`);
+        }
       }
       lines.push('---');
       return lines.join('\n');
@@ -623,28 +663,30 @@ export class OutboundContextService {
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 
-/** A recorded reply as a task wake shows it (#2261). Relative times: models misread UTC. */
+/**
+ * An open send with the messages its recipients wrote back, as a task wake shows it (#2261).
+ * Relative times: models misread UTC.
+ */
 export interface RecordedReplyView {
   entry_id: string;
   sent: string;
   message: string;
   expected_reply?: string;
-  reply_from: string;
-  reply_received: string;
-  reply: string;
+  /** Set when the send was made by the waking task (its task-wake binding). */
+  asked_by_this_task?: true;
+  messages_back: { from: string; received: string; text: string }[];
 }
 
-/** The task-wake view of entries with a recorded reply; rows without one are skipped. */
-export function recordedReplyViews(rows: readonly OutboundContextRow[]): RecordedReplyView[] {
-  return rows.flatMap((r) => r.lastReply
+/** The task-wake view of entries with recipient messages; rows without any are skipped. */
+export function recordedReplyViews(rows: readonly OutboundContextRow[], taskId?: string): RecordedReplyView[] {
+  return rows.flatMap((r) => r.recipientMessages.length > 0
     ? [{
         entry_id: r.id,
         sent: `${timeAgo(r.createdAt)} via ${r.channelId}`,
         message: r.contentPreview.replace(/\n/g, ' '),
         ...(r.expectedReply ? { expected_reply: r.expectedReply } : {}),
-        reply_from: r.lastReply.from,
-        reply_received: timeAgo(r.lastReply.at),
-        reply: r.lastReply.preview,
+        ...(taskId !== undefined && r.metadata?.[TASK_WAKE_TASK_ID_KEY] === taskId ? { asked_by_this_task: true as const } : {}),
+        messages_back: r.recipientMessages.map((m) => ({ from: m.from, received: timeAgo(m.at), text: m.preview })),
       }]
     : []);
 }

@@ -204,20 +204,25 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
  * A non-principal sender's turn carries a block of the messages Curia sent to them (#2261,
  * Fix B of #1848). Without it, "Thur Nov 5" from someone asked to pick a date read as a stray
  * message and got NO_REPLY (2026-10-21), and the answer was lost. The bullets mirror the
- * principal block's routing (delegation hint, task-wake binding) for a reply from the
- * recipient, and the last line overrides the NO_REPLY default for an answer Curia asked for.
+ * principal block's routing (OUTBOUND_CONTEXT, OUTBOUND_CONTEXT_TASK_WAKE) for a reply from
+ * the recipient, including its match step: act on the entry the message answers, leave the
+ * others open. The NO_REPLY override applies only to an answer; a message that answers no
+ * entry keeps non-principal-reply-shaped's contract. No resume_token bullet: the recipient
+ * block never renders one (outbound-context.ts), and clarification relays go to the principal.
  */
 const RECIPIENT_OUTBOUND_CONTEXT = [
-  'The [ACTIVE OUTBOUND CONTEXT] block lists messages you sent to this sender. A message that',
-  'answers one of them is the answer you were waiting for: act on it now.',
-  '- An entry with a `delegation:` line: delegate to that specialist with the sender\'s full',
-  '  message as the task and the entry_id as `outbound_entry_id`.',
-  '- An entry whose `context` has `bind_reply: true`: call `context-bridge-release` with that',
+  'The [ACTIVE OUTBOUND CONTEXT] block lists messages you sent to this sender. Decide whether',
+  'this message answers one of them. Act only on the entry it answers and leave the others open.',
+  '- An answered entry with a `delegation:` line: delegate to that specialist with the sender\'s',
+  '  full message as the task and the entry_id as `outbound_entry_id`.',
+  '- An answered entry marked `bind_reply: true`: call `context-bridge-release` with that',
   '  entry_id and `reply` set to the sender\'s answer verbatim.',
-  '- Any other entry: do the work the question was for. If a task is waiting on this answer',
-  '  (task-list), record it there with task-update. Then call `context-bridge-release` with',
-  '  the entry_id.',
-  'Your final response is a short acknowledgment to the sender: not NO_REPLY, and not a separate send.',
+  '- Any other answered entry: do the work the question was for. If a task is waiting on this',
+  '  answer (task-list), record it there with task-update. Then call `context-bridge-release`',
+  '  with the entry_id.',
+  'After acting on an answer, your final response is a short acknowledgment to the sender: not',
+  'NO_REPLY, and not a separate send. A message that answers none of them (thanks, a new',
+  'question) leaves every entry open; handle it as you would without this block.',
 ];
 
 /**

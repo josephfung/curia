@@ -695,15 +695,16 @@ export class Scheduler {
   }
 
   /**
-   * Replies recipients sent to the agent's still-open outbound messages, for a task wake
-   * (#2261). Best-effort: a failed read means the wake goes without them, not a failed fire.
+   * Messages recipients sent back on the agent's still-open outbound messages, for a task
+   * wake (#2261); those the waking task sent come first. Best-effort: a failed read means the
+   * wake goes without them, not a failed fire.
    */
-  private async recordedRepliesFor(agentId: string): Promise<RecordedReplyView[]> {
+  private async recordedRepliesFor(agentId: string, taskId: string): Promise<RecordedReplyView[]> {
     if (!this.outboundContextService) return [];
     try {
-      return recordedReplyViews(await this.outboundContextService.getActiveWithReplies(agentId));
+      return recordedReplyViews(await this.outboundContextService.getActiveWithReplies(agentId, taskId), taskId);
     } catch (err) {
-      this.logger.error({ err, agentId }, 'Failed to read recorded replies for a task wake — waking without them');
+      this.logger.error({ err, agentId, taskId }, 'Failed to read recipient messages for a task wake — waking without them');
       return [];
     }
   }
@@ -1059,7 +1060,7 @@ export class Scheduler {
       content = formatTaskWakeContent(
         { taskId: job.agentTaskId, title: job.taskTitle, progress: job.progress, agentId: job.agentId, tags: job.taskTags },
         job.taskPayload,
-        await this.recordedRepliesFor(job.agentId),
+        await this.recordedRepliesFor(job.agentId, job.agentTaskId),
       );
     } else if (job.agentTaskId) {
       // A task-bound job that is not a wake has no disposition contract.

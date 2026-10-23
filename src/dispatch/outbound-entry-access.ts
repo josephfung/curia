@@ -10,6 +10,24 @@
 import { isOutsiderOriginated } from '../contacts/principal.js';
 
 /**
+ * True when this inbound's sender address is authenticated by its channel, so a match on
+ * the contact's verified identity means the message is from that contact (#2261). A
+ * verified contact identity says the address belongs to the contact, not that this message
+ * came from it. Signal and Slack identities are authenticated by the protocol. Email counts
+ * only when SPF, DKIM and DMARC passed (`senderVerified`, set by the email adapter, which
+ * still publishes mail that fails them). SMS and voice caller IDs are spoofable (ADR-036),
+ * and any other channel is refused until it is shown to be authenticated.
+ */
+export function inboundSenderAuthenticated(
+  channelId: string,
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (channelId === 'signal' || channelId === 'slack') return true;
+  if (channelId === 'email') return metadata?.['senderVerified'] === true;
+  return false;
+}
+
+/**
  * The contact ID of the outside sender a task was started by, or null when the principal,
  * the system or an agent started it. An outsider originator without a usable contact ID
  * (an unresolved sender) returns an empty string, which matches no entry.

@@ -59,7 +59,7 @@ function row(id: string, delegationHint: string | null, recipientContactIds: str
     contentPreview: 'Dana proposed Tuesday 8am. Accept, or suggest another time?',
     expectedReply: null, delegationHint, metadata: null,
     createdAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000), released: false,
-    recipientContactIds, lastReply: null,
+    recipientContactIds, recipientMessages: [],
   };
 }
 

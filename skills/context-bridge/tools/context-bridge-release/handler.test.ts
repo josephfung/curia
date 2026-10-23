@@ -313,7 +313,7 @@ describe('ContextBridgeReleaseHandler', () => {
         id: ENTRY_ID, conversationId: 'signal:+15196161377', channelId: 'signal', agentId: 'coordinator',
         contentPreview: 'Any of these work for you?', expectedReply: null, delegationHint: null, metadata,
         createdAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000), released: false,
-        recipientContactIds, lastReply: { at: new Date(), from: 'Xiaopu Fung', preview: 'Thur Nov 5' },
+        recipientContactIds, recipientMessages: [{ at: new Date(), from: 'Xiaopu Fung', preview: 'Thur Nov 5' }],
       };
     }
 

@@ -62,8 +62,8 @@ describe('scoped views with overlapping runs', () => {
   it('match recipients, record replies and list wake replies over the run\'s own entries only (#2261)', async () => {
     const XIAOPU = '1d833dd7-5c5f-4adc-b311-c8347b49a18e';
     const rows: Record<string, OutboundContextRow> = {
-      'e-a': { id: 'e-a', agentId: 'coordinator', createdAt: new Date(), recipientContactIds: [XIAOPU], lastReply: { at: new Date(), from: 'X', preview: 'p' } } as unknown as OutboundContextRow,
-      'e-real': { id: 'e-real', agentId: 'coordinator', createdAt: new Date(), recipientContactIds: [XIAOPU], lastReply: { at: new Date(), from: 'X', preview: 'p' } } as unknown as OutboundContextRow,
+      'e-a': { id: 'e-a', agentId: 'coordinator', createdAt: new Date(), recipientContactIds: [XIAOPU], recipientMessages: [{ at: new Date(), from: 'X', preview: 'p' }] } as unknown as OutboundContextRow,
+      'e-real': { id: 'e-real', agentId: 'coordinator', createdAt: new Date(), recipientContactIds: [XIAOPU], recipientMessages: [{ at: new Date(), from: 'X', preview: 'p' }] } as unknown as OutboundContextRow,
     };
     const recorded: string[][] = [];
     const real = {
@@ -83,6 +83,23 @@ describe('scoped views with overlapping runs', () => {
     });
     expect(recorded).toEqual([['e-a']]);
     expect(await view.getActiveForRecipient(XIAOPU)).toEqual([]);
+  });
+
+  it('record a failed recipient or wake read on the run, so it fails instead of passing without the block (#2261)', async () => {
+    const real = {
+      getEntry: async () => { throw new Error('db down'); },
+    } as unknown as OutboundContextService;
+    const view = scopedOutboundContext(real, currentScope);
+    const state = run('A', [], ['e-a']);
+
+    await context.run(state, async () => {
+      await expect(view.getActiveForRecipient('1d833dd7-5c5f-4adc-b311-c8347b49a18e')).rejects.toThrow('db down');
+      await expect(view.getActiveWithReplies('coordinator')).rejects.toThrow('db down');
+    });
+    expect(state.scope.errors).toEqual([
+      'outbound-context read failed: db down',
+      'outbound-context read failed: db down',
+    ]);
   });
 
   it('give each run only its own backlog counts (prompt trim PR 7)', async () => {

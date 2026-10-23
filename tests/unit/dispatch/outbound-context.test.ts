@@ -303,7 +303,7 @@ describe('OutboundContextService', () => {
         expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
         released: false,
         recipientContactIds: null,
-        lastReply: null,
+        recipientMessages: [],
       }];
 
       const result = service.formatInjectionBlock(entries, 'Hello from CEO');
@@ -334,7 +334,7 @@ describe('OutboundContextService', () => {
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         released: false,
         recipientContactIds: null,
-        lastReply: null,
+        recipientMessages: [],
       }];
 
       const result = service.formatInjectionBlock(entries, 'Reply');
@@ -365,7 +365,7 @@ describe('OutboundContextService', () => {
         expiresAt: new Date(Date.now() + 70 * 60 * 60 * 1000),
         released: false,
         recipientContactIds: [XIAOPU],
-        lastReply: null,
+        recipientMessages: [],
         ...overrides,
       };
     }
@@ -392,17 +392,18 @@ describe('OutboundContextService', () => {
           id: 'id-1', conversation_id: 'c', channel_id: 'signal', agent_id: 'coordinator',
           content_preview: 'Q', expected_reply: null, delegation_hint: null, metadata: null,
           created_at: new Date(), expires_at: new Date(), released: false,
-          recipient_contact_ids: [XIAOPU], last_reply_at: null, last_reply_from: null, last_reply_preview: null,
+          recipient_contact_ids: [XIAOPU], recipient_messages: [], last_recipient_message_at: null,
         }],
       });
       const rows = await service.getActiveForRecipient(XIAOPU);
 
       expect(rows[0]!.recipientContactIds).toEqual([XIAOPU]);
-      expect(rows[0]!.lastReply).toBeNull();
+      expect(rows[0]!.recipientMessages).toEqual([]);
       const [sql, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(sql).toContain('released = false');
       expect(sql).toContain('expires_at > now()');
-      expect(sql).toContain('= ANY(recipient_contact_ids)');
+      // Containment, which the partial GIN index serves; `= ANY()` cannot use it.
+      expect(sql).toContain('recipient_contact_ids @> ARRAY[$1::uuid]');
       expect(params).toEqual([XIAOPU, 10]);
     });
 
@@ -411,13 +412,14 @@ describe('OutboundContextService', () => {
       expect(pool.query).not.toHaveBeenCalled();
     });
 
-    it('recordReply stamps the sender and a whitespace-collapsed preview on the given active entries', async () => {
+    it('recordReply appends the sender and a whitespace-collapsed preview on the given active entries', async () => {
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 1 });
       await service.recordReply(['id-1', 'id-2'], { from: 'Xiaopu Fung', content: 'Thur\n\nNov 5' });
       const [sql, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
-      expect(sql).toContain('last_reply_at = now()');
+      expect(sql).toContain('last_recipient_message_at = now()');
       expect(sql).toContain('released = false');
-      expect(params).toEqual([['id-1', 'id-2'], 'Xiaopu Fung', 'Thur Nov 5']);
+      // Keeps the first message and the latest two (integration test covers the trim).
+      expect(params).toEqual([['id-1', 'id-2'], 'Xiaopu Fung', 'Thur Nov 5', 3]);
     });
 
     it('recordReply does nothing for no entries', async () => {
@@ -425,48 +427,67 @@ describe('OutboundContextService', () => {
       expect(pool.query).not.toHaveBeenCalled();
     });
 
-    it('getActiveWithReplies reads the waking agent\'s active entries that have a reply', async () => {
+    it('getActiveWithReplies reads the waking agent\'s entries with messages, the waking task\'s first', async () => {
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [] });
-      await service.getActiveWithReplies('coordinator');
+      await service.getActiveWithReplies('coordinator', 'task-1');
       const [sql, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
-      expect(sql).toContain('last_reply_at IS NOT NULL');
+      expect(sql).toContain('last_recipient_message_at IS NOT NULL');
       expect(sql).toContain('agent_id = $1');
-      expect(params).toEqual(['coordinator', 5]);
+      expect(params).toEqual(['coordinator', 'task_id', 'task-1', 5]);
     });
 
-    it('maps the last_reply columns', async () => {
-      const at = new Date();
+    it('maps the recipient_messages column, dropping malformed items', async () => {
+      const at = new Date('2026-10-21T18:02:00.000Z');
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         rows: [{
           id: 'id-1', conversation_id: 'c', channel_id: 'signal', agent_id: 'coordinator',
           content_preview: 'Q', expected_reply: null, delegation_hint: null, metadata: null,
           created_at: new Date(), expires_at: new Date(), released: false,
-          recipient_contact_ids: null, last_reply_at: at, last_reply_from: 'Xiaopu Fung', last_reply_preview: 'Thur Nov 5',
+          recipient_contact_ids: null, last_recipient_message_at: at,
+          recipient_messages: [{ at: at.toISOString(), from: 'Xiaopu Fung', preview: 'Thur Nov 5' }, { at: 'not a date' }, null],
         }],
       });
       const [row] = await service.getActiveWithReplies('coordinator');
-      expect(row!.lastReply).toEqual({ at, from: 'Xiaopu Fung', preview: 'Thur Nov 5' });
+      expect(row!.recipientMessages).toEqual([{ at, from: 'Xiaopu Fung', preview: 'Thur Nov 5' }]);
     });
 
-    it('a recipient block says it holds only messages sent to this sender and leaves out recorded replies', () => {
+    it('a recipient block says it holds only messages sent to this sender and leaves out recipient messages', () => {
       const block = service.formatInjectionBlock(
-        [entry({ lastReply: { at: new Date(), from: 'Xiaopu Fung', preview: 'earlier message' } })],
+        [entry({ recipientMessages: [{ at: new Date(), from: 'Xiaopu Fung', preview: 'earlier message' }] })],
         'Thur Nov 5',
         'recipient',
       )!;
       expect(block.startsWith('[ACTIVE OUTBOUND CONTEXT — messages you sent to this sender that may receive replies]')).toBe(true);
       expect(block).toContain('expected reply: which candidate lunch dates Xiaopu can join');
-      expect(block).not.toContain('latest message back');
+      expect(block).not.toContain('earlier message');
       expect(block.endsWith('Thur Nov 5')).toBe(true);
     });
 
-    it('a principal block shows the recorded reply on its entry', () => {
+    it('a recipient block never carries the context JSON, only the bind_reply flag', () => {
+      const metadata = { bind_reply: true, task_id: '3804c301-aaaa-4bbb-8ccc-dddddddddddd', resume_token: 'eyJzZWNyZXQiOiJicmllZiJ9' };
+      const recipient = service.formatInjectionBlock([entry({ metadata })], 'Thur Nov 5', 'recipient')!;
+      expect(recipient).toContain('bind_reply: true');
+      expect(recipient).not.toContain('context:');
+      expect(recipient).not.toContain(metadata.task_id);
+      expect(recipient).not.toContain(metadata.resume_token);
+
+      // The principal still sees the whole context.
+      const principal = service.formatInjectionBlock([entry({ metadata })], 'Any luck?')!;
+      expect(principal).toContain(`context: ${JSON.stringify(metadata)}`);
+    });
+
+    it('a principal block lists the recipient messages on their entry, not as replies', () => {
       const block = service.formatInjectionBlock(
-        [entry({ lastReply: { at: new Date(Date.now() - 3 * 3_600_000), from: 'Xiaopu Fung', preview: 'Thur Nov 5' } })],
+        [entry({ recipientMessages: [
+          { at: new Date(Date.now() - 3 * 3_600_000), from: 'Xiaopu Fung', preview: 'Thur Nov 5' },
+          { at: new Date(Date.now() - 3_600_000), from: 'Xiaopu Fung', preview: 'Can you resend the address?' },
+        ] })],
         'Any luck with Xiaopu?',
       )!;
       expect(block).toContain('[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]');
-      expect(block).toContain('latest message back from Xiaopu Fung, 3 hours ago: "Thur Nov 5"');
+      expect(block).toContain('messages back from its recipients since it was sent (not necessarily answers to it):');
+      expect(block).toContain('  - Xiaopu Fung, 3 hours ago: "Thur Nov 5"');
+      expect(block).toContain('  - Xiaopu Fung, 1 hour ago: "Can you resend the address?"');
     });
 
     it('isEntryAddressedTo matches recipients case-insensitively and never matches a legacy row', () => {
@@ -475,20 +496,23 @@ describe('OutboundContextService', () => {
       expect(isEntryAddressedTo(entry({ recipientContactIds: null }), XIAOPU)).toBe(false);
     });
 
-    it('recordedReplyViews lists only entries with a reply, in relative time', () => {
+    it('recordedReplyViews lists only entries with messages, in relative time, marking the waking task\'s own', () => {
       const views = recordedReplyViews([
-        entry({ lastReply: { at: new Date(Date.now() - 2 * 3_600_000), from: 'Xiaopu Fung', preview: 'Thur Nov 5' } }),
+        entry({
+          metadata: { bind_reply: true, task_id: 'task-1' },
+          recipientMessages: [{ at: new Date(Date.now() - 2 * 3_600_000), from: 'Xiaopu Fung', preview: 'Thur Nov 5' }],
+        }),
+        entry({ id: 'other-task', metadata: { bind_reply: true, task_id: 'task-2' }, recipientMessages: [{ at: new Date(), from: 'Jeff', preview: 'ok' }] }),
         entry({ id: 'no-reply' }),
-      ]);
+      ], 'task-1');
       expect(views).toEqual([{
         entry_id: 'efc521b3-4ef1-40ca-a34f-63f18629fe21',
         sent: '30 minutes ago via signal',
         message: 'Any of these work for you: Tue Oct 27, Thu Nov 5?',
         expected_reply: 'which candidate lunch dates Xiaopu can join',
-        reply_from: 'Xiaopu Fung',
-        reply_received: '2 hours ago',
-        reply: 'Thur Nov 5',
-      }]);
+        asked_by_this_task: true,
+        messages_back: [{ from: 'Xiaopu Fung', received: '2 hours ago', text: 'Thur Nov 5' }],
+      }, expect.not.objectContaining({ asked_by_this_task: true })]);
     });
   });
 });

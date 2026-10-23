@@ -184,12 +184,16 @@ Three approaches were considered:
   could be dropped (2026-10-21: "Thur Nov 5" from a contact asked to pick a lunch
   date got `NO_REPLY`). Entries now record the contact IDs they were sent to, and
   a verified non-principal sender's turn gets a block of only the entries sent to
-  them. Entries sent to anyone else stay withheld, so the #1848 confidentiality
-  property holds; principal turns are unchanged. The dispatcher also stamps the
-  recipient's message on those entries so principal turns and task wakes can see
-  the reply, and tools refuse an entry_id not sent to the outside sender of the
-  turn. Rows written before migration 104 carry no recipients and are never shown
-  to a non-principal.
+  them, on channels that authenticate this message's sender (Signal, Slack, and
+  email that passed SPF/DKIM/DMARC; not SMS or voice). Entries sent to anyone else
+  stay withheld, so the #1848 confidentiality property holds; principal turns are
+  unchanged. That block leaves out the raw `context` JSON (task ids, resume tokens),
+  since the turn's reply goes to the sender. The dispatcher also records the
+  recipient's message on those entries (the first and the latest two), so principal
+  turns and task wakes can see it; they render it as a message back, not an answer,
+  because the dispatcher cannot tell which entry it answers. Tools refuse an
+  entry_id not sent to the outside sender of the turn. Rows written before
+  migration 104 carry no recipients and are never shown to a non-principal.
 - An unrecognised channel id in `contextBridge.channelDefaultExpiryHours` is
   accepted and silently inert — registration uses pseudo-channel ids
   (`internal`, `scheduler`, `bullpen`) that are not in the channel catalog, so

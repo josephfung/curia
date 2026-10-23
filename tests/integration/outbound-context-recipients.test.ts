@@ -1,15 +1,17 @@
 // tests/integration/outbound-context-recipients.test.ts
 //
 // #2261 (Fix B of #1848): entries record who they were sent to, a non-principal sender's
-// turn reads only the entries sent to them, and the dispatcher stamps their reply on those
-// entries for later principal turns and task wakes. The recipient match is a uuid[] ANY()
-// and the stamp a conditional UPDATE, so the SQL is only meaningfully tested on Postgres.
+// turn reads only the entries sent to them, and the dispatcher stamps their messages on
+// those entries for later principal turns and task wakes. The recipient match is a uuid[]
+// containment and the stamp a JSONB-trimming UPDATE, so the SQL is only meaningfully tested
+// on Postgres.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { OutboundContextService } from '../../src/dispatch/outbound-context.js';
 import { createSilentLogger } from '../../src/logger.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -23,19 +25,25 @@ describeIf('outbound-context recipients and recorded replies (#2261)', () => {
   const xiaopu = randomUUID();
   const jeff = randomUUID();
   const agentId = `coordinator-${randomUUID()}`;
+  // The suite UPDATEs and DELETEs rows, so it runs only once the target is curia_test.
+  let dbVerified = false;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await pool.query('SELECT recipient_contact_ids, last_reply_at FROM outbound_context LIMIT 0');
+    await requireCuriaTestDatabase(pool);
+    dbVerified = true;
+    await pool.query('SELECT recipient_contact_ids, recipient_messages, last_recipient_message_at FROM outbound_context LIMIT 0');
     service = new OutboundContextService(pool, createSilentLogger());
   });
 
   afterAll(async () => {
-    await pool.query('DELETE FROM outbound_context WHERE conversation_id = $1', [conversationId]);
+    if (dbVerified) {
+      await pool.query('DELETE FROM outbound_context WHERE conversation_id = $1', [conversationId]);
+    }
     await pool.end();
   });
 
-  async function register(content: string, recipientContactIds?: string[]): Promise<string> {
+  async function register(content: string, recipientContactIds?: string[], metadata?: Record<string, unknown>): Promise<string> {
     return service.register({
       conversationId,
       channelId: 'signal',
@@ -44,6 +52,7 @@ describeIf('outbound-context recipients and recorded replies (#2261)', () => {
       expectedReply: 'which lunch dates work',
       expiresInHours: 1,
       ...(recipientContactIds ? { recipientContactIds } : {}),
+      ...(metadata ? { metadata } : {}),
     });
   }
 
@@ -74,7 +83,7 @@ describeIf('outbound-context recipients and recorded replies (#2261)', () => {
     expect(ids).not.toContain(expired);
   });
 
-  it('records the reply on active entries only, and the waking agent sees it', async () => {
+  it('records the message on active entries only, and the waking agent sees it', async () => {
     const asked = await register('Any of these work for you: Tue Oct 27, Thu Nov 5?', [xiaopu]);
     const released = await register('Old ask', [xiaopu]);
     await service.releaseEntry(released);
@@ -82,17 +91,54 @@ describeIf('outbound-context recipients and recorded replies (#2261)', () => {
     await service.recordReply([asked, released], { from: 'Xiaopu Fung', content: 'Thur\n Nov 5' });
 
     const entry = await service.getEntry(asked);
-    expect(entry?.lastReply).toMatchObject({ from: 'Xiaopu Fung', preview: 'Thur Nov 5' });
-    expect(entry?.lastReply?.at).toBeInstanceOf(Date);
-    const { rows } = await pool.query<{ last_reply_at: Date | null }>('SELECT last_reply_at FROM outbound_context WHERE id = $1', [released]);
-    expect(rows[0]!.last_reply_at).toBeNull();
+    expect(entry?.recipientMessages).toHaveLength(1);
+    expect(entry?.recipientMessages[0]).toMatchObject({ from: 'Xiaopu Fung', preview: 'Thur Nov 5' });
+    expect(entry?.recipientMessages[0]?.at).toBeInstanceOf(Date);
+    const { rows } = await pool.query<{ last_recipient_message_at: Date | null; recipient_messages: unknown[] }>(
+      'SELECT last_recipient_message_at, recipient_messages FROM outbound_context WHERE id = $1', [released],
+    );
+    expect(rows[0]!.last_recipient_message_at).toBeNull();
+    expect(rows[0]!.recipient_messages).toEqual([]);
 
-    const replies = await service.getActiveWithReplies(agentId);
-    expect(replies.map((e) => e.id)).toContain(asked);
+    const withMessages = await service.getActiveWithReplies(agentId);
+    expect(withMessages.map((e) => e.id)).toContain(asked);
     expect(await service.getActiveWithReplies(`someone-else-${randomUUID()}`)).toEqual([]);
 
     // The principal's block shows it on the entry.
     const block = service.formatInjectionBlock([entry!], 'Any luck with Xiaopu?');
-    expect(block).toContain('latest message back from Xiaopu Fung, just now: "Thur Nov 5"');
+    expect(block).toContain('  - Xiaopu Fung, just now: "Thur Nov 5"');
+  });
+
+  it('keeps the first message and the latest two, so a follow-up never replaces the answer', async () => {
+    const asked = await register('Which day works for lunch?', [xiaopu]);
+    for (const content of ['Thur Nov 5', 'Can you resend the address?', 'Is it the one on Elgin?', 'Thanks!']) {
+      await service.recordReply([asked], { from: 'Xiaopu Fung', content });
+    }
+    const previews = (await service.getEntry(asked))?.recipientMessages.map((m) => m.preview);
+    expect(previews).toEqual(['Thur Nov 5', 'Is it the one on Elgin?', 'Thanks!']);
+  });
+
+  it('lists the waking task\'s own sends first, ahead of newer messages on other sends', async () => {
+    const taskId = randomUUID();
+    // A separate agent id so other tests' entries do not share the wake's cap.
+    const wakeAgent = `coordinator-${randomUUID()}`;
+    const reg = (content: string, metadata?: Record<string, unknown>) => service.register({
+      conversationId, channelId: 'signal', agentId: wakeAgent, content, expiresInHours: 1,
+      recipientContactIds: [xiaopu], ...(metadata ? { metadata } : {}),
+    });
+    const ownAsk = await reg('Which day works for lunch?', { bind_reply: true, task_id: taskId });
+    await service.recordReply([ownAsk], { from: 'Xiaopu Fung', content: 'Thur Nov 5' });
+    const others: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const id = await reg(`Other ask ${i}`);
+      await service.recordReply([id], { from: 'Xiaopu Fung', content: `answer ${i}` });
+      others.push(id);
+    }
+
+    const forTask = await service.getActiveWithReplies(wakeAgent, taskId);
+    expect(forTask[0]?.id).toBe(ownAsk);
+    expect(forTask).toHaveLength(5);
+    // Without the task, the cap keeps the five newest and the older ask drops out.
+    expect((await service.getActiveWithReplies(wakeAgent)).map((e) => e.id)).not.toContain(ownAsk);
   });
 });

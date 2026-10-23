@@ -43,14 +43,18 @@ export interface TaskWakeSubject {
 }
 
 /**
- * Says what `replies_to_messages_you_sent` is. A wake cannot read message threads, so this
+ * Says what `messages_back_on_open_sends` is. A wake cannot read message threads, so this
  * list is the only place a reply that arrived on another conversation shows up (#2261):
  * on 2026-10-22 a wake reported "checked Signal: no reply yet" the morning after one came.
+ * The dispatcher records every message from a recipient while a send is open without knowing
+ * which send it answers, so the note leaves that judgment to the agent.
  */
 export const RECORDED_REPLIES_NOTE =
-  'replies_to_messages_you_sent: the latest message back from each recipient of a message you sent ' +
-  'that is still awaiting a reply. If one answers what this task is waiting on, use it. You cannot read ' +
-  'message threads, so never report a reply as missing when it is listed here.';
+  'messages_back_on_open_sends: messages you sent that are still open, each with what its ' +
+  'recipients wrote to you since (the first message and the latest two). A message may or may not ' +
+  'answer that send; judge from its text. Sends this task made are marked asked_by_this_task. You ' +
+  'cannot read message threads, so when a message here answers what this task is waiting on, use ' +
+  'it and do not report that no reply came.';
 
 /**
  * The `agent.task` body of an ordinary task wake. Scheduler.fireJob sends it, and the
@@ -71,7 +75,7 @@ export function formatTaskWakeContent(
     task_payload: taskPayload,
     ...(steps !== undefined && { steps }),
     ...(recordedReplies.length > 0 && {
-      replies_to_messages_you_sent: recordedReplies,
+      messages_back_on_open_sends: recordedReplies,
       replies_note: RECORDED_REPLIES_NOTE,
     }),
     instruction: WAKE_DISPOSITION_INSTRUCTION,

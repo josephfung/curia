@@ -231,16 +231,16 @@ describe('Scheduler task-wake disposition (#1951)', () => {
   });
 
   // #2261: a wake cannot read message threads. On 2026-10-22 one reported "checked Signal:
-  // no reply yet" the morning after the answer came, so replies recorded on the waking
-  // agent's open messages travel in the wake body.
-  describe('recorded replies (#2261)', () => {
+  // no reply yet" the morning after the answer came, so messages recorded on the waking
+  // agent's open sends travel in the wake body.
+  describe('recorded recipient messages (#2261)', () => {
     const reply = {
       id: 'efc521b3-4ef1-40ca-a34f-63f18629fe21', conversationId: 'signal:+15196161377', channelId: 'signal',
       agentId: 'meeting-debrief', contentPreview: 'Any of these work for you: Thu Nov 5?',
-      expectedReply: 'which lunch dates Xiaopu can join', delegationHint: null, metadata: null,
+      expectedReply: 'which lunch dates Xiaopu can join', delegationHint: null, metadata: { bind_reply: true, task_id: 'task-abc' },
       createdAt: new Date(Date.now() - 20 * 3_600_000), expiresAt: new Date(Date.now() + 3_600_000), released: false,
       recipientContactIds: ['1d833dd7-5c5f-4adc-b311-c8347b49a18e'],
-      lastReply: { at: new Date(Date.now() - 16 * 3_600_000), from: 'Xiaopu Fung', preview: 'Thur Nov 5' },
+      recipientMessages: [{ at: new Date(Date.now() - 16 * 3_600_000), from: 'Xiaopu Fung', preview: 'Thur Nov 5' }],
     };
 
     function schedulerWith(outboundContextService: Record<string, unknown>): Scheduler {
@@ -263,22 +263,26 @@ describe('Scheduler task-wake disposition (#1951)', () => {
       return scheduler;
     }
 
-    it('lists replies to the waking agent\'s own open messages', async () => {
+    it('lists messages back on the waking agent\'s open sends, marking the task\'s own', async () => {
       const getActiveWithReplies = vi.fn().mockResolvedValue([reply]);
       schedulerWith({ getActiveWithReplies });
       const content = JSON.parse((await fire()).payload.content) as Record<string, unknown>;
 
-      expect(getActiveWithReplies).toHaveBeenCalledWith('meeting-debrief');
-      expect(content['replies_to_messages_you_sent']).toEqual([expect.objectContaining({
-        entry_id: reply.id, reply_from: 'Xiaopu Fung', reply: 'Thur Nov 5', reply_received: '16 hours ago',
+      expect(getActiveWithReplies).toHaveBeenCalledWith('meeting-debrief', 'task-abc');
+      expect(content['messages_back_on_open_sends']).toEqual([expect.objectContaining({
+        entry_id: reply.id,
+        asked_by_this_task: true,
+        messages_back: [{ from: 'Xiaopu Fung', received: '16 hours ago', text: 'Thur Nov 5' }],
       })]);
-      expect(content['replies_note']).toContain('never report a reply as missing');
+      // A message may not answer the send it is listed on; the note leaves that to the agent.
+      expect(content['replies_note']).toContain('may or may not answer');
+      expect(content['replies_note']).toContain('do not report that no reply came');
     });
 
     it('adds nothing when no reply is recorded', async () => {
       schedulerWith({ getActiveWithReplies: vi.fn().mockResolvedValue([]) });
       const content = JSON.parse((await fire()).payload.content) as Record<string, unknown>;
-      expect(content).not.toHaveProperty('replies_to_messages_you_sent');
+      expect(content).not.toHaveProperty('messages_back_on_open_sends');
       expect(content).not.toHaveProperty('replies_note');
     });
 
@@ -286,7 +290,7 @@ describe('Scheduler task-wake disposition (#1951)', () => {
       schedulerWith({ getActiveWithReplies: vi.fn().mockRejectedValue(new Error('db down')) });
       const content = JSON.parse((await fire()).payload.content) as Record<string, unknown>;
       expect(content['task_id']).toBe('task-abc');
-      expect(content).not.toHaveProperty('replies_to_messages_you_sent');
+      expect(content).not.toHaveProperty('messages_back_on_open_sends');
       expect(logger.error).toHaveBeenCalled();
     });
   });

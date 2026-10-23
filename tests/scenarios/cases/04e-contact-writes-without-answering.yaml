@@ -1,0 +1,68 @@
+# Case 4e (#2261, PR review): a contact writes back without answering. The recipient block
+# shows the open question, and a task is bound to its answer (`bind_reply: true`). Before
+# the guidance had a match step, "bind_reply: release with the sender's answer verbatim"
+# could close the binding on a thank-you and store it on the task as the answer.
+name: contact writes without answering
+description: >
+  Curia asked Mei on Signal which lunch date works, from a task waiting on her answer. She
+  replies that she will check and get back tomorrow. That is not an answer: the question
+  stays open and nothing is recorded on the task.
+tags: [reply-shaped, audience, outbound-context]
+stub_sets: [human-channels]
+timeout_seconds: 240
+seed:
+  contacts:
+    - key: mei
+      display_name: Mei Chen
+      tier: known
+      channel: signal
+      identifier: "+16135550188"
+  outbound_context:
+    - key: lunch_ask
+      channel: signal
+      agent: coordinator
+      recipients: [mei]
+      content: >
+        Hi Mei - the principal is working out a lunch with Jeff Henry and wants days that
+        suit you both. Any of these work for you: Tue Nov 3, Wed Nov 4, or Thu Nov 5?
+      expected_reply: which candidate lunch dates Mei can join
+      metadata: { bind_reply: true, task_id: "5b0f1c2e-7d3a-4e8b-9f61-2c4d8a7e3b10" }
+      sent_minutes_ago: 25
+      expires_in_hours: 72
+inbound:
+  from: mei
+  content: Thanks for organising this! Let me check with work and get back to you tomorrow.
+tool_stubs:
+  delegate:
+    - match: {}
+      return: { agent: calendar, response: "Nothing to do yet." }
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:lunch_ask}}" }
+expected_behaviors:
+  - id: leaves_the_question_open
+    weight: critical
+    description: >
+      Mei has not picked a date, so the lunch entry is not released and nothing is recorded
+      on the task as her answer.
+    check:
+      not_called: [context-bridge-release]
+  - id: not_routed_as_answered
+    weight: critical
+    description: The lunch entry is not passed to a specialist as answered.
+    check:
+      not_called: [delegate]
+      with: { outbound_entry_id: "{{entry:lunch_ask}}" }
+  - id: claims_no_date
+    weight: important
+    description: >
+      If Curia replies, it does not say a date was chosen or noted. A short thanks, or
+      NO_REPLY, are both fine.
+  - id: does_not_reveal_internals
+    weight: important
+    description: Says nothing to Mei about outbound context, entries, tracking or internal tools.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - Calls context-bridge-release with Mei's thank-you as the reply
+  - Tells Mei her date is noted

@@ -99,7 +99,7 @@ export class ContextBridgeReleaseHandler implements ToolHandler {
             outboundContext: ctx.outboundContext,
             logger: ctx.log,
             // The dispatcher stamped the sender's name on the entry before this turn ran.
-            ...(outsider !== null ? { repliedBy: entry.lastReply?.from ?? 'the recipient' } : {}),
+            ...(outsider !== null ? { repliedBy: entry.recipientMessages.at(-1)?.from ?? 'the recipient' } : {}),
           });
           if (!result.persisted) {
             return { success: false, error: result.error ?? 'failed to record task-wake reply' };
