@@ -37,6 +37,8 @@ function makeActiveEntry(overrides: Partial<OutboundContextRow> = {}): OutboundC
     createdAt: new Date(Date.now() - 5 * 60 * 1000),
     expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
     released: false,
+    recipientContactIds: null,
+    recipientMessages: [],
     ...overrides,
   };
 }
@@ -88,6 +90,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
     resolved?: boolean;
     systemRole?: 'principal' | 'agent' | 'system' | null;
     tier?: ContactTier;
+    verified?: boolean;
   } = {}): ContactResolver {
     if (opts.resolved === false) {
       return {
@@ -107,7 +110,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         systemRole: opts.systemRole ?? null,
         tier: opts.tier ?? (opts.systemRole === 'principal' ? 'principal' : 'known'),
         kind: 'person',
-        verified: true,
+        verified: opts.verified ?? true,
         kgNodeId: null,
         knowledgeSummary: '',
         authorization: null,
@@ -133,8 +136,13 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         ].join('\n');
       },
     );
+    // A non-principal sender's own entries (#2261): none unless a test supplies them.
+    const getActiveForRecipient = vi.fn(async (_contactId: string): Promise<OutboundContextRow[]> => []);
+    const recordReply = vi.fn(async () => undefined);
     const outboundContextService = {
       getActive,
+      getActiveForRecipient,
+      recordReply,
       formatInjectionBlock,
     } as unknown as OutboundContextService;
 
@@ -150,7 +158,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
       tasks.push(e as AgentTaskEvent);
     });
 
-    return { bus, tasks, getActive, formatInjectionBlock };
+    return { bus, tasks, getActive, getActiveForRecipient, recordReply, formatInjectionBlock };
   }
 
   it('injects ACTIVE OUTBOUND CONTEXT for principal inbound (liveTurn=true)', async () => {
@@ -247,6 +255,224 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
     expect(getActive).not.toHaveBeenCalled();
     expect(tasks[0]!.payload.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
     expect(tasks[0]!.payload.content).toBe('Account: curia\n\nHello from nowhere');
+  });
+
+  describe('recipient-matched block for a non-principal sender (#2261)', () => {
+    const lunchAsk = makeActiveEntry({
+      id: 'efc521b3-4ef1-40ca-a34f-63f18629fe21',
+      agentId: 'coordinator',
+      contentPreview: 'Any of these work for you: Tue Oct 27, Thu Nov 5?',
+      expectedReply: 'which candidate lunch dates Xiaopu can join',
+      delegationHint: null,
+      metadata: null,
+      recipientContactIds: ['contact-other-1'],
+      recipientMessages: [],
+    });
+
+    // A one-to-one Signal message, as the adapter publishes it (isGroup: false).
+    async function sendFromContact(
+      harness: ReturnType<typeof buildHarness>,
+      content = 'Thur Nov 5',
+      metadata: Record<string, unknown> = {},
+    ) {
+      await harness.bus.publish('channel', createInboundMessage({
+        conversationId: 'signal:+15195040098',
+        channelId: 'signal',
+        senderId: '+15195040098',
+        content,
+        metadata: { isGroup: false, ...metadata },
+      }));
+    }
+
+    it('shows a verified contact the entries sent to them, and never the global list', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      harness.getActiveForRecipient.mockResolvedValueOnce([lunchAsk]);
+      await sendFromContact(harness);
+
+      const task = harness.tasks[0]!;
+      expect(task.payload.liveTurn).toBe(false);
+      expect(harness.getActive).not.toHaveBeenCalled();
+      expect(harness.getActiveForRecipient).toHaveBeenCalledWith('contact-other-1');
+      expect(harness.formatInjectionBlock).toHaveBeenCalledWith([lunchAsk], 'Thur Nov 5', 'recipient');
+      expect(task.payload.content).toContain('efc521b3-4ef1-40ca-a34f-63f18629fe21');
+      expect(task.payload.content).toContain('Thur Nov 5');
+      expect(task.payload.turnGuidance).toEqual(['non-principal-reply-shaped', 'recipient-outbound-context']);
+    });
+
+    it('records the sender\'s own text on the entries it was shown', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      harness.getActiveForRecipient.mockResolvedValueOnce([lunchAsk]);
+      await sendFromContact(harness);
+
+      expect(harness.recordReply).toHaveBeenCalledWith(
+        ['efc521b3-4ef1-40ca-a34f-63f18629fe21'],
+        { from: 'Other Contact', contactId: 'contact-other-1', content: 'Thur Nov 5' },
+      );
+    });
+
+    it('records an email without its Subject line and the quoted thread', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      harness.getActiveForRecipient.mockResolvedValueOnce([lunchAsk]);
+      await harness.bus.publish('channel', createInboundMessage({
+        conversationId: 'email:thread-lunch',
+        channelId: 'email',
+        senderId: 'xiaopu@example.com',
+        content: 'Subject: Re: Lunch\n\nThur Nov 5 works.\n\nOn Tue, Oct 20, 2026 at 9:00 AM Curia <curia@example.com> wrote:\n> Which day works?',
+        metadata: { senderVerified: true, curiaRole: 'to', otherRecipientCount: 0 },
+      }));
+
+      expect(harness.recordReply).toHaveBeenCalledWith(
+        ['efc521b3-4ef1-40ca-a34f-63f18629fe21'],
+        expect.objectContaining({ content: 'Thur Nov 5 works.' }),
+      );
+    });
+
+    it('still injects the block when recording the reply fails', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      harness.getActiveForRecipient.mockResolvedValueOnce([lunchAsk]);
+      harness.recordReply.mockRejectedValueOnce(new Error('db down'));
+      await sendFromContact(harness);
+
+      expect(harness.tasks[0]!.payload.content).toContain('efc521b3-4ef1-40ca-a34f-63f18629fe21');
+    });
+
+    it('adds nothing when no active entry was sent to this sender', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      await sendFromContact(harness);
+
+      expect(harness.tasks[0]!.payload.content).toBe('Thur Nov 5');
+      expect(harness.recordReply).not.toHaveBeenCalled();
+      expect(harness.tasks[0]!.payload.turnGuidance).toEqual(['non-principal-reply-shaped']);
+    });
+
+    it('does not read entries for an unverified contact', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'known', verified: false }));
+      await sendFromContact(harness);
+
+      expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
+      expect(harness.recordReply).not.toHaveBeenCalled();
+    });
+
+    // A verified identity says the address is the contact's, not that this message is from
+    // them: a forged From of a verified address must not get the block or a recorded message.
+    it('reads entries for email only when SPF, DKIM and DMARC passed', async () => {
+      const send = (harness: ReturnType<typeof buildHarness>, senderVerified: boolean) =>
+        harness.bus.publish('channel', createInboundMessage({
+          conversationId: 'email:thread-lunch',
+          channelId: 'email',
+          senderId: 'xiaopu@example.com',
+          content: 'Thur Nov 5',
+          metadata: { senderVerified, curiaRole: 'to', otherRecipientCount: 0 },
+        }));
+
+      const forged = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      forged.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+      await send(forged, false);
+      expect(forged.getActiveForRecipient).not.toHaveBeenCalled();
+      expect(forged.recordReply).not.toHaveBeenCalled();
+      expect(forged.tasks[0]!.payload.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
+
+      const authenticated = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      authenticated.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+      await send(authenticated, true);
+      expect(authenticated.getActiveForRecipient).toHaveBeenCalledWith('contact-other-1');
+    });
+
+    it('does not read entries for SMS, whose From is spoofable (ADR-036)', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      harness.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+      await harness.bus.publish('channel', createInboundMessage({
+        conversationId: 'sms:+15195040098',
+        channelId: 'sms',
+        senderId: '+15195040098',
+        content: 'Thur Nov 5',
+      }));
+
+      expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
+      expect(harness.recordReply).not.toHaveBeenCalled();
+    });
+
+    // The block shows what Curia sent one person. Where the reply reaches anyone else, they
+    // would see it, and their chatter would be recorded as that person's message.
+    describe('only in a one-to-one conversation', () => {
+      async function expectNoBlock(message: Parameters<typeof createInboundMessage>[0]) {
+        const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+        harness.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+        await harness.bus.publish('channel', createInboundMessage(message));
+        expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
+        expect(harness.recordReply).not.toHaveBeenCalled();
+        expect(harness.tasks[0]!.payload.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
+        expect(harness.tasks[0]!.payload.content).not.toContain('efc521b3');
+      }
+
+      it('not in a Signal group', () => expectNoBlock({
+        conversationId: 'signal:group=Z3JvdXAtaWQ=', channelId: 'signal', senderId: '+15195040098',
+        content: 'hey all, what time does the offsite start?', metadata: { isGroup: true, groupId: 'Z3JvdXAtaWQ=' },
+      }));
+
+      it('not for a Signal message whose adapter metadata is missing', () => expectNoBlock({
+        conversationId: 'signal:+15195040098', channelId: 'signal', senderId: '+15195040098', content: 'Thur Nov 5',
+      }));
+
+      it('not in a Slack channel thread', () => expectNoBlock({
+        conversationId: 'slack:C123:1700000000.000100', channelId: 'slack', senderId: 'U123',
+        content: 'Thur Nov 5', metadata: { isDm: false, slackChannel: 'C123', eventType: 'app_mention' },
+      }));
+
+      it('not on an email where Curia is only CC\'d', () => expectNoBlock({
+        conversationId: 'email:thread-cc', channelId: 'email', senderId: 'xiaopu@example.com',
+        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'cc', otherRecipientCount: 1 },
+      }));
+
+      it('not on an email with anyone else on To or CC', () => expectNoBlock({
+        conversationId: 'email:thread-group', channelId: 'email', senderId: 'xiaopu@example.com',
+        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'to', otherRecipientCount: 2 },
+      }));
+
+      it('not on an email whose recipient count is unknown', () => expectNoBlock({
+        conversationId: 'email:thread-unknown', channelId: 'email', senderId: 'xiaopu@example.com',
+        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'to' },
+      }));
+
+      it('in a Slack DM', async () => {
+        const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+        harness.getActiveForRecipient.mockResolvedValue([lunchAsk]);
+        await harness.bus.publish('channel', createInboundMessage({
+          conversationId: 'slack:D123', channelId: 'slack', senderId: 'U123', content: 'Thur Nov 5',
+          metadata: { isDm: true, slackChannel: 'D123', eventType: 'message' },
+        }));
+        expect(harness.getActiveForRecipient).toHaveBeenCalledWith('contact-other-1');
+      });
+    });
+
+    it('does not read entries for an unresolved sender', async () => {
+      const harness = buildHarness(makeResolver({ resolved: false }));
+      await sendFromContact(harness);
+
+      expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
+    });
+
+    it('does not read entries for auto-generated mail', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
+      await harness.bus.publish('channel', createInboundMessage({
+        conversationId: 'email:thread-auto',
+        channelId: 'email',
+        senderId: 'noreply@example.com',
+        content: 'Your receipt',
+        metadata: { isAutoGenerated: true, autoGeneratedSignals: ['auto-submitted'] },
+      }));
+
+      expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
+    });
+
+    it('a principal turn still reads the global list, not the recipient one', async () => {
+      const harness = buildHarness(makeResolver({ systemRole: 'principal', tier: 'principal' }));
+      await sendFromContact(harness, 'Any luck with Xiaopu?');
+
+      expect(harness.getActive).toHaveBeenCalledOnce();
+      expect(harness.getActiveForRecipient).not.toHaveBeenCalled();
+      expect(harness.recordReply).not.toHaveBeenCalled();
+    });
   });
 
   it('calls stampOriginator exactly once per inbound', async () => {

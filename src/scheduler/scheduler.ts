@@ -16,11 +16,12 @@ import { makeWakeContext } from '../autonomy/effective-standing.js';
 import type { DriftDetector } from './drift-detector.js';
 import type { DreamEngine } from '../memory/dream-engine.js';
 import type { JobRow } from './scheduler-service.js';
-import type { OutboundContextService } from '../dispatch/outbound-context.js';
+import { recordedReplyViews, type OutboundContextService, type RecordedReplyView } from '../dispatch/outbound-context.js';
 import { classifyError } from '../errors/classify.js';
 import { findTemplateTokens } from '../skills/_shared/placeholder-guard.js';
 import { isUuid } from '../util/uuid.js';
 import type { TaskOriginator } from '../contacts/types.js';
+import { outsiderOriginatorContactId } from '../dispatch/outbound-entry-access.js';
 import {
   formatDelegationRetryWakeContent,
   readDelegationRetryWake,
@@ -33,6 +34,7 @@ import {
   NEEDS_DISPOSITION_TAG,
   dispositionReviewNotice,
   formatTaskWakeContent,
+  withRecordedReplies,
   dispositionTurnPrompt,
   isUndisposedWake,
   isParkedStatus,
@@ -695,6 +697,35 @@ export class Scheduler {
   }
 
   /**
+   * Messages recipients sent back on the agent's still-open outbound messages, for a task
+   * wake (#2261); those the waking task sent come first. A wake an outside contact started
+   * lists only the entries sent to that contact, as their own turns do (#1848): the wake can
+   * message them, so it must not carry anyone else's words. An outsider with no usable
+   * contact id gets none. Best-effort: a failed read means the wake goes without them, not a
+   * failed fire.
+   */
+  private async recordedRepliesFor(
+    agentId: string,
+    taskId: string,
+    originator: TaskOriginator | null,
+  ): Promise<RecordedReplyView[]> {
+    if (!this.outboundContextService) return [];
+    const outsider = outsiderOriginatorContactId({ originator });
+    // An outsider without a usable contact id ('unresolved', '') can be shown nothing.
+    if (outsider !== null && !isUuid(outsider)) return [];
+    try {
+      const rows = await this.outboundContextService.getActiveWithReplies(agentId, {
+        taskId,
+        ...(outsider !== null ? { recipientContactId: outsider } : {}),
+      });
+      return recordedReplyViews(rows, taskId, outsider ?? undefined);
+    } catch (err) {
+      this.logger.error({ err, agentId, taskId }, 'Failed to read recipient messages for a task wake — waking without them');
+      return [];
+    }
+  }
+
+  /**
    * Delete expired and released outbound context rows and log the result.
    * Called at startup and then on the daily interval via cleanupHandle.
    *
@@ -1039,13 +1070,17 @@ export class Scheduler {
     // the agent back through the whole recap.
     const recapInstruction = isTaskWakePayload(job.taskPayload) ? undefined : debriefRecapInstruction(job);
     let content: string;
+    let recordedReplies: RecordedReplyView[] = [];
     if (job.agentTaskId && isTaskWakePayload(job.taskPayload)) {
       // An ordinary task wake carries the wake instruction. Delegation-retry content
       // replaces this string below.
+      // Recipient messages are attached after placeholder substitution below: they are a
+      // contact's words, and nothing in them may be filled in (#2261).
       content = formatTaskWakeContent(
         { taskId: job.agentTaskId, title: job.taskTitle, progress: job.progress, agentId: job.agentId, tags: job.taskTags },
         job.taskPayload,
       );
+      recordedReplies = await this.recordedRepliesFor(job.agentId, job.agentTaskId, job.originator);
     } else if (job.agentTaskId) {
       // A task-bound job that is not a wake has no disposition contract.
       content = JSON.stringify({
@@ -1095,6 +1130,9 @@ export class Scheduler {
         'scheduler: task payload contains unresolvable template tokens — the agent will read them as literal text',
       );
     }
+
+    // A contact's recorded words join the wake body only now, after substitution (#2261).
+    if (recordedReplies.length > 0) content = withRecordedReplies(content, recordedReplies);
 
     // Prepend prior-run context so the agent knows what happened last time
     // and can avoid repeating work or adjust its approach accordingly.

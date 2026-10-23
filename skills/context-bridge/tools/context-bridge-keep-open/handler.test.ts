@@ -100,4 +100,37 @@ describe('ContextBridgeKeepOpenHandler (#1972)', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/db down/);
   });
+
+  // #2261: a delegation a contact's turn started carries their originator; only an entry
+  // sent to them can be kept open.
+  describe('in a delegation an outside contact\'s turn started', () => {
+    const XIAOPU = '1d833dd7-5c5f-4adc-b311-c8347b49a18e';
+    const taskMetadata = {
+      delegationOrigin: { agentId: 'coordinator', conversationId: 'signal:+1555' },
+      originator: { contactId: XIAOPU, systemRole: null, channel: 'signal', initiatedAt: '2026-10-21T21:29:59.973Z', tier: 'trusted' },
+    };
+    const withEntry = (recipientContactIds: string[] | null) => makeCtx({ entry_id: ENTRY_ID }, {
+      taskMetadata,
+      outboundContext: {
+        getEntry: vi.fn().mockResolvedValue({ id: ENTRY_ID, delegationHint: 'ceo-inbox', metadata: null, recipientContactIds }),
+        markExchangeOpen: vi.fn().mockResolvedValue(true),
+      },
+    } as unknown as Partial<ToolContext>);
+
+    it.each([
+      ['sent to someone else', ['6e99314b-f9b5-4515-bafb-1a52d45b706b']],
+      ['with no recipients', null],
+    ])('refuses an entry %s', async (_label, recipients) => {
+      const ctx = withEntry(recipients);
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect(ctx.outboundContext!.markExchangeOpen).not.toHaveBeenCalled();
+    });
+
+    it('keeps open an entry sent to that contact', async () => {
+      const ctx = withEntry([XIAOPU]);
+      const result = await handler.execute(ctx);
+      expect(result).toEqual({ success: true, data: { kept_open: ENTRY_ID } });
+    });
+  });
 });

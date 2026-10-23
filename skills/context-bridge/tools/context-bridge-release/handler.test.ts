@@ -300,4 +300,93 @@ describe('ContextBridgeReleaseHandler', () => {
     expect(result.success).toBe(false);
     expect(ctx.outboundContext!.releaseEntry).not.toHaveBeenCalled();
   });
+
+  // #2261: a turn an outside sender started shows only the entries sent to them, so only
+  // those can be released, and a reply recorded from it names the sender, not the principal.
+  describe('on a turn an outside sender started (#2261)', () => {
+    const XIAOPU = '1d833dd7-5c5f-4adc-b311-c8347b49a18e';
+    const OTHER = '6e99314b-f9b5-4515-bafb-1a52d45b706b';
+    const outsider = { originator: { contactId: XIAOPU, systemRole: null, channel: 'signal', initiatedAt: '2026-10-21T21:29:59.973Z', tier: 'trusted' } };
+
+    const message = (from: string, contactId: string, preview: string) => ({ at: new Date(), from, contactId, preview, riskScore: 0 });
+
+    function entry(
+      recipientContactIds: string[] | null,
+      metadata: Record<string, unknown> | null = null,
+      recipientMessages = [message('Xiaopu Fung', XIAOPU, 'Thur Nov 5')],
+    ) {
+      return {
+        id: ENTRY_ID, conversationId: 'signal:+15196161377', channelId: 'signal', agentId: 'coordinator',
+        contentPreview: 'Any of these work for you?', expectedReply: null, delegationHint: null, metadata,
+        createdAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000), released: false,
+        recipientContactIds, recipientMessages,
+      };
+    }
+
+    // On an entry sent to several people the latest message can be someone else's.
+    it('credits the answer to this sender, not to whoever wrote last on the entry', async () => {
+      const taskRepo = {
+        getTask: vi.fn().mockResolvedValue({ id: TASK_ID, status: 'waiting', owner: 'curia' }),
+        updateTask: vi.fn().mockResolvedValue({ id: TASK_ID }),
+      };
+      const ctx = makeCtx(
+        { entry_id: ENTRY_ID, reply: 'Thur Nov 5' },
+        { taskMetadata: outsider, taskRepo: taskRepo as unknown as TaskRepo } as Partial<ToolContext>,
+      );
+      (ctx.outboundContext!.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue(entry(
+        [XIAOPU, OTHER],
+        { bind_reply: true, task_id: TASK_ID },
+        [message('Xiaopu Fung', XIAOPU, 'Thur Nov 5'), message('Jeff Henry', OTHER, 'works for me too')],
+      ));
+      await handler.execute(ctx);
+
+      expect(taskRepo.updateTask).toHaveBeenCalledWith(
+        TASK_ID, expect.objectContaining({ progressNote: 'Xiaopu Fung replied: Thur Nov 5' }), 'coordinator',
+      );
+    });
+
+    it('releases an entry sent to that sender', async () => {
+      const ctx = makeCtx({ entry_id: ENTRY_ID }, { taskMetadata: outsider } as Partial<ToolContext>);
+      (ctx.outboundContext!.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue(entry([XIAOPU]));
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it.each([
+      ['sent to someone else', [OTHER]],
+      ['with no recipients (written before #2261)', null],
+    ])('refuses an entry %s', async (_label, recipients) => {
+      const ctx = makeCtx({ entry_id: ENTRY_ID, reply: 'Thur Nov 5' }, { taskMetadata: outsider } as Partial<ToolContext>);
+      (ctx.outboundContext!.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue(entry(recipients));
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('was not sent to this sender');
+      expect(ctx.outboundContext!.releaseEntry).not.toHaveBeenCalled();
+    });
+
+    it('records a task-wake answer under the sender\'s name', async () => {
+      const taskRepo = {
+        getTask: vi.fn().mockResolvedValue({ id: TASK_ID, status: 'waiting', owner: 'curia' }),
+        updateTask: vi.fn().mockResolvedValue({ id: TASK_ID }),
+      };
+      const ctx = makeCtx(
+        { entry_id: ENTRY_ID, reply: 'Thur Nov 5' },
+        { taskMetadata: outsider, taskRepo: taskRepo as unknown as TaskRepo } as Partial<ToolContext>,
+      );
+      (ctx.outboundContext!.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue(
+        entry([XIAOPU], { bind_reply: true, task_id: TASK_ID }),
+      );
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(taskRepo.updateTask).toHaveBeenCalledWith(
+        TASK_ID,
+        expect.objectContaining({ progressNote: 'Xiaopu Fung replied: Thur Nov 5', status: 'in_progress' }),
+        'coordinator',
+      );
+    });
+  });
 });

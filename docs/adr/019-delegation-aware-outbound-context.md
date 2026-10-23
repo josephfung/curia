@@ -61,9 +61,11 @@ Three approaches were considered:
 **C. Dedicated outbound-context registry with a scoped capability surface.**
    A single `outbound_context` table records every outbound message Curia sends:
    conversation, channel, originating agent, content preview, expected-reply
-   hint, delegation hint, structured metadata, TTL. The dispatcher injects
-   active entries into the coordinator's prompt on every **dispatcher-routed
-   principal** inbound (`liveTurn: true` — #1848 / #1598). Voice inbounds
+   hint, delegation hint, structured metadata, TTL, and (since #2261) the
+   contact IDs it was sent to. The dispatcher injects all active entries into
+   the coordinator's prompt on every **dispatcher-routed principal** inbound
+   (`liveTurn: true` — #1848 / #1598), and only the entries sent to the sender
+   on a verified contact's one-to-one inbound (#2261, see Consequences). Voice inbounds
    never reach this path (`channelId === 'voice'` returns early); `VoiceRuntime`
    applies the same `liveTurn` gate on its own injection path. Skills get a
    narrow `outboundContext` capability (register + release, pre-scoped to the
@@ -112,10 +114,10 @@ Three approaches were considered:
    The per-channel tier was added in #1816: a flat 6h default was plausible for
    a Signal ping to the principal but expired before any realistic email
    correspondent could reply, so next-business-day answers arrived as
-   unrecognised cold inbounds. TTL is keyed on channel, not recipient — the
-   registration path has no recipient in scope (the table stores none), and the
-   channel is the better proxy anyway, since email is asynchronous for the
-   principal and third parties alike.
+   unrecognised cold inbounds. TTL is keyed on channel, not recipient. When this
+   was decided the registration path had no recipient in scope; it records
+   recipients since #2261, but the channel is still the better proxy, since
+   email is asynchronous for the principal and third parties alike.
 
 6. **Periodic cleanup.** A scheduled job runs `cleanupExpired()` on a fixed
    cadence to delete released and expired rows. The dispatcher's read query
@@ -179,13 +181,31 @@ Three approaches were considered:
   both the dispatcher and the voice path (#1598): the block is principal-audience
   content and must not appear on third-party or unknown sender turns (including
   `http`, whose caller-supplied `sender_id` never resolves as principal).
-  **Cost of the gate (accepted until Fix B):** for any entry whose reply comes
-  from a third party, the coordinator never sees the entry, so `delegation_hint`
-  cannot route the reply, `context-bridge-release` / ceo-inbox self-sweep cannot
-  fire for it, and the row clears only via TTL + `cleanupExpired()`. Principal-
-  facing flows (research-analyst clarification, meeting-debrief, ceo-inbox 🚨,
-  task-wake bindings) are unaffected. Recipient-identity correlation (who the
-  outbound was sent *to*) remains open as Fix B of #1848.
+  **Fix B (#2261):** the gate had a cost — a third party's reply arrived without
+  the entry it answered, so `delegation_hint` could not route it and the answer
+  could be dropped (2026-10-21: "Thur Nov 5" from a contact asked to pick a lunch
+  date got `NO_REPLY`). Entries now record the contact IDs they were sent to, and
+  a verified non-principal sender's turn gets a block of only the entries sent to
+  them. Every gate on that block decides who can see what, and each fails closed:
+  - **Who:** a verified, non-blocked contact.
+  - **Authenticated channel:** Signal, Slack, and email that passed SPF/DKIM/DMARC;
+    never SMS or voice, whose sender ids are spoofable.
+  - **One-to-one:** a Signal 1:1, a Slack DM, or an email with nobody else on To
+    or CC (Curia's email replies go to everyone on the thread). A group, channel or
+    multi-party thread would show one person's entries to others.
+  - **What:** what the sender received, the owning agent's id and `bind_reply`.
+    Curia's own notes (`expected reply`, hint text, the `context` JSON with task
+    ids and resume tokens) stay on the principal's block.
+  Entries sent to anyone else stay withheld, so the #1848 confidentiality property
+  holds. The dispatcher also records the recipient's message on those entries (the
+  first three and the latest three). Principal turns now list those messages on the
+  entry, JSON-encoded and labelled untrusted, as a message back rather than an
+  answer, because the dispatcher cannot tell which entry it answers. Task wakes list
+  them too; a wake an outside contact started lists only entries sent to that
+  contact and only that contact's own messages. Tools refuse an entry_id not sent to
+  the outside sender of the turn, and refuse bulk clears on such a turn. A contact
+  merge re-points the recipient ids. Rows written before migration 104 carry no
+  recipients and are never shown to a non-principal.
 - An unrecognised channel id in `contextBridge.channelDefaultExpiryHours` is
   accepted and silently inert — registration uses pseudo-channel ids
   (`internal`, `scheduler`, `bullpen`) that are not in the channel catalog, so

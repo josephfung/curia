@@ -11,11 +11,15 @@
 //
 // Only a delegated specialist can call it — `delegate` stamps delegationOrigin on
 // every task it publishes, and nothing else does — so the coordinator cannot use
-// it to keep entries it routed.
+// it to keep entries it routed. In a delegation an outside contact's turn started
+// (the originator travels with it), only an entry sent to that contact can be kept
+// open, as with context-bridge-release (#2261).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 import { delegationHintOwner, rosterFromRegistry } from '../../../../src/dispatch/delegation-hint.js';
+import { isEntryAddressedTo } from '../../../../src/dispatch/outbound-context.js';
+import { outsiderOriginatorContactId } from '../../../../src/dispatch/outbound-entry-access.js';
 
 export class ContextBridgeKeepOpenHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -48,6 +52,14 @@ export class ContextBridgeKeepOpenHandler implements ToolHandler {
       const entry = await ctx.outboundContext.getEntry(entryId);
       if (!entry) {
         return { success: false, error: 'outbound context entry not found or already released' };
+      }
+      const outsider = outsiderOriginatorContactId(ctx.taskMetadata);
+      if (outsider !== null && !isEntryAddressedTo(entry, outsider)) {
+        ctx.log.warn({ entryId }, 'context-bridge-keep-open refused — entry was not sent to the contact this turn is for');
+        return {
+          success: false,
+          error: `Entry ${entryId} was not sent to the contact this conversation is with, so it cannot be kept open here.`,
+        };
       }
       const owner = delegationHintOwner(entry.delegationHint, rosterFromRegistry(ctx.agentRegistry));
       if (owner && owner !== ctx.agentId) {

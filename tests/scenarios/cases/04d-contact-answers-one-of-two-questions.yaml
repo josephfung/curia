@@ -1,0 +1,92 @@
+# Case 4d (#2261, PR review): a contact with two open questions answers one. The recipient
+# block shows every active entry sent to the sender, so the `recipient-outbound-context`
+# guidance must match the message to the entry it answers and leave the other open, as the
+# principal-side guidance does. Before that match step, "Any other entry: release" could
+# close both.
+name: contact answers one of two questions
+description: >
+  Curia has two open questions to Mei on Signal: which lunch date works, and whether the
+  photos came through. She replies "Thur Nov 5 works for me". The coordinator closes the
+  lunch question and leaves the photos question open.
+tags: [reply-shaped, audience, outbound-context]
+stub_sets: [human-channels]
+timeout_seconds: 240
+seed:
+  contacts:
+    - key: mei
+      display_name: Mei Chen
+      tier: known
+      channel: signal
+      identifier: "+16135550188"
+  outbound_context:
+    - key: lunch_ask
+      channel: signal
+      agent: coordinator
+      recipients: [mei]
+      content: >
+        Hi Mei - the principal is working out a lunch with Jeff Henry and wants days that
+        suit you both. Any of these work for you: Tue Nov 3, Wed Nov 4, or Thu Nov 5?
+      expected_reply: which candidate lunch dates Mei can join
+      sent_minutes_ago: 40
+      expires_in_hours: 72
+    - key: photos_ask
+      channel: signal
+      agent: coordinator
+      recipients: [mei]
+      content: >
+        Also, did the photos from Saturday's dinner come through? Happy to resend them if not.
+      expected_reply: whether Mei received the dinner photos
+      sent_minutes_ago: 38
+      expires_in_hours: 72
+inbound:
+  from: mei
+  content: Thur Nov 5 works for me
+tool_stubs:
+  delegate:
+    - match: {}
+      return: { agent: calendar, response: "Noted Thu Nov 5 as Mei's date. Nothing booked yet; Jeff still needs to confirm." }
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:lunch_ask}}" }
+expected_behaviors:
+  - id: leaves_photos_open
+    weight: critical
+    description: The photos question is still unanswered, so its entry is not released.
+    check:
+      not_called: [context-bridge-release]
+      with: { entry_id: "{{entry:photos_ask}}" }
+  - id: photos_not_routed
+    weight: critical
+    description: The photos entry is not passed to a specialist as answered either.
+    check:
+      not_called: [delegate]
+      with: { outbound_entry_id: "{{entry:photos_ask}}" }
+  - id: closes_the_lunch_question
+    weight: important
+    description: >
+      Closes the lunch entry: context-bridge-release with its entry_id, or delegate with it
+      as outbound_entry_id.
+    check:
+      any_of:
+        - called: context-bridge-release
+          with: { entry_id: "{{entry:lunch_ask}}" }
+        - called: delegate
+          with: { outbound_entry_id: "{{entry:lunch_ask}}" }
+  - id: acknowledges_the_answer
+    weight: critical
+    description: Replies to Mei instead of staying silent (NO_REPLY).
+    check:
+      reply: not_no_reply
+  - id: does_not_assume_photos
+    weight: important
+    description: >
+      The reply does not say or imply that Mei got the photos; it may ask about them or leave
+      them out.
+  - id: does_not_reveal_internals
+    weight: important
+    description: Says nothing to Mei about outbound context, entries, tracking or internal tools.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - Releases the photos entry along with the lunch one
+  - Tells Mei it is glad the photos arrived

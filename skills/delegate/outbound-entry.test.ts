@@ -50,13 +50,22 @@ function makeBus(response: Partial<AgentResponsePayload> = {}) {
   return { bus, published };
 }
 
-function row(id: string, delegationHint: string | null): OutboundContextRow {
+const DANA_CONTACT_ID = '5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e';
+const OTHER_CONTACT_ID = '6c7d8e9f-0a1b-4c2d-9e3f-4a5b6c7d8e9f';
+
+function row(id: string, delegationHint: string | null, recipientContactIds: string[] | null = null): OutboundContextRow {
   return {
     id, conversationId: 'thread-1', channelId: 'signal', agentId: 'ceo-inbox',
     contentPreview: 'Dana proposed Tuesday 8am. Accept, or suggest another time?',
     expectedReply: null, delegationHint, metadata: null,
     createdAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000), released: false,
+    recipientContactIds, recipientMessages: [],
   };
+}
+
+/** Task metadata for a turn an outside contact started (stampOriginator's shape). */
+function outsiderMetadata(contactId: string): Record<string, unknown> {
+  return { originator: { contactId, systemRole: null, channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'trusted' } };
 }
 
 function makeOutboundContext(entries: OutboundContextRow[]) {
@@ -251,6 +260,44 @@ describe('delegate: outbound-context entry lifecycle (#1972)', () => {
 
     expect(result.success).toBe(true);
     expect(publishedTask(published)).toBeDefined();
+    expect(oc.releaseUnlessKeptOpen).not.toHaveBeenCalled();
+  });
+
+  // #2261: a turn an outside sender started sees only the entries sent to them, so
+  // only those can be linked; any other id is refused in code.
+  it('links an entry sent to the outside sender who started this turn', async () => {
+    const { bus, published } = makeBus();
+    const oc = makeOutboundContext([row(ENTRY_ID, 'ceo-inbox', [DANA_CONTACT_ID])]);
+    const ctx = makeCtx(bus, oc, { outbound_entry_id: ENTRY_ID });
+    ctx.taskMetadata = outsiderMetadata(DANA_CONTACT_ID);
+    await new DelegateHandler().execute(ctx);
+
+    const task = publishedTask(published);
+    expect(oc.releaseUnlessKeptOpen).toHaveBeenCalledWith(ENTRY_ID, task.id);
+    expect(task.payload.content).toContain("the recipient's reply to outbound-context entry");
+  });
+
+  it('does not link an entry sent to someone else on an outside sender\'s turn', async () => {
+    const { bus } = makeBus();
+    const oc = makeOutboundContext([row(ENTRY_ID, 'ceo-inbox', [OTHER_CONTACT_ID])]);
+    const ctx = makeCtx(bus, oc, { outbound_entry_id: ENTRY_ID });
+    ctx.taskMetadata = outsiderMetadata(DANA_CONTACT_ID);
+    const result = await new DelegateHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(oc.releaseUnlessKeptOpen).not.toHaveBeenCalled();
+    expect((result as { data: Record<string, unknown> }).data['outbound_entry']).toMatchObject({
+      id: ENTRY_ID, status: 'not_linked', reason: 'entry was not sent to the sender of this conversation',
+    });
+  });
+
+  it('does not link a legacy entry with no recipients on an outside sender\'s turn', async () => {
+    const { bus } = makeBus();
+    const oc = makeOutboundContext([row(ENTRY_ID, 'ceo-inbox', null)]);
+    const ctx = makeCtx(bus, oc, { outbound_entry_id: ENTRY_ID });
+    ctx.taskMetadata = outsiderMetadata(DANA_CONTACT_ID);
+    await new DelegateHandler().execute(ctx);
+
     expect(oc.releaseUnlessKeptOpen).not.toHaveBeenCalled();
   });
 

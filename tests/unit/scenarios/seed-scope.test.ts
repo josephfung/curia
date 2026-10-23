@@ -59,6 +59,52 @@ describe('scoped views with overlapping runs', () => {
     expect(await view.getActive()).toEqual([]);
   });
 
+  it('match recipients, record replies and list wake replies over the run\'s own entries only (#2261)', async () => {
+    const XIAOPU = '1d833dd7-5c5f-4adc-b311-c8347b49a18e';
+    const rows: Record<string, OutboundContextRow> = {
+      'e-a': { id: 'e-a', agentId: 'coordinator', createdAt: new Date(), recipientContactIds: [XIAOPU], recipientMessages: [{ at: new Date(), from: 'X', preview: 'p' }] } as unknown as OutboundContextRow,
+      'e-real': { id: 'e-real', agentId: 'coordinator', createdAt: new Date(), recipientContactIds: [XIAOPU], recipientMessages: [{ at: new Date(), from: 'X', preview: 'p' }] } as unknown as OutboundContextRow,
+    };
+    const recorded: string[][] = [];
+    const real = {
+      getEntry: async (id: string) => rows[id] ?? null,
+      recordReply: async (ids: string[]) => { recorded.push([...ids]); },
+      getActiveForRecipient: async () => { throw new Error('the real query scans every instance\'s entries'); },
+      getActiveWithReplies: async () => { throw new Error('the real query scans every instance\'s entries'); },
+    } as unknown as OutboundContextService;
+    const view = scopedOutboundContext(real, currentScope);
+
+    await context.run(run('A', [], ['e-a']), async () => {
+      expect((await view.getActiveForRecipient(XIAOPU)).map(r => r.id)).toEqual(['e-a']);
+      expect(await view.getActiveForRecipient('6e99314b-f9b5-4515-bafb-1a52d45b706b')).toEqual([]);
+      expect((await view.getActiveWithReplies('coordinator')).map(r => r.id)).toEqual(['e-a']);
+      expect(await view.getActiveWithReplies('ceo-inbox')).toEqual([]);
+      // Scoped to one contact, as production scopes a wake an outside contact started.
+      expect((await view.getActiveWithReplies('coordinator', { recipientContactId: XIAOPU })).map(r => r.id)).toEqual(['e-a']);
+      expect(await view.getActiveWithReplies('coordinator', { recipientContactId: '6e99314b-f9b5-4515-bafb-1a52d45b706b' })).toEqual([]);
+      await view.recordReply(['e-a', 'e-real'], { from: 'X', contactId: XIAOPU, content: 'c' });
+    });
+    expect(recorded).toEqual([['e-a']]);
+    expect(await view.getActiveForRecipient(XIAOPU)).toEqual([]);
+  });
+
+  it('record a failed recipient or wake read on the run, so it fails instead of passing without the block (#2261)', async () => {
+    const real = {
+      getEntry: async () => { throw new Error('db down'); },
+    } as unknown as OutboundContextService;
+    const view = scopedOutboundContext(real, currentScope);
+    const state = run('A', [], ['e-a']);
+
+    await context.run(state, async () => {
+      await expect(view.getActiveForRecipient('1d833dd7-5c5f-4adc-b311-c8347b49a18e')).rejects.toThrow('db down');
+      await expect(view.getActiveWithReplies('coordinator')).rejects.toThrow('db down');
+    });
+    expect(state.scope.errors).toEqual([
+      'outbound-context read failed: db down',
+      'outbound-context read failed: db down',
+    ]);
+  });
+
   it('give each run only its own backlog counts (prompt trim PR 7)', async () => {
     const view = scopedPrincipalBacklog(currentScope);
     const withBacklog = run('A', []);

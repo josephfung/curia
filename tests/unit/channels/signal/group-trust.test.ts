@@ -29,7 +29,8 @@ describe('checkGroupMemberTrust', () => {
 
     const result = await checkGroupMemberTrust(['+14155551234', '+14165559999'], svc);
 
-    expect(result).toEqual({ trusted: true, unknownMembers: [], blockedMembers: [] });
+    // trustedContactIds: who a group send went to, for the outbound-context entry (#2261).
+    expect(result).toEqual({ trusted: true, unknownMembers: [], blockedMembers: [], trustedContactIds: ['c1', 'c2'] });
   });
 
   it('surfaces a provisional contact as unknownMember', async () => {
@@ -84,6 +85,6 @@ describe('checkGroupMemberTrust', () => {
 
     const result = await checkGroupMemberTrust([], svc);
 
-    expect(result).toEqual({ trusted: true, unknownMembers: [], blockedMembers: [] });
+    expect(result).toEqual({ trusted: true, unknownMembers: [], blockedMembers: [], trustedContactIds: [] });
   });
 });

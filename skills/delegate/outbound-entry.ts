@@ -33,6 +33,8 @@ import { delegationHintOwner, rosterFromRegistry, type DelegationHintRoster } fr
 import { isTaskWakeReplyBinding } from '../../src/dispatch/task-wake-reply.js';
 import { decodeResumeToken } from '../../src/agents/resume-token.js';
 import { isUuid, UUID_PATTERN } from '../../src/util/uuid.js';
+import { isEntryAddressedTo } from '../../src/dispatch/outbound-context.js';
+import { outsiderOriginatorContactId } from '../../src/dispatch/outbound-entry-access.js';
 
 export interface LinkedOutboundEntry {
   entryId: string;
@@ -77,6 +79,8 @@ export async function linkOutboundEntry(
     return hasExplicit ? notLinked('outbound context is not available on this instance') : { link: null };
   }
   const roster: DelegationHintRoster = rosterFromRegistry(ctx.agentRegistry);
+  // On a turn an outside sender started, only the entries sent to them can be linked (#2261).
+  const outsider = outsiderOriginatorContactId(ctx.taskMetadata);
 
   try {
     if (hasExplicit) {
@@ -85,6 +89,9 @@ export async function linkOutboundEntry(
       }
       const entry = await outboundContext.getEntry(entryId);
       if (!entry) return notLinked('no active entry with this id (already released or expired)');
+      if (outsider !== null && !isEntryAddressedTo(entry, outsider)) {
+        return notLinked('entry was not sent to the sender of this conversation');
+      }
       if (isTaskWakeReplyBinding(entry.metadata)) {
         return notLinked('task-wake binding: close it with context-bridge-release and reply instead');
       }
@@ -97,7 +104,10 @@ export async function linkOutboundEntry(
     const owned: string[] = [];
     for (const id of quoted) {
       const entry = await outboundContext.getEntry(id);
-      if (entry && !isTaskWakeReplyBinding(entry.metadata) && delegationHintOwner(entry.delegationHint, roster) === agent) {
+      if (
+        entry && !isTaskWakeReplyBinding(entry.metadata) && delegationHintOwner(entry.delegationHint, roster) === agent
+        && (outsider === null || isEntryAddressedTo(entry, outsider))
+      ) {
         owned.push(id);
       }
     }
@@ -118,10 +128,12 @@ export async function linkOutboundEntry(
 }
 
 /** Line appended to the specialist's brief naming the entry it is answering. */
-export function outboundEntryNote(entryId: string): string {
+export function outboundEntryNote(entryId: string, fromRecipient = false): string {
+  // A reply from the person the message went to (#2261) is not the principal's.
+  const who = fromRecipient ? 'the recipient' : 'the principal';
   return (
-    `\n\n[Outbound context] This task answers the principal's reply to outbound-context entry ${entryId}. ` +
-    'The platform releases that entry when you return, after which the principal\'s next message no longer routes to you.'
+    `\n\n[Outbound context] This task answers ${who}'s reply to outbound-context entry ${entryId}. ` +
+    `The platform releases that entry when you return, after which ${who}'s next message no longer routes to you.`
   );
 }
 

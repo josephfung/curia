@@ -175,6 +175,8 @@ export class SignalSendHandler implements ToolHandler {
           agentId: ctx.agentId ?? 'coordinator',
           log: ctx.log,
           boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
+          // The members a reply in the group can come from (#2261).
+          recipientContactIds: trust.trustedContactIds,
         });
 
         return { success: true, data: { delivered_to: groupId, channel: 'signal', ...relayDeferredData(result) } };
@@ -244,6 +246,8 @@ export class SignalSendHandler implements ToolHandler {
         agentId: ctx.agentId ?? 'coordinator',
         log: ctx.log,
         boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
+        // Lets the dispatcher show this entry when the recipient replies (#2261).
+        recipientContactIds: [resolved.contactId],
       });
 
       return {

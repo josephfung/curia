@@ -69,6 +69,11 @@ export async function recordTaskWakeReply(options: {
   taskRepo: TaskRepo;
   outboundContext: OutboundContextRelease;
   logger: Logger;
+  /**
+   * Who answered, for the progress note. Omitted for the principal; a recipient's reply
+   * on their own turn names them (#2261), so a later wake does not read it as the principal's.
+   */
+  repliedBy?: string;
 }): Promise<TaskWakeReplyPersistResult> {
   const reply = options.reply.trim();
   if (reply.length === 0) {
@@ -89,13 +94,17 @@ export async function recordTaskWakeReply(options: {
       return { persisted: false, error: `task not found: ${taskId}` };
     }
 
-    const progressNote = `principal replied: ${reply.slice(0, 1500)}`;
+    const progressNote = `${options.repliedBy ?? 'principal'} replied: ${reply.slice(0, 1500)}`;
     const updates: Parameters<TaskRepo['updateTask']>[1] = { progressNote };
 
-    if (task.owner === 'ceo') {
+    // The principal answering hands their task back to Curia (#1299). A contact's answer
+    // does not (#2261): a task the principal owns stays theirs, in its status, with the
+    // answer noted. Curia's own parked task resumes, since the answer is what it waited on.
+    const byPrincipal = options.repliedBy === undefined;
+    if (byPrincipal && task.owner === 'ceo') {
       updates.owner = 'curia';
     }
-    if (task.status === 'waiting' || task.status === 'blocked') {
+    if ((byPrincipal || task.owner !== 'ceo') && (task.status === 'waiting' || task.status === 'blocked')) {
       updates.status = 'in_progress';
     }
 

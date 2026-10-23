@@ -1,0 +1,88 @@
+# Case 4c (#2261): a contact answers a question Curia sent them. Production 2026-10-21:
+# Curia asked the principal's spouse on Signal which of six lunch dates she could make;
+# she replied "Thur Nov 5". The outbound-context block was withheld on every non-principal
+# turn (#1848), so the coordinator saw a bare date from someone and answered NO_REPLY; the
+# answer was lost and the principal was later told she had not replied.
+# Fix B of #1848: a verified sender's turn now carries the entries sent to them, with the
+# `recipient-outbound-context` turn guidance (src/agents/prompts/turn-guidance.ts).
+name: contact answers Curia's question
+description: >
+  Curia asked Mei on Signal which lunch dates she can make for the principal's lunch with
+  Jeff. She replies with just "Thur Nov 5". The block shows her the question it answers,
+  so the coordinator treats the date as her answer and acknowledges it instead of staying
+  silent.
+tags: [reply-shaped, audience, outbound-context]
+stub_sets: [human-channels]
+timeout_seconds: 240
+seed:
+  contacts:
+    - key: mei
+      display_name: Mei Chen
+      tier: known
+      channel: signal
+      identifier: "+16135550188"
+  outbound_context:
+    - key: lunch_ask
+      channel: signal
+      agent: coordinator
+      recipients: [mei]
+      content: >
+        Hi Mei - the principal is working out a lunch with Jeff Henry and wants days that
+        suit you both. Any of these work for you: Tue Oct 27, Wed Oct 28, Tue Nov 3,
+        Wed Nov 4, Thu Nov 5, or Wed Nov 11?
+      expected_reply: which candidate lunch dates Mei can join
+      sent_minutes_ago: 25
+      expires_in_hours: 72
+inbound:
+  from: mei
+  content: Thur Nov 5
+tool_stubs:
+  delegate:
+    - match: {}
+      return: { agent: calendar, response: "Noted Thu Nov 5 as Mei's date. Nothing booked yet; Jeff still needs to confirm." }
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:lunch_ask}}" }
+expected_behaviors:
+  - id: acknowledges_the_answer
+    weight: critical
+    description: Replies to Mei instead of staying silent (NO_REPLY).
+    check:
+      reply: not_no_reply
+  - id: treats_it_as_her_answer
+    weight: critical
+    description: >
+      Treats "Thur Nov 5" as Mei's answer to the lunch-date question: the reply confirms
+      Thursday Nov 5 (or that her date was noted). It does not ask her what she means,
+      does not say it lost the thread, and does not treat the message as unrelated.
+  - id: closes_the_question
+    weight: important
+    description: >
+      Closes the entry the answer settles: context-bridge-release with its entry_id, or
+      delegate with it as outbound_entry_id (the platform releases it when the specialist
+      returns, #1972).
+    check:
+      any_of:
+        - called: context-bridge-release
+          with: { entry_id: "{{entry:lunch_ask}}" }
+        - called: delegate
+          with: { outbound_entry_id: "{{entry:lunch_ask}}" }
+  - id: one_message_to_mei
+    weight: important
+    description: The acknowledgment is the reply itself; Mei is not also sent a separate message.
+    check:
+      not_called: [signal-send, sms-send, email-send]
+  - id: reply_is_only_for_mei
+    weight: important
+    description: >
+      The reply is a short message to Mei. It does not claim the lunch is booked or that
+      Jeff has agreed, and carries nothing addressed to the principal.
+  - id: does_not_reveal_internals
+    weight: important
+    description: Says nothing to Mei about outbound context, entries, tracking or internal tools.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - Returns NO_REPLY to a bare date, as production did on 2026-10-21
+  - Asks Mei what "Thur Nov 5" refers to
+  - Tells Mei the lunch with Jeff is booked

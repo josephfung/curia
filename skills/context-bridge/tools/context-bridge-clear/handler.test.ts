@@ -118,4 +118,25 @@ describe('ContextBridgeClearHandler', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/Failed to clear/);
   });
+
+  // #2261: it releases by subject across every entry, so a contact's turn cannot use it.
+  it('refuses a turn an outside contact started, releasing nothing', async () => {
+    const ctx = makeCtx({ subjects: ['Jeff Henry board seat'] }, { totalReleased: 2, perSubject: [], unmatched: [] });
+    (ctx as unknown as Record<string, unknown>).taskMetadata = {
+      originator: { contactId: '1d833dd7-5c5f-4adc-b311-c8347b49a18e', systemRole: null, channel: 'signal', initiatedAt: '2026-10-21T21:29:59.973Z', tier: 'trusted' },
+    };
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect(ctx.outboundContext!.clearBySubjects).not.toHaveBeenCalled();
+  });
+
+  it('still clears on a principal turn', async () => {
+    const ctx = makeCtx({ subjects: ['Sean Brownlee'] }, { totalReleased: 1, perSubject: [{ subject: 'Sean Brownlee', released: 1 }], unmatched: [] });
+    (ctx as unknown as Record<string, unknown>).taskMetadata = {
+      originator: { contactId: 'principal-1', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-10-21T21:29:59.973Z', tier: null },
+    };
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+  });
 });

@@ -136,6 +136,11 @@ export interface SeedOutboundEntry {
   expectedReply?: string;
   delegationHint?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Seeded contact keys the message was sent to (#2261). A reply from one of them gets
+   * this entry in its recipient-matched block. Omitted: principal turns only.
+   */
+  recipients?: string[];
   /** Backdates created_at so the block reads "sent N minutes ago". Default 10. */
   sentMinutesAgo?: number;
   expiresInHours?: number;

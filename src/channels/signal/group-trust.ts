@@ -29,6 +29,8 @@ export interface GroupTrustResult {
   unknownMembers: string[];
   /** E.164 numbers of explicitly blocked contacts. */
   blockedMembers: string[];
+  /** Contact IDs of the members that passed: who a group send went to (#2261). */
+  trustedContactIds: string[];
 }
 
 /**
@@ -50,6 +52,7 @@ export async function checkGroupMemberTrust(
 ): Promise<GroupTrustResult> {
   const unknownMembers: string[] = [];
   const blockedMembers: string[] = [];
+  const trustedContactIds: string[] = [];
 
   for (const phone of memberPhones) {
     const contact = await contactService.resolveByChannelIdentity('signal', phone);
@@ -63,13 +66,15 @@ export async function checkGroupMemberTrust(
       // A positive allowlist via meetsMinimumTier() avoids the prior denylist
       // (tier !== 'unknown' && !== 'blocked'), which trusted any unexpected value.
       unknownMembers.push(phone);
+    } else {
+      trustedContactIds.push(contact.contactId);
     }
-    // meetsMinimumTier(tier, 'known') → trusted member
   }
 
   return {
     trusted: unknownMembers.length === 0 && blockedMembers.length === 0,
     unknownMembers,
     blockedMembers,
+    trustedContactIds,
   };
 }

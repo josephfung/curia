@@ -469,8 +469,11 @@ A single table records every outbound message Curia sends, with enough metadata 
 | `created_at` | `TIMESTAMPTZ` | Insert time |
 | `expires_at` | `TIMESTAMPTZ` | Auto-expiry deadline |
 | `released` | `BOOLEAN` | `true` once an agent explicitly closes the thread |
+| `recipient_contact_ids` | `UUID[]?` | Contacts the message was sent to (#2261); `NULL` on rows written before migration 104, which are never shown to a non-principal |
+| `recipient_messages` | `JSONB` | Messages those recipients sent while the entry was active, `[{at, from, contact_id, preview, risk_score}]`, the first three and the latest three (#2261) |
+| `last_recipient_message_at` | `TIMESTAMPTZ?` | When the latest of those arrived; orders the task-wake list |
 
-A partial index `(expires_at, created_at DESC) WHERE released = false` covers the dispatcher's hot read.
+A partial index `(expires_at, created_at DESC) WHERE released = false` covers the dispatcher's hot read. A partial GIN index on `recipient_contact_ids` (same predicate) serves the recipient lookup, which uses `@>`.
 
 ### `OutboundContextService`
 
@@ -526,7 +529,15 @@ On every **dispatcher-routed principal** inbound (`liveTurn: true`), the dispatc
 2. If any exist, calls `formatInjectionBlock(entries, originalContent)` to prepend an `[ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]` block to the content the coordinator sees.
 3. Each block keeps the key name `entry_id` (for `context-bridge-release`) but labels it as an outbound_context UUID — not a Nylas/email message id — plus channel, originating agent, age, expiry-relative time, content preview, and any explicit hint fields.
 
-Non-principal dispatcher inbounds (resolved third parties, unresolved/`tier: unknown` senders) skip the query entirely — the block is principal-audience content (#1848). Voice inbounds never reach this path; `VoiceRuntime` applies the same `liveTurn` gate on its own injection path (#1598). `stampOriginator()` runs once per dispatcher inbound and supplies that signal.
+Non-principal dispatcher inbounds never get that global block — it is principal-audience content (#1848). Voice inbounds never reach this path; `VoiceRuntime` applies the same `liveTurn` gate on its own injection path (#1598). `stampOriginator()` runs once per dispatcher inbound and supplies that signal.
+
+**Recipient-matched block (#2261, Fix B of #1848).** Each entry records the contact IDs it was sent to (`recipient_contact_ids`, written by all five send skills from verified identities; Signal group sends record the members that passed the trust check). A non-principal sender's inbound gets a block of only the active entries sent to them (`getActiveForRecipient`), headed `[ACTIVE OUTBOUND CONTEXT — messages you sent to this sender that may receive replies]`, with the `recipient-outbound-context` turn guidance (act on the entry the message answers, leave the others open). Every gate decides who can see what and fails closed (`Dispatcher.injectRecipientOutboundContext`):
+
+- the sender is a resolved, **verified**, non-blocked contact, and the message is not machine mail;
+- the channel authenticated this message's sender (`inboundSenderAuthenticated`: Signal, Slack, and email with `senderVerified`; never SMS or voice), since a verified identity alone does not stop a forged From;
+- the conversation is **one-to-one** (`inboundIsOneToOne`: a Signal message with `isGroup: false`, a Slack DM, or an email with `curiaRole: 'to'` and `otherRecipientCount: 0`, which the email adapter sets only when it knows its own address). In a group, a channel or a multi-party email the reply would reach people the entry was never sent to.
+
+The recipient block shows what the sender received, the owning agent's id (the hint's leading word) and `bind_reply: true` where set; `expected reply`, the hint's text and the `context` JSON stay on the principal's block. When the block is injected, the dispatcher records the sender's message on those entries (`recipient_messages`, with their contact id and the injection scan's risk score; an email without its Subject line and quoted thread). Principal blocks list the messages under `messages back from its recipients since it was sent`, each JSON-encoded and labelled untrusted, with a flag when the scan scored it. Task wakes list the waking agent's entries that have any as `messages_back_on_open_sends` (up to 10, the waking task's own sends first); a wake an outside contact started lists only the entries sent to that contact and only their own messages, without `expected_reply`, and an unresolved outsider's wake lists none. Placeholders in the wake payload are filled in before the messages are added, so nothing in a contact's words is substituted. On a turn an outside sender started, `context-bridge-release`, `context-bridge-keep-open` and `delegate`'s `outbound_entry_id` refuse any entry not sent to that sender, and `context-bridge-clear` is refused outright (`src/dispatch/outbound-entry-access.ts`). A contact's answer recorded on a principal-owned task leaves it with the principal. A contact merge re-points `recipient_contact_ids` and the recorded messages' contact ids.
 
 The coordinator reads this block, decides whether the inbound is a continuation of an outbound thread, and (if so) delegates to the originating agent (passing the entry as `outbound_entry_id`) — or invokes `context-bridge-release` if the LLM concludes the thread is done and the entry is not another agent's.
 

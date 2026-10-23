@@ -163,6 +163,24 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-21T21:22:49.103Z"
     },
+    "contact answers Curia's question": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-23T21:08:25.728Z"
+    },
+    "contact answers one of two questions": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-23T21:12:14.617Z"
+    },
+    "contact writes without answering": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-23T21:12:59.680Z"
+    },
     "contacts ambiguous name with a wrong role": {
       "unstubbed": 0,
       "runs": 5,

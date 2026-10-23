@@ -119,6 +119,8 @@ export class SmsSendHandler implements ToolHandler {
         agentId: ctx.agentId ?? 'coordinator',
         log: ctx.log,
         boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
+        // Lets the dispatcher show this entry when the recipient replies (#2261).
+        recipientContactIds: [resolved.contactId],
       });
 
       return {

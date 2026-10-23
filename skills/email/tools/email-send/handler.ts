@@ -60,8 +60,11 @@ async function resolveReferenceList(
   raw: string,
   field: string,
   log: ToolContext['log'],
-): Promise<{ addresses: string[]; contactIds: Array<string | undefined>; identityNames: string[] } | { error: string }> {
+): Promise<{ addresses: string[]; contactIds: Array<string | undefined>; identityNames: string[]; recipientContactIds: string[] } | { error: string }> {
   const addresses: string[] = [];
+  // Every resolved contact, the principal's included: stored on the outbound-context entry
+  // (#2261), never shown to the model.
+  const recipientContactIds: string[] = [];
   // Undefined for the alias: the principal's contact ID stays out of the model's
   // context (spec 09). Only a UUID the agent passed is echoed back.
   const contactIds: Array<string | undefined> = [];
@@ -81,11 +84,12 @@ async function resolveReferenceList(
     if (addresses.includes(resolved.identifier)) continue;
     addresses.push(resolved.identifier);
     contactIds.push(resolved.kind === 'contact' ? resolved.contactId : undefined);
+    recipientContactIds.push(resolved.contactId);
     // Always set, so identityNames stays aligned with addresses. A resolved
     // reference always names the identity (a label, "primary", or "unlabelled").
     identityNames.push(resolved.identityName);
   }
-  return { addresses, contactIds, identityNames };
+  return { addresses, contactIds, identityNames, recipientContactIds };
 }
 
 export class EmailSendHandler implements ToolHandler {
@@ -171,11 +175,13 @@ export class EmailSendHandler implements ToolHandler {
     const toIdentity = resolvedTo.identityNames[0];
     let ccAddresses: string[] = [];
     let ccIdentities: string[] = [];
+    let ccContactIds: string[] = [];
     if (cc) {
       const resolved = await resolveReferenceList(ctx.outboundGateway, cc, 'cc', ctx.log);
       if ('error' in resolved) return { success: false, error: resolved.error };
       ccAddresses = resolved.addresses;
       ccIdentities = resolved.identityNames;
+      ccContactIds = resolved.recipientContactIds;
     }
 
     // When replying, fetch the original message and append a quoted copy below
@@ -270,6 +276,8 @@ export class EmailSendHandler implements ToolHandler {
         agentId: ctx.agentId ?? 'coordinator',
         log: ctx.log,
         boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
+        // Lets the dispatcher show this entry when a To or CC recipient replies (#2261).
+        recipientContactIds: [...resolvedTo.recipientContactIds, ...ccContactIds],
       });
 
       return {

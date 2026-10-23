@@ -13,8 +13,10 @@ import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-li
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
 import {
   OutboundContextService,
+  isEntryAddressedTo,
   type OutboundContextEntry,
   type OutboundContextRow,
+  type RecordedReply,
   type SubjectClearResult,
 } from '../../src/dispatch/outbound-context.js';
 import type { PrincipalBacklogSource } from '../../src/dispatch/principal-backlog.js';
@@ -109,18 +111,56 @@ export function scopedOutboundContext(real: OutboundContextService, currentScope
     return rows.filter((r): r is OutboundContextRow => r !== null);
   };
 
+  /** Read the run's active entries, recording a failure on the run before rethrowing. */
+  const readScoped = async <T>(scope: SeedScope, read: (rows: OutboundContextRow[]) => T): Promise<T> => {
+    try {
+      return read(await activeEntries(scope));
+    } catch (err) {
+      // The Dispatcher and runtime log a failed read and carry on without the block, so the
+      // run would be scored on a premise it never had; the harness fails it instead.
+      scope.errors.push(`outbound-context read failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
+  };
+  const lastMessageAt = (e: OutboundContextRow): number => e.recipientMessages.at(-1)?.at.getTime() ?? 0;
+
   return Object.assign(Object.create(real) as OutboundContextService, {
     getActive: async (limit = 10): Promise<OutboundContextRow[]> => {
       const scope = currentScope();
       if (!scope) return [];
-      try {
-        return (await activeEntries(scope))
-          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-          .slice(0, limit);
-      } catch (err) {
-        scope.errors.push(`outbound-context read failed: ${err instanceof Error ? err.message : String(err)}`);
-        throw err;
-      }
+      return readScoped(scope, rows => rows
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit));
+    },
+    // #2261: the same recipient match, recorded messages and wake list as production's SQL,
+    // over the run's entries only. Without these the prototype's methods would read the
+    // whole table and show one run's entries to another.
+    getActiveForRecipient: async (contactId: string, limit = 10): Promise<OutboundContextRow[]> => {
+      const scope = currentScope();
+      if (!scope) return [];
+      return readScoped(scope, rows => rows
+        .filter(e => isEntryAddressedTo(e, contactId))
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit));
+    },
+    recordReply: async (entryIds: readonly string[], reply: RecordedReply): Promise<void> => {
+      const owned = entryIds.filter(id => owning(id));
+      if (owned.length > 0) await real.recordReply(owned, reply);
+    },
+    getActiveWithReplies: async (
+      agentId: string,
+      opts: { taskId?: string; recipientContactId?: string; limit?: number } = {},
+    ): Promise<OutboundContextRow[]> => {
+      const scope = currentScope();
+      if (!scope) return [];
+      const { taskId, recipientContactId, limit = 10 } = opts;
+      const forTask = (e: OutboundContextRow): number =>
+        taskId !== undefined && e.metadata?.['task_id'] === taskId ? 1 : 0;
+      return readScoped(scope, rows => rows
+        .filter(e => e.recipientMessages.length > 0 && e.agentId === agentId)
+        .filter(e => recipientContactId === undefined || isEntryAddressedTo(e, recipientContactId))
+        .sort((a, b) => forTask(b) - forTask(a) || lastMessageAt(b) - lastMessageAt(a))
+        .slice(0, limit));
     },
     getEntry: async (entryId: string): Promise<OutboundContextRow | null> =>
       owning(entryId) ? real.getEntry(entryId) : null,
@@ -366,6 +406,11 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
       // A relayed clarification (#2027): production's token, where the relay send's
       // context_bridge puts it.
       const resumeToken = entry.resume ? encodeResumeToken(entry.resume) : undefined;
+      const recipientContactIds = (entry.recipients ?? []).map((k) => {
+        const id = seeded.refs.get(`contact:${k}`);
+        if (!id) throw new Error(`seed.outbound_context '${entry.key}': recipient '${k}' is not a seeded contact key`);
+        return id;
+      });
       const id = await outboundContext.register({
         conversationId: `${SCENARIO_ENTRY_ORIGIN}${entry.key}`,
         channelId: entry.channelId,
@@ -375,6 +420,7 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
         delegationHint: entry.delegationHint,
         metadata: resumeToken ? { ...entry.metadata, resume_token: resumeToken } : entry.metadata,
         expiresInHours: entry.expiresInHours ?? 6,
+        ...(recipientContactIds.length > 0 ? { recipientContactIds } : {}),
       });
       if (resumeToken) seeded.refs.set(`resume_token:${entry.key}`, resumeToken);
       seeded.entryIds.push(id);

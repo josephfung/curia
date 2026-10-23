@@ -147,6 +147,7 @@ export const CONTACT_REFERENCE_KEYS = [
   'originator_bullpen_threads',
   'originator_secret_capture_tokens',
   'originator_pending_delegations',
+  'outbound_context_recipients',
 ] as const;
 export type ContactReferenceKey = (typeof CONTACT_REFERENCE_KEYS)[number];
 export type ContactReferenceCounts = Record<ContactReferenceKey, number>;
@@ -3357,6 +3358,23 @@ class PostgresContactBackend implements ContactServiceBackend {
     counts.originator_pending_delegations = await run(
       `UPDATE pending_delegations SET originator = jsonb_set(originator, '{contactId}', to_jsonb($2::text))
        WHERE originator->>'contactId' = $1::text`,
+    );
+
+    // outbound_context recipients (migration 104, #2261): a bare UUID[] with no FK, like the
+    // originator JSON above. Left alone, an answer from the merged person arrives without
+    // the question Curia sent the absorbed contact. The ids in recorded messages move too,
+    // so a contact-scoped read still finds the survivor's own words.
+    counts.outbound_context_recipients = await run(
+      `UPDATE outbound_context
+          SET recipient_contact_ids = ARRAY(
+                SELECT DISTINCT r FROM unnest(array_replace(recipient_contact_ids, $1::uuid, $2::uuid)) AS r),
+              recipient_messages = (
+                SELECT COALESCE(jsonb_agg(
+                         CASE WHEN m->>'contact_id' = $1::text
+                              THEN jsonb_set(m, '{contact_id}', to_jsonb($2::text)) ELSE m END
+                         ORDER BY ord), '[]'::jsonb)
+                  FROM jsonb_array_elements(recipient_messages) WITH ORDINALITY AS t(m, ord))
+        WHERE recipient_contact_ids @> ARRAY[$1::uuid]`,
     );
 
     this.logger.debug({ fromContactId, toContactId, counts }, 'contacts: reattached contact references');

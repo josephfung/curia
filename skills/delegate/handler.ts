@@ -22,6 +22,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { parseResolvedContactIds } from '../../src/agents/resolved-entities.js';
+import { outsiderOriginatorContactId } from '../../src/dispatch/outbound-entry-access.js';
 import {
   linkOutboundEntry,
   outboundEntryNote,
@@ -670,7 +671,9 @@ export class DelegateHandler implements ToolHandler {
       senderId: 'coordinator',
       // The entry note goes on this run's content only, not on delegationOrigin's
       // originalTask, which seeds a later resume_token for a different exchange.
-      content: link ? effectiveTask + outboundEntryNote(link.entryId) : effectiveTask,
+      content: link
+        ? effectiveTask + outboundEntryNote(link.entryId, outsiderOriginatorContactId(ctx.taskMetadata) !== null)
+        : effectiveTask,
       metadata: delegationMetadata,
       // Forward the live-principal-turn signal (#1126) across this SYNCHRONOUS delegation: a
       // specialist acting inside the principal's live turn (e.g. the contacts specialist running

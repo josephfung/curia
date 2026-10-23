@@ -19,6 +19,11 @@ export interface InboundGuidanceFacts {
    * Empty when no block was injected (no entries, a non-principal turn, or a read failure).
    */
   injectedEntryMetadata: ReadonlyArray<Record<string, unknown> | null>;
+  /**
+   * Entries rendered into a non-principal sender's block: the messages sent to them (#2261).
+   * Absent or zero when no such block was injected.
+   */
+  recipientEntryCount?: number;
   channelId: string;
   /** Email only: Curia was CC'd rather than addressed directly. */
   curiaCc: boolean;
@@ -261,6 +266,7 @@ export function inboundTurnGuidance(facts: InboundGuidanceFacts): TurnGuidanceKe
       keys.push(facts.principalAcquaintance === 'principal-domain' ? 'principal-colleague' : 'principal-correspondent');
       keys.push('acquaintance-time-request');
     }
+    if ((facts.recipientEntryCount ?? 0) > 0) keys.push('recipient-outbound-context');
   } else if (entries.length === 0) {
     // A spot-check verdict ("2 bad") is reply-shaped but not ambiguous: the reply-shaped note
     // says to ask what the principal is replying to, spot-check-reply says to act. They give

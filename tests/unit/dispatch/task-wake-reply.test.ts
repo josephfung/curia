@@ -33,6 +33,8 @@ function makeEntry(overrides: Partial<OutboundContextRow> = {}): OutboundContext
     createdAt: new Date(),
     expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     released: false,
+    recipientContactIds: null,
+    recipientMessages: [],
     ...overrides,
   };
 }
@@ -114,6 +116,30 @@ describe('task-wake-reply', () => {
         'coordinator',
       );
       expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    // #2261: handing a task back to Curia is the principal's call, not a contact's.
+    it('a contact\'s answer leaves a principal-owned task with the principal, in its status', async () => {
+      const result = await recordTaskWakeReply({
+        reply: 'Thur Nov 5', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
+        repliedBy: 'Xiaopu Fung',
+      });
+
+      expect(result.persisted).toBe(true);
+      const updates = (taskRepo.updateTask as ReturnType<typeof vi.fn>).mock.calls[0]![1] as Record<string, unknown>;
+      expect(updates).toEqual({ progressNote: 'Xiaopu Fung replied: Thur Nov 5' });
+      expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it('a contact\'s answer resumes Curia\'s own parked task, which was waiting on it', async () => {
+      (taskRepo.getTask as ReturnType<typeof vi.fn>).mockResolvedValue({ id: TASK_ID, status: 'blocked', owner: 'curia' });
+      await recordTaskWakeReply({
+        reply: 'Thur Nov 5', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
+        repliedBy: 'Xiaopu Fung',
+      });
+
+      const updates = (taskRepo.updateTask as ReturnType<typeof vi.fn>).mock.calls[0]![1] as Record<string, unknown>;
+      expect(updates).toEqual({ progressNote: 'Xiaopu Fung replied: Thur Nov 5', status: 'in_progress' });
     });
 
     it('rejects entries without task-wake binding metadata', async () => {

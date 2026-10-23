@@ -29,6 +29,7 @@ export type TurnGuidanceKey =
   | 'principal-colleague'
   | 'principal-correspondent'
   | 'acquaintance-time-request'
+  | 'recipient-outbound-context'
   | 'spot-check-reply'
   | 'outbound-context'
   | 'outbound-context-task-wake'
@@ -157,9 +158,10 @@ export function verificationCodeReceivedLines(
 }
 
 /**
- * Any inbound from someone other than the principal (outbound context is withheld). The
- * first paragraph is every non-principal turn's reply contract, moved out of the always-on
- * prompt (prompt trim PR 4): principal turns never need it, and auto-generated mail, the
+ * Any inbound from someone other than the principal (outbound context is limited to what
+ * was sent to this sender, #2261). The first paragraph is every non-principal turn's reply
+ * contract, moved out of the always-on prompt (prompt trim PR 4): principal turns never
+ * need it, and auto-generated mail, the
  * one non-principal turn without this block, has its own NO_REPLY preamble and never relays.
  * Anything for the principal goes in a note block, which the runtime cuts out of the reply
  * and the dispatcher emails to them (prompt trim PR 5, src/agents/principal-note.ts).
@@ -180,7 +182,8 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   'an FYI, a decline that needs no acknowledgment, a message not meant for you), the message',
   'is exactly NO_REPLY and nothing else.',
   '',
-  'The [ACTIVE OUTBOUND CONTEXT] block is withheld on these turns, not empty. A message that',
+  'On these turns an [ACTIVE OUTBOUND CONTEXT] block shows only messages you sent to this',
+  'sender; everything else is withheld, not empty. A message that',
   'mentions earlier contact you cannot find but makes a request you can act on ("Following up',
   'on the intro: could you share a few times?") is self-contained: act on it as usual, without',
   'first looking for the earlier contact. Only a message whose meaning depends on a thread you',
@@ -196,6 +199,34 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   'this exchange that they can act on, add it after the message inside',
   '<note_for_principal></note_for_principal> tags. The note is emailed to the principal and',
   'only they see it; nothing for the principal goes in the message.',
+];
+
+/**
+ * A non-principal sender's turn carries a block of the messages Curia sent to them (#2261,
+ * Fix B of #1848). Without it, "Thur Nov 5" from someone asked to pick a date read as a stray
+ * message and got NO_REPLY, and the answer was lost. The bullets mirror the
+ * principal block's routing (OUTBOUND_CONTEXT, OUTBOUND_CONTEXT_TASK_WAKE) for a reply from
+ * the recipient, including its match step: act on the entry the message answers, leave the
+ * others open. The NO_REPLY override applies only to an answer; a message that answers no
+ * entry keeps non-principal-reply-shaped's contract. No resume_token bullet: the recipient
+ * block never renders one (outbound-context.ts), and clarification relays go to the principal.
+ */
+const RECIPIENT_OUTBOUND_CONTEXT = [
+  'The [ACTIVE OUTBOUND CONTEXT] block lists messages you sent to this sender. Decide whether',
+  'this message answers one of them. Act only on the entry it answers and leave the others open.',
+  '- An answered entry with a `delegation:` line: delegate to that specialist with the sender\'s',
+  '  full message as the task and the entry_id as `outbound_entry_id`.',
+  '- An answered entry marked `bind_reply: true`: call `context-bridge-release` with that',
+  '  entry_id and `reply` set to the sender\'s answer verbatim. If the message does not answer',
+  '  its question, even when it is the only entry, do not call it: the binding stays open.',
+  '- Any other answered entry: do the work the question was for. If a task is waiting on this',
+  '  answer (task-list), record it there with task-update. Then call `context-bridge-release`',
+  '  with the entry_id.',
+  'Your final response is your only reply to the sender; never a separate send. After acting on',
+  'an answer, it is a short acknowledgment, not NO_REPLY. A message that answers none of them',
+  '(thanks, "I\'ll get back to you", a new question) is not an answer: call no',
+  'context-bridge-release, leave every entry open, and handle the message as you would without',
+  'this block.',
 ];
 
 /**
@@ -221,10 +252,11 @@ const SPOT_CHECK_REPLY = [
 ];
 
 /**
- * The [ACTIVE OUTBOUND CONTEXT] block is in this message (principal turns only). The
- * `delegation:` bullet is the transfer-ownership reply rule, moved here from the always-on
- * prompt (prompt trim PR 4): only this block carries a delegation hint, and only principal
- * turns get the block (#1848), so a third party's reply never reaches this rule.
+ * The principal's [ACTIVE OUTBOUND CONTEXT] block is in this message: every active entry,
+ * on a principal turn (#1848). The `delegation:` bullet is the transfer-ownership reply
+ * rule, moved here from the always-on prompt (prompt trim PR 4). A third party's turn gets
+ * only the entries sent to them, under `recipient-outbound-context`, which carries its own
+ * version of this routing (#2261); this key is never added to such a turn.
  */
 const OUTBOUND_CONTEXT = [
   'The [ACTIVE OUTBOUND CONTEXT] block lists messages you sent that may receive replies.',
@@ -344,6 +376,7 @@ const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
   'principal-colleague': PRINCIPAL_COLLEAGUE,
   'principal-correspondent': PRINCIPAL_CORRESPONDENT,
   'acquaintance-time-request': ACQUAINTANCE_TIME_REQUEST,
+  'recipient-outbound-context': RECIPIENT_OUTBOUND_CONTEXT,
   'spot-check-reply': SPOT_CHECK_REPLY,
   'outbound-context': OUTBOUND_CONTEXT,
   'outbound-context-task-wake': OUTBOUND_CONTEXT_TASK_WAKE,
@@ -373,6 +406,7 @@ export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
   'principal-colleague',
   'principal-correspondent',
   'acquaintance-time-request',
+  'recipient-outbound-context',
   'spot-check-reply',
   'outbound-context',
   'outbound-context-task-wake',

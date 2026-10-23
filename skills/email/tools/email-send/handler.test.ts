@@ -265,6 +265,8 @@ describe('EmailSendHandler', () => {
         delegationHint: 'Delegate to meeting-debrief',
         expiresInHours: 72,
         ttlSource: 'agent',
+        // Who it went to, so a reply from them is shown this entry (#2261).
+        recipientContactIds: [ALICE_ID],
       });
     });
 
@@ -298,6 +300,7 @@ describe('EmailSendHandler', () => {
         // next-business-day replies could land (#1816).
         expiresInHours: 72,
         ttlSource: 'channel-default',
+        recipientContactIds: [ALICE_ID],
       });
     });
 

@@ -57,6 +57,26 @@ describe('registerOutboundContext', () => {
     });
   });
 
+  it('passes the recipients through on both the minimal and the explicit path (#2261)', async () => {
+    const recipient = '1d833dd7-5c5f-4adc-b311-c8347b49a18e';
+    const minimal = makeCap();
+    await registerOutboundContext(minimal, undefined, { ...baseOpts, recipientContactIds: [recipient] });
+    expect(minimal.register).toHaveBeenCalledWith(expect.objectContaining({ recipientContactIds: [recipient] }));
+
+    const explicit = makeCap();
+    await registerOutboundContext(explicit, JSON.stringify({ agent_id: 'coordinator', expected_reply: 'dates' }), {
+      ...baseOpts,
+      recipientContactIds: [recipient],
+    });
+    expect(explicit.register).toHaveBeenCalledWith(expect.objectContaining({ recipientContactIds: [recipient] }));
+  });
+
+  it('leaves recipients off the entry when none are given', async () => {
+    const cap = makeCap();
+    await registerOutboundContext(cap, undefined, { ...baseOpts, recipientContactIds: [] });
+    expect((cap.register as ReturnType<typeof vi.fn>).mock.calls[0]![0]).not.toHaveProperty('recipientContactIds');
+  });
+
   it('auto-binds task-wake sends when boundTask is present without context_bridge (#1299)', async () => {
     const cap = makeCap();
     await registerOutboundContext(cap, undefined, {
