@@ -106,11 +106,17 @@ export async function registerOutboundContext(
     log: Logger;
     /** When present (task-wake turns), auto-bind principal replies to this task (#1299). */
     boundTask?: BoundTaskContext | null;
+    /**
+     * Contact IDs the message went to (#2261). Lets the dispatcher show the entry on a
+     * reply from one of them; omitted, the entry is shown on principal turns only.
+     */
+    recipientContactIds?: readonly string[];
   },
 ): Promise<void> {
   if (!outboundContext) return;
 
-  const { channelId, content, agentId, log, boundTask } = opts;
+  const { channelId, content, agentId, log, boundTask, recipientContactIds } = opts;
+  const recipients = recipientContactIds && recipientContactIds.length > 0 ? { recipientContactIds } : {};
 
   try {
     let bridge = parseContextBridge(contextBridgeRaw, log);
@@ -178,6 +184,7 @@ export async function registerOutboundContext(
             ? Math.max(bridge.expires_in_hours!, channelDefaultHours)
             : Math.max(outboundContext.explicitExpiryHours, channelDefaultHours),
         ttlSource: agentChoseTtl ? 'agent' : systemInjectedTtl ? 'task-wake' : 'explicit-tier',
+        ...recipients,
       });
     } else {
       // Auto-registration — context_bridge was absent, null, or malformed.
@@ -189,6 +196,7 @@ export async function registerOutboundContext(
         content,
         expiresInHours: channelDefaultHours,
         ttlSource: 'channel-default',
+        ...recipients,
       });
     }
   } catch (err) {

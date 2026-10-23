@@ -10,6 +10,7 @@
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import { attributeOutboundEntry, type DelegationHintRoster } from './delegation-hint.js';
+import { isUuid } from '../util/uuid.js';
 
 const MAX_PREVIEW_LENGTH = 300;
 // Metadata carries structured delegation context (e.g. resume_tokens for
@@ -81,6 +82,11 @@ export interface OutboundContextEntry {
    * only by callers that let the service resolve the default.
    */
   ttlSource?: TtlSource;
+  /**
+   * Contact IDs the message was sent to (#2261). A non-principal sender's turn shows only
+   * the entries sent to that sender, so an entry without recipients is never shown to one.
+   */
+  recipientContactIds?: readonly string[];
 }
 
 /**
@@ -105,6 +111,18 @@ export interface OutboundContextRow {
   createdAt: Date;
   expiresAt: Date;
   released: boolean;
+  /** Contact IDs the message was sent to; null for rows written before #2261. */
+  recipientContactIds: string[] | null;
+  /** The latest message a recipient sent while the entry was active (#2261), or null. */
+  lastReply: { at: Date; from: string; preview: string } | null;
+}
+
+/** Who wrote a reply and what it said, as the dispatcher stamps it on entries (#2261). */
+export interface RecordedReply {
+  /** The sender's display name. */
+  from: string;
+  /** The inbound text; truncated to the preview length for storage. */
+  content: string;
 }
 
 /** Result of a bulk clear-by-subject operation (see clearBySubjects). */
@@ -192,6 +210,29 @@ function timeUntil(date: Date): string {
   return `${days}d`;
 }
 
+/** Recipient IDs to store: valid UUIDs, lower-cased and de-duplicated; null when none. */
+function normalizeRecipients(ids: readonly string[] | undefined): string[] | null {
+  if (!ids) return null;
+  const out = [...new Set(ids.filter((id) => typeof id === 'string' && isUuid(id)).map((id) => id.toLowerCase()))];
+  return out.length > 0 ? out : null;
+}
+
+function mapLastReply(row: Record<string, unknown>): OutboundContextRow['lastReply'] {
+  const at = row.last_reply_at;
+  if (!(at instanceof Date)) return null;
+  return {
+    at,
+    from: (row.last_reply_from as string | null) ?? 'a recipient',
+    preview: (row.last_reply_preview as string | null) ?? '',
+  };
+}
+
+/** True when the entry was sent to this contact (#2261). Legacy rows have no recipients. */
+export function isEntryAddressedTo(entry: Pick<OutboundContextRow, 'recipientContactIds'>, contactId: string): boolean {
+  const target = contactId.toLowerCase();
+  return entry.recipientContactIds?.some((id) => id.toLowerCase() === target) ?? false;
+}
+
 function mapRow(row: Record<string, unknown>): OutboundContextRow {
   return {
     id: row.id as string,
@@ -205,6 +246,8 @@ function mapRow(row: Record<string, unknown>): OutboundContextRow {
     createdAt: row.created_at as Date,
     expiresAt: row.expires_at as Date,
     released: row.released as boolean,
+    recipientContactIds: (row.recipient_contact_ids as string[] | null | undefined) ?? null,
+    lastReply: mapLastReply(row),
   };
 }
 
@@ -275,12 +318,13 @@ export class OutboundContextService {
     const ttlSource: TtlSource =
       entry.ttlSource ?? (entry.expiresInHours != null ? 'agent' : 'channel-default');
     const expiresAt = new Date(Date.now() + expiresInHours * 3_600_000);
+    const recipients = normalizeRecipients(entry.recipientContactIds);
 
     const result = await this.pool.query<{ id: string }>(
       `INSERT INTO outbound_context
          (conversation_id, channel_id, agent_id, content_preview,
-          expected_reply, delegation_hint, metadata, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          expected_reply, delegation_hint, metadata, expires_at, recipient_contact_ids)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
       [
         entry.conversationId,
@@ -291,6 +335,7 @@ export class OutboundContextService {
         truncateField(entry.delegationHint, MAX_FIELD_LENGTH),
         serializeMetadata(entry.metadata),
         expiresAt,
+        recipients,
       ],
     );
 
@@ -298,10 +343,63 @@ export class OutboundContextService {
     // Log the resolved window and where it came from — a silently-short TTL was
     // invisible in prod until someone read the row by hand (#1816).
     this.logger.debug(
-      { id, channelId: entry.channelId, agentId: entry.agentId, expiresInHours, ttlSource },
+      { id, channelId: entry.channelId, agentId: entry.agentId, expiresInHours, ttlSource, recipientCount: recipients?.length ?? 0 },
       'Outbound context entry registered',
     );
     return id;
+  }
+
+  /**
+   * Active entries sent to one contact, newest first (#2261). This is the only read a
+   * non-principal sender's turn gets: the block on their turn holds what was sent to them
+   * and nothing sent to anyone else, which keeps the #1848 confidentiality property.
+   */
+  async getActiveForRecipient(contactId: string, limit = 10): Promise<OutboundContextRow[]> {
+    if (!isUuid(contactId)) return [];
+    const result = await this.pool.query(
+      `SELECT * FROM outbound_context
+       WHERE released = false AND expires_at > now()
+         AND $1::uuid = ANY(recipient_contact_ids)
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [contactId, limit],
+    );
+    return result.rows.map(mapRow);
+  }
+
+  /**
+   * Active entries sent on one agent's behalf that a recipient has written back on, newest
+   * reply first (#2261). For that agent's task wakes, which have no inbound to correlate and
+   * no thread to read: without this a wake reports "no reply yet" when one arrived on
+   * another conversation. Scoped to the agent so a wake sees replies to its own messages only.
+   */
+  async getActiveWithReplies(agentId: string, limit = 5): Promise<OutboundContextRow[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM outbound_context
+       WHERE released = false AND expires_at > now() AND last_reply_at IS NOT NULL
+         AND agent_id = $1
+       ORDER BY last_reply_at DESC
+       LIMIT $2`,
+      [agentId, limit],
+    );
+    return result.rows.map(mapRow);
+  }
+
+  /**
+   * Stamp a recipient's message on the entries shown on their turn (#2261). Deterministic
+   * on purpose: whether or not the coordinator acts on the reply, a later principal turn
+   * or task wake can see that the recipient wrote back and what they said. Only the
+   * latest message is kept.
+   */
+  async recordReply(entryIds: readonly string[], reply: RecordedReply): Promise<void> {
+    if (entryIds.length === 0) return;
+    const preview = truncatePreview(reply.content.replace(/\s+/g, ' ').trim());
+    await this.pool.query(
+      `UPDATE outbound_context
+          SET last_reply_at = now(), last_reply_from = $2, last_reply_preview = $3
+        WHERE id = ANY($1::uuid[]) AND released = false`,
+      [entryIds, truncateField(reply.from, MAX_FIELD_LENGTH), preview],
+    );
   }
 
   /**
@@ -478,10 +576,15 @@ export class OutboundContextService {
   /**
    * Format the [ACTIVE OUTBOUND CONTEXT] injection block for the coordinator.
    * Returns null when there are no active entries (caller uses original content).
+   *
+   * `audience` (#2261): `principal` is every active entry, with any recorded reply on it.
+   * `recipient` is a non-principal sender's own entries: the header says so, and the
+   * recorded reply is left out (it is this sender's own earlier message).
    */
   formatInjectionBlock(
     entries: OutboundContextRow[],
     originalContent: string,
+    audience: 'principal' | 'recipient' = 'principal',
   ): string | null {
     if (entries.length === 0) return null;
 
@@ -497,12 +600,19 @@ export class OutboundContextService {
       if (e.expectedReply) lines.push(`expected reply: ${e.expectedReply}`);
       if (e.delegationHint) lines.push(`delegation: ${e.delegationHint}`);
       if (e.metadata) lines.push(`context: ${JSON.stringify(e.metadata)}`);
+      if (audience === 'principal' && e.lastReply) {
+        // Any message from a recipient while the entry is active, related or not: "latest
+        // message back", not "reply", so the coordinator still judges whether it answers.
+        lines.push(`latest message back from ${e.lastReply.from}, ${timeAgo(e.lastReply.at)}: "${e.lastReply.preview}"`);
+      }
       lines.push('---');
       return lines.join('\n');
     });
 
     return [
-      '[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]',
+      audience === 'recipient'
+        ? '[ACTIVE OUTBOUND CONTEXT — messages you sent to this sender that may receive replies]'
+        : '[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]',
       'Each entry_id below is an outbound_context UUID for delegate\'s outbound_entry_id or context-bridge-release only. Do not pass it as email-reply reply_to_message_id — that field needs a Nylas Message ID from the inbound email preamble (Message ID: …).',
       ...blocks,
       '',
@@ -512,6 +622,32 @@ export class OutboundContextService {
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────
+
+/** A recorded reply as a task wake shows it (#2261). Relative times: models misread UTC. */
+export interface RecordedReplyView {
+  entry_id: string;
+  sent: string;
+  message: string;
+  expected_reply?: string;
+  reply_from: string;
+  reply_received: string;
+  reply: string;
+}
+
+/** The task-wake view of entries with a recorded reply; rows without one are skipped. */
+export function recordedReplyViews(rows: readonly OutboundContextRow[]): RecordedReplyView[] {
+  return rows.flatMap((r) => r.lastReply
+    ? [{
+        entry_id: r.id,
+        sent: `${timeAgo(r.createdAt)} via ${r.channelId}`,
+        message: r.contentPreview.replace(/\n/g, ' '),
+        ...(r.expectedReply ? { expected_reply: r.expectedReply } : {}),
+        reply_from: r.lastReply.from,
+        reply_received: timeAgo(r.lastReply.at),
+        reply: r.lastReply.preview,
+      }]
+    : []);
+}
 
 /**
  * Strip the [ACTIVE OUTBOUND CONTEXT] preamble from a stored user message,

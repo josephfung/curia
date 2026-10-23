@@ -385,6 +385,68 @@ describe('EmailReplyHandler', () => {
       });
     });
 
+    it('registers the To and CC recipients that are contacts, so their reply sees the entry (#2261)', async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Got it, thanks' });
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+        from: [{ email: 'alice@example.com' }],
+        to: [],
+        cc: [{ email: 'bob@example.com' }, { email: 'stranger@example.com' }],
+        subject: 'Quick note',
+        body: '',
+        date: 0,
+      });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-1' });
+      const contacts: Record<string, string> = {
+        'alice@example.com': '11111111-1111-4111-8111-111111111111',
+        'bob@example.com': '22222222-2222-4222-8222-222222222222',
+      };
+      const resolveByChannelIdentity = vi.fn(async (_channel: string, address: string) =>
+        contacts[address] ? { contactId: contacts[address] } : null);
+      const mockRegister = vi.fn().mockResolvedValue('entry-1');
+      Object.assign(ctx as unknown as Record<string, unknown>, {
+        agentId: 'coordinator',
+        contactService: { resolveByChannelIdentity },
+        outboundContext: {
+          register: mockRegister,
+          release: vi.fn(),
+          defaultExpiryHours: 6,
+          explicitExpiryHours: 24,
+          defaultExpiryHoursFor: () => 72,
+        },
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(resolveByChannelIdentity).toHaveBeenCalledWith('email', 'alice@example.com');
+      expect(mockRegister).toHaveBeenCalledWith(expect.objectContaining({
+        recipientContactIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
+      }));
+    });
+
+    it('still registers the entry when a recipient lookup throws', async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Got it, thanks' });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-1' });
+      const mockRegister = vi.fn().mockResolvedValue('entry-1');
+      Object.assign(ctx as unknown as Record<string, unknown>, {
+        agentId: 'coordinator',
+        contactService: { resolveByChannelIdentity: vi.fn().mockRejectedValue(new Error('db down')) },
+        outboundContext: {
+          register: mockRegister,
+          release: vi.fn(),
+          defaultExpiryHours: 6,
+          explicitExpiryHours: 24,
+          defaultExpiryHoursFor: () => 72,
+        },
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(mockRegister).toHaveBeenCalledOnce();
+      expect(mockRegister.mock.calls[0]![0]).not.toHaveProperty('recipientContactIds');
+    });
+
     it('logs warning but succeeds when bridge registration fails', async () => {
       const ctx = makeCtx({
         reply_to_message_id: 'nylas-msg-1',

@@ -163,6 +163,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-21T21:22:49.103Z"
     },
+    "contact answers Curia's question": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-23T15:13:58.673Z"
+    },
     "contacts ambiguous name with a wrong role": {
       "unstubbed": 0,
       "runs": 5,

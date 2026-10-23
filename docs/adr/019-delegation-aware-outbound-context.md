@@ -179,13 +179,17 @@ Three approaches were considered:
   both the dispatcher and the voice path (#1598): the block is principal-audience
   content and must not appear on third-party or unknown sender turns (including
   `http`, whose caller-supplied `sender_id` never resolves as principal).
-  **Cost of the gate (accepted until Fix B):** for any entry whose reply comes
-  from a third party, the coordinator never sees the entry, so `delegation_hint`
-  cannot route the reply, `context-bridge-release` / ceo-inbox self-sweep cannot
-  fire for it, and the row clears only via TTL + `cleanupExpired()`. Principal-
-  facing flows (research-analyst clarification, meeting-debrief, ceo-inbox 🚨,
-  task-wake bindings) are unaffected. Recipient-identity correlation (who the
-  outbound was sent *to*) remains open as Fix B of #1848.
+  **Fix B (#2261):** the gate had a cost — a third party's reply arrived without
+  the entry it answered, so `delegation_hint` could not route it and the answer
+  could be dropped (2026-10-21: "Thur Nov 5" from a contact asked to pick a lunch
+  date got `NO_REPLY`). Entries now record the contact IDs they were sent to, and
+  a verified non-principal sender's turn gets a block of only the entries sent to
+  them. Entries sent to anyone else stay withheld, so the #1848 confidentiality
+  property holds; principal turns are unchanged. The dispatcher also stamps the
+  recipient's message on those entries so principal turns and task wakes can see
+  the reply, and tools refuse an entry_id not sent to the outside sender of the
+  turn. Rows written before migration 104 carry no recipients and are never shown
+  to a non-principal.
 - An unrecognised channel id in `contextBridge.channelDefaultExpiryHours` is
   accepted and silently inert — registration uses pseudo-channel ids
   (`internal`, `scheduler`, `bullpen`) that are not in the channel catalog, so

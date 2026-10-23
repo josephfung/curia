@@ -143,6 +143,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`curia-postgres` shutdown** — `docker stop` now lets Postgres finish shutting down instead of killing it midway.
+- **Third-party replies** — Curia sees its question when a contact answers; later turns and task wakes see replies. (#2261)
 - **Empty answers at the output cap** — OpenRouter responses that reasoned to `max_tokens` with no answer are retried. (#1915)
 - **Voice tool audit** — spoken-turn tool calls now record `tool.invoke` and `tool.result`, like text turns. (#1968)
 - **Voice barge-ins** — a stream the caller cancels no longer records an `llm.error` or logs an error. (#1968)

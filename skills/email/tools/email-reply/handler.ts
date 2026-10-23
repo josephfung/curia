@@ -87,6 +87,28 @@ async function resolveCcList(
   return { cc: addresses.join(', ') };
 }
 
+/**
+ * Contact IDs of a reply's To and CC addresses, for the outbound-context entry (#2261).
+ * Best-effort: an address with no contact is skipped, and a lookup failure only means the
+ * entry is not shown when that person replies; the send has already gone out.
+ */
+async function replyRecipientContactIds(
+  ctx: ToolContext,
+  addresses: readonly string[],
+): Promise<string[]> {
+  if (!ctx.contactService) return [];
+  const ids: string[] = [];
+  for (const address of addresses) {
+    try {
+      const contact = await ctx.contactService.resolveByChannelIdentity('email', address);
+      if (contact) ids.push(contact.contactId);
+    } catch (err) {
+      ctx.log.warn({ err }, 'email-reply: recipient contact lookup failed — a reply from them will not see this entry');
+    }
+  }
+  return ids;
+}
+
 export class EmailReplyHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as {
@@ -274,6 +296,8 @@ export class EmailReplyHandler implements ToolHandler {
         agentId: ctx.agentId ?? 'coordinator',
         log: ctx.log,
         boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
+        // Lets the dispatcher show this entry when a To or CC recipient replies (#2261).
+        recipientContactIds: await replyRecipientContactIds(ctx, [originalFrom, ...(ccAddresses ?? [])]),
       });
 
       ctx.log.info(

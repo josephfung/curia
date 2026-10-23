@@ -33,6 +33,8 @@ function makeEntry(overrides: Partial<OutboundContextRow> = {}): OutboundContext
     createdAt: new Date(),
     expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     released: false,
+    recipientContactIds: null,
+    lastReply: null,
     ...overrides,
   };
 }

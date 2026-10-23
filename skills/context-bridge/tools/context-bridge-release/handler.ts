@@ -5,13 +5,16 @@
 // only by its owner or by the delegate that routed the reply (#1972).
 //
 // When `reply` is provided and the entry is a task-wake binding (bind_reply +
-// task_id in metadata), persists the principal answer on the bound task first, then
-// releases — atomically (#1299).
+// task_id in metadata), persists the answer on the bound task first, then
+// releases — atomically (#1299). On a turn a non-principal sender started, only an
+// entry sent to that sender can be touched, and the note names them (#2261).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isTaskWakeReplyBinding, recordTaskWakeReply } from '../../../../src/dispatch/task-wake-reply.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 import { delegationHintOwner, rosterFromRegistry } from '../../../../src/dispatch/delegation-hint.js';
+import { isEntryAddressedTo } from '../../../../src/dispatch/outbound-context.js';
+import { outsiderOriginatorContactId } from '../../../../src/dispatch/outbound-entry-access.js';
 
 /**
  * A non-UUID `entry_id` is a Postgres 22P02 on the uuid column, and the driver
@@ -69,6 +72,14 @@ export class ContextBridgeReleaseHandler implements ToolHandler {
 
     try {
       const entry = await ctx.outboundContext.getEntry(entryId);
+      // A turn someone other than the principal started may close only an entry sent to
+      // that person: the only entries its block shows (#2261). An id from anywhere else is
+      // refused, so a steered turn cannot release, or write a reply onto, another exchange.
+      const outsider = outsiderOriginatorContactId(ctx.taskMetadata);
+      if (outsider !== null && entry && !isEntryAddressedTo(entry, outsider)) {
+        ctx.log.warn({ entryId }, 'context-bridge-release refused — entry was not sent to the contact this turn is for');
+        return { success: false, error: `Entry ${entryId} was not sent to this sender, so it cannot be released from this conversation.` };
+      }
       if (reply.length > 0) {
         if (!entry) {
           return { success: false, error: 'outbound context entry not found or already released' };
@@ -87,6 +98,8 @@ export class ContextBridgeReleaseHandler implements ToolHandler {
             taskRepo: ctx.taskRepo,
             outboundContext: ctx.outboundContext,
             logger: ctx.log,
+            // The dispatcher stamped the sender's name on the entry before this turn ran.
+            ...(outsider !== null ? { repliedBy: entry.lastReply?.from ?? 'the recipient' } : {}),
           });
           if (!result.persisted) {
             return { success: false, error: result.error ?? 'failed to record task-wake reply' };

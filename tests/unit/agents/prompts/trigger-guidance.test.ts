@@ -192,6 +192,7 @@ describe('parseTurnGuidanceKeys', () => {
       'principal-colleague',
       'principal-correspondent',
       'acquaintance-time-request',
+      'recipient-outbound-context',
       'spot-check-reply',
       'outbound-context',
       'outbound-context-task-wake',

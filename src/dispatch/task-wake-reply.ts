@@ -69,6 +69,11 @@ export async function recordTaskWakeReply(options: {
   taskRepo: TaskRepo;
   outboundContext: OutboundContextRelease;
   logger: Logger;
+  /**
+   * Who answered, for the progress note. Omitted for the principal; a recipient's reply
+   * on their own turn names them (#2261), so a later wake does not read it as the principal's.
+   */
+  repliedBy?: string;
 }): Promise<TaskWakeReplyPersistResult> {
   const reply = options.reply.trim();
   if (reply.length === 0) {
@@ -89,7 +94,7 @@ export async function recordTaskWakeReply(options: {
       return { persisted: false, error: `task not found: ${taskId}` };
     }
 
-    const progressNote = `principal replied: ${reply.slice(0, 1500)}`;
+    const progressNote = `${options.repliedBy ?? 'principal'} replied: ${reply.slice(0, 1500)}`;
     const updates: Parameters<TaskRepo['updateTask']>[1] = { progressNote };
 
     if (task.owner === 'ceo') {

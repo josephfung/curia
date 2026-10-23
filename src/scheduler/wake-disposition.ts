@@ -6,6 +6,7 @@
 // disposed the task, and they word the one follow-up turn and the review notice.
 
 import { ceoInboxWakeGuidance } from '../agents/prompts/ceo-inbox-wake-guidance.js';
+import type { RecordedReplyView } from '../dispatch/outbound-context.js';
 
 /** Tag that excludes a task from selectHeartbeatCandidates. */
 export const NEEDS_DISPOSITION_TAG = 'needs-disposition';
@@ -42,10 +43,24 @@ export interface TaskWakeSubject {
 }
 
 /**
+ * Says what `replies_to_messages_you_sent` is. A wake cannot read message threads, so this
+ * list is the only place a reply that arrived on another conversation shows up (#2261):
+ * on 2026-10-22 a wake reported "checked Signal: no reply yet" the morning after one came.
+ */
+export const RECORDED_REPLIES_NOTE =
+  'replies_to_messages_you_sent: the latest message back from each recipient of a message you sent ' +
+  'that is still awaiting a reply. If one answers what this task is waiting on, use it. You cannot read ' +
+  'message threads, so never report a reply as missing when it is listed here.';
+
+/**
  * The `agent.task` body of an ordinary task wake. Scheduler.fireJob sends it, and the
  * scenario harness sends the same body for its task-wake cases.
  */
-export function formatTaskWakeContent(subject: TaskWakeSubject, taskPayload: Record<string, unknown>): string {
+export function formatTaskWakeContent(
+  subject: TaskWakeSubject,
+  taskPayload: Record<string, unknown>,
+  recordedReplies: readonly RecordedReplyView[] = [],
+): string {
   // A ceo-inbox task of a kind it schedules for itself carries that kind's steps (#2025);
   // they used to sit in its always-on prompt.
   const steps = ceoInboxWakeGuidance(subject.agentId, subject.tags);
@@ -55,6 +70,10 @@ export function formatTaskWakeContent(subject: TaskWakeSubject, taskPayload: Rec
     progress: subject.progress ?? {},
     task_payload: taskPayload,
     ...(steps !== undefined && { steps }),
+    ...(recordedReplies.length > 0 && {
+      replies_to_messages_you_sent: recordedReplies,
+      replies_note: RECORDED_REPLIES_NOTE,
+    }),
     instruction: WAKE_DISPOSITION_INSTRUCTION,
   });
 }

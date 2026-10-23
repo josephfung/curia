@@ -13,8 +13,10 @@ import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-li
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
 import {
   OutboundContextService,
+  isEntryAddressedTo,
   type OutboundContextEntry,
   type OutboundContextRow,
+  type RecordedReply,
   type SubjectClearResult,
 } from '../../src/dispatch/outbound-context.js';
 import type { PrincipalBacklogSource } from '../../src/dispatch/principal-backlog.js';
@@ -121,6 +123,29 @@ export function scopedOutboundContext(real: OutboundContextService, currentScope
         scope.errors.push(`outbound-context read failed: ${err instanceof Error ? err.message : String(err)}`);
         throw err;
       }
+    },
+    // #2261: the same recipient match, recorded reply and wake list as production's SQL,
+    // over the run's entries only. Without these the prototype's methods would read the
+    // whole table and show one run's entries to another.
+    getActiveForRecipient: async (contactId: string, limit = 10): Promise<OutboundContextRow[]> => {
+      const scope = currentScope();
+      if (!scope) return [];
+      return (await activeEntries(scope))
+        .filter(e => isEntryAddressedTo(e, contactId))
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit);
+    },
+    recordReply: async (entryIds: readonly string[], reply: RecordedReply): Promise<void> => {
+      const owned = entryIds.filter(id => owning(id));
+      if (owned.length > 0) await real.recordReply(owned, reply);
+    },
+    getActiveWithReplies: async (agentId: string, limit = 5): Promise<OutboundContextRow[]> => {
+      const scope = currentScope();
+      if (!scope) return [];
+      return (await activeEntries(scope))
+        .filter(e => e.lastReply !== null && e.agentId === agentId)
+        .sort((a, b) => b.lastReply!.at.getTime() - a.lastReply!.at.getTime())
+        .slice(0, limit);
     },
     getEntry: async (entryId: string): Promise<OutboundContextRow | null> =>
       owning(entryId) ? real.getEntry(entryId) : null,
@@ -366,6 +391,11 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
       // A relayed clarification (#2027): production's token, where the relay send's
       // context_bridge puts it.
       const resumeToken = entry.resume ? encodeResumeToken(entry.resume) : undefined;
+      const recipientContactIds = (entry.recipients ?? []).map((k) => {
+        const id = seeded.refs.get(`contact:${k}`);
+        if (!id) throw new Error(`seed.outbound_context '${entry.key}': recipient '${k}' is not a seeded contact key`);
+        return id;
+      });
       const id = await outboundContext.register({
         conversationId: `${SCENARIO_ENTRY_ORIGIN}${entry.key}`,
         channelId: entry.channelId,
@@ -375,6 +405,7 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
         delegationHint: entry.delegationHint,
         metadata: resumeToken ? { ...entry.metadata, resume_token: resumeToken } : entry.metadata,
         expiresInHours: entry.expiresInHours ?? 6,
+        ...(recipientContactIds.length > 0 ? { recipientContactIds } : {}),
       });
       if (resumeToken) seeded.refs.set(`resume_token:${entry.key}`, resumeToken);
       seeded.entryIds.push(id);

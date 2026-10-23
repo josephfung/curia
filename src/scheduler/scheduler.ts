@@ -16,7 +16,7 @@ import { makeWakeContext } from '../autonomy/effective-standing.js';
 import type { DriftDetector } from './drift-detector.js';
 import type { DreamEngine } from '../memory/dream-engine.js';
 import type { JobRow } from './scheduler-service.js';
-import type { OutboundContextService } from '../dispatch/outbound-context.js';
+import { recordedReplyViews, type OutboundContextService, type RecordedReplyView } from '../dispatch/outbound-context.js';
 import { classifyError } from '../errors/classify.js';
 import { findTemplateTokens } from '../skills/_shared/placeholder-guard.js';
 import { isUuid } from '../util/uuid.js';
@@ -695,6 +695,20 @@ export class Scheduler {
   }
 
   /**
+   * Replies recipients sent to the agent's still-open outbound messages, for a task wake
+   * (#2261). Best-effort: a failed read means the wake goes without them, not a failed fire.
+   */
+  private async recordedRepliesFor(agentId: string): Promise<RecordedReplyView[]> {
+    if (!this.outboundContextService) return [];
+    try {
+      return recordedReplyViews(await this.outboundContextService.getActiveWithReplies(agentId));
+    } catch (err) {
+      this.logger.error({ err, agentId }, 'Failed to read recorded replies for a task wake — waking without them');
+      return [];
+    }
+  }
+
+  /**
    * Delete expired and released outbound context rows and log the result.
    * Called at startup and then on the daily interval via cleanupHandle.
    *
@@ -1045,6 +1059,7 @@ export class Scheduler {
       content = formatTaskWakeContent(
         { taskId: job.agentTaskId, title: job.taskTitle, progress: job.progress, agentId: job.agentId, tags: job.taskTags },
         job.taskPayload,
+        await this.recordedRepliesFor(job.agentId),
       );
     } else if (job.agentTaskId) {
       // A task-bound job that is not a wake has no disposition contract.

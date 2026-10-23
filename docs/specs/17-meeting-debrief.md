@@ -160,7 +160,8 @@ When the meeting-debrief agent sends a prompt via Signal, the CEO's response arr
 2. Dispatcher routes to coordinator (always — no routing bypass)
 3. Coordinator sees `[ACTIVE OUTBOUND CONTEXT]` block injected by dispatcher
    (principal inbound only — `#1848`; the debrief prompt is CEO-facing, so this
-   step depends on that audience)
+   step depends on that audience. A non-principal sender sees only entries sent to
+   them, #2261, so a debrief prompt never reaches anyone else.)
 4. Coordinator judges relevance — if reply relates to an active entry, delegates to the hinted specialist via the existing `delegate` skill
 5. Specialist processes and returns result; coordinator relays in its own voice
 

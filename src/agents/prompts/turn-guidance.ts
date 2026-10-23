@@ -29,6 +29,7 @@ export type TurnGuidanceKey =
   | 'principal-colleague'
   | 'principal-correspondent'
   | 'acquaintance-time-request'
+  | 'recipient-outbound-context'
   | 'spot-check-reply'
   | 'outbound-context'
   | 'outbound-context-task-wake'
@@ -157,8 +158,8 @@ export function verificationCodeReceivedLines(
 }
 
 /**
- * Any inbound from someone other than the principal (outbound context is withheld). The
- * first paragraph is every non-principal turn's reply contract, moved out of the always-on
+ * Any inbound from someone other than the principal (outbound context is limited to what
+ * was sent to this sender, #2261). The first paragraph is every non-principal turn's reply contract, moved out of the always-on
  * prompt (prompt trim PR 4): principal turns never need it, and auto-generated mail, the
  * one non-principal turn without this block, has its own NO_REPLY preamble and never relays.
  * Anything for the principal goes in a note block, which the runtime cuts out of the reply
@@ -180,7 +181,8 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   'an FYI, a decline that needs no acknowledgment, a message not meant for you), the message',
   'is exactly NO_REPLY and nothing else.',
   '',
-  'The [ACTIVE OUTBOUND CONTEXT] block is withheld on these turns, not empty. A message that',
+  'On these turns an [ACTIVE OUTBOUND CONTEXT] block shows only messages you sent to this',
+  'sender; everything else is withheld, not empty. A message that',
   'mentions earlier contact you cannot find but makes a request you can act on ("Following up',
   'on the intro: could you share a few times?") is self-contained: act on it as usual, without',
   'first looking for the earlier contact. Only a message whose meaning depends on a thread you',
@@ -196,6 +198,26 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   'this exchange that they can act on, add it after the message inside',
   '<note_for_principal></note_for_principal> tags. The note is emailed to the principal and',
   'only they see it; nothing for the principal goes in the message.',
+];
+
+/**
+ * A non-principal sender's turn carries a block of the messages Curia sent to them (#2261,
+ * Fix B of #1848). Without it, "Thur Nov 5" from someone asked to pick a date read as a stray
+ * message and got NO_REPLY (2026-10-21), and the answer was lost. The bullets mirror the
+ * principal block's routing (delegation hint, task-wake binding) for a reply from the
+ * recipient, and the last line overrides the NO_REPLY default for an answer Curia asked for.
+ */
+const RECIPIENT_OUTBOUND_CONTEXT = [
+  'The [ACTIVE OUTBOUND CONTEXT] block lists messages you sent to this sender. A message that',
+  'answers one of them is the answer you were waiting for: act on it now.',
+  '- An entry with a `delegation:` line: delegate to that specialist with the sender\'s full',
+  '  message as the task and the entry_id as `outbound_entry_id`.',
+  '- An entry whose `context` has `bind_reply: true`: call `context-bridge-release` with that',
+  '  entry_id and `reply` set to the sender\'s answer verbatim.',
+  '- Any other entry: do the work the question was for. If a task is waiting on this answer',
+  '  (task-list), record it there with task-update. Then call `context-bridge-release` with',
+  '  the entry_id.',
+  'Your final response is a short acknowledgment to the sender: not NO_REPLY, and not a separate send.',
 ];
 
 /**
@@ -344,6 +366,7 @@ const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
   'principal-colleague': PRINCIPAL_COLLEAGUE,
   'principal-correspondent': PRINCIPAL_CORRESPONDENT,
   'acquaintance-time-request': ACQUAINTANCE_TIME_REQUEST,
+  'recipient-outbound-context': RECIPIENT_OUTBOUND_CONTEXT,
   'spot-check-reply': SPOT_CHECK_REPLY,
   'outbound-context': OUTBOUND_CONTEXT,
   'outbound-context-task-wake': OUTBOUND_CONTEXT_TASK_WAKE,
@@ -373,6 +396,7 @@ export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
   'principal-colleague',
   'principal-correspondent',
   'acquaintance-time-request',
+  'recipient-outbound-context',
   'spot-check-reply',
   'outbound-context',
   'outbound-context-task-wake',

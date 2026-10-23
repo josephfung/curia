@@ -417,6 +417,8 @@ describe('SignalSendHandler', () => {
         metadata: { meeting: 'sync' },
         expiresInHours: 48,
         ttlSource: 'agent',
+        // Who it went to, so a reply from them is shown this entry (#2261).
+        recipientContactIds: [BOB_ID],
       });
     });
 
@@ -446,6 +448,7 @@ describe('SignalSendHandler', () => {
         content: 'Hello',
         expiresInHours: 6,
         ttlSource: 'channel-default',
+        recipientContactIds: [BOB_ID],
       });
     });
 

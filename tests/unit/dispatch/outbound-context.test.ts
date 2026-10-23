@@ -1,6 +1,12 @@
 // tests/unit/dispatch/outbound-context.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OutboundContextService, ScopedOutboundContext } from '../../../src/dispatch/outbound-context.js';
+import {
+  OutboundContextService,
+  ScopedOutboundContext,
+  isEntryAddressedTo,
+  recordedReplyViews,
+  type OutboundContextRow,
+} from '../../../src/dispatch/outbound-context.js';
 import type { DbPool } from '../../../src/db/connection.js';
 import pino from 'pino';
 
@@ -40,10 +46,12 @@ describe('OutboundContextService', () => {
       expect(id).toBe(fakeId);
       const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[0]).toContain('INSERT INTO outbound_context');
-      expect(call[1]).toHaveLength(8);
+      expect(call[1]).toHaveLength(9);
       expect(call[1][0]).toBe('conv-1');
       expect(call[1][1]).toBe('signal');
       expect(call[1][2]).toBe('meeting-debrief');
+      // No recipients given: NULL, so the entry is never shown to a non-principal (#2261).
+      expect(call[1][8]).toBeNull();
     });
 
     it('truncates content_preview to 300 characters', async () => {
@@ -294,6 +302,8 @@ describe('OutboundContextService', () => {
         createdAt: new Date(Date.now() - 5 * 60 * 1000),
         expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
         released: false,
+        recipientContactIds: null,
+        lastReply: null,
       }];
 
       const result = service.formatInjectionBlock(entries, 'Hello from CEO');
@@ -323,6 +333,8 @@ describe('OutboundContextService', () => {
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         released: false,
+        recipientContactIds: null,
+        lastReply: null,
       }];
 
       const result = service.formatInjectionBlock(entries, 'Reply');
@@ -331,6 +343,152 @@ describe('OutboundContextService', () => {
       expect(result).not.toContain('expected reply:');
       expect(result).not.toContain('delegation:');
       expect(result).not.toContain('context:');
+    });
+  });
+
+  // #2261 (Fix B of #1848): entries carry who they were sent to and the latest reply back.
+  describe('recipients and recorded replies (#2261)', () => {
+    const XIAOPU = '1d833dd7-5c5f-4adc-b311-c8347b49a18e';
+    const OTHER = '6e99314b-f9b5-4515-bafb-1a52d45b706b';
+
+    function entry(overrides: Partial<OutboundContextRow> = {}): OutboundContextRow {
+      return {
+        id: 'efc521b3-4ef1-40ca-a34f-63f18629fe21',
+        conversationId: 'signal:+15196161377',
+        channelId: 'signal',
+        agentId: 'coordinator',
+        contentPreview: 'Any of these work for you: Tue Oct 27, Thu Nov 5?',
+        expectedReply: 'which candidate lunch dates Xiaopu can join',
+        delegationHint: null,
+        metadata: null,
+        createdAt: new Date(Date.now() - 30 * 60 * 1000),
+        expiresAt: new Date(Date.now() + 70 * 60 * 60 * 1000),
+        released: false,
+        recipientContactIds: [XIAOPU],
+        lastReply: null,
+        ...overrides,
+      };
+    }
+
+    it('stores recipients lower-cased and de-duplicated, dropping anything that is not a UUID', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [{ id: 'id-1' }] });
+      await service.register({
+        conversationId: 'c', channelId: 'email', agentId: 'coordinator', content: 'Hi',
+        recipientContactIds: [XIAOPU.toUpperCase(), XIAOPU, 'principal', ''],
+      });
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(call[1][8]).toEqual([XIAOPU]);
+    });
+
+    it('stores NULL when no recipient is a UUID', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [{ id: 'id-1' }] });
+      await service.register({ conversationId: 'c', channelId: 'email', agentId: 'a', content: 'Hi', recipientContactIds: ['nope'] });
+      expect((pool.query as ReturnType<typeof vi.fn>).mock.calls[0]![1][8]).toBeNull();
+    });
+
+    it('getActiveForRecipient reads only active entries sent to that contact', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        rows: [{
+          id: 'id-1', conversation_id: 'c', channel_id: 'signal', agent_id: 'coordinator',
+          content_preview: 'Q', expected_reply: null, delegation_hint: null, metadata: null,
+          created_at: new Date(), expires_at: new Date(), released: false,
+          recipient_contact_ids: [XIAOPU], last_reply_at: null, last_reply_from: null, last_reply_preview: null,
+        }],
+      });
+      const rows = await service.getActiveForRecipient(XIAOPU);
+
+      expect(rows[0]!.recipientContactIds).toEqual([XIAOPU]);
+      expect(rows[0]!.lastReply).toBeNull();
+      const [sql, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(sql).toContain('released = false');
+      expect(sql).toContain('expires_at > now()');
+      expect(sql).toContain('= ANY(recipient_contact_ids)');
+      expect(params).toEqual([XIAOPU, 10]);
+    });
+
+    it('getActiveForRecipient returns nothing, without a query, for a non-UUID contact id', async () => {
+      expect(await service.getActiveForRecipient('primary-user')).toEqual([]);
+      expect(pool.query).not.toHaveBeenCalled();
+    });
+
+    it('recordReply stamps the sender and a whitespace-collapsed preview on the given active entries', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 1 });
+      await service.recordReply(['id-1', 'id-2'], { from: 'Xiaopu Fung', content: 'Thur\n\nNov 5' });
+      const [sql, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(sql).toContain('last_reply_at = now()');
+      expect(sql).toContain('released = false');
+      expect(params).toEqual([['id-1', 'id-2'], 'Xiaopu Fung', 'Thur Nov 5']);
+    });
+
+    it('recordReply does nothing for no entries', async () => {
+      await service.recordReply([], { from: 'X', content: 'Y' });
+      expect(pool.query).not.toHaveBeenCalled();
+    });
+
+    it('getActiveWithReplies reads the waking agent\'s active entries that have a reply', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [] });
+      await service.getActiveWithReplies('coordinator');
+      const [sql, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(sql).toContain('last_reply_at IS NOT NULL');
+      expect(sql).toContain('agent_id = $1');
+      expect(params).toEqual(['coordinator', 5]);
+    });
+
+    it('maps the last_reply columns', async () => {
+      const at = new Date();
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        rows: [{
+          id: 'id-1', conversation_id: 'c', channel_id: 'signal', agent_id: 'coordinator',
+          content_preview: 'Q', expected_reply: null, delegation_hint: null, metadata: null,
+          created_at: new Date(), expires_at: new Date(), released: false,
+          recipient_contact_ids: null, last_reply_at: at, last_reply_from: 'Xiaopu Fung', last_reply_preview: 'Thur Nov 5',
+        }],
+      });
+      const [row] = await service.getActiveWithReplies('coordinator');
+      expect(row!.lastReply).toEqual({ at, from: 'Xiaopu Fung', preview: 'Thur Nov 5' });
+    });
+
+    it('a recipient block says it holds only messages sent to this sender and leaves out recorded replies', () => {
+      const block = service.formatInjectionBlock(
+        [entry({ lastReply: { at: new Date(), from: 'Xiaopu Fung', preview: 'earlier message' } })],
+        'Thur Nov 5',
+        'recipient',
+      )!;
+      expect(block.startsWith('[ACTIVE OUTBOUND CONTEXT — messages you sent to this sender that may receive replies]')).toBe(true);
+      expect(block).toContain('expected reply: which candidate lunch dates Xiaopu can join');
+      expect(block).not.toContain('latest message back');
+      expect(block.endsWith('Thur Nov 5')).toBe(true);
+    });
+
+    it('a principal block shows the recorded reply on its entry', () => {
+      const block = service.formatInjectionBlock(
+        [entry({ lastReply: { at: new Date(Date.now() - 3 * 3_600_000), from: 'Xiaopu Fung', preview: 'Thur Nov 5' } })],
+        'Any luck with Xiaopu?',
+      )!;
+      expect(block).toContain('[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]');
+      expect(block).toContain('latest message back from Xiaopu Fung, 3 hours ago: "Thur Nov 5"');
+    });
+
+    it('isEntryAddressedTo matches recipients case-insensitively and never matches a legacy row', () => {
+      expect(isEntryAddressedTo(entry(), XIAOPU.toUpperCase())).toBe(true);
+      expect(isEntryAddressedTo(entry(), OTHER)).toBe(false);
+      expect(isEntryAddressedTo(entry({ recipientContactIds: null }), XIAOPU)).toBe(false);
+    });
+
+    it('recordedReplyViews lists only entries with a reply, in relative time', () => {
+      const views = recordedReplyViews([
+        entry({ lastReply: { at: new Date(Date.now() - 2 * 3_600_000), from: 'Xiaopu Fung', preview: 'Thur Nov 5' } }),
+        entry({ id: 'no-reply' }),
+      ]);
+      expect(views).toEqual([{
+        entry_id: 'efc521b3-4ef1-40ca-a34f-63f18629fe21',
+        sent: '30 minutes ago via signal',
+        message: 'Any of these work for you: Tue Oct 27, Thu Nov 5?',
+        expected_reply: 'which candidate lunch dates Xiaopu can join',
+        reply_from: 'Xiaopu Fung',
+        reply_received: '2 hours ago',
+        reply: 'Thur Nov 5',
+      }]);
     });
   });
 });
@@ -613,6 +771,21 @@ describe('ScopedOutboundContext', () => {
         content: 'Dana proposes Wednesday instead. Accept?',
         delegationHint: 'ceo-inbox',
       });
+    });
+
+    it('keeps the recipients through attribution (#2261)', async () => {
+      const service = new OutboundContextService(makePool(), logger);
+      const registerSpy = vi.spyOn(service, 'register').mockResolvedValue('new-id');
+
+      const scoped = new ScopedOutboundContext(service, 'thread-1', { roster, relayRequester: 'ceo-inbox', log: logger });
+      await scoped.register({
+        channelId: 'signal',
+        agentId: 'coordinator',
+        content: 'Dana proposes Wednesday instead. Accept?',
+        recipientContactIds: ['1d833dd7-5c5f-4adc-b311-c8347b49a18e'],
+      });
+
+      expect(registerSpy.mock.calls[0]![0].recipientContactIds).toEqual(['1d833dd7-5c5f-4adc-b311-c8347b49a18e']);
     });
 
     it('drops an unroutable hint on a non-relayed send', async () => {

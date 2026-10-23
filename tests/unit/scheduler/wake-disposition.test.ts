@@ -230,6 +230,67 @@ describe('Scheduler task-wake disposition (#1951)', () => {
     expect(content.instruction).toContain('does not close the task');
   });
 
+  // #2261: a wake cannot read message threads. On 2026-10-22 one reported "checked Signal:
+  // no reply yet" the morning after the answer came, so replies recorded on the waking
+  // agent's open messages travel in the wake body.
+  describe('recorded replies (#2261)', () => {
+    const reply = {
+      id: 'efc521b3-4ef1-40ca-a34f-63f18629fe21', conversationId: 'signal:+15196161377', channelId: 'signal',
+      agentId: 'meeting-debrief', contentPreview: 'Any of these work for you: Thu Nov 5?',
+      expectedReply: 'which lunch dates Xiaopu can join', delegationHint: null, metadata: null,
+      createdAt: new Date(Date.now() - 20 * 3_600_000), expiresAt: new Date(Date.now() + 3_600_000), released: false,
+      recipientContactIds: ['1d833dd7-5c5f-4adc-b311-c8347b49a18e'],
+      lastReply: { at: new Date(Date.now() - 16 * 3_600_000), from: 'Xiaopu Fung', preview: 'Thur Nov 5' },
+    };
+
+    function schedulerWith(outboundContextService: Record<string, unknown>): Scheduler {
+      scheduler.stop();
+      scheduler = new Scheduler({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        pool: pool as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        bus: bus as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        logger: logger as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        schedulerService: schedulerService as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        taskRepo: taskRepo as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        outboundContextService: outboundContextService as any,
+        ownsAgent: () => true,
+      });
+      return scheduler;
+    }
+
+    it('lists replies to the waking agent\'s own open messages', async () => {
+      const getActiveWithReplies = vi.fn().mockResolvedValue([reply]);
+      schedulerWith({ getActiveWithReplies });
+      const content = JSON.parse((await fire()).payload.content) as Record<string, unknown>;
+
+      expect(getActiveWithReplies).toHaveBeenCalledWith('meeting-debrief');
+      expect(content['replies_to_messages_you_sent']).toEqual([expect.objectContaining({
+        entry_id: reply.id, reply_from: 'Xiaopu Fung', reply: 'Thur Nov 5', reply_received: '16 hours ago',
+      })]);
+      expect(content['replies_note']).toContain('never report a reply as missing');
+    });
+
+    it('adds nothing when no reply is recorded', async () => {
+      schedulerWith({ getActiveWithReplies: vi.fn().mockResolvedValue([]) });
+      const content = JSON.parse((await fire()).payload.content) as Record<string, unknown>;
+      expect(content).not.toHaveProperty('replies_to_messages_you_sent');
+      expect(content).not.toHaveProperty('replies_note');
+    });
+
+    it('still wakes the task when the read fails', async () => {
+      schedulerWith({ getActiveWithReplies: vi.fn().mockRejectedValue(new Error('db down')) });
+      const content = JSON.parse((await fire()).payload.content) as Record<string, unknown>;
+      expect(content['task_id']).toBe('task-abc');
+      expect(content).not.toHaveProperty('replies_to_messages_you_sent');
+      expect(logger.error).toHaveBeenCalled();
+    });
+  });
+
   it('sends the body formatTaskWakeContent builds, which the scenario harness reuses', async () => {
     const task = await fire();
     expect(task.payload.content).toBe(formatTaskWakeContent(
