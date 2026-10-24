@@ -400,6 +400,61 @@ describe('VoiceTurnRunner', () => {
   });
 });
 
+describe('VoiceTurnRunner barge-in during a tool call (#2265)', () => {
+  it('unwinds a tool that never resolves within 100ms and discards the late result', async () => {
+    const lateResult = 'LATE_SECRET_RESULT_should_not_leak';
+    let releaseTool: (result: { content: string }) => void = () => {};
+    const gate = new Promise<{ content: string }>((resolve) => {
+      releaseTool = resolve;
+    });
+    const controller = new AbortController();
+    const info = vi.fn();
+    const spyLogger = {
+      debug: vi.fn(),
+      info,
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      child: () => spyLogger,
+    } as unknown as Logger;
+    const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
+    const provider = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [toolCall], usage, provenance }],
+      [{ type: 'message_end', content: 'should not run', usage, provenance }],
+    ]);
+    const runner = new VoiceTurnRunner({
+      provider,
+      model: 'fake',
+      logger: spyLogger,
+      invokeTool: () => {
+        queueMicrotask(() => controller.abort());
+        return gate;
+      },
+      onSpeechText: async () => {},
+    });
+
+    const outcome = await Promise.race([
+      runner.runTurn({ messages: [{ role: 'user', content: 'look it up' }], signal: controller.signal })
+        .then((result) => ({ kind: 'done' as const, result })),
+      new Promise<{ kind: 'timeout' }>((resolve) => {
+        setTimeout(() => resolve({ kind: 'timeout' }), 100);
+      }),
+    ]);
+    expect(outcome.kind).toBe('done');
+    if (outcome.kind !== 'done') return;
+    expect(outcome.result.aborted).toBe(true);
+    expect(provider.streamCalls).toBe(1);
+
+    releaseTool({ content: lateResult });
+    await vi.waitFor(() => {
+      const discarded = info.mock.calls.filter((call) => call[1] === 'voice tool result discarded after barge-in');
+      expect(discarded).toHaveLength(1);
+      expect(discarded[0]![0]).toMatchObject({ tool: 'lookup', toolCallId: 'call_1' });
+    });
+    expect(provider.streamCalls).toBe(1);
+  });
+});
+
 describe('VoiceTurnRunner reasoning (ADR-048 §3)', () => {
   // Pinned to the literal value, not the constant: on Haiku 5.5 anything but
   // `none` lets the model think before speaking (ADR-038 2026-10-22 addendum, #2245).

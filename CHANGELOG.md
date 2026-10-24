@@ -145,6 +145,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`async-offramp`** — returns after the task is durably queued, without waiting on the coordinator. (#2265)
+- **Voice tool barge-in** — a stalled tool call no longer holds the turn; its late result is discarded. (#2265)
 - **Email reply-all** — keeps every original To recipient on To; replies to Curia's own messages reach their recipients. (#2273)
 - **Your Contact Details** — lists Signal and SMS numbers separately, so Curia stops giving Signal as its texting number.
 - **`curia-postgres` shutdown** — `docker stop` now lets Postgres finish shutting down instead of killing it midway.

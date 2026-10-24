@@ -327,13 +327,17 @@ function briefContainsResolvedDate(brief: string, iso: string): boolean {
 
 function makeSpikeOfframpBus() {
   const published: BusEvent[] = [];
+  const publish = async (_layer: string, event: BusEvent) => {
+    published.push(event);
+  };
   const bus = {
     subscribe() {
       /* unused in spike */
     },
-    async publish(_layer: string, event: BusEvent) {
-      published.push(event);
-    },
+    publish,
+    // The handler returns once the write-ahead would have committed (#2265).
+    // This spike bus has no subscribers, so both paths just record the event.
+    publishDetached: publish,
   } as unknown as EventBus;
   return { bus, published };
 }

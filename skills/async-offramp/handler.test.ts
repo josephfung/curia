@@ -1,23 +1,25 @@
 // handler.test.ts — async-offramp skill (#1614 / ADR-038 gate #3).
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import pino from 'pino';
 import { AsyncOfframpHandler, resetAsyncOfframpDedupForTests } from './handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
-import type { EventBus } from '../../src/bus/bus.js';
+import { EventBus } from '../../src/bus/bus.js';
 import type { AgentTaskEvent, BusEvent } from '../../src/bus/events.js';
 
 function makeBus(opts: { failPublish?: boolean } = {}) {
   const published: BusEvent[] = [];
+  const publish = async (_layer: string, event: BusEvent) => {
+    if (opts.failPublish) {
+      throw new Error('bus unavailable');
+    }
+    published.push(event);
+  };
   const bus = {
     subscribe() {
       /* unused */
     },
-    async publish(_layer: string, event: BusEvent) {
-      if (opts.failPublish) {
-        throw new Error('bus unavailable');
-      }
-      published.push(event);
-    },
+    publish,
+    publishDetached: publish,
   } as unknown as EventBus;
   return { bus, published };
 }
@@ -186,6 +188,69 @@ describe('AsyncOfframpHandler', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/voice-only/i);
     expect(published).toHaveLength(0);
+  });
+
+  it('resolves while a slow agent.task subscriber is still running (#2265)', async () => {
+    let releaseSubscriber = (): void => {};
+    const subscriberRunning = new Promise<void>((resolve) => {
+      releaseSubscriber = resolve;
+    });
+    const writeAhead = vi.fn(async (_event: BusEvent) => {});
+    const bus = new EventBus(pino({ level: 'silent' }), writeAhead);
+    let subscriberEntered = false;
+    bus.subscribe('agent.task', 'agent', async () => {
+      subscriberEntered = true;
+      await subscriberRunning;
+    });
+
+    try {
+      let settled = false;
+      const pending = handler.execute(makeCtx(bus, {
+        brief: 'Draft the competitive research deck',
+        follow_up_channel: 'email',
+      })).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await vi.waitFor(() => {
+        expect(settled).toBe(true);
+        expect(subscriberEntered).toBe(true);
+      });
+
+      const result = await pending;
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const data = result.data as Record<string, unknown>;
+      expect(data).toMatchObject({ accepted: true, deduplicated: false });
+      const published = writeAhead.mock.calls[0]![0];
+      expect(data['task_event_id']).toBe(published.id);
+      expect(published.type).toBe('agent.task');
+    } finally {
+      releaseSubscriber();
+    }
+  });
+
+  it('returns success false and clears the dedup claim when audit write-ahead fails (#2265)', async () => {
+    const bus = new EventBus(pino({ level: 'silent' }), async () => {
+      throw new Error('audit insert failed');
+    });
+    const subscriber = vi.fn(async () => {});
+    bus.subscribe('agent.task', 'agent', subscriber);
+
+    const input = { brief: 'Heavy research ask', follow_up_channel: 'email' };
+    const result = await handler.execute(makeCtx(bus, input));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/failed to hand off/i);
+    expect(subscriber).not.toHaveBeenCalled();
+
+    const { bus: recovered, published } = makeBus();
+    const retry = await handler.execute(makeCtx(recovered, input));
+    expect(retry.success).toBe(true);
+    if (retry.success) {
+      expect((retry.data as Record<string, unknown>)['deduplicated']).toBe(false);
+    }
+    expect(published).toHaveLength(1);
   });
 
   it('returns honest failure when enqueue publish fails (no false confirm)', async () => {
