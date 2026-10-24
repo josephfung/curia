@@ -76,9 +76,11 @@ interface StorageBackend {
  * while production uses Postgres.
  *
  * When a `SummarizationConfig` is provided, the Postgres backend automatically
- * summarizes old turns once the active count exceeds `threshold`. Summarized turns
- * are marked `archived = true` in the DB (retained for audit) and replaced in active
- * context by a condensed synthetic system turn. See spec §01-memory-system.md.
+ * summarizes old turns once the active count exceeds `threshold`. A voice write
+ * returns after the insert and runs that pass in the background; other channels
+ * wait for it. Passes for one conversation and agent are serialized. Summarized
+ * turns are marked `archived = true` in the DB (retained for audit) and replaced
+ * in active context by a condensed synthetic system turn. See spec §01-memory-system.md.
  */
 export class WorkingMemory {
   private backend: StorageBackend;
@@ -269,6 +271,15 @@ export const CONTACT_RECENT_HISTORY_SQL = `SELECT role, content, conversation_id
  * every write. Archived rows stay in the DB but are excluded from `get()` results.
  */
 class PostgresBackend implements StorageBackend {
+  /**
+   * Tail of the summarization chain for one conversation and agent.
+   * The next pass starts only after the previous one settles, so two voice
+   * turns that both cross the threshold cannot archive at the same time (#2266).
+   * The kept-row check in the archive transaction is the backstop for a writer
+   * outside this process.
+   */
+  private summarizationTail = new Map<string, Promise<void>>();
+
   constructor(
     private pool: DbPool,
     private logger: Logger,
@@ -349,15 +360,18 @@ class PostgresBackend implements StorageBackend {
     }
 
     // After writing, check whether we've crossed the summarization threshold.
-    // Summarization is best-effort — a failure must not abort the agent turn since
-    // the turn has already been persisted. Catch here (not inside maybeSummarize)
-    // so errors propagate cleanly out of the private method and the non-fatal
-    // decision is explicit and visible at the call site.
+    // Summarization is best-effort: the turn row is already stored.
+    // Voice returns here and runs the pass in the background — awaiting the
+    // condensation call is 4–5s of silence before the spoken reply (#2266).
+    // Other channels still wait. A failure of an inline pass is logged and
+    // swallowed here so the caller is not failed for a condensation error;
+    // a background failure is logged at warn on the chain instead.
     // DB retries for the post-LLM persistence half live inside maybeSummarize —
     // wrapping the whole call would re-bill the summarization LLM on a DB blip.
     if (this.summarization) {
+      const background = attribution.channelId === 'voice';
       try {
-        await this.maybeSummarize(conversationId, agentId, this.summarization);
+        await this.scheduleSummarization(conversationId, agentId, background);
       } catch (err) {
         this.logger.error(
           { err, conversationId, agentId },
@@ -365,6 +379,56 @@ class PostgresBackend implements StorageBackend {
         );
       }
     }
+  }
+
+  /**
+   * Queue a summarization pass behind any in-flight pass for this conversation
+   * and agent. Voice callers get a resolved promise immediately; the pass
+   * continues on the chain. Other callers wait until this pass settles.
+   */
+  private scheduleSummarization(
+    conversationId: string,
+    agentId: string,
+    background: boolean,
+  ): Promise<void> {
+    const config = this.summarization;
+    if (!config) return Promise.resolve();
+
+    const key = `${conversationId}\0${agentId}`;
+    const previous = this.summarizationTail.get(key) ?? Promise.resolve();
+    const run = previous
+      .then(() => undefined, () => undefined)
+      .then(() => this.maybeSummarize(conversationId, agentId, config));
+
+    // The tail always fulfills, so a failed pass does not reject the next one
+    // and does not surface as an unhandled rejection when nobody awaits `run`.
+    const tail = run.then(
+      () => undefined,
+      (err: unknown) => {
+        if (!background) return;
+        this.logger.warn(
+          { err, conversationId, agentId },
+          'working_memory: background summarization failed — turn written, context window will grow until next successful pass',
+        );
+      },
+    );
+    this.summarizationTail.set(key, tail);
+    // `finally` returns a new promise. If `tail` rejects (the warn call threw)
+    // that promise rejects too, and voiding it would be an unhandledRejection
+    // (#983). Cleanup failure is logged and swallowed: nothing is awaiting this.
+    void tail.finally(() => {
+      if (this.summarizationTail.get(key) === tail) {
+        this.summarizationTail.delete(key);
+      }
+    }).catch((err: unknown) => {
+      this.logger.error(
+        { err, conversationId, agentId },
+        'working_memory: detached summarization chain rejected',
+      );
+    });
+
+    if (background) return Promise.resolve();
+    return run;
   }
 
   async getPersonTurns(conversationId: string, agentId: string): Promise<string[]> {
@@ -542,8 +606,10 @@ class PostgresBackend implements StorageBackend {
    * If so, archive the oldest (count - keepWindow) turns and replace them with
    * a condensed synthetic system turn at the head of the kept window.
    *
-   * Failures are logged but do NOT propagate — a failed summarization is preferable
-   * to aborting the agent turn. The next add() will retry automatically.
+   * Failures propagate to {@link scheduleSummarization}. An inline caller logs
+   * them and continues; a voice caller has already returned, and the chain logs
+   * them at warn. The next add() retries. A failed pass is preferable to
+   * failing the turn: the row is already stored.
    */
   private async maybeSummarize(
     conversationId: string,

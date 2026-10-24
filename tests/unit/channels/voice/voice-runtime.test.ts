@@ -13,6 +13,7 @@ import {
   LLM_FAILURE_USER_MESSAGE,
 } from '../../../../src/memory/llm-failure-turn.js';
 import { WorkingMemory } from '../../../../src/memory/working-memory.js';
+import type { DbPool } from '../../../../src/db/connection.js';
 import { CONTACT_RECENT_HISTORY_HEADER } from '../../../../src/memory/contact-recent-history.js';
 import {
   VoiceRuntime,
@@ -802,6 +803,84 @@ describe('VoiceRuntime brain/context parity (#1551)', () => {
       { role: 'user', content: 'still with me' },
       { role: 'assistant', content: 'Yes, still here.' },
     ]);
+  });
+
+  it('starts the spoken reply without waiting for a hanging summarizer (#2266)', async () => {
+    let releaseSummarizer: (response: LLMResponse) => void = () => {};
+    let summarizerResolved = false;
+    const summarizerHung = new Promise<LLMResponse>(resolve => {
+      releaseSummarizer = resolve;
+    });
+    const summarizer: LLMProvider = {
+      id: 'summarizer',
+      chat: vi.fn(() => summarizerHung.then(response => {
+        summarizerResolved = true;
+        return response;
+      })),
+    };
+
+    const queryHandler = (sql: string): { rows: unknown[] } => {
+      const normalized = sql.replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT COUNT(*)')) return { rows: [{ count: '21' }] };
+      if (normalized.startsWith('SELECT id, role, content, created_at')) {
+        return {
+          rows: [{
+            id: '00000000-0000-0000-0000-000000000001',
+            role: 'user',
+            content: 'earlier turn',
+            created_at: new Date('2026-01-01T12:00:00Z'),
+          }],
+        };
+      }
+      if (normalized.startsWith('SELECT created_at')) {
+        return { rows: [{ created_at: new Date('2026-01-01T12:00:10Z') }] };
+      }
+      return { rows: [] };
+    };
+    const pool = {
+      query: vi.fn().mockImplementation((sql: string) => Promise.resolve(queryHandler(sql))),
+      connect: vi.fn().mockImplementation(() => Promise.resolve({
+        query: vi.fn().mockImplementation((sql: string) => Promise.resolve(queryHandler(sql))),
+        release: vi.fn(),
+      })),
+    } as unknown as DbPool;
+    const memoryLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const wm = WorkingMemory.createWithPostgres(
+      pool,
+      memoryLogger as never,
+      { threshold: 20, keepWindow: 10, provider: summarizer, model: 'claude-3-5-haiku-20241022' },
+    );
+
+    const llm = new FakeStreamProvider([reply('On my way.')]);
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory: wm,
+    });
+
+    try {
+      await start(runtime, 'sum1');
+      stt.emit({ text: 'what is next', isFinal: true, speechFinal: true });
+
+      const idle = runtime.awaitIdle('sum1');
+      const outcome = await Promise.race([
+        idle.then(() => 'reply' as const),
+        delay(2_000).then(() => 'blocked' as const),
+      ]);
+      expect(outcome).toBe('reply');
+      expect(transport.publishedFrames.length).toBeGreaterThan(0);
+      expect(llm.seenMessages.length).toBeGreaterThan(0);
+      await vi.waitFor(() => expect(summarizer.chat).toHaveBeenCalled());
+      expect(summarizerResolved).toBe(false);
+    } finally {
+      releaseSummarizer({ type: 'text', content: 'summary of earlier turns', usage, provenance });
+      await vi.waitFor(() => {
+        const completes = memoryLogger.info.mock.calls.filter(
+          call => call[1] === 'working_memory: summarization complete',
+        );
+        expect(completes.length).toBeGreaterThan(0);
+      });
+    }
   });
 
   it('survives a throwing roster provider and an invalid timezone (slimmer prompt, turn completes)', async () => {
