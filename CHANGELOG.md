@@ -145,6 +145,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Voice summarization** — runs in the background, so crossing the threshold no longer delays the reply. (#2266)
 - **Email reply-all** — keeps every original To recipient on To; replies to Curia's own messages reach their recipients. (#2273)
 - **Your Contact Details** — lists Signal and SMS numbers separately, so Curia stops giving Signal as its texting number.
 - **`curia-postgres` shutdown** — `docker stop` now lets Postgres finish shutting down instead of killing it midway.
