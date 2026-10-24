@@ -220,7 +220,12 @@ export class AsyncOfframpHandler implements ToolHandler {
     try {
       // Publish as 'dispatch' — only dispatch/system may publish agent.task
       // (permissions.ts). Infrastructure skills are trusted to impersonate.
-      await ctx.bus.publish('dispatch', taskEvent);
+      // publishDetached returns once the audit write-ahead commits. The
+      // coordinator subscriber keeps running after this tool returns, so a
+      // long async task cannot hold the spoken turn until the 15s skill
+      // timeout (#2265). A write-ahead failure still rejects and the catch
+      // below clears the dedup claim.
+      await ctx.bus.publishDetached('dispatch', taskEvent);
     } catch (err) {
       enqueuedByKey.delete(idempotencyKey);
       const message = err instanceof Error ? err.message : String(err);

@@ -224,4 +224,58 @@ describe('EventBus', () => {
     expect(handler).toHaveBeenCalledWith(event);
     expect(onDelivered).toHaveBeenCalledWith(event.id);
   });
+
+  it('publishDetached resolves after the write-ahead while a subscriber is still running (#2265)', async () => {
+    let releaseSubscriber = (): void => {};
+    const subscriberRunning = new Promise<void>((resolve) => {
+      releaseSubscriber = resolve;
+    });
+    const onEvent = vi.fn(async () => {});
+    const onDelivered = vi.fn(async () => {});
+    bus = new EventBus(createLogger('error'), onEvent, onDelivered);
+    let subscriberEntered = false;
+    bus.subscribe('inbound.message', 'dispatch', async () => {
+      subscriberEntered = true;
+      await subscriberRunning;
+    });
+
+    const event = createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+    });
+
+    try {
+      await bus.publishDetached('channel', event);
+      expect(onEvent).toHaveBeenCalledWith(event);
+      expect(subscriberEntered).toBe(true);
+      expect(onDelivered).not.toHaveBeenCalled();
+    } finally {
+      releaseSubscriber();
+    }
+
+    await vi.waitFor(() => {
+      expect(onDelivered).toHaveBeenCalledWith(event.id);
+    });
+  });
+
+  it('publishDetached rejects a failing write-ahead before subscribers run (#2265)', async () => {
+    const onEvent = vi.fn(async () => {
+      throw new Error('audit insert failed');
+    });
+    const handler = vi.fn();
+    bus = new EventBus(createLogger('error'), onEvent);
+    bus.subscribe('inbound.message', 'dispatch', handler);
+
+    const event = createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+    });
+
+    await expect(bus.publishDetached('channel', event)).rejects.toThrow(/audit insert failed/);
+    expect(handler).not.toHaveBeenCalled();
+  });
 });

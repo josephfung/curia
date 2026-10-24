@@ -82,6 +82,36 @@ export class EventBus {
   }
 
   async publish(layer: Layer, event: BusEvent): Promise<void> {
+    await this.writeAhead(layer, event);
+    await this.deliver(event);
+  }
+
+  /**
+   * Persist the event, then hand subscriber delivery to the background.
+   * Resolves once the write-ahead hook has succeeded (or immediately when no
+   * hook is set). Authorization failures and a throwing write-ahead reject
+   * before any subscriber runs, same as {@link publish}.
+   *
+   * Subscriber and acknowledgement errors are logged on the detached chain.
+   * They do not reject this call. `publish()` still waits for every subscriber
+   * — voice `async-offramp` uses this so a spoken turn is not held for the
+   * coordinator's whole task (#2265).
+   */
+  async publishDetached(layer: Layer, event: BusEvent): Promise<void> {
+    await this.writeAhead(layer, event);
+    void this.deliver(event).catch((err: unknown) => {
+      this.logger.error(
+        { err, eventType: event.type, eventId: event.id },
+        'Detached subscriber delivery failed',
+      );
+    });
+  }
+
+  /**
+   * Permission check plus the audit write-ahead. Throws before any subscriber
+   * runs. A write-ahead failure must not look like a delivered event.
+   */
+  private async writeAhead(layer: Layer, event: BusEvent): Promise<void> {
     // Enforce publish permissions — the layer claiming ownership of an event type
     // must match the allowlist so rogue components can't inject arbitrary events.
     if (!canPublish(layer, event.type)) {
@@ -120,11 +150,14 @@ export class EventBus {
     if (this.onEvent) {
       await this.onEvent(event);
     }
+  }
 
-    // Deliver to subscribers sequentially — awaited so the full chain completes
-    // before publish() resolves, which makes test assertions straightforward.
-    // Subscriber errors are caught and logged individually so one bad subscriber
-    // cannot block delivery to subsequent subscribers.
+  /**
+   * Deliver to subscribers sequentially. Subscriber errors are caught and
+   * logged individually so one bad subscriber cannot block the rest.
+   * `publish()` awaits this; `publishDetached()` does not.
+   */
+  private async deliver(event: BusEvent): Promise<void> {
     const handlers = this.subscribers.get(event.type) ?? [];
     for (const handler of handlers) {
       try {

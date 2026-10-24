@@ -3,8 +3,10 @@
 // Thin voice wrapper over the streaming turn primitive
 // (src/agents/llm/streaming-turn.ts, #1552 / #1563). This file owns only voice UX:
 // sentence-chunk TTS, filler speech, barge-in AbortSignal semantics, and the
-// audible exhaustion fallback. Tool-loop / message assembly / round-cap /
-// stream+abort live in the shared primitive.
+// audible exhaustion fallback. A tool call is raced against the turn signal so
+// barge-in unwinds without waiting for the tool; a late result is logged and
+// dropped (#2265). Tool-loop / message assembly / round-cap / stream+abort live
+// in the shared primitive.
 //
 // Text AgentRuntime.handleTask also delegates here via a chat-compatible
 // openStream adapter over chatWithRetry (ADR-038) — do not fold voice into
@@ -25,6 +27,7 @@ import {
   StreamUnsupportedError,
   assertStreamingProvider,
   runStreamingToolLoop,
+  type StreamingTurnInvokeTool,
 } from '../../agents/llm/streaming-turn.js';
 import { NO_REASONING } from '../../agents/llm/sampling-options.js';
 import { SentenceChunker } from './sentence-chunker.js';
@@ -40,6 +43,71 @@ const EXHAUSTION_FALLBACK = 'Sorry, I could not finish that — please try again
 /** Placeholder when voice has no invokeTool bridge (should not happen in production). */
 const MISSING_INVOKE_TOOL_RESULT = 'Tool execution is not wired for voice turns yet.';
 
+/** Fed back only when the turn is already aborting, so the model never sees it. */
+const ABORTED_TOOL_RESULT = 'Tool execution cancelled (turn aborted).';
+
+/**
+ * Start the tool, but resolve as soon as the turn aborts. The call keeps
+ * running; its eventual result is logged and dropped so it cannot reach the
+ * model or the transcript (#2265).
+ */
+function invokeToolUntilAbort(
+  invoke: StreamingTurnInvokeTool,
+  call: ToolCall,
+  ctx: { messages: Message[] } | undefined,
+  signal: AbortSignal,
+  log: Logger,
+): Promise<{ content: string; is_error?: boolean }> {
+  const pending = invoke(call, ctx);
+  const cancelled = { content: ABORTED_TOOL_RESULT, is_error: true };
+
+  const discardLateResult = (): void => {
+    pending.then(
+      () => {
+        log.info(
+          { tool: call.name, toolCallId: call.id },
+          'voice tool result discarded after barge-in',
+        );
+      },
+      (err: unknown) => {
+        log.warn(
+          { err, tool: call.name, toolCallId: call.id },
+          'voice tool failed after barge-in; result discarded',
+        );
+      },
+    );
+  };
+
+  // Abort can land inside invoke() before the listener below is attached.
+  if (signal.aborted) {
+    discardLateResult();
+    return Promise.resolve(cancelled);
+  }
+
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      signal.removeEventListener('abort', onAbort);
+      discardLateResult();
+      resolve(cancelled);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    pending.then(
+      (result) => {
+        // abort() sets the flag before listeners run, so this is the
+        // already-handled path: onAbort resolved and will log the result.
+        if (signal.aborted) return;
+        signal.removeEventListener('abort', onAbort);
+        resolve(result);
+      },
+      (err: unknown) => {
+        if (signal.aborted) return;
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 export interface VoiceTurnRunnerConfig {
   /** LLM provider — must implement stream(). */
   provider: LLMProvider;
@@ -47,8 +115,13 @@ export interface VoiceTurnRunnerConfig {
   logger: Logger;
   /** Optional tools available for this turn. */
   tools?: ToolDefinition[];
-  /** Invoke a tool and return result text; used when the stream yields tool_use. */
-  invokeTool?: (call: ToolCall) => Promise<{ content: string; is_error?: boolean }>;
+  /**
+   * Invoke a tool and return result text; used when the stream yields tool_use.
+   * The second argument is the mutable working transcript (text path splices
+   * skill-activate blocks there). Voice forwards it and races the call against
+   * the turn's abort signal.
+   */
+  invokeTool?: StreamingTurnInvokeTool;
   /**
    * Max tool-use rounds. Defaults to DEFAULT_STREAMING_MAX_ROUNDS (8).
    * Intentionally not the coordinator's text-path maxTurns — see streaming-turn.ts.
@@ -120,7 +193,9 @@ export class VoiceTurnRunner {
       tools: this.config.tools,
       maxRounds: this.maxRounds,
       signal,
-      invokeTool: this.config.invokeTool,
+      invokeTool: this.config.invokeTool
+        ? (call, ctx) => invokeToolUntilAbort(this.config.invokeTool!, call, ctx, signal, this.log)
+        : undefined,
       missingInvokeToolResult: MISSING_INVOKE_TOOL_RESULT,
       // Time to first token is the budget; voice never reasons (ADR-048 §3).
       requestOptions: { reasoning: NO_REASONING },

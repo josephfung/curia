@@ -3,7 +3,7 @@ import { EventBus } from '../../../../src/bus/bus.js';
 import type { BusEvent } from '../../../../src/bus/events.js';
 import type { OutboundContextRow } from '../../../../src/dispatch/outbound-context.js';
 import { OutboundContextService } from '../../../../src/dispatch/outbound-context.js';
-import { createSilentLogger } from '../../../../src/logger.js';
+import { createSilentLogger, type Logger } from '../../../../src/logger.js';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, Message } from '../../../../src/agents/llm/provider.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../../../src/agents/prompts/date-resolve-guardrail.js';
 import { VOICE_ASYNC_OFFRAMP_GUIDANCE } from '../../../../src/agents/prompts/voice-async-offramp.js';
@@ -80,6 +80,8 @@ class FakeStreamProvider implements LLMProvider {
   readonly id = 'fake-stream';
   /** Messages passed to each stream() call, for context-assembly assertions. */
   readonly seenMessages: Message[][] = [];
+  /** Date.now() at the start of each stream() call. */
+  readonly streamStartedAt: number[] = [];
   constructor(
     private readonly scripts: LLMStreamEvent[][],
     private readonly delayMs = 0,
@@ -89,6 +91,7 @@ class FakeStreamProvider implements LLMProvider {
     return { type: 'text', content: '', usage, provenance };
   }
   async *stream(params: { messages?: Message[]; options?: Record<string, unknown> }): AsyncIterable<LLMStreamEvent> {
+    this.streamStartedAt.push(Date.now());
     this.seenMessages.push(params.messages ?? []);
     const script = this.scripts[this.call] ?? [];
     this.call += 1;
@@ -202,6 +205,7 @@ function makeRuntime(overrides: {
   /** End-of-speech hold (#2240). Defaults to 0 here so a final starts its turn at once. */
   turnHoldMs?: number;
   maxUtteranceBytes?: number;
+  logger?: Logger;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];
@@ -217,7 +221,7 @@ function makeRuntime(overrides: {
   const store = overrides.store ?? fakeStore().store;
   const runtime = new VoiceRuntime({
     bus,
-    logger,
+    logger: overrides.logger ?? logger,
     sessionStore: store,
     stt,
     tts,
@@ -594,6 +598,95 @@ describe('VoiceRuntime', () => {
     await runtime.awaitIdle('s4');
 
     expect(invokeTool).toHaveBeenCalledOnce();
+  });
+
+  it('barge-in during a hung tool unwinds within 100ms and drops the late result (#2265)', async () => {
+    const lateResult = 'LATE_SECRET_RESULT_should_not_leak';
+    let releaseTool: (result: { content: string }) => void = () => {};
+    const gate = new Promise<{ content: string }>((resolve) => {
+      releaseTool = resolve;
+    });
+    let toolSettled = false;
+    const invokeTool = vi.fn(() => gate.then((result) => {
+      toolSettled = true;
+      return result;
+    }));
+    const info = vi.fn();
+    const spyLogger = {
+      debug: vi.fn(),
+      info,
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      trace: vi.fn(),
+      child: () => spyLogger,
+    } as unknown as Logger;
+    const llm = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [{ id: 'c1', name: 'lookup', input: {} }], usage, provenance }],
+      replyScript('Moving on.'),
+    ]);
+    const wm = WorkingMemory.createInMemory();
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      invokeTool,
+      workingMemory: wm,
+      logger: spyLogger,
+    });
+
+    await runtime.startSession({
+      sessionId: 'tool-barge',
+      conversationId: 'voice:tool-barge',
+      roomName: 'voice-tool-barge',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: 'look this up', isFinal: true, speechFinal: true });
+    await vi.waitFor(() => {
+      expect(invokeTool).toHaveBeenCalledOnce();
+    });
+
+    const bargeAt = Date.now();
+    stt.emit({ text: 'never mind the lookup', isFinal: true, speechFinal: true, confidence: 0.95 });
+    await vi.waitFor(() => {
+      const followUp = llm.seenMessages.findIndex((msgs) =>
+        msgs.some((m) => m.content === 'never mind the lookup'),
+      );
+      expect(followUp).toBeGreaterThan(0);
+    });
+    const followUp = llm.seenMessages.findIndex((msgs) =>
+      msgs.some((m) => m.content === 'never mind the lookup'),
+    );
+    expect(llm.streamStartedAt[followUp]! - bargeAt).toBeLessThan(100);
+    expect(toolSettled).toBe(false);
+
+    const idle = await Promise.race([
+      runtime.awaitIdle('tool-barge').then(() => 'idle' as const),
+      delay(1_000).then(() => 'still-waiting' as const),
+    ]);
+    expect(idle).toBe('idle');
+    expect(toolSettled).toBe(false);
+    const streamsBeforeLateResult = llm.streamStartedAt.length;
+    expect(JSON.stringify(llm.seenMessages)).toContain('never mind the lookup');
+
+    releaseTool({ content: lateResult });
+    await vi.waitFor(() => {
+      const discarded = info.mock.calls.filter((call) => call[1] === 'voice tool result discarded after barge-in');
+      expect(discarded).toHaveLength(1);
+      expect(discarded[0]![0]).toMatchObject({ tool: 'lookup', toolCallId: 'c1' });
+    });
+    expect(toolSettled).toBe(true);
+    expect(llm.streamStartedAt).toHaveLength(streamsBeforeLateResult);
+
+    const flat = JSON.stringify(llm.seenMessages);
+    expect(flat).not.toContain(lateResult);
+    expect(flat).not.toContain('Tool execution cancelled');
+    const stored = await wm.getHistory('voice:tool-barge', 'coordinator', { raw: true });
+    const storedFlat = JSON.stringify(stored);
+    expect(storedFlat).not.toContain(lateResult);
+    expect(storedFlat).not.toContain('Tool execution cancelled');
   });
 
   it("hands the tool bridge the turn's inbound.message id, the parent of its tool audit (#1968)", async () => {

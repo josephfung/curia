@@ -80,6 +80,8 @@ Bullpen flow: Agent publishes `agent.discuss` → target agent (subscribed to `a
 
 **Write-ahead audit logging.** The audit logger writes events to Postgres *before* delivering to other subscribers. If the process crashes after audit write but before subscriber delivery, the event is logged but unprocessed — on restart, the system can replay unacknowledged events from the audit log. This gives at-least-once delivery for all events and exactly-once audit recording.
 
+**Subscriber wait.** `publish()` resolves after every subscriber has been attempted. `publishDetached()` resolves once the write-ahead hook has succeeded and delivers subscribers in the background; a write-ahead failure rejects either call before any subscriber runs. Voice `async-offramp` uses the detached form so a spoken turn is not held for the coordinator's whole task (#2265).
+
 For launch, the replay mechanism is manual (operator can query unprocessed events). Automatic replay on startup is a future enhancement.
 
 ### Event Type Registry
