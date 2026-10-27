@@ -117,6 +117,55 @@ describe('loadScenarioCase', () => {
     });
   });
 
+  it('loads a mid-turn follow-up on a channel inbound (#2018)', () => {
+    const body = VALID.replace(
+      PRINCIPAL_INBOUND,
+      'from: principal\n  channel: signal\n  content: "Text me the code"\n  followup:\n    after: first_tool_call\n    from: principal\n    content: "Use email instead"',
+    );
+    const c = loadScenarioCase(write('f.yaml', body));
+    expect(c.inbound.followup).toEqual({
+      after: 'first_tool_call',
+      from: 'principal',
+      content: 'Use email instead',
+    });
+  });
+
+  it('loads a delayed follow-up from a seeded contact, including its channel (#2018)', () => {
+    const body = VALID.replace(
+      PRINCIPAL_INBOUND,
+      'from: principal\n  content: "Yes"\n  followup:\n    after: { ms: 1500 }\n    from: sam\n    channel: email\n    content: "Thursday works"',
+    );
+    const c = loadScenarioCase(write('d.yaml', body));
+    expect(c.inbound.followup).toEqual({
+      after: { ms: 1500 },
+      from: 'sam',
+      channel: 'email',
+      content: 'Thursday works',
+    });
+  });
+
+  it.each([
+    ['a follow-up whose after is not a trigger', 'after: later\n    from: principal\n    content: "wait"', /first_tool_call or \{ ms: N \}/],
+    ['a follow-up delay of zero', 'after: { ms: 0 }\n    from: principal\n    content: "wait"', /integer from 1 to/],
+    ['a fractional follow-up delay', 'after: { ms: 1.5 }\n    from: principal\n    content: "wait"', /integer from 1 to/],
+    ['a follow-up delay past two minutes', 'after: { ms: 120001 }\n    from: principal\n    content: "wait"', /integer from 1 to/],
+    ['a follow-up from bullpen', 'after: first_tool_call\n    from: bullpen\n    content: "wait"', /principal or a seeded contact/],
+    ['a follow-up from an unseeded contact', 'after: first_tool_call\n    from: dana\n    content: "wait"', /not principal or a seeded contact/],
+    ['a follow-up channel that is not the contact\'s', 'after: { ms: 10 }\n    from: sam\n    channel: signal\n    content: "wait"', /differs from contact 'sam'/],
+    ['a follow-up with an unknown key', 'after: first_tool_call\n    from: principal\n    content: "wait"\n    when: soon', /unknown key\(s\) when/],
+  ])('rejects %s (#2018)', (_label, follow, error) => {
+    const body = VALID.replace(PRINCIPAL_INBOUND, `from: principal\n  content: "Yes"\n  followup:\n    ${follow}`);
+    expect(() => loadScenarioCase(write('bad-follow.yaml', body))).toThrow(error);
+  });
+
+  it('rejects a follow-up on a task wake (#2018)', () => {
+    const body = VALID.replace(
+      PRINCIPAL_INBOUND,
+      `from: task-wake\n  task: ${WAKE_TASK}\n  followup:\n    after: first_tool_call\n    from: principal\n    content: "wait"`,
+    );
+    expect(() => loadScenarioCase(write('wake-follow.yaml', body))).toThrow(/only for a channel inbound/);
+  });
+
   it.each([
     ['a placeholder for an unseeded entry', VALID.replace('{{entry:offsite}}', '{{entry:missing}}'), /names no seeded entry/],
     ['an unknown placeholder kind', VALID.replace('{{entry:offsite}}', '{{job:x}}'), /unknown placeholder/],

@@ -27,7 +27,7 @@
 // captures that specialist's turn the way it captures the coordinator's. A `bullpen` or
 // `scheduler` inbound reaches it the way a thread reply or its own schedule does.
 import { randomUUID } from 'node:crypto';
-import { createAgentDiscuss, createAgentTask, createInboundMessage } from '../../src/bus/events.js';
+import { createAgentDiscuss, createAgentTask, createInboundMessage, type InjectionDrainPoint } from '../../src/bus/events.js';
 import { stampOriginator } from '../../src/contacts/stamp-originator.js';
 import {
   buildInboundEmailIdentifierBlock,
@@ -73,6 +73,7 @@ import {
   type TurnOutcome,
 } from '../shared/turn-capture.js';
 import { internalNamesFor } from './assertions.js';
+import { publishFollowupOnTextFinish, turnStartDrainError, type TextFinishSlot } from './followup-exit.js';
 import { createDelegationCapture, inRunOrder, type DelegationCapture, type DelegationTrace } from './delegation-capture.js';
 import { discoverableTools } from './discovery.js';
 import { applyReach } from './reach.js';
@@ -106,6 +107,12 @@ import { COORDINATOR, type CapturedToolCall, type ScenarioCase, type ScenarioRun
  * turn around it. The delegate wait must time out first, so its result is what gets scored.
  */
 const DELEGATION_RUN_MARGIN_MS = 120_000;
+/**
+ * How long the first tool stays held while a follow-up is published (#2018).
+ * Injection queues in well under this. Past it, the tool returns anyway, so a
+ * run with the flag off still finishes instead of waiting out the case timeout.
+ */
+const FOLLOWUP_QUEUE_WAIT_MS = 5_000;
 
 /** Prefix of the application_name every suite process sets on its connections. */
 export const SCENARIO_APPLICATION_PREFIX = 'curia-scenarios';
@@ -131,6 +138,97 @@ export function parseTimeout(raw: string | undefined): number {
 
 /** How long shutdown waits for turns that outlived their run's timeout. */
 const LATE_TURN_GRACE_MS = 60_000;
+
+/** A declared follow-up that never started publishing. The run must not be scored as one turn. */
+export const FOLLOWUP_UNPUBLISHED_ERROR = 'inbound.followup was never published: the turn ended first';
+
+/** Publish started, and the dispatcher did not queue the message into the live turn. */
+export const FOLLOWUP_NOT_QUEUED_ERROR = 'follow-up was not queued into the live turn';
+
+/**
+ * Keep an error the turn already recorded (a timeout, a refused queue). Otherwise
+ * fail a follow-up case whose second message never started.
+ */
+export function unpublishedFollowupError(
+  hasFollowup: boolean,
+  published: boolean,
+  existingError: string | undefined,
+): string | undefined {
+  if (!hasFollowup || published) return existingError;
+  return existingError ?? FOLLOWUP_UNPUBLISHED_ERROR;
+}
+
+/**
+ * A publish that started still has to join the host. `undefined` means the
+ * decision has not arrived: that is a miss, not a pass. An error already on
+ * the turn stays.
+ */
+export function unjoinedFollowupError(
+  hasFollowup: boolean,
+  published: boolean,
+  joinedHost: boolean | undefined,
+  existingError: string | undefined,
+): string | undefined {
+  if (existingError !== undefined) return existingError;
+  if (!hasFollowup || !published || joinedHost === true) return undefined;
+  return FOLLOWUP_NOT_QUEUED_ERROR;
+}
+
+/**
+ * Wait for an in-flight landing before either check. `published` and
+ * `joinedHost` are read after it settles, so a decision still in flight is
+ * not scored as a miss or a pass.
+ */
+export async function followupScoreError(input: {
+  hasFollowup: boolean;
+  published: () => boolean;
+  landing: Promise<void> | undefined;
+  joinedHost: () => boolean | undefined;
+  existingError: string | undefined;
+}): Promise<string | undefined> {
+  if (input.landing !== undefined) {
+    try {
+      await input.landing;
+    } catch (err) {
+      if (input.existingError !== undefined) return input.existingError;
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+  const unpublished = unpublishedFollowupError(input.hasFollowup, input.published(), input.existingError);
+  if (unpublished !== undefined) return unpublished;
+  return unjoinedFollowupError(
+    input.hasFollowup,
+    input.published(),
+    input.joinedHost(),
+    input.existingError,
+  );
+}
+
+/**
+ * A queued follow-up's publish settles when the host drains it, while that turn
+ * is still running. Only a publish that did not join the host is its own turn,
+ * and only that one owns cleanup.
+ */
+export function followupCleansAfterSettle(joinedHost: boolean | undefined): boolean {
+  return joinedHost !== true;
+}
+
+/**
+ * Stay pending until `delivery` settles, then clean up unless the follow-up
+ * joined the host. Callers put the returned promise in the shutdown wait
+ * immediately, so a separate turn is not still writing when the pool closes.
+ */
+export function observeFollowupDelivery(
+  delivery: Promise<void>,
+  joinedHost: () => boolean | undefined,
+  cleanup: () => Promise<void>,
+): Promise<void> {
+  const finish = async (): Promise<void> => {
+    if (!followupCleansAfterSettle(joinedHost())) return;
+    await cleanup();
+  };
+  return delivery.then(finish, finish);
+}
 
 /**
  * After a run ends and is cancelled, how long to wait for its leftover work to wind down
@@ -335,10 +433,13 @@ export async function createScenarioHarness(
   // Production's Dispatcher, given an outbound-context service so it injects the
   // block — narrowed to the run's own entries — the run's own backlog counts, and the
   // run's own verifications, so a principal's relayed code is tracked as in production.
+  // A missing scan is not a clean scan: the stack's scanner is the one production
+  // builds, and a bad extra pattern fails the stack rather than weakening it (#2018).
   new Dispatcher({
     bus,
     logger,
     contactResolver: stack.contactResolver,
+    injectionScanner: stack.injectionScanner,
     // Production's trust scoring (#2227): the coordinator sees the sender's trust score,
     // and a message counts toward the sender's confidence, as in production.
     channelPolicies: stack.trustScoring.channelPolicies,
@@ -347,6 +448,7 @@ export async function createScenarioHarness(
     outboundContextService: scopedOutbound,
     principalBacklog: scopedPrincipalBacklog(currentScope),
     verification: stack.verification,
+    turnLanes: stack.turnLanes,
     selfEmail: SCENARIO_CURIA_EMAIL,
     // Production's check against the run's own seed: the principal's email identities as
     // the stack read them, and a mailbox whose Sent folder is the run's principal_wrote
@@ -364,6 +466,28 @@ export async function createScenarioHarness(
       contacts: stack.contactService,
     },
   }).register();
+  // A follow-up's tryInject has decided. The harness waits for that before it
+  // lets a held tool return, and does not await the follow-up's publish (that
+  // publish resolves only when the follow-up is drained, inside the host turn).
+  // The boolean is whether the decision was `queued`.
+  const injectionQueued = new Map<string, (queued: boolean) => void>();
+  const tryInject = stack.turnLanes.tryInject.bind(stack.turnLanes);
+  stack.turnLanes.tryInject = (conversationId, input) => {
+    const decision = tryInject(conversationId, input);
+    const wake = injectionQueued.get(conversationId);
+    if (wake) {
+      injectionQueued.delete(conversationId);
+      wake(decision.kind === 'queued');
+    }
+    return decision;
+  };
+  const waitForInjection = (conversationId: string): Promise<boolean> => new Promise((resolve) => {
+    injectionQueued.set(conversationId, resolve);
+  });
+  // A text llm.call is awaited before the runtime's exit hook. The follow-up
+  // for a reply with no tool call is published from that subscriber, so the
+  // queue is full when closeIfIdle runs and the correction drains at exit.
+  const exitSlots = new Map<string, TextFinishSlot>();
   // Bullpen mentions reach the coordinator the way they do in production.
   new BullpenDispatcher(bus, logger, stack.bullpenService, stack.agentRegistry).register();
 
@@ -372,6 +496,28 @@ export async function createScenarioHarness(
   // Every model call billed to the run it was made in (#1980).
   const unattributed = new UsageLedger();
   meterAgentCalls(bus, context.current, unattributed);
+  // After the meter, so a text finish is billed even though this handler holds
+  // the llm.call delivery until the follow-up is queued. A throw here would be
+  // swallowed by the runtime's telemetry catch, and the exit hook would then
+  // see an empty queue, so the failure is recorded on the run instead.
+  bus.subscribe('llm.call', 'system', (event) =>
+    publishFollowupOnTextFinish(event, exitSlots, (conversationId, err) => {
+      capture.fail(conversationId, err);
+    }));
+  // Drain points live on the run result. A turn_start drain means the
+  // correction joined before the model had chosen, so the run fails here
+  // instead of depending on log level to notice it (#2018).
+  const injectionDrains = new Map<string, InjectionDrainPoint[]>();
+  bus.subscribe('agent.task.input_injected', 'system', (event) => {
+    if (event.type !== 'agent.task.input_injected') return;
+    const points = injectionDrains.get(event.payload.conversationId);
+    if (!points) return;
+    points.push(event.payload.drainPoint);
+    const message = turnStartDrainError(event.payload.drainPoint);
+    if (message !== undefined) {
+      capture.fail(event.payload.conversationId, new Error(message));
+    }
+  });
   const coordinator = stack.agent(COORDINATOR);
   const coordinatorTools = new Set(coordinator.toolDefs.map(t => t.name));
   // Production's own activation check, per skill: what skill-activate would hand the
@@ -429,6 +575,29 @@ export async function createScenarioHarness(
       .catch((err: unknown) => {
         logger.error({ err, conversationId }, 'scenario harness: late conversation cleanup failed');
         process.stderr.write(`  [WARN] late cleanup failed for ${conversationId}: ${err instanceof Error ? err.message : String(err)}\n`);
+      })
+      .finally(() => { lateTurns.delete(settled); });
+    lateTurns.set(settled, context.current());
+  }
+
+  /**
+   * A follow-up publish joins `lateTurns` as soon as it starts. Cleanup runs
+   * only when `joinedHost` is not true at settlement: a queued follow-up
+   * resolves inside the live host turn, and that host delivery owns cleanup.
+   */
+  function trackFollowupDelivery(
+    delivery: Promise<void>,
+    conversationId: string,
+    joinedHost: () => boolean | undefined,
+  ): void {
+    const settled: Promise<void> = observeFollowupDelivery(
+      delivery,
+      joinedHost,
+      () => cleanupConversation(stack.pool, conversationId),
+    )
+      .catch((err: unknown) => {
+        logger.error({ err, conversationId }, 'scenario harness: follow-up conversation cleanup failed');
+        process.stderr.write(`  [WARN] follow-up cleanup failed for ${conversationId}: ${err instanceof Error ? err.message : String(err)}\n`);
       })
       .finally(() => { lateTurns.delete(settled); });
     lateTurns.set(settled, context.current());
@@ -527,6 +696,29 @@ export async function createScenarioHarness(
     // a failed seed becomes this run's error instead of aborting the suite.
     let seeded: SeededRun | undefined;
     let conversationId: string | undefined;
+    // Follow-up drain points for this attempt. The map entry is removed on
+    // disarm; this array is what the run result keeps.
+    let injectionDrainPoints: InjectionDrainPoint[] | undefined;
+    // A follow-up lives only for this attempt. Cleanup disarms it so a late
+    // timer cannot publish after the run, and releases a held first tool so
+    // the turn can finish (#2018).
+    let releaseFirstCall: (() => void) | undefined;
+    let followupArmed = true;
+    let followupTimer: ReturnType<typeof setTimeout> | undefined;
+    const disarmFollowup = (): void => {
+      followupArmed = false;
+      if (followupTimer !== undefined) {
+        clearTimeout(followupTimer);
+        followupTimer = undefined;
+      }
+      releaseFirstCall?.();
+      releaseFirstCall = undefined;
+      if (conversationId !== undefined) {
+        injectionQueued.delete(conversationId);
+        exitSlots.delete(conversationId);
+        injectionDrains.delete(conversationId);
+      }
+    };
     let stubbedCalls: StubbedCall[] = [];
     let trace: DelegationTrace | undefined;
     let inboundContent = '';
@@ -580,14 +772,31 @@ export async function createScenarioHarness(
       conversationId = runConversationId;
 
       controller.beginRun(stubTable, runConversationId, { realDelegation });
+      // Armed before the inbound is published. A fast first tool call must
+      // already be held, or the follow-up lands after the model has moved on.
+      if (inbound.followup?.after === 'first_tool_call') {
+        let release: () => void = () => {};
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        controller.holdFirstCall(runConversationId, held);
+        releaseFirstCall = release;
+      }
       openRuns.set(runConversationId, state);
       delegations.begin(runConversationId);
       let outcome: TurnOutcome;
       // Specialists still working when the run's own wait ran out (#2027).
       let stillWorking: string[] = [];
       try {
+        // Capture matches events by conversation id, so a second live turn is
+        // not a second reply: it is mixed in or dropped. A follow-up that was
+        // not queued must fail the run before any of that is scored (#2018).
+        if (inbound.followup && stack.turnLanes.enabled !== true) {
+          throw new Error(
+            'inbound.followup requires dispatch.turnInjection.enabled; the flag is off',
+          );
+        }
         const waiter = capture.waitFor(runConversationId, timeoutMs, agent);
         let delivery: Promise<void>;
+        let hostInboundId: string | undefined;
         if (thread) {
           // Posted by the thread's creator (or the case's author), mentioning the case's
           // agent — the event a bullpen reply produces. BullpenDispatcher turns it into
@@ -634,7 +843,7 @@ export async function createScenarioHarness(
             parentEventId: randomUUID(),
           }));
         } else if (sender !== 'bullpen' && 'channelId' in sender) {
-          delivery = bus.publish('channel', createInboundMessage({
+          const hostInbound = createInboundMessage({
             conversationId: runConversationId,
             channelId: sender.channelId,
             senderId: sender.senderId,
@@ -644,17 +853,137 @@ export async function createScenarioHarness(
             // A scenario inbound is a one-to-one message, and the adapters say so (#2261).
             ...(sender.channelId === 'signal' ? { metadata: { isGroup: false } } : {}),
             ...(sender.channelId === 'slack' ? { metadata: { isDm: true } } : {}),
-          }));
+          });
+          hostInboundId = hostInbound.id;
+          delivery = bus.publish('channel', hostInbound);
         } else {
           throw new Error('unreachable: bullpen sender without a thread');
         }
         // A publish that fails outright (no handler, a throwing subscriber) must end the
         // run now, not after the timeout.
         delivery.catch((err: unknown) => capture.fail(runConversationId, err));
+        // Not awaited. Awaiting the host publish waits for the whole turn, and
+        // the follow-up has to be in flight before that turn ends (#2018).
+        // True once publishFollowup gets past its armed check and calls publish.
+        let followupPublished = false;
+        // Set from tryInject's decision. Undefined until then: a publish that
+        // settles without it did not join the host turn.
+        let joinedHost: boolean | undefined;
+        // The landing already in flight. Scoring awaits this before disarm, so
+        // a decision still inside the dispatcher's contact and scan work is
+        // not dropped. Absent until that landing starts: a timer that has not
+        // fired must not be waited into a finished turn.
+        let followupLanding: Promise<void> | undefined;
+        if (inbound.followup && typeof sender === 'object' && 'channelId' in sender) {
+          // A follow-up is only valid from a channel sender, and that branch
+          // always sets the id. Publishing without it would skip the wait.
+          if (hostInboundId === undefined) {
+            throw new Error('channel follow-up has no host inbound id');
+          }
+          const follow = inbound.followup;
+          injectionDrainPoints = [];
+          injectionDrains.set(runConversationId, injectionDrainPoints);
+          const publishFollowup = async (): Promise<void> => {
+            if (!followupArmed) return;
+            const followSender = await resolveSender({
+              ...scenario,
+              inbound: {
+                ...scenario.inbound,
+                from: follow.from,
+                channel: follow.channel ?? scenario.inbound.channel,
+              },
+            }, stack);
+            if (typeof followSender !== 'object' || !('channelId' in followSender)) {
+              throw new Error(`followup from '${follow.from}' is not a channel sender`);
+            }
+            if (!followupArmed) return;
+            followupPublished = true;
+            const followDelivery = bus.publish('channel', createInboundMessage({
+              conversationId: runConversationId,
+              channelId: followSender.channelId,
+              senderId: followSender.senderId,
+              content: follow.content,
+              ...(followSender.channelId === 'signal' ? { metadata: { isGroup: false } } : {}),
+              ...(followSender.channelId === 'slack' ? { metadata: { isDm: true } } : {}),
+            }));
+            // In lateTurns now, so shutdown waits if this becomes its own turn.
+            // A queued follow-up settles on drain, inside the host turn; cleanup
+            // stays with the host delivery. Not awaited: this promise resolves
+            // only when the follow-up is drained or its own turn ends.
+            trackFollowupDelivery(followDelivery, runConversationId, () => joinedHost);
+            followDelivery.catch((err: unknown) => capture.fail(runConversationId, err));
+          };
+          const followupLanded = async (): Promise<void> => {
+            if (!followupArmed) return;
+            const queued = waitForInjection(runConversationId);
+            void queued.then((wasQueued) => { joinedHost = wasQueued; });
+            void publishFollowup().catch((err: unknown) => capture.fail(runConversationId, err));
+            const injected = await Promise.race([
+              queued,
+              new Promise<boolean>((resolve) => {
+                const timer = setTimeout(() => resolve(false), FOLLOWUP_QUEUE_WAIT_MS);
+                timer.unref();
+              }),
+            ]);
+            if (!injected && followupArmed) {
+              capture.fail(runConversationId, new Error(FOLLOWUP_NOT_QUEUED_ERROR));
+            }
+          };
+          if (follow.after === 'first_tool_call') {
+            // The model has to have chosen before the correction arrives.
+            // whenFirstCall is that moment for a tool round: the call stays
+            // held until the follow-up is queued, and the next round drains
+            // it. A text reply never records a tool call. Its llm.call is
+            // awaited before the exit hook, and the subscriber publishes
+            // there, so closeIfIdle sees the queue and the drain is `exit`
+            // rather than `turn_start`. A `turn_start` drain fails the run.
+            let claimed = false;
+            const claim = (): boolean => {
+              if (claimed || !followupArmed) return false;
+              claimed = true;
+              return true;
+            };
+            const publish = async (): Promise<void> => {
+              const landing = followupLanded();
+              followupLanding = landing;
+              await landing;
+              releaseFirstCall?.();
+            };
+            exitSlots.set(runConversationId, { agentId: agent, claim, publish });
+            void (async () => {
+              await controller.whenFirstCall(runConversationId);
+              if (!claim()) return;
+              await publish();
+            })().catch((err: unknown) => capture.fail(runConversationId, err));
+          } else {
+            followupTimer = setTimeout(() => {
+              followupTimer = undefined;
+              const landing = followupLanded();
+              followupLanding = landing;
+              void landing.catch((err: unknown) => capture.fail(runConversationId, err));
+            }, follow.after.ms);
+            followupTimer.unref();
+          }
+        }
         trackDelivery(delivery, runConversationId);
         outcome = await waiter;
+        // Before disarm drops the injection waiter. Publish returns before
+        // tryInject, so the host can finish while the decision is in flight.
+        const followupError = await followupScoreError({
+          hasFollowup: inbound.followup !== undefined,
+          published: () => followupPublished,
+          landing: followupLanding,
+          joinedHost: () => joinedHost,
+          existingError: outcome.error,
+        });
+        if (followupError !== undefined && outcome.error === undefined) {
+          outcome = { ...outcome, error: followupError };
+        }
         if (outcome.errorKind === 'timeout') stillWorking = controller.pendingDelegations(runConversationId);
       } finally {
+        // Before endRun resolves a waiting first-call, so the publisher sees
+        // the follow-up is no longer armed.
+        disarmFollowup();
         stubbedCalls = controller.endRun(runConversationId);
         trace = delegations.end(runConversationId);
         openRuns.delete(runConversationId);
@@ -697,6 +1026,7 @@ export async function createScenarioHarness(
         unstubbedCalls: countHoles(merged),
         ...(error ? { error } : {}),
         ...(timeoutKind ? { timeoutKind } : {}),
+        ...(injectionDrainPoints !== undefined ? { injectionDrainPoints: [...injectionDrainPoints] } : {}),
         ...(realDelegation ? { delegations: trace?.delegations ?? [] } : {}),
         usage: state.usage.snapshot(),
         providerRetries: [],
@@ -712,10 +1042,12 @@ export async function createScenarioHarness(
         durationMs: Date.now() - started,
         unstubbedCalls: stubbedCalls.filter(c => c.disposition === 'refused' || c.disposition === 'canned').length,
         error: describeError(err),
+        ...(injectionDrainPoints !== undefined ? { injectionDrainPoints: [...injectionDrainPoints] } : {}),
         usage: state.usage.snapshot(),
         providerRetries: [],
       };
     } finally {
+      disarmFollowup();
       if (seeded) {
         // Recorded on the run, not thrown: a throw here would replace the run's result
         // and abort the suite, losing every paid run before it. gateFailures reports it.

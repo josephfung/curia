@@ -227,6 +227,35 @@ export function resolveLateDeliveryConfig(yaml: YamlConfig['delegate']): LateDel
 }
 
 // ---------------------------------------------------------------------------
+// Turn lanes + mid-turn injection (#2018, ADR-053)
+// ---------------------------------------------------------------------------
+
+export interface TurnInjectionConfig {
+  enabled: boolean;
+  maxInjectionsPerTurn: number;
+  extraRoundsPerInjection: number;
+  laneWaitTimeoutMs: number;
+}
+
+const DEFAULT_TURN_INJECTION_CONFIG: TurnInjectionConfig = {
+  enabled: false,
+  maxInjectionsPerTurn: 5,
+  extraRoundsPerInjection: 2,
+  laneWaitTimeoutMs: 1_200_000,
+};
+
+/** Resolve the optional dispatch.turnInjection block. Missing fields keep the defaults. */
+export function resolveTurnInjectionConfig(yaml: YamlConfig['dispatch']): TurnInjectionConfig {
+  const t = yaml?.turnInjection;
+  return {
+    enabled: t?.enabled ?? DEFAULT_TURN_INJECTION_CONFIG.enabled,
+    maxInjectionsPerTurn: t?.maxInjectionsPerTurn ?? DEFAULT_TURN_INJECTION_CONFIG.maxInjectionsPerTurn,
+    extraRoundsPerInjection: t?.extraRoundsPerInjection ?? DEFAULT_TURN_INJECTION_CONFIG.extraRoundsPerInjection,
+    laneWaitTimeoutMs: t?.laneWaitTimeoutMs ?? DEFAULT_TURN_INJECTION_CONFIG.laneWaitTimeoutMs,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Delegated sign-in verification config (#2017)
 // ---------------------------------------------------------------------------
 
@@ -563,6 +592,21 @@ export interface YamlConfig {
     /** Milliseconds of inactivity before a conversation.checkpoint event is published.
      *  Defaults to 600000 (10 minutes). */
     conversationCheckpointDebounceMs?: number;
+    /**
+     * Turn lanes and mid-turn injection (#2018, ADR-053). Absent fields use
+     * {@link DEFAULT_TURN_INJECTION_CONFIG}. The shipped config sets `enabled` true.
+     * An absent field stays false.
+     */
+    turnInjection?: {
+      /** Master switch. Absent means false. The shipped config sets it true. */
+      enabled?: boolean;
+      /** Live same-sender follow-ups drained into one turn before the rest wait. Default: 5. */
+      maxInjectionsPerTurn?: number;
+      /** Added to the host's maxTurns for each drained follow-up. Default: 2. */
+      extraRoundsPerInjection?: number;
+      /** How long a waiter blocks on a busy lane before it runs anyway, in ms. Default: 1200000. */
+      laneWaitTimeoutMs?: number;
+    };
     rate_limit?: {
       /** Duration of each rate-limit window in milliseconds. Default: 60000 (1 minute). */
       window_ms?: number;
@@ -1224,6 +1268,26 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         `dispatch.rate_limit.max_global (${effectiveMaxGlobal}) must be >= max_per_sender (${effectiveMaxPerSender})`,
       );
     }
+  }
+
+  // Turn lanes (#2018). A mis-shaped block must fail at boot. laneWaitTimeoutMs reaches
+  // setTimeout, so an overflowed value would fire the fail-open path immediately.
+  const turnInjection = config.dispatch?.turnInjection;
+  if (turnInjection !== undefined) {
+    if (typeof turnInjection !== 'object' || turnInjection === null || Array.isArray(turnInjection)) {
+      throw new Error(`dispatch.turnInjection must be a YAML mapping, got: ${typeof turnInjection}`);
+    }
+    if (turnInjection.enabled !== undefined && typeof turnInjection.enabled !== 'boolean') {
+      throw new Error(`dispatch.turnInjection.enabled must be a boolean, got: ${typeof turnInjection.enabled}`);
+    }
+    for (const field of ['maxInjectionsPerTurn', 'extraRoundsPerInjection', 'laneWaitTimeoutMs'] as const) {
+      const value = turnInjection[field];
+      if (value === undefined) continue;
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error(`dispatch.turnInjection.${field} must be a positive integer, got: ${value}`);
+      }
+    }
+    assertFitsNodeTimer('dispatch.turnInjection.laneWaitTimeoutMs', turnInjection.laneWaitTimeoutMs);
   }
 
   const workingMemory = config.workingMemory;

@@ -1666,4 +1666,37 @@ describe('OpenRouterProvider chat() retries', () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(result.type).toBe('error');
   });
+
+  it('sends a tool result, then a later user text, as tool then user', async () => {
+    mockCreate.mockResolvedValue(makeTextResponse());
+    const model = 'google/gemini-2.0-flash-001';
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      model,
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'reasoning',
+              provider: 'openrouter',
+              model,
+              data: { reasoning: 'check the thread' },
+            },
+            { type: 'tool_use', id: 'call-1', name: 'browser-navigate', input: { url: 'https://example.com' } },
+          ],
+        },
+        buildUserToolResultMessage([{ id: 'call-1', content: 'page' }]),
+        { role: 'user', content: [{ type: 'text', text: 'use email' }] },
+      ],
+    });
+    const sent = mockCreate.mock.calls[0]![0] as {
+      messages: Array<{ role: string; content?: unknown; reasoning?: string; tool_call_id?: string }>;
+    };
+    expect(sent.messages.map((message) => message.role)).toEqual(['assistant', 'tool', 'user']);
+    expect(sent.messages[0]!.reasoning).toBe('check the thread');
+    expect(sent.messages[1]!.tool_call_id).toBe('call-1');
+    expect(JSON.stringify(sent.messages[2]!.content)).toContain('use email');
+    expect(sent.messages[2]!.role).toBe('user');
+  });
 });

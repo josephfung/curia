@@ -15,6 +15,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Ant Farm video-call design** — design doc for replacing the Phaser office with a call view. (#2127)
+- **Turn lanes** — per-conversation lock and injection config, on in the shipped file. (#2018)
+- **Turn lane wiring** — a coordinator conversation has one holder. (#2018)
+- **`agent.task.input_injected`** — **public API:** audit event for a drained same-contact follow-up. (#2018)
+- **Mid-turn injection** — a same-contact follow-up joins the live coordinator turn. (#2018)
+- **Delegate wait** — a queued follow-up ends the wait early and the specialist keeps running. (#2018)
+- **`delegation.timed_out`** — **public API:** optional `cause` distinguishes an interrupted wait from a timeout. (#2018)
+- **Injected working-memory rows** — host task id is stored, and model history keeps the follow-up group. (#2018)
+- **Scenario follow-up** — a case can send a second message while the first turn is still running. (#2018)
 - **Console activity feed** — home page lists what Curia did, one plain-language line per job. (#2251)
 - **`activity.summary` bus event** — **public API:** one fast-tier summary per conversational job, stored for the feed. (#2251)
 - **Ant Farm replay links** — URL can preselect a conversation and time window. (#2251)
@@ -72,7 +81,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Small-cap model check** — boot refuses fast-tier, judge or voice models that cannot turn thinking off. (#2224)
-- **Small-cap calls on the fast tier** — drift detector, setup name suggestion, fact, relationship, voice and grant extraction. (#2224)
+- **Small-cap calls on the fast tier** — the drift detector and every `infraLlm.extract` call moved off the standard tier. (#2224)
 - **`infraLlm.extract` (public API, additive)** — optional `tier: 'fast' | 'standard'`; defaults to standard. (#2191)
 - **`activity-log`** — uses the shared activity describers; each action gains a readable `summary` line. (#2251)
 - **Unset pronouns** — agents use the name or they/them and never infer pronouns from a name. (#2226)
@@ -161,6 +170,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scenario follow-up** — the harness scans inbound text, so a clean follow-up can join. (#2018)
+- **Scenario follow-up** — sends a correction on the first tool call, or at the exit hook. (#2018)
+- **Scenario follow-up** — a turn-start drain fails the run, and the point is recorded. (#2018)
+- **Scenario case 26** — stubs the task writes and email-button shapes the gate run used. (#2018)
+- **Scenario case 26** — bare-ref and label email clicks sent as a one-click batch now succeed. (#2018)
+- **Scenario follow-up** — an unpublished second message fails the run, and its own turn is cleaned up. (#2018)
+- **Scenario follow-up** — scoring waits for the injection decision, and a miss still fails the run. (#2018)
+- **Turn injection config** — startup accepts `dispatch.turnInjection` in the config schema. (#2018)
+- **Synthetic notices** — approval, drift-pause and suspension wakes set `syntheticTurn`. (#2018)
 - **KG semantic search** — filters apply before the limit, so closer facts no longer hide entities or create duplicates. (#2248)
 - **Shadow judge** — runs on the fast tier with reasoning off, so sent-observe stops timing out. (#2191)
 - **Recent activity card** — loads for signed-in console users instead of failing with a Bearer token error. (#2285)

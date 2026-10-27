@@ -51,7 +51,7 @@ interface InboundReactionPayload {
   metadata?: Record<string, unknown>;
 }
 
-interface AgentTaskPayload {
+export interface AgentTaskPayload {
   agentId: string;
   conversationId: string;
   channelId: string;
@@ -71,12 +71,12 @@ interface AgentTaskPayload {
   liveTurn?: boolean;
   /** Synthetic-turn signal (#1892). Like `liveTurn`, a DISTINCT top-level field rather than a
    *  `metadata` key, so a skill forwarding the metadata bag cannot set it by accident. Stamped
-   *  `true` only by the paths that re-enter an agent with a brief Curia wrote to itself: the
-   *  content-filter rewrite, a late specialist result, and the secret-capture resume. The runtime
-   *  forwards it to `working_memory.synthetic`, where contact recall reads it to tell Curia's own
-   *  row apart from an unattributed human message. Absent means "a person said this", which is the
-   *  fail-closed reading — a mislabelled human turn would drop its conversation from the
-   *  shared-conversation check and leak that person's words into another contact's recall. */
+   *  `true` when an internal producer re-enters an agent with a brief Curia wrote to itself,
+   *  rather than a person's message. The runtime forwards it to `working_memory.synthetic`,
+   *  where contact recall reads it to tell Curia's own row apart from an unattributed human
+   *  message. Absent means "a person said this", which is the fail-closed reading — a
+   *  mislabelled human turn would drop its conversation from the shared-conversation check
+   *  and leak that person's words into another contact's recall. */
   syntheticTurn?: boolean;
   /** Resolved sender context from the contact resolver. Undefined if contacts not configured. */
   senderContext?: import('../contacts/types.js').InboundSenderContext;
@@ -962,8 +962,10 @@ export type LateDelegationReviewOutcome =
   | 'update_failed';
 
 // DelegationTimedOutPayload — published by the agent layer (runtime) when a delegate wait
-// times out with the specialist possibly still running, right after the failure is escalated
-// to the principal backlog. The LateDelegationSubscriber turns this into a durable handle.
+// ends with the specialist still running. A timer expiry is escalated to the principal
+// backlog first. An interrupted wait (a same-contact follow-up queued on the turn) is not
+// a failure and opens no review task. The LateDelegationSubscriber turns either into a
+// durable handle; `cause` does not change that handle.
 interface DelegationTimedOutPayload {
   /** The delegate agent.task event id — the specialist stamps it as parentEventId on its
    *  eventual agent.response, so it is the correlation key for the whole mechanism. */
@@ -991,6 +993,12 @@ interface DelegationTimedOutPayload {
   reviewTaskId?: string;
   /** The delegate wait that elapsed, in ms — sets the handle's TTL floor. */
   waitTimeoutMs?: number;
+  /**
+   * Why the wait ended. `wait_timeout` is the delegate timer. `interrupted` is a
+   * queued same-contact follow-up; the specialist keeps running and nothing is
+   * escalated. Callers may omit it: `createDelegationTimedOut` fills `wait_timeout`.
+   */
+  cause?: 'wait_timeout' | 'interrupted';
 }
 
 // DelegationLateResolvedPayload — published by the system layer when a pending delegation
@@ -1193,6 +1201,42 @@ export interface AgentTaskEvent extends BaseEvent {
   type: 'agent.task';
   sourceLayer: 'dispatch';
   payload: AgentTaskPayload;
+}
+
+/**
+ * Where a same-contact follow-up was drained into the host turn (#2018).
+ * `round:N` is the 0-based tool-loop round. `exit` is the draft that had
+ * not been sent yet.
+ */
+export type InjectionDrainPoint = 'turn_start' | 'exit' | `round:${number}`;
+
+const INJECTION_DRAIN_POINT_RE = /^round:(0|[1-9]\d*)$/;
+
+export function isInjectionDrainPoint(value: string): value is InjectionDrainPoint {
+  return value === 'turn_start' || value === 'exit' || INJECTION_DRAIN_POINT_RE.test(value);
+}
+
+/**
+ * A follow-up was drained into a live turn (#2018).
+ *
+ * No message body. The text stays in working_memory, attributed to
+ * `senderContactId`. This event only records that the drain happened, so
+ * one contact's words cannot ride into another turn's audit row.
+ * `parentEventId` is `inboundEventId`. `hostTaskEventId` is the audit `task_id`.
+ */
+interface AgentTaskInputInjectedPayload {
+  hostTaskEventId: string;
+  inboundEventId: string;
+  conversationId: string;
+  agentId: string;
+  drainPoint: InjectionDrainPoint;
+  senderContactId: string;
+}
+
+export interface AgentTaskInputInjectedEvent extends BaseEvent {
+  type: 'agent.task.input_injected';
+  sourceLayer: 'agent';
+  payload: AgentTaskInputInjectedPayload;
 }
 
 export interface AgentResponseEvent extends BaseEvent {
@@ -1992,6 +2036,7 @@ export type BusEvent =
   | InboundMessageEvent
   | InboundReactionEvent
   | AgentTaskEvent
+  | AgentTaskInputInjectedEvent
   | AgentResponseEvent
   | OutboundMessageEvent
   | ToolInvokeEvent
@@ -2102,6 +2147,38 @@ export function createAgentTask(
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,
+  };
+}
+
+export function createAgentTaskInputInjected(
+  payload: AgentTaskInputInjectedPayload,
+): AgentTaskInputInjectedEvent {
+  if (!isInjectionDrainPoint(payload.drainPoint)) {
+    throw new Error('agent.task.input_injected: invalid drainPoint');
+  }
+  for (const field of ['hostTaskEventId', 'inboundEventId', 'conversationId', 'agentId', 'senderContactId'] as const) {
+    // A non-string with a `.length` (an object carrying message text) must
+    // not be copied onto the audit event.
+    if (typeof payload[field] !== 'string' || payload[field].length === 0) {
+      throw new Error(`agent.task.input_injected: ${field} is required`);
+    }
+  }
+  // Copy field by field. A caller that spreads a wider object (a message,
+  // a task payload) must not be able to put that text on the audit event.
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'agent.task.input_injected',
+    sourceLayer: 'agent',
+    payload: {
+      hostTaskEventId: payload.hostTaskEventId,
+      inboundEventId: payload.inboundEventId,
+      conversationId: payload.conversationId,
+      agentId: payload.agentId,
+      drainPoint: payload.drainPoint,
+      senderContactId: payload.senderContactId,
+    },
+    parentEventId: payload.inboundEventId,
   };
 }
 
@@ -2678,7 +2755,10 @@ export function createDelegationTimedOut(
     timestamp: new Date(),
     type: 'delegation.timed_out',
     sourceLayer: 'agent',
-    payload,
+    payload: {
+      ...payload,
+      cause: payload.cause ?? 'wait_timeout',
+    },
     parentEventId,
   };
 }

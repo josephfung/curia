@@ -11,8 +11,8 @@
 // or disable voice.
 //
 // The standard tier is not a slot: no small-cap call site runs on it.
-// tests/unit/agents/llm/small-cap-models.test.ts fails if an `infraLlm.extract` other
-// than file-parse's is left on it.
+// tests/unit/agents/llm/small-cap-models.test.ts fails if any `infraLlm.extract` is
+// left on it.
 
 import type { YamlConfig } from '../../config.js';
 import type { ModelRegistry } from './model-registry.js';
@@ -31,14 +31,14 @@ const DEFAULT_JUDGE_MODEL = 'claude-haiku-5-5';
 const FAST_TIER_CALL_SITES =
   'the infra-llm classifier (10 tokens), setup name suggestion (16), activity summarizer (40), '
   + 'drift detector (200), extract-facts and extract-relationships (1,000), voice-learn (1,200), '
-  + 'scan-grant-recommendations (4,000) and, with no channels.voice.model, voice turns';
+  + 'scan-grant-recommendations and file-parse (4,000) and, with no channels.voice.model, voice turns';
 
 /**
- * The models that serve a small-cap NO_REASONING call site under this config.
- * A disabled judge serves none. `voiceModel` is the trimmed `channels.voice.model`
- * override; without it voice runs on the fast tier, which is already listed.
+ * The models that serve a small-cap NO_REASONING call site under this config, checked
+ * early in boot. A disabled judge serves none. The voice override is not listed: it is
+ * checked by voiceModelSlot only when the voice adapter will start.
  */
-export function smallCapModelSlots(yaml: YamlConfig, voiceModel: string | undefined): SmallCapModelSlot[] {
+export function smallCapModelSlots(yaml: YamlConfig): SmallCapModelSlot[] {
   const slots: SmallCapModelSlot[] = [];
   const fast = yaml.model_routing?.tiers.fast?.model;
   if (fast) slots.push({ configKey: 'model_routing.tiers.fast.model', model: fast, callSites: FAST_TIER_CALL_SITES });
@@ -58,10 +58,16 @@ export function smallCapModelSlots(yaml: YamlConfig, voiceModel: string | undefi
       callSites: 'the escalation judge: disclosure (200 tokens), action (300) and band review (1,200)',
     });
   }
-  if (voiceModel) {
-    slots.push({ configKey: 'channels.voice.model', model: voiceModel, callSites: 'voice turns, which are latency-bound' });
-  }
   return slots;
+}
+
+/**
+ * The slot for the trimmed `channels.voice.model` override. Boot checks it where the
+ * voice adapter is built, so an override on a channel that never starts cannot stop
+ * boot. Without an override voice runs on the fast tier, which smallCapModelSlots lists.
+ */
+export function voiceModelSlot(voiceModel: string): SmallCapModelSlot {
+  return { configKey: 'channels.voice.model', model: voiceModel, callSites: 'voice turns, which are latency-bound' };
 }
 
 /**

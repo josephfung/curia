@@ -131,6 +131,18 @@ export interface StreamingTurnHooks {
     toolCalls: ToolCall[];
     toolRounds: number;
   }) => Promise<StreamingTurnRoundDecision>;
+  /**
+   * Called when the model ends the turn with text. Text uses this to drain a
+   * same-contact follow-up into the draft instead of sending it. Voice does
+   * not pass it. `continue` pushes the draft plus `append` and counts as a
+   * round. No hook keeps today's return, which does not mutate the working
+   * transcript after the last stream.
+   */
+  beforeFinish?: (info: {
+    messages: Message[];
+    finalText: string;
+    round: number;
+  }) => Promise<{ action: 'finish' } | { action: 'continue'; append: Message[] }>;
 }
 
 export interface StreamingTurnConfig {
@@ -389,6 +401,22 @@ export async function runStreamingToolLoop(
       // already carried on a prior assistant tool_use turn.
       const transcriptReply =
         messageEnd.content.length > 0 ? messageEnd.content : roundStreamedText;
+      if (config.hooks?.beforeFinish) {
+        const decision = await config.hooks.beforeFinish({
+          messages: workingMessages,
+          finalText: messageEnd.content,
+          round,
+        });
+        if (decision.action === 'continue') {
+          // The draft was not sent. The next stream() has to see it, then the
+          // follow-up, or the model answers as if the draft already went out.
+          if (transcriptReply.length > 0) {
+            workingMessages.push({ role: 'assistant', content: transcriptReply });
+          }
+          for (const message of decision.append) workingMessages.push(message);
+          continue;
+        }
+      }
       const messages =
         transcriptReply.length > 0
           ? [...workingMessages, { role: 'assistant' as const, content: transcriptReply }]

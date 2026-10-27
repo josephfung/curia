@@ -249,4 +249,31 @@ describe('extractStructuredFields', () => {
       logger,
     ).outcome).toBe('denied');
   });
+
+  it('maps agent.task.input_injected without reading a message body (#2018)', () => {
+    const host = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const inbound = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const sender = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    expect(extractStructuredFields(
+      'agent.task.input_injected',
+      {
+        hostTaskEventId: host,
+        inboundEventId: inbound,
+        conversationId: 'signal:+1555',
+        agentId: 'coordinator',
+        drainPoint: 'turn_start',
+        senderContactId: sender,
+        content: 'this must not become a column',
+      },
+      'evt-inject',
+      logger,
+    )).toEqual({
+      action: 'inject',
+      outcome: 'success',
+      target_type: 'conversation',
+      target_id: 'signal:+1555',
+      initiator_type: 'human',
+      initiator_id: sender,
+    });
+  });
 });

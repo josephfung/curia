@@ -77,16 +77,37 @@ export function rewriteLlmFailureTurns<T extends { role: string; content: string
  * 2. Collapses consecutive same-role user/assistant turns anywhere in the
  *    array, keeping the later one — heals mid-history orphans from crash /
  *    silent-stop / failed-marker-persist paths.
- * 3. Drops trailing `user` turns that have no assistant reply yet. The runtime
- *    appends the current user separately.
+ *    A user row followed by one or more `injected` user rows is a group
+ *    (#2018): the rows stay in order. A later non-injected user row replaces
+ *    the whole group. One-row pop would leave the anchor user orphaned
+ *    beside the new question, and providers that merge same-role turns would
+ *    glue the previous turn's text onto the new one.
+ * 3. Drops trailing `user` turns that have no assistant reply yet, including
+ *    a trailing injected group. The runtime appends the current user separately.
  */
-export function historyForLlm<T extends { role: string; content: string }>(turns: T[]): T[] {
+export function historyForLlm<T extends { role: string; content: string; injected?: true }>(turns: T[]): T[] {
   const out: T[] = [];
   for (const turn of rewriteLlmFailureTurns(turns)) {
     if (turn.role !== 'system') {
       const last = out[out.length - 1];
       if (last && last.role === turn.role) {
-        out.pop();
+        // An injected user row joins the preceding user row. It does not
+        // replace it. Any other same-role row replaces the group.
+        const keepsGroup = turn.role === 'user' && turn.injected === true;
+        if (!keepsGroup) {
+          if (turn.role === 'user') {
+            while (
+              out.length > 0
+              && out[out.length - 1]!.role === 'user'
+              && out[out.length - 1]!.injected === true
+            ) {
+              out.pop();
+            }
+          }
+          if (out.length > 0 && out[out.length - 1]?.role === turn.role) {
+            out.pop();
+          }
+        }
       }
     }
     out.push(turn);
@@ -95,4 +116,37 @@ export function historyForLlm<T extends { role: string; content: string }>(turns
     out.pop();
   }
   return out;
+}
+
+export type LlmFailurePairing =
+  | { ok: true }
+  | { ok: false; reason: 'not_user' | 'content_mismatch' };
+
+/**
+ * Whether the tail of raw history is the user message this task wrote.
+ *
+ * A trailing run of injected follow-ups is part of that same turn (#2018),
+ * so the check looks through them to the anchor user row. The injected
+ * rows' own text is never the anchor: pairing on it would mark a failure
+ * against a follow-up instead of the question that failed.
+ *
+ * `not_user` — the tail (after that run) is not a user row. Callers stay quiet.
+ * `content_mismatch` — a different user row is last. Callers warn and skip.
+ */
+export function llmFailurePairing<T extends { role: string; content: string; injected?: true }>(
+  history: readonly T[],
+  expectedUserContent: string,
+): LlmFailurePairing {
+  let index = history.length - 1;
+  while (index >= 0 && history[index]?.role === 'user' && history[index]?.injected === true) {
+    index -= 1;
+  }
+  const anchor = index >= 0 ? history[index] : undefined;
+  if (anchor?.role !== 'user' || anchor.injected === true) {
+    return { ok: false, reason: 'not_user' };
+  }
+  if (anchor.content !== expectedUserContent) {
+    return { ok: false, reason: 'content_mismatch' };
+  }
+  return { ok: true };
 }

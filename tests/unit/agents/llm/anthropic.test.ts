@@ -927,6 +927,49 @@ describe('AnthropicProvider — reasoning pass-back (ADR-048 §1)', () => {
       expect(assistantBlockTypes(2)).toEqual([['thinking', 'text', 'tool_use'], ['text', 'tool_use']]);
     });
 
+    it('keeps earlier thinking when a user text follow-up sits after the tool result', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_1'));
+      const r1 = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+      const withFollowUp = [
+        ...r1.next,
+        { role: 'user' as const, content: [{ type: 'text' as const, text: 'use email' }] },
+      ];
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      const sent = await provider.chat({
+        messages: [{ role: 'system', content: 'You are Curia.' }, ...withFollowUp],
+        tools,
+        model: 'claude-haiku-5-5',
+      });
+      expect(sent.type).toBe('text');
+      expect(assistantBlockTypes(1)).toEqual([['thinking', 'text', 'tool_use']]);
+      const params = mockCreate.mock.calls[1]![0] as { messages: Array<{ role: string; content: unknown }> };
+      const last = params.messages.at(-1)!;
+      expect(last.role).toBe('user');
+      expect(JSON.stringify(last.content)).toContain('use email');
+      expect(JSON.stringify(last.content)).not.toContain('tool_result');
+    });
+
+    it('keeps earlier thinking after an exit-drain draft and a user follow-up', async () => {
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      mockCreate.mockResolvedValueOnce(toolUseResponse('claude-haiku-5-5', [thinking], 'toolu_1'));
+      const r1 = await round(provider, 'claude-haiku-5-5', [{ role: 'user', content: 'Hi' }]);
+      const drained = [
+        ...r1.next,
+        { role: 'assistant' as const, content: 'Draft that was not sent' },
+        { role: 'user' as const, content: [{ type: 'text' as const, text: 'actually use email' }] },
+      ];
+      mockCreate.mockResolvedValueOnce(makeTextResponse());
+      const sent = await provider.chat({
+        messages: [{ role: 'system', content: 'You are Curia.' }, ...drained],
+        tools,
+        model: 'claude-haiku-5-5',
+      });
+      expect(sent.type).toBe('text');
+      if (sent.type === 'text') expect(sent.provenance.reasoningBlocksDropped).toBeUndefined();
+      expect(assistantBlockTypes(1)).toEqual([['thinking', 'text', 'tool_use']]);
+    });
+
     it('does not check models that do not bind thinking to the prefix', async () => {
       const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
       mockCreate.mockResolvedValueOnce(toolUseResponse('claude-sonnet-4-6', [thinking]));

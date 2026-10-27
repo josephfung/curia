@@ -258,6 +258,59 @@ export function parseDelegateInFlightData(
   };
 }
 
+export interface DelegateInProgressResult {
+  inProgress: true;
+  agent: string;
+  reason: 'interrupted';
+  delegateEventId: string;
+  delegateConversationId: string;
+  message: string;
+}
+
+function delegateResultRecord(data: unknown, logger: Logger | undefined, label: string): Record<string, unknown> | null {
+  if (data === null || data === undefined) return null;
+  if (typeof data === 'string') {
+    try {
+      const parsed = JSON.parse(data) as unknown;
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      return parsed as Record<string, unknown>;
+    } catch (err) {
+      logger?.warn(
+        { err, dataPreview: data.slice(0, 200) },
+        `Failed to parse delegate ${label} payload — treating as not ${label}`,
+      );
+      return null;
+    }
+  }
+  if (typeof data === 'object' && !Array.isArray(data)) return data as Record<string, unknown>;
+  return null;
+}
+
+/**
+ * A delegate wait that ended because a same-contact follow-up was queued (#2018).
+ * Not a failure: the specialist is still running and the turn continues.
+ * `reason: 'timeout'` is never this shape.
+ */
+export function parseDelegateInProgressData(data: unknown, logger?: Logger): DelegateInProgressResult | null {
+  const record = delegateResultRecord(data, logger, 'in-progress');
+  if (!record) return null;
+  if (record['in_progress'] !== true || record['reason'] !== 'interrupted') return null;
+  if (typeof record['agent'] !== 'string' || record['agent'] === '') return null;
+  if (typeof record['message'] !== 'string') return null;
+  const delegateEventId = record['delegate_event_id'];
+  const delegateConversationId = record['delegate_conversation_id'];
+  if (typeof delegateEventId !== 'string' || delegateEventId === '') return null;
+  if (typeof delegateConversationId !== 'string' || delegateConversationId === '') return null;
+  return {
+    inProgress: true,
+    agent: record['agent'],
+    reason: 'interrupted',
+    delegateEventId,
+    delegateConversationId,
+    message: record['message'],
+  };
+}
+
 /** Parse a delegate skill success payload that carries structured failure fields. */
 export function parseDelegateFailureData(data: unknown, logger?: Logger): DelegateFailureResult | null {
   if (data === null || data === undefined) return null;

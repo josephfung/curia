@@ -91,6 +91,14 @@ dispatch:
     max_per_sender: 15      # messages per sender per window (15 allows for an active chat burst)
     max_global: 100         # total messages per window across all senders
 
+  # Turn lanes + mid-turn injection (#2018, ADR-053).
+  # enabled: false, or omitting the key, keeps concurrent turns.
+  turnInjection:
+    enabled: true
+    maxInjectionsPerTurn: 5        # ADR-053 §3
+    extraRoundsPerInjection: 2     # ADR-053 §3: added to the host's maxTurns per drained input
+    laneWaitTimeoutMs: 1200000     # ADR-053 §6: 20 min, then fail open (log error, run anyway)
+
 workingMemory:
   # TTL for working memory turns. Rows are expired by DreamEngine's nightly purge
   # pass (DELETE WHERE expires_at < now()). The idx_wm_expires partial index makes

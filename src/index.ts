@@ -20,7 +20,7 @@
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig, resolveRelayBudgetConfig } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig, resolveRelayBudgetConfig, resolveTurnInjectionConfig } from './config.js';
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
@@ -39,12 +39,13 @@ import { OpenRouterProvider } from './agents/llm/openrouter.js';
 import { BedrockProvider } from './agents/llm/bedrock.js';
 import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
+import { TurnLanes } from './dispatch/turn-lanes.js';
 import { createPrincipalBacklogSource } from './dispatch/principal-backlog.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { discoverAgentManifests } from './agents/loader.js';
 import type { AgentYamlConfig, AgentDiscovery } from './agents/loader.js';
 import { ModelRouter } from './agents/llm/model-router.js';
-import { smallCapModelSlots, smallCapThinkingViolations } from './agents/llm/small-cap-models.js';
+import { smallCapModelSlots, smallCapThinkingViolations, voiceModelSlot } from './agents/llm/small-cap-models.js';
 import { ModelRegistry } from './agents/llm/model-registry.js';
 import { createEstimateCostUsd } from './agents/llm/pricing.js';
 import type { LLMProvider } from './agents/llm/provider.js';
@@ -123,9 +124,8 @@ import { formatWhoYouServeBlock } from './agents/principal-contact-block.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { OutboundQueueRepo } from './skills/outbound-queue-repo.js';
 import { ExportControlService, resolveExportControls } from './security/export-controls.js';
-import { InboundScanner } from './dispatch/inbound-scanner.js';
+import { createInboundScanner } from './dispatch/security-config-loader.js';
 import { RateLimiter } from './dispatch/rate-limiter.js';
-import { parseExtraInjectionPatterns, type ExtraInjectionPattern } from './dispatch/security-config-loader.js';
 import { parseExtraPiiPatterns, getMissingBuiltInPatterns, getBuiltInPatternCount } from './pii/scrubber.js';
 import type { PiiPattern } from './pii/scrubber.js';
 import { PiiRedactor } from './dispatch/pii-redactor.js';
@@ -528,8 +528,9 @@ async function main(): Promise<void> {
   const estimateCostUsd = createEstimateCostUsd(modelRegistry, modelRoutingConfig.tiers.standard.model);
   const modelRouter = new ModelRouter(modelRoutingConfig, modelRegistry, logger);
   // A model that cannot turn thinking off spends the small output caps of the classifier,
-  // judges, drift detector and voice turns on thinking (#2224).
-  const smallCapViolations = smallCapThinkingViolations(smallCapModelSlots(yamlConfig, config.voiceModel), modelRegistry);
+  // judges and drift detector on thinking (#2224). The voice override is checked where
+  // the voice adapter is built.
+  const smallCapViolations = smallCapThinkingViolations(smallCapModelSlots(yamlConfig), modelRegistry);
   if (smallCapViolations.length > 0) {
     logger.fatal({ violations: smallCapViolations }, `Model cannot turn thinking off on a small-cap call site — ${smallCapViolations.join(' ')}`);
     process.exit(1);
@@ -1934,6 +1935,18 @@ async function main(): Promise<void> {
     );
   }
 
+  // Built before the email adapters so a same-thread follow-up can be released
+  // at the dispatcher's decision. The shipped config turns this on; an absent field stays off.
+  const turnInjection = resolveTurnInjectionConfig(yamlConfig.dispatch);
+  const turnLanes = new TurnLanes({
+    enabled: turnInjection.enabled,
+    maxInjectionsPerTurn: turnInjection.maxInjectionsPerTurn,
+    extraRoundsPerInjection: turnInjection.extraRoundsPerInjection,
+    laneWaitTimeoutMs: turnInjection.laneWaitTimeoutMs,
+    logger,
+  });
+  logger.info({ enabled: turnInjection.enabled }, 'Turn lanes initialized');
+
   // Construct one EmailAdapter per resolved account (but don't start any yet —
   // adapters must not poll until the dispatcher is registered, otherwise inbound.message
   // events have no subscriber and are permanently dropped because each adapter advances
@@ -1971,6 +1984,7 @@ async function main(): Promise<void> {
         // Replay this account's unacknowledged inbound.message rows before the
         // first poll, so a deploy cannot leave write-ahead mail behind the watermark.
         unacknowledgedInbound: auditLogger,
+        turnLanes,
       }));
     }
     // Divergence guard (#964): the registry gate marked email enabled + resolvable, yet no
@@ -2081,6 +2095,16 @@ async function main(): Promise<void> {
     // Capability check runs BEFORE resolveProviderForModel so an unknown voice
     // override warns and disables voice instead of process.exit(1) (#1553 review).
     const voiceModel = config.voiceModel ?? modelRouter.resolve('fast').model;
+    // The override's small-cap check lives here, not with the early one, so it stops boot
+    // only when the voice adapter will actually start (#2224). Without an override, voice
+    // runs on the fast tier, which the early check covers.
+    if (config.voiceModel) {
+      const voiceViolations = smallCapThinkingViolations([voiceModelSlot(config.voiceModel)], modelRegistry);
+      if (voiceViolations.length > 0) {
+        logger.fatal({ violations: voiceViolations }, `Model cannot turn thinking off on a small-cap call site — ${voiceViolations.join(' ')}`);
+        process.exit(1);
+      }
+    }
     const voiceCaps = evaluateVoiceModelCapabilities(
       voiceModel,
       modelRegistry.getModel(voiceModel)?.capabilities,
@@ -2766,6 +2790,7 @@ async function main(): Promise<void> {
       : undefined,
     defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
     lateDelivery: {
+      enabled: lateDeliveryConfig.enabled,
       ttlMinutes: lateDeliveryConfig.ttlMinutes,
       sweepIntervalMinutes: lateDeliveryConfig.sweepIntervalMinutes,
     },
@@ -2773,6 +2798,7 @@ async function main(): Promise<void> {
     conversationEntities,
     workingDocsRepo,
     taskRepo,
+    turnLanes,
   };
   for (const agentConfig of agentConfigs) {
     let assembled: AssembledAgent;
@@ -2990,28 +3016,12 @@ async function main(): Promise<void> {
     'PII scrubber active',
   );
 
-  // Layer 1 inbound injection scanner — parses extra patterns from the already-merged
+  // Layer 1 inbound injection scanner — extra patterns come from the already-merged
   // config (default.yaml + local.yaml, see loadYamlConfig()) so operator overrides in
-  // local.yaml actually take effect (#1397). Non-fatal on parse error: a broken custom
-  // pattern entry should warn loudly but not prevent startup (built-in defaults still protect).
-  // Narrow the try block to parseExtraInjectionPatterns() only — the constructor and
-  // logger.info are not config-parsing concerns and should not be silenced by this catch.
-  let extraInjectionPatterns: ExtraInjectionPattern[] = [];
-  try {
-    extraInjectionPatterns = parseExtraInjectionPatterns(
-      yamlConfig.security?.extra_injection_patterns ?? [],
-      'security.extra_injection_patterns (config/default.yaml merged with config/local.yaml)',
-    );
-  } catch (err) {
-    // Warn and fall back to zero extra patterns — built-in defaults still protect.
-    // A misconfigured extra pattern entry should not block startup entirely.
-    logger.warn({ err }, 'Failed to parse extra injection patterns from config — using built-in defaults only');
-  }
-  const injectionScanner = new InboundScanner({ extraPatterns: extraInjectionPatterns });
-  logger.info(
-    { builtInPatterns: InboundScanner.DEFAULT_PATTERN_COUNT, extraPatterns: extraInjectionPatterns.length },
-    'Inbound injection scanner initialized',
-  );
+  // local.yaml actually take effect (#1397). A broken custom pattern warns and the
+  // built-in defaults still protect. createInboundScanner keeps that try around the
+  // parse only.
+  const injectionScanner = createInboundScanner(yamlConfig, logger);
 
   // Parse trust scorer weights from config (security.trust_score section in default.yaml).
   // Falls back to DEFAULT_TRUST_WEIGHTS (0.4/0.4/0.2) if the section is absent.
@@ -3083,6 +3093,7 @@ async function main(): Promise<void> {
       : undefined,
     principalBacklog: createPrincipalBacklogSource(pool),
     verification: verificationRuntime,
+    turnLanes,
   });
   dispatcher.register();
   // Deferred delegations wake in the originating conversation (#1893). The

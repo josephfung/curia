@@ -55,16 +55,21 @@ even when the coordinator rewords the brief.
 
 A `delegate` wait that times out does not stop the specialist — by design (#1288): cancelling an
 in-flight run risks a half-completed side effect, so the run is left alone and the coordinator's
-turn ends. The specialist then finishes minutes later and publishes an `agent.response` whose
-originating turn no longer exists. Before v0.44 nothing consumed it, and the work was silently
-lost: the weekly travel sweep timed out four weeks running while the calendar agent delivered a
-full result each time, and no trip task was created for a month.
+turn ends. A queued same-contact follow-up ends that wait the same way (#2018): the specialist
+keeps running, and the handle's `cause` is `interrupted` rather than a timeout. The specialist
+then finishes minutes later and publishes an `agent.response` whose originating turn no longer
+exists. Before v0.44 nothing consumed it, and the work was silently lost: the weekly travel sweep
+timed out four weeks running while the calendar agent delivered a full result each time, and no
+trip task was created for a month.
 
 The lifecycle now:
 
-1. On timeout, the runtime publishes `delegation.timed_out` carrying the delegate `agent.task`
-   event id — the value the specialist stamps as `parentEventId` on its eventual response — plus
-   the originating routing and the id of the CEO review task the escalation created.
+1. When the wait ends, the runtime publishes `delegation.timed_out` carrying the delegate
+   `agent.task` event id — the value the specialist stamps as `parentEventId` on its eventual
+   response — plus the originating routing. `cause` is `wait_timeout` when the delegate timer
+   fired, and that payload also carries the id of the CEO review task the escalation created.
+   `cause` is `interrupted` when a same-contact follow-up was queued: no review task is opened
+   and nothing is escalated. Either way the late result still wakes the originating turn.
 2. `LateDelegationSubscriber` (system layer) persists that as a row in `pending_delegations`,
    or promotes the dispatch-time `running` claim for the same `delegate_event_id` in place.
    `UNIQUE (delegate_event_id)` makes the handle idempotent, and `status` is a lease
@@ -289,7 +294,7 @@ The agent runtime exposes hooks at key lifecycle points. Hooks are used by the f
 
 ## Agent State Model
 
-**Stateful per-conversation, restart-safe.** Each inbound message carries a `conversation_id` — a deterministic, human-readable key derived from the channel and its native thread/sender identity (e.g., `signal:+15550001111`, `email:<threadId>`, `cli:local:default`). It is deliberately *reversible*: outbound adapters parse it back to recover the reply target (thread id, phone number, group id). Stored as TEXT, not a UUID. See ADR-025. The agent loads conversation history from working memory (Postgres) on each invocation. No in-process state — restarts lose nothing.
+**Stateful per-conversation, restart-safe.** Each inbound message carries a `conversation_id` — a deterministic, human-readable key derived from the channel and its native thread/sender identity (e.g., `signal:+15550001111`, `email:<threadId>`, `cli:local:default`). It is deliberately *reversible*: outbound adapters parse it back to recover the reply target (thread id, phone number, group id). Stored as TEXT, not a UUID. See ADR-025. The agent loads conversation history from working memory (Postgres) on each invocation. The turn lane is the in-process exception ([ADR-053](../adr/053-turn-lanes-and-mid-turn-injection.md)): one coordinator turn holds a human conversation until it releases. A follow-up that was queued and not drained when the process stops stays unacknowledged, so inbound replay delivers it as its own turn. Conversation history itself stays in Postgres.
 
 ---
 
@@ -410,7 +415,7 @@ The `ModelRegistry` holds static metadata (pricing, context window, provider pre
 
 A registry entry can name a different value for `none` in `thinkingOffType`. `claude-sonnet-5-5` names `between_tools`, because it rejects `disabled`. `between_tools` turns off thinking before the first response only. Anthropic documents short thinking between tool calls, though none appeared in 16 live requests on 2026-10-21. A call with tools at `none` gets the 16,384-token output cap as a precaution. `claude-opus-5-5` cannot turn thinking off at any effort, so its registry entry does not list `none`. A call site that sends `NO_REASONING` to Opus 5.5 gets the model's default thinking.
 
-**Small-cap call sites (#2224).** Boot refuses a model that fails `ModelRegistry.canTurnThinkingOff` as the fast-tier model, either judge's model or `channels.voice.model` (`src/agents/llm/small-cap-models.ts`). The error names the config key. The small-cap call sites run on those models: the drift detector, setup's name suggestion, extract-facts, extract-relationships, voice-learn and scan-grant-recommendations run on the fast tier for that reason, and a unit test fails if any `infraLlm.extract` other than file-parse's document parsing is left on standard. A model passes if its entry lists `none` or records `thinksByDefault: false`; with the flag unset, only a model with no `reasoning` entry and no `reasoning` capability passes.
+**Small-cap call sites (#2224).** Boot refuses a model that fails `ModelRegistry.canTurnThinkingOff` as the fast-tier model, either judge's model or, when the voice channel starts, `channels.voice.model` (`src/agents/llm/small-cap-models.ts`). The error names the config key. The small-cap call sites run on those models: the drift detector, setup's name suggestion, extract-facts, extract-relationships, voice-learn, scan-grant-recommendations and file-parse run on the fast tier for that reason, and a unit test fails if any `infraLlm.extract` is left on standard. A model passes if its entry lists `none` or records `thinksByDefault: false`; with the flag unset, only a model with no `reasoning` entry and no `reasoning` capability passes.
 
 **Reasoning pass-back (ADR-048 §1).** Within one task's tool loop, each assistant `tool_use` turn carries the reasoning that produced it into the next request, as `ReasoningContent` blocks placed first in the turn. OpenRouter sends back `reasoning_details` unmodified (rebuilt from stream fragments when streaming); Anthropic sends back `thinking` and `redacted_thinking` blocks with their signatures. A provider drops blocks another model or provider wrote (tier fallback). For models flagged `thinkingBoundToPrefix` (`claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`), `AnthropicProvider` also checks each turn's thinking against the request prefix (system, tools, earlier messages) as it will be sent, with earlier drops applied, and drops blocks written for a different prefix, because the API rejects stale blocks and the loop does change the prefix (the Bullpen refresh, tool discovery). Blocks written after a change match the reduced prefix and go back on later rounds. Reasoning never enters conversation history, and `llm_call_archive` stores a marker in place of each block.
 
@@ -436,6 +441,7 @@ All agents receive a `## Current Date & Time` block in their system prompt on ev
 **All inbound messages route to the Coordinator.** The dispatch layer does not classify or route messages to specialist agents — that's the Coordinator's job. The dispatcher's responsibilities are:
 
 - Route every `inbound.message` to the Coordinator agent
+- Hold one coordinator turn at a time on a human-channel conversation (`dispatch.turnInjection`, [ADR-053](../adr/053-turn-lanes-and-mid-turn-injection.md)). On in the shipped config; `enabled: false` or omitting the key leaves it off. With the flag on, a live follow-up from the same resolved contact is drained into the turn still running, and the drain is audited as `agent.task.input_injected`. Any other arrival — a different sender, an unresolved sender, auto-generated mail, a message with scanner findings, or a synthetic wake — waits, then runs as its own turn. Scheduler, internal, bullpen, and voice turns are not laned. A waiter that has waited `laneWaitTimeoutMs` (20 minutes) logs an error and runs anyway, without taking the lane.
 - Enforce policy: rate limits, blocked senders, required approvals
 - Translate `agent.response` → `outbound.message` (completing the response loop), unless the agent returns the `NO_REPLY` sentinel (or `suppressDelivery`) — then publish `outbound.no_reply` and send nothing (#1732). The sentinel is interpreted only by the agent runtime (which blanks `content` and sets `suppressDelivery`) and by dispatch. Other `agent.response` subscribers (scheduler job summary, resumable-continuation) must not parse `content` as a control token.
 - Email the principal a note the coordinator left for them in a reply to someone else (`principalNote`, cut out of `content` by the runtime), whatever happens to the relay ([spec 15](15-outbound-safety.md), prompt trim PR 5)

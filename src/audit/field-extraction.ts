@@ -110,6 +110,19 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     initiator_id: str(p, 'initiatedBy', fail),
   }),
 
+  // Same-contact follow-up drained into a live turn (#2018). The host task id
+  // is not a structured column here — the logger maps payload.hostTaskEventId
+  // onto task_id, and the factory sets parent_event_id to the inbound. No
+  // message body is extracted because the payload does not carry one.
+  'agent.task.input_injected': (p, fail) => ({
+    action: 'inject',
+    outcome: 'success',
+    target_type: 'conversation',
+    target_id: str(p, 'conversationId', fail),
+    initiator_type: 'human',
+    initiator_id: str(p, 'senderContactId', fail),
+  }),
+
   'inbound.message': (p, fail) => ({
     action: 'receive',
     outcome: 'success',

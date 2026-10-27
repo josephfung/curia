@@ -457,6 +457,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
+    "mid-turn correction switches the sign-in channel": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-26T15:59:35.644Z"
+    },
     "no google file chat": {
       "unstubbed": 0,
       "runs": 5,

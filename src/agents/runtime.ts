@@ -5,7 +5,9 @@ import {
   type StreamingTurnOpenStreamParams,
 } from './llm/streaming-turn.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, createAgentTaskInputInjected, isInjectionDrainPoint, type AgentResponseFailureReason, type AgentTaskEvent, type InjectionDrainPoint } from '../bus/events.js';
+import { holderFromAgentTask, type TurnLanes } from '../dispatch/turn-lanes.js';
+import { frameInjectedInput } from './injected-input.js';
 import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
@@ -16,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
-import { historyForLlm, llmFailureTurnContent, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
+import { historyForLlm, llmFailurePairing, llmFailureTurnContent, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
 import { renderBudgetExhaustedVerificationReply } from './prompts/verification-block.js';
 import {
   CONTACT_RECENT_HISTORY_TIER,
@@ -101,6 +103,7 @@ import {
   findAlreadyDeliveredKey,
   parseDelegateFailureData,
   parseDelegateInFlightData,
+  parseDelegateInProgressData,
   seedAlreadyDelivered,
   type DelegationFailureInfo,
 } from './delegation-guard.js';
@@ -332,6 +335,16 @@ export interface AgentConfig {
   lateDeliveryTtlMinutes?: number;
   lateDeliverySweepIntervalMinutes?: number;
   /**
+   * `delegate.lateDelivery.enabled`. A queued follow-up ends a laned delegate
+   * wait only when this is on. Omitted means on, matching the config default.
+   */
+  lateDeliveryEnabled?: boolean;
+  /**
+   * Per-conversation turn lane (#2018). Absent, or present with the flag off:
+   * every task runs immediately and no lane method is called.
+   */
+  turnLanes?: TurnLanes;
+  /**
    * Conversation-scoped contact IDs (#1818). When set, identities resolved by
    * a delegation are remembered and re-injected next turn from the current
    * contact row — working memory does not keep tool results.
@@ -393,10 +406,61 @@ export class AgentRuntime {
     this.config.bus.subscribe('agent.task', 'agent', async (event) => {
       const taskEvent = event as AgentTaskEvent;
       if (taskEvent.payload.agentId !== this.config.agentId) return;
+      const lanes = this.config.turnLanes;
+      // The flag is a property. Calling a method while it is off would show up
+      // in the flag-off spy, and today's concurrent turns must not touch the lane.
+      if (lanes?.enabled && lanes.isLaned(taskEvent.payload)) {
+        await lanes.acquire(holderFromAgentTask(taskEvent));
+      }
       await this.handleTask(taskEvent);
     });
 
     this.config.logger.info({ agentId: this.config.agentId }, 'Agent registered');
+  }
+
+  /**
+   * Drop this task's hold. Idempotent, and a no-op when the flag is off or this
+   * task does not hold the lane (including a waiter that fail-opened).
+   */
+  private releaseLane(taskEventId: string): void {
+    const lanes = this.config.turnLanes;
+    if (!lanes?.enabled) return;
+    lanes.release(taskEventId);
+  }
+
+  /**
+   * Audit events for follow-ups already stored in working memory. The ticket
+   * stays unresolved until this publish succeeds, so handleInbound does not
+   * persist the same row again. A failure is logged inside the lane and left
+   * parked for the next flush.
+   */
+  private async flushRetainedAudits(): Promise<void> {
+    const lanes = this.config.turnLanes;
+    if (!lanes?.enabled) return;
+    const { bus } = this.config;
+    await lanes.flushRetained(async (retained) => {
+      await bus.publish('agent', createAgentTaskInputInjected({
+        hostTaskEventId: retained.hostTaskEventId,
+        inboundEventId: retained.input.inboundEventId,
+        conversationId: retained.audit.conversationId,
+        agentId: retained.audit.agentId,
+        drainPoint: retained.audit.drainPoint,
+        senderContactId: retained.input.senderContactId,
+      }));
+    });
+  }
+
+  /**
+   * Publish agent.response. The lane is released first: the content-block rewrite
+   * task is published by a subscriber of this event, and it has to be able to
+   * acquire the same conversation (#2018).
+   */
+  private async publishAgentResponse(
+    taskEvent: AgentTaskEvent,
+    event: ReturnType<typeof createAgentResponse>,
+  ): Promise<void> {
+    this.releaseLane(taskEvent.id);
+    await this.config.bus.publish('agent', event);
   }
 
   /**
@@ -452,6 +516,18 @@ export class AgentRuntime {
         this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
       }
     } finally {
+      // Backstop. Every response path releases before it publishes; a throw
+      // before that still has to drop the hold or the next message waits out
+      // the lane timeout.
+      this.releaseLane(taskEvent.id);
+      try {
+        await this.flushRetainedAudits();
+      } catch (flushErr) {
+        this.config.logger.error(
+          { err: flushErr, taskEventId: taskEvent.id },
+          'Failed to flush a retained follow-up audit',
+        );
+      }
       // Clean up the rate limit entry for this task so the validator's writeCounts map
       // doesn't grow unboundedly over many tasks in a long-running process.
       // The key mirrors the source provenance string used by skills during this task.
@@ -1609,16 +1685,102 @@ export class AgentRuntime {
       let lastLlmUsage: LLMUsage | undefined;
       let lastLlmProvenance: LLMCallProvenance | undefined;
 
+      // Same-contact follow-ups join this turn only when the lane is on and
+      // this task holds it. The flag check is first so a disabled lane is
+      // never asked (#2018, R-1). liveTurn starts as the task stamped it and
+      // moves to true only for a live follow-up on a principal host.
+      const lanes = this.config.turnLanes;
+      const laned = lanes?.enabled === true && lanes.isLaned(taskEvent.payload);
+      const turnState = { liveTurn: taskEvent.payload.liveTurn === true };
+      const hostIsPrincipal = laned && holderFromAgentTask(taskEvent).originatorIsPrincipal === true;
+      const drainInjected = async (drainPoint: InjectionDrainPoint): Promise<Message[]> => {
+        if (!laned || !lanes) return [];
+        const inputs = lanes.takeQueued(taskEvent.id);
+        if (inputs.length === 0) return [];
+        const framed: Message[] = [];
+        for (const input of inputs) {
+          if (memory) {
+            await memory.addTurn(conversationId, agentId, { role: 'user', content: input.originalContent }, {
+              senderContactId: input.senderContactId,
+              channelId: input.channelId,
+              synthetic: false,
+              injectedIntoTaskId: taskEvent.id,
+            });
+            // The row is stored. A later audit failure must not return this
+            // ticket as holder_ended, or handleInbound persists it again.
+            lanes.deferAudit(taskEvent.id, input.inboundEventId, {
+              conversationId,
+              agentId,
+              drainPoint,
+            });
+          }
+          let audited = false;
+          try {
+            await bus.publish('agent', createAgentTaskInputInjected({
+              hostTaskEventId: taskEvent.id,
+              inboundEventId: input.inboundEventId,
+              conversationId,
+              agentId,
+              drainPoint,
+              senderContactId: input.senderContactId,
+            }));
+            audited = true;
+          } catch (err) {
+            if (!memory) throw err;
+            logger.error(
+              {
+                err,
+                agentId,
+                conversationId,
+                hostTaskEventId: taskEvent.id,
+                inboundEventId: input.inboundEventId,
+              },
+              'Stored follow-up audit failed — the ticket stays open until the retry',
+            );
+          }
+          budget.maxTurns += lanes.extraRoundsPerInjection;
+          if (input.liveTurn && hostIsPrincipal) turnState.liveTurn = true;
+          // Ids only. The body, the label, and the guidance stay off the log.
+          logger.info(
+            {
+              agentId,
+              conversationId,
+              hostTaskEventId: taskEvent.id,
+              inboundEventId: input.inboundEventId,
+              senderContactId: input.senderContactId,
+              drainPoint,
+              audited,
+            },
+            audited
+              ? 'Drained a same-contact follow-up into the live turn'
+              : 'Stored a same-contact follow-up; audit retry is still pending',
+          );
+          framed.push(frameInjectedInput(input, {
+            exitDrain: drainPoint === 'exit',
+            timezone: this.config.timezone,
+          }));
+          // Confirm only after the audit event is published. A later throw
+          // must not send an already-stored follow-up back as its own turn.
+          if (audited) lanes.confirmDrained(taskEvent.id, [input.inboundEventId]);
+        }
+        return framed;
+      };
+
       // Text turns are intentionally non-cancellable today (same as pre-#1563):
       // chatWithRetry does not take an AbortSignal, and openStream ignores
       // params.signal. The controller is kept reachable as a required-arg
       // placeholder for a future turn-level cancel/timeout.
       const turnAbort = new AbortController();
+      const injectionRoom = laned && lanes
+        ? lanes.maxInjectionsPerTurn * lanes.extraRoundsPerInjection + 1
+        : 0;
       const streamResult = await runStreamingToolLoop(messages, {
         provider,
         model: streamModel,
         tools: workingToolDefs,
-        maxRounds: budget.maxTurns,
+        // The allowance is fixed at the start. Draining later raises budget.maxTurns;
+        // maxRounds already includes every follow-up this hold can accept.
+        maxRounds: budget.maxTurns + injectionRoom,
         signal: turnAbort.signal,
         logger,
         openStream: async function* (this: AgentRuntime, params: StreamingTurnOpenStreamParams) {
@@ -1663,7 +1825,27 @@ export class AgentRuntime {
               );
             }
             maybeAppendCheckpointBudgetNudge(workingMessages);
+            if (!laned) return;
+            const drainPoint = round === 0 ? 'turn_start' : `round:${round}`;
+            if (!isInjectionDrainPoint(drainPoint)) return;
+            const drained = await drainInjected(drainPoint);
+            for (const message of drained) workingMessages.push(message);
           },
+          ...(laned && lanes ? {
+            beforeFinish: async (): Promise<{ action: 'finish' } | { action: 'continue'; append: Message[] }> => {
+              if (lanes.closeIfIdle(taskEvent.id)) return { action: 'finish' };
+              // The budget was already spent. Leave the follow-up queued.
+              // publishAgentResponse releases after the assistant row is stored,
+              // and that release returns the ticket as holder_ended (ADR-053 §5).
+              if (budget.turnsUsed + 1 >= budget.maxTurns) {
+                return { action: 'finish' };
+              }
+              const append = await drainInjected('exit');
+              if (append.length === 0) return { action: 'finish' };
+              budget.turnsUsed += 1;
+              return { action: 'continue', append };
+            },
+          } : {}),
           onToolUse: async ({ toolCalls, messages: workingMessages }) => {
             // Match former while-loop order: increment, nudge (uses updated
             // turnsUsed), then enforce maxTurns before invoking tools.
@@ -1731,7 +1913,7 @@ export class AgentRuntime {
                 ...failedSkillsPayload(),
                 parentEventId: taskEvent.id,
               });
-              await bus.publish('agent', clarificationResponse);
+              await this.publishAgentResponse(taskEvent, clarificationResponse);
 
               logger.info(
                 { agentId, conversationId, question: pendingClarification.question.slice(0, 100) },
@@ -1796,7 +1978,7 @@ export class AgentRuntime {
                 ...failedSkillsPayload(),
                 parentEventId: taskEvent.id,
               });
-              await bus.publish('agent', escalationResponse);
+              await this.publishAgentResponse(taskEvent, escalationResponse);
 
               logger.info(
                 {
@@ -1995,11 +2177,18 @@ export class AgentRuntime {
             conversationId,
             parentEventId: invokeEvent.id,
             taskMetadata: taskEvent.payload.metadata,
-            liveTurn: taskEvent.payload.liveTurn,
+            liveTurn: turnState.liveTurn,
             delegationGuard,
             turnDateResolveResults: turnDateResolveTracker.snapshot(),
             senderId: taskEvent.payload.senderId,
             identifierSources,
+            // After acquire, and only on delegate. A signal taken before this
+            // task holds the lane never aborts. Late delivery off keeps today's
+            // wait: no signal is passed.
+            ...(toolCall.name === 'delegate'
+              && laned && lanes && this.config.lateDeliveryEnabled !== false
+              ? { inputSignal: lanes.inputSignal(taskEvent.id) }
+              : {}),
           };
 
           const startTime = Date.now();
@@ -2345,14 +2534,51 @@ export class AgentRuntime {
               skillInput !== null &&
               !Array.isArray(skillInput)
             ) {
+              const delegateInput = skillInput as Record<string, unknown>;
+              const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
+              // A queued follow-up ends the wait. That is not a failure: no guard
+              // record, no escalation, no review task. The specialist keeps running
+              // and its result arrives later as its own wake (#2018).
+              const delegateInProgress = parseDelegateInProgressData(result.data, logger);
+              if (delegateInProgress) {
+                try {
+                  await bus.publish('agent', createDelegationTimedOut(
+                    {
+                      delegateEventId: delegateInProgress.delegateEventId,
+                      delegateConversationId: delegateInProgress.delegateConversationId,
+                      targetAgent: delegateInProgress.agent,
+                      delegateTask,
+                      agentId,
+                      conversationId,
+                      channelId: taskEvent.payload.channelId,
+                      senderId: taskEvent.payload.senderId,
+                      originTaskEventId: taskEvent.id,
+                      ...(originator !== undefined && {
+                        originator: originator as unknown as Record<string, unknown>,
+                      }),
+                      cause: 'interrupted',
+                    },
+                    taskEvent.id,
+                  ));
+                } catch (err) {
+                  logger.error(
+                    {
+                      err,
+                      agentId,
+                      conversationId,
+                      targetAgent: delegateInProgress.agent,
+                      delegateEventId: delegateInProgress.delegateEventId,
+                    },
+                    'Failed to publish delegation.timed_out — a late specialist response will not be delivered',
+                  );
+                }
+              }
               const delegatePaused = parseDelegatePausedData(result.data, logger);
-              if (!delegatePaused) {
+              if (!delegateInProgress && !delegatePaused) {
                 // An already_in_flight refusal was queued before the result was recorded,
                 // above, so the audit event carries the same `queued` the model sees.
                 const delegateFailure = parseDelegateFailureData(result.data, logger);
                 if (delegateFailure) {
-                  const delegateInput = skillInput as Record<string, unknown>;
-                  const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
                   const dKey = delegationKey(delegateFailure.agent, delegateTask);
                   if (
                     delegateFailure.declined === true
@@ -2776,7 +3002,7 @@ export class AgentRuntime {
       ...failedSkillsPayload(),
       parentEventId: taskEvent.id,
     });
-    await bus.publish('agent', responseEvent);
+    await this.publishAgentResponse(taskEvent, responseEvent);
 
     // Bullpen read-watermark (#1065, #1901). Stamp the woke thread always, ambient
     // threads that are not an open handoff, and ambient handoffs this turn actually
@@ -3186,6 +3412,7 @@ export class AgentRuntime {
       if (call.sliceCostTracker && Number.isFinite(estimatedCostUsd) && estimatedCostUsd > 0) {
         call.sliceCostTracker.usd += estimatedCostUsd;
       }
+      // The scenario follow-up harness relies on this await; see tests/scenarios/followup-exit.ts.
       await bus.publish('agent', event);
     } catch (err) {
       // Telemetry failure must not abort the agent task. Log at error so the gap
@@ -3600,7 +3827,7 @@ export class AgentRuntime {
     reason: 'maxTurns',
     sliceCostUsd?: number,
   ): Promise<void> {
-    const { agentId, bus, logger } = this.config;
+    const { agentId, logger } = this.config;
     logger.info(
       { agentId, taskId, done: checkpoint.done, total: checkpoint.total, budget, reason, sliceCostUsd },
       'Resumable task hit turn budget — pausing from last checkpoint',
@@ -3629,7 +3856,7 @@ export class AgentRuntime {
       }),
       parentEventId: taskEvent.id,
     });
-    await bus.publish('agent', responseEvent);
+    await this.publishAgentResponse(taskEvent, responseEvent);
   }
 
   /**
@@ -3723,7 +3950,7 @@ export class AgentRuntime {
     /** User-facing text replacing the generic failure message (#2201). */
     content: string = LLM_FAILURE_USER_MESSAGE,
   ): Promise<void> {
-    const { agentId, bus } = this.config;
+    const { agentId } = this.config;
     const { conversationId } = taskEvent.payload;
     const structuredFailure = agentErr ? mapAgentErrorToResponseFields(agentErr) : undefined;
     const failedSkillsFields =
@@ -3746,7 +3973,7 @@ export class AgentRuntime {
       ...failedSkillsFields,
       parentEventId: taskEvent.id,
     });
-    await bus.publish('agent', responseEvent);
+    await this.publishAgentResponse(taskEvent, responseEvent);
     // Marker only affects the next turn's history, so it must not delay the user's
     // error reply — maybeSummarize inside addTurn can issue an LLM call (#1767).
     // Must not throw: a memory failure here would re-enter handleTask's catch
@@ -3830,14 +4057,16 @@ export class AgentRuntime {
     if (!memory) return;
     try {
       // Pairing check against stored content, not the sanitized rewrite (#1775).
+      // A trailing injected follow-up still belongs to this task (#2018).
       const history = await memory.getHistory(conversationId, agentId, { raw: true });
-      const last = history[history.length - 1];
-      if (last?.role !== 'user') return;
-      if (last.content !== expectedUserContent) {
-        logger.warn(
-          { agentId, conversationId },
-          'LLM failure marker skipped — last user turn is not this task\'s message',
-        );
+      const pairing = llmFailurePairing(history, expectedUserContent);
+      if (!pairing.ok) {
+        if (pairing.reason === 'content_mismatch') {
+          logger.warn(
+            { agentId, conversationId },
+            'LLM failure marker skipped — last user turn is not this task\'s message',
+          );
+        }
         return;
       }
       await memory.addTurn(conversationId, agentId, {

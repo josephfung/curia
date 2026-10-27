@@ -49,6 +49,7 @@ The audit logger extracts structured fields from each event payload before INSER
 | `inbound.message` | `receive` | `success` | `conversation` / conversationId | `human` / senderId |
 | `agent.task` | `delegate` | `pending` | `agent` / agentId | `system` / `dispatch` |
 | `agent.response` | `respond` | `success` | `conversation` / conversationId | `agent` / agentId |
+| `agent.task.input_injected` | `inject` | `success` | `conversation` / conversationId | `human` / senderContactId |
 | `outbound.message` | `send` | `success` | `conversation` / conversationId | `system` / `dispatch` |
 | `outbound.no_reply` | `suppress` | `success` | `conversation` / conversationId | `system` / `dispatch` |
 | `outbound.delivered` | `deliver` | `success` | `conversation` / conversationId | `channel` / channelId |
@@ -92,6 +93,7 @@ A controlled vocabulary for the `action` column. Inspired by CADF and FHIR Audit
 | `send` | Outbound message delivered |
 | `suppress` | Outbound delivery explicitly declined (`NO_REPLY`) or otherwise withheld by policy |
 | `receive` | Inbound message accepted |
+| `inject` | A same-contact follow-up was drained into a live turn (`agent.task.input_injected`, #2018). `task_id` is the host turn, not a payload field named `taskId` |
 | `resolve` | Identity or contact resolution attempted |
 | `hold` | Message held pending human review |
 | `approve` | Human approved a pending action |
