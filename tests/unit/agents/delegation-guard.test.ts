@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { addPrincipalNoteToReviewTask, ALREADY_DELIVERED_REASON, DelegationGuard, escalateDelegationFailure, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
+import { addPrincipalNoteToReviewTask, ALREADY_DELIVERED_REASON, DelegationGuard, escalateDelegationFailure, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, parseDelegateInProgressData, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
 import { encodeResumeToken, MAX_RESUME_TASK_LENGTH } from '../../../src/agents/resume-token.js';
 import pino from 'pino';
 import { escalationRequester } from '../../../src/agents/task-escalation.js';
@@ -185,6 +185,40 @@ describe('parseDelegateFailureData — late-delivery correlation ids (#1799)', (
 
     expect(parsed?.delegateEventId).toBeUndefined();
     expect(parsed?.waitTimeoutMs).toBeUndefined();
+  });
+});
+
+describe('parseDelegateInProgressData (#2018)', () => {
+  const logger = pino({ level: 'silent' });
+
+  it('accepts an interrupted wait and rejects a timeout wearing the same flag', () => {
+    const parsed = parseDelegateInProgressData({
+      agent: 'researcher',
+      in_progress: true,
+      reason: 'interrupted',
+      delegate_event_id: 'evt-1',
+      delegate_conversation_id: 'delegate-1',
+      message: 'still working',
+    }, logger);
+    expect(parsed).toEqual({
+      inProgress: true,
+      agent: 'researcher',
+      reason: 'interrupted',
+      delegateEventId: 'evt-1',
+      delegateConversationId: 'delegate-1',
+      message: 'still working',
+    });
+
+    expect(parseDelegateInProgressData({
+      agent: 'researcher',
+      in_progress: true,
+      reason: 'timeout',
+      failed: true,
+      retryable: false,
+      message: 'timed out',
+      delegate_event_id: 'evt-1',
+      delegate_conversation_id: 'delegate-1',
+    }, logger)).toBeNull();
   });
 });
 

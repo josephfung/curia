@@ -366,6 +366,13 @@ export interface ToolContext {
    *  replays). Read
    *  through `identifierHasSource()` in `src/skills/_shared/identifier-source.ts`. */
   identifierSources?: import('../contacts/identifier-provenance.js').IdentifierSources;
+  /**
+   * Aborts when a same-contact follow-up is queued on this turn (#2018). Distinct
+   * from `signal`, which is this call's own timeout. Set on `delegate` only when
+   * turn injection and late delivery are both enabled. An abort ends the wait
+   * and leaves the specialist running.
+   */
+  inputSignal?: AbortSignal;
   /** Aborted when this call hits its manifest timeout. The execution layer stops
    *  waiting at that point, but the handler keeps running: pass this to network
    *  requests so they are cancelled too (#2083). Set on every invocation. */

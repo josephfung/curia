@@ -85,6 +85,8 @@ export function buildApprovalDeliveryWake(shortRef: string, what: string, parent
       "Deliver it with deliver-approval, on the channel the principal's standing preferences name for urgent items.",
       'Do not do anything else.',
     ].join(' '),
+    // Curia telling itself to deliver an approval, not a person reaching out (#2018).
+    syntheticTurn: true,
     parentEventId,
   });
 }

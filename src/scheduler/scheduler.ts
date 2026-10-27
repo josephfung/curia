@@ -1902,6 +1902,8 @@ export class Scheduler {
                     channelId: 'scheduler',
                     senderId: 'scheduler',
                     content: notifyContent,
+                    // Review notice Curia wrote to itself, not a person reaching out (#2018).
+                    syntheticTurn: true,
                     parentEventId: driftEvent.id,
                   });
                   await this.bus.publish('system', notifyEvent);
@@ -2015,6 +2017,8 @@ export class Scheduler {
               lastError: error ?? 'Unknown error',
               consecutiveFailures: job.consecutiveFailures,
             }),
+            // Suspension notice Curia wrote to itself, not a person reaching out (#2018).
+            syntheticTurn: true,
             parentEventId: suspendedEvent.id,
           });
           await this.bus.publish('system', notifyEvent);

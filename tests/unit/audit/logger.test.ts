@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AuditLogger } from '../../../src/audit/logger.js';
 import { createSilentLogger } from '../../../src/logger.js';
-import { createInboundMessage, createLlmCall } from '../../../src/bus/events.js';
+import { createAgentTaskInputInjected, createInboundMessage, createLlmCall } from '../../../src/bus/events.js';
 import { GENESIS_HASH, computeEntryHash, toHashTimestamp } from '../../../src/audit/hash-chain.js';
 import {
   INBOUND_REPLAY_AGED_OUT_WARN_HOURS,
@@ -217,6 +217,32 @@ describe('AuditLogger.log — structured columns + hash chain', () => {
       GENESIS_HASH,
     );
     expect(entryHash).toBe(expected);
+  });
+
+  it('records an injected follow-up under the host task and the inbound parent (#2018)', async () => {
+    const host = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const inbound = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const sender = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const event = createAgentTaskInputInjected({
+      hostTaskEventId: host,
+      inboundEventId: inbound,
+      conversationId: 'signal:+1555',
+      agentId: 'coordinator',
+      drainPoint: 'turn_start',
+      senderContactId: sender,
+    });
+
+    await logger.log(event);
+
+    const insert = pool.queries.find((q) => q.sql.includes('INSERT INTO audit_log'));
+    expect(insert).toBeDefined();
+    const params = insert!.params!;
+    // $7 conversation_id, $8 task_id, $9 parent_event_id
+    expect(params[6]).toBe('signal:+1555');
+    expect(params[7]).toBe(host);
+    expect(params[8]).toBe(inbound);
+    expect(params[9]).toBe('inject');
+    expect(params[14]).toBe(sender);
   });
 
   it('writes llm_call_archive in a transaction when event.archive is set', async () => {

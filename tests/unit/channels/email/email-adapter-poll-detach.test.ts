@@ -6,6 +6,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import pino from 'pino';
 import { Writable } from 'node:stream';
 import { EmailAdapter, type EmailAdapterConfig } from '../../../../src/channels/email/email-adapter.js';
+import { TurnLanes } from '../../../../src/dispatch/turn-lanes.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
@@ -84,6 +85,7 @@ function makeAdapter(
     logger: ReturnType<typeof createMocks>['logger'];
     configStore: EmailAdapterConfig['configStore'];
     unacknowledgedInbound: EmailAdapterConfig['unacknowledgedInbound'];
+    turnLanes: TurnLanes;
   }> = {},
 ) {
   return new EmailAdapter({
@@ -102,6 +104,7 @@ function makeAdapter(
     timezone: 'America/Toronto',
     configStore: overrides.configStore,
     unacknowledgedInbound: overrides.unacknowledgedInbound,
+    turnLanes: overrides.turnLanes,
   });
 }
 
@@ -294,6 +297,91 @@ describe('EmailAdapter — poll does not wait for the agent turn (#2254)', () =>
       expect(gate.started).toEqual(['first', 'second']);
     });
     gate.release('second');
+    await adapter.drainInFlight();
+    await adapter.stop();
+  });
+
+  it('releases the same thread when intake settles, and keeps the next delivery\'s lock', async () => {
+    const mocks = createMocks();
+    const lanes = new TurnLanes({
+      enabled: true,
+      maxInjectionsPerTurn: 5,
+      extraRoundsPerInjection: 2,
+      laneWaitTimeoutMs: 60_000,
+      logger: pino({ level: 'silent' }),
+    });
+    const adapter = makeAdapter(mocks, { maxConcurrentTurns: 4, turnLanes: lanes });
+    const gate = hangInbound(mocks.bus);
+    const events = new Map<string, BusEvent>();
+    const publish = mocks.bus.publish as ReturnType<typeof vi.fn>;
+    const hanging = publish.getMockImplementation() as ((layer: string, event: BusEvent) => Promise<void>) | undefined;
+    publish.mockImplementation((layer: string, event: BusEvent) => {
+      const id = inboundId(event);
+      if (id) events.set(id, event);
+      return hanging ? hanging(layer, event) : Promise.resolve();
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      makeMockMessage({ id: 'first', threadId: 'thread-same', from: [{ email: 'ada@example.com' }] }),
+      makeMockMessage({ id: 'second', threadId: 'thread-same', from: [{ email: 'ada@example.com' }] }),
+      makeMockMessage({ id: 'third', threadId: 'thread-same', from: [{ email: 'ada@example.com' }] }),
+      makeMockMessage({ id: 'fourth', threadId: 'thread-same', from: [{ email: 'ada@example.com' }] }),
+    ]);
+
+    await adapter.start();
+    expect(gate.started).toEqual(['first']);
+    const first = events.get('first');
+    expect(first).toBeDefined();
+    lanes.markIntakeSettled(first!.id);
+    await vi.waitFor(() => {
+      expect(gate.started).toEqual(['first', 'second']);
+    });
+    lanes.markIntakeSettled(events.get('second')!.id);
+    await vi.waitFor(() => {
+      expect(gate.started).toEqual(['first', 'second', 'third']);
+    });
+    // The first delivery ending must not drop the third's lock.
+    gate.release('first');
+    await vi.waitFor(() => expect(adapter.inboundInFlight).toBe(2));
+    expect(gate.started).toEqual(['first', 'second', 'third']);
+    lanes.markIntakeSettled(events.get('third')!.id);
+    await vi.waitFor(() => {
+      expect(gate.started).toEqual(['first', 'second', 'third', 'fourth']);
+    });
+    gate.release('second');
+    gate.release('third');
+    gate.release('fourth');
+    await adapter.drainInFlight();
+    await adapter.stop();
+  });
+
+  it('settles intake when the inbound publish fails so the thread can continue', async () => {
+    const mocks = createMocks();
+    const lanes = new TurnLanes({
+      enabled: true,
+      maxInjectionsPerTurn: 5,
+      extraRoundsPerInjection: 2,
+      laneWaitTimeoutMs: 60_000,
+      logger: pino({ level: 'silent' }),
+    });
+    const adapter = makeAdapter(mocks, { maxConcurrentTurns: 4, turnLanes: lanes });
+    const publish = mocks.bus.publish as ReturnType<typeof vi.fn>;
+    const started: string[] = [];
+    publish.mockImplementation((_layer: string, event: BusEvent) => {
+      const id = inboundId(event);
+      if (!id) return Promise.resolve();
+      started.push(id);
+      if (id === 'first') return Promise.reject(new Error('write-ahead failed'));
+      return Promise.resolve();
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      makeMockMessage({ id: 'first', threadId: 'thread-same', from: [{ email: 'ada@example.com' }] }),
+      makeMockMessage({ id: 'second', threadId: 'thread-same', from: [{ email: 'ada@example.com' }] }),
+    ]);
+
+    await adapter.start();
+    await vi.waitFor(() => {
+      expect(started).toEqual(['first', 'second']);
+    });
     await adapter.drainInFlight();
     await adapter.stop();
   });

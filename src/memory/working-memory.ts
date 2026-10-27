@@ -8,6 +8,7 @@ import {
   withDbRetry,
 } from '../db/resilience.js';
 import { rewriteLlmFailureTurns } from './llm-failure-turn.js';
+import { isUuid } from '../util/uuid.js';
 import {
   CONTACT_RECENT_HISTORY_MAX_TURNS,
   normalizeAddTurnAttribution,
@@ -24,6 +25,34 @@ export type { AddTurnAttribution, ContactRecentHistoryQuery, ContactRecentTurn }
 export interface ConversationTurn {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  /**
+   * True when this user row was drained into a host turn (#2018).
+   * Set only from `working_memory.injected_into_task_id`. Absent on a normal
+   * turn, so existing readers that compare `{ role, content }` stay valid.
+   * The host task id itself stays in the column; model history only needs
+   * the flag to keep the follow-up grouped with the turn it joined.
+   */
+  injected?: true;
+}
+
+/**
+ * Map a stored row to a turn. `injected` is set only when the column is a
+ * UUID. A sentence written into the column by a path that skipped the
+ * normalizer stays a normal turn — message text must not form a group.
+ */
+function conversationTurnFromStored(
+  role: string,
+  content: string,
+  injectedIntoTaskId: string | null | undefined,
+): ConversationTurn {
+  const turn: ConversationTurn = {
+    role: role as ConversationTurn['role'],
+    content,
+  };
+  if (isUuid(injectedIntoTaskId)) {
+    turn.injected = true;
+  }
+  return turn;
 }
 
 export interface GetHistoryOptions {
@@ -326,7 +355,26 @@ class PostgresBackend implements StorageBackend {
       if (attribution.createdAt) {
         await this.pool.query(
           `INSERT INTO working_memory (
-             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id, synthetic, created_at
+             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id, synthetic, created_at, injected_into_task_id
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            conversationId,
+            agentId,
+            turn.role,
+            turn.content,
+            expiresAt,
+            attribution.senderContactId,
+            attribution.channelId,
+            attribution.synthetic,
+            attribution.createdAt,
+            attribution.injectedIntoTaskId,
+          ],
+        );
+      } else {
+        await this.pool.query(
+          `INSERT INTO working_memory (
+             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id, synthetic, injected_into_task_id
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
@@ -338,24 +386,7 @@ class PostgresBackend implements StorageBackend {
             attribution.senderContactId,
             attribution.channelId,
             attribution.synthetic,
-            attribution.createdAt,
-          ],
-        );
-      } else {
-        await this.pool.query(
-          `INSERT INTO working_memory (
-             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id, synthetic
-           )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [
-            conversationId,
-            agentId,
-            turn.role,
-            turn.content,
-            expiresAt,
-            attribution.senderContactId,
-            attribution.channelId,
-            attribution.synthetic,
+            attribution.injectedIntoTaskId,
           ],
         );
       }
@@ -499,9 +530,13 @@ class PostgresBackend implements StorageBackend {
       // Subquery gets the most recent N active (non-archived) rows (newest first),
       // then the outer query reverses to chronological order for LLM context.
       // Archived rows are excluded — they're represented by the synthetic summary turn.
-      const result = await this.pool.query<{ role: string; content: string }>(
-        `SELECT role, content FROM (
-           SELECT role, content, created_at
+      const result = await this.pool.query<{
+        role: string;
+        content: string;
+        injected_into_task_id: string | null;
+      }>(
+        `SELECT role, content, injected_into_task_id FROM (
+           SELECT role, content, injected_into_task_id, created_at
            FROM working_memory
            WHERE conversation_id = $1
              AND agent_id = $2
@@ -512,10 +547,11 @@ class PostgresBackend implements StorageBackend {
         [conversationId, agentId, limit],
       );
 
-      return result.rows.map((row) => ({
-        role: row.role as ConversationTurn['role'],
-        content: row.content,
-      }));
+      return result.rows.map((row) => conversationTurnFromStored(
+        row.role,
+        row.content,
+        row.injected_into_task_id,
+      ));
     } catch (err) {
       if (isDbUnavailableError(err)) {
         const agentErr = createDbUnavailableAgentError('working-memory', err);
@@ -537,6 +573,11 @@ class PostgresBackend implements StorageBackend {
    * Assistant and system turns come only from conversations with no other
    * sender and no unattributed user turn (including archived rows). The
    * synthetic voice greeting cue ($6) is not a participant.
+   *
+   * `injected_into_task_id` is not part of this predicate (#2018). A drained
+   * follow-up is still that sender's words, and a null sender still shares
+   * the conversation. Consulting the column here would let a follow-up hide
+   * a second person from recall.
    *
    * `id` is only a stable tie-break when two rows share `created_at`. It is
    * not insertion order. The privacy predicate does not depend on that order.
@@ -909,6 +950,7 @@ class InMemoryBackend implements StorageBackend {
       createdAt: attribution.createdAt ?? new Date(),
       archived: false,
       synthetic: attribution.synthetic,
+      injectedIntoTaskId: attribution.injectedIntoTaskId,
       seq: this.seq++,
     });
     this.store.set(k, turns);
@@ -917,7 +959,11 @@ class InMemoryBackend implements StorageBackend {
   async get(conversationId: string, agentId: string, maxTurns?: number): Promise<ConversationTurn[]> {
     const k = this.key(conversationId, agentId);
     const turns = this.store.get(k) ?? [];
-    const visible = turns.map((row) => ({ role: row.role, content: row.content }));
+    const visible = turns.map((row) => conversationTurnFromStored(
+      row.role,
+      row.content,
+      row.injectedIntoTaskId,
+    ));
     if (maxTurns && visible.length > maxTurns) {
       // Return the last N turns (most recent), preserving chronological order
       return visible.slice(-maxTurns);

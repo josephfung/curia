@@ -8,6 +8,7 @@
 // Each instance owns a single Nylas grant.
 
 import type { EventBus } from '../../bus/bus.js';
+import type { TurnLanes } from '../../dispatch/turn-lanes.js';
 import type { Logger } from '../../logger.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { EmailSendRequest } from './outbound-request.js';
@@ -174,6 +175,12 @@ export interface EmailAdapterConfig {
   unacknowledgedInbound?: {
     listUnacknowledgedInbound(accountId: string): Promise<InboundMessageEvent[]>;
   };
+  /**
+   * When the flag is on, the next same-thread message is released once the
+   * dispatcher has decided the inbound, so it can join the turn still running.
+   * Absent, or with the flag off, the thread stays locked until delivery ends.
+   */
+  turnLanes?: TurnLanes;
 }
 
 export class EmailAdapter implements Channel {
@@ -203,14 +210,16 @@ export class EmailAdapter implements Channel {
   private inFlightTurns = 0;
   /** Settling handles so stop() and tests can wait out a detached delivery. */
   private inFlightRuns = new Set<Promise<void>>();
-  /** conversationId → epoch ms when its current delivery started. */
-  private readonly inFlightStartedAt = new Map<string, number>();
-  /** conversationIds already warned for the turn currently in flight. */
+  /** messageId → when that delivery started. Two messages on one thread can overlap once injection is on. */
+  private readonly inFlightStartedAt = new Map<string, { conversationId: string; startedAt: number }>();
+  /** messageIds already warned for the delivery currently in flight. */
   private readonly stallWarned = new Set<string>();
   /** conversationId → messages waiting to deliver, in message-date order. */
   private readonly pendingByThread = new Map<string, QueuedInboundEmail[]>();
-  /** conversationIds whose delivery is in flight. At most one each (#2018). */
+  /** conversationIds whose delivery is in flight. At most one each until intake settles (#2018). */
   private readonly runningThreads = new Set<string>();
+  /** conversationId → messageId that currently owns the thread lock. */
+  private readonly threadOwner = new Map<string, string>();
   /**
    * Threads that have a queued head and no free slot, oldest first.
    * A Set keeps insertion order: membership is O(1), and moving a thread to
@@ -337,8 +346,8 @@ export class EmailAdapter implements Channel {
   /** Age of the oldest in-flight turn, or null when nothing is running. */
   get oldestInboundInFlightAgeMs(): number | null {
     let oldestStart = Number.POSITIVE_INFINITY;
-    for (const startedAt of this.inFlightStartedAt.values()) {
-      if (startedAt < oldestStart) oldestStart = startedAt;
+    for (const entry of this.inFlightStartedAt.values()) {
+      if (entry.startedAt < oldestStart) oldestStart = entry.startedAt;
     }
     return oldestStart === Number.POSITIVE_INFINITY ? null : Date.now() - oldestStart;
   }
@@ -358,8 +367,8 @@ export class EmailAdapter implements Channel {
   get inboundStalledTurns(): number {
     const now = Date.now();
     let stalled = 0;
-    for (const startedAt of this.inFlightStartedAt.values()) {
-      if (now - startedAt >= EMAIL_INBOUND_TURN_STALL_MS) stalled++;
+    for (const entry of this.inFlightStartedAt.values()) {
+      if (now - entry.startedAt >= EMAIL_INBOUND_TURN_STALL_MS) stalled++;
     }
     return stalled;
   }
@@ -1054,9 +1063,20 @@ export class EmailAdapter implements Channel {
     if (queue.length === 0) this.pendingByThread.delete(conversationId);
 
     this.runningThreads.add(conversationId);
+    this.threadOwner.set(conversationId, item.messageId);
     this.inFlightTurns += 1;
     const startedAt = Date.now();
-    this.inFlightStartedAt.set(conversationId, startedAt);
+    this.inFlightStartedAt.set(item.messageId, { conversationId, startedAt });
+
+    // Flag on only. intakeSettled resolves immediately when the lane is off,
+    // and releasing the thread then would let the next message pass the one
+    // still running. The in-flight count stays tied to `run` either way.
+    const lanes = this.config.turnLanes;
+    if (lanes?.enabled) {
+      void lanes.intakeSettled(item.event.id).then(() => {
+        this.releaseRunningThread(conversationId, item.messageId);
+      });
+    }
 
     // One chain for a sync throw and a rejection. Bookkeeping lives in finally
     // so the two paths cannot drift.
@@ -1071,10 +1091,13 @@ export class EmailAdapter implements Channel {
         },
       )
       .finally(() => {
-        this.runningThreads.delete(conversationId);
+        // The dispatcher settles intake after it accepts the inbound. A
+        // write-ahead failure never gets there, and this call is idempotent.
+        if (lanes?.enabled) lanes.markIntakeSettled(item.event.id);
+        this.releaseRunningThread(conversationId, item.messageId);
         this.inFlightTurns -= 1;
-        this.inFlightStartedAt.delete(conversationId);
-        this.stallWarned.delete(conversationId);
+        this.inFlightStartedAt.delete(item.messageId);
+        this.stallWarned.delete(item.messageId);
         this.inFlightRuns.delete(run);
         if (!this.running) return;
         // Behind threads that were already waiting on the cap, so a burst on
@@ -1086,6 +1109,22 @@ export class EmailAdapter implements Channel {
         this.drainSlotWaiters();
       });
     this.inFlightRuns.add(run);
+  }
+
+  /**
+   * Drop the thread lock if this delivery still owns it. A later message may
+   * already own it once intake settled early; that owner's lock stays.
+   */
+  private releaseRunningThread(conversationId: string, messageId: string): void {
+    if (this.threadOwner.get(conversationId) !== messageId) return;
+    this.threadOwner.delete(conversationId);
+    this.runningThreads.delete(conversationId);
+    if (!this.running) return;
+    if (this.pendingByThread.has(conversationId)) {
+      this.slotWaiters.delete(conversationId);
+      this.slotWaiters.add(conversationId);
+    }
+    this.drainSlotWaiters();
   }
 
   private drainSlotWaiters(): void {
@@ -1139,15 +1178,16 @@ export class EmailAdapter implements Channel {
 
   private warnLongRunningTurns(): void {
     const now = Date.now();
-    for (const [conversationId, startedAt] of this.inFlightStartedAt) {
-      const ageMs = now - startedAt;
+    for (const [messageId, entry] of this.inFlightStartedAt) {
+      const ageMs = now - entry.startedAt;
       if (ageMs < EMAIL_INBOUND_TURN_STALL_MS) continue;
-      if (this.stallWarned.has(conversationId)) continue;
-      this.stallWarned.add(conversationId);
+      if (this.stallWarned.has(messageId)) continue;
+      this.stallWarned.add(messageId);
       this.config.logger.warn(
         {
           accountId: this.config.accountId,
-          conversationId,
+          conversationId: entry.conversationId,
+          messageId,
           ageMs,
           thresholdMs: EMAIL_INBOUND_TURN_STALL_MS,
           inFlight: this.inFlightTurns,

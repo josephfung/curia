@@ -240,6 +240,18 @@ describe('Bus Permissions', () => {
     expect(canPublish('execution', 'system.restart')).toBe(false);
   });
 
+  it('lets the agent publish agent.task.input_injected and only system subscribe (#2018)', () => {
+    expect(canPublish('agent', 'agent.task.input_injected')).toBe(true);
+    expect(canPublish('system', 'agent.task.input_injected')).toBe(true);
+    expect(canSubscribe('system', 'agent.task.input_injected')).toBe(true);
+    // A channel must not be able to declare that its text was injected.
+    for (const layer of ['channel', 'dispatch', 'execution'] as const) {
+      expect(canPublish(layer, 'agent.task.input_injected')).toBe(false);
+      expect(canSubscribe(layer, 'agent.task.input_injected')).toBe(false);
+    }
+    expect(canSubscribe('agent', 'agent.task.input_injected')).toBe(false);
+  });
+
   it('allows only the system layer to publish and subscribe to kg.nodes_merged (#2233)', () => {
     expect(canPublish('system', 'kg.nodes_merged')).toBe(true);
     expect(canSubscribe('system', 'kg.nodes_merged')).toBe(true);

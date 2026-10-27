@@ -369,6 +369,49 @@ describe('scenario stub layer', () => {
       data: { id: 'draft-0002', body_plain: 'scripted' },
     });
   });
+
+  it('holds only the first call until the harness releases it (#2018)', async () => {
+    const { layer, controller } = setup();
+    controller.beginRun({ 'memory-query': [{ match: {}, return: { hits: 0 } }] }, 'scenario-1');
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    controller.holdFirstCall('scenario-1', held);
+    let firstReturned = false;
+    const first = layer.invoke('memory-query', {}, undefined, coordinatorCall).then((result) => {
+      firstReturned = true;
+      return result;
+    });
+    await controller.whenFirstCall('scenario-1');
+    expect(firstReturned).toBe(false);
+    await expect(layer.invoke('memory-query', { q: 'later' }, undefined, coordinatorCall))
+      .resolves.toEqual({ success: true, data: { hits: 0 } });
+    expect(firstReturned).toBe(false);
+    release();
+    await expect(first).resolves.toEqual({ success: true, data: { hits: 0 } });
+    expect(controller.endRun('scenario-1')).toHaveLength(2);
+  });
+
+  it('settles whenFirstCall when the run closes with no call (#2018)', async () => {
+    const { controller } = setup();
+    controller.beginRun({}, 'scenario-1');
+    let settled = false;
+    const pending = controller.whenFirstCall('scenario-1').then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    controller.endRun('scenario-1');
+    await pending;
+    expect(settled).toBe(true);
+  });
+
+  it('whenFirstCall resolves immediately when no run is open (#2018)', async () => {
+    const { controller } = setup();
+    await controller.whenFirstCall('missing');
+  });
+
+  it('holdFirstCall requires an open run (#2018)', () => {
+    const { controller } = setup();
+    expect(() => controller.holdFirstCall('missing', Promise.resolve())).toThrow(/no open run/);
+  });
 });
 
 describe('real delegation (#2027)', () => {

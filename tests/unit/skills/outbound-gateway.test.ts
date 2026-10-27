@@ -2987,6 +2987,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(wakes).toHaveLength(1);
     if (wakes[0]?.type === 'agent.task') {
       expect(wakes[0].payload).toMatchObject({ agentId: 'coordinator', conversationId: `approval-delivery:${result.actionRef}` });
+      expect(wakes[0].payload.syntheticTurn).toBe(true);
       expect(wakes[0].payload.content).toContain('deliver-approval');
       expect(wakes[0].parentEventId).toBe('task-123');
     }

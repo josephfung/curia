@@ -5,12 +5,13 @@
 // closed and call context-bridge-release itself; on the production model it released
 // after interim results. Now delegate links the entry (outbound_entry_id, or the id of
 // an entry the target owns quoted in the brief) and settles it from the result shape:
-// kept only while routing the reply again could still work (no run started, or a
-// retryable failure), released otherwise unless the specialist kept it open.
+// kept only while routing the reply again could still work (no run started, a
+// retryable failure, or an interrupted wait whose specialist is still running),
+// released otherwise unless the specialist kept it open.
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { DelegateHandler } from './handler.js';
-import { settlementFor } from './outbound-entry.js';
+import { settlementFor, settleOutboundEntry } from './outbound-entry.js';
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import type { EventBus } from '../../src/bus/bus.js';
@@ -321,9 +322,24 @@ describe('settlementFor: every delegate result shape (#1972)', () => {
     ['a wait timeout', ok({ failed: true, reason: 'timeout', retryable: false, possibly_succeeded: true }), 'release'],
     ['a retryable failure', ok({ failed: true, reason: 'api_error', retryable: true }), 'keep'],
     ['an in-flight refusal', ok({ in_flight: true, reason: 'already_in_flight' }), 'keep'],
+    ['an interrupted wait', ok({ in_progress: true, reason: 'interrupted', agent: 'ceo-inbox' }), 'keep'],
     ['a guard block', ok({ failed: true, blocked: true, reason: 'blocked', retryable: false }), 'keep'],
   ] as const)('%s → %s', (_label, result, action) => {
     expect(settlementFor(result, created).action).toBe(action);
+  });
+
+  it('does not release the entry when the wait was interrupted', async () => {
+    const { bus } = makeBus();
+    const oc = makeOutboundContext([row(ENTRY_ID, 'ceo-inbox')]);
+    const ctx = makeCtx(bus, oc, {});
+    const report = await settleOutboundEntry(
+      ctx,
+      { entryId: ENTRY_ID, source: 'input' },
+      { success: true, data: { in_progress: true, reason: 'interrupted', agent: 'ceo-inbox' } },
+      { delegatedTaskId: 'task-1', resumeToken: undefined },
+    );
+    expect(report).toEqual({ id: ENTRY_ID, status: 'kept' });
+    expect(oc.releaseUnlessKeptOpen).not.toHaveBeenCalled();
   });
 
   it('keeps on a brief rejected before dispatch (e.g. date validation)', () => {

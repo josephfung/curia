@@ -64,4 +64,16 @@ describe('normalizeAddTurnAttribution synthetic flag', () => {
     expect(normalizeAddTurnAttribution({ synthetic: 'yes' } as never).synthetic).toBe(false);
     expect(normalizeAddTurnAttribution({ synthetic: 1 } as never).synthetic).toBe(false);
   });
+
+  it('stores a host task id only when it is a UUID (#2018)', () => {
+    const host = 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA';
+    expect(normalizeAddTurnAttribution({ injectedIntoTaskId: host }).injectedIntoTaskId).toBe(host.toLowerCase());
+    expect(normalizeAddTurnAttribution({}).injectedIntoTaskId).toBeNull();
+    expect(normalizeAddTurnAttribution(undefined).injectedIntoTaskId).toBeNull();
+    expect(normalizeAddTurnAttribution({ injectedIntoTaskId: '' }).injectedIntoTaskId).toBeNull();
+    expect(normalizeAddTurnAttribution({ injectedIntoTaskId: 'use email instead' }).injectedIntoTaskId).toBeNull();
+    expect(normalizeAddTurnAttribution({ injectedIntoTaskId: 'not-a-uuid' }).injectedIntoTaskId).toBeNull();
+    // A non-string must not throw and must not be stored.
+    expect(normalizeAddTurnAttribution({ injectedIntoTaskId: { id: host } as never }).injectedIntoTaskId).toBeNull();
+  });
 });

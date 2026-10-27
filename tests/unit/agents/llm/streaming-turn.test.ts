@@ -733,3 +733,97 @@ describe('requestOptions', () => {
     expect(seen).toEqual([{ reasoning: { effort: 'none' }, signal }]);
   });
 });
+
+describe('beforeFinish (#2018)', () => {
+  function end(content: string): LLMStreamEvent {
+    return { type: 'message_end', content, usage, provenance };
+  }
+
+  it('with no hook, the transcript matches a turn that never heard of the hook', async () => {
+    const provider = new FakeStreamProvider([[end('Hello world.')]]);
+    const result = await runStreamingToolLoop([{ role: 'user', content: 'hi' }], {
+      provider,
+      model: 'fake',
+      maxRounds: 2,
+      signal: new AbortController().signal,
+    });
+    expect(result.stopReason).toBe('message_end');
+    expect(result.finalText).toBe('Hello world.');
+    expect(result.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'Hello world.' },
+    ]);
+    expect(result.exhausted).toBe(false);
+  });
+
+  it('continue pushes the draft and the appended messages, and the next stream sees them', async () => {
+    const seen: unknown[] = [];
+    const provider = new FakeStreamProvider([
+      [end('Draft reply')],
+      [end('Sent reply')],
+    ]);
+    const original = provider.stream.bind(provider);
+    provider.stream = async function* (params: { messages?: unknown; options?: Record<string, unknown> }) {
+      seen.push(params.messages);
+      yield* original(params);
+    } as typeof provider.stream;
+    let finishes = 0;
+    const result = await runStreamingToolLoop([{ role: 'user', content: 'hi' }], {
+      provider,
+      model: 'fake',
+      maxRounds: 4,
+      signal: new AbortController().signal,
+      hooks: {
+        beforeFinish: async () => {
+          finishes += 1;
+          if (finishes === 1) {
+            return { action: 'continue', append: [{ role: 'user', content: [{ type: 'text', text: 'use email' }] }] };
+          }
+          return { action: 'finish' };
+        },
+      },
+    });
+    expect(result.stopReason).toBe('message_end');
+    expect(result.finalText).toBe('Sent reply');
+    expect(seen[1]).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'Draft reply' },
+      { role: 'user', content: [{ type: 'text', text: 'use email' }] },
+    ]);
+    expect(result.messages.at(-1)).toEqual({ role: 'assistant', content: 'Sent reply' });
+  });
+
+  it('continue counts toward maxRounds and exhaustion still returns exhausted', async () => {
+    const provider = new FakeStreamProvider([[end('one')], [end('two')], [end('three')]]);
+    const result = await runStreamingToolLoop([{ role: 'user', content: 'hi' }], {
+      provider,
+      model: 'fake',
+      maxRounds: 2,
+      signal: new AbortController().signal,
+      hooks: {
+        beforeFinish: async () => ({ action: 'continue', append: [{ role: 'user', content: 'again' }] }),
+      },
+    });
+    expect(result.exhausted).toBe(true);
+    expect(result.stopReason).toBe('exhausted');
+    expect(provider.streamCalls).toBe(2);
+    expect(result.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user']);
+  });
+
+  it('an aborted signal returns before beforeFinish', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const beforeFinish = vi.fn();
+    const provider = new FakeStreamProvider([[end('nope')]]);
+    const result = await runStreamingToolLoop([{ role: 'user', content: 'hi' }], {
+      provider,
+      model: 'fake',
+      maxRounds: 2,
+      signal: controller.signal,
+      hooks: { beforeFinish },
+    });
+    expect(result.stopReason).toBe('aborted');
+    expect(beforeFinish).not.toHaveBeenCalled();
+    expect(provider.streamCalls).toBe(0);
+  });
+});

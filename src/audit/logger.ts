@@ -138,13 +138,15 @@ export class AuditLogger {
       typeof payload.conversationId === 'string' ? payload.conversationId : null;
 
     // Populate task_id when present in payload (additive — no backfill of historical rows).
-    // schedule.fired emits agentTaskId; normalize to the canonical taskId key.
+    // schedule.fired emits agentTaskId; agent.task.input_injected emits
+    // hostTaskEventId (#2018). Normalize both onto the canonical taskId key.
+    // parent_event_id stays event.parentEventId — the injected-input factory
+    // sets that to the drained inbound.
     const taskId =
-      typeof payload.taskId === 'string'
-        ? payload.taskId
-        : typeof payload.agentTaskId === 'string'
-          ? payload.agentTaskId
-          : null;
+      typeof payload.taskId === 'string' ? payload.taskId
+      : typeof payload.agentTaskId === 'string' ? payload.agentTaskId
+      : typeof payload.hostTaskEventId === 'string' ? payload.hostTaskEventId
+      : null;
 
     const parentEventId = event.parentEventId ?? null;
 

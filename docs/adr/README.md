@@ -74,6 +74,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [050](050-external-verifications-as-first-class-state.md) | External verifications are first-class state — a `verifications` record per site, per-turn injection over always-on prompt, tracked sign-in codes replaced by `[sign-in code]` in every tool input except `web-browser`, in-memory single-process tracker (#2017) | Accepted |
 | [051](051-knowledge-graph-embeddings-from-a-configurable-endpoint.md) | Knowledge graph embeddings come from any OpenAI-compatible endpoint, with a per-model profile (width, prefixes, thresholds), vectors stamped with their model, a boot gate and `pnpm reembed:kg` (#2023) | Accepted |
 | [052](052-knowledge-graph-node-merge.md) | Knowledge-graph node merge — previewed, plan-token-gated, single-transaction console merge; the survivor's type is the result type; the absorbed node is archived as a tombstone; contacts fold by survivor type; contact merges re-point calendars, grants and task/message references (#2233) | Accepted |
+| [053](053-turn-lanes-and-mid-turn-injection.md) | Turn lanes and mid-turn injection — one coordinator turn at a time per human conversation; only a live follow-up from that turn's resolved contact may join it; synthetic wakes wait (#2018; amended 2026-10-26) | Accepted |
 
 ## Adding new ADRs
 

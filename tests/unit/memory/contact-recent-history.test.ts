@@ -155,6 +155,36 @@ describe('selectContactRecentTurns', () => {
     expect(turns.map(t => t.content)).toEqual(['alice wrote']);
   });
 
+  it('does not let the host-task column hide a second person or drop the sender (#2018)', () => {
+    const host = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const attributed = selectContactRecentTurns([
+      row({
+        conversationId: 'signal:+1555',
+        role: 'user',
+        content: 'alice',
+        senderContactId: ALICE,
+        seq: 1,
+        injectedIntoTaskId: host,
+      }),
+      row({ conversationId: 'signal:+1555', role: 'assistant', content: 'reply', seq: 2 }),
+    ], query);
+    expect(attributed.map(t => t.content)).toEqual(['alice', 'reply']);
+
+    const shared = selectContactRecentTurns([
+      row({ conversationId: 'signal:+1555', role: 'user', content: 'alice', senderContactId: ALICE, seq: 1 }),
+      row({
+        conversationId: 'signal:+1555',
+        role: 'user',
+        content: 'unattributed follow-up',
+        senderContactId: null,
+        seq: 2,
+        injectedIntoTaskId: host,
+      }),
+      row({ conversationId: 'signal:+1555', role: 'assistant', content: 'quotes both', seq: 3 }),
+    ], query);
+    expect(shared.map(t => t.content)).toEqual(['alice']);
+  });
+
   it('does not let a human message that merely looks like a Curia brief open a shared thread', () => {
     // The reason this reads a column instead of the content. Message bodies are
     // attacker-controlled: if the text decided, a CC'd stranger could open the

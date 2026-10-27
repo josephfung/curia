@@ -222,7 +222,16 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
 
   // Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after agents so agent.task already has handlers.
-  const dispatcher = new Dispatcher({ bus, logger, contactResolver, channelPolicies: undefined });
+  const dispatcher = new Dispatcher({
+    bus,
+    logger,
+    contactResolver,
+    channelPolicies: undefined,
+    turnLanes: stack.turnLanes,
+    // The lane is on in the shipped config. Without the stack's scanner every
+    // follow-up is refused, because a missing scan is not a clean one (#2018).
+    injectionScanner: stack.injectionScanner,
+  });
   dispatcher.register();
 
   // Production's BullpenDispatcher, but acting only on the posts a targeted case makes.

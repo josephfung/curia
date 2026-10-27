@@ -190,6 +190,14 @@ export interface AddTurnAttribution {
    * Tests set it so the same-day window is deterministic.
    */
   createdAt?: Date;
+  /**
+   * Host `agent.task` id when this user row was drained into a live turn
+   * (#2018). Only a UUID is stored. Anything else, including message text,
+   * is dropped — the column is an id, never a copy of what was said.
+   * Omitted means a normal turn. This does not mark the row synthetic:
+   * the words still belong to `senderContactId`.
+   */
+  injectedIntoTaskId?: string | null;
 }
 
 export function normalizeAddTurnAttribution(meta: AddTurnAttribution | undefined): {
@@ -197,6 +205,11 @@ export function normalizeAddTurnAttribution(meta: AddTurnAttribution | undefined
   channelId: string | null;
   synthetic: boolean;
   createdAt: Date | null;
+  /**
+   * Host task id for a drained follow-up. Null unless the caller passed a
+   * UUID — a message body must not be able to land in this column.
+   */
+  injectedIntoTaskId: string | null;
   /** True when the caller passed a sender id that is not a contact UUID. */
   senderDropped: boolean;
   /** Only an explicit `background` leaves the pass off the caller's await. */
@@ -216,11 +229,16 @@ export function normalizeAddTurnAttribution(meta: AddTurnAttribution | undefined
   }
   // Strict equality, not truthiness: only an explicit `true` marks a row as
   // Curia's own. Anything else means a person said it.
+  // Same rule for the host-task id: only a UUID is stored, lowercased like
+  // other persisted ids. A sentence, an empty string, or a non-string is null.
+  const rawInjected = meta?.injectedIntoTaskId;
+  const injectedIntoTaskId = isUuid(rawInjected) ? rawInjected.toLowerCase() : null;
   return {
     senderContactId,
     channelId,
     synthetic: meta?.synthetic === true,
     createdAt,
+    injectedIntoTaskId,
     senderDropped,
     summarize: meta?.summarize === 'background' ? 'background' : 'inline',
   };
@@ -332,6 +350,12 @@ export interface ContactRecentSourceTurn {
   archived: boolean;
   /** `working_memory.synthetic` — Curia's own row, not a participant's message (#1892). */
   synthetic: boolean;
+  /**
+   * `working_memory.injected_into_task_id` — host task when this row was
+   * drained into a live turn (#2018). Not a participant flag. Recall ignores
+   * it and still keys off sender and synthetic.
+   */
+  injectedIntoTaskId?: string | null;
   seq: number;
 }
 

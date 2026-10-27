@@ -32,6 +32,7 @@ import type { WorkingMemory } from '../memory/working-memory.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import { BULLPEN_PENDING_WINDOW_MINUTES, type BullpenService } from '../memory/bullpen.js';
 import type { ExecutionLayer } from '../skills/execution.js';
+import type { TurnLanes } from '../dispatch/turn-lanes.js';
 import type { ToolRegistry } from '../skills/registry.js';
 import type { SkillRegistry } from '../skills/skill-registry.js';
 import {
@@ -343,11 +344,13 @@ export interface AgentAssemblyContext {
   /** True while a browser session id is live. Absent when no browser service runs. */
   browserSessionAlive?: (sessionId: string) => boolean;
   defaultDelegateTimeoutMs?: number;
-  lateDelivery: { ttlMinutes: number; sweepIntervalMinutes: number };
+  lateDelivery: { enabled?: boolean; ttlMinutes: number; sweepIntervalMinutes: number };
   bullpenService?: BullpenService;
   conversationEntities?: ConversationEntityState;
   workingDocsRepo?: WorkingDocsRepo;
   taskRepo?: TaskRepo;
+  /** Shared with the dispatcher. Absent in callers that predate turn lanes. */
+  turnLanes?: TurnLanes;
 }
 
 export interface AssembledAgent {
@@ -474,6 +477,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     // Lets the runtime look up a delegate target's expected_duration_seconds (#387).
     agentRegistry: ctx.agentRegistry,
     defaultDelegateTimeoutMs: ctx.defaultDelegateTimeoutMs,
+    lateDeliveryEnabled: ctx.lateDelivery.enabled ?? true,
     lateDeliveryTtlMinutes: ctx.lateDelivery.ttlMinutes,
     lateDeliverySweepIntervalMinutes: ctx.lateDelivery.sweepIntervalMinutes,
     bullpenService: ctx.bullpenService,
@@ -489,6 +493,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     taskRepo: (pinResolution.heartbeatEligible || pinResolution.documentWorkspaceEnabled)
       ? ctx.taskRepo
       : undefined,
+    turnLanes: ctx.turnLanes,
   };
 
   return { agentConfig, pinResolution, systemPrompt, pinnedToolNames, toolDefs, runtimeConfig };
