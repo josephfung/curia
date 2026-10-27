@@ -221,6 +221,12 @@ export interface InvokeOptions {
    * agent runtime per task and forwarded to the skill as `ctx.identifierSources`.
    */
   identifierSources?: import('../contacts/identifier-provenance.js').IdentifierSources;
+  /**
+   * Aborts when a same-contact follow-up is queued on this turn (#2018). Set only
+   * when turn injection is on, the turn is laned, and late delivery is enabled.
+   * The delegate handler ends its wait; it does not cancel the specialist.
+   */
+  inputSignal?: AbortSignal;
 }
 
 /** Cap on the input rendering passed to the escalation judge — keeps full email bodies and
@@ -2531,6 +2537,7 @@ export class ExecutionLayer {
       // a synchronously-delegated specialist (a specialist acting inside the principal's live turn).
       // Distinct from taskMetadata so no persistence skill can sweep it into a wakeable row.
       liveTurn: options?.liveTurn,
+      ...(options?.inputSignal !== undefined ? { inputSignal: options.inputSignal } : {}),
       delegationGuard: options?.delegationGuard,
       turnDateResolveResults: options?.turnDateResolveResults,
       identifierSources: options?.identifierSources,

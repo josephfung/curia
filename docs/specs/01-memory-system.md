@@ -23,6 +23,7 @@ Short-lived context for active agent conversations. Stored in the `working_memor
 - `archived` BOOLEAN — excludes summarized turns from active context loading (migration 018)
 - `sender_contact_id` UUID NULL — contact who authored a `user` turn (migration 090). Assistant and system turns leave it null. Deleting the contact sets it null.
 - `channel_id` TEXT NULL — inbound channel, used to label cross-conversation recall (migration 090)
+- `injected_into_task_id` TEXT NULL — the host `agent.task` id when this user row was drained into a live turn (migration 106, [ADR-053](../adr/053-turn-lanes-and-mid-turn-injection.md)). Null is a normal turn. Model history keeps that row with the user row it followed, so the follow-up does not replace the original. Contact-recent history does not read the column.
 
 ---
 

@@ -107,6 +107,16 @@
             "max_per_sender": { "type": "integer", "minimum": 1 },
             "max_global": { "type": "integer", "minimum": 1 }
           }
+        },
+        "turnInjection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "maxInjectionsPerTurn": { "type": "integer", "minimum": 1 },
+            "extraRoundsPerInjection": { "type": "integer", "minimum": 1 },
+            "laneWaitTimeoutMs": { "type": "integer", "minimum": 1 }
+          }
         }
       }
     },

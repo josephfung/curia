@@ -3,6 +3,9 @@
 // Provides the extra_injection_patterns list to InboundScanner at startup.
 // Operators can add patterns here without code changes; changes take effect on restart.
 
+import type { Logger } from '../logger.js';
+import { InboundScanner } from './inbound-scanner.js';
+
 export interface ExtraInjectionPattern {
   regex: RegExp;
   label: string;
@@ -64,4 +67,41 @@ export function parseExtraInjectionPatterns(entries: unknown, source: string): E
 
     return { regex: compiled, label: e.label };
   });
+}
+
+/**
+ * The scanner production and the test stacks hand to Dispatcher (#2018).
+ * One construction site, so the context label and the next option cannot
+ * drift between `src/index.ts` and a harness.
+ *
+ * `onParseError: 'warn'` (the default, production) logs and keeps the built-in
+ * patterns. `'throw'` is for a test stack: a broken custom pattern must fail
+ * the suite rather than quietly score runs against a weaker scanner.
+ * The try covers parsing only. Constructing the scanner and the info log are
+ * not config errors and are not swallowed.
+ */
+export function createInboundScanner(
+  yamlConfig: { security?: { extra_injection_patterns?: unknown } },
+  logger: Logger,
+  options?: { onParseError?: 'warn' | 'throw' },
+): InboundScanner {
+  const onParseError = options?.onParseError ?? 'warn';
+  let extraPatterns: ExtraInjectionPattern[] = [];
+  try {
+    extraPatterns = parseExtraInjectionPatterns(
+      yamlConfig.security?.extra_injection_patterns ?? [],
+      'security.extra_injection_patterns (config/default.yaml merged with config/local.yaml)',
+    );
+  } catch (err) {
+    if (onParseError === 'throw') throw err;
+    // Warn and fall back to zero extra patterns — built-in defaults still protect.
+    // A misconfigured extra pattern entry should not block startup entirely.
+    logger.warn({ err }, 'Failed to parse extra injection patterns from config — using built-in defaults only');
+  }
+  const scanner = new InboundScanner({ extraPatterns });
+  logger.info(
+    { builtInPatterns: InboundScanner.DEFAULT_PATTERN_COUNT, extraPatterns: extraPatterns.length },
+    'Inbound injection scanner initialized',
+  );
+  return scanner;
 }

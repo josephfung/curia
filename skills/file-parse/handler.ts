@@ -202,8 +202,11 @@ export class FileParseHandler implements ToolHandler {
     // The Anthropic API only accepts the canonical MIME types.
     const normalizedMimeType = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
 
+    // Fast tier: on a model that thinks, the 4000 tokens can all go to thinking and the
+    // parse comes back empty (#2224).
     const result = await infraLlm.extract(textPrompt, {
       maxTokens: 4000,
+      tier: 'fast',
       image: { base64: contentBase64, mediaType: normalizedMimeType },
     });
 
@@ -309,9 +312,10 @@ export class FileParseHandler implements ToolHandler {
       return { success: true, data: { type, raw_text: rawText, structured: null, confidence: 1.0 } };
     }
 
+    // Fast tier, for the same reason as the image path (#2224).
     const result = await infraLlm.extract(
       `${prompt}\n\nDocument text:\n${rawText}`,
-      { maxTokens: 4000 },
+      { maxTokens: 4000, tier: 'fast' },
     );
 
     if (!result.ok) {

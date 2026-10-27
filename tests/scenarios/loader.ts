@@ -20,6 +20,7 @@ import {
   type ExpectedBehavior,
   type IdentityFixture,
   type ScenarioCase,
+  type ScenarioFollowup,
   type ScenarioInbound,
   type ScenarioWakeTask,
   type SeedBullpenThread,
@@ -78,7 +79,10 @@ const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'del
 const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const REPLY_KEYS = ['from', 'content'] as const;
 const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
-const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'email', 'task'] as const;
+const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'email', 'task', 'followup'] as const;
+const FOLLOWUP_KEYS = ['after', 'from', 'content', 'channel'] as const;
+/** A follow-up held this long still releases the first tool, so a flag-off run can finish. */
+const FOLLOWUP_MAX_DELAY_MS = 120_000;
 const EMAIL_KEYS = ['nylas_message_id', 'account', 'auto_generated', 'auto_generated_signals', 'to', 'cc', 'sender_verified'] as const;
 const AUTONOMY_KEYS = ['score', 'gating'] as const;
 const AUTONOMY_GATINGS = ['band', 'tier'] as const;
@@ -566,6 +570,40 @@ function parseInbound(raw: unknown, file: string): ScenarioInbound {
           },
         }
       : {}),
+    ...(raw['followup'] !== undefined ? { followup: parseFollowup(raw['followup'], file, from) } : {}),
+  };
+}
+
+function parseFollowup(raw: unknown, file: string, inboundFrom: string): ScenarioFollowup {
+  if (!isObject(raw)) throw new CaseError(file, `inbound.followup must be a mapping`);
+  onlyKeys(raw, FOLLOWUP_KEYS, file, 'inbound.followup');
+  if (inboundFrom === 'bullpen' || inboundFrom === 'scheduler' || inboundFrom === 'task-wake' || inboundFrom === 'delegate') {
+    throw new CaseError(file, `inbound.followup is only for a channel inbound (got '${inboundFrom}')`);
+  }
+  const afterRaw = raw['after'];
+  let after: ScenarioFollowup['after'];
+  if (afterRaw === 'first_tool_call') {
+    after = 'first_tool_call';
+  } else if (isObject(afterRaw)) {
+    onlyKeys(afterRaw, ['ms'], file, 'inbound.followup.after');
+    const ms = afterRaw['ms'];
+    if (typeof ms !== 'number' || !Number.isInteger(ms) || ms < 1 || ms > FOLLOWUP_MAX_DELAY_MS) {
+      throw new CaseError(file, `inbound.followup.after.ms must be an integer from 1 to ${FOLLOWUP_MAX_DELAY_MS}`);
+    }
+    after = { ms };
+  } else {
+    throw new CaseError(file, `inbound.followup.after must be first_tool_call or { ms: N }`);
+  }
+  const from = str(raw, 'from', file, 'inbound.followup');
+  if (from === 'bullpen' || from === 'scheduler' || from === 'task-wake' || from === 'delegate') {
+    throw new CaseError(file, `inbound.followup.from must be principal or a seeded contact`);
+  }
+  const channel = optStr(raw, 'channel', file, 'inbound.followup');
+  return {
+    after,
+    from,
+    content: str(raw, 'content', file, 'inbound.followup'),
+    ...(channel !== undefined ? { channel } : {}),
   };
 }
 
@@ -999,6 +1037,15 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
     if (!contact) throw new CaseError(file, `inbound.from '${from}' is not principal, bullpen, scheduler, task-wake, delegate or a seeded contact`);
     if (channel && channel !== contact.channel) {
       throw new CaseError(file, `inbound.channel '${channel}' differs from contact '${from}' channel '${contact.channel}'`);
+    }
+  }
+
+  const follow = scenario.inbound.followup;
+  if (follow && follow.from !== 'principal') {
+    const contact = scenario.seed.contacts.find(c => c.key === follow.from);
+    if (!contact) throw new CaseError(file, `inbound.followup.from '${follow.from}' is not principal or a seeded contact`);
+    if (follow.channel && follow.channel !== contact.channel) {
+      throw new CaseError(file, `inbound.followup.channel '${follow.channel}' differs from contact '${follow.from}' channel '${contact.channel}'`);
     }
   }
 }

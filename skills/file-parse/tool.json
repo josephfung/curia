@@ -1,7 +1,7 @@
 {
   "name": "file-parse",
   "description": "Parse a document (CSV, PDF, HTML, image, ICS, XML, plain text, or Markdown). Pass content_base64 or a temp_file_url, the reported mime_type, and filename. Always pass filename from the download tool or from archive-extract. When mime_type is missing or application/octet-stream, the filename extension selects the parser (.xml, .txt, .md, .markdown, .csv, .pdf, .html, .htm, .ics, and image extensions). A specific mime_type wins over the extension. extract_as structures the result; raw XML, text, Markdown, CSV, and ICS need no model call.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "provenance_source": true,

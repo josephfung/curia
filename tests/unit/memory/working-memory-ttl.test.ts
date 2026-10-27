@@ -97,6 +97,42 @@ describe('WorkingMemory — TTL', () => {
       await memory.addTurn(CONV, AGENT, { role: 'user', content: 'Hello' });
 
       expect(capturedSql).toContain('expires_at');
+      expect(capturedSql).toContain('injected_into_task_id');
+    });
+
+    it('ignores a non-UUID host-task column when reading history (#2018)', async () => {
+      const pool = buildSimplePool((sql) => {
+        if (sql.includes('injected_into_task_id')) {
+          return {
+            rows: [
+              { role: 'user', content: 'hello', injected_into_task_id: 'not-a-uuid' },
+              { role: 'user', content: 'follow', injected_into_task_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+            ],
+          };
+        }
+        return { rows: [] };
+      });
+      const memory = WorkingMemory.createWithPostgres(pool, silentLogger());
+      await expect(memory.getHistory(CONV, AGENT, { raw: true })).resolves.toEqual([
+        { role: 'user', content: 'hello' },
+        { role: 'user', content: 'follow', injected: true },
+      ]);
+    });
+
+    it('writes the host task id and leaves a normal turn null (#2018)', async () => {
+      const captured: unknown[][] = [];
+      const pool = buildSimplePool((sql, params) => {
+        if (sql.includes('INSERT INTO working_memory')) captured.push(params ?? []);
+        return { rows: [] };
+      });
+      const memory = WorkingMemory.createWithPostgres(pool, silentLogger());
+      const host = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      await memory.addTurn(CONV, AGENT, { role: 'user', content: 'hello' });
+      await memory.addTurn(CONV, AGENT, { role: 'user', content: 'use email' }, {
+        injectedIntoTaskId: host,
+      });
+      expect(captured[0]?.[8]).toBeNull();
+      expect(captured[1]?.[8]).toBe(host);
     });
   });
 

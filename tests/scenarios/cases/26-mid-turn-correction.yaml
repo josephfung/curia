@@ -1,0 +1,350 @@
+# Case 26 (#2018, ADR-053): a same-contact follow-up arrives while the first tool
+# call is still in flight, and the turn follows the correction. The harness holds
+# that first call until the follow-up is queued. A text reply never makes that
+# call, so the same follow-up is published at the exit hook, before the turn
+# finishes. Capture matches one conversation to one turn, so a follow-up that is
+# not queued fails the run instead of being scored as a second reply. A drain at
+# turn_start fails the run, and the point is recorded on the result. The shipped
+# config turns the flag on. The passing run on the release-gate model drained at
+# round:1, with every critical check at 100%. With the flag off the harness
+# errors before publishing. It is not a known_failure: that marker would hide a
+# real miss.
+#
+# The seeded verification is SMS, matching the opening message. The follow-up is
+# what switches the channel to email. A pending email row would already tell the
+# coordinator to read the code from the inbox.
+#
+# The attractive wrong path is clicking "Text me the code". The page offers both
+# buttons and the opening message asks for text. An unmatched action on the
+# session stays on that page: returning the emailed page would score a text click
+# in an unlisted selector form as email chosen. sms-send is a second wrong path;
+# human-channels lets it succeed. The follow-up switches to email, which the
+# sign-in block reads from the inbox via ceo-inbox
+# (src/agents/prompts/verification-block.ts: "Email codes: delegate the read to
+# ceo-inbox.").
+#
+# The site is example-benefits.ca (a reserved name), not a real benefits host.
+name: mid-turn correction switches the sign-in channel
+description: >
+  The principal asks Curia, on Signal, to sign in to example-benefits.ca and have
+  the site text the sign-in code. The first page offers a text button and an email
+  button. While Curia is still on that page, the principal sends a second message:
+  use email for the code, not SMS. Curia chooses email, asks ceo-inbox to read the
+  code from the inbox, and the reply says the code is coming by email because the
+  principal changed their mind. Curia clicks "Email me the code", does not
+  click "Text me the code", and does not send an SMS.
+tags: [turn-injection, signin, browser]
+release_gate: true
+runs: 3
+stub_sets: [human-channels]
+seed:
+  principal_identities:
+    - { channel: signal, identifier: "+15555550199" }
+  verifications:
+    - key: otp
+      site: example-benefits.ca
+      page_domain: login.example-benefits.ca
+      delivery: sms
+      browser_session_id: s-26
+      task: 4b7e1c90-2d3f-4a5b-8c6d-7e8f9012ab34
+      requested_minutes_ago: 1
+inbound:
+  from: principal
+  channel: signal
+  content: >
+    Sign in to https://login.example-benefits.ca and have them text me the code.
+  followup:
+    after: first_tool_call
+    from: principal
+    content: "actually, use email for the code, not SMS"
+tool_stubs:
+  web-browser:
+    - match: { action: navigate, url: "https://login.example-benefits.ca" }
+      return: &choice
+        session_id: s-26
+        url: https://login.example-benefits.ca/mfa
+        content: |
+          Example Benefits — How should we send your sign-in code?
+          You asked for a text. Text is the default. Email is also available.
+          --- Interactable elements ---
+          [g1f0e1] button "Text me the code"
+          [g1f0e2] button "Email me the code"
+        verification_suspected: { page_domain: example-benefits.ca, signals: [delivery-choice] }
+    - match: { action: navigate, url: "https://login.example-benefits.ca/" }
+      return: *choice
+    - match: { action: navigate, url: "https://example-benefits.ca" }
+      return: *choice
+    - match: { action: navigate, url: "https://example-benefits.ca/" }
+      return: *choice
+    - match: { action: get_content }
+      return: *choice
+    - match: { action: screenshot }
+      return: *choice
+    - match: { action: null, actions: null }
+      return: *choice
+    - match: { action: click, selector: "[g1f0e2]" }
+      return: &emailed
+        session_id: s-26
+        session_reused: true
+        url: https://login.example-benefits.ca/mfa/email
+        content: |
+          Example Benefits — Check your email
+          We sent a 6-digit code to the inbox on the account. It expires in 10 minutes.
+          --- Interactable elements ---
+          [g2f0e1] textbox "Verification code"
+          [g2f0e2] button "Continue"
+        verification_suspected: { page_domain: example-benefits.ca, signals: [one-time-code-input] }
+    - match: { action: click, selector: "g1f0e2" }
+      return: *emailed
+    - match: { action: click, selector: "Email me the code" }
+      return: *emailed
+    # One click, sent as a batch of one. The choice-page catch-all would
+    # otherwise answer it.
+    - match:
+        actions:
+          - { action: click, selector: "[g1f0e2]" }
+      return: *emailed
+    - match:
+        actions:
+          - { action: click, selector: "g1f0e2" }
+      return: *emailed
+    - match:
+        actions:
+          - { action: click, selector: "Email me the code" }
+      return: *emailed
+    - match: { action: click, selector: "[g1f0e1]" }
+      return: &texted
+        session_id: s-26
+        session_reused: true
+        url: https://login.example-benefits.ca/mfa/sms
+        content: |
+          Example Benefits — Check your phone
+          We sent a 6-digit code by text. It expires in 10 minutes.
+          --- Interactable elements ---
+          [g3f0e1] textbox "Verification code"
+          [g3f0e2] button "Continue"
+        verification_suspected: { page_domain: example-benefits.ca, signals: [one-time-code-input] }
+    - match: { action: click, selector: "g1f0e1" }
+      return: *texted
+    # Entering the emailed code and continuing signs in. Without this, the
+    # session catch-all below returns the choice page and the model reports
+    # that the code was rejected.
+    - match:
+        actions:
+          - { action: type, selector: "[g2f0e1]", text: "518204" }
+          - { action: click, selector: "[g2f0e2]" }
+      return: &signedin
+        session_id: s-26
+        session_reused: true
+        url: https://login.example-benefits.ca/home
+        content: |
+          Example Benefits — You're signed in.
+          The email code was accepted.
+    - match:
+        actions:
+          - { action: type, selector: "g2f0e1", text: "518204" }
+          - { action: click, selector: "g2f0e2" }
+      return: *signedin
+    - match:
+        actions:
+          - { action: click, selector: "[g2f0e1]" }
+          - { action: type, selector: "[g2f0e1]", text: "518204" }
+          - { action: click, selector: "[g2f0e2]" }
+      return: *signedin
+    - match:
+        actions:
+          - { action: click, selector: "g2f0e1" }
+          - { action: type, selector: "g2f0e1", text: "518204" }
+          - { action: click, selector: "g2f0e2" }
+      return: *signedin
+    # Two calls instead of one batch: type, then click. The type leaves the
+    # emailed page with the code filled in; the click signs in.
+    - match: { action: type, selector: "[g2f0e1]", text: "518204" }
+      return: &typed
+        session_id: s-26
+        session_reused: true
+        url: https://login.example-benefits.ca/mfa/email
+        content: |
+          Example Benefits — Check your email
+          The code 518204 is in the verification field.
+          --- Interactable elements ---
+          [g2f0e1] textbox "Verification code"
+          [g2f0e2] button "Continue"
+        verification_suspected: { page_domain: example-benefits.ca, signals: [one-time-code-input] }
+    - match: { action: type, selector: "g2f0e1", text: "518204" }
+      return: *typed
+    - match: { action: click, selector: "[g2f0e2]" }
+      return: *signedin
+    - match: { action: click, selector: "g2f0e2" }
+      return: *signedin
+    # Still the choice page. The emailed page is only the email-button stubs above,
+    # so a click in some other selector form is not told that email was chosen.
+    - match: { session_id: s-26 }
+      return: *choice
+  delegate:
+    - match: { agent: ceo-inbox }
+      return:
+        agent: ceo-inbox
+        response: >
+          Found it: "Your Example Benefits sign-in code" from Example Benefits
+          <no-reply@notify.example-benefits.ca>, received a minute ago. The code is
+          518204; it expires 10 minutes after it was sent. I've left the email in the inbox.
+    - match: {}
+      error: That specialist can't help with this.
+  verification:
+    - match: { action: list }
+      return:
+        verifications:
+          - verification_id: "{{verification:otp}}"
+            site: example-benefits.ca
+            page_domain: example-benefits.ca
+            delivery: sms
+            status: pending
+            browser_session_id: s-26
+            task_id: 4b7e1c90-2d3f-4a5b-8c6d-7e8f9012ab34
+            requested_at: "{{at:now-1m}}"
+            expires_at: "{{at:now+9m}}"
+        displayTimezone: "{{timezone}}"
+    - match: { action: open, delivery: email }
+      return:
+        verification_id: "{{verification:otp}}"
+        site: example-benefits.ca
+        page_domain: example-benefits.ca
+        delivery: email
+        status: pending
+        browser_session_id: s-26
+        task_id: 4b7e1c90-2d3f-4a5b-8c6d-7e8f9012ab34
+        requested_at: "{{at:now-1m}}"
+        expires_at: "{{at:now+9m}}"
+        reused: true
+        email_wait_seconds: 180
+        next_step: The code was emailed. Delegate the read to ceo-inbox. Do not send an SMS.
+        displayTimezone: "{{timezone}}"
+    - match: { action: open, delivery: sms }
+      return:
+        verification_id: "{{verification:otp}}"
+        site: example-benefits.ca
+        page_domain: example-benefits.ca
+        delivery: sms
+        status: pending
+        browser_session_id: s-26
+        task_id: 4b7e1c90-2d3f-4a5b-8c6d-7e8f9012ab34
+        requested_at: "{{at:now-1m}}"
+        expires_at: "{{at:now+9m}}"
+        reused: false
+        ask_channel: signal
+        next_step: The principal's latest message decides. If they said email, do not ask them for a texted code.
+        displayTimezone: "{{timezone}}"
+    - match: { action: satisfy, verification_id: "{{verification:otp}}" }
+      return:
+        verification_id: "{{verification:otp}}"
+        site: example-benefits.ca
+        page_domain: example-benefits.ca
+        delivery: email
+        status: satisfied
+        browser_session_id: s-26
+        task_id: 4b7e1c90-2d3f-4a5b-8c6d-7e8f9012ab34
+        requested_at: "{{at:now-1m}}"
+        expires_at: "{{at:now+9m}}"
+        displayTimezone: "{{timezone}}"
+    - match: {}
+      error: "Verification not found"
+  # The seeded verification is bound to this task. Updating or completing it is
+  # a reasonable side step, so an unstubbed call must not be scored as a miss.
+  task-update:
+    - match: { task_id: 4b7e1c90-2d3f-4a5b-8c6d-7e8f9012ab34 }
+      return:
+        task_id: 4b7e1c90-2d3f-4a5b-8c6d-7e8f9012ab34
+        title: Sign in to example-benefits.ca
+        status: in_progress
+        owner: curia
+        priority: 2
+        tags: []
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-complete:
+    - match: { task_id: 4b7e1c90-2d3f-4a5b-8c6d-7e8f9012ab34 }
+      return:
+        task_id: 4b7e1c90-2d3f-4a5b-8c6d-7e8f9012ab34
+        title: Sign in to example-benefits.ca
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 8c1d2e3f-4a5b-4c6d-9e0f-1a2b3c4d5e6f, sensitivity: internal }
+  doc-place:
+    - match: {}
+      return:
+        action: create_folder
+        slug: benefits
+        directory_prefix: /projects/benefits/
+        path: /projects/benefits/brief.md
+        reason: No existing project folder covers this.
+        catalog: []
+        displayTimezone: America/Toronto
+  doc-write:
+    - match: {}
+      return:
+        action: created
+        version: 1
+        displayTimezone: America/Toronto
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: reads_the_code_from_the_inbox
+    weight: critical
+    description: Asks ceo-inbox (delegate) for the emailed sign-in code.
+    check:
+      called: delegate
+      with: { agent: ceo-inbox }
+  - id: clicks_email
+    weight: critical
+    description: Clicks "Email me the code", as [g1f0e2], the bare ref, the button label, or a one-click batch.
+    check:
+      any_of:
+        - called: web-browser
+          with: { action: click, selector: "[g1f0e2]" }
+        - called: web-browser
+          with: { action: click, selector: "g1f0e2" }
+        - called: web-browser
+          with: { action: click, selector: "Email me the code" }
+        - called: web-browser
+          with:
+            actions:
+              - { action: click, selector: "[g1f0e2]" }
+        - called: web-browser
+          with:
+            actions:
+              - { action: click, selector: "g1f0e2" }
+        - called: web-browser
+          with:
+            actions:
+              - { action: click, selector: "Email me the code" }
+  - id: does_not_click_text
+    weight: critical
+    description: Does not click "Text me the code" ([g1f0e1]). That click asks the site to text the code.
+    check:
+      not_called: [web-browser]
+      with: { action: click, selector: "[g1f0e1]" }
+  - id: does_not_click_text_bare_ref
+    weight: critical
+    description: Does not click "Text me the code" as the bare ref g1f0e1.
+    check:
+      not_called: [web-browser]
+      with: { action: click, selector: "g1f0e1" }
+  - id: does_not_text
+    weight: critical
+    description: Does not send an SMS. sms-send succeeds, so it is a real choice, separate from the site texting a code.
+    check:
+      not_called: [sms-send]
+  - id: acknowledges_the_switch
+    weight: important
+    description: >
+      The reply tells the principal the code will come by email, not text, because
+      they changed their mind while the sign-in was in progress.
+failure_modes:
+  - Sends an SMS, or clicks "Text me the code" and treats that as the finished choice
+  - Asks the principal to read a texted code after they said to use email
+  - Replies without acknowledging the switch from text to email

@@ -1388,6 +1388,8 @@ describe('delegate manifest', () => {
     expect(outputs['elapsed_wait_ms']).toBeUndefined();
     expect(outputs['delegate_event_id']).toBeDefined();
     expect(outputs['next_step']).toContain('already_in_flight');
+    expect(outputs['in_progress']).toContain('still running');
+    expect(outputs['reason']).toContain('interrupted');
   });
 });
 
@@ -1955,6 +1957,105 @@ describe('DelegateHandler dispatch claim (#1893)', () => {
     expect((result.data as { reason: string }).reason).toBe('timeout');
     expect(published).toEqual(['calendar']);
     expect(claim.releaseRunning).not.toHaveBeenCalled();
+  });
+
+  it('returns in_progress and keeps the claim when inputSignal aborts (#2018)', async () => {
+    const bus = new EventBus(logger);
+    let publishedTaskId: string | undefined;
+    bus.subscribe('agent.task', 'agent', (event) => {
+      if (event.type === 'agent.task') publishedTaskId = event.id;
+    });
+    const claim = holdingClaim();
+    const inputSignal = new AbortController();
+    inputSignal.abort();
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Book the room', timeout_ms: 60_000 },
+      { bus, agentRegistry: registry(), openDelegationLookup: claim.lookup, inputSignal: inputSignal.signal, ...origin() },
+    ));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as {
+      in_progress?: boolean;
+      reason?: string;
+      failed?: boolean;
+      message?: string;
+      delegate_event_id?: string;
+      delegate_conversation_id?: string;
+      possibly_succeeded?: boolean;
+    };
+    expect(data.in_progress).toBe(true);
+    expect(data.reason).toBe('interrupted');
+    expect(data.failed).toBeUndefined();
+    expect(data.possibly_succeeded).toBeUndefined();
+    expect(data.message).toBe(
+      'The specialist is still working. Its result will arrive as a separate follow-up after this turn. Do not delegate this work again.',
+    );
+    expect(data.delegate_event_id).toBe(publishedTaskId);
+    expect(data.delegate_conversation_id).toMatch(/^delegate-/);
+    expect(claim.acquireRunning).toHaveBeenCalledOnce();
+    expect(claim.releaseRunning).not.toHaveBeenCalled();
+  });
+
+  it('ends a running wait when inputSignal aborts, without using the timeout reason (#2018)', async () => {
+    const bus = new EventBus(logger);
+    let sawTask = false;
+    bus.subscribe('agent.task', 'agent', (event) => {
+      if (event.type === 'agent.task') sawTask = true;
+    });
+    const claim = holdingClaim();
+    const inputSignal = new AbortController();
+    const pending = handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Book the room', timeout_ms: 60_000 },
+      { bus, agentRegistry: registry(), openDelegationLookup: claim.lookup, inputSignal: inputSignal.signal, ...origin() },
+    ));
+    await vi.waitFor(() => expect(sawTask).toBe(true));
+    inputSignal.abort();
+    const result = await pending;
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { reason?: string }).reason).toBe('interrupted');
+    expect(claim.releaseRunning).not.toHaveBeenCalled();
+  });
+
+  it('ends the wait while the specialist publish is still in flight (#2018)', async () => {
+    const bus = new EventBus(logger);
+    let releaseSpecialist: (() => void) | undefined;
+    const specialist = new Promise<void>((resolve) => {
+      releaseSpecialist = resolve;
+    });
+    let entered = false;
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type !== 'agent.task') return;
+      entered = true;
+      await specialist;
+    });
+    const claim = holdingClaim();
+    const inputSignal = new AbortController();
+    const pending = handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Book the room', timeout_ms: 60_000 },
+      { bus, agentRegistry: registry(), openDelegationLookup: claim.lookup, inputSignal: inputSignal.signal, ...origin() },
+    ));
+    await vi.waitFor(() => expect(entered).toBe(true));
+    inputSignal.abort();
+    const result = await pending;
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as {
+      in_progress?: boolean;
+      reason?: string;
+      failed?: boolean;
+      possibly_succeeded?: boolean;
+    };
+    expect(data.in_progress).toBe(true);
+    expect(data.reason).toBe('interrupted');
+    expect(data.failed).toBeUndefined();
+    expect(data.possibly_succeeded).toBeUndefined();
+    expect(claim.releaseRunning).not.toHaveBeenCalled();
+    expect(releaseSpecialist).toEqual(expect.any(Function));
+    releaseSpecialist!();
   });
 
   it('a claim conflict does not dispatch, whatever the brief says', async () => {

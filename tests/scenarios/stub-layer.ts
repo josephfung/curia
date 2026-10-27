@@ -137,10 +137,23 @@ export interface StubController {
    * that times out with one is waiting on a slow specialist, not stuck.
    */
   pendingDelegations(conversationId: string): string[];
+  /**
+   * The first tool call of this run does not return until `until` settles (#2018).
+   * The harness uses that gap to publish a follow-up while the call is in flight.
+   */
+  holdFirstCall(conversationId: string, until: Promise<void>): void;
+  /** Resolves when this run has recorded its first tool call. */
+  whenFirstCall(conversationId: string): Promise<void>;
   /** Calls refused because they came from a conversation with no open run. */
   readonly staleCalls: number;
   /** web-search calls that ran the real tool, across every run (#2106). */
   readonly liveSearch: Readonly<LiveSearchTally>;
+}
+
+function deferredVoid(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((res) => { resolve = res; });
+  return { promise, resolve };
 }
 
 function skillError(message: string): string {
@@ -174,6 +187,11 @@ export function createStubController(
     waiting: string[];
     /** Makes a model-chosen specialist conversation id unique to this run. */
     token: string;
+    /** Resolved on the first recorded call. The harness waits on it to publish a follow-up. */
+    firstCall: { promise: Promise<void>; resolve: () => void };
+    /** When set, the first call awaits this before it returns. */
+    holdFirst?: Promise<void>;
+    gateOpened: boolean;
   }
   const runs = new Map<string, OpenRun>();
   /** A specialist's conversation → the run it works for (#2027). */
@@ -226,6 +244,15 @@ export function createStubController(
         disposition,
       });
     };
+    // The first call of the run waits here when the harness asked it to, so a
+    // follow-up can be published before the model sees this result (#2018).
+    const note = async (disposition: StubbedCall['disposition']): Promise<void> => {
+      record(disposition);
+      if (!run || run.gateOpened || run.calls.length !== 1) return;
+      run.gateOpened = true;
+      run.firstCall.resolve();
+      if (run.holdFirst) await run.holdFirst;
+    };
 
     const stub = stubs ? matchToolStub(toolName, input, stubs, options?.agentId) : undefined;
     // Same write-then-read replay as smoke (#2074). A stub that names draft_id
@@ -233,12 +260,12 @@ export function createStubController(
     if (run) {
       const draft = recordedDraftRead(toolName, input, run.tools, stub?.match);
       if (draft) {
-        record('stubbed');
+        await note('stubbed');
         return { success: true, data: draft };
       }
     }
     if (stub) {
-      record('stubbed');
+      await note('stubbed');
       if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
       // A success stub stands in for the send, not for the attachment check the
       // gateway runs first. A file_url outside the temp store is refused with
@@ -259,7 +286,7 @@ export function createStubController(
     }
 
     if (stubs === null || mustStub(toolName, registry(), unavailable(), inert(), { realDelegation: run?.realDelegation })) {
-      record('refused');
+      await note('refused');
       return {
         success: false,
         error: skillError(
@@ -271,7 +298,7 @@ export function createStubController(
       };
     }
 
-    record(inert().has(toolName) ? 'canned' : 'passthrough');
+    await note(inert().has(toolName) ? 'canned' : 'passthrough');
     if (toolName === 'delegate' && run) {
       // Only a real-delegation run gets here: mustStub refuses delegate otherwise.
       const conversationId = specialistConversation(run, input['conversation_id']);
@@ -321,11 +348,27 @@ export function createStubController(
         specialists: new Set(),
         waiting: [],
         token: randomUUID().slice(0, 8),
+        firstCall: deferredVoid(),
+        gateOpened: false,
       });
+    },
+    holdFirstCall(conversationId, until) {
+      const run = runs.get(conversationId);
+      if (!run) throw new Error(`StubController.holdFirstCall: no open run for ${conversationId}`);
+      run.holdFirst = until;
+    },
+    whenFirstCall(conversationId) {
+      const run = runs.get(conversationId);
+      if (!run) return Promise.resolve();
+      if (run.calls.length > 0) run.firstCall.resolve();
+      return run.firstCall.promise;
     },
     endRun(conversationId) {
       const run = runs.get(conversationId);
       runs.delete(conversationId);
+      // Unblock a follow-up waiter. The harness disarms before this, so the
+      // waiter does not publish after the run (#2018).
+      run?.firstCall.resolve();
       for (const specialist of run?.specialists ?? []) delegated.delete(specialist);
       return run?.calls ?? [];
     },

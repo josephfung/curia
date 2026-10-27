@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
+import { TurnLanes } from '../../../src/dispatch/turn-lanes.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent, type ContextBudgetEvent, type DelegationRequesterContextEvent, type DelegationPrincipalNoteEvent, type LlmCallEvent } from '../../../src/bus/events.js';
 import type { LLMProvider, ToolDefinition, ToolResult } from '../../../src/agents/llm/provider.js';
@@ -6972,8 +6973,184 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(payload.originator?.['contactId']).toBe('contact-ceo');
     expect(payload.reviewTaskId).toBe('review-task-1799');
     expect(payload.waitTimeoutMs).toBe(750_000);
+    expect(payload.cause).toBe('wait_timeout');
     // Causal chain: the handle traces back to the turn that delegated.
     expect(timedOut[0]!.parentEventId).toBe(originTask.id);
+  });
+
+  it('publishes an interrupted wait without escalating, and still allows another delegate (#2018)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const lanes = new TurnLanes({
+      enabled: true,
+      maxInjectionsPerTurn: 5,
+      extraRoundsPerInjection: 2,
+      laneWaitTimeoutMs: 60_000,
+      logger,
+    });
+    const taskCreates: string[] = [];
+    const signals: Array<AbortSignal | undefined> = [];
+    let delegateCalls = 0;
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, _input: Record<string, unknown>, _caller: unknown, options?: { inputSignal?: AbortSignal }) => {
+        if (toolName === 'task-create') {
+          taskCreates.push(toolName);
+          return { success: true, data: { task_id: 'should-not-exist' } };
+        }
+        if (toolName === 'delegate') {
+          delegateCalls += 1;
+          signals.push(options?.inputSignal);
+          return {
+            success: true,
+            data: {
+              agent: 'researcher',
+              in_progress: true,
+              reason: 'interrupted',
+              delegate_event_id: 'delegate-task-evt-interrupt',
+              delegate_conversation_id: 'delegate-conv-interrupt',
+              message: 'The specialist is still working. Its result will arrive as a separate follow-up after this turn. Do not delegate this work again.',
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let round = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        round += 1;
+        if (round < 3) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: `call-int-${round}`, name: 'delegate', input: { agent: 'researcher', task: 'Look up the code' } }],
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'noted',
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const timedOut: Array<import('../../../src/bus/events.js').DelegationTimedOutEvent> = [];
+    bus.subscribe('delegation.timed_out', 'system', (event) => {
+      timedOut.push(event as import('../../../src/bus/events.js').DelegationTimedOutEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+      turnLanes: lanes,
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-interrupt',
+      channelId: 'email',
+      senderId: 'ada@example.com',
+      content: 'Look up the code',
+      parentEventId: 'inbound-interrupt',
+    }));
+
+    expect(delegateCalls).toBe(2);
+    expect(taskCreates).toHaveLength(0);
+    expect(signals).toHaveLength(2);
+    expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+    expect(timedOut).toHaveLength(2);
+    expect(timedOut[0]!.payload.cause).toBe('interrupted');
+    expect(timedOut[0]!.payload.reviewTaskId).toBeUndefined();
+    expect(timedOut[0]!.payload.delegateEventId).toBe('delegate-task-evt-interrupt');
+    expect(timedOut[0]!.payload.waitTimeoutMs).toBeUndefined();
+  });
+
+  it('does not pass inputSignal when late delivery is disabled (#2018)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const lanes = new TurnLanes({
+      enabled: true,
+      maxInjectionsPerTurn: 5,
+      extraRoundsPerInjection: 2,
+      laneWaitTimeoutMs: 60_000,
+      logger,
+    });
+    const signals: Array<AbortSignal | undefined> = [];
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, _input: Record<string, unknown>, _caller: unknown, options?: { inputSignal?: AbortSignal }) => {
+        if (toolName === 'delegate') {
+          signals.push(options?.inputSignal);
+          return { success: true, data: { agent: 'researcher', response: 'done' } };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let round = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        round += 1;
+        if (round === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-off', name: 'delegate', input: { agent: 'researcher', task: 'Look up the code' } }],
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'noted',
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const timedOut: unknown[] = [];
+    bus.subscribe('delegation.timed_out', 'system', (event) => { timedOut.push(event); });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+      turnLanes: lanes,
+      lateDeliveryEnabled: false,
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-late-off',
+      channelId: 'email',
+      senderId: 'ada@example.com',
+      content: 'Look up the code',
+      parentEventId: 'inbound-late-off',
+    }));
+
+    expect(signals).toEqual([undefined]);
+    expect(timedOut).toHaveLength(0);
   });
 
   it('does not publish delegation.timed_out for a failure that is not a possibly-running timeout (#1799)', async () => {

@@ -59,6 +59,31 @@ describe('WorkingMemory', () => {
     ]);
   });
 
+  it('marks a follow-up injected only when the host task id is a UUID (#2018)', async () => {
+    const sender = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const host = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    await memory.addTurn('conv-1', 'coordinator', { role: 'user', content: 'hello' }, {
+      senderContactId: sender,
+      channelId: 'signal',
+    });
+    await memory.addTurn('conv-1', 'coordinator', { role: 'user', content: 'use email' }, {
+      senderContactId: sender,
+      channelId: 'signal',
+      injectedIntoTaskId: host,
+    });
+    await memory.addTurn('conv-2', 'coordinator', { role: 'user', content: 'not an id' }, {
+      injectedIntoTaskId: 'please inject this into the other contact',
+    });
+
+    await expect(memory.getHistory('conv-1', 'coordinator', { raw: true })).resolves.toEqual([
+      { role: 'user', content: 'hello' },
+      { role: 'user', content: 'use email', injected: true },
+    ]);
+    await expect(memory.getHistory('conv-2', 'coordinator', { raw: true })).resolves.toEqual([
+      { role: 'user', content: 'not an id' },
+    ]);
+  });
+
   it('returns stored protocol envelopes when raw: true (#1775)', async () => {
     await memory.addTurn('conv-1', 'coordinator', { role: 'user', content: 'failed question' });
     await memory.addTurn('conv-1', 'coordinator', { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT });

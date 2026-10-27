@@ -1512,6 +1512,44 @@ describe('Scheduler', () => {
       expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done', undefined, undefined);
     });
 
+    it('marks the suspension notice as a synthetic turn (#2018)', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
+      schedulerService.completeJobRun.mockResolvedValueOnce({ suspended: true });
+      schedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        consecutiveFailures: 3,
+      });
+      scheduler.start();
+
+      const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-suspended',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
+      });
+      // handleCompletion is not awaited by the subscriber. The notice is published
+      // after completeJobRun and getJob resolve. Wait on that publish rather than
+      // a fixed number of microtasks.
+      type Published = [string, { type: string; payload: { conversationId?: string; syntheticTurn?: boolean; content?: string } }];
+      const findNotify = (): Published | undefined => (bus.publish.mock.calls as Published[])
+        .find(([, event]) => event.type === 'agent.task' && event.payload.content?.includes('schedule_suspended'));
+      await vi.waitFor(() => {
+        expect(findNotify()).toBeDefined();
+      });
+      const notify = findNotify();
+      expect(notify?.[1].payload.syntheticTurn).toBe(true);
+      expect(notify?.[1].payload.conversationId).toBe('scheduler:job-1');
+    });
+
     it('threads failedSkills from agent.response into completeJobRun (#1830)', async () => {
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
@@ -2362,6 +2400,7 @@ describe('Scheduler', () => {
       });
 
       const content = notifyCall![1].payload.content;
+      expect((notifyCall![1].payload as { syntheticTurn?: boolean }).syntheticTurn).toBe(true);
 
       // Must NOT echo the re-executable original intent or the raw payload.
       expect(content).not.toContain(intentAnchor);

@@ -10,7 +10,8 @@
 //
 // - Keep the entry only while routing the reply again could still work: no
 //   specialist run started (in-flight refusal, guard block, a brief rejected
-//   before dispatch) or the run failed retryably.
+//   before dispatch), the run failed retryably, or the wait ended because a
+//   follow-up was queued and the specialist is still running.
 // - Release it on every other outcome: an answer, a clarification request (the
 //   follow-up is relayed as a new entry with the new resume_token, and keeping
 //   the old one would let the principal's next answer match a stale entry), a
@@ -157,6 +158,7 @@ export function settlementFor(
   }
   const data = (result.data ?? {}) as Record<string, unknown>;
   if (data['in_flight'] === true) return { action: 'keep', why: 'specialist already busy' };
+  if (data['in_progress'] === true) return { action: 'keep', why: 'specialist still running' };
   if (data['blocked'] === true) return { action: 'keep', why: 'blocked before dispatch' };
   if (data['failed'] === true && data['retryable'] === true) return { action: 'keep', why: 'retryable failure' };
   if (data['declined'] === true) return { action: 'release', why: 'specialist declined' };
