@@ -78,7 +78,7 @@
     "livekit-server-sdk": "^2.19.1",
     "luxon": "^3.7.2",
     "markdown-it": "^15.0.3",
-    "node-html-parser": "^9.0.4",
+    "node-html-parser": "^9.0.5",
     "node-pg-migrate": "^9.0.0",
     "nylas": "^8.4.0",
     "openai": "^7.30.1",
