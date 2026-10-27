@@ -21,6 +21,6 @@
   },
   "dependencies": {
     "cronstrue": "^3.32.0",
-    "livekit-client": "^2.22.4"
+    "livekit-client": "^2.23.0"
   }
 }

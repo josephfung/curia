@@ -267,8 +267,8 @@ importers:
         specifier: ^3.32.0
         version: 3.32.0
       livekit-client:
-        specifier: ^2.22.4
-        version: 2.22.4(@types/dom-mediacapture-record@1.0.22)
+        specifier: ^2.23.0
+        version: 2.23.0(@types/dom-mediacapture-record@1.0.22)
     devDependencies:
       '@tanstack/react-router':
         specifier: ^1.170.42
@@ -4240,8 +4240,8 @@ packages:
   linkify-it@6.1.0:
     resolution: {integrity: sha512-wJ/TwpSDTLepCrQoYWYIExIKg5Zchex2Nn5yk2mFnB+6PtdkHtyLx742md9csRjjOnGkKIS/RrbY7l8D6gT9Vw==}
 
-  livekit-client@2.22.4:
-    resolution: {integrity: sha512-UJ5K8gqP8uIO+tjhGeF+s6SzgLfxZKPxQjSqzzkF298QNYMnhYmXGQRMMh3GnsfaeswnsHHMSogMeb7SocH2zw==}
+  livekit-client@2.23.0:
+    resolution: {integrity: sha512-j9Kg86nJjBjNFUD+ukp2jwMCGa0k+YD5gU//RzAM+ZY3pbG631QCte7fQjwqWMmtBzhDJL9nKYuOLMv/9IbAxg==}
     peerDependencies:
       '@types/dom-mediacapture-record': ^1
 
@@ -9997,8 +9997,7 @@ snapshots:
 
   jose@6.2.12: {}
 
-  jose@6.2.13:
-    optional: true
+  jose@6.2.13: {}
 
   joycon@3.1.1: {}
 
@@ -10192,13 +10191,13 @@ snapshots:
     dependencies:
       uc.micro: 3.0.0
 
-  livekit-client@2.22.4(@types/dom-mediacapture-record@1.0.22):
+  livekit-client@2.23.0(@types/dom-mediacapture-record@1.0.22):
     dependencies:
       '@livekit/mutex': 1.1.1
       '@livekit/protocol': 1.52.1
       '@types/dom-mediacapture-record': 1.0.22
       events: 3.3.0
-      jose: 6.2.12
+      jose: 6.2.13
       loglevel: 1.9.2
       machina: 7.0.1
       sdp-transform: 2.15.0
