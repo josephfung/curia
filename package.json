@@ -51,7 +51,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.133.0",
+    "@anthropic-ai/sdk": "^0.135.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1152.0",
     "@curia/shared-types": "workspace:*",
     "@fastify/cookie": "^11.1.3",
