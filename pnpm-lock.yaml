@@ -37,8 +37,8 @@ importers:
   .:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.133.0
-        version: 0.133.0(zod@4.6.5)
+        specifier: ^0.135.0
+        version: 0.135.0(zod@4.6.5)
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1152.0
         version: 3.1153.0
@@ -376,8 +376,8 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/sdk@0.133.0':
-    resolution: {integrity: sha512-jlqUN8p8ESTJj+GJnA4KjzbEfF1waEoGzRT8jwytlYGFFgv+/DUQOxlYGvYw10UzhD1kwLqYzxvA3FrTB2YWuQ==}
+  '@anthropic-ai/sdk@0.135.0':
+    resolution: {integrity: sha512-WWrdL57JhU5KoynpTjt9GXK6k7ud9nPw2uw/Trn+oBXh6s0KpjhAccWZm2Qxw08ARYG1UDQj5iC+JO42j1rt/g==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -1861,6 +1861,10 @@ packages:
 
   '@opentelemetry/api-logs@0.222.0':
     resolution: {integrity: sha512-9mb1If+IF6u0ZVXkHQ6ogEae5HwA6ajIVUgpSDQyRASxft6BSXHvBvPooRle3yFN/fKnCdSOnuu0OC3PLcF6+g==}
+    engines: {node: '>=8.0.0'}
+
+  '@opentelemetry/api@1.10.0':
+    resolution: {integrity: sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ==}
     engines: {node: '>=8.0.0'}
 
   '@opentelemetry/api@1.9.1':
@@ -6010,8 +6014,9 @@ snapshots:
     optionalDependencies:
       zod: 4.6.5
 
-  '@anthropic-ai/sdk@0.133.0(zod@4.6.5)':
+  '@anthropic-ai/sdk@0.135.0(zod@4.6.5)':
     dependencies:
+      '@opentelemetry/api': 1.10.0
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
@@ -6554,7 +6559,7 @@ snapshots:
       '@azure/identity': 4.13.3
       '@azure/logger': 1.4.0
       '@azure/storage-blob': 12.33.0
-      '@opentelemetry/api': 1.9.1
+      '@opentelemetry/api': 1.10.0
       https-proxy-agent: 7.0.6
       openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.87)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
       tslib: 2.8.1
@@ -7841,7 +7846,9 @@ snapshots:
 
   '@opentelemetry/api-logs@0.222.0':
     dependencies:
-      '@opentelemetry/api': 1.9.1
+      '@opentelemetry/api': 1.10.0
+
+  '@opentelemetry/api@1.10.0': {}
 
   '@opentelemetry/api@1.9.1': {}
 
@@ -8605,7 +8612,7 @@ snapshots:
       '@ai-sdk/gateway': 3.0.196(zod@4.6.5)
       '@ai-sdk/provider': 3.0.16
       '@ai-sdk/provider-utils': 4.0.51(zod@4.6.5)
-      '@opentelemetry/api': 1.9.1
+      '@opentelemetry/api': 1.10.0
       zod: 4.6.5
 
   ajv-formats@3.0.1(ajv@8.20.0):
