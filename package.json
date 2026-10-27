@@ -58,7 +58,7 @@
     "@fastify/cors": "^11.3.1",
     "@fastify/rate-limit": "^11.2.1",
     "@fastify/static": "^10.1.5",
-    "@ghostery/adblocker-playwright": "^2.18.2",
+    "@ghostery/adblocker-playwright": "^2.20.1",
     "@livekit/rtc-node": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@slack/socket-mode": "^3.1.0",
