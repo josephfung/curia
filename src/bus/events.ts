@@ -4,6 +4,7 @@ import type { ContactTier, DedupConfidence, SystemRole, TierElevationReason, Tru
 import type { Sensitivity, NodeType } from '../memory/types.js';
 import type { ActionRisk } from '../skills/types.js';
 import type { ReasoningEffort } from '../agents/llm/sampling-options.js';
+import type { ReasoningWatchdogRecord } from '../agents/llm/reasoning-watchdog.js';
 
 // -- Base event shape --
 // Every event on the bus shares these fields; parentEventId forms the causal chain.
@@ -876,6 +877,11 @@ interface LlmCallPayload {
    * this is the attempt that succeeded. `null` where `attempts` is.
    */
   failedAttemptsMs?: number | null;
+  /**
+   * Set when the reasoning watchdog stopped a call and made a forced attempt
+   * (#2371); `null` otherwise.
+   */
+  reasoningWatchdog?: ReasoningWatchdogRecord | null;
 }
 
 // ModelFallbackEngagedPayload — emitted by the agent runtime when the primary

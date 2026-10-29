@@ -66,6 +66,7 @@ const reported = {
   reasoningBlocksDropped: 0,
   attempts: 2,
   failedAttemptsMs: 600_400,
+  reasoningWatchdog: null,
 };
 const unreported = {
   reasoningTokens: null,
@@ -74,6 +75,7 @@ const unreported = {
   reasoningBlocksDropped: 0,
   attempts: null,
   failedAttemptsMs: null,
+  reasoningWatchdog: null,
 };
 
 describe('llmCallReasoningFields', () => {
@@ -91,6 +93,12 @@ describe('llmCallReasoningFields', () => {
 
   it('records null for fields the provider did not report', () => {
     expect(llmCallReasoningFields(usage(), provenance())).toEqual(unreported);
+  });
+
+  it('maps reasoningWatchdog through, and null when absent', () => {
+    const watchdog = { trigger: 'tokens' as const, firedAtReasoningTokens: 8000, firedAfterMs: 41_000, forcedOutcome: 'acted' as const };
+    expect(llmCallReasoningFields(usage(), { ...provenance(), reasoningWatchdog: watchdog }).reasoningWatchdog).toEqual(watchdog);
+    expect(llmCallReasoningFields(usage(), provenance()).reasoningWatchdog).toBeNull();
   });
 });
 

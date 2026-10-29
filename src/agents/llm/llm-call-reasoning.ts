@@ -5,6 +5,7 @@
 
 import type { LLMCallProvenance, LLMUsage } from './provider.js';
 import type { ReasoningEffort } from './sampling-options.js';
+import type { ReasoningWatchdogRecord } from './reasoning-watchdog.js';
 
 export interface LlmCallReasoningFields {
   reasoningTokens: number | null;
@@ -13,6 +14,7 @@ export interface LlmCallReasoningFields {
   reasoningBlocksDropped: number;
   attempts: number | null;
   failedAttemptsMs: number | null;
+  reasoningWatchdog: ReasoningWatchdogRecord | null;
 }
 
 /**
@@ -33,5 +35,6 @@ export function llmCallReasoningFields(
     // null, not 1, where the provider does not count: its SDK may retry unseen.
     attempts: provenance.attempts ?? null,
     failedAttemptsMs: provenance.failedAttemptsMs ?? null,
+    reasoningWatchdog: provenance.reasoningWatchdog ?? null,
   };
 }
