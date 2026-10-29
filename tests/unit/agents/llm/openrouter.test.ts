@@ -710,7 +710,7 @@ describe('OpenRouterProvider — stream', () => {
         type: 'message_end',
         content: 'hello',
         usage: { inputTokens: 12, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
-        provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-123' },
+        provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-123', attempts: 1, failedAttemptsMs: 0 },
       },
     ]);
     const params = mockCreate.mock.calls[0]![0];
@@ -774,12 +774,14 @@ describe('OpenRouterProvider — stream', () => {
 
     expect(events[0]).toEqual({ type: 'request_started', maxTokens: expect.any(Number) });
     expect(events[1]).toEqual({ type: 'text_delta', text: 'Checking. ' });
-    expect(events[2]).toEqual({
+    expect(events[2]).toEqual({ type: 'output_started' });
+    expect(events.filter((e) => e.type === 'output_started')).toHaveLength(1);
+    expect(events[3]).toEqual({
       type: 'tool_use',
       toolCalls: [{ id: 'call_1', name: 'search', input: { query: 'curia' } }],
       content: 'Checking. ',
       usage: { inputTokens: 22, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
-      provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-tool' },
+      provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-tool', attempts: 1, failedAttemptsMs: 0 },
     });
   });
 
@@ -798,7 +800,10 @@ describe('OpenRouterProvider — stream', () => {
       chunk({ reasoning: 'second ', reasoning_details: [{ type: 'reasoning.text', text: 'second ' }] }),
       // Details only.
       chunk({ reasoning_details: [{ type: 'reasoning.text', text: 'third' }, { type: 'reasoning.encrypted', data: 'xx' }] }),
-      chunk({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'search', arguments: '{}' } }] }, 'tool_calls'),
+      // An empty delta.reasoning does not hide the details text.
+      chunk({ reasoning: '', reasoning_details: [{ type: 'reasoning.text', text: 'fourth' }] }),
+      chunk({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'search', arguments: '{"q"' } }] }),
+      chunk({ tool_calls: [{ index: 0, function: { arguments: ':"x"}' } }] }, 'tool_calls'),
     ]));
 
     const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
@@ -810,12 +815,17 @@ describe('OpenRouterProvider — stream', () => {
 
     expect(events[0]).toEqual({ type: 'request_started', maxTokens: 32_768 });
     expect(events.filter((e) => e.type === 'request_started')).toHaveLength(1);
-    expect(events.slice(1, 4)).toEqual([
+    expect(events.slice(1, 5)).toEqual([
       { type: 'reasoning_delta', text: 'first ' },
       { type: 'reasoning_delta', text: 'second ' },
       { type: 'reasoning_delta', text: 'third' },
+      { type: 'reasoning_delta', text: 'fourth' },
     ]);
-    expect(events[4]!.type).toBe('tool_use');
+    // output_started once, on the first tool-call chunk, before the final tool_use.
+    expect(events[5]).toEqual({ type: 'output_started' });
+    expect(events.filter((e) => e.type === 'output_started')).toHaveLength(1);
+    expect(events[6]!.type).toBe('tool_use');
+    expect(events).toHaveLength(7);
     expect(mockCreate.mock.calls[0]![0].max_tokens).toBe(32_768);
   });
 
@@ -926,7 +936,27 @@ describe('OpenRouterProvider — stream', () => {
       options: { signal: controller.signal },
     }));
 
-    expect(mockCreate.mock.calls[0]![1]).toEqual({ signal: controller.signal });
+    expect(mockCreate.mock.calls[0]![1]).toEqual({ signal: controller.signal, maxRetries: 0 });
+  });
+
+  it('turns off SDK retries on the stream request, so retries are counted where they happen (#1915)', async () => {
+    mockCreate.mockResolvedValue(makeStream([
+      {
+        id: 'chatcmpl-noretry',
+        model: 'openai/gpt-4o',
+        choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop', logprobs: null }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+    ]));
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({ messages: [{ role: 'user', content: 'Hello' }], model: 'openai/gpt-4o' }));
+
+    expect(mockCreate.mock.calls[0]![1]).toEqual({ maxRetries: 0 });
+    const end = events.at(-1);
+    if (end?.type !== 'message_end') throw new Error(`expected message_end, got ${end?.type}`);
+    expect(end.provenance).toMatchObject({ attempts: 1, failedAttemptsMs: 0 });
   });
 
   // Leak-parity fix (#1651, mirrors #1648): the provider must release the underlying
@@ -1193,7 +1223,7 @@ describe('OpenRouterProvider — reasoning (#2042)', () => {
         } else {
           expect(JSON.stringify(result)).not.toContain('CIPHERTEXT-DO-NOT-STORE');
         }
-        if (result && result.type !== 'error' && result.type !== 'text_delta' && result.type !== 'request_started' && result.type !== 'reasoning_delta') {
+        if (result && result.type !== 'error' && result.type !== 'text_delta' && result.type !== 'request_started' && result.type !== 'reasoning_delta' && result.type !== 'output_started') {
           expect(JSON.stringify(buildLlmArchiveResponse(result))).not.toContain('CIPHERTEXT-DO-NOT-STORE');
         }
       }

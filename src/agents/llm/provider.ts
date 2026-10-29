@@ -148,12 +148,12 @@ export interface LLMCallProvenance {
    */
   reasoningBlocksDropped?: number;
   /**
-   * OpenRouter chat() only: requests sent for this call, counting retries.
-   * Absent where the provider does not count them (#1915).
+   * OpenRouter only: requests sent for this call, counting retries (always 1 on
+   * stream(), which does not retry). Absent where the provider does not count them (#1915).
    */
   attempts?: number;
   /**
-   * OpenRouter chat() only: time spent on failed attempts and the backoff after
+   * OpenRouter only: time spent on failed attempts and the backoff after
    * each, so `latencyMs - failedAttemptsMs` is the attempt that succeeded (#1915).
    */
   failedAttemptsMs?: number;
@@ -204,6 +204,13 @@ export type LLMStreamEvent =
    * floor). A watcher arms its thresholds from it.
    */
   | { type: 'request_started'; maxTokens: number }
+  /**
+   * Emitted at most once, on the first chunk of a tool call, so a watcher knows
+   * output has begun even though tool-call arguments produce no delta event.
+   * Text output signals itself through `text_delta`; a provider need not emit
+   * this for text.
+   */
+  | { type: 'output_started' }
   | { type: 'text_delta'; text: string }
   /**
    * One per reasoning delta that carries non-empty readable text (never for
@@ -235,7 +242,8 @@ export interface LLMProvider {
    * Stream a conversation turn. Optional — providers that cannot stream omit it.
    * Voice refuses to start when stream is unavailable. Never silently buffer the
    * full reply before first yield when the backend supports true streaming.
-   * Emits `request_started` first (once), and `reasoning_delta` per readable reasoning delta.
+   * Emits `request_started` first (once), `reasoning_delta` per readable reasoning delta,
+   * and `output_started` once on the first tool-call chunk.
    * Honor `options.signal` (AbortSignal) for cancellation (barge-in).
    * Like chat(), should not throw for API failures — yield `{ type: 'error' }` instead.
    * May throw only for programmer errors (e.g. missing model) before the iterable starts,

@@ -635,6 +635,35 @@ describe('AnthropicProvider — stream', () => {
     expect(events.filter((e) => e.type === 'request_started')).toHaveLength(1);
   });
 
+  it('emits output_started once, on the first tool_use content_block_start', async () => {
+    mockStream.mockReturnValue(makeStream([
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'plan' } },
+      { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'search', input: {} } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"query":' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '"curia"}' } },
+      { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'toolu_2', name: 'search', input: {} } },
+    ], {
+      id: 'msg_stream_tools',
+      model: 'claude-sonnet-4-6',
+      content: [
+        { type: 'tool_use', id: 'toolu_1', name: 'search', input: { query: 'curia' } },
+        { type: 'tool_use', id: 'toolu_2', name: 'search', input: {} },
+      ],
+      usage: { input_tokens: 21, output_tokens: 9, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      stop_reason: 'tool_use',
+    }));
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Search' }],
+      model: 'claude-sonnet-4-6',
+      tools: [{ name: 'search', description: 'Search', input_schema: { type: 'object' as const, properties: {} } }],
+    }));
+
+    expect(events.map((e) => e.type)).toEqual(['request_started', 'reasoning_delta', 'output_started', 'tool_use']);
+  });
+
   it('empty thinking deltas (display omitted) emit no reasoning_delta', async () => {
     mockStream.mockReturnValue(makeStream([
       { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '' } },

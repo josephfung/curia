@@ -538,8 +538,15 @@ export class AnthropicProvider implements LLMProvider {
       // that accumulates until an OOM restart (#1648; upstream anthropics/claude-code#33380).
       // MessageStream.abort() is idempotent — calling it after finalMessage() is a no-op.
       try {
+        let outputStarted = false;
         for await (const event of stream) {
-          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta' && event.delta.text) {
+          if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+            // input_json_delta chunks yield no event; tell watchers output has begun.
+            if (!outputStarted) {
+              outputStarted = true;
+              yield { type: 'output_started' };
+            }
+          } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta' && event.delta.text) {
             yield { type: 'text_delta', text: event.delta.text };
           } else if (event.type === 'content_block_delta' && event.delta.type === 'thinking_delta' && event.delta.thinking) {
             yield { type: 'reasoning_delta', text: event.delta.thinking };

@@ -744,8 +744,8 @@ export class OpenRouterProvider implements LLMProvider {
   /**
    * Send a non-streamed request, retrying it here rather than in the SDK
    * (`maxRetries: 0`) so every failed attempt is logged and the count reaches
-   * llm.call (#1915). stream() keeps the SDK's retries: they happen before any
-   * token arrives.
+   * llm.call (#1915). stream() sends one request with SDK retries off too; a
+   * failed watched stream falls back to chat(), which retries here (#2371).
    *
    * A response that hit max_tokens with no answer is retried too, at once: it is
    * not an overload signal. The last attempt's response is returned whatever it
@@ -989,7 +989,13 @@ export class OpenRouterProvider implements LLMProvider {
         stream: true,
         stream_options: { include_usage: true },
       };
-      const stream = await this.client.chat.completions.create(streamParams, signal ? { signal } : undefined);
+      // No SDK retries (#2371): a retry inside the SDK is invisible to llm.call's
+      // attempt count. A failed watched call falls back to chat(), which retries
+      // and counts each attempt; voice fails the turn fast rather than hanging.
+      const stream = await this.client.chat.completions.create(streamParams, {
+        maxRetries: 0,
+        ...(signal ? { signal } : {}),
+      });
       abortStream = () => stream.controller.abort();
 
       let content = '';
@@ -1005,6 +1011,7 @@ export class OpenRouterProvider implements LLMProvider {
       let seenChunk = false;
       let finishReason: string | null = null;
       const toolCallDeltas = new Map<number, PendingToolCall>();
+      let outputStarted = false;
       let reasoningDirect = '';
       const reasoningState = emptyReasoningState();
       // The raw details, rebuilt for pass-back; reasoningState only holds readable text.
@@ -1030,15 +1037,22 @@ export class OpenRouterProvider implements LLMProvider {
 
           const delta = choice.delta as { reasoning?: unknown; reasoning_details?: unknown };
           if (typeof delta.reasoning === 'string') reasoningDirect += delta.reasoning;
-          // One reasoning_delta per chunk: delta.reasoning wins; details text only when it is absent.
-          const reasoningText = typeof delta.reasoning === 'string'
+          // One reasoning_delta per chunk: a non-empty delta.reasoning wins; the
+          // details text is used when it is absent or empty.
+          const reasoningText = typeof delta.reasoning === 'string' && delta.reasoning !== ''
             ? delta.reasoning
             : readableReasoningDetailsText(delta.reasoning_details);
           if (reasoningText) yield { type: 'reasoning_delta', text: reasoningText };
           absorbReasoningDetails(reasoningState, delta.reasoning_details);
           mergeReasoningDetailDeltas(reasoningDetails, delta.reasoning_details);
 
-          for (const toolCallDelta of choice.delta.tool_calls ?? []) {
+          const toolCallChunks = choice.delta.tool_calls ?? [];
+          if (toolCallChunks.length > 0 && !outputStarted) {
+            // Tool-call arguments yield no delta event; tell watchers output has begun.
+            outputStarted = true;
+            yield { type: 'output_started' };
+          }
+          for (const toolCallDelta of toolCallChunks) {
             const pending = toolCallDeltas.get(toolCallDelta.index) ?? { name: '', arguments: '' };
             if (toolCallDelta.id) pending.id = toolCallDelta.id;
             if (toolCallDelta.function?.name) pending.name += toolCallDelta.function.name;
@@ -1079,6 +1093,10 @@ export class OpenRouterProvider implements LLMProvider {
         providerRequestId,
         ...(upstreamProvider !== undefined ? { upstreamProvider } : {}),
         ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+        // One request, never retried here (SDK retries are off above), so the
+        // #1915 attempt telemetry reads the same as a first-try chat().
+        attempts: 1,
+        failedAttemptsMs: 0,
       };
       const reasoning = reasoningFieldsFromParts(
         reasoningDirect,
