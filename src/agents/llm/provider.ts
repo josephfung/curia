@@ -8,6 +8,7 @@
 
 import type { AgentError } from '../../errors/types.js';
 import type { ReasoningEffort } from './sampling-options.js';
+import type { ReasoningWatchdogRecord } from './reasoning-watchdog.js';
 
 /**
  * Content block types for multi-turn tool-use conversations.
@@ -156,6 +157,11 @@ export interface LLMCallProvenance {
    * each, so `latencyMs - failedAttemptsMs` is the attempt that succeeded (#1915).
    */
   failedAttemptsMs?: number;
+  /**
+   * Set when the reasoning watchdog stopped the streamed attempt and this
+   * response came from the forced attempt (#2371). Absent otherwise.
+   */
+  reasoningWatchdog?: ReasoningWatchdogRecord;
 }
 
 // Import and re-export ToolDefinition from the canonical location in skills/types.ts

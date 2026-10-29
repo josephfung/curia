@@ -52,6 +52,7 @@ import { createEstimateCostUsd } from './agents/llm/pricing.js';
 import type { LLMProvider } from './agents/llm/provider.js';
 import { LLMProviderRouter } from './agents/llm/provider-router.js';
 import { TelemetryLlmProvider } from './agents/llm/telemetry-provider.js';
+import { ReasoningWatchdogProvider } from './agents/llm/reasoning-watchdog-provider.js';
 import { InfraLlmService } from './skills/infra-llm.js';
 import { AgentRegistry, missingDurationHintWarning } from './agents/agent-registry.js';
 import {
@@ -549,7 +550,7 @@ async function main(): Promise<void> {
   }
   const providerRegistry = new Map<string, LLMProvider>();
   if (config.anthropicApiKey) {
-    providerRegistry.set('anthropic', new AnthropicProvider(config.anthropicApiKey, logger, modelRegistry));
+    providerRegistry.set('anthropic', new ReasoningWatchdogProvider(new AnthropicProvider(config.anthropicApiKey, logger, modelRegistry), logger));
   }
 
   // OpenRouter — optional second provider for non-Claude models.
@@ -558,7 +559,7 @@ async function main(): Promise<void> {
   // only checks models that are actually mapped to a tier.
   if (config.openrouterApiKey) {
     const openrouterProvider = new OpenRouterProvider(config.openrouterApiKey, logger, modelRegistry);
-    providerRegistry.set('openrouter', openrouterProvider);
+    providerRegistry.set('openrouter', new ReasoningWatchdogProvider(openrouterProvider, logger));
     logger.info('OpenRouter provider registered — non-Claude models available');
   }
 
@@ -566,14 +567,15 @@ async function main(): Promise<void> {
   // are present; the tier validation below fails loudly if a tier is mapped to a
   // Bedrock model without it.
   if (bedrockCreds) {
-    providerRegistry.set('bedrock', new BedrockProvider(
+    // Bedrock has no stream(), so the wrapper passes its chat() through unwatched.
+    providerRegistry.set('bedrock', new ReasoningWatchdogProvider(new BedrockProvider(
       bedrockCreds.accessKeyId,
       bedrockCreds.secretAccessKey,
       bedrockCreds.region,
       config.awsBedrockTimeoutMs,
       logger,
       modelRegistry,
-    ));
+    ), logger));
     logger.info({ region: bedrockCreds.region }, 'AWS Bedrock provider registered — Bedrock-hosted models available');
   } else if (config.awsAccessKeyId || config.awsSecretAccessKey) {
     // Partial config is almost certainly a mistake — say so rather than leaving
