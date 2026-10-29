@@ -101,6 +101,33 @@ describe('runStreamingToolLoop (#1552)', () => {
     expect(result.toolRounds).toBe(0);
   });
 
+  it('ignores request_started and reasoning_delta events', async () => {
+    const terminal: LLMStreamEvent = { type: 'message_end', content: 'Hello world.', usage, provenance };
+    const run = async (script: LLMStreamEvent[]) => {
+      const deltas: string[] = [];
+      const result = await runStreamingToolLoop([{ role: 'user', content: 'hi' }], {
+        provider: new FakeStreamProvider([script]),
+        model: 'fake',
+        maxRounds: DEFAULT_STREAMING_MAX_ROUNDS,
+        signal: new AbortController().signal,
+        hooks: { onTextDelta: (text) => { deltas.push(text); } },
+      });
+      return { result, deltas };
+    };
+
+    const plain = await run([textDelta('Hello world.'), terminal]);
+    const withNew = await run([
+      { type: 'request_started', maxTokens: 32_768 },
+      { type: 'reasoning_delta', text: 'thinking' },
+      textDelta('Hello world.'),
+      { type: 'reasoning_delta', text: ' more' },
+      terminal,
+    ]);
+
+    expect(withNew.result).toEqual(plain.result);
+    expect(withNew.deltas).toEqual(plain.deltas);
+  });
+
   it('runs tool_use → invokeTool → continues with tool_result shape', async () => {
     const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: { q: 'weather' } };
     const provider = new FakeStreamProvider([

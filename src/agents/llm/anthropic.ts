@@ -528,6 +528,7 @@ export class AnthropicProvider implements LLMProvider {
       model = built.model;
       const { createParams, signal, prefixHash, reasoningEffort, reasoningBlocksDropped } = built;
       const stream = this.client.messages.stream(createParams, signal ? { signal } : undefined);
+      yield { type: 'request_started', maxTokens: createParams.max_tokens };
 
       // Guarantee the underlying fetch Response / ReadableStream is released on every
       // exit path — normal completion, a thrown error, an AbortSignal firing, or a
@@ -540,6 +541,8 @@ export class AnthropicProvider implements LLMProvider {
         for await (const event of stream) {
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta' && event.delta.text) {
             yield { type: 'text_delta', text: event.delta.text };
+          } else if (event.type === 'content_block_delta' && event.delta.type === 'thinking_delta' && event.delta.thinking) {
+            yield { type: 'reasoning_delta', text: event.delta.thinking };
           }
         }
 

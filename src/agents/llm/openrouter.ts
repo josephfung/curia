@@ -297,6 +297,19 @@ function absorbReasoningDetails(state: ReasoningDetailState, details: unknown): 
   for (const detail of details) absorbReasoningDetail(state, detail);
 }
 
+/** The readable text (reasoning.text and reasoning.summary) in one chunk's reasoning_details; encrypted entries add nothing. */
+function readableReasoningDetailsText(details: unknown): string {
+  if (!Array.isArray(details)) return '';
+  let text = '';
+  for (const detail of details) {
+    if (typeof detail !== 'object' || detail === null) continue;
+    const record = detail as Record<string, unknown>;
+    if (record.type === 'reasoning.text' && typeof record.text === 'string') text += record.text;
+    else if (record.type === 'reasoning.summary' && typeof record.summary === 'string') text += record.summary;
+  }
+  return text;
+}
+
 /** Models already warned for returning reasoning tokens without readable text. */
 const reasoningOmissionWarned = new Set<string>();
 
@@ -970,6 +983,7 @@ export class OpenRouterProvider implements LLMProvider {
       const built = this.buildCreateParams(params, 'stream');
       model = built.model;
       const { createParams, signal, reasoningEffort } = built;
+      yield { type: 'request_started', maxTokens: createParams.max_tokens as number };
       const streamParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
         ...createParams,
         stream: true,
@@ -1016,6 +1030,11 @@ export class OpenRouterProvider implements LLMProvider {
 
           const delta = choice.delta as { reasoning?: unknown; reasoning_details?: unknown };
           if (typeof delta.reasoning === 'string') reasoningDirect += delta.reasoning;
+          // One reasoning_delta per chunk: delta.reasoning wins; details text only when it is absent.
+          const reasoningText = typeof delta.reasoning === 'string'
+            ? delta.reasoning
+            : readableReasoningDetailsText(delta.reasoning_details);
+          if (reasoningText) yield { type: 'reasoning_delta', text: reasoningText };
           absorbReasoningDetails(reasoningState, delta.reasoning_details);
           mergeReasoningDetailDeltas(reasoningDetails, delta.reasoning_details);
 

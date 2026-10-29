@@ -568,6 +568,7 @@ describe('AnthropicProvider — stream', () => {
     }));
 
     expect(events).toEqual([
+      { type: 'request_started', maxTokens: expect.any(Number) },
       { type: 'text_delta', text: 'hel' },
       { type: 'text_delta', text: 'lo' },
       {
@@ -600,14 +601,53 @@ describe('AnthropicProvider — stream', () => {
       tools: [{ name: 'search', description: 'Search', input_schema: { type: 'object' as const, properties: {} } }],
     }));
 
-    expect(events[0]).toEqual({ type: 'text_delta', text: 'Let me check.' });
-    expect(events[1]).toEqual({
+    expect(events[0]).toEqual({ type: 'request_started', maxTokens: expect.any(Number) });
+    expect(events[1]).toEqual({ type: 'text_delta', text: 'Let me check.' });
+    expect(events[2]).toEqual({
       type: 'tool_use',
       toolCalls: [{ id: 'toolu_1', name: 'search', input: { query: 'curia' } }],
       content: 'Let me check.',
       usage: { inputTokens: 21, outputTokens: 9, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
       provenance: { requestedModel: 'claude-sonnet-4-6', actualModel: 'claude-sonnet-4-6', providerRequestId: 'msg_stream_tool' },
     });
+  });
+
+  it('stream emits request_started with the sent max_tokens and a reasoning_delta per non-empty thinking_delta', async () => {
+    mockStream.mockReturnValue(makeStream([
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'let me ' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'think' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'ok' } },
+    ], makeTextResponse()));
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'claude-sonnet-4-6',
+    }));
+
+    const sentMaxTokens = mockStream.mock.calls[0]![0].max_tokens as number;
+    expect(events.slice(0, 4)).toEqual([
+      { type: 'request_started', maxTokens: sentMaxTokens },
+      { type: 'reasoning_delta', text: 'let me ' },
+      { type: 'reasoning_delta', text: 'think' },
+      { type: 'text_delta', text: 'ok' },
+    ]);
+    expect(events.filter((e) => e.type === 'request_started')).toHaveLength(1);
+  });
+
+  it('empty thinking deltas (display omitted) emit no reasoning_delta', async () => {
+    mockStream.mockReturnValue(makeStream([
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'ok' } },
+    ], makeTextResponse()));
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'claude-sonnet-4-6',
+    }));
+
+    expect(events.some((e) => e.type === 'reasoning_delta')).toBe(false);
   });
 
   it('passes AbortSignal through to messages.stream()', async () => {
@@ -665,15 +705,15 @@ describe('AnthropicProvider — stream', () => {
     mockStream.mockReturnValue(stream);
 
     const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
-    // Break after the first event: the async generator's finally must still run and
-    // abort the SDK stream, otherwise its Response buffer leaks.
+    // Break after the first text delta (request_started precedes it): the async generator's
+    // finally must still run and abort the SDK stream, otherwise its Response buffer leaks.
     const seen: LLMStreamEvent[] = [];
     for await (const event of provider.stream({ messages: [{ role: 'user', content: 'Hello' }], model: 'claude-sonnet-4-6' })) {
       seen.push(event);
-      break;
+      if (event.type === 'text_delta') break;
     }
 
-    expect(seen).toHaveLength(1);
+    expect(seen).toHaveLength(2);
     expect(stream.abort).toHaveBeenCalledTimes(1);
   });
 

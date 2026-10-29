@@ -192,7 +192,18 @@ export type LLMResponse =
   | { type: 'error'; error: AgentError; usage?: LLMUsage };
 
 export type LLMStreamEvent =
+  /**
+   * Emitted exactly once per stream() call, before any other event, carrying the
+   * max_tokens the request actually sent (after the model cap and any thinking
+   * floor). A watcher arms its thresholds from it.
+   */
+  | { type: 'request_started'; maxTokens: number }
   | { type: 'text_delta'; text: string }
+  /**
+   * One per reasoning delta that carries non-empty readable text (never for
+   * encrypted or omitted thinking). A watcher counts one token per event.
+   */
+  | { type: 'reasoning_delta'; text: string }
   | ({ type: 'tool_use'; toolCalls: ToolCall[]; content?: string; reasoningBlocks?: ReasoningContent[]; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
   | ({ type: 'message_end'; content: string; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
   | { type: 'error'; error: AgentError; usage?: LLMUsage };
@@ -218,6 +229,7 @@ export interface LLMProvider {
    * Stream a conversation turn. Optional — providers that cannot stream omit it.
    * Voice refuses to start when stream is unavailable. Never silently buffer the
    * full reply before first yield when the backend supports true streaming.
+   * Emits `request_started` first (once), and `reasoning_delta` per readable reasoning delta.
    * Honor `options.signal` (AbortSignal) for cancellation (barge-in).
    * Like chat(), should not throw for API failures — yield `{ type: 'error' }` instead.
    * May throw only for programmer errors (e.g. missing model) before the iterable starts,
