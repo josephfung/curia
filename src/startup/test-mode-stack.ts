@@ -100,7 +100,7 @@ import { WorkingDocsRepo } from '../db/working-docs-repo.js';
 import { AnthropicProvider } from '../agents/llm/anthropic.js';
 import { OpenRouterProvider } from '../agents/llm/openrouter.js';
 import { BedrockProvider } from '../agents/llm/bedrock.js';
-import { ReasoningWatchdogProvider } from '../agents/llm/reasoning-watchdog-provider.js';
+import { watchProvider } from '../agents/llm/reasoning-watchdog-provider.js';
 import { ModelRegistry } from '../agents/llm/model-registry.js';
 import { ModelRouter, type ModelRoutingConfig, type Tier, type TierConfig } from '../agents/llm/model-router.js';
 import type { ReasoningSetting } from '../agents/llm/sampling-options.js';
@@ -1162,13 +1162,13 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       // The reasoning watchdog wraps each concrete provider as in src/index.ts, so the
       // suites run production's provider stack; the harness's wrapper sits outside it.
       if (anthropicApiKey) {
-        providerRegistry.set('anthropic', wrapProvider(new ReasoningWatchdogProvider(new AnthropicProvider(anthropicApiKey, logger, modelRegistry), logger)));
+        providerRegistry.set('anthropic', wrapProvider(watchProvider(new AnthropicProvider(anthropicApiKey, logger, modelRegistry), logger)));
       }
       if (openrouterApiKey) {
-        providerRegistry.set('openrouter', wrapProvider(new ReasoningWatchdogProvider(new OpenRouterProvider(openrouterApiKey, logger, modelRegistry), logger)));
+        providerRegistry.set('openrouter', wrapProvider(watchProvider(new OpenRouterProvider(openrouterApiKey, logger, modelRegistry), logger)));
       }
       if (awsAccessKeyId && awsSecretAccessKey && config.awsRegion) {
-        providerRegistry.set('bedrock', wrapProvider(new ReasoningWatchdogProvider(new BedrockProvider(
+        providerRegistry.set('bedrock', wrapProvider(watchProvider(new BedrockProvider(
           awsAccessKeyId, awsSecretAccessKey, config.awsRegion, config.awsBedrockTimeoutMs, logger, modelRegistry,
         ), logger)));
       }

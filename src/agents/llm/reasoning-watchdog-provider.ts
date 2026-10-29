@@ -2,17 +2,26 @@
 //
 // A watched chat() runs through inner.stream(), counting one reasoning token per
 // reasoning_delta. If reasoning reaches half the request's max_tokens, or half the
-// usable time window passes, before any output starts, the stream is aborted and
-// the call is re-asked once through inner.chat() with the reasoning so far appended
-// as a runtime note (the "forced attempt"). An empty finish at the cap after
-// reasoning counts as a stop too. Providers without stream() are passed through.
+// usable time window passes, before any output starts (text_delta, output_started
+// or a final event), the stream is aborted and the call is re-asked once through
+// inner.chat() with the reasoning so far appended as a runtime note (the "forced
+// attempt"). An empty reply after reasoning counts as a stop too. Providers
+// without stream() are passed through.
 //
-// Same wrapping style as TelemetryLlmProvider. Deliberately does not import
-// openrouter.ts (or any concrete provider), so no provider can ever cycle back here.
+// Same wrapping style as TelemetryLlmProvider. Imports no concrete provider
+// class, so no provider can ever cycle back here.
 
 import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';
-import type { LLMProvider, LLMResponse, LLMStreamEvent, Message, ToolDefinition, ToolResult } from './provider.js';
+import type {
+  LLMProvider,
+  LLMResponse,
+  LLMStreamEvent,
+  LLMUsage,
+  Message,
+  ToolDefinition,
+  ToolResult,
+} from './provider.js';
 import {
   forcedAttemptMessage,
   watchdogLimits,
@@ -37,10 +46,23 @@ interface WatchdogStop {
 type WatchedOutcome =
   /** The watched stream settled the call: a normal answer, or the caller's cancellation. */
   | { kind: 'done'; response: LLMResponse }
-  /** The watchdog stopped the stream; a forced attempt follows. */
-  | { kind: 'stopped'; stop: WatchdogStop; reasoningText: string; reasoningTokens: number }
-  /** The stream failed on its own; fall back to a plain inner.chat(). */
-  | { kind: 'failed'; detail: unknown };
+  /**
+   * The watchdog stopped the stream; a forced attempt follows. `stoppedUsage` is
+   * the stopped attempt's real usage when it finished (a `cap` stop); absent when
+   * the stream was cut before usage arrived.
+   */
+  | { kind: 'stopped'; stop: WatchdogStop; reasoningText: string; reasoningTokens: number; stoppedUsage?: LLMUsage }
+  /**
+   * Fall back to a plain inner.chat(params): the stream failed on its own, or
+   * finished empty with no readable reasoning (so chat()'s own empty-reply retry,
+   * #2247, runs). `billedUsage` is the empty attempt's usage, added to the result.
+   */
+  | { kind: 'failed'; detail: unknown; billedUsage?: LLMUsage };
+
+/** Wrap a registry provider with the reasoning watchdog (#2371). */
+export function watchProvider(provider: LLMProvider, logger: Logger): ReasoningWatchdogProvider {
+  return new ReasoningWatchdogProvider(provider, logger);
+}
 
 export class ReasoningWatchdogProvider implements LLMProvider {
   readonly id: string;
@@ -66,14 +88,16 @@ export class ReasoningWatchdogProvider implements LLMProvider {
     if (outcome.kind === 'done') return outcome.response;
     if (outcome.kind === 'failed') {
       // Once, with the original params: the provider's own chat() retries (#2247)
-      // handle a reset or idle timeout better than a second stream would.
+      // handle a reset, idle timeout or empty reply better than a second stream would.
       this.logger.warn(
         { err: outcome.detail, model: params.model, provider: this.inner.id },
         'Reasoning watchdog: watched stream failed — falling back to chat()',
       );
-      return this.inner.chat(params);
+      const response = await this.inner.chat(params);
+      if (outcome.billedUsage === undefined) return response;
+      return { ...response, usage: addUsage(response.usage, outcome.billedUsage) };
     }
-    return this.forcedAttempt(params, outcome.stop, outcome.reasoningText, outcome.reasoningTokens);
+    return this.forcedAttempt(params, outcome);
   }
 
   private async watch(
@@ -95,6 +119,7 @@ export class ReasoningWatchdogProvider implements LLMProvider {
     let tokenThreshold: number | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stop: WatchdogStop | undefined;
+    let stoppedUsage: LLMUsage | undefined;
 
     const stopWith = (trigger: WatchdogTrigger): void => {
       if (stop) return;
@@ -167,7 +192,9 @@ export class ReasoningWatchdogProvider implements LLMProvider {
             reasoningText += event.text;
             if (tokenThreshold !== undefined && reasoningTokens >= tokenThreshold) fire('tokens');
             break;
+          case 'output_started':
           case 'text_delta':
+            // output_started covers tool calls, whose argument chunks yield no event.
             standDown();
             break;
           case 'tool_use':
@@ -175,16 +202,24 @@ export class ReasoningWatchdogProvider implements LLMProvider {
             return { kind: 'done', response: { ...event } };
           case 'message_end':
             standDown();
-            if (event.content === '' && reasoningTokens > 0) {
-              // Reasoning ate the whole cap: the token estimate was too low. Treat it
-              // as a stop rather than returning an empty answer.
-              stopWith('cap');
-              break;
+            if (event.content === '') {
+              if (reasoningTokens > 0) {
+                // An empty reply after reasoning: reasoning ate the cap before the
+                // token trigger fired. Treat it as a stop, not an empty answer.
+                stopWith('cap');
+                stoppedUsage = event.usage;
+                break;
+              }
+              // Empty with no readable reasoning (encrypted, omitted, or none): let
+              // chat() retry it as it did before streaming (#2247). No forced message.
+              return { kind: 'failed', detail: new Error('Stream ended with an empty reply'), billedUsage: event.usage };
             }
             return { kind: 'done', response: { ...event, type: 'text' } };
           case 'error':
             if (callerAborted()) return { kind: 'done', response: event };
             if (stop) break; // our own abort surfacing as the provider's cancellation error
+            // A 400/401/404 would fail the same way through chat(): return it as is.
+            if (!event.error.retryable) return { kind: 'done', response: event };
             return { kind: 'failed', detail: event.error };
         }
         if (stop) break;
@@ -209,7 +244,13 @@ export class ReasoningWatchdogProvider implements LLMProvider {
       // The caller cancelled while the watchdog was stopping: no forced attempt.
       return { kind: 'done', response: { type: 'error', error: classifyError(callerSignal?.reason, this.inner.id) } };
     }
-    return { kind: 'stopped', stop, reasoningText, reasoningTokens };
+    return {
+      kind: 'stopped',
+      stop,
+      reasoningText,
+      reasoningTokens,
+      ...(stoppedUsage !== undefined ? { stoppedUsage } : {}),
+    };
   }
 
   /**
@@ -227,10 +268,9 @@ export class ReasoningWatchdogProvider implements LLMProvider {
 
   private async forcedAttempt(
     params: CallParams,
-    stop: WatchdogStop,
-    reasoningText: string,
-    reasoningTokens: number,
+    stopped: Extract<WatchedOutcome, { kind: 'stopped' }>,
   ): Promise<LLMResponse> {
+    const { stop, reasoningText, reasoningTokens, stoppedUsage } = stopped;
     // deadlineAt only positions the watchdog; the forced attempt is not watched.
     let forcedOptions: Record<string, unknown> | undefined;
     if (params.options !== undefined) {
@@ -249,14 +289,19 @@ export class ReasoningWatchdogProvider implements LLMProvider {
       'Reasoning watchdog fired — forced attempt',
     );
 
-    // The stopped attempt's output was billed too: one token per reasoning_delta.
-    // Its input tokens are unknowable (the stream was cut before usage arrived),
-    // so inputTokens reflects the forced attempt only.
-    const usage = response.usage === undefined ? undefined : {
-      ...response.usage,
-      outputTokens: response.usage.outputTokens + reasoningTokens,
-      reasoningTokens: (response.usage.reasoningTokens ?? 0) + reasoningTokens,
-    };
+    // The stopped attempt was billed too. A `cap` stop finished, so its real usage
+    // is known and added whole. A cut stream never reported usage: count one
+    // output token per reasoning_delta, and inputTokens reflects the forced attempt only.
+    let usage: LLMUsage | undefined;
+    if (stoppedUsage !== undefined) {
+      usage = addUsage(response.usage, stoppedUsage);
+    } else if (response.usage !== undefined) {
+      usage = {
+        ...response.usage,
+        outputTokens: response.usage.outputTokens + reasoningTokens,
+        reasoningTokens: (response.usage.reasoningTokens ?? 0) + reasoningTokens,
+      };
+    }
     if (response.type === 'error') return usage === undefined ? response : { ...response, usage };
     return {
       ...response,
@@ -264,6 +309,21 @@ export class ReasoningWatchdogProvider implements LLMProvider {
       provenance: { ...response.provenance, reasoningWatchdog: record },
     };
   }
+}
+
+/** Sum two usages; `a` may be absent (an error response without usage). */
+function addUsage(a: LLMUsage | undefined, b: LLMUsage): LLMUsage {
+  if (a === undefined) return { ...b };
+  const reasoningTokens = a.reasoningTokens === undefined && b.reasoningTokens === undefined
+    ? undefined
+    : (a.reasoningTokens ?? 0) + (b.reasoningTokens ?? 0);
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheCreationInputTokens: a.cacheCreationInputTokens + b.cacheCreationInputTokens,
+    cacheReadInputTokens: a.cacheReadInputTokens + b.cacheReadInputTokens,
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+  };
 }
 
 function forcedOutcome(response: LLMResponse): ReasoningWatchdogRecord['forcedOutcome'] {

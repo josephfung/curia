@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ReasoningWatchdogProvider } from '../../../../src/agents/llm/reasoning-watchdog-provider.js';
+import { ReasoningWatchdogProvider, watchProvider } from '../../../../src/agents/llm/reasoning-watchdog-provider.js';
 import { watchdogLimits } from '../../../../src/agents/llm/reasoning-watchdog.js';
 import type {
   LLMCallProvenance,
@@ -45,7 +45,7 @@ const textResponse = (content: string): LLMResponse => ({ type: 'text', content,
  * One step of a scripted stream: an event to yield, or a stall that waits for the
  * request signal to abort and then yields the provider's cancellation error.
  */
-type Step = LLMStreamEvent | { stall: true };
+type Step = LLMStreamEvent | { stall: true } | { wait: number };
 
 interface FakeProvider extends LLMProvider {
   chatCalls: ChatParams[];
@@ -93,6 +93,11 @@ function fakeProvider(opts: {
             });
             yield { type: 'error', error: agentError('Request was aborted.') };
             return;
+          }
+          if ('wait' in step) {
+            // Output in progress with no event (e.g. tool-call arguments being written).
+            await new Promise<void>((resolve) => setTimeout(resolve, step.wait));
+            continue;
           }
           yield step;
         }
@@ -399,12 +404,19 @@ describe('ReasoningWatchdogProvider', () => {
     });
   });
 
-  it('message_end empty at the cap is a watchdog stop with trigger "cap"', async () => {
+  it('message_end empty after reasoning is a watchdog stop with trigger "cap", counting its real usage', async () => {
+    const stoppedUsage = usage({
+      inputTokens: 500,
+      outputTokens: 10_000,
+      cacheCreationInputTokens: 7,
+      cacheReadInputTokens: 40,
+      reasoningTokens: 9_990,
+    });
     const inner = fakeProvider({
       steps: [
         { type: 'request_started', maxTokens: 10_000 },
         ...reasoning(4),
-        { type: 'message_end', content: '', usage: usage({ outputTokens: 10_000 }), provenance },
+        { type: 'message_end', content: '', usage: stoppedUsage, provenance },
       ],
       chatResponses: [textResponse('Acted on it.')],
     });
@@ -415,6 +427,126 @@ describe('ReasoningWatchdogProvider', () => {
     if (result.type === 'error') throw new Error('unreachable');
     expect(result.type).toBe('text');
     expect(result.provenance.reasoningWatchdog).toMatchObject({ trigger: 'cap', firedAtReasoningTokens: 4, forcedOutcome: 'acted' });
+    // The stopped attempt's real usage (not its 4 reasoning deltas) plus the forced attempt's.
+    expect(result.usage).toEqual({
+      inputTokens: 600,
+      outputTokens: 10_020,
+      cacheCreationInputTokens: 7,
+      cacheReadInputTokens: 40,
+      reasoningTokens: 9_990,
+    });
+  });
+
+  it('an empty message_end with no readable reasoning falls back to inner.chat(params) once, unforced', async () => {
+    const emptyUsage = usage({ inputTokens: 300, outputTokens: 4_000, reasoningTokens: 4_000 });
+    const inner = fakeProvider({
+      steps: [
+        { type: 'request_started', maxTokens: 4_000 },
+        { type: 'message_end', content: '', usage: emptyUsage, provenance, reasoningOmitted: 'encrypted' },
+      ],
+      chatResponses: [textResponse('Retried answer.')],
+    });
+    const params = baseParams({ deadlineAt: Date.now() + 600_000 });
+    const result = await new ReasoningWatchdogProvider(inner, createSilentLogger()).chat(params);
+    expect(inner.chatCalls).toHaveLength(1);
+    // The original params, untouched: no runtime note, deadlineAt kept.
+    expect(inner.chatCalls[0]).toBe(params);
+    if (result.type !== 'text') throw new Error(`expected text, got ${result.type}`);
+    expect(result.content).toBe('Retried answer.');
+    expect(result.provenance.reasoningWatchdog).toBeUndefined();
+    // The empty attempt was billed too.
+    expect(result.usage).toEqual(usage({ inputTokens: 400, outputTokens: 4_020, reasoningTokens: 4_000 }));
+  });
+
+  it('stands down on output_started: a long tool-call write past fireAtMs is not cut', async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const { fireAtMs } = watchdogLimits({ maxTokens: 10_000, callStartMs: start });
+    const toolUse: LLMStreamEvent = {
+      type: 'tool_use',
+      toolCalls: [{ id: 't1', name: 'email-send', input: { body: 'long' } }],
+      usage: usage(),
+      provenance,
+    };
+    const inner = fakeProvider({
+      steps: [
+        { type: 'request_started', maxTokens: 10_000 },
+        ...reasoning(3),
+        { type: 'output_started' },
+        { wait: fireAtMs - start + 30_000 },
+        toolUse,
+      ],
+    });
+    const pending = new ReasoningWatchdogProvider(inner, createSilentLogger()).chat(baseParams());
+    await vi.advanceTimersByTimeAsync(fireAtMs - start + 30_000);
+    const result = await pending;
+    const signal = inner.streamCalls[0]!.options!.signal as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    expect(result.type).toBe('tool_use');
+    if (result.type !== 'tool_use') throw new Error('unreachable');
+    expect(result.provenance.reasoningWatchdog).toBeUndefined();
+    expect(inner.chatCalls).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a non-retryable stream error is returned as-is, not resent through chat()', async () => {
+    const authError: AgentError = { ...agentError('401 invalid key'), type: 'AUTH_FAILURE', retryable: false };
+    const inner = fakeProvider({
+      steps: [{ type: 'request_started', maxTokens: 10_000 }, { type: 'error', error: authError }],
+      chatResponses: [textResponse('should not be used')],
+    });
+    const result = await new ReasoningWatchdogProvider(inner, createSilentLogger()).chat(baseParams());
+    expect(result).toEqual({ type: 'error', error: authError });
+    expect(inner.chatCalls).toHaveLength(0);
+  });
+
+  it.each([
+    { maxTokens: 32_768, fireAt: 16_384 },
+    { maxTokens: 4_000, fireAt: 2_000 },
+  ])('token trigger fires at reasoning token $fireAt of a $maxTokens cap', async ({ maxTokens, fireAt }) => {
+    const inner = fakeProvider({
+      steps: [
+        { type: 'request_started', maxTokens },
+        ...reasoning(fireAt),
+        { type: 'message_end', content: 'never reached', usage: usage(), provenance },
+      ],
+      chatResponses: [textResponse('ok')],
+    });
+    const result = await new ReasoningWatchdogProvider(inner, createSilentLogger()).chat(baseParams());
+    // request_started + exactly fireAt deltas; the watchdog fires on the last one.
+    expect(inner.consumed).toBe(1 + fireAt);
+    if (result.type === 'error') throw new Error('unreachable');
+    expect(result.provenance.reasoningWatchdog).toMatchObject({ trigger: 'tokens', firedAtReasoningTokens: fireAt });
+    expect(inner.chatCalls).toHaveLength(1);
+  });
+
+  it('the caller aborting as the watchdog fires: no forced attempt, the caller error is returned', async () => {
+    const caller = new AbortController();
+    const steps = reasoning(5);
+    const inner = fakeProvider({ chatResponses: [textResponse('should not be used')], noStream: true });
+    inner.stream = async function* () {
+      yield { type: 'request_started', maxTokens: 10 };
+      for (let i = 0; i < steps.length; i++) {
+        // The barge-in lands in the same tick as the delta that reaches the threshold.
+        if (i === steps.length - 1) caller.abort(new Error('barge-in'));
+        yield steps[i]!;
+      }
+      yield { type: 'message_end', content: 'late', usage: usage(), provenance };
+    };
+    const result = await new ReasoningWatchdogProvider(inner, createSilentLogger()).chat(baseParams({ signal: caller.signal }));
+    expect(inner.chatCalls).toHaveLength(0);
+    expect(result.type).toBe('error');
+    if (result.type !== 'error') throw new Error('unreachable');
+    expect(result.error.message).toContain('barge-in');
+  });
+
+  it('watchProvider wraps a provider in a ReasoningWatchdogProvider over it', async () => {
+    const inner = fakeProvider({ noStream: true, chatResponses: [textResponse('hi')] });
+    const wrapped = watchProvider(inner, createSilentLogger());
+    expect(wrapped).toBeInstanceOf(ReasoningWatchdogProvider);
+    expect(wrapped.id).toBe('fake');
+    expect(await wrapped.chat(baseParams())).toEqual(textResponse('hi'));
+    expect(inner.chatCalls).toHaveLength(1);
   });
 
   it('the forced response comes back empty: forcedOutcome "empty"', async () => {
