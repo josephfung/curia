@@ -239,11 +239,11 @@ All three A/Bs ran on `deepseek/deepseek-v4.1-flash`, except the fast-tier check
 - **Tokens:** reasoning reaches 0.5 of the request's `max_tokens` (`REASONING_WATCHDOG_TOKEN_FRACTION`).
 - **Time:** 0.5 of the usable window has passed (`REASONING_WATCHDOG_TIME_FRACTION`). The window runs from the call's start to the turn's deadline (`turnDeadlineAt` on the `agent.task` payload, passed to the call as `options.deadlineAt`) or the request timeout, whichever is sooner, less 60s reserved for the forced attempt (`FORCED_ATTEMPT_RESERVE_MS`).
 
-A reply that ends empty at the cap after reasoning counts as a stop too (`cap`). A deadline that is past or inside the reserve is ignored, so the watchdog never fires at once. Once output starts, the watchdog stands down and never cuts a reply in progress.
+An empty reply after reasoning counts as a stop too (`cap`); an empty reply with no readable reasoning falls back to a plain `inner.chat()`, so OpenRouter's empty-reply retry (#2247) still runs. A deadline that is past or inside the reserve is ignored, so the watchdog never fires at once. Once output starts (`text_delta`, or `output_started` on the first tool-call chunk), the watchdog stands down and never cuts a reply or a tool call in progress.
 
-**The forced attempt.** After a stop, the call is made once more through `inner.chat()` with the provider's normal retries. A `user` message is appended that opens with `[Runtime note from Curia, not from the principal]` and quotes the last 16,000 characters of the stopped reasoning, then tells the model to act now. At most one forced attempt is made per call, and it is not watched. If the stream fails on its own, the call falls back to a plain `inner.chat()`. A caller's abort passes straight through. Turns stay non-cancellable: the deadline positions the watchdog and never aborts a call.
+**The forced attempt.** After a stop, the call is made once more through `inner.chat()` with the provider's normal retries. A `user` message is appended that opens with `[Runtime note from Curia, not from the principal]` and quotes the last 16,000 characters of the stopped reasoning, then tells the model to act now. At most one forced attempt is made per call, and it is not watched. If the stream fails with a retryable error, the call falls back to a plain `inner.chat()`, which owns the retries (the OpenRouter stream sends one request, SDK retries off); a non-retryable error is returned as is. A caller's abort passes straight through. Turns stay non-cancellable: the deadline positions the watchdog and never aborts a call.
 
-**Recording.** `llm.call` carries `reasoningWatchdog` (`trigger`, `firedAtReasoningTokens`, `firedAfterMs`, `forcedOutcome`), and `null` when the watchdog did not fire. The stopped attempt's reasoning tokens are added to the forced response's usage, since they were billed. Providers without `stream()` (Bedrock) are passed through unwatched.
+**Recording.** `llm.call` carries `reasoningWatchdog` (`trigger`, `firedAtReasoningTokens`, `firedAfterMs`, `forcedOutcome`), and `null` when the watchdog did not fire. The stopped attempt's usage is added to the forced response's, since it was billed: its real usage after a `cap` stop, otherwise one output token per reasoning delta. On prefix-bound Anthropic models, the forced response's thinking blocks carry a prefix hash that includes the runtime note; the note never enters history, so the prefix guard drops those blocks on the next request. This is expected and harmless. Providers without `stream()` (Bedrock) are passed through unwatched.
 
 ### Why a forced attempt, not a retry
 
@@ -251,7 +251,7 @@ A replay of 14 archived production turns that had run long on reasoning compared
 
 ### Consequences
 
-- **Public API changes.** `agent.task` gains `turnDeadlineAt`, `llm.call` gains `reasoningWatchdog`, and `LLMStreamEvent` gains `request_started` and `reasoning_delta`. The provider contract is written up in `docs/dev/adding-an-llm-provider.md`.
+- **Public API changes.** `agent.task` gains `turnDeadlineAt`, `llm.call` gains `reasoningWatchdog`, and `LLMStreamEvent` gains `request_started`, `reasoning_delta` and `output_started`. The provider contract is written up in `docs/dev/adding-an-llm-provider.md`.
 - **A stopped call costs its reasoning twice.** The tokens spent before the stop are billed, and the forced attempt may reason again, though the note asks it not to.
 - **The fractions are untuned.** 0.5 and 0.5 are starting points, not measurements. `llm.call.reasoningWatchdog` records every firing so they can be revisited from production data.
 - **The deadline is a position, not a cap.** A turn without `turnDeadlineAt` uses the request timeout as its window.

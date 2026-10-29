@@ -54,12 +54,14 @@ Register dated snapshots in their own right. Lookup is exact-first, then longest
 
 1. `request_started { maxTokens }` — exactly once, first, before any other event. `maxTokens` is the value the request actually sent, after the model cap and any thinking floor. The watchdog arms its thresholds from it.
 2. `reasoning_delta { text }` — one per reasoning delta that carries non-empty readable text. Never emit one for encrypted or omitted thinking. The watchdog counts one token per event.
-3. `text_delta { text }` — one per piece of the reply.
-4. A terminal event: `tool_use` (with `toolCalls`, `usage`, `provenance`, and `reasoningBlocks` if any), or `message_end` (with `content`, `usage`, `provenance`), or `error`.
+3. `output_started` — at most once, on the first chunk of a tool call (OpenRouter's first `delta.tool_calls` entry, Anthropic's `content_block_start` of type `tool_use`). Tool-call argument chunks produce no other event, so without it the watchdog cannot tell a model writing a long tool call from one still thinking, and the time trigger would cut the call. Text needs no `output_started`: `text_delta` signals it.
+4. `text_delta { text }` — one per piece of the reply.
+5. A terminal event: `tool_use` (with `toolCalls`, `usage`, `provenance`, and `reasoningBlocks` if any), or `message_end` (with `content`, `usage`, `provenance`), or `error`.
 
-Three more rules:
+Four more rules:
 
 - **Yield `error` events** for API failures, as `chat()` returns them. Do not throw mid-stream.
+- **No SDK retries.** Send the stream request with the SDK's retries off (`maxRetries: 0`). A failed watched stream falls back to `chat()`, which retries and counts each attempt; SDK retries underneath would be hidden and multiply the requests.
 - **Honor `options.signal`.** A cancelled stream ends promptly, with an `error` event or by throwing the SDK's abort error.
 - **Release the SDK stream on every exit.** Close it in a `finally`, so a consumer that stops early (the watchdog does, and so does barge-in) frees the response buffers. A consumer calling `return()` on your iterator must reach that `finally`.
 
@@ -79,23 +81,23 @@ Never rebuild reasoning from the archive. The prompt archive replaces each block
 
 ## 5. Registration
 
-Construct the provider in `src/index.ts` next to the others, add it to `providerRegistry` under the registry's `provider` id, and **wrap it in `ReasoningWatchdogProvider`** (`reasoning-watchdog-provider.ts`):
+Construct the provider in `src/index.ts` next to the others, add it to `providerRegistry` under the registry's `provider` id, and **wrap it with `watchProvider`**, which returns a `ReasoningWatchdogProvider` (`reasoning-watchdog-provider.ts`):
 
 ```typescript
-providerRegistry.set('my-provider', new ReasoningWatchdogProvider(new MyProvider(config.myKey, logger, modelRegistry), logger));
+providerRegistry.set('my-provider', watchProvider(new MyProvider(config.myKey, logger, modelRegistry), logger));
 ```
 
 The wrapper does nothing for a provider that has no `stream()`: it passes `chat()` straight through. For one that does, it runs each `chat()` through `inner.stream()` and:
 
 - counts reasoning tokens (one per `reasoning_delta`) and watches the clock;
-- stops the stream when reasoning reaches half of the request's `maxTokens`, or half of the usable time window passes, before any output starts (or when the reply ends empty after reasoning at the cap);
+- stops the stream when reasoning reaches half of the request's `maxTokens`, or half of the usable time window passes, before any output starts (`text_delta`, `output_started` or a terminal event), or when the reply ends empty after reasoning;
 - makes one forced attempt through `inner.chat()` with the tail of the reasoning appended as a runtime note;
-- falls back to a plain `inner.chat()` if the stream fails on its own;
+- falls back to a plain `inner.chat()` once if the stream fails with a retryable error, or ends empty with no readable reasoning (so `chat()`'s own empty-reply retry runs); a non-retryable error event is returned as is;
 - passes a caller's abort straight through, and never cuts a reply once output has started.
 
 The thresholds are in `reasoning-watchdog.ts`. The stopped call is recorded on `llm.call` as `reasoningWatchdog` (`null` when it did not fire). The test-mode stack, `src/startup/test-mode-stack.ts`, wraps each provider the same way, so wrap yours there too if the behavior suites should be able to run on it.
 
-Do not import the wrapper from your provider, or your provider from the wrapper. The wrapper depends only on the `LLMProvider` interface.
+Do not import the wrapper from your provider, or your provider from the wrapper. The wrapper imports no concrete provider class.
 
 ---
 
@@ -109,7 +111,7 @@ Copy the shape of `tests/unit/agents/llm/openrouter.test.ts` (HTTP-style backend
 - `signal` abort: the call stops and returns an `error`;
 - `temperature` and `reasoning` mapping, including a model that does not list the effort;
 - reasoning blocks returned, passed back, and dropped for a different model;
-- for `stream()`: `request_started` first and once, `reasoning_delta` per readable delta (none for encrypted thinking), the terminal event, and the SDK stream released when the consumer stops early.
+- for `stream()`: `request_started` first and once, `reasoning_delta` per readable delta (none for encrypted thinking), `output_started` once on the first tool-call chunk, the terminal event, and the SDK stream released when the consumer stops early.
 
 Also add the models to the checks in `model-registry.test.ts` and `provider-router.test.ts` if they cover the new `provider` id.
 
@@ -122,10 +124,10 @@ Also add the models to the checks in `model-registry.test.ts` and `provider-rout
 - [ ] `max_tokens` is capped at the registry value; `signal`, `temperature` and `reasoning` go through `sampling-options.ts`
 - [ ] No reasoning budget is sent, and never an effort together with a budget
 - [ ] `LLMCallProvenance` and `LLMUsage` are filled, including `reasoningTokens` where reported
-- [ ] If `stream()` exists: `request_started` first and once, `reasoning_delta` per readable delta, then `tool_use` or `message_end`; it honors `options.signal` and releases the SDK stream on every exit
+- [ ] If `stream()` exists: `request_started` first and once, `reasoning_delta` per readable delta, `output_started` on the first tool-call chunk, then `tool_use` or `message_end`; SDK retries off; it honors `options.signal` and releases the SDK stream on every exit
 - [ ] If `stream()` is omitted, it is omitted entirely (no stub), and the docs note that the provider is unwatched and cannot serve voice
 - [ ] Reasoning blocks are returned and passed back verbatim, filtered with `sendableReasoningBlocks`
-- [ ] Registered in `src/index.ts` (and the test-mode stack) wrapped in `ReasoningWatchdogProvider`
+- [ ] Registered in `src/index.ts` (and the test-mode stack) wrapped with `watchProvider`
 - [ ] Tests follow `openrouter.test.ts` and `anthropic.test.ts`
 - [ ] Spec 02's provider list and `CHANGELOG.md` are updated
 

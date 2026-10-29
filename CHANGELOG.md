@@ -103,7 +103,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **agent.task / llm.call / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started` and `reasoning_delta` added. (#2371)
+- **agent.task / llm.call / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started`, `reasoning_delta` and `output_started` added. (#2371)
+- **LLM calls** — agent and infra calls on Anthropic and OpenRouter now stream internally. (#2371)
 - **Principal-only sends** — a message to the principal alone skips autonomy gates A and B (spec 14). (#2337)
 - **ceo-inbox triage** — runs hourly instead of every 15 minutes, cutting scheduled triage runs to a quarter.
 - **ceo-inbox delegate wait** — raised from 300s to 563s to fit observed p99 run length. (#1915)
