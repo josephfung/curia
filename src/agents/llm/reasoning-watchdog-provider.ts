@@ -111,20 +111,38 @@ export class ReasoningWatchdogProvider implements LLMProvider {
       clearTimeout(timer);
       timer = undefined;
     };
-    // Resolves when the watchdog aborts, so a stream stalled mid-reasoning is
-    // abandoned at once even if the provider is slow to honour the signal.
-    const stopped = new Promise<'stopped'>((resolve) => {
-      internal.signal.addEventListener('abort', () => resolve('stopped'), { once: true });
-    });
     const callerAborted = (): boolean => callerSignal?.aborted === true;
 
     const iterator = stream({ ...params, options: { ...options, signal } })[Symbol.asyncIterator]();
+    // The next event, or 'stopped' as soon as the watchdog aborts, so a stream stalled
+    // mid-reasoning is abandoned at once even if the provider is slow to honour the
+    // signal. A fresh promise per event, with its abort listener removed when the event
+    // arrives: racing one long-lived "stopped" promise (Promise.race) would pin a
+    // reaction, and the event it resolved with, for every event of the call.
+    const nextOrStop = (): Promise<IteratorResult<LLMStreamEvent> | 'stopped'> => {
+      if (internal.signal.aborted) return Promise.resolve('stopped');
+      return new Promise((resolve, reject) => {
+        const onAbort = (): void => resolve('stopped');
+        internal.signal.addEventListener('abort', onAbort, { once: true });
+        iterator.next().then(
+          (result) => {
+            internal.signal.removeEventListener('abort', onAbort);
+            resolve(result);
+          },
+          (err: unknown) => {
+            internal.signal.removeEventListener('abort', onAbort);
+            // A no-op when the watchdog already resolved this promise with 'stopped'.
+            reject(err);
+          },
+        );
+      });
+    };
     // True once the iterator has finished on its own (done or threw), so it needs no closing.
     let finished = false;
 
     try {
       for (;;) {
-        const next = await Promise.race([iterator.next(), stopped]);
+        const next = await nextOrStop();
         if (next === 'stopped') break;
         if (next.done) {
           finished = true;

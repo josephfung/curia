@@ -153,6 +153,44 @@ describe('ReasoningWatchdogProvider', () => {
     expect(inner.chatCalls).toHaveLength(0);
   });
 
+  it('holds at most one abort listener per pending event and removes each one (no per-event retention)', async () => {
+    const add = vi.spyOn(AbortSignal.prototype, 'addEventListener');
+    const remove = vi.spyOn(AbortSignal.prototype, 'removeEventListener');
+    let watched: AbortSignal | undefined;
+    const outstanding = (): number => {
+      const count = (spy: typeof add | typeof remove): number =>
+        spy.mock.calls.filter((call, i) => spy.mock.contexts[i] === watched && call[0] === 'abort').length;
+      return count(add) - count(remove);
+    };
+    let maxOutstanding = 0;
+    const events = 200;
+    const inner: LLMProvider = {
+      id: 'fake',
+      chat: async () => textResponse('unused'),
+      stream: async function* (params) {
+        watched = params.options?.signal as AbortSignal;
+        yield { type: 'request_started', maxTokens: 1_000_000 };
+        for (let i = 0; i < events; i++) {
+          maxOutstanding = Math.max(maxOutstanding, outstanding());
+          yield { type: 'reasoning_delta', text: `r${i} ` };
+        }
+        yield { type: 'message_end', content: 'done', usage: usage(), provenance };
+      },
+    };
+    try {
+      const result = await new ReasoningWatchdogProvider(inner, createSilentLogger()).chat(baseParams());
+      expect(result.type).toBe('text');
+      expect(watched).toBeDefined();
+      // One listener per event in flight, never an accumulating set...
+      expect(maxOutstanding).toBeLessThanOrEqual(1);
+      // ...and every listener added for an event is gone once the call ends.
+      expect(outstanding()).toBe(0);
+    } finally {
+      add.mockRestore();
+      remove.mockRestore();
+    }
+  });
+
   describe('a watched call that finishes normally returns the same LLMResponse inner.chat would', () => {
     it('maps tool_use to a tool_use response', async () => {
       const toolUse: LLMStreamEvent = {
