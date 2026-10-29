@@ -355,15 +355,15 @@ Each persistent task carries:
 
 ## LLM Provider Abstraction
 
-Multi-provider from day one:
+Multi-provider from day one. There are three chat providers: Anthropic (Claude API), OpenRouter (the route to OpenAI, Google and DeepSeek models) and AWS Bedrock. To add one, follow [Adding an LLM Provider](../dev/adding-an-llm-provider.md).
 
 ```
 src/agents/llm/
   provider.ts      # common interface
   anthropic.ts     # Claude API (Anthropic)
-  openrouter.ts    # OpenRouter API (Gemini Flash, DeepSeek V3, GPT-4o, etc.)
+  openrouter.ts    # OpenRouter API (Gemini Flash, DeepSeek, GPT-4o, etc.)
   bedrock.ts       # AWS Bedrock Converse API (Claude via inference profiles; chat only, no stream())
-  ollama.ts        # local models
+  reasoning-watchdog-provider.ts # wrapper that bounds runaway reasoning (ADR-048 amendment, #2371)
   model-registry.ts # ModelRegistry — centralized model metadata
 ```
 
@@ -375,10 +375,19 @@ interface LLMProvider {
   chat(params: {
     messages: Message[];
     tools?: ToolDefinition[];
-    options?: LLMOptions;
-  }): Promise<LLMResponse>;
+    toolResults?: ToolResult[];
+    model?: string;
+    options?: Record<string, unknown>;   // max_tokens, temperature, reasoning, signal, ...
+  }): Promise<LLMResponse>;              // text | tool_use | error — API failures are returned, not thrown
+
+  // Optional. Voice and the reasoning watchdog need it; Bedrock has none.
+  stream?(params: { /* same as chat() */ }): AsyncIterable<LLMStreamEvent>;
 }
 ```
+
+`LLMStreamEvent` is `request_started`, `text_delta`, `reasoning_delta`, `tool_use`, `message_end` or `error`. `request_started { maxTokens }` comes first, once, and carries the `max_tokens` the request actually sent. `reasoning_delta { text }` comes once per readable reasoning delta, never for encrypted thinking. Every successful response carries `LLMCallProvenance`, which `llm.call` publishes.
+
+**Reasoning watchdog (#2371).** Each concrete provider is wrapped in `ReasoningWatchdogProvider`, which implements the same interface. It runs a `chat()` through the inner provider's `stream()` and stops the call when reasoning reaches half of the request's `max_tokens`, or half of the usable time window passes, before any output starts. It then makes one forced attempt through `inner.chat()`, with the tail of the reasoning appended as a runtime note. The window ends at the turn's deadline when the `agent.task` payload carries `turnDeadlineAt` (set by delegation and the scheduler), or at the 10-minute request timeout otherwise, less 60s reserved for the forced attempt. A provider without `stream()` is passed through unwatched. `llm.call` records a stop as `reasoningWatchdog`, and it is `null` when the watchdog did not fire. Turns stay non-cancellable: the deadline positions the watchdog and never aborts a turn. See ADR-048's 2026-10-29 amendment.
 
 ### Provider Configuration
 

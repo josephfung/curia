@@ -215,3 +215,43 @@ All three A/Bs ran on `deepseek/deepseek-v4.1-flash`, except the fast-tier check
   - **`low` failed all three parts of the rule.** Its second pass failed both gates. Ten critical behaviors fell below the default's worse pass, though five went the other way. Its weighted scores (99.1% on both passes) sat below the default's spread of 99.4–99.6%. It saved about a quarter of the reasoning tokens in scenarios, at similar latency and cost. Reduced effort showed most in urgency classification: across `low`'s two smoke passes, urgency cases failed or needed a retry three times.
 - **The default fails the gate on its own.** It failed all four of its suite runs here, and `main` failed in #2205's A/B too. At 5 runs per case, the 80% bar flags one-off misses. These A/Bs therefore judged on two-pass spread rather than any single gate result. The gate itself is tracked in #2209.
 - **The setting stays.** Any installation can still choose an effort per tier. Production sets none.
+
+## Amendment (2026-10-29): a reasoning watchdog, and no reasoning budget
+
+#2371 follows #1915, which made slow calls visible (`attempts`, `failedAttemptsMs`) and sized the delegate wait to observed run lengths. A call that reasons for most of its budget without acting still wastes the whole call. This amendment adds a watchdog for that case. It sends no reasoning budget, because none of the budgets available to Curia works.
+
+### What a probe found (2026-10-29)
+
+- **No DeepSeek endpoint enforces `reasoning.max_tokens`.** On `deepseek/deepseek-v4.1-flash`, the CoreWeave, Decart, DeepInfra, StreamLake and Alibaba endpoints all accepted the parameter and ignored it. A 1,000-token budget produced 3.7K to 10.3K reasoning tokens.
+- **`effort: low` was not enforced either.** The earlier probe (above) showed effort shaping reasoning on a puzzle; on this one it did not hold a call down.
+- **Effort and budget together are a 400.** OpenRouter rejects the request itself: "Only one of reasoning.effort and reasoning.max_tokens can be specified". The two controls cannot be combined to cover each other.
+- **Gemini 3.1 Flash Lite enforces a budget, but a budget turns its reasoning on.** The judges run it with reasoning at `minimal`, so a budget would add reasoning there.
+- **Claude 5.x rejects `budget_tokens`.** Anthropic's API returns a 400 for `thinking.type: enabled` with `budget_tokens` on Haiku 5.5 and Opus 5.5. Sonnet 4.6 still accepts it.
+
+### Decision
+
+**Curia sends no reasoning budget to any provider, and never an effort together with one.** The model's own limit is the only bound on a call, so the bound moves to the consumer: a watchdog watches the stream and stops a call that reasons for too long.
+
+**The wrapper.** `ReasoningWatchdogProvider` (`src/agents/llm/reasoning-watchdog-provider.ts`) wraps each concrete provider. A watched `chat()` runs through `inner.stream()`. The watchdog counts one reasoning token per `reasoning_delta` event, using the `maxTokens` that `request_started` reports. Nothing is configured per model or in the registry.
+
+**Two fractions** (`reasoning-watchdog.ts`). The watchdog stops the call at whichever comes first, before any output has started:
+
+- **Tokens:** reasoning reaches 0.5 of the request's `max_tokens` (`REASONING_WATCHDOG_TOKEN_FRACTION`).
+- **Time:** 0.5 of the usable window has passed (`REASONING_WATCHDOG_TIME_FRACTION`). The window runs from the call's start to the turn's deadline (`turnDeadlineAt` on the `agent.task` payload, passed to the call as `options.deadlineAt`) or the request timeout, whichever is sooner, less 60s reserved for the forced attempt (`FORCED_ATTEMPT_RESERVE_MS`).
+
+A reply that ends empty at the cap after reasoning counts as a stop too (`cap`). A deadline that is past or inside the reserve is ignored, so the watchdog never fires at once. Once output starts, the watchdog stands down and never cuts a reply in progress.
+
+**The forced attempt.** After a stop, the call is made once more through `inner.chat()` with the provider's normal retries. A `user` message is appended that opens with `[Runtime note from Curia, not from the principal]` and quotes the last 16,000 characters of the stopped reasoning, then tells the model to act now. At most one forced attempt is made per call, and it is not watched. If the stream fails on its own, the call falls back to a plain `inner.chat()`. A caller's abort passes straight through. Turns stay non-cancellable: the deadline positions the watchdog and never aborts a call.
+
+**Recording.** `llm.call` carries `reasoningWatchdog` (`trigger`, `firedAtReasoningTokens`, `firedAfterMs`, `forcedOutcome`), and `null` when the watchdog did not fire. The stopped attempt's reasoning tokens are added to the forced response's usage, since they were billed. Providers without `stream()` (Bedrock) are passed through unwatched.
+
+### Why a forced attempt, not a retry
+
+A replay of 14 archived production turns that had run long on reasoning compared the two ways of continuing. A forced attempt acted on 22 of 22 runs (median about 28s). A plain retry acted on 5 of 7 (median about 75s). Handing the model the end of its own reasoning lets it act on what it had already worked out, where a retry re-derives it.
+
+### Consequences
+
+- **Public API changes.** `agent.task` gains `turnDeadlineAt`, `llm.call` gains `reasoningWatchdog`, and `LLMStreamEvent` gains `request_started` and `reasoning_delta`. The provider contract is written up in `docs/dev/adding-an-llm-provider.md`.
+- **A stopped call costs its reasoning twice.** The tokens spent before the stop are billed, and the forced attempt may reason again, though the note asks it not to.
+- **The fractions are untuned.** 0.5 and 0.5 are starting points, not measurements. `llm.call.reasoningWatchdog` records every firing so they can be revisited from production data.
+- **The deadline is a position, not a cap.** A turn without `turnDeadlineAt` uses the request timeout as its window.
