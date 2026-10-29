@@ -79,6 +79,14 @@ export interface AgentTaskPayload {
    *  mislabelled human turn would drop its conversation from the shared-conversation check
    *  and leak that person's words into another contact's recall. */
   syntheticTurn?: boolean;
+  /** When this turn's caller will stop waiting, epoch ms (#2371). Like `liveTurn`, a DISTINCT
+   *  top-level field rather than a `metadata` key, so a skill forwarding the metadata bag
+   *  cannot copy a stale deadline into another task. Set by the `delegate` skill (dispatch time
+   *  plus the resolved wait) and by the scheduler (fire time plus the slot timeout). The runtime
+   *  hands it to the LLM call as `options.deadlineAt`, where the reasoning watchdog positions
+   *  its time trigger against it. It never cancels the turn; turns stay non-cancellable.
+   *  Absent means no deadline is known. */
+  turnDeadlineAt?: number;
   /** Resolved sender context from the contact resolver. Undefined if contacts not configured. */
   senderContext?: import('../contacts/types.js').InboundSenderContext;
   /** Original task intent for persistent scheduler tasks. Undefined for one-shot and direct tasks.

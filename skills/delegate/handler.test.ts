@@ -149,6 +149,28 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
   });
 });
 
+describe('DelegateHandler turn deadline (#2371)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('the published agent.task carries turnDeadlineAt = dispatch time + the resolved wait', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-29T12:00:00Z'));
+    const now = Date.now();
+    const { bus, published } = makeBus();
+    const ctx = makeCtx(bus);
+    ctx.input = { agent: 'research-analyst', task: 'find the acquisition comps', timeout_ms: 563_000 };
+    const result = await new DelegateHandler().execute(ctx);
+    expect(result.success).toBe(true);
+
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    expect(task.payload.turnDeadlineAt).toBe(now + 563_000);
+    // A distinct payload field, never a metadata key.
+    expect(task.payload.metadata).not.toHaveProperty('turnDeadlineAt');
+  });
+});
+
 describe('DelegateHandler date-resolve brief validation (#1612)', () => {
   afterEach(() => {
     restoreDefaultRegistry();

@@ -507,6 +507,31 @@ describe('Scheduler', () => {
       expect(taskEvent.payload.expectedDurationSeconds).toBeUndefined();
     });
 
+    it('a fired agent.task carries turnDeadlineAt = fire time + the slot timeout, with a duration hint (#2371)', async () => {
+      vi.setSystemTime(new Date('2026-10-29T12:00:00Z'));
+      const row = fakeDbRow({ expected_duration_seconds: 300 });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { turnDeadlineAt?: number } }];
+      expect(taskEvent.payload.turnDeadlineAt).toBe(Date.now() + computeRecoveryTimeout(300) * 1000);
+    });
+
+    it('a fired agent.task carries turnDeadlineAt from the default duration when the job has no hint (#2371)', async () => {
+      vi.setSystemTime(new Date('2026-10-29T12:00:00Z'));
+      const row = fakeDbRow({ expected_duration_seconds: null });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { turnDeadlineAt?: number } }];
+      // The scheduler's default assumed duration is 600 s.
+      expect(taskEvent.payload.turnDeadlineAt).toBe(Date.now() + computeRecoveryTimeout(600) * 1000);
+    });
+
     it('logs and swallows errors during polling', async () => {
       pool.query.mockRejectedValueOnce(new Error('db down'));
 

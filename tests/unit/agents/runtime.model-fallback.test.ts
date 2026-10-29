@@ -62,7 +62,7 @@ function makeProvider(id: string, response: LLMResponse): LLMProvider {
 
 // Publish a task and return a promise that resolves with the agent.response event.
 // Uses the system layer to capture all bus events.
-async function runTask(bus: EventBus, agentId: string, content = 'hello'): Promise<{
+async function runTask(bus: EventBus, agentId: string, content = 'hello', turnDeadlineAt?: number): Promise<{
   response: AgentResponseEvent | null;
   fallbackEvents: ModelFallbackEngagedEvent[];
   errorEvents: AgentErrorEvent[];
@@ -89,6 +89,7 @@ async function runTask(bus: EventBus, agentId: string, content = 'hello'): Promi
     channelId: 'cli',
     senderId: 'test-sender',
     content,
+    ...(turnDeadlineAt !== undefined && { turnDeadlineAt }),
     parentEventId: parentId,
   });
 
@@ -348,5 +349,92 @@ describe('AgentRuntime reasoning setting (ADR-048 §3)', () => {
     }).register();
     await runTask(bus, AGENT_ID);
     expect(calls[0]!.payload.reasoningEffort).toBe('low');
+  });
+});
+
+describe('AgentRuntime turn deadline (#2371)', () => {
+  const logger = createSilentLogger();
+  const AGENT_ID = 'test-agent';
+  const PRIMARY_MODEL = 'deepseek/deepseek-v4.1-flash';
+  const FALLBACK_MODEL = 'claude-sonnet-4-6';
+  const DEADLINE = 1_800_000_000_000;
+
+  let bus: EventBus;
+  beforeEach(() => {
+    bus = new EventBus(logger);
+  });
+
+  function optionsOfCall(provider: LLMProvider, n: number): unknown {
+    const params = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[n]![0] as { options?: unknown };
+    return params.options;
+  }
+
+  it('passes options.deadlineAt from turnDeadlineAt on the primary call, alongside reasoning', async () => {
+    const primary = makeProvider('openrouter', makeSuccessResponse(PRIMARY_MODEL));
+    new AgentRuntime({
+      agentId: AGENT_ID, systemPrompt: 'You are helpful.', provider: primary, resolvedModel: PRIMARY_MODEL,
+      tier: 'standard', reasoning: { effort: 'low' }, bus, logger,
+    }).register();
+    await runTask(bus, AGENT_ID, 'hello', DEADLINE);
+    expect(optionsOfCall(primary, 0)).toEqual({ reasoning: { effort: 'low' }, deadlineAt: DEADLINE });
+  });
+
+  it('passes deadlineAt alone when the tier has no reasoning setting', async () => {
+    const primary = makeProvider('openrouter', makeSuccessResponse(PRIMARY_MODEL));
+    new AgentRuntime({
+      agentId: AGENT_ID, systemPrompt: 'You are helpful.', provider: primary, resolvedModel: PRIMARY_MODEL, tier: 'standard', bus, logger,
+    }).register();
+    await runTask(bus, AGENT_ID, 'hello', DEADLINE);
+    expect(optionsOfCall(primary, 0)).toEqual({ deadlineAt: DEADLINE });
+  });
+
+  it('passes deadlineAt on the fallback call with the fallback tier reasoning', async () => {
+    const primary = makeProvider('openrouter', makeNotFoundResponse());
+    const fallback = makeProvider('anthropic', makeSuccessResponse(FALLBACK_MODEL));
+    new AgentRuntime({
+      agentId: AGENT_ID, systemPrompt: 'You are helpful.', provider: primary, resolvedModel: PRIMARY_MODEL, tier: 'standard',
+      reasoning: { effort: 'low' }, fallbackModel: FALLBACK_MODEL, fallbackProvider: fallback, fallbackReasoning: { effort: 'high' },
+      bus, logger,
+    }).register();
+    await runTask(bus, AGENT_ID, 'hello', DEADLINE);
+    expect(optionsOfCall(primary, 0)).toEqual({ reasoning: { effort: 'low' }, deadlineAt: DEADLINE });
+    expect(optionsOfCall(fallback, 0)).toEqual({ reasoning: { effort: 'high' }, deadlineAt: DEADLINE });
+  });
+
+  it('passes deadlineAt on the retry call', async () => {
+    const retryable: LLMResponse = {
+      type: 'error',
+      error: { type: 'RATE_LIMIT', source: 'openrouter', message: '429', retryable: true, context: {}, timestamp: new Date() },
+    };
+    const chat = vi.fn()
+      .mockResolvedValueOnce(retryable)
+      .mockResolvedValueOnce(makeSuccessResponse(PRIMARY_MODEL));
+    const primary: LLMProvider = { id: 'openrouter', chat };
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      new AgentRuntime({
+        agentId: AGENT_ID, systemPrompt: 'You are helpful.', provider: primary, resolvedModel: PRIMARY_MODEL,
+        tier: 'standard', reasoning: { effort: 'low' }, bus, logger,
+      }).register();
+      const done = runTask(bus, AGENT_ID, 'hello', DEADLINE);
+      await vi.advanceTimersByTimeAsync(60_000);
+      vi.useRealTimers();
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(optionsOfCall(primary, 0)).toEqual({ reasoning: { effort: 'low' }, deadlineAt: DEADLINE });
+    expect(optionsOfCall(primary, 1)).toEqual({ reasoning: { effort: 'low' }, deadlineAt: DEADLINE });
+  });
+
+  it('omits deadlineAt when the task has none', async () => {
+    const primary = makeProvider('openrouter', makeSuccessResponse(PRIMARY_MODEL));
+    new AgentRuntime({
+      agentId: AGENT_ID, systemPrompt: 'You are helpful.', provider: primary, resolvedModel: PRIMARY_MODEL,
+      tier: 'standard', reasoning: { effort: 'low' }, bus, logger,
+    }).register();
+    await runTask(bus, AGENT_ID);
+    expect(optionsOfCall(primary, 0)).toEqual({ reasoning: { effort: 'low' } });
   });
 });

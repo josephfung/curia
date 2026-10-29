@@ -52,6 +52,30 @@ describe('Event Types', () => {
     expect(task.parentEventId).toBe(parent.id);
   });
 
+  it('createAgentTask passes turnDeadlineAt through and never reads it from metadata (#2371)', () => {
+    const withField = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      content: 'Hello',
+      channelId: 'cli',
+      senderId: 'user',
+      turnDeadlineAt: 1_700_000_000_000,
+      parentEventId: 'p-1',
+    });
+    expect(withField.payload.turnDeadlineAt).toBe(1_700_000_000_000);
+
+    const fromMetadata = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      content: 'Hello',
+      channelId: 'cli',
+      senderId: 'user',
+      metadata: { turnDeadlineAt: 1_700_000_000_000 },
+      parentEventId: 'p-1',
+    });
+    expect(fromMetadata.payload.turnDeadlineAt).toBeUndefined();
+  });
+
   it('creates an agent.response event', () => {
     const event = createAgentResponse({
       agentId: 'coordinator',

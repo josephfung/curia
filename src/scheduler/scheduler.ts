@@ -1224,6 +1224,8 @@ export class Scheduler {
       // Pass the duration hint so the runtime can widen the delegate timeout for
       // long-running scheduled tasks. null (no explicit duration) becomes undefined.
       expectedDurationSeconds: job.expectedDurationSeconds ?? undefined,
+      // The slot's timeout as a wall-clock deadline (#2371), for the reasoning watchdog.
+      turnDeadlineAt: Date.now() + this.slotTimeoutMs(job),
       // Thread the stored originator (+ wakeContext for heartbeat wakes) through.
       metadata,
       parentEventId: firedEvent.id,

@@ -170,8 +170,17 @@ import type { ConversationEntityState } from '../entity-context/conversation-ent
  * Request options for an agent turn: the tier's reasoning setting, when it has
  * one (ADR-048 §3). Nothing otherwise, so the provider default applies.
  */
-function agentTurnOptions(reasoning: ReasoningSetting | undefined): { options?: Record<string, unknown> } {
-  return reasoning !== undefined ? { options: { reasoning } } : {};
+function agentTurnOptions(
+  reasoning: ReasoningSetting | undefined,
+  deadlineAt?: number,
+): { options?: Record<string, unknown> } {
+  if (reasoning === undefined && deadlineAt === undefined) return {};
+  return {
+    options: {
+      ...(reasoning !== undefined && { reasoning }),
+      ...(deadlineAt !== undefined && { deadlineAt }),
+    },
+  };
 }
 
 export interface AgentConfig {
@@ -3212,7 +3221,7 @@ export class AgentRuntime {
         const response = await provider.chat({
           messages,
           ...(modelForCall !== undefined ? { model: modelForCall } : {}),
-          ...agentTurnOptions(this.config.reasoning),
+          ...agentTurnOptions(this.config.reasoning, taskEvent.payload.turnDeadlineAt),
         });
         // Recorded like any other call (#1990): the raw text, including a rejected
         // draft and anything outside the reply block, is otherwise kept nowhere.
@@ -3499,11 +3508,13 @@ export class AgentRuntime {
     // Prefer the explicitly resolved model; fall back to modelName so callers that
     // set only modelName (e.g. unit tests) still reach the provider without error.
     const modelForCall = this.config.resolvedModel ?? this.config.modelName;
+    // Read once: the same deadline positions the watchdog on the primary, fallback and retry calls.
+    const turnDeadlineAt = taskEvent.payload.turnDeadlineAt;
     const callStartMs = Date.now();
     const response = await provider.chat({
       ...params,
       ...(modelForCall !== undefined ? { model: modelForCall } : {}),
-      ...agentTurnOptions(this.config.reasoning),
+      ...agentTurnOptions(this.config.reasoning, turnDeadlineAt),
     });
     const latencyMs = Date.now() - callStartMs;
     if (response.type !== 'error') {
@@ -3544,7 +3555,7 @@ export class AgentRuntime {
           fallbackResponse = await this.config.fallbackProvider.chat({
             ...params,
             model: this.config.fallbackModel,
-            ...agentTurnOptions(this.config.fallbackReasoning),
+            ...agentTurnOptions(this.config.fallbackReasoning, turnDeadlineAt),
           });
         } catch (err) {
           // Provider threw synchronously (network failure, misconfiguration, etc.) —
@@ -3653,7 +3664,7 @@ export class AgentRuntime {
       const retryResponse = await provider.chat({
         ...params,
         ...(modelForCall !== undefined ? { model: modelForCall } : {}),
-        ...agentTurnOptions(this.config.reasoning),
+        ...agentTurnOptions(this.config.reasoning, turnDeadlineAt),
       });
       const retryLatencyMs = Date.now() - retryStartMs;
       if (retryResponse.type !== 'error') {

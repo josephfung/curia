@@ -706,6 +706,9 @@ export class DelegateHandler implements ToolHandler {
       // duration of this synchronous call; the moment work crosses an async boundary
       // (scheduler-create, task wake_at, a persisted bullpen thread) the signal is gone.
       liveTurn: ctx.liveTurn,
+      // When this wait ends (#2371): the reasoning watchdog positions its time trigger
+      // against it. A distinct field, never cancelling the specialist's turn.
+      turnDeadlineAt: Date.now() + specialistTimeoutMs,
       parentEventId: `delegate-${randomUUID()}`,
     });
     onTaskCreated(taskEvent.id);
