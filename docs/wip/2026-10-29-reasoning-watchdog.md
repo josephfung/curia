@@ -29,7 +29,7 @@
   - `REASONING_WATCHDOG_TIME_FRACTION = 0.5`
   - `FORCED_ATTEMPT_RESERVE_MS = 60_000`
   - `FORCED_REASONING_TAIL_CHARS = 16_000`
-  - `WATCHDOG_REQUEST_TIMEOUT_MS = 600_000`. This matches OpenRouter's `OPENROUTER_REQUEST_TIMEOUT_MS` and the Anthropic SDK default; import the OpenRouter constant rather than repeating the number.
+  - `WATCHDOG_REQUEST_TIMEOUT_MS = 600_000`. Shared with OpenRouter via `LLM_REQUEST_TIMEOUT_MS` in `request-timeout.ts` (not imported from a concrete provider).
 - **Reasoning is counted in tokens:** one per `reasoning_delta`, never by character count.
 - **At most one forced attempt per call.** The watched attempt is the only one that streams. The forced attempt goes through `inner.chat()` with that provider's normal retries.
 - **Turns stay non-cancellable.** `deadlineAt` only sets when the watchdog fires; it never aborts a call or a turn.
