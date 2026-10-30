@@ -96,6 +96,9 @@ function reasoningFieldsFrom(response: AnthropicMessage, usage: LLMUsage): LLMRe
 
 export class AnthropicProvider implements LLMProvider {
   id = 'anthropic';
+  // Sonnet 5.5 refuses (stop_reason "refusal", category reasoning_extraction) any
+  // forced attempt that quotes its reasoning back; 2026-10-29 probe, #2371.
+  readonly acceptsReasoningInForcedAttempt = false;
   private client: Anthropic;
   private logger: Logger;
   private readonly modelRegistry: ModelRegistry;

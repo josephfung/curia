@@ -225,6 +225,14 @@ export interface LLMProvider {
   // Human-readable identifier used in logs and metrics (e.g. 'anthropic', 'openai').
   id: string;
 
+  /**
+   * When `false`, the reasoning watchdog's forced attempt omits the quoted
+   * reasoning: this provider's models refuse having their reasoning echoed back
+   * (Anthropic's `reasoning_extraction` classifier on Sonnet 5.5, 2026-10-29
+   * probe, #2371). Absent or `true` means the reasoning tail is included.
+   */
+  readonly acceptsReasoningInForcedAttempt?: boolean;
+
   // Send a conversation to the model and receive a structured response.
   // `options` is an escape hatch for provider-specific knobs (model name,
   // temperature, etc.) that don't belong in the common interface.

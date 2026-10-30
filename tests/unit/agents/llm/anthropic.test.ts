@@ -169,6 +169,13 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
   });
 });
 
+describe('AnthropicProvider — forced attempt contract', () => {
+  it('does not accept its own reasoning quoted back (reasoning_extraction refusal, #2371)', () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    expect(provider.acceptsReasoningInForcedAttempt).toBe(false);
+  });
+});
+
 describe('AnthropicProvider — prompt caching', () => {
   beforeEach(() => {
     mockCreate.mockReset();

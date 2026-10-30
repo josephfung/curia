@@ -239,6 +239,48 @@ describe('ReasoningWatchdogProvider', () => {
     });
   });
 
+  describe('acceptsReasoningInForcedAttempt (#2371)', () => {
+    const forcedTool: LLMResponse = {
+      type: 'tool_use',
+      toolCalls: [{ id: 't1', name: 'calendar-create', input: {} }],
+      usage: usage(),
+      provenance,
+    };
+    const stoppingSteps: LLMStreamEvent[] = [
+      { type: 'request_started', maxTokens: 10 },
+      ...reasoning(8),
+      { type: 'message_end', content: 'late', usage: usage(), provenance },
+    ];
+
+    it('omits the quoted reasoning when the inner provider sets it to false', async () => {
+      const inner = fakeProvider({ steps: stoppingSteps, chatResponses: [forcedTool] });
+      Object.assign(inner, { acceptsReasoningInForcedAttempt: false });
+      await new ReasoningWatchdogProvider(inner, createSilentLogger()).chat(baseParams());
+
+      expect(inner.chatCalls).toHaveLength(1);
+      const last = inner.chatCalls[0]!.messages.at(-1)!;
+      const content = last.content as string;
+      expect(content.startsWith(MARKER)).toBe(true);
+      expect(content).toContain('Take your next step now');
+      expect(content).not.toContain('<previous_reasoning>');
+      expect(content).not.toContain('r0 r1');
+    });
+
+    it('includes the reasoning when the property is true', async () => {
+      const inner = fakeProvider({ steps: stoppingSteps, chatResponses: [forcedTool] });
+      Object.assign(inner, { acceptsReasoningInForcedAttempt: true });
+      await new ReasoningWatchdogProvider(inner, createSilentLogger()).chat(baseParams());
+      expect(inner.chatCalls[0]!.messages.at(-1)!.content as string).toContain('<previous_reasoning>');
+    });
+
+    it('passes the property through from the inner provider', () => {
+      const off = fakeProvider({ steps: [] });
+      Object.assign(off, { acceptsReasoningInForcedAttempt: false });
+      expect(watchProvider(off, createSilentLogger()).acceptsReasoningInForcedAttempt).toBe(false);
+      expect(watchProvider(fakeProvider({ steps: [] }), createSilentLogger()).acceptsReasoningInForcedAttempt).toBeUndefined();
+    });
+  });
+
   it('token trigger: aborts after the threshold and makes one forced attempt', async () => {
     const forced: LLMResponse = {
       type: 'tool_use',

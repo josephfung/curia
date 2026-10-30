@@ -66,6 +66,8 @@ export function watchProvider(provider: LLMProvider, logger: Logger): ReasoningW
 
 export class ReasoningWatchdogProvider implements LLMProvider {
   readonly id: string;
+  // Passthrough, so a further wrapper sees the inner provider's value.
+  readonly acceptsReasoningInForcedAttempt?: boolean;
   // `declare` so no own property exists when the inner provider cannot stream:
   // voice checks for stream's presence and must not see one that isn't there.
   declare readonly stream?: (params: CallParams) => AsyncIterable<LLMStreamEvent>;
@@ -76,6 +78,7 @@ export class ReasoningWatchdogProvider implements LLMProvider {
     private readonly now: () => number = Date.now,
   ) {
     this.id = inner.id;
+    this.acceptsReasoningInForcedAttempt = inner.acceptsReasoningInForcedAttempt;
     // Streaming callers (voice) are passed straight through, unwatched.
     if (inner.stream) this.stream = inner.stream.bind(inner);
   }
@@ -279,7 +282,7 @@ export class ReasoningWatchdogProvider implements LLMProvider {
     }
     const response = await this.inner.chat({
       ...params,
-      messages: [...params.messages, { role: 'user', content: forcedAttemptMessage(reasoningText) }],
+      messages: [...params.messages, { role: 'user', content: forcedAttemptMessage(this.inner.acceptsReasoningInForcedAttempt === false ? '' : reasoningText) }],
       ...(forcedOptions !== undefined ? { options: forcedOptions } : {}),
     });
 

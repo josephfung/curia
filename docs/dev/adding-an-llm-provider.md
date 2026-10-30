@@ -67,6 +67,8 @@ Four more rules:
 
 Voice and the watchdog both skip a provider whose `stream` property is absent. Do not define `stream` as an empty stub; omit it.
 
+Set `readonly acceptsReasoningInForcedAttempt = false` if your models refuse having their own reasoning quoted back. The watchdog's forced attempt then omits the `<previous_reasoning>` block. Anthropic does: Sonnet 5.5 returns a `reasoning_extraction` refusal. Leave it unset otherwise.
+
 ---
 
 ## 4. Reasoning pass-back
