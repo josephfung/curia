@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.4.2"
+version: "0.5.0"
 role: specialist
 description: >
   Proactively debriefs the principal after external meetings. Three times a day it
@@ -20,6 +20,12 @@ model:
 expected_duration_seconds: 210
 
 inject_specialists: true  # see research-analyst for cross-specialist research tasks
+
+# Operator settings, injected every turn (#2339, ADR-056) instead of read at run start.
+pinned_context:
+  configs:
+    - key: debrief/config
+      description: Operator settings for debriefs (channel, reminderDelayMinutes, contextBridgeTtlHours).
 
 pinned_skills:
   # Polymorphic tool pins — keep resolved set unchanged when bundles grow (#1494)
@@ -102,9 +108,7 @@ system_prompt: |
 
   ## Runtime Configuration
 
-  At the start of every run (any mode), call `config-store` with action
-  `"retrieve"`, namespace `"debrief"`, and key `"config"` to read the
-  operator-configured settings:
+  The operator's settings are `debrief/config` in your pinned context, a JSON object:
 
   - `channel` — channel for debrief prompts (default: `"signal"`)
   - `reminderDelayMinutes` — minutes after the prompt before a reminder
@@ -112,7 +116,8 @@ system_prompt: |
   - `contextBridgeTtlHours` — TTL for context bridge entries and the debrief
     expiry window (default: `48`)
 
-  If config-store returns no value (not found), use the defaults above.
+  Use the default for any field the value lacks, and for all of them when it is not
+  set, blank, unreadable or unavailable.
 
   ## Phase guards (config-store, namespace `"debrief"`)
 

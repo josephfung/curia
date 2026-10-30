@@ -24,6 +24,7 @@
 //   - security.trust_thresholds in config/default.yaml
 //   - Specialist agents (agents/*.yaml) or their registry enablement
 //   - The principal's verified channel identities, or Curia's own email / Signal number
+//   - A pinned_context document or setting any agent declares (#2339)
 //
 // Requires: DATABASE_URL pointing at a migrated Curia instance, and SECRET_ENCRYPTION_KEY.
 // No LLM key is needed — providers are offline and nothing is sent. The vault key is
@@ -41,6 +42,8 @@ import { inspect } from 'node:util';
 import pino from 'pino';
 import { createTestModeStack, type TestModeStack } from '../src/startup/test-mode-stack.js';
 import type { Logger } from '../src/logger.js';
+import type { PinnedDocRead } from '../src/agents/pinned-context.js';
+import type { AssembledAgent } from '../src/startup/agent-assembly.js';
 import { discoverSkillManifests } from '../src/skills/skill-loader.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
@@ -86,11 +89,47 @@ export interface PromptInputsSnapshot {
    * which production has never seen, is not dropped.
    */
   disabled_skills: string[];
+  /**
+   * Every pinned_context entry a loaded agent declares (#2339), read as a turn reads it:
+   * a document's read result (null when it was never created), a setting's value (null
+   * when not set). Keyed by path and by `<namespace>/<key>`, sorted. A failed read fails
+   * the snapshot rather than recording a guess.
+   */
+  pinned_context: {
+    docs: Record<string, PinnedDocRead>;
+    configs: Record<string, string | null>;
+  };
+}
+
+/** Read each declared entry once, through the declaring agent's own reader. */
+async function readPinnedContext(
+  agents: readonly AssembledAgent[],
+): Promise<PromptInputsSnapshot['pinned_context']> {
+  const docs = new Map<string, PinnedDocRead>();
+  const configs = new Map<string, string | null>();
+  for (const agent of agents) {
+    const { agentId, pinnedContext, pinnedContextReader } = agent.runtimeConfig;
+    if (!pinnedContext?.length) continue;
+    if (!pinnedContextReader) throw new Error(`${agentId} declares pinned_context but has no pinnedContextReader`);
+    for (const entry of pinnedContext) {
+      const name = entry.kind === 'doc' ? entry.path : `${entry.namespace}/${entry.key}`;
+      if (docs.has(name) || configs.has(name)) continue;
+      try {
+        if (entry.kind === 'doc') docs.set(name, await pinnedContextReader.readDoc(entry.path));
+        else configs.set(name, await pinnedContextReader.readConfig(entry.namespace, entry.key));
+      } catch (err) {
+        throw new Error(`reading pinned_context ${name} (declared by ${agentId}) failed`, { cause: err });
+      }
+    }
+  }
+  const sorted = <T>(m: Map<string, T>): Record<string, T> =>
+    Object.fromEntries([...m].sort(([a], [b]) => a.localeCompare(b)));
+  return { docs: sorted(docs), configs: sorted(configs) };
 }
 
 /** Read every input from the coordinator's runtime config, which is what production feeds the builder. */
 export async function buildPromptInputsSnapshot(
-  stack: Pick<TestModeStack, 'agent' | 'principalContactId' | 'skillRegistry'>,
+  stack: Pick<TestModeStack, 'agent' | 'agents' | 'principalContactId' | 'skillRegistry'>,
   curiaVersion: string,
   /** Every SKILL.md bundle discovered on disk — the stack's skills dir. */
   discoveredSkillNames: readonly string[],
@@ -157,6 +196,7 @@ export async function buildPromptInputsSnapshot(
     },
     // The stack's SkillRegistry holds exactly what production's reconcile enables.
     disabled_skills: discoveredSkillNames.filter((name) => !stack.skillRegistry.get(name)).sort(),
+    pinned_context: await readPinnedContext(stack.agents),
   };
 }
 

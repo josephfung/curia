@@ -95,7 +95,7 @@ import { AuditLogRepo } from '../audit/audit-log-repo.js';
 import { AgentRuntime } from '../agents/runtime.js';
 import { AgentRegistry } from '../agents/agent-registry.js';
 import { discoverAgentManifests, type AgentYamlConfig } from '../agents/loader.js';
-import { createPinnedContextReader } from '../agents/pinned-context.js';
+import { createPinnedContextReader, type PinnedContextReader } from '../agents/pinned-context.js';
 import { WorkingDocsRepo } from '../db/working-docs-repo.js';
 import { AnthropicProvider } from '../agents/llm/anthropic.js';
 import { OpenRouterProvider } from '../agents/llm/openrouter.js';
@@ -280,6 +280,12 @@ export interface TestModeStackOptions {
    * so every run would otherwise see every other run's seeded verifications.
    */
   wrapVerification?: (runtime: VerificationRuntime) => VerificationRuntime;
+  /**
+   * Narrow the pinned-context reader (#2339) before the agents receive it. The scenario
+   * suite serves each run its own seeded documents and settings: the copied database's
+   * are shared by every run, and a case must not depend on what happens to be in it.
+   */
+  wrapPinnedContextReader?: (reader: PinnedContextReader) => PinnedContextReader;
   /**
    * Wire production's `delegate` dispatch claims (pending_delegations: the in-flight
    * refusal and the running claim, #1858 / #1893), as src/index.ts does when late
@@ -1477,12 +1483,14 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       browserSessionAlive: options.browserSessionAlive,
       // Reads only, so it creates no deferred work: the same per-turn block production
       // renders (#2338). Writes still have no repo here (see header).
-      pinnedContextReader: createPinnedContextReader({
-        workingDocsRepo: new WorkingDocsRepo(pool, logger),
-        entityMemory,
-        logger,
-        warnChars: yamlConfig.documentWorkspace?.pinnedContextWarnChars,
-      }),
+      pinnedContextReader: (options.wrapPinnedContextReader ?? ((reader: PinnedContextReader) => reader))(
+        createPinnedContextReader({
+          workingDocsRepo: new WorkingDocsRepo(pool, logger),
+          entityMemory,
+          logger,
+          warnChars: yamlConfig.documentWorkspace?.pinnedContextWarnChars,
+        }),
+      ),
       defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
       lateDelivery: {
         enabled: lateDelivery.enabled,

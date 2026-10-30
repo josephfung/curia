@@ -155,6 +155,22 @@ export interface ExpectedBehavior {
   check?: BehaviorCheck;
 }
 
+/**
+ * What the run's agents read through pinned_context (`seed.pinned`, #2339). The harness
+ * serves these instead of the database's own, so runs never see each other's documents
+ * or the copied database's: an entry not named here reads as not yet created / not set.
+ * Plain records and arrays, not Map/Set: the seed passes through resolveDatePlaceholders,
+ * which rebuilds every object from its own entries.
+ */
+export interface SeedPinned {
+  /** Document text by `/shared/` path, shown as the block shows a live document. */
+  docs: Record<string, string>;
+  /** Config value by `<namespace>/<key>`. */
+  configs: Record<string, string>;
+  /** Paths and `<namespace>/<key>` keys whose read fails: the block shows them as unavailable. */
+  unavailable: string[];
+}
+
 /** A contact to create for the run. Referenced elsewhere as `{{contact:<key>}}`. */
 export interface SeedContact {
   key: string;
@@ -456,6 +472,8 @@ export interface ScenarioCase {
     tasks: SeedTask[];
     /** Outreach rows (#2312). */
     outreach: SeedOutreach[];
+    /** Pinned-context documents and settings (#2339). Absent: every entry reads as unset. */
+    pinned?: SeedPinned;
     /**
      * What is waiting on the principal on this run's principal turn (prompt trim PR 7):
      * the counts the Dispatcher's backlog line reports. Absent means nothing is waiting.

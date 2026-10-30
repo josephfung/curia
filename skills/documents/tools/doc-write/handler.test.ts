@@ -38,6 +38,7 @@ function makeRepo(overrides: Partial<WorkingDocsRepo> = {}): WorkingDocsRepo {
     append: vi.fn().mockResolvedValue({ ok: true, document: appended }),
     update: vi.fn(),
     editSection: vi.fn(),
+    deleteSection: vi.fn(),
     projectPrefixHasLiveDocs: vi.fn().mockResolvedValue(false),
     existsAtPath: vi.fn().mockResolvedValue(false),
     ...overrides,
@@ -410,6 +411,73 @@ describe('DocWriteHandler', () => {
     }
   });
 
+  describe('section-delete (#2339)', () => {
+    const PATH = '/projects/x/brief.md';
+    const body = '## Board mail\n\n- When: from the board\n\n## Newsletters\n\n- When: Substack\n';
+
+    it('deletes the section, logs it, and reports the new version', async () => {
+      const deleteSection = vi.fn().mockResolvedValue({
+        ok: true,
+        document: makeDoc({ version: 4, body: '## Newsletters\n\n- When: Substack\n' }),
+      });
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(makeDoc({ version: 3, body })), deleteSection });
+      const result = await new DocWriteHandler().execute(makeCtx({
+        path: PATH, mode: 'section-delete', section: ' Board mail ', expected_section_version: 2,
+      }, repo));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { action?: string; document?: { version?: number } };
+        expect(data.action).toBe('section-deleted');
+        expect(data.document?.version).toBe(4);
+      }
+      expect(deleteSection).toHaveBeenCalledWith(PATH, { section: 'Board mail', expectedSectionVersion: 2 });
+      // The folder's log.md (which the read mock reports as existing) gets an entry.
+      expect(repo.append).toHaveBeenCalledWith('/projects/x/log.md', expect.objectContaining({
+        content: expect.stringContaining('section-delete'),
+      }));
+    });
+
+    it('fails on a missing section, without logging, so no removal is confirmed', async () => {
+      const deleteSection = vi.fn().mockResolvedValue({ ok: false, missingSection: true, document: makeDoc({ body }) });
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(makeDoc({ body })), deleteSection });
+      const result = await new DocWriteHandler().execute(makeCtx({
+        path: PATH, mode: 'section-delete', section: 'Coffee',
+      }, repo));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/No section 'Coffee'.*nothing was deleted/);
+      expect(repo.create).not.toHaveBeenCalled();
+      expect(repo.append).not.toHaveBeenCalled();
+    });
+
+    it('returns conflict data on a section version mismatch', async () => {
+      const deleteSection = vi.fn().mockResolvedValue({
+        ok: false, conflict: true, document: makeDoc({ version: 5, sectionVersions: { 'Board mail': 3 } }),
+      });
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(makeDoc({ body })), deleteSection });
+      const result = await new DocWriteHandler().execute(makeCtx({
+        path: PATH, mode: 'section-delete', section: 'Board mail', expected_section_version: 1,
+      }, repo));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { conflict?: boolean; section_versions?: Record<string, number> };
+        expect(data.conflict).toBe(true);
+        expect(data.section_versions).toEqual({ 'Board mail': 3 });
+      }
+      expect(repo.create).not.toHaveBeenCalled();
+    });
+
+    it('requires a section and an existing document', async () => {
+      const noSection = await new DocWriteHandler().execute(makeCtx({ path: PATH, mode: 'section-delete' }, makeRepo()));
+      expect(noSection.success).toBe(false);
+      if (!noSection.success) expect(noSection.error).toMatch(/requires section/);
+
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(null) });
+      const noDoc = await new DocWriteHandler().execute(makeCtx({ path: PATH, mode: 'section-delete', section: 'A' }, repo));
+      expect(noDoc.success).toBe(false);
+      expect(repo.deleteSection).not.toHaveBeenCalled();
+    });
+  });
+
   describe('/shared/ write guard (#2338)', () => {
     const SHARED = '/shared/inbox/rules.md';
 
@@ -453,6 +521,16 @@ describe('DocWriteHandler', () => {
         path: '/projects/../shared/inbox/rules.md', mode: 'create', type: 'agent-settings', body: 'x',
       }, repo));
       expect(result.success).toBe(false);
+    });
+
+    it('guards section-delete like every other mode (#2339)', async () => {
+      const repo = makeRepo();
+      const result = await new DocWriteHandler().execute(sharedCtx('coordinator', {
+        path: SHARED, mode: 'section-delete', section: 'Board mail',
+      }, repo));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/pinned_context/);
+      expect(repo.deleteSection).not.toHaveBeenCalled();
     });
 
     it('rejects a call with no agent or no roster', async () => {

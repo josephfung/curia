@@ -9,6 +9,7 @@ import {
   scopedBrowserSessionAlive,
   scopedBullpen,
   scopedOutboundContext,
+  scopedPinnedContextReader,
   scopedPrincipalBacklog,
   scopedVerification,
   SCENARIO_IDENTITY_LABEL,
@@ -119,6 +120,46 @@ describe('scoped views with overlapping runs', () => {
     expect(a).toEqual({ decayWarnings: 0, pendingApprovals: 2, principalTasks: 0 });
     expect(b).toEqual(none);
     expect(await view.counts()).toEqual(none);
+  });
+
+  it('serve each run only its own pinned documents and settings, never the database\'s (#2339)', async () => {
+    const real = {
+      warnChars: 123,
+      readDoc: vi.fn(async () => ({ status: 'live' as const, version: 9, content: 'the database copy' })),
+      readConfig: vi.fn(async () => 'the database value'),
+    };
+    const view = scopedPinnedContextReader(real, currentScope);
+    const withRules = run('A', []);
+    withRules.scope.pinned = {
+      docs: { '/shared/inbox/rules.md': '## Board mail' },
+      configs: { 'ceo_inbox/decision_tagging': '{"enabled": true}' },
+      unavailable: ['/shared/calendar/rules.md', 'debrief/config'],
+    };
+    const [a, b] = await Promise.all([
+      context.run(withRules, async () => ({
+        inbox: await view.readDoc('/shared/inbox/rules.md'),
+        tagging: await view.readConfig('ceo_inbox', 'decision_tagging'),
+        unseeded: await view.readConfig('ceo_inbox', 'other'),
+      })),
+      context.run(run('B', []), async () => ({
+        inbox: await view.readDoc('/shared/inbox/rules.md'),
+        tagging: await view.readConfig('ceo_inbox', 'decision_tagging'),
+      })),
+    ]);
+    expect(a).toEqual({
+      inbox: { status: 'live', version: 1, content: '## Board mail' },
+      tagging: '{"enabled": true}',
+      unseeded: null,
+    });
+    expect(b).toEqual({ inbox: null, tagging: null });
+    await context.run(withRules, async () => {
+      await expect(view.readDoc('/shared/calendar/rules.md')).rejects.toThrow(/fails/);
+      await expect(view.readConfig('debrief', 'config')).rejects.toThrow(/fails/);
+    });
+    expect(await view.readDoc('/shared/inbox/rules.md')).toBeNull();
+    expect(view.warnChars).toBe(123);
+    expect(real.readDoc).not.toHaveBeenCalled();
+    expect(real.readConfig).not.toHaveBeenCalled();
   });
 });
 

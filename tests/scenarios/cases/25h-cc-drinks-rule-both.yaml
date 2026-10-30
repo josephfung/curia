@@ -20,6 +20,27 @@ autonomy: { score: 84, gating: band }
 identity: scheduling-prefs
 stub_sets: [human-channels, calendar-office, calendar-specialist]
 seed:
+  pinned:
+    # The principal's scheduling rules document, in calendar's pinned context (#2339).
+    docs:
+      /shared/calendar/rules.md: |
+        ---
+        type: agent-settings
+        title: Scheduling rules
+        ---
+        Each rule is a `##` section with Applies to / Do / Status lines. Status is active or paused.
+
+        ## Coffee meetings
+
+        - Applies to: coffee meetings
+        - Do: weekdays between 9 AM and 4 PM, 45 minutes, at a café near the office
+        - Status: active
+
+        ## Drinks
+
+        - Applies to: drinks
+        - Do: after work only: start at 5:30 PM or later, 90 minutes, at a bar or restaurant
+        - Status: active
   contacts:
     - key: leo
       display_name: Leo Martins
@@ -61,15 +82,6 @@ tool_stubs:
   memory-store:
     - match: {}
       return: { stored: true, action: created, node_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000d5, sensitivity: internal }
-  # The principal's stored calendar rules (agents/calendar.yaml loads them at task start).
-  config-store:
-    - agent: calendar
-      match: { action: retrieve, namespace: calendar }
-      return:
-        found: true
-        namespace: calendar
-        key: rules
-        value: '[{"applies_to":"coffee meetings","instruction":"weekdays between 9 AM and 4 PM, 45 minutes, at a café near the office","active":true},{"applies_to":"drinks","instruction":"after work only: start at 5:30 PM or later, 90 minutes, at a bar or restaurant","active":true}]'
   calendar-find-free-time:
     - agent: calendar
       match: {}
@@ -91,13 +103,6 @@ expected_behaviors:
       called: [calendar-find-free-time, calendar-list-events]
       agent: any
       success: true
-  - id: reads_rules
-    weight: important
-    description: The calendar specialist reads the stored calendar rules.
-    check:
-      called: config-store
-      agent: calendar
-      with: { action: retrieve, namespace: calendar }
   - id: answers_leo
     weight: critical
     description: Answers Leo on the principal's thread (email-reply to its Message ID).

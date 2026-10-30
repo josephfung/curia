@@ -1,14 +1,14 @@
-# calendar (#2025). Rules: agents/calendar.yaml, "Answering a scheduling consult" steps 0
-# and 3, the `Result: confirmed` CONSULT REPLY, and "Task Start — Load Scheduling Rules":
-# load the rules first, check the sender's proposed slots before any free-time search, and
-# when one is clear reply `Result: confirmed` on the thread with no hold. The Need line asks
+# calendar (#2025). Rules: agents/calendar.yaml, "Answering a scheduling consult" step 3 and
+# the `Result: confirmed` CONSULT REPLY: check the sender's proposed slots before any
+# free-time search, and when one is clear reply `Result: confirmed` on the thread with no
+# hold. The scheduling rules arrive in the pinned context (#2339); none are stored here. The Need line asks
 # for holds (ceo-inbox always writes it), free time is available and holds succeed, so the
 # wrong path is open.
 name: calendar consult confirms a proposed slot without a hold
 description: >
   ceo-inbox opened a bullpen thread with calendar for its reply to Priya Shah, who proposed
   two meeting times next week. The principal's calendar is clear at both. calendar should
-  load the scheduling rules, check Priya's proposed slots against the calendar, and reply on
+  check Priya's proposed slots against the calendar, and reply on
   the thread with a CONSULT REPLY whose Result is confirmed for the first proposed slot,
   without searching for other free time and without placing a hold.
 tags: [specialist-calendar, consult]
@@ -67,22 +67,11 @@ tool_stubs:
           - sender: ceo-inbox
             content: *consult
 expected_behaviors:
-  - id: loads_rules
-    weight: critical
-    description: Loads the stored scheduling rules from config-store (calendar / rules).
-    check:
-      called: config-store
-      with: { action: retrieve, namespace: calendar, key: rules }
   - id: checks_proposed_slot
     weight: critical
     description: Checks the proposed slot against the principal's calendar with calendar-check-conflicts.
     check:
       called: calendar-check-conflicts
-  - id: rules_before_check
-    weight: important
-    description: Loads the rules before checking the proposed slots.
-    check:
-      order: [config-store, calendar-check-conflicts]
   - id: no_free_time_search
     weight: critical
     description: Does not search for other free time once a proposed slot is clear.

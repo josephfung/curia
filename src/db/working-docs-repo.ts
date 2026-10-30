@@ -9,6 +9,7 @@ import {
   emitOkfDocument,
   extractLinks,
   editSectionBody,
+  removeSection,
   okfByteSize,
   normalizeDocPath,
   type ExtractedLink,
@@ -107,6 +108,17 @@ export interface EditSectionParams {
    */
   taskId?: string;
 }
+
+export interface DeleteSectionParams {
+  section: string;
+  /** Per-section optimistic version, as for editSection. */
+  expectedSectionVersion?: number;
+}
+
+/** editSection's results, plus a section that is not in the document (#2339). */
+export type WorkingDocDeleteSectionResult =
+  | WorkingDocWriteResult
+  | { ok: false; missingSection: true; document: WorkingDocRow };
 
 interface DbWorkingDocRow {
   id: string;
@@ -441,6 +453,91 @@ export class WorkingDocsRepo {
     } catch (err) {
       await client.query('ROLLBACK');
       this.logger.error({ err, path: normalized, section: sectionKey }, 'working-docs-repo: editSection transaction failed');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Delete one `##` section, heading and body, and drop its section version (#2339).
+   * Same row lock and section-version check as editSection. A section that is not in
+   * the document changes nothing and says so, so a caller never confirms a removal
+   * that did not happen.
+   */
+  async deleteSection(path: string, params: DeleteSectionParams): Promise<WorkingDocDeleteSectionResult> {
+    const normalized = normalizeDocPath(path);
+    const sectionKey = params.section.trim();
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: lockedRows } = await client.query<DbWorkingDocRow>(
+        `SELECT ${DOC_COLUMNS}
+         FROM working_documents
+         WHERE path = $1 AND archived_at IS NULL
+         FOR UPDATE`,
+        [normalized],
+      );
+      const lockedRow = lockedRows[0];
+      if (!lockedRow) {
+        await client.query('ROLLBACK');
+        throw new Error(`working-docs-repo: document not found at ${normalized}`);
+      }
+
+      const locked = mapRow(lockedRow);
+      const removed = removeSection(locked.body, sectionKey);
+      if (!removed) {
+        await client.query('ROLLBACK');
+        return { ok: false, missingSection: true, document: locked };
+      }
+      // editSection keys versions by the heading as the caller wrote it, and headings
+      // match case-insensitively, so every spelling of this heading goes.
+      const matchesHeading = (key: string) => key.trim().toLowerCase() === sectionKey.toLowerCase();
+      const currentSectionVersion = locked.sectionVersions[sectionKey]
+        ?? locked.sectionVersions[removed.heading]
+        ?? 0;
+      if (params.expectedSectionVersion !== undefined
+        && params.expectedSectionVersion !== currentSectionVersion) {
+        await client.query('ROLLBACK');
+        return { ok: false, conflict: true, document: locked };
+      }
+
+      const sectionVersions = Object.fromEntries(
+        Object.entries(locked.sectionVersions).filter(([key]) => !matchesHeading(key)),
+      );
+      const byteSize = okfByteSize({ type: locked.type, frontmatter: locked.frontmatter, body: removed.body });
+      const links = extractLinks(normalized, removed.body);
+
+      const { rows } = await client.query<DbWorkingDocRow>(
+        `UPDATE working_documents
+         SET body = $2,
+             version = version + 1,
+             section_versions = $3::jsonb,
+             byte_size = $4,
+             updated_at = now()
+         WHERE path = $1
+           AND archived_at IS NULL
+           AND version = $5
+         RETURNING ${DOC_COLUMNS}`,
+        [normalized, removed.body, JSON.stringify(sectionVersions), byteSize, locked.version],
+      );
+      if (!rows[0]) {
+        await client.query('ROLLBACK');
+        const latest = await this.read(normalized);
+        return { ok: false, conflict: true, document: latest ?? locked };
+      }
+      await this.replaceLinks(client, normalized, links);
+      await client.query('COMMIT');
+      const document = mapRow(rows[0]);
+      this.logger.info(
+        { path: normalized, section: removed.heading, version: document.version },
+        'working-docs-repo: deleted section',
+      );
+      return { ok: true, document };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error({ err, path: normalized, section: sectionKey }, 'working-docs-repo: deleteSection transaction failed');
       throw err;
     } finally {
       client.release();

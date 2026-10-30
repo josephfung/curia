@@ -30,8 +30,8 @@ calendar-check-conflicts:
   - agent: calendar
     match: {}
     return: { conflicts: [], clear: true, displayTimezone: "{{timezone}}" }
-# The principal's stored scheduling rules (agents/calendar.yaml loads them at task start):
-# none. A write is the case's to stub.
+# config-store holds no calendar settings (the holds toggle reads as unset, so holds are on).
+# Scheduling rules are a pinned document since #2339: a case seeds them with seed.pinned.
 config-store:
   - agent: calendar
     match: { action: retrieve }

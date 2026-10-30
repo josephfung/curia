@@ -108,7 +108,7 @@ pinned_context:
 - An agent's standing settings can grow past 2000 characters and be edited a section at a
   time, by the agent or by the principal in the console.
 - Declaring agents lose a tool call per run and the prompt step that loaded their settings.
-  Moving ceo-inbox and calendar onto this is #2339.
+  ceo-inbox and calendar moved their standing rules onto this, and meeting-debrief its settings, in #2339.
 - Everything declared is sent on every turn. That's right for settings the agent applies on
   most turns and wrong for anything rarer, which should stay an on-demand read. The size
   warning surfaces a document that has grown too large to inject; per-entry load modes can

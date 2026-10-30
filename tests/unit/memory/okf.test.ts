@@ -6,6 +6,7 @@ import {
   splitSections,
   editSectionBody,
   joinSections,
+  removeSection,
   normalizeDocPath,
 } from '../../../src/memory/okf.js';
 
@@ -132,6 +133,24 @@ Intro text.
     const edited = editSectionBody(body, 'Risks', 'None yet.');
     expect(edited).toContain('## Risks');
     expect(edited).toContain('None yet.');
+  });
+
+  it('removes a section, heading and body, matching the heading case-insensitively (#2339)', () => {
+    const removed = removeSection(body, ' progress ');
+    expect(removed?.heading).toBe('Progress');
+    expect(removed?.body).not.toContain('## Progress');
+    expect(removed?.body).not.toContain('312 / 1300');
+    expect(removed?.body).toContain('Intro text.');
+    expect(removed?.body).toContain('## Decisions\n\n- Auto-unfollow stale accounts.');
+  });
+
+  it('removes the last section without leaving a trailing heading (#2339)', () => {
+    const removed = removeSection(body, 'Decisions');
+    expect(removed?.body).toBe('# Title\n\nIntro text.\n\n## Progress\n\n312 / 1300 reviewed.\n');
+  });
+
+  it('returns null for a missing section rather than changing the body (#2339)', () => {
+    expect(removeSection(body, 'Risks')).toBeNull();
   });
 });
 

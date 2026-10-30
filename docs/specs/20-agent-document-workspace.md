@@ -141,7 +141,7 @@ Five skills, auto-pinned into every workspace-enabled agent (§7):
 | `doc-list` | none | 0.1.0 | List documents under a path prefix — the `index.md` projection of a directory. |
 | `doc-search` | none | 0.1.0 | **Case-sensitive substring** grep across bodies (`line.includes(query)`); `path_prefix` defaults to the whole workspace; capped at 50 matches. |
 | `doc-place` | none | 0.1.1 | Read-only placement recommendation (`extend` / `add_to_folder` / `create_folder`) from the shared placement module (#1819). |
-| `doc-write` | low | 0.3.4 | Create / append / replace / section-edit at a path; appends a `log.md` entry; returns `conflict: true` on version mismatch; stamps `task_id` to the **project-root** task when omitted (including append / section-edit on unowned docs); rejects new UUID-named folders **except** when the UUID equals the bound root task id (legacy home, even with no live docs yet) or the folder already has live documents. Shared `log.md` stays unowned. |
+| `doc-write` | low | 0.5.0 | Create / append / replace / section-edit / section-delete at a path (section-delete removes a `##` section's heading and body, and errors on a missing section); appends a `log.md` entry; returns `conflict: true` on version mismatch; stamps `task_id` to the **project-root** task when omitted (including append / section-edit on unowned docs); rejects new UUID-named folders **except** when the UUID equals the bound root task id (legacy home, even with no live docs yet) or the folder already has live documents. Shared `log.md` stays unowned. |
 
 `doc-write` carries `action_risk: low` (an internal-state write); the four read / recommend
 skills are `action_risk: none`. Placement algorithms live in

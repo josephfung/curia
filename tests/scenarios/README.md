@@ -191,6 +191,7 @@ seeded rows, stubs, model calls and spend are found through its own case context
 | Sign-in verifications (#2017) | the verification runtime's `open`, then backdated (and closed, for a non-pending `status`) | The coordinator's "## Sign-in verifications" block, the Dispatcher's code tracking and the ExecutionLayer see only the run's rows (`scopedVerification`, the `wrapVerification` stack option), and only the run's sessions read as alive (`browserSessionAlive`). Cases seeding one site never run at once (one pending row per site). Deleted after the run. |
 | Principal identities (#2017) | `seed.principal_identities`: a verified, active identity for the principal, added only when they have no active one on that channel | Labelled `scenario-fixture (#2017)`; cleanup deletes only the row its run added, and the sweep only labelled rows. Cases adding one on the same channel never run at once. A raw insert, so the principal's identity list in every agent's prompt (read at boot) is unchanged. |
 | The principal backlog (prompt trim PR 7) | `seed.backlog` counts | The Dispatcher's backlog line reads the run's own counts (`scopedPrincipalBacklog`), never the shared tables. A case stubs the list tools to show the items its counts promise. |
+| Pinned context (#2339) | `seed.pinned`: `/shared/` document text and config values by key, and entries whose read fails | Agents' `## Pinned context` block reads the run's own values (`scopedPinnedContextReader`, the `wrapPinnedContextReader` stack option), never the copied database's documents or settings. An entry the case does not name reads as not yet created or not set. A write is the case's to stub (`doc-write`, `config-store`). |
 | Scheduler jobs | the `scheduler-list` stub | Never written to the database. Within a run, a later list replays that run's stubbed creates, edits and cancels onto the stub. |
 | The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. |
 | Specialists' conversations (real delegation) | | The same rows for each `scenario-delegate-…` conversation. A specialist the run abandoned is cleaned again when it finishes. |
@@ -377,6 +378,14 @@ seed:
   backlog:                                # optional; what the backlog line reports on a principal turn
     pending_approvals: 1                  #   decay_warnings, pending_approvals, principal_tasks;
     decay_warnings: 0                     #   absent counts are 0, and one must be positive
+  pinned:                                 # optional; what agents' pinned_context reads (#2339)
+    docs:                                 #   /shared/ path → document text, as the block shows it
+      /shared/calendar/rules.md: |
+        ## Drinks
+        - Applies to: drinks
+    configs:                              #   <namespace>/<key> → value
+      ceo_inbox/decision_tagging: '{"enabled": true}'
+    unavailable: [debrief/config]         #   reads that fail: the block shows them as unavailable
 inbound:
   from: principal                         # principal | bullpen | scheduler | task-wake | <contact key>
   channel: cli                            # principal only; default cli

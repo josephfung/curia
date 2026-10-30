@@ -93,7 +93,40 @@
       "type": "boolean",
       "description": "When true, ${available_specialists} in the system_prompt is replaced at bootstrap with the list of registered specialist agents."
     },
+    "pinned_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Shared documents and config-store keys injected into every turn (ADR-056). Shape only: loadAgentConfig (src/agents/pinned-context.ts) checks paths, keys, descriptions and duplicates.",
+      "properties": {
+        "docs": { "$ref": "#/definitions/pinnedContextList" },
+        "configs": { "$ref": "#/definitions/pinnedContextList" }
+      }
+    },
     "install":   { "type": "object" },
     "uninstall": { "type": "object" }
+  },
+  "definitions": {
+    "pinnedContextList": {
+      "description": "One entry or a list. An entry is a string, or a mapping with the string plus a one-line description.",
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/definitions/pinnedContextEntry" },
+        { "type": "array", "items": { "$ref": "#/definitions/pinnedContextEntry" } }
+      ]
+    },
+    "pinnedContextEntry": {
+      "anyOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "key": { "type": "string", "minLength": 1 },
+            "description": { "type": "string" }
+          }
+        }
+      ]
+    }
   }
 }

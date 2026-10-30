@@ -7,6 +7,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { hasBacklog, type PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
+import { parsePinnedContext } from '../../src/agents/pinned-context.js';
 import { isKnownPiiLabel } from '../../src/pii/scrubber.js';
 import { registrableDomain } from '../../src/verification/domain.js';
 import { hasDatePlaceholders, resolveDatePlaceholders } from '../shared/date-placeholders.js';
@@ -35,6 +36,7 @@ import {
   type SeedContact,
   type SeedOutboundEntry,
   type SeedOutreach,
+  type SeedPinned,
   type SeedPrincipalIdentity,
   type SeedTask,
   type SeedVerification,
@@ -76,7 +78,8 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
 }
 
 const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway'] as const;
-const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach'] as const;
+const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach', 'pinned'] as const;
+const PINNED_KEYS = ['docs', 'configs', 'unavailable'] as const;
 const TASK_KEYS = ['key', 'title', 'intent', 'originator', 'agent'] as const;
 const OUTREACH_KEYS = ['key', 'task', 'via', 'org_name', 'domains', 'addresses', 'contacts', 'summary', 'confirmed'] as const;
 const OUTREACH_VIAS: readonly SeedOutreach['via'][] = ['email', 'web_form', 'signal', 'sms', 'slack', 'phone', 'other'];
@@ -664,6 +667,51 @@ function parseOutreach(raw: Raw, file: string): SeedOutreach[] {
   });
 }
 
+/**
+ * `seed.pinned` (#2339): `docs` maps a `/shared/` path to its text, `configs` maps
+ * `<namespace>/<key>` to its value, and `unavailable` lists entries whose read fails.
+ * Paths and keys are checked with the same rules as an agent's pinned_context.
+ */
+function parsePinned(raw: Raw, file: string): SeedPinned | undefined {
+  if (raw['pinned'] === undefined) return undefined;
+  const pinned: SeedPinned = { docs: {}, configs: {}, unavailable: [] };
+  const block = mapping(raw, 'pinned', file, 'seed');
+  onlyKeys(block, PINNED_KEYS, file, 'seed.pinned');
+  const values = (key: 'docs' | 'configs'): Array<[string, string]> => {
+    if (block[key] === undefined) return [];
+    const m = mapping(block, key, file, 'seed.pinned');
+    return Object.entries(m).map(([name, value]) => {
+      if (typeof value !== 'string') throw new CaseError(file, `seed.pinned.${key}: '${name}' must be a string`);
+      return [name, value];
+    });
+  };
+  const docs = values('docs');
+  const configs = values('configs');
+  const unavailable = strList(block, 'unavailable', file, 'seed.pinned');
+  // Classify the failing reads by their trimmed text, so ' /shared/a.md' is a document.
+  const isDoc = (name: string): boolean => name.trim().startsWith('/');
+  const failingDocs = unavailable.filter(isDoc);
+  const failingConfigs = unavailable.filter(name => !isDoc(name));
+  const docNames = [...docs.map(([name]) => name), ...failingDocs];
+  const configNames = [...configs.map(([name]) => name), ...failingConfigs];
+  let entries;
+  try {
+    entries = parsePinnedContext({ docs: docNames, configs: configNames }, 'scenario seed');
+  } catch (err) {
+    throw new CaseError(file, `seed.pinned: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // Store each value under the canonical name validation accepted, which is what the
+  // reader is asked for. parsePinnedContext returns docs first, then configs, each in the
+  // order given, one entry per name (duplicates are refused above).
+  const canonical = entries.map(e => (e.kind === 'doc' ? e.path : `${e.namespace}/${e.key}`));
+  const docCanon = canonical.slice(0, docNames.length);
+  const configCanon = canonical.slice(docNames.length);
+  docs.forEach(([, text], i) => { pinned.docs[docCanon[i]!] = text; });
+  configs.forEach(([, value], i) => { pinned.configs[configCanon[i]!] = value; });
+  pinned.unavailable = [...docCanon.slice(docs.length), ...configCanon.slice(configs.length)];
+  return pinned;
+}
+
 /** `seed.backlog`: each count a whole number, absent ones zero, at least one positive. */
 function parseBacklog(raw: Raw, file: string): PrincipalBacklogCounts | undefined {
   if (raw['backlog'] === undefined) return undefined;
@@ -966,6 +1014,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   if (!isObject(seedRaw)) throw new CaseError(file, `'seed' must be a mapping`);
   onlyKeys(seedRaw, SEED_KEYS, file, 'seed');
   const backlog = parseBacklog(seedRaw, file);
+  const pinned = parsePinned(seedRaw, file);
   const seed = {
     contacts: parseContacts(seedRaw, file),
     outboundContext: parseOutbound(seedRaw, file),
@@ -974,6 +1023,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     principalIdentities: parsePrincipalIdentities(seedRaw, file),
     tasks: parseTasks(seedRaw, file),
     outreach: parseOutreach(seedRaw, file),
+    ...(pinned && { pinned }),
     ...(backlog && { backlog }),
   };
 

@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.23.1"
+version: "0.24.0"
 role: specialist
 description: >
   Manages the principal's personal email inbox. Handles standing-rule management,
@@ -21,6 +21,15 @@ model:
 expected_duration_seconds: 450
 
 inject_specialists: true
+
+# Standing rules and the tagging switch, injected every turn (#2339, ADR-056).
+pinned_context:
+  docs:
+    - path: /shared/inbox/rules.md
+      description: The principal's standing email rules, one `##` section per rule.
+  configs:
+    - key: ceo_inbox/decision_tagging
+      description: '{"enabled": true} turns on Gmail labels for each final classification.'
 
 pinned_skills:
   - ceo-inbox
@@ -367,31 +376,15 @@ system_prompt: |
   without signing with a name or title. In your final summary, add:
     Voice profile: UNAVAILABLE (fallback used)
 
-  ## Step 2: Load standing rules and decision tagging config
+  ## Step 2: Standing rules and decision tagging
 
-  Call config-store with:
-  - action: retrieve
-  - namespace: ceo_inbox
-  - key: decision_tagging
-
-  If found, parse the JSON value. If enabled is true, you will apply
-  classification labels after triaging each message in step 4.
-
-  Then call config-store with:
-  - action: retrieve
-  - namespace: ceo_inbox
-  - key: rules
-
-  If found, parse the JSON array. Each entry has:
-  - condition: natural language predicate to evaluate against each email
-  - instruction: what to do if the condition matches
-  - active: boolean — skip inactive rules
-
-  Hold both values in context for the triage loop.
-
-  If either config-store call fails or returns no value, continue without
-  aborting. Treat missing decision_tagging as disabled. Treat missing rules
-  as an empty array.
+  Both are in your pinned context; do not call a tool to load them.
+  - **Rules:** each `##` section of `/shared/inbox/rules.md` with `Status: active`.
+    `When:` is the condition to evaluate against each email, `Do:` the instruction.
+    No document or no rules means none. If it is unavailable this turn, triage
+    without rules and report `Rules loaded: UNAVAILABLE`.
+  - **Decision tagging** is on only when `ceo_inbox/decision_tagging` is
+    `{"enabled": true}`; otherwise off.
 
   ## Step 3: List one batch of unread messages
 
@@ -498,7 +491,7 @@ system_prompt: |
   3. Summarize any relevant standing instruction from 4a, plus relationship
      context that may help the calendar specialist decide whether to accept,
      decline, or tentatively accept the invite. Per-sender entity-context
-     instructions beat config-store rules. If no rule matches, set
+     instructions beat standing rules. If no rule matches, set
      `Standing: none`; the calendar specialist still evaluates relationship,
      sender kind, prior correspondence, subject/body context, and conflicts.
   4. Call `bullpen-post` with `participants: ['calendar']` (the required
@@ -774,7 +767,7 @@ system_prompt: |
   entity-context), subject, snippet or body, and any relationship data.
   If the condition matches, follow the instruction. Note: if entity-context
   returned a per-sender standing instruction in step 4a that already
-  determined the action, skip conflicting config-store rules for this
+  determined the action, skip conflicting standing rules for this
   message — entity-context standing instructions take precedence.
   The instruction may:
   - Apply a label (call ceo-inbox-label)
@@ -951,19 +944,24 @@ system_prompt: |
 
   ## Rule Management (delegated mode only)
 
-  A delegated request about standing rules or decision tagging is handled with
-  config-store in the `ceo_inbox` namespace, without running triage.
+  A delegated request about standing rules or decision tagging is handled without
+  running triage.
 
-  - **Decision tagging on or off:** store key `decision_tagging` with value
-    `{"enabled": true}` or `{"enabled": false}`.
-  - **Rules** live under key `rules` as a JSON array of
-    `{"condition": …, "instruction": …, "active": true|false}`. To add, pause or
-    remove one, retrieve the array (start from `[]` if not found), append the new
-    rule with `active: true`, set the matching rule's `active: false`, or remove
-    it; store the whole array back as a string; and confirm what changed.
-  - **Listing:** retrieve `rules` and `decision_tagging`, and show each rule's
-    number, condition, instruction and status (active or paused), then whether
-    tagging is on.
+  - **Decision tagging on or off:** config-store store, namespace `ceo_inbox`, key
+    `decision_tagging`, value `{"enabled": true}` or `{"enabled": false}`.
+  - **Rules** are `##` sections of `/shared/inbox/rules.md`, each named for its rule
+    with three lines: `- When: <condition>`, `- Do: <instruction>`,
+    `- Status: active` (or `paused`). Change them with `doc-write`:
+    - Add: `section-edit` a new section, under a heading no rule uses yet, with
+      `Status: active`. If the document is not yet created, `create` it: type
+      `agent-settings`, frontmatter `title: Inbox standing rules`, the rule as its body.
+    - Edit or pause: `section-edit` the matching rule with all three lines.
+    - Remove: `section-delete` the matching rule.
+  - **Listing:** each rule's number, name, condition, instruction and status, then
+    whether tagging is on.
+
+  Confirm a change only after its write succeeds. If it fails, or the document is
+  unavailable this turn, report that and change nothing else.
 
   If more than one rule matches the request (e.g. "pause the email rule"), list
   the candidates and ask which one they mean.

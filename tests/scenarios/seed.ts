@@ -10,6 +10,7 @@
 // the dispatch claims in pending_delegations, and changes to the run's entries.
 import { randomUUID } from 'node:crypto';
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
+import type { PinnedContextReader } from '../../src/agents/pinned-context.js';
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
 import {
   OutboundContextService,
@@ -38,7 +39,7 @@ import { buildInitialTaskProgress } from '../../src/db/task-repo.js';
 import { FailOpenLimiter } from '../../src/autonomy/band-policy.js';
 import type { TaskOutreachRepo, TaskOutreachRow } from '../../src/dispatch/task-outreach.js';
 import type { RecordedReview, RecordedSend } from '../../src/startup/test-mode-sends.js';
-import type { GatewayOutcome, ScenarioCase, SeedContact, SeedOutreach, SeedPrincipalIdentity, SeedTask } from './types.js';
+import type { GatewayOutcome, ScenarioCase, SeedContact, SeedOutreach, SeedPinned, SeedPrincipalIdentity, SeedTask } from './types.js';
 
 /**
  * Stamped into `notes` on every seeded contact — contacts have no source column, and
@@ -80,6 +81,8 @@ export class SeedScope {
   readonly principalWroteTo = new Set<string>();
   /** What the run says is waiting on the principal (`seed.backlog`); none when unset. */
   backlog: PrincipalBacklogCounts | undefined;
+  /** The run's pinned-context documents and settings (`seed.pinned`, #2339); none when unset. */
+  pinned: SeedPinned | undefined;
   /** How many deliveries the run had when its `inbound.then` turn began (#2333); unset without one. */
   thenStartsAt: number | undefined;
   /**
@@ -131,6 +134,7 @@ export class SeedScope {
     this.aliveSessions.clear();
     this.principalWroteTo.clear();
     this.backlog = undefined;
+    this.pinned = undefined;
     this.thenStartsAt = undefined;
     this.rootConversation = undefined;
     this.throughGateway = false;
@@ -470,6 +474,31 @@ export function scopedPrincipalBacklog(currentScope: CurrentScope, actionLogRepo
 }
 
 /** The bullpen as runtimes see it, narrowed to the calling run's threads (real SQL underneath). */
+/**
+ * The pinned-context reader the run's agents get (#2339): the run's `seed.pinned`, never
+ * the database's documents or settings, which are the copied database's own and shared by
+ * every run. An entry the case does not name reads as not yet created / not set, outside
+ * every run too; one it lists as `unavailable` fails its read, as a database error would.
+ */
+export function scopedPinnedContextReader(real: PinnedContextReader, currentScope: CurrentScope): PinnedContextReader {
+  return {
+    warnChars: real.warnChars,
+    async readDoc(path) {
+      const pinned = currentScope()?.pinned;
+      if (pinned?.unavailable.includes(path)) throw new Error(`scenario seed: the read of ${path} fails`);
+      return pinned && Object.hasOwn(pinned.docs, path)
+        ? { status: 'live', version: 1, content: pinned.docs[path]! }
+        : null;
+    },
+    async readConfig(namespace, key) {
+      const name = `${namespace}/${key}`;
+      const pinned = currentScope()?.pinned;
+      if (pinned?.unavailable.includes(name)) throw new Error(`scenario seed: the read of ${name} fails`);
+      return pinned && Object.hasOwn(pinned.configs, name) ? pinned.configs[name]! : null;
+    },
+  };
+}
+
 export function scopedBullpen(real: BullpenService, currentScope: CurrentScope): BullpenService {
   return Object.assign(Object.create(real) as BullpenService, {
     getPendingThreadsForAgent: async (agentId: string, windowMinutes: number) => {
@@ -565,6 +594,7 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
   if (stack.principalContactId) seeded.refs.set('principal_contact_id', stack.principalContactId);
 
   scope.backlog = scenario.seed.backlog;
+  scope.pinned = scenario.seed.pinned;
   try {
     for (const identity of scenario.seed.principalIdentities) {
       if (!stack.principalContactId) throw new Error('No principal contact in this database');

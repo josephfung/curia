@@ -104,6 +104,7 @@ import {
   scopedBrowserSessionAlive,
   scopedBullpen,
   scopedOutboundContext,
+  scopedPinnedContextReader,
   scopedPrincipalBacklog,
   scopedVerification,
   SeedScope,
@@ -459,6 +460,7 @@ export async function createScenarioHarness(
     // see only the run's seeded rows, and the run's seeded sessions read as alive (there
     // is no browser; web-browser is stubbed).
     wrapVerification: (runtime) => scopedVerification(runtime, currentScope),
+    wrapPinnedContextReader: (reader) => scopedPinnedContextReader(reader, currentScope),
     browserSessionAlive: scopedBrowserSessionAlive(currentScope),
     delegationClaims: true,
     // Through-gateway sends (#2312): production's review, recording transports. What passes

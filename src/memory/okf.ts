@@ -252,6 +252,23 @@ export function editSectionBody(
   return joinSections(preamble, sections);
 }
 
+/**
+ * Remove a `##` section, heading and body (#2339). Matches the heading the way
+ * editSectionBody does (trimmed, case-insensitive, first match). Returns the new body
+ * and the heading as stored, or null when no section matches.
+ */
+export function removeSection(
+  body: string,
+  sectionHeading: string,
+): { body: string; heading: string } | null {
+  const normalizedHeading = sectionHeading.trim().toLowerCase();
+  const { preamble, sections } = splitSections(body);
+  const idx = sections.findIndex(s => s.heading.toLowerCase() === normalizedHeading);
+  if (idx === -1) return null;
+  const [removed] = sections.splice(idx, 1);
+  return { body: joinSections(preamble, sections), heading: removed!.heading };
+}
+
 /** Build a backtick fence long enough to wrap content that may contain nested fences. */
 export function markdownFenceFor(content: string, minTicks = 3): string {
   const runs = content.match(/`+/g) ?? [];

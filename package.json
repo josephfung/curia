@@ -43,6 +43,7 @@
     "report:kg-linkage": "tsx --env-file=.env scripts/kg-node-linkage-report.ts",
     "dedup:contacts": "tsx --env-file=.env scripts/dedup-contacts.ts",
     "repair:config-store-labels": "tsx --env-file=.env scripts/repair-config-store-labels.ts",
+    "migrate:standing-rules": "tsx --env-file=.env scripts/migrate-standing-rules.ts",
     "embedding-eval": "tsx scripts/embedding-eval.ts",
     "reembed:kg": "tsx --env-file=.env scripts/reembed-kg.ts",
     "seed-vault": "tsx --env-file=.env scripts/seed-vault.ts",

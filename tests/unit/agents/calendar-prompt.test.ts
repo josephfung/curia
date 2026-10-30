@@ -3,7 +3,7 @@
 // Structural contract tests for the calendar agent prompt.
 // These assert that the YAML system_prompt text satisfies specific ordering and
 // content requirements — without invoking an LLM. They are fast, deterministic,
-// and serve as a living spec for scheduling consult and rules-loading behavior.
+// and serve as a living spec for scheduling consult and standing-rules behavior.
 
 import { describe, it, expect } from 'vitest';
 import { loadAgentConfig } from '../../../src/agents/loader.js';
@@ -25,12 +25,12 @@ function extractCalendarConsultSection(prompt: string): string {
   return prompt.slice(start, end);
 }
 
-function extractCalendarRulesLoadSection(prompt: string): string {
-  const start = prompt.indexOf('## Task Start — Load Scheduling Rules');
-  const end = prompt.indexOf('## Answering a scheduling consult');
-  if (start === -1) throw new Error('Task Start — Load Scheduling Rules section not found');
+function extractCalendarRulesApplySection(prompt: string): string {
+  const start = prompt.indexOf('## Applying Scheduling Rules');
+  const end = prompt.indexOf('## Answering a peer request');
+  if (start === -1) throw new Error('Applying Scheduling Rules section not found');
   if (end === -1 || end <= start)
-    throw new Error('Answering a scheduling consult not found after rules load section');
+    throw new Error('Answering a peer request not found after the rules section');
   return prompt.slice(start, end);
 }
 
@@ -168,38 +168,34 @@ describe('calendar consult prompt — formal invite RSVP behavior', () => {
   });
 });
 
-describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', () => {
-  it('loads scheduling rules from config-store calendar/rules by key at task start', () => {
-    const prompt = loadCalendarPrompt();
-    const loadSection = extractCalendarRulesLoadSection(prompt);
-
-    expect(loadSection).toContain('config-store');
-    expect(loadSection).toContain('namespace: calendar');
-    expect(loadSection).toContain('key: rules');
-    expect(loadSection).toContain('empty array');
-    expect(loadSection).toContain('system-prompt defaults apply unchanged');
+describe('calendar agent — standing scheduling rules (pinned document, #2339)', () => {
+  it('declares its rules document in pinned_context and loads no rules by tool', () => {
+    const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
+    expect(config.pinned_context).toEqual({
+      docs: [expect.objectContaining({ path: '/shared/calendar/rules.md' })],
+    });
+    const prompt = config.system_prompt;
+    expect(prompt).not.toContain('key: rules');
+    expect(prompt).not.toMatch(/namespace[:=] ?calendar\b/);
+    expect(prompt).toContain('`/shared/calendar/rules.md` in your pinned context');
   });
 
-  it('documents lightly structured rule shape (applies_to, instruction, active)', () => {
-    const prompt = loadCalendarPrompt();
-    const loadSection = extractCalendarRulesLoadSection(prompt);
-
-    expect(loadSection).toContain('applies_to');
-    expect(loadSection).toContain('instruction');
-    expect(loadSection).toContain('active');
+  it('applies active rules, skips paused ones, and falls back to defaults', () => {
+    const section = extractCalendarRulesApplySection(loadCalendarPrompt());
+    expect(section).toContain('`Applies to:`');
+    expect(section).toContain('`Do:`');
+    expect(section).toContain('`Status: paused`');
+    expect(section).toContain('system-prompt defaults apply');
+    expect(section).toContain('unavailable this turn');
   });
 
-  it('loads rules before proposing times in the consult flow', () => {
-    const prompt = loadCalendarPrompt();
-    const consultSection = extractCalendarConsultSection(prompt);
-    const loadStepPos = posIn(consultSection, '0. **Load scheduling rules');
+  it('starts the consult flow without a rules-load step', () => {
+    const consultSection = extractCalendarConsultSection(loadCalendarPrompt());
     const resolveStepPos = posIn(consultSection, '1. **Resolve calendars and timezones');
-    const memoryStepPos = posIn(consultSection, '2. **Recall per-contact context');
-
-    expect(loadStepPos).toBeGreaterThan(-1);
-    expect(resolveStepPos).toBeGreaterThan(loadStepPos);
-    expect(memoryStepPos).toBeGreaterThan(resolveStepPos);
-    expect(consultSection.slice(loadStepPos, resolveStepPos)).toContain('config-store');
+    expect(resolveStepPos).toBeGreaterThan(-1);
+    expect(consultSection).not.toContain('Load scheduling rules');
+    // The only config-store read left in the consult flow is the holds toggle.
+    expect(consultSection.match(/config-store/g)).toHaveLength(1);
   });
 
   it('uses memory-query for per-contact context only, not standing CEO rules', () => {
@@ -213,10 +209,10 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     const memoryStep = consultSection.slice(memoryStepStart, proposedStepStart);
     expect(memoryStep).toContain('memory-query');
     expect(memoryStep).toContain('per-contact');
-    // The per-contact-only scope is stated once, where the rules load is (#2025).
-    const loadSection = extractCalendarRulesLoadSection(prompt);
-    expect(loadSection).toContain('`memory-query` for **per-contact**');
-    expect(loadSection).toContain('not for standing principal-wide rules');
+    // The per-contact-only scope is stated once, where the rules are applied (#2025).
+    const applySection = extractCalendarRulesApplySection(prompt);
+    expect(applySection).toContain('`memory-query` for **per-contact**');
+    expect(applySection).toContain('not for standing principal-wide rules');
   });
 
   it('honours loaded rules when finding free time and picking slots', () => {
@@ -236,31 +232,31 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     expect(consultSection).toContain('applied:');
   });
 
-  it('documents rules-management delegation flow (add, edit, list, pause, remove)', () => {
-    const prompt = loadCalendarPrompt();
-    const managementSection = extractCalendarRulesManagementSection(prompt);
+  it('manages rules as document sections with doc-write (list, add, edit, pause, remove)', () => {
+    const managementSection = extractCalendarRulesManagementSection(loadCalendarPrompt());
 
-    expect(managementSection).toContain('**Add a rule:**');
-    expect(managementSection).toContain('**Edit a rule:**');
-    expect(managementSection).toContain('**List rules:**');
-    expect(managementSection).toContain('**Pause a rule:**');
-    expect(managementSection).toContain('**Remove a rule:**');
-    expect(managementSection).toContain('namespace=calendar, key=rules');
-    expect(managementSection).toContain('run a scheduling consult');
+    expect(managementSection).toContain('**List:**');
+    expect(managementSection).toContain('**Add:** `section-edit` a new section, under a heading no rule uses yet');
+    expect(managementSection).toContain('`create` it instead');
+    expect(managementSection).toContain('**Edit or pause:** `section-edit`');
+    expect(managementSection).toContain('**Remove:** `section-delete`');
+    expect(managementSection).toMatch(/Do NOT run a\s+scheduling consult/);
+    expect(managementSection).not.toContain('JSON');
   });
 
-  it('fails closed on rules-management retrieve, parse, and store errors', () => {
-    const prompt = loadCalendarPrompt();
-    const managementSection = extractCalendarRulesManagementSection(prompt);
-
-    expect(managementSection).toContain('**Failure policy:**');
-    expect(managementSection).toContain('found: false');
-    expect(managementSection).toContain('do not overwrite');
-    expect(managementSection).toContain('only after store succeeds');
-    expect(managementSection).toContain('add, list, pause, edit, and remove');
+  it('confirms a rule change only after the write succeeds', () => {
+    const managementSection = extractCalendarRulesManagementSection(loadCalendarPrompt());
+    expect(managementSection).toContain('Confirm a change only after `doc-write` succeeds');
+    expect(managementSection).toContain('unavailable this turn');
   });
 
-  it('captures new CEO scheduling preferences as config-store rules', () => {
+  it('pins doc-write, not the whole documents bundle', () => {
+    const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
+    expect(config.pinned_skills).toContain('doc-write');
+    expect(config.pinned_skills).not.toContain('documents');
+  });
+
+  it('captures new CEO scheduling preferences as rules in the rules document', () => {
     const prompt = loadCalendarPrompt();
     const hierarchyStart = posIn(prompt, '## Preference Hierarchy');
     const conflictStart = posIn(prompt, '## Conflict Escalation');
@@ -269,8 +265,7 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
 
     const hierarchySection = prompt.slice(hierarchyStart, conflictStart);
     expect(hierarchySection).toContain('Capturing new preferences');
-    expect(hierarchySection).toContain('config-store');
-    expect(hierarchySection).toContain('Standing principal-wide preferences belong in config-store');
+    expect(hierarchySection).toMatch(/Standing principal-wide preferences belong in the rules\s+document/);
   });
 
   it('bumps calendar agent version for scheduling-rules capability', async () => {
@@ -283,7 +278,8 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     // 0.9.2 = composed email is always a draft block, never reported as sent (#2055).
     // 0.10.0 = the bullpen tool is split into bullpen-post/-reply/-read/-close (#2126).
     // 0.10.1 = ADR-046 trim (#2025): restated code rules and duplicates cut.
-    expect(config.version).toBe('0.10.1');
+    // 0.11.0 = standing rules move to a pinned /shared/ document edited with doc-write (#2339).
+    expect(config.version).toBe('0.11.0');
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {
@@ -324,10 +320,4 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     expect(prompt).toMatch(/a closed-thread wake gets no ambient copy of it/);
   });
 
-  it('skips the scheduling-rules load for a peer request', () => {
-    // "Task Start — Load Scheduling Rules" mandates a config-store call for
-    // free/busy work; a question places nothing, so that round-trip is waste.
-    const prompt = loadCalendarPrompt();
-    expect(prompt).toMatch(/Skip the "Task Start — Load Scheduling Rules" step below for a peer request/);
-  });
 });

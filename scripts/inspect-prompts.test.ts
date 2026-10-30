@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentConfig } from '../src/agents/runtime.js';
 import type { AssembledAgent } from '../src/startup/agent-assembly.js';
 import type { SkillRegistry } from '../src/skills/skill-registry.js';
+import type { PinnedContextEntry, PinnedContextReader } from '../src/agents/pinned-context.js';
 import { buildPromptInputsSnapshot } from './inspect-prompts.js';
 
 const AGENT_CONTACT_ID = '11111111-1111-4111-8111-111111111111';
@@ -42,10 +43,11 @@ function coordinatorConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 const ENABLED_SKILLS = new Set(['tasks', 'documents']);
 const DISCOVERED = ['documents', 'tasks', 'ceo-inbox', 'calendar'];
 
-function stackWith(rc: AgentConfig, opts: { noPrincipal?: boolean } = {}) {
+function stackWith(rc: AgentConfig, opts: { noPrincipal?: boolean; agents?: AssembledAgent[] } = {}) {
   const principalContactId = opts.noPrincipal ? undefined : PRINCIPAL_CONTACT_ID;
   return {
     skillRegistry: { get: (name: string) => (ENABLED_SKILLS.has(name) ? {} : undefined) } as unknown as SkillRegistry,
+    agents: [{ runtimeConfig: rc } as AssembledAgent, ...(opts.agents ?? [])],
     agent: (name: string) => {
       if (name !== 'coordinator') throw new Error(`Agent '${name}' is not loaded in this stack`);
       return { runtimeConfig: rc } as AssembledAgent;
@@ -77,7 +79,65 @@ describe('buildPromptInputsSnapshot', () => {
       // phone mirrors signal for curia-deploy's loader until it reads signal/sms.
       channel_accounts: { email: 'curia@example.com', signal: '+15550003333', sms: null, phone: '+15550003333' },
       disabled_skills: ['calendar', 'ceo-inbox'],
+      pinned_context: { docs: {}, configs: {} },
     });
+  });
+
+  it('reads every declared pinned_context entry once, through the declaring agent\'s reader (#2339)', async () => {
+    const reads: Array<[reader: string, entry: string]> = [];
+    // A reader per agent, so an entry read through the wrong agent's reader shows up.
+    const readerFor = (agentId: string): PinnedContextReader => ({
+      warnChars: 16_000,
+      readDoc: async (path) => {
+        reads.push([agentId, path]);
+        return path === '/shared/inbox/rules.md' ? { status: 'live', version: 3, content: '## Board mail' } : null;
+      },
+      readConfig: async (namespace, key) => {
+        reads.push([agentId, `${namespace}/${key}`]);
+        return namespace === 'ceo_inbox' ? '{"enabled": true}' : null;
+      },
+    });
+    const declaring = (agentId: string, pinnedContext: PinnedContextEntry[]) =>
+      ({ runtimeConfig: { agentId, pinnedContext, pinnedContextReader: readerFor(agentId) } }) as unknown as AssembledAgent;
+    const agents = [
+      declaring('ceo-inbox', [
+        { kind: 'doc', path: '/shared/inbox/rules.md' },
+        { kind: 'config', namespace: 'ceo_inbox', key: 'decision_tagging' },
+      ]),
+      declaring('calendar', [{ kind: 'doc', path: '/shared/calendar/rules.md' }]),
+      declaring('editor', [{ kind: 'doc', path: '/shared/inbox/rules.md' }]),
+      declaring('meeting-debrief', [{ kind: 'config', namespace: 'debrief', key: 'config' }]),
+    ];
+    const snapshot = await buildPromptInputsSnapshot(stackWith(coordinatorConfig(), { agents }), '0.44.0', DISCOVERED);
+    expect(snapshot.pinned_context).toEqual({
+      docs: { '/shared/calendar/rules.md': null, '/shared/inbox/rules.md': { status: 'live', version: 3, content: '## Board mail' } },
+      configs: { 'ceo_inbox/decision_tagging': '{"enabled": true}', 'debrief/config': null },
+    });
+    expect(Object.keys(snapshot.pinned_context.docs)).toEqual(['/shared/calendar/rules.md', '/shared/inbox/rules.md']);
+    // Each unique entry is read once, by the first agent that declares it; editor's
+    // duplicate of the inbox rules is not read again.
+    expect(reads).toEqual([
+      ['ceo-inbox', '/shared/inbox/rules.md'],
+      ['ceo-inbox', 'ceo_inbox/decision_tagging'],
+      ['calendar', '/shared/calendar/rules.md'],
+      ['meeting-debrief', 'debrief/config'],
+    ]);
+  });
+
+  it('fails rather than guess when a pinned read fails (#2339)', async () => {
+    const agent = {
+      runtimeConfig: {
+        agentId: 'calendar',
+        pinnedContext: [{ kind: 'doc', path: '/shared/calendar/rules.md' }],
+        pinnedContextReader: {
+          warnChars: 1,
+          readDoc: async () => { throw new Error('connection reset'); },
+          readConfig: async () => null,
+        },
+      },
+    } as unknown as AssembledAgent;
+    await expect(buildPromptInputsSnapshot(stackWith(coordinatorConfig(), { agents: [agent] }), '0.44.0', DISCOVERED))
+      .rejects.toThrow(/reading pinned_context \/shared\/calendar\/rules\.md \(declared by calendar\) failed/);
   });
 
   it('no longer emits executive_voice_block (its injection was removed in #957)', async () => {
@@ -123,6 +183,7 @@ describe('buildPromptInputsSnapshot', () => {
   it('fails when the coordinator is not loaded', async () => {
     const stack = {
       agent: () => { throw new Error("Agent 'coordinator' is not loaded in this stack"); },
+      agents: [],
       principalContactId: undefined,
       skillRegistry: {} as SkillRegistry,
     };

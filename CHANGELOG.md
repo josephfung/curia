@@ -15,6 +15,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`doc-write` `section-delete`** — removes one `##` section and its heading; a missing section errors. (#2339)
+- **`migrate:standing-rules`** — one-off script moves inbox and calendar rule arrays into `/shared/` documents. (#2339)
+- **Scenario `seed.pinned`** — cases seed the documents and settings agents read through `pinned_context`. (#2339)
+- **`inspect-prompts` pinned values** — snapshot carries every declared `pinned_context` entry for curia-deploy's eval harness. (#2339)
 - **`pinned_context`** — **public API:** agent YAML field injecting declared `/shared/` documents and config keys every turn. (#2338)
 - **`/shared/` documents** — durable, never archived with a project; only declaring agents can write them. (#2338)
 - **ADR-056** — `pinned_context`: declaration is write permission; `/shared/` is durable by prefix. (#2338)
@@ -105,6 +109,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **agent.task / llm.call / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started`, `reasoning_delta` and `output_started` added. (#2371)
 - **LLM calls** — agent and infra calls on Anthropic and OpenRouter now stream internally. (#2371)
+- **ceo-inbox and calendar standing rules** — live in pinned `/shared/` documents, past the 2000-character cap, edited per rule. (#2339)
+- **meeting-debrief settings** — `debrief/config` arrives through `pinned_context`; no config-store read each run. (#2339)
 - **Principal-only sends** — a message to the principal alone skips autonomy gates A and B (spec 14). (#2337)
 - **ceo-inbox triage** — runs hourly instead of every 15 minutes, cutting scheduled triage runs to a quarter.
 - **ceo-inbox delegate wait** — raised from 300s to 563s to fit observed p99 run length. (#1915)
@@ -222,6 +228,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Agent YAML schema** — startup validation accepts `pinned_context`; it rejected any agent declaring it. (#2339)
 - **Image signing** — `docker-publish` retries `cosign sign`, so a Rekor 409 no longer fails a good publish. (#2369)
 - **Voice recap requests** — after-call emails go through the async off-ramp, not the draft-only inbox specialist. (#2347)
 - **Minutes follow-up** — the wake now carries the minutes path, so the coordinator stops searching for it. (#2347)

@@ -5,13 +5,36 @@
 name: inbox delegated rules request runs no triage
 description: >
   The coordinator hands ceo-inbox the principal's request to list the inbox's standing
-  rules. Two rules are stored. The inbox also holds unread mail. ceo-inbox should read the
-  rules (and the decision-tagging setting) from config-store and report them, and do
-  nothing else: no triage of the unread mail.
+  rules. Two rules are stored, one paused, in the rules document ceo-inbox gets in its pinned
+  context (#2339), with decision tagging on. The inbox also holds unread mail. ceo-inbox
+  should report the rules and the tagging setting from its pinned context, and do nothing
+  else: no triage of the unread mail.
 tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox]
 agent: ceo-inbox
 stub_sets: [ceo-inbox-office]
 seed:
+  pinned:
+    docs:
+      /shared/inbox/rules.md: |
+        ---
+        type: agent-settings
+        title: Inbox standing rules
+        ---
+        Each rule is a `##` section with When / Do / Status lines. Status is active or paused.
+
+        ## Board mail
+
+        - When: From the board (anyone @board.example.test)
+        - Do: Label BOARD and classify as 🚨 Urgent
+        - Status: active
+
+        ## Substack newsletters
+
+        - When: Newsletters from Substack
+        - Do: Archive (✔️ Cleared)
+        - Status: paused
+    configs:
+      ceo_inbox/decision_tagging: '{"enabled": true}'
   contacts:
     - key: sam
       display_name: Sam Rivera
@@ -21,15 +44,10 @@ inbound:
   from: delegate
   content: "The principal asked: what inbox rules do I have set up right now? List them."
 tool_stubs:
-  config-store:
-    - match: { action: retrieve, key: rules }
-      return:
-        found: true
-        namespace: ceo_inbox
-        key: rules
-        value: '[{"condition":"From the board (anyone @board.example.test)","instruction":"Label BOARD and classify as 🚨 Urgent","active":true},{"condition":"Newsletters from Substack","instruction":"Archive (✔️ Cleared)","active":false}]'
-    - match: { action: retrieve, key: decision_tagging }
-      return: { found: true, namespace: ceo_inbox, key: decision_tagging, value: '{"enabled": true}' }
+  # Writes succeed, so a rules rewrite while listing is scored, not hidden.
+  doc-write:
+    - match: {}
+      return: { action: section-edited, document: { path: /shared/inbox/rules.md, version: 2 } }
   ceo-inbox-list:
     - match: {}
       return:
@@ -44,12 +62,6 @@ tool_stubs:
             unread: true
             snippet: Are we still on for Thursday?
 expected_behaviors:
-  - id: reads_rules
-    weight: critical
-    description: Reads the stored rules from config-store.
-    check:
-      called: config-store
-      with: { action: retrieve, key: rules }
   - id: no_triage
     weight: critical
     description: Runs no triage (no unread-mail listing, no archiving, labelling or marking read).
@@ -58,11 +70,17 @@ expected_behaviors:
   - id: lists_both_rules
     weight: critical
     description: >
-      The reply lists both stored rules with their condition and instruction, and shows that
-      the Substack rule is paused (inactive) while the board rule is active.
+      The reply lists both stored rules with their condition and instruction, shows that
+      the Substack rule is paused (inactive) while the board rule is active, and says decision
+      tagging is on.
   - id: no_rule_changes
     weight: important
-    description: Does not store anything to config-store (a list request changes no rule).
+    description: Writes nothing to the rules document (a list request changes no rule).
+    check:
+      not_called: [doc-write]
+  - id: no_setting_changes
+    weight: important
+    description: Stores nothing to config-store (a list request changes no setting).
     check:
       not_called: [config-store]
       with: { action: store }

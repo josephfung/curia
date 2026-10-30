@@ -110,7 +110,11 @@ const AGENT_BUDGETS: AgentBudget[] = [
   { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 82_671, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
-  { agent: 'calendar', alwaysOnPromptTokens: 6_200, localToolDefinitionBytes: 25_000, allowMcpPins: false },
+  // Standing rules moved to a pinned document (#2339): the config-store JSON-array steps came
+  // out (YAML 23,890 → 21,918 chars, ~5,983 → ~5,490 tokens) and doc-write was pinned to edit
+  // the document (+2,100 bytes, 26,729 over 23 local tools). The prompt budget drops by the
+  // cut and the tool budget rises by exactly doc-write's definition, so the total holds.
+  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 27_100, allowMcpPins: false },
   // ceo-inbox: YAML 60,090 → 49,037 chars (~16,416 → ~13,653 tokens always-on with its SKILL.md bodies),
   // its task-wake steps now riding on the wake; 43,469 bytes over 41 local tools.
   // archive-extract plus the longer file-parse description (#2208) is +1,831 bytes, the same

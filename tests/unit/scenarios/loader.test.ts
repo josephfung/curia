@@ -11,6 +11,7 @@ import {
   selectRunCases,
 } from '../../scenarios/loader.js';
 import type { ScenarioCase } from '../../scenarios/types.js';
+import { resolveDatePlaceholders } from '../../shared/date-placeholders.js';
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(path.join(tmpdir(), 'scenarios-')); });
@@ -250,6 +251,57 @@ describe('loadScenarioCase', () => {
   ])('rejects a backlog with %s', (_label, backlog, error) => {
     const body = VALID.replace('seed:\n', `seed:\n  backlog: ${backlog}\n`);
     expect(() => loadScenarioCase(write('bad-backlog.yaml', body))).toThrow(error);
+  });
+
+  it('loads seed.pinned: documents by normalized path, settings by key, failing reads (#2339)', () => {
+    const body = VALID.replace('seed:\n', [
+      'seed:',
+      '  pinned:',
+      '    docs:',
+      '      /shared/./inbox/rules.md: "## Board mail"',
+      '    configs:',
+      `      ceo_inbox/decision_tagging: '{"enabled": true}'`,
+      '    unavailable: [/shared/calendar/rules.md, debrief/config]',
+      '',
+    ].join('\n'));
+    const c = loadScenarioCase(write('pinned.yaml', body));
+    expect(c.seed.pinned).toEqual({
+      docs: { '/shared/inbox/rules.md': '## Board mail' },
+      configs: { 'ceo_inbox/decision_tagging': '{"enabled": true}' },
+      unavailable: ['/shared/calendar/rules.md', 'debrief/config'],
+    });
+    // The harness seeds from a date-resolved copy (harness.ts); the values must survive it.
+    expect(resolveDatePlaceholders(c.seed, 'America/Toronto').pinned).toEqual(c.seed.pinned);
+    expect(loadScenarioCase(write('none.yaml', VALID)).seed).not.toHaveProperty('pinned');
+  });
+
+  it('stores seed.pinned names in the canonical form the reader asks for', () => {
+    const body = VALID.replace('seed:\n', [
+      'seed:',
+      '  pinned:',
+      '    docs:',
+      `      ' /shared/inbox/rules.md': "## Board mail"`,
+      '    configs:',
+      `      ' ceo_inbox / decision_tagging ': 'on'`,
+      `    unavailable: [' /shared/calendar/rules.md', ' debrief / config ']`,
+      '',
+    ].join('\n'));
+    expect(loadScenarioCase(write('padded.yaml', body)).seed.pinned).toEqual({
+      docs: { '/shared/inbox/rules.md': '## Board mail' },
+      configs: { 'ceo_inbox/decision_tagging': 'on' },
+      unavailable: ['/shared/calendar/rules.md', 'debrief/config'],
+    });
+  });
+
+  it.each([
+    ['a document outside /shared/', 'docs: { /projects/x/rules.md: "x" }', /under \/shared\//],
+    ['a key without a namespace', 'configs: { decision_tagging: "x" }', /namespace/],
+    ['a non-string value', 'configs: { a/b: 3 }', /must be a string/],
+    ['a document both seeded and failing', 'docs: { /shared/a.md: "x" }\n    unavailable: [/shared/a.md]', /more than once|duplicate/i],
+    ['an unknown key', 'archived: []', /unknown key\(s\) archived/],
+  ])('rejects seed.pinned with %s', (_label, block, error) => {
+    const body = VALID.replace('seed:\n', `seed:\n  pinned:\n    ${block}\n`);
+    expect(() => loadScenarioCase(write('bad-pinned.yaml', body))).toThrow(error);
   });
 
   it('parses seed.verifications and resolves {{verification:key}} (#2017)', () => {

@@ -415,8 +415,10 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     // 0.23.0 = archive-extract joins the pinned tools so standing rules can read
     //          zip and gzip attachments (#2208).
     // 0.23.1 = hourly triage cron and a 450s delegate-wait hint (#1915).
+    // 0.24.0 = standing rules and decision tagging arrive through pinned_context, and
+    //          rules are edited as sections of a /shared/ document (#2339).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.23.1');
+    expect(config.version).toBe('0.24.0');
   });
 });
 

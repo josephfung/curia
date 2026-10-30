@@ -1,6 +1,9 @@
-// pinned_context (#2338): YAML validation and the per-turn `## Pinned context` block.
+// pinned_context (#2338): YAML validation, the per-turn `## Pinned context` block, and the
+// agents that use it (#2339).
 import { describe, expect, it, vi } from 'vitest';
+import { resolve } from 'node:path';
 import pino from 'pino';
+import { loadAgentConfig } from '../../../src/agents/loader.js';
 import type { WorkingDocsRepo } from '../../../src/db/working-docs-repo.js';
 import {
   createPinnedContextReader,
@@ -259,5 +262,39 @@ describe('createPinnedContextReader', () => {
     expect(r.warnChars).toBe(5);
     await expect(r.readDoc('/shared/a.md')).rejects.toThrow(/not configured/);
     await expect(r.readConfig('n', 'k')).rejects.toThrow(/not configured/);
+  });
+});
+
+describe('shipped agents on pinned_context (#2339)', () => {
+  const agentsDir = resolve(import.meta.dirname, '../../../agents');
+  const load = (name: string) => loadAgentConfig(resolve(agentsDir, `${name}.yaml`));
+
+  it.each([
+    ['calendar', [{ kind: 'doc', path: '/shared/calendar/rules.md' }]],
+    ['ceo-inbox', [
+      { kind: 'doc', path: '/shared/inbox/rules.md' },
+      { kind: 'config', namespace: 'ceo_inbox', key: 'decision_tagging' },
+    ]],
+    ['meeting-debrief', [{ kind: 'config', namespace: 'debrief', key: 'config' }]],
+  ])('%s declares its standing state', (name, expected) => {
+    const entries = parsePinnedContext(load(name).pinned_context, name);
+    expect(entries).toEqual(expected.map(e => expect.objectContaining(e)));
+    // Every entry carries a purpose line for the block.
+    expect(entries.every(e => typeof e.description === 'string' && e.description.length > 0)).toBe(true);
+  });
+
+  it('no longer fetches pinned values with a tool call', () => {
+    expect(load('calendar').system_prompt).not.toMatch(/key[:=] ?rules/);
+    const inbox = load('ceo-inbox').system_prompt;
+    expect(inbox).not.toMatch(/key[:=] ?rules/);
+    expect(inbox).not.toMatch(/retrieve[\s\S]{0,80}decision_tagging/);
+    expect(load('meeting-debrief').system_prompt).not.toMatch(/key `"config"`/);
+  });
+
+  it('pins doc-write wherever an agent declares a document it maintains', () => {
+    for (const name of ['calendar', 'ceo-inbox']) {
+      const pins = load(name).pinned_skills ?? [];
+      expect(pins.includes('doc-write') || pins.includes('documents'), name).toBe(true);
+    }
   });
 });

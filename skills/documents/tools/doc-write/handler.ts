@@ -23,7 +23,7 @@ import {
 import { isUuid } from '../../../../src/util/uuid.js';
 import { isDurableDocPath, isSharedDocPath } from '../../../../src/memory/durable-doc-prefixes.js';
 
-const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit']);
+const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit', 'section-delete']);
 
 /**
  * `/shared/` write guard (#2338): declaring a path in `pinned_context` is the
@@ -105,7 +105,7 @@ export class DocWriteHandler implements ToolHandler {
     if (!input.mode || !VALID_MODES.has(input.mode)) {
       return {
         success: false,
-        error: "Missing or invalid mode — must be 'create', 'append', 'replace', or 'section-edit'",
+        error: "Missing or invalid mode — must be 'create', 'append', 'replace', 'section-edit', or 'section-delete'",
       };
     }
 
@@ -279,6 +279,41 @@ export class DocWriteHandler implements ToolHandler {
           return {
             success: true,
             data: { action: 'section-edited', document: mapDocumentRow(result.document, timezone) },
+          };
+        }
+        case 'section-delete': {
+          if (!input.section || typeof input.section !== 'string' || !input.section.trim()) {
+            return { success: false, error: 'section-delete mode requires section (string)' };
+          }
+          const current = await repo.read(normalized);
+          if (!current) {
+            return { success: false, error: `Document not found at ${normalized}` };
+          }
+          const deleted = await repo.deleteSection(normalized, {
+            section: input.section.trim(),
+            expectedSectionVersion: input.expected_section_version,
+          });
+          if ('missingSection' in deleted) {
+            // An error, not a no-op success: the agent must not confirm a removal that
+            // did not happen (#2339).
+            return {
+              success: false,
+              error: `No section '${input.section.trim()}' in ${normalized}; nothing was deleted. Check the heading against the document.`,
+            };
+          }
+          if (!deleted.ok) {
+            return { success: true, data: mapWriteConflict(deleted, timezone) };
+          }
+          await appendDirectoryLog(
+            ctx,
+            normalized,
+            'section-delete',
+            `${summary} (${input.section.trim()})`,
+            logTaskId,
+          );
+          return {
+            success: true,
+            data: { action: 'section-deleted', document: mapDocumentRow(deleted.document, timezone) },
           };
         }
         default:

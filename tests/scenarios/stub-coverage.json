@@ -29,13 +29,13 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-10-30T02:32:56.918Z"
     },
     "calendar consult confirms a proposed slot without a hold": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-10-30T02:28:59.349Z"
     },
     "calendar consult falls back to free time with holds disabled": {
       "unstubbed": 0,
@@ -95,19 +95,19 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-10-30T02:29:29.173Z"
     },
-    "calendar rule edit rewrites the whole array": {
+    "calendar rule edit changes one section": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-10-30T02:29:54.689Z"
     },
     "cc coffee follows standing rule (both)": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-21T21:24:55.420Z"
+      "recordedAt": "2026-10-30T02:27:26.646Z"
     },
     "cc coffee follows standing rule (prefs)": {
       "unstubbed": 0,
@@ -119,7 +119,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-21T21:22:49.103Z"
+      "recordedAt": "2026-10-30T02:18:37.440Z"
     },
     "cc coffee in a week or two": {
       "unstubbed": 0,
@@ -131,7 +131,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-21T21:24:55.420Z"
+      "recordedAt": "2026-10-30T02:24:12.452Z"
     },
     "cc drinks follows standing rule (prefs)": {
       "unstubbed": 0,
@@ -143,7 +143,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-21T21:22:49.103Z"
+      "recordedAt": "2026-10-30T02:14:19.325Z"
     },
     "cc move things around asks first at approval band": {
       "unstubbed": 0,
@@ -395,7 +395,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-10-30T02:27:46.598Z"
     },
     "inbox delegated summary reads and ranks the unread mail": {
       "unstubbed": 0,
