@@ -531,7 +531,6 @@ export class AnthropicProvider implements LLMProvider {
       model = built.model;
       const { createParams, signal, prefixHash, reasoningEffort, reasoningBlocksDropped } = built;
       const stream = this.client.messages.stream(createParams, signal ? { signal } : undefined);
-      yield { type: 'request_started', maxTokens: createParams.max_tokens };
 
       // Guarantee the underlying fetch Response / ReadableStream is released on every
       // exit path — normal completion, a thrown error, an AbortSignal firing, or a
@@ -541,6 +540,9 @@ export class AnthropicProvider implements LLMProvider {
       // that accumulates until an OOM restart (#1648; upstream anthropics/claude-code#33380).
       // MessageStream.abort() is idempotent — calling it after finalMessage() is a no-op.
       try {
+        // Inside the try: the request is already in flight, so a consumer that stops
+        // at this event must still reach the abort() below.
+        yield { type: 'request_started', maxTokens: createParams.max_tokens };
         let outputStarted = false;
         for await (const event of stream) {
           if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {

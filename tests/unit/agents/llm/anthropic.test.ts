@@ -753,6 +753,24 @@ describe('AnthropicProvider — stream', () => {
     expect(stream.abort).toHaveBeenCalledTimes(1);
   });
 
+  it('aborts the underlying stream when the consumer stops at request_started', async () => {
+    const stream = makeStream(
+      [{ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'a' } }],
+      streamFinal(),
+    );
+    mockStream.mockReturnValue(stream);
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    // The SDK stream already exists when request_started is yielded, so stopping there
+    // must still run the cleanup finally (#1648).
+    for await (const event of provider.stream({ messages: [{ role: 'user', content: 'Hello' }], model: 'claude-sonnet-4-6' })) {
+      expect(event.type).toBe('request_started');
+      break;
+    }
+
+    expect(stream.abort).toHaveBeenCalledTimes(1);
+  });
+
   it('aborts the underlying stream and yields an error when iteration throws', async () => {
     const stream = {
       [Symbol.asyncIterator]() {
