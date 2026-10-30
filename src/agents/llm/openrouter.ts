@@ -25,6 +25,7 @@ import type { ModelRegistry } from './model-registry.js';
 import { logUnsentReasoningEffort, resolveReasoning, resolveTemperature, type ReasoningEffort } from './sampling-options.js';
 import { sendableReasoningBlocks } from './reasoning-blocks.js';
 import { isCallerCancellation } from './cancellation.js';
+import { LLM_REQUEST_TIMEOUT_MS } from './request-timeout.js';
 
 /**
  * Best-effort message extraction, mirroring classify.ts's own logic so the
@@ -108,11 +109,8 @@ export function upstreamProviderFrom(carrier: object): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
 }
 
-/**
- * Per-attempt request timeout. This is the openai SDK's own default, made explicit:
- * a non-streamed call still running at this point is aborted as a timeout (#1915).
- */
-export const OPENROUTER_REQUEST_TIMEOUT_MS = 600_000;
+/** Per-attempt request timeout; see LLM_REQUEST_TIMEOUT_MS (#1915). */
+export const OPENROUTER_REQUEST_TIMEOUT_MS = LLM_REQUEST_TIMEOUT_MS;
 
 /** Attempts per chat() call: the first plus the SDK's default of two retries. */
 export const OPENROUTER_MAX_ATTEMPTS = 3;

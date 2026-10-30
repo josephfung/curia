@@ -99,7 +99,7 @@ The wrapper does nothing for a provider that has no `stream()`: it passes `chat(
 
 The thresholds are in `reasoning-watchdog.ts`. The stopped call is recorded on `llm.call` as `reasoningWatchdog` (`null` when it did not fire). The test-mode stack, `src/startup/test-mode-stack.ts`, wraps each provider the same way, so wrap yours there too if the behavior suites should be able to run on it.
 
-Do not import the wrapper from your provider, or your provider from the wrapper. The wrapper imports no concrete provider class.
+Do not import the wrapper from your provider, or your provider from the wrapper. The wrapper imports no concrete provider module, even indirectly; a value both sides need (like the request timeout in `request-timeout.ts`) goes in a neutral module.
 
 ---
 

@@ -9,7 +9,8 @@
 // without stream() are passed through.
 //
 // Same wrapping style as TelemetryLlmProvider. Imports no concrete provider
-// class, so no provider can ever cycle back here.
+// module, directly or through reasoning-watchdog.ts, so no provider can ever
+// cycle back here and the wrapper never loads a provider SDK.
 
 import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';

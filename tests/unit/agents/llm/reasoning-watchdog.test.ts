@@ -1,10 +1,29 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   watchdogLimits,
   forcedAttemptMessage,
   estimateReasoningTokens,
   FORCED_REASONING_TAIL_CHARS,
+  WATCHDOG_REQUEST_TIMEOUT_MS,
 } from '../../../../src/agents/llm/reasoning-watchdog.js';
+import { OPENROUTER_REQUEST_TIMEOUT_MS } from '../../../../src/agents/llm/openrouter.js';
+
+describe('watchdog module dependencies', () => {
+  const llmDir = path.join(import.meta.dirname, '../../../../src/agents/llm');
+  it.each(['reasoning-watchdog.ts', 'reasoning-watchdog-provider.ts'])(
+    '%s imports no concrete provider module',
+    (file) => {
+      const source = fs.readFileSync(path.join(llmDir, file), 'utf8');
+      expect(source).not.toMatch(/from '\.\/(openrouter|anthropic|bedrock)\.js'/);
+    },
+  );
+  it('measures against the same request timeout OpenRouter uses', () => {
+    expect(WATCHDOG_REQUEST_TIMEOUT_MS).toBe(OPENROUTER_REQUEST_TIMEOUT_MS);
+    expect(WATCHDOG_REQUEST_TIMEOUT_MS).toBe(600_000);
+  });
+});
 
 describe('estimateReasoningTokens', () => {
   it('returns the delta count when it is the higher figure', () => {

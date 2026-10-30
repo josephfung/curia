@@ -5,7 +5,7 @@
 // re-asks once with the tail of the reasoning, so the model acts on what it
 // already worked out. This module is pure: no I/O, no clock reads.
 
-import { OPENROUTER_REQUEST_TIMEOUT_MS } from './openrouter.js';
+import { LLM_REQUEST_TIMEOUT_MS } from './request-timeout.js';
 
 /** Fire when reasoning tokens reach this fraction of the call's max_tokens cap. */
 export const REASONING_WATCHDOG_TOKEN_FRACTION = 0.5;
@@ -28,8 +28,8 @@ export const FORCED_ATTEMPT_RESERVE_MS = 60_000;
 /** How much of the stopped reasoning is quoted back in the forced message. */
 export const FORCED_REASONING_TAIL_CHARS = 16_000;
 
-/** Per-request timeout the time window is measured against (matches OpenRouter's). */
-export const WATCHDOG_REQUEST_TIMEOUT_MS = OPENROUTER_REQUEST_TIMEOUT_MS;
+/** Per-request timeout the time window is measured against (the same value OpenRouter uses). */
+export const WATCHDOG_REQUEST_TIMEOUT_MS = LLM_REQUEST_TIMEOUT_MS;
 
 export interface WatchdogLimits {
   /** Reasoning-token count at which the watchdog fires. */
