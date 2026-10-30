@@ -10,6 +10,15 @@ import { OPENROUTER_REQUEST_TIMEOUT_MS } from './openrouter.js';
 /** Fire when reasoning tokens reach this fraction of the call's max_tokens cap. */
 export const REASONING_WATCHDOG_TOKEN_FRACTION = 0.5;
 
+/**
+ * Characters of reasoning text per token, used to estimate tokens from text length.
+ * Reasoning text measured 2.5-4.3 characters per token; 3 sits at the low end so the
+ * estimate errs toward firing. A reasoning_delta can carry several tokens: CoreWeave
+ * (DeepSeek V4.1 Flash) sent about 2.6 tokens per delta, so counting deltas alone
+ * could never reach half the cap before the cap itself (#2371).
+ */
+export const REASONING_CHARS_PER_TOKEN_ESTIMATE = 3;
+
 /** Fire when this fraction of the usable time window has elapsed. */
 export const REASONING_WATCHDOG_TIME_FRACTION = 0.5;
 
@@ -61,6 +70,11 @@ export function watchdogLimits(args: {
     tokenThreshold: Math.floor(maxTokens * REASONING_WATCHDOG_TOKEN_FRACTION),
     fireAtMs: callStartMs + window * REASONING_WATCHDOG_TIME_FRACTION,
   };
+}
+
+/** Reasoning tokens so far: the delta count or the text-length estimate, whichever is higher. */
+export function estimateReasoningTokens(deltaCount: number, reasoningChars: number): number {
+  return Math.max(deltaCount, Math.ceil(reasoningChars / REASONING_CHARS_PER_TOKEN_ESTIMATE));
 }
 
 export function forcedAttemptMessage(reasoningSoFar: string): string {

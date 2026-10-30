@@ -546,10 +546,12 @@ describe('ReasoningWatchdogProvider', () => {
     { maxTokens: 32_768, fireAt: 16_384 },
     { maxTokens: 4_000, fireAt: 2_000 },
   ])('token trigger fires at reasoning token $fireAt of a $maxTokens cap', async ({ maxTokens, fireAt }) => {
+    // One-character deltas, so the delta count (not the text length) is the larger estimate.
+    const shortDeltas: LLMStreamEvent[] = Array.from({ length: fireAt }, () => ({ type: 'reasoning_delta', text: 'r' }));
     const inner = fakeProvider({
       steps: [
         { type: 'request_started', maxTokens },
-        ...reasoning(fireAt),
+        ...shortDeltas,
         { type: 'message_end', content: 'never reached', usage: usage(), provenance },
       ],
       chatResponses: [textResponse('ok')],
@@ -560,6 +562,26 @@ describe('ReasoningWatchdogProvider', () => {
     if (result.type === 'error') throw new Error('unreachable');
     expect(result.provenance.reasoningWatchdog).toMatchObject({ trigger: 'tokens', firedAtReasoningTokens: fireAt });
     expect(inner.chatCalls).toHaveLength(1);
+  });
+
+  it('token trigger fires on estimated tokens when few deltas carry long text (#2371)', async () => {
+    // maxTokens 100 -> threshold 50. Three 60-char deltas: ceil(120/3)=40 after the 2nd, ceil(180/3)=60 after the 3rd.
+    const long = (c: string): LLMStreamEvent => ({ type: 'reasoning_delta', text: c.repeat(60) });
+    const inner = fakeProvider({
+      steps: [
+        { type: 'request_started', maxTokens: 100 },
+        long('a'),
+        long('b'),
+        long('c'),
+        long('d'),
+        { type: 'message_end', content: 'never reached', usage: usage(), provenance },
+      ],
+      chatResponses: [textResponse('ok')],
+    });
+    const result = await new ReasoningWatchdogProvider(inner, createSilentLogger()).chat(baseParams());
+    expect(inner.consumed).toBe(1 + 3);
+    if (result.type === 'error') throw new Error('unreachable');
+    expect(result.provenance.reasoningWatchdog).toMatchObject({ trigger: 'tokens', firedAtReasoningTokens: 60 });
   });
 
   it('the caller aborting as the watchdog fires: no forced attempt, the caller error is returned', async () => {

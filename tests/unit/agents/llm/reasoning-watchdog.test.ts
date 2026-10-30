@@ -2,8 +2,22 @@ import { describe, it, expect } from 'vitest';
 import {
   watchdogLimits,
   forcedAttemptMessage,
+  estimateReasoningTokens,
   FORCED_REASONING_TAIL_CHARS,
 } from '../../../../src/agents/llm/reasoning-watchdog.js';
+
+describe('estimateReasoningTokens', () => {
+  it('returns the delta count when it is the higher figure', () => {
+    expect(estimateReasoningTokens(12, 30)).toBe(12);
+  });
+  it('returns ceil(chars / 3) when that is higher', () => {
+    expect(estimateReasoningTokens(5, 30)).toBe(10);
+    expect(estimateReasoningTokens(1, 31)).toBe(11);
+  });
+  it('is zero when no reasoning arrived', () => {
+    expect(estimateReasoningTokens(0, 0)).toBe(0);
+  });
+});
 
 describe('watchdogLimits', () => {
   it('fires tokens at half the call cap', () => {

@@ -214,7 +214,8 @@ export type LLMStreamEvent =
   | { type: 'text_delta'; text: string }
   /**
    * One per reasoning delta that carries non-empty readable text (never for
-   * encrypted or omitted thinking). A watcher counts one token per event.
+   * encrypted or omitted thinking). A delta may carry several tokens, so a watcher
+   * estimates tokens from the delta count and the text length, whichever is higher.
    */
   | { type: 'reasoning_delta'; text: string }
   | ({ type: 'tool_use'; toolCalls: ToolCall[]; content?: string; reasoningBlocks?: ReasoningContent[]; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)

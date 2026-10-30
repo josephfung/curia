@@ -53,7 +53,7 @@ Register dated snapshots in their own right. Lookup is exact-first, then longest
 `stream(params)` returns an `AsyncIterable<LLMStreamEvent>` for the same parameters as `chat()`. Implement it when the backend can truly stream. Never buffer the full reply and yield it at the end. The event order:
 
 1. `request_started { maxTokens }` — exactly once, first, before any other event. `maxTokens` is the value the request actually sent, after the model cap and any thinking floor. The watchdog arms its thresholds from it.
-2. `reasoning_delta { text }` — one per reasoning delta that carries non-empty readable text. Never emit one for encrypted or omitted thinking. The watchdog counts one token per event.
+2. `reasoning_delta { text }` — one per reasoning delta that carries non-empty readable text. Never emit one for encrypted or omitted thinking. A delta may carry several tokens (CoreWeave sends about 2.6), so the watchdog estimates tokens from the delta count and the reasoning text length (3 characters per token), whichever is higher.
 3. `output_started` — at most once, on the first chunk of a tool call (OpenRouter's first `delta.tool_calls` entry, Anthropic's `content_block_start` of type `tool_use`). Tool-call argument chunks produce no other event, so without it the watchdog cannot tell a model writing a long tool call from one still thinking, and the time trigger would cut the call. Text needs no `output_started`: `text_delta` signals it.
 4. `text_delta { text }` — one per piece of the reply.
 5. A terminal event: `tool_use` (with `toolCalls`, `usage`, `provenance`, and `reasoningBlocks` if any), or `message_end` (with `content`, `usage`, `provenance`), or `error`.
@@ -91,7 +91,7 @@ providerRegistry.set('my-provider', watchProvider(new MyProvider(config.myKey, l
 
 The wrapper does nothing for a provider that has no `stream()`: it passes `chat()` straight through. For one that does, it runs each `chat()` through `inner.stream()` and:
 
-- counts reasoning tokens (one per `reasoning_delta`) and watches the clock;
+- estimates reasoning tokens (the `reasoning_delta` count or the reasoning text length divided by 3, whichever is higher) and watches the clock;
 - stops the stream when reasoning reaches half of the request's `maxTokens`, or half of the usable time window passes, before any output starts (`text_delta`, `output_started` or a terminal event), or when the reply ends empty after reasoning;
 - makes one forced attempt through `inner.chat()` with the tail of the reasoning appended as a runtime note;
 - falls back to a plain `inner.chat()` once if the stream fails with a retryable error, or ends empty with no readable reasoning (so `chat()`'s own empty-reply retry runs); a non-retryable error event is returned as is;

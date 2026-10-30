@@ -1,7 +1,7 @@
 // reasoning-watchdog-provider.ts — LLMProvider wrapper that bounds runaway reasoning (#2371).
 //
-// A watched chat() runs through inner.stream(), counting one reasoning token per
-// reasoning_delta. If reasoning reaches half the request's max_tokens, or half the
+// A watched chat() runs through inner.stream(), estimating reasoning tokens from the
+// reasoning_delta count and the reasoning text length, whichever is higher. If reasoning reaches half the request's max_tokens, or half the
 // usable time window passes, before any output starts (text_delta, output_started
 // or a final event), the stream is aborted and the call is re-asked once through
 // inner.chat() with the reasoning so far appended as a runtime note (the "forced
@@ -23,6 +23,7 @@ import type {
   ToolResult,
 } from './provider.js';
 import {
+  estimateReasoningTokens,
   forcedAttemptMessage,
   watchdogLimits,
   type ReasoningWatchdogRecord,
@@ -116,7 +117,7 @@ export class ReasoningWatchdogProvider implements LLMProvider {
     const signal = callerSignal ? AbortSignal.any([callerSignal, internal.signal]) : internal.signal;
     const callStartMs = this.now();
 
-    let reasoningTokens = 0;
+    let deltas = 0;
     let reasoningText = '';
     let watching = true;
     let tokenThreshold: number | undefined;
@@ -126,7 +127,7 @@ export class ReasoningWatchdogProvider implements LLMProvider {
 
     const stopWith = (trigger: WatchdogTrigger): void => {
       if (stop) return;
-      stop = { trigger, firedAtReasoningTokens: reasoningTokens, firedAfterMs: this.now() - callStartMs };
+      stop = { trigger, firedAtReasoningTokens: estimateReasoningTokens(deltas, reasoningText.length), firedAfterMs: this.now() - callStartMs };
     };
     const fire = (trigger: 'tokens' | 'time'): void => {
       if (!watching || stop) return;
@@ -191,9 +192,9 @@ export class ReasoningWatchdogProvider implements LLMProvider {
             break;
           }
           case 'reasoning_delta':
-            reasoningTokens += 1;
+            deltas += 1;
             reasoningText += event.text;
-            if (tokenThreshold !== undefined && reasoningTokens >= tokenThreshold) fire('tokens');
+            if (tokenThreshold !== undefined && estimateReasoningTokens(deltas, reasoningText.length) >= tokenThreshold) fire('tokens');
             break;
           case 'output_started':
           case 'text_delta':
@@ -206,7 +207,7 @@ export class ReasoningWatchdogProvider implements LLMProvider {
           case 'message_end':
             standDown();
             if (event.content === '') {
-              if (reasoningTokens > 0) {
+              if (estimateReasoningTokens(deltas, reasoningText.length) > 0) {
                 // An empty reply after reasoning: reasoning ate the cap before the
                 // token trigger fired. Treat it as a stop, not an empty answer.
                 stopWith('cap');
@@ -251,7 +252,7 @@ export class ReasoningWatchdogProvider implements LLMProvider {
       kind: 'stopped',
       stop,
       reasoningText,
-      reasoningTokens,
+      reasoningTokens: estimateReasoningTokens(deltas, reasoningText.length),
       ...(stoppedUsage !== undefined ? { stoppedUsage } : {}),
     };
   }
@@ -293,8 +294,8 @@ export class ReasoningWatchdogProvider implements LLMProvider {
     );
 
     // The stopped attempt was billed too. A `cap` stop finished, so its real usage
-    // is known and added whole. A cut stream never reported usage: count one
-    // output token per reasoning_delta, and inputTokens reflects the forced attempt only.
+    // is known and added whole. A cut stream never reported usage: use the
+    // estimated reasoning tokens as output tokens, and inputTokens reflects the forced attempt only.
     let usage: LLMUsage | undefined;
     if (stoppedUsage !== undefined) {
       usage = addUsage(response.usage, stoppedUsage);
