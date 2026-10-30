@@ -36,4 +36,14 @@ describe('forcedAttemptMessage', () => {
     expect(msg).toContain('Take your next step now');
     expect(msg).not.toContain('<previous_reasoning>');
   });
+  it('forced message with no reasoning omits the "below" sentence', () => {
+    expect(forcedAttemptMessage('')).toBe(
+      [
+        '[Runtime note from Curia, not from the principal]',
+        'Your previous attempt at this step was stopped after a long stretch of reasoning with no action.',
+        'You have already thought this through. Do not start over or re-derive it.',
+        'Take your next step now: call the tool you need, or write your reply.',
+      ].join('\n'),
+    );
+  });
 });

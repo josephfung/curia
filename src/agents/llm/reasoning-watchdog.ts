@@ -64,11 +64,14 @@ export function watchdogLimits(args: {
 }
 
 export function forcedAttemptMessage(reasoningSoFar: string): string {
+  const hasReasoning = reasoningSoFar.length > 0;
   const lines = [
     '[Runtime note from Curia, not from the principal]',
-    'Your previous attempt at this step was stopped after a long stretch of reasoning with no action. The end of that reasoning is below.',
+    hasReasoning
+      ? 'Your previous attempt at this step was stopped after a long stretch of reasoning with no action. The end of that reasoning is below.'
+      : 'Your previous attempt at this step was stopped after a long stretch of reasoning with no action.',
   ];
-  if (reasoningSoFar.length > 0) {
+  if (hasReasoning) {
     const truncated = reasoningSoFar.length > FORCED_REASONING_TAIL_CHARS;
     const tail = truncated ? reasoningSoFar.slice(-FORCED_REASONING_TAIL_CHARS) : reasoningSoFar;
     lines.push('<previous_reasoning>', `${truncated ? '…' : ''}${tail}`, '</previous_reasoning>');
