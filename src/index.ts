@@ -101,7 +101,7 @@ import { VoiceAdapter } from './channels/voice/voice-adapter.js';
 import { VoiceSessionBridge } from './channels/voice/session-bridge.js';
 import { VoiceSessionStore } from './channels/voice/session-store.js';
 import { VoiceRuntime } from './channels/voice/voice-runtime.js';
-import { VOICE_TOOL_NAMES } from './channels/voice/voice-tools.js';
+import { VOICE_TOOL_NAMES, withVoiceSpokenNotes } from './channels/voice/voice-tools.js';
 import { invokeVoiceToolAudited } from './channels/voice/voice-tool-audit.js';
 import { evaluateVoiceModelCapabilities } from './channels/voice/voice-model-capabilities.js';
 import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './speech/index.js';
@@ -2167,6 +2167,7 @@ async function main(): Promise<void> {
           new LiveKitRoomSession({ url: livekitUrl, token, callerIdentity, logger }),
         workingMemory: memory,
         maxUtteranceBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
+        turnHoldMs: yamlConfig.channels?.voice?.turn_hold_ms,
         // Same per-turn date/timezone grounding the coordinator gets — without it
         // "tomorrow / next week" is un-anchored for every voice tool call (#1551).
         timezone: config.timezone,
@@ -2876,7 +2877,8 @@ async function main(): Promise<void> {
       // definitions rode every spoken round. It includes the voice-only async
       // off-ramp (#1614 / ADR-038), which is NOT a coordinator pin — the
       // coordinator is the async destination and must not advertise it.
-      const voiceToolDefs = toolRegistry.toToolDefinitions([...VOICE_TOOL_NAMES]);
+      // Voice-only spoken phrasing on shared tools (#2379).
+      const voiceToolDefs = withVoiceSpokenNotes(toolRegistry.toToolDefinitions([...VOICE_TOOL_NAMES]));
       const missingVoiceTools = VOICE_TOOL_NAMES.filter(name => !voiceToolDefs.some(d => d.name === name));
       if (missingVoiceTools.length > 0) {
         logger.warn({ missingVoiceTools }, 'Voice tools not registered; spoken turns run without them');

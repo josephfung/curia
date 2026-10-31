@@ -54,6 +54,11 @@
             "livekit_management_url": {
               "type": "string",
               "description": "HTTP(S) base for LiveKit RoomService (DeleteRoom, etc.). Distinct from browser signaling URL. Compose default: http://livekit:7880."
+            },
+            "turn_hold_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Wait (ms) after end-of-speech before a spoken turn starts. Absent: the runtime default. 0: no hold."
             }
           }
         },

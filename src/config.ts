@@ -606,6 +606,11 @@ export interface YamlConfig {
        * `http://livekit:7880`.
        */
       livekit_management_url?: string;
+      /**
+       * Wait (ms) after the STT end-of-speech signal before a spoken turn
+       * starts (#2240, #2379). Absent → VoiceRuntime's default; 0 → no hold.
+       */
+      turn_hold_ms?: number;
     };
   };
   browser?: {

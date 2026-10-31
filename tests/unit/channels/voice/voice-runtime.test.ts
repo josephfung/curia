@@ -413,6 +413,47 @@ describe('VoiceRuntime', () => {
     expect(events.filter(e => e.type === 'voice.session.ended').length).toBe(1);
   });
 
+  it('keeps turnStats when a second hangup path wins the end write mid-teardown (#2379)', async () => {
+    const llm = new FakeStreamProvider([replyScript('Sure.')]);
+    // Holds disconnect open, as the Signal transport does while pacat exits.
+    let releaseDisconnect!: () => void;
+    const disconnectGate = new Promise<void>(resolve => {
+      releaseDisconnect = resolve;
+    });
+    class SlowDisconnectTransport extends FakeAudioTransport {
+      override async disconnect(): Promise<void> {
+        await disconnectGate;
+        await super.disconnect();
+      }
+    }
+    const transport = new SlowDisconnectTransport();
+    const { store, endReasons } = fakeStore();
+    const { runtime, events, stt } = makeRuntime({ llm, transport, store, tts: new SlowTtsProvider(2, 1) });
+
+    await runtime.startSession({
+      sessionId: 's-race',
+      conversationId: 'voice:s-race',
+      roomName: 'voice-s-race',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'hello there', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-race');
+
+    // transport.onClose starts ending the session and parks in disconnect.
+    transport.emitClose('principal_disconnected');
+    // The bridge's remote_hangup arrives while that teardown is still running.
+    const remote = runtime.endSession('s-race', 'remote_hangup');
+    await delay(10);
+    releaseDisconnect();
+    await remote;
+    await delay(10);
+
+    expect(endReasons).toHaveLength(1);
+    expect(endedTurnStats(events)).toEqual({ utterances: 1, turns: 1, bargeInCancels: 0, joinedUtterances: 0 });
+  });
+
   it('endSession resolves (not rejects) when the store write fails', async () => {
     const llm = new FakeStreamProvider([[{ type: 'message_end', content: 'ok', usage, provenance }]]);
     // endSession() is fired-and-forgotten (`void this.endSession(...)`) from
@@ -3068,5 +3109,135 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     expect(prompt).toContain('reading the principal\'s inbox');
     expect(prompt).toContain('A recap of this call is meeting-notes-start.');
     expect(prompt).toContain('such as links or research results, goes to async-offramp, not a specialist');
+  });
+});
+
+describe('VoiceRuntime audio timing telemetry (#2379)', () => {
+  function spyLogger(): { logger: Logger; info: ReturnType<typeof vi.fn> } {
+    const info = vi.fn();
+    const logger = {
+      debug: vi.fn(),
+      info,
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      trace: vi.fn(),
+      child: () => logger,
+    } as unknown as Logger;
+    return { logger, info };
+  }
+
+  function infoFields(info: ReturnType<typeof vi.fn>, message: string): Array<Record<string, unknown>> {
+    return info.mock.calls
+      .filter(([, msg]) => msg === message)
+      .map(([fields]) => fields as Record<string, unknown>);
+  }
+
+  /** TTS with 100 ms frames, delivered much faster than real time. */
+  class BigFrameTtsProvider extends SlowTtsProvider {
+    override async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
+      for await (const frame of super.synthesize(opts)) {
+        yield { ...frame, pcm: new Int16Array(2400) };
+      }
+    }
+  }
+
+  it('logs last word → turn start and → first audio on the TTFA line', async () => {
+    const { logger, info } = spyLogger();
+    const llm = new FakeStreamProvider([replyScript('Sure.')]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), logger });
+    await runtime.startSession({
+      sessionId: 'gap',
+      conversationId: 'voice:gap',
+      roomName: 'voice-gap',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: 'what is on today', isFinal: true, speechFinal: true, speechStartedAgoMs: 1500, speechEndedAgoMs: 400 });
+    await runtime.awaitIdle('gap');
+
+    const [ttfa] = infoFields(info, 'voice time-to-first-audio');
+    expect(ttfa).toBeDefined();
+    const toTurn = ttfa!['voice.last_word_to_turn_ms'] as number;
+    const toAudio = ttfa!['voice.last_word_to_audio_ms'] as number;
+    expect(toTurn).toBeGreaterThanOrEqual(400);
+    expect(toAudio).toBeGreaterThanOrEqual(toTurn);
+  });
+
+  it('logs barge-in detect time and queued audio at info, and flushes the transport queue', async () => {
+    const { logger, info } = spyLogger();
+    const llm = new FakeStreamProvider([replyScript('This is a fairly long spoken answer.')], 2);
+    const { runtime, stt, transport } = makeRuntime({ llm, tts: new BigFrameTtsProvider(50, 2), logger });
+    await runtime.startSession({
+      sessionId: 'barge-log',
+      conversationId: 'voice:barge-log',
+      roomName: 'voice-barge-log',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'tell me a story', isFinal: true, speechFinal: true });
+    await vi.waitFor(() => expect(transport.publishedFrames.length).toBeGreaterThan(5));
+
+    stt.emit({ text: 'actually wait', isFinal: false, confidence: 0.9, speechStartedAgoMs: 350 });
+    await runtime.awaitIdle('barge-log');
+
+    const [barge] = infoFields(info, 'voice barge-in: cancelled assistant turn');
+    expect(barge).toMatchObject({ 'voice.barge_in_detect_ms': 350, flushed: true });
+    // 100 ms frames arrive every ~2 ms, so most of what was published has not played.
+    expect(barge!['voice.barge_in_queued_audio_ms']).toBeGreaterThan(200);
+    expect(barge!['voice.barge_in_turn_audio_ms']).toBeGreaterThan(500);
+    expect(transport.clearQueuedAudioCount).toBe(1);
+  });
+
+  it('warns with the terms (not the sentence) when a reply names an internal component', async () => {
+    const warn = vi.fn();
+    const logger = {
+      debug: vi.fn(), info: vi.fn(), warn, error: vi.fn(), fatal: vi.fn(), trace: vi.fn(),
+      child: () => logger,
+    } as unknown as Logger;
+    const llm = new FakeStreamProvider([replyScript("I'll ask the calendar specialist.")]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), logger });
+    await runtime.startSession({
+      sessionId: 'jargon',
+      conversationId: 'voice:jargon',
+      roomName: 'voice-jargon',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'am I free tomorrow', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('jargon');
+
+    const named = warn.mock.calls.filter(([, msg]) => msg === 'voice reply named an internal component');
+    expect(named).toHaveLength(1);
+    expect(named[0]![0]).toEqual({ sessionId: 'jargon', terms: ['specialist'] });
+  });
+
+  it('logs TTS chunks that arrive slower than real time as starved, and a call summary', async () => {
+    const { logger, info } = spyLogger();
+    const llm = new FakeStreamProvider([replyScript('Sure.')]);
+    // 160-sample frames are 6.7 ms of audio at 24 kHz, delivered every 20 ms.
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(5, 20), logger });
+    await runtime.startSession({
+      sessionId: 'starve',
+      conversationId: 'voice:starve',
+      roomName: 'voice-starve',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'hello there', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('starve');
+
+    const [chunk] = infoFields(info, 'voice TTS chunk delivered');
+    expect(chunk).toMatchObject({ starvedCount: 4, chars: 5, aborted: false });
+    expect(chunk!['voice.tts_starved_ms']).toBeGreaterThan(0);
+
+    await runtime.endSession('starve', 'test');
+    const [summary] = infoFields(info, 'voice session audio summary');
+    expect(summary).toMatchObject({ 'voice.tts_chunks': 1, 'voice.tts_starved_count': 4 });
   });
 });

@@ -234,6 +234,11 @@ export class LiveKitRoomSession implements AudioTransport {
     await source.captureFrame(audioFrame);
   }
 
+  clearQueuedAudio(): void {
+    // The AudioSource queues up to a second of audio ahead of playout.
+    this.source?.clearQueue();
+  }
+
   async disconnect(): Promise<void> {
     if (this.disconnecting) return;
     this.disconnecting = true;

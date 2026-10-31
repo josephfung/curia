@@ -21,6 +21,12 @@ export interface SttTranscriptEvent {
   /** End-of-turn / utterance endpoint signal from the provider */
   speechFinal?: boolean;
   confidence?: number;
+  /**
+   * How long before this event arrived the first word started and the last
+   * word ended, in ms of stream audio (#2379). Absent without word timings.
+   */
+  speechStartedAgoMs?: number;
+  speechEndedAgoMs?: number;
 }
 
 export interface SttSessionOptions {

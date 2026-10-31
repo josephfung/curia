@@ -10,6 +10,7 @@ export class FakeAudioTransport implements AudioTransport {
   readonly publishedFrames: PcmFrame[] = [];
   connected = false;
   disconnectCount = 0;
+  clearQueuedAudioCount = 0;
 
   private readonly remoteCallbacks: Array<(frame: PcmFrame) => void> = [];
   private readonly closeCallbacks: Array<(reason: AudioTransportCloseReason) => void> = [];
@@ -33,6 +34,10 @@ export class FakeAudioTransport implements AudioTransport {
 
   async publishAudio(frame: PcmFrame): Promise<void> {
     this.publishedFrames.push(frame);
+  }
+
+  clearQueuedAudio(): void {
+    this.clearQueuedAudioCount += 1;
   }
 
   /** Test helper: simulate an inbound audio frame arriving from the principal. */

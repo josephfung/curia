@@ -20,6 +20,8 @@
 // Add a tool here only with evidence that a live call needs it and can finish with
 // it inside the round cap. ADR-037 calls voice a curated subset of the coordinator;
 // tests/unit/channels/voice/voice-tools.test.ts holds this list to that.
+import type { ToolDefinition } from '../../agents/llm/provider.js';
+
 export const VOICE_TOOL_NAMES: readonly string[] = [
   // Specialist domains: calendar, contacts, inbox, research, social-media drafts.
   'delegate',
@@ -42,3 +44,25 @@ export const VOICE_TOOL_NAMES: readonly string[] = [
   'memory-query',
   'memory-store',
 ];
+
+/**
+ * Spoken-phrasing notes appended to a shared tool's description on voice only
+ * (#2379). The caller hears whatever the model says before a tool call, and
+ * the model named the specialist it was about to brief. The coordinator's own
+ * "How you speak" rule covers text turns, so the shared manifest stays as is.
+ * Voice-only tools (async-offramp) carry their phrasing in their own manifest.
+ */
+export const VOICE_TOOL_SPOKEN_NOTES: Readonly<Record<string, string>> = {
+  delegate:
+    'On this call, the caller hears one person doing the work. Say what you are doing ' +
+    'in their terms: "Let me check your calendar, one moment." ' +
+    '"I\'ll send her a short note." Never name specialists, delegation, or tools out loud.',
+};
+
+/** Voice's copy of the tool definitions, with VOICE_TOOL_SPOKEN_NOTES appended. */
+export function withVoiceSpokenNotes(defs: readonly ToolDefinition[]): ToolDefinition[] {
+  return defs.map(def => {
+    const note = VOICE_TOOL_SPOKEN_NOTES[def.name];
+    return note ? { ...def, description: `${def.description} ${note}` } : def;
+  });
+}

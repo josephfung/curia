@@ -3,7 +3,9 @@
 
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
-import { VOICE_TOOL_NAMES } from '../../../../src/channels/voice/voice-tools.js';
+import { VOICE_TOOL_NAMES, withVoiceSpokenNotes } from '../../../../src/channels/voice/voice-tools.js';
+import { findInternalJargon } from '../../../../src/channels/voice/spoken-jargon.js';
+import { buildVoiceSystemPrompt, VOICE_GREETING_INSTRUCTION } from '../../../../src/channels/voice/voice-runtime.js';
 import { measureAgentContext } from '../../../../src/agents/prompt-budget.js';
 import { discoverToolManifests } from '../../../../src/skills/loader.js';
 import { ToolRegistry } from '../../../../src/skills/registry.js';
@@ -89,5 +91,56 @@ describe('VOICE_TOOL_NAMES', () => {
       .toToolDefinitions([...VOICE_TOOL_NAMES])
       .reduce((sum, def) => sum + Buffer.byteLength(JSON.stringify(def), 'utf8'), 0);
     expect(bytes).toBeLessThanOrEqual(VOICE_TOOL_DEFINITION_BYTES_BUDGET);
+  });
+});
+
+// The voice model narrated its internals on a live call: "I'll ask the calendar
+// specialist", "the coordinator with an async offramp" (#2379). It copies quoted
+// examples closely, so none of the examples voice is given may carry those words.
+describe('voice spoken phrasing (#2379)', () => {
+  const registry = catalog();
+  const voiceDefs = withVoiceSpokenNotes(registry.toToolDefinitions([...VOICE_TOOL_NAMES]));
+
+  /** Every `description` string in a tool definition, top level and per input. */
+  function descriptions(value: unknown): string[] {
+    if (typeof value !== 'object' || value === null) return [];
+    return Object.entries(value).flatMap(([key, child]) =>
+      key === 'description' && typeof child === 'string' ? [child] : descriptions(child),
+    );
+  }
+
+  function quotedExamples(text: string): string[] {
+    return [...text.matchAll(/"([^"]+)"/g)].map(match => match[1]!);
+  }
+
+  it('appends the spoken note to delegate on voice only', () => {
+    const shared = registry.get('delegate')!.manifest.description;
+    const voice = voiceDefs.find(def => def.name === 'delegate')!.description;
+    expect(voice.startsWith(shared)).toBe(true);
+    expect(voice.length).toBeGreaterThan(shared.length);
+    expect(voice).toMatch(/one person doing the work/);
+    // Other tools pass through unchanged.
+    const dateResolve = voiceDefs.find(def => def.name === 'date-resolve')!;
+    expect(dateResolve.description).toBe(registry.get('date-resolve')!.manifest.description);
+  });
+
+  it('gives the delegate and async-offramp tools a spoken example to copy', () => {
+    for (const name of ['delegate', 'async-offramp']) {
+      const def = voiceDefs.find(d => d.name === name)!;
+      expect(quotedExamples(def.description).length, name).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps every quoted example in voice prompt and tool text free of internal terms', () => {
+    const prompt = buildVoiceSystemPrompt({
+      identityBlock: null,
+      specialistRoster: '- @calendar: Calendar and scheduling.',
+      audience: { liveTurn: true },
+    });
+    const texts = [prompt, VOICE_GREETING_INSTRUCTION, ...voiceDefs.flatMap(def => descriptions(def))];
+    const offending = texts
+      .flatMap(quotedExamples)
+      .filter(example => findInternalJargon(example).length > 0);
+    expect(offending).toEqual([]);
   });
 });
