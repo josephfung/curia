@@ -49,6 +49,8 @@ describe('bypassesBearerAuth', () => {
     '/api/tasks',
     '/api/contacts',
     '/api/chat/messages',
+    '/api/sessions',
+    '/api/sessions/:id',
     '/api/grant-recommendations',
     '/api/identity/me',
     '/api/setup/status',
@@ -64,6 +66,7 @@ describe('bypassesBearerAuth', () => {
     '/api/nonexistent',
     // Prefixes must not match on a shared leading substring (#872 review).
     '/api/chat-export',
+    '/api/sessions-export',
     '/api/tasks-summary',
     '/api/contacts.csv',
     '/*',

@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Voice audio telemetry** — per-turn last-word gap, per-chunk TTS timing and starvation, per-call event-loop delay. (#2379)
 - **Recurring calendar events** — create, edit and delete a series or one occurrence; standing meetings become one event. (#2385)
+- **`operator.session`** — **public API:** audit event for logout, revoke, pairing, and signing out other devices. (#2341)
 - **ADR-057** — retire bearer `/api/messages`; console chat on `/api/chat` is the only ingress. (#999)
 - **`doc-write` `section-delete`** — removes one `##` section and its heading; a missing section errors. (#2339)
 - **`migrate:standing-rules`** — one-off script moves inbox and calendar rule arrays into `/shared/` documents. (#2339)
@@ -120,6 +121,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Time saved** — human-time estimate on Done-for-you's clock; undescribed calls add a few seconds. (#2349)
 - **Time saved footnote** — one line on a narrow screen, and readable against the card. (#2349)
 - **Recent Activity** — scratch notes and conflicted `doc-write` calls no longer appear. (#2349)
+- **Console sessions** — idle expiry is 90 days, with logout, rename, and revoke. (#2341)
 - **agent.task / llm.call / llm.error / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started`, `reasoning_delta` and `output_started` added. (#2371)
 - **LLM calls** — agent and infra calls on Anthropic and OpenRouter now stream internally. (#2371)
 - **Console API paths** — tasks, contacts, chat and grants move to `/api/*`; old tabs work for one release. (#872)

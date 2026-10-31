@@ -12,9 +12,14 @@ The KG view in the React console uses `/api/kg/*` for graph primitives (nodes, g
 
 ## Security model
 
-The web explorer is gated by `WEB_APP_BOOTSTRAP_SECRET` from `.env`:
+The web explorer is gated by `WEB_APP_BOOTSTRAP_SECRET` from the vault:
 - `GET /` serves the React console shell (session cookie required for data).
-- All `/api/kg/*` routes require either `x-web-bootstrap-secret` header or a valid `curia_session` cookie.
+- Console routes, including `/api/kg/*`, require either `x-web-bootstrap-secret` or a valid `curia_session` cookie.
+- `POST /auth` exchanges the access key for that cookie. The cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` when `APP_ORIGIN` is `https://`.
+- A session lasts **90 days from last use**. An authenticated request slides `expires_at` forward, at most once an hour, and updates `last_seen_at`. A session idle longer than 90 days is rejected and the console sends the operator to `/login`.
+- Sessions are stored hashed in Postgres and reloaded at boot, so a restart or deploy does not end them.
+- `POST /auth/logout` ends the current session. Settings → Devices lists every live session (name, kind, last seen, notification status) and can rename, revoke, or sign out every other device. Revoking removes the row from memory and from Postgres.
+- Pair, revoke, logout and sign-out-all are audited as `operator.session`.
 
 If `WEB_APP_BOOTSTRAP_SECRET` is missing, the KG API routes are not registered at all (intentional 404, not 503).
 

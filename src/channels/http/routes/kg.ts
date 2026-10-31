@@ -6,12 +6,17 @@
 // Auth for /api/kg/*: session cookie or x-web-bootstrap-secret via assertSecret.
 // POST /auth mints the curia_session cookie used by all console routes.
 
-import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
-import { assertSecret, compareSecrets, CONSOLE_RATE, hashToken, type SessionStore } from '../session-auth.js';
+import { assertSecret, compareSecrets, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
+import {
+  deviceNameFromUserAgent,
+  issueSession,
+  readUserAgent,
+  sessionCookieOptions,
+} from '../console-sessions.js';
 import { resolveConsoleOriginator } from '../console-originator.js';
 import { isUuid } from '../../../util/uuid.js';
 import type { NodeMergeApi } from '../../../kg-merge/service.js';
@@ -120,34 +125,22 @@ export async function knowledgeGraphRoutes(
     }
 
     // Issue a 256-bit random session token. The secret itself never goes in the cookie.
-    const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
-    const token = randomBytes(32).toString('hex');
-    const tokenHash = hashToken(token);
-    const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-
-    // Write to Postgres first — if the DB write fails, the Map is never updated and the
-    // cookie is never sent, so no phantom session can be created.
-    // ON CONFLICT is a safety net against an astronomically unlikely 256-bit hash collision.
+    // Idle window is 90 days and slides on later requests (ADR-055). The plaintext
+    // token stays in the cookie; Postgres stores only its hash.
+    const userAgent = readUserAgent(request);
+    let issued: Awaited<ReturnType<typeof issueSession>>;
     try {
-      await pool.query(
-        `INSERT INTO sessions (token_hash, last_seen_at, expires_at)
-         VALUES ($1, NOW(), $2)
-         ON CONFLICT (token_hash) DO UPDATE SET expires_at = EXCLUDED.expires_at, last_seen_at = NOW()`,
-        [tokenHash, expiresAt],
-      );
+      issued = await issueSession(pool, sessions, {
+        kind: 'browser',
+        name: deviceNameFromUserAgent(userAgent),
+        userAgent,
+      });
     } catch (err) {
       logger.error({ err }, 'Failed to persist session to Postgres');
       return reply.status(503).send({ error: 'Login is temporarily unavailable. Please try again.' });
     }
-    sessions.set(tokenHash, expiresAt.getTime());
 
-    reply.setCookie('curia_session', token, {
-      httpOnly: true,
-      secure: secureCookies,  // true in prod (https://), false for http://localhost
-      sameSite: 'strict',
-      path: '/',
-      maxAge: SESSION_TTL_MS / 1000,
-    });
+    reply.setCookie('curia_session', issued.token, sessionCookieOptions(secureCookies));
 
     return reply.status(200).send({ ok: true });
   });

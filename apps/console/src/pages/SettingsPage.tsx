@@ -283,6 +283,7 @@ const SETTINGS_SECTIONS = [
   { id: 'posture',      label: 'Standing preferences', href: '/settings/posture' },
   { id: 'autonomy',     label: 'Autonomy',     href: '/settings/autonomy' },
   { id: 'memory',       label: 'Memory',       href: '/settings/memory' },
+  { id: 'devices',      label: 'Devices',      href: '/settings/devices' },
 ] as const;
 
 interface SettingsLayoutProps {

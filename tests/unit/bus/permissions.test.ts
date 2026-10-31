@@ -231,6 +231,15 @@ describe('Bus Permissions', () => {
     }
   });
 
+  it('allows only the system layer to publish and subscribe to operator.session', () => {
+    expect(canPublish('system', 'operator.session')).toBe(true);
+    expect(canSubscribe('system', 'operator.session')).toBe(true);
+    expect(canPublish('channel', 'operator.session')).toBe(false);
+    expect(canPublish('dispatch', 'operator.session')).toBe(false);
+    expect(canPublish('agent', 'operator.session')).toBe(false);
+    expect(canPublish('execution', 'operator.session')).toBe(false);
+  });
+
   it('allows system layer to publish and subscribe to system.restart', () => {
     expect(canPublish('system', 'system.restart')).toBe(true);
     expect(canSubscribe('system', 'system.restart')).toBe(true);

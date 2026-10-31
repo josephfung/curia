@@ -131,6 +131,19 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
     return () => controller.abort();
   }, []);
 
+  const logOut = () => {
+    apiFetch('/auth/logout', { method: 'POST' })
+      .catch((err: unknown) => {
+        console.error('[Sidebar] logout failed:', err);
+      })
+      .finally(() => {
+        navigate({ to: '/login' }).catch((err: unknown) => {
+          console.error('[Sidebar] navigation to /login failed:', err);
+        });
+        setOpen(false);
+      });
+  };
+
   const go = (view: string) => {
     const to = ROUTES[view];
     if (to) {
@@ -270,12 +283,15 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
 
       <div className="sidebar-footer">
         <ThemeToggle theme={theme} onChange={onThemeChange} />
-        <button className="sidebar-user">
+        <button type="button" className="sidebar-user">
           <span className="sidebar-user-avatar">{getInitials(principalName)}</span>
           <span className="sidebar-user-meta">
             <span className="sidebar-user-name">{principalName ?? 'Setting up…'}</span>
             <span className="sidebar-user-org">{version ? `v${version}` : ''}</span>
           </span>
+        </button>
+        <button type="button" className="sidebar-logout" onClick={logOut}>
+          Log out
         </button>
       </div>
     </nav>

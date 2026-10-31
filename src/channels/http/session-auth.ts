@@ -9,9 +9,41 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 
-// token → expiry timestamp in ms. Lives in HttpAdapter, shared across route registrations.
+/**
+ * One live session in the in-memory map. `renewedAt` is the last time the idle
+ * window was written (login or a throttled renewal) and anchors the next write.
+ * A bare number is accepted so older tests can keep storing just an expiry.
+ */
+export interface SessionEntry {
+  /** Epoch ms. A request at or after this instant is rejected. */
+  expiresAt: number;
+  /** Epoch ms of the last expiry write. */
+  renewedAt: number;
+  /** sessions.id. Absent when a test planted only an expiry. */
+  id?: string;
+}
+
+export type SessionStoreValue = SessionEntry | number;
+
+// token hash → expiry. Lives in HttpAdapter, shared across route registrations.
 // Map keys are SHA-256 hashes of the raw token so the plaintext never touches the DB.
-export type SessionStore = Map<string, number>;
+export type SessionStore = Map<string, SessionStoreValue>;
+
+export function sessionExpiresAt(value: SessionStoreValue | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === 'number' ? value : value.expiresAt;
+}
+
+/** Slides the idle window. Bound per store so route handlers stay unchanged. */
+export interface SessionRenewer {
+  touch(tokenHash: string, rawToken: string, reply: FastifyReply): void;
+}
+
+const sessionRenewers = new WeakMap<SessionStore, SessionRenewer>();
+
+export function bindSessionRenewer(sessions: SessionStore, renewer: SessionRenewer): void {
+  sessionRenewers.set(sessions, renewer);
+}
 
 /**
  * Shared per-route rate limit for console session-authed APIs (KG, tasks, contacts,
@@ -28,6 +60,13 @@ export const CONSOLE_RATE = {
  */
 export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+/** The raw `curia_session` cookie, or null when the request has none. */
+export function readSessionCookie(request: FastifyRequest): string | null {
+  const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
+  const token = cookies?.['curia_session'];
+  return typeof token === 'string' && token.length > 0 ? token : null;
 }
 
 /**
@@ -68,12 +107,15 @@ export function assertSecret(
 
   // Primary path: browser session cookie set by POST /auth.
   // @fastify/cookie augments FastifyRequest with .cookies at runtime.
-  const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
-  const sessionToken = cookies?.['curia_session'];
+  const sessionToken = readSessionCookie(request);
   if (sessionToken) {
     // Hash before lookup — the Map is keyed by SHA-256(token), matching what was stored.
-    const expiresAt = sessions.get(hashToken(sessionToken));
-    if (expiresAt !== undefined && Date.now() < expiresAt) return true;
+    const tokenHash = hashToken(sessionToken);
+    const expiresAt = sessionExpiresAt(sessions.get(tokenHash));
+    if (expiresAt !== undefined && Date.now() < expiresAt) {
+      sessionRenewers.get(sessions)?.touch(tokenHash, sessionToken, reply);
+      return true;
+    }
     // Expired or unknown token — fall through to header check below.
   }
 
