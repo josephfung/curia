@@ -4,7 +4,7 @@
 // reports unavailable) so the card can show an error instead of a false zero.
 
 import type { Pool } from 'pg';
-import { minutesForCall, timeSavedDetail, timeSavedHelp, visibleToolNames } from '../activity/describers.js';
+import { hiddenToolNames, minutesForCall, timeSavedDetail, timeSavedHelp, visibleToolNames } from '../activity/describers.js';
 import { OPEN_TASK_STATUSES } from '../agents/prompts/backlog-line.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import type { DisclosureDecisionRecorder } from '../autonomy/disclosure-decisions.js';
@@ -305,13 +305,15 @@ export class BriefingService {
   private async loadModel(from: Date, to: Date, timezone: string): Promise<BriefingWindow> {
     const result = await this.deps.pool.query<{ histogram: unknown; saved_calls: unknown }>(
       HISTOGRAM_SQL,
-      [from, to, new Date(to.getTime() + DELEGATION_TAIL_MS), timezone, MAX_DELEGATION_DEPTH, visibleToolNames()],
+      [from, to, new Date(to.getTime() + DELEGATION_TAIL_MS), timezone, MAX_DELEGATION_DEPTH, visibleToolNames(), hiddenToolNames()],
     );
     const row = result.rows[0];
     const model = shapeHistogramFromCounts(parseHistogramRows(row?.histogram), to, timezone);
-    // Each call the feed would show adds its minutes, including a repeat of the
-    // same tool. Recent Activity lists both, and a retry is not distinguishable
-    // from a second real action without a per-tool target (#2349).
+    // Each visible call adds its describer minutes, and each undescribed call
+    // adds the flat default (ADR-058), including a repeat of the same tool.
+    // Recent Activity lists the visible ones, and a retry is not distinguishable
+    // from a second real action without a per-tool target (#2349). Hidden
+    // describers are omitted here; they are worth zero.
     const perDay = new Map<string, number>();
     for (const saved of parseSavedCalls(row?.saved_calls)) {
       const minutes = minutesForCall({
@@ -384,15 +386,18 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
 
 /**
  * One row: `histogram` (day × actor × outcome counts) and `saved_calls` (the
- * successful visible calls those counts are built from).
+ * successful calls the minutes are summed from: visible tools, plus any named
+ * tool the describers do not list).
  *
  * Root jobs in [$1, $2). Delegated tasks fold into their root, up to $5 levels,
  * and may finish as late as $3. The day is the root task's timestamp in $4, for
  * both the bars and the minutes, so a job that starts at 23:59 stays on that day.
  * The tool name is read the same way as readAuditToolName (invoke first, then
  * the result; target_id only when target_type is skill). $6 is the visible set:
- * described and not hidden. Anything else, including a tool with no describer,
- * is left out. An unnamed call is left out too, because NULL never matches.
+ * described and not hidden. The histogram uses only that set, so an undescribed
+ * call cannot become a hiccup. $7 is the hidden set. Minutes keep every
+ * successful named call outside it, visible or undescribed. An unnamed call is
+ * left out.
  * Success is outcome 'success', or any other outcome except failure, error and
  * denied when the payload says success. Those three are failures even if the
  * payload says otherwise. A failed root reply with no successful visible call
@@ -539,8 +544,11 @@ SELECT
       'data', data
     )), '[]'::jsonb)
     FROM calls
-    WHERE tool_name = ANY($6::text[])
-      AND kind = 'ok'
+    WHERE kind = 'ok'
+      AND tool_name IS NOT NULL
+      AND tool_name <> ''
+      AND tool_name <> '[EXTRACTION_FAILED]'
+      AND NOT (tool_name = ANY($7::text[]))
   ) AS saved_calls`;
 
 function sumWindow(values: readonly number[]): number {

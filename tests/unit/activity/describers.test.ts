@@ -8,6 +8,7 @@ import {
   hiddenToolNames,
   isVisibleTool,
   minutesForCall,
+  UNDESCRIBED_CALL_MINUTES,
   timeSavedDetail,
   timeSavedHelp,
   visibleToolNames,
@@ -150,19 +151,15 @@ describe('describeToolCall', () => {
 });
 
 describe('minutesForCall', () => {
-  it('counts one visible action in a turn full of reads and plumbing', () => {
-    const turn = [
-      'contact-lookup',
-      'entity-context',
-      'ceo-inbox-search',
-      'extract-facts',
-      'web-search',
-      'memory-store',
-      'ceo-inbox-draft-reply',
-    ];
-    const minutes = turn.reduce((sum, name) => sum + minutesForCall(call(name, {}, {})), 0);
-    expect(minutes).toBe(5);
-    expect(minutes).toBe(minutesForCall(call('ceo-inbox-draft-reply', {}, {})));
+  it('adds the default for an unlisted tool and zero for hidden plumbing', () => {
+    const unlisted = ['contact-lookup', 'entity-context', 'ceo-inbox-search'];
+    const hidden = ['extract-facts', 'web-search', 'memory-store'];
+    const minutes = [...unlisted, ...hidden, 'ceo-inbox-draft-reply']
+      .reduce((sum, name) => sum + minutesForCall(call(name, {}, {})), 0);
+    expect(minutes).toBeCloseTo(5 + unlisted.length * UNDESCRIBED_CALL_MINUTES);
+    for (const name of hidden) expect(minutesForCall(call(name, {}, {})), name).toBe(0);
+    expect(minutesForCall(call('contact-lookup', {}, {}, false))).toBe(0);
+    expect(minutesForCall(call('   ', {}, {}))).toBe(0);
   });
 
   it('weights an archive, a draft, a send, and a meeting apart', () => {
@@ -173,7 +170,7 @@ describe('minutesForCall', () => {
     expect(minutesForCall(call('email-reply', {}, {}))).toBe(5);
     expect(minutesForCall(call('calendar-create-event', {}, {}))).toBe(10);
     expect(minutesForCall(call('file-parse', {}, {}))).toBe(0);
-    expect(minutesForCall(call('constructor', {}, {}))).toBe(0);
+    expect(minutesForCall(call('constructor', {}, {}))).toBe(UNDESCRIBED_CALL_MINUTES);
     expect(minutesForCall(call('calendar-create-event', {}, {}, false))).toBe(0);
   });
 
@@ -272,7 +269,7 @@ describe('minutesForCall', () => {
 
   it('states the tile definition from the same weights', () => {
     expect(timeSavedHelp()).toBe(
-      "Rough estimate of your time behind the actions in Recent Activity. A meeting ≈10 min, a reply ≈5, filing ≈½. Reads don't count.",
+      "Rough estimate of your time behind the actions in Recent Activity. A meeting ≈10 min, a reply ≈5, filing ≈½. Reads don't count. An unlisted tool ≈0.052 min.",
     );
     expect(timeSavedDetail()).toBe(
       'A new document ≈15 min, an edit ≈3. Scratch notes don\'t count. Each action counts, including a repeat.',

@@ -699,12 +699,23 @@ export function visibleToolNames(): readonly string[] {
 const MINUTES_CTX: DescribeContext = { name: () => null, timezone: 'UTC' };
 
 /**
- * Principal-minutes for one call the activity feed would show.
- * Zero when the call failed, the tool is unknown or hidden, or `done()` returns
- * null (a dry-run merge, a hold that was not placed, scratch notes).
+ * Human-time backstop for a successful call the describers do not name (ADR-058).
+ * The first census spread 2,390 minutes of likely human effort across 45,633
+ * undescribed calls: 2,390 / 45,633 = 0.052 minutes.
+ */
+export const UNDESCRIBED_CALL_MINUTES = 0.052;
+
+/**
+ * Principal-minutes for one successful call.
+ * A named tool uses its describer. A hidden describer, a failed call, a blank
+ * name, or a `done()` that returns null (a dry-run merge, an unplaced hold,
+ * scratch notes) is zero. Any other name is the undescribed-call default.
  */
 export function minutesForCall(call: ToolCall): number {
   if (!call.ok) return 0;
+  if (!hasDescriber(call.toolName)) {
+    return call.toolName.trim().length > 0 ? UNDESCRIBED_CALL_MINUTES : 0;
+  }
   const shown = describeToolCall(call, MINUTES_CTX);
   if (!shown || shown.prominence === 'hidden') return 0;
   const describer = lookup(call.toolName);
@@ -727,7 +738,7 @@ export function timeSavedHelp(): string {
   const reply = flatMinutes('ceo-inbox-draft-reply');
   const filing = flatMinutes('email-archive');
   const filingText = filing === 0.5 ? '½' : String(filing);
-  return `Rough estimate of your time behind the actions in Recent Activity. A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. Reads don't count.`;
+  return `Rough estimate of your time behind the actions in Recent Activity. A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. Reads don't count. An unlisted tool ≈${UNDESCRIBED_CALL_MINUTES} min.`;
 }
 
 /**

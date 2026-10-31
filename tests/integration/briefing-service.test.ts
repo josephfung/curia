@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
-import { timeSavedDetail, timeSavedHelp } from '../../src/activity/describers.js';
+import { timeSavedDetail, timeSavedHelp, UNDESCRIBED_CALL_MINUTES } from '../../src/activity/describers.js';
 import { BriefingService } from '../../src/dashboard/briefing-service.js';
 import { HISTOGRAM_DAYS, STATS_WINDOW_DAYS, addCalendarDays, localDayKey, localMidnight } from '../../src/dashboard/briefing.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
@@ -292,7 +292,7 @@ describeIf('briefing service against Postgres', () => {
     }
   });
 
-  it('sums weighted visible actions and leaves reads and plumbing at zero', async () => {
+  it('sums weighted visible actions, the undescribed default, and zero for hidden plumbing', async () => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
@@ -422,8 +422,11 @@ describeIf('briefing service against Postgres', () => {
 
       const stats = await service.stats(now);
       // 5 draft + 0.5 archive + 10 meeting + 0.5 archive-by-target-id + 0.5 label
-      // + 0.5 skipped-but-successful archive. Dry-run and the non-task invoke add 0.
-      expect(stats.minutesSaved.current).toBeCloseTo(17);
+      // + 0.5 skipped-but-successful archive. Three unlisted lookups add the
+      // default each. extract-facts, web-search, and file-parse add 0. Dry-run
+      // and the non-task invoke add 0.
+      const unlistedLookups = 3 * UNDESCRIBED_CALL_MINUTES;
+      expect(stats.minutesSaved.current).toBeCloseTo(17 + unlistedLookups);
       expect(stats.done.current).toBe(1);
       // The earlier meeting plus the one that started just before this window.
       expect(stats.minutesSaved.previous).toBeCloseTo(20);
