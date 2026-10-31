@@ -26,6 +26,12 @@ export interface AudioTransport {
    * uses it to end the session when the console tab closes without DELETE.
    */
   onClose(cb: (reason: AudioTransportCloseReason) => void): void;
+  /**
+   * The caller's microphone was muted or unmuted by the client. iOS mutes the
+   * track when the installed app is backgrounded; the peer connection stays up.
+   * VoiceRuntime stops speaking and ends the call if the mute lasts the grace period.
+   */
+  onCallerMuted(cb: (muted: boolean) => void): void;
   /** Publish an outbound (assistant / TTS) audio frame to the remote peer. */
   publishAudio(frame: PcmFrame): Promise<void>;
   /**

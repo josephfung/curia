@@ -8,6 +8,7 @@ function props(overrides: Partial<UseVoiceCallResult> = {}): UseVoiceCallResult 
     voiceAvailable: true,
     callState: 'idle',
     muted: false,
+    backgroundPaused: false,
     error: null,
     sessionId: null,
     heardAssistant: false,
@@ -55,6 +56,15 @@ describe('VoiceCallBar (#1571)', () => {
 
   // The muted branch had no coverage at all: `props()` hardcodes `muted: false` and nothing
   // overrode it, so the status string and both mute labels could invert unnoticed.
+  it('says the call is paused when the phone backgrounds the app', () => {
+    const html = renderToStaticMarkup(
+      <VoiceCallBar {...props({ callState: 'connected', heardAssistant: true, backgroundPaused: true })} />,
+    );
+    expect(html).toContain('Paused while Curia is in the background');
+    expect(html).toContain('voice-call-hangup');
+    expect(html).toContain('Hang up');
+  });
+
   it('renders the muted status and Unmute control while muted', () => {
     const html = renderToStaticMarkup(
       <VoiceCallBar {...props({ callState: 'connected', heardAssistant: true, muted: true })} />,

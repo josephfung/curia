@@ -12,9 +12,11 @@ function statusText(
   callState: UseVoiceCallResult['callState'],
   muted: boolean,
   heardAssistant: boolean,
+  backgroundPaused: boolean,
 ): string {
   if (callState === 'connecting') return 'Connecting…';
   if (callState === 'connected') {
+    if (backgroundPaused) return 'Paused while Curia is in the background';
     if (!heardAssistant) return 'Greeting…';
     return muted ? 'On call · muted' : 'Listening…';
   }
@@ -25,6 +27,7 @@ export function VoiceCallBar({
   voiceAvailable,
   callState,
   muted,
+  backgroundPaused,
   error,
   heardAssistant = false,
   startCall,
@@ -58,7 +61,7 @@ export function VoiceCallBar({
   return (
     <div className={`voice-call-bar ${callState}`} role="status" aria-live="polite">
       <span className="voice-call-live-dot" aria-hidden="true" />
-      <span className="voice-call-status">{statusText(callState, muted, heardAssistant)}</span>
+      <span className="voice-call-status">{statusText(callState, muted, heardAssistant, backgroundPaused)}</span>
       {error && <span className="voice-call-error">{error}</span>}
       <span className="voice-call-spacer" />
       <button
@@ -73,7 +76,7 @@ export function VoiceCallBar({
       </button>
       <button
         type="button"
-        className="btn btn-danger btn-sm"
+        className="btn btn-danger btn-sm voice-call-hangup"
         onClick={() => void hangUp()}
         aria-label="Hang up voice call"
       >

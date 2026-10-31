@@ -168,6 +168,11 @@ export interface ToolContext {
    *  (e.g., resolving a caller's registered calendars, looking up contacts).
    *  Populated whenever the ExecutionLayer has a contactService instance. */
   contactService?: import('../contacts/contact-service.js').ContactService;
+  /**
+   * True when a paired phone has a live push subscription. Set only for
+   * setup-status. Absent means the check cannot run and the task stays pending.
+   */
+  phoneAppReady?: () => Promise<boolean>;
   /** Contact confidence scoring pipeline — available to skills declaring 'confidencePipeline'
    *  in capabilities. Skills that modify trust-related data (trust level, identity pairings)
    *  should declare this capability and fire scoring signals through it. */

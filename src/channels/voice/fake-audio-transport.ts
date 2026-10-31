@@ -14,6 +14,7 @@ export class FakeAudioTransport implements AudioTransport {
 
   private readonly remoteCallbacks: Array<(frame: PcmFrame) => void> = [];
   private readonly closeCallbacks: Array<(reason: AudioTransportCloseReason) => void> = [];
+  private readonly callerMutedCallbacks: Array<(muted: boolean) => void> = [];
 
   async connect(): Promise<void> {
     this.connected = true;
@@ -30,6 +31,10 @@ export class FakeAudioTransport implements AudioTransport {
 
   onClose(cb: (reason: AudioTransportCloseReason) => void): void {
     this.closeCallbacks.push(cb);
+  }
+
+  onCallerMuted(cb: (muted: boolean) => void): void {
+    this.callerMutedCallbacks.push(cb);
   }
 
   async publishAudio(frame: PcmFrame): Promise<void> {
@@ -55,5 +60,10 @@ export class FakeAudioTransport implements AudioTransport {
   /** Test helper: simulate principal/room disconnect (must not be used from disconnect()). */
   emitClose(reason: AudioTransportCloseReason = 'principal_disconnected'): void {
     for (const cb of this.closeCallbacks) cb(reason);
+  }
+
+  /** Test helper: the caller's mic was muted or unmuted without leaving the room. */
+  emitCallerMuted(muted: boolean): void {
+    for (const cb of this.callerMutedCallbacks) cb(muted);
   }
 }

@@ -82,6 +82,7 @@ export class SignalAudioTransport implements AudioTransport {
 
   private readonly remoteCallbacks: Array<(frame: PcmFrame) => void> = [];
   private readonly closeCallbacks: Array<(reason: AudioTransportCloseReason) => void> = [];
+  private readonly callerMutedCallbacks: Array<(muted: boolean) => void> = [];
 
   // `closing` distinguishes an intentional local disconnect() from an
   // unexpected child exit/error — only the latter fires close callbacks,
@@ -260,6 +261,12 @@ export class SignalAudioTransport implements AudioTransport {
 
   onClose(cb: (reason: AudioTransportCloseReason) => void): void {
     this.closeCallbacks.push(cb);
+  }
+
+  onCallerMuted(cb: (muted: boolean) => void): void {
+    // A Signal call has no installed-app background mute. The callback is kept
+    // so the runtime can register one transport path for every call.
+    this.callerMutedCallbacks.push(cb);
   }
 
   async publishAudio(frame: PcmFrame): Promise<void> {

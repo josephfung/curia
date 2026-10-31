@@ -206,6 +206,8 @@ function makeRuntime(overrides: {
   createTransport?: (opts: { roomName: string; token: string; livekitUrl: string; callerIdentity: string }) => FakeAudioTransport;
   /** End-of-speech hold (#2240). Defaults to 0 here so a final starts its turn at once. */
   turnHoldMs?: number;
+  /** Background-mute grace. Tests pass a few dozen milliseconds. */
+  pauseGraceMs?: number;
   maxUtteranceBytes?: number;
   logger?: Logger;
 }) {
@@ -238,6 +240,7 @@ function makeRuntime(overrides: {
     historyReadTimeoutMs: overrides.historyReadTimeoutMs,
     outboundContextService: overrides.outboundContextService,
     turnHoldMs: overrides.turnHoldMs ?? 0,
+    pauseGraceMs: overrides.pauseGraceMs,
     maxUtteranceBytes: overrides.maxUtteranceBytes,
   });
   if (overrides.bridge) runtime.configureTools(overrides.bridge);
@@ -3160,6 +3163,64 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     const llm = await callWithNotes({ content: 'Notes could not be started for this call.', is_error: true });
     const last = systemText(llm.seenMessages[llm.seenMessages.length - 1] ?? []);
     expect(last).not.toContain('## Meeting notes');
+  });
+
+  it('does not speak into a muted call and ends it after the pause grace', async () => {
+    const llm = new FakeStreamProvider([
+      [
+        { type: 'text_delta', text: 'Hi there. ' },
+        { type: 'message_end', content: 'Hi there.', usage, provenance },
+      ],
+    ]);
+    const { store, endReasons } = fakeStore();
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(3, 1),
+      store,
+      pauseGraceMs: 30,
+    });
+
+    await runtime.startSession({
+      sessionId: 's-pause',
+      conversationId: 'voice:s-pause',
+      roomName: 'voice-s-pause',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    transport.emitCallerMuted(true);
+    stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-pause');
+    expect(transport.publishedFrames.length).toBe(0);
+    await vi.waitFor(() => {
+      expect(endReasons).toContain('pause_grace');
+    });
+  });
+
+  it('keeps the call when the mic unmutes before the pause grace', async () => {
+    const llm = new FakeStreamProvider([[]]);
+    const { store, endReasons } = fakeStore();
+    const { runtime, transport } = makeRuntime({
+      llm,
+      store,
+      pauseGraceMs: 80,
+    });
+
+    await runtime.startSession({
+      sessionId: 's-unpause',
+      conversationId: 'voice:s-unpause',
+      roomName: 'voice-s-unpause',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    transport.emitCallerMuted(true);
+    transport.emitCallerMuted(false);
+    await delay(120);
+    expect(endReasons).not.toContain('pause_grace');
+    await runtime.endSession('s-unpause', 'test');
   });
 
   // #2347: one recap, one path. The delegation sentence must agree with the

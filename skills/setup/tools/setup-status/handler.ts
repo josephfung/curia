@@ -12,7 +12,8 @@ type CompletionCheck =
   | { type: 'scheduler_has_active_debrief' }
   | { type: 'always_available' }
   | { type: 'principal_profile' }
-  | { type: 'vault_secrets_all'; keys: string[] };
+  | { type: 'vault_secrets_all'; keys: string[] }
+  | { type: 'paired_push_subscription' };
 
 interface CatalogTask {
   id: string;
@@ -162,6 +163,15 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
+      let phoneReady = false;
+      if (ctx.phoneAppReady) {
+        try {
+          phoneReady = await ctx.phoneAppReady();
+        } catch (err) {
+          ctx.log.warn({ err }, 'setup-status: phone app check failed — reporting pending');
+        }
+      }
+
       const annotated: CatalogTaskWithStatus[] = tasks.map(task => {
         let done = false;
         // Cast to include undefined: catalog.yaml is loaded without per-entry validation,
@@ -184,6 +194,9 @@ export class SetupStatusHandler implements ToolHandler {
               break;
             case 'vault_secrets_all':
               done = check.keys.every(k => secretPresent(ctx, k));
+              break;
+            case 'paired_push_subscription':
+              done = phoneReady;
               break;
           }
         } else {

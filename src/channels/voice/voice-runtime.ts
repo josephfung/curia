@@ -426,6 +426,11 @@ export interface VoiceRuntimeConfig {
    */
   turnHoldMs?: number;
   /**
+   * How long a caller-mic mute (the installed app in the background) may last
+   * before the call ends. Default two minutes. A disconnect still ends immediately.
+   */
+  pauseGraceMs?: number;
+  /**
    * IANA timezone for the per-turn date/time block (same block the coordinator
    * gets — formatTimeContextBlock). Without it, "tomorrow / next week" is
    * un-anchored for every voice tool call (#1551). Omitted → no time block.
@@ -613,6 +618,10 @@ interface ActiveSession {
   audioStats: { chunks: number; audioMs: number; gapMs: number; starvedMs: number; starvedCount: number };
   /** Event-loop delay over the call; the host shares one small box (#2379). */
   loopDelay: ELDHistogram;
+  /** The caller's mic is muted, so TTS must not be published. */
+  callerMuted: boolean;
+  /** Fires when a background mute outlasts the grace period. */
+  pauseTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /** A session whose end is in progress: one caller tears it down and persists it. */
@@ -745,6 +754,8 @@ export class VoiceRuntime {
         turnAudioMs: 0,
         audioStats: { chunks: 0, audioMs: 0, gapMs: 0, starvedMs: 0, starvedCount: 0 },
         loopDelay: monitorEventLoopDelay({ resolution: 10 }),
+        callerMuted: false,
+        pauseTimer: null,
       };
       session.loopDelay.enable();
       this.sessions.set(params.sessionId, session);
@@ -761,6 +772,10 @@ export class VoiceRuntime {
         if (session.ending) return;
         this.log.info({ sessionId: params.sessionId, reason }, 'Audio transport closed; ending voice session');
         void this.endSessionWith(params.sessionId, reason, true);
+      });
+
+      transport.onCallerMuted(muted => {
+        this.handleCallerMuted(session, muted);
       });
 
       // Handle transcripts (interim → barge-in; final+endpoint → turn).
@@ -1391,7 +1406,7 @@ export class VoiceRuntime {
     opts: { onFirstAudio?: () => void },
   ): (sentence: string, meta: { streamId: string }) => Promise<void> {
     return async (sentence: string, meta: { streamId: string }): Promise<void> => {
-      if (controller.signal.aborted || session.ending) return;
+      if (controller.signal.aborted || session.ending || session.callerMuted) return;
       // A prod signal for #2379, not a filter: the sentence is still spoken.
       // Terms only — the sentence itself is call content.
       const jargon = findInternalJargon(sentence);
@@ -1419,7 +1434,7 @@ export class VoiceRuntime {
           sampleRate: session.publishSampleRate,
           signal: controller.signal,
         })) {
-          if (controller.signal.aborted || session.ending) break;
+          if (controller.signal.aborted || session.ending || session.callerMuted) break;
           opts.onFirstAudio?.();
           const arrivedAt = Date.now();
           // The turn's first frame starts from silence, so only later frames can find the clock dry.
@@ -2020,6 +2035,35 @@ export class VoiceRuntime {
     });
   }
 
+  /**
+   * A muted caller mic means the installed app is in the background. Stop
+   * speaking immediately. End the call if it stays muted for the grace period.
+   * Unmute cancels that timer; a disconnect still ends the call at once.
+   */
+  private handleCallerMuted(session: ActiveSession, muted: boolean): void {
+    if (session.ending) return;
+    if (muted) {
+      session.callerMuted = true;
+      if (session.currentController && !session.currentController.signal.aborted) {
+        session.currentController.abort();
+      }
+      if (session.pauseTimer) return;
+      const graceMs = this.config.pauseGraceMs ?? 120_000;
+      session.pauseTimer = setTimeout(() => {
+        session.pauseTimer = null;
+        if (session.ending || !session.callerMuted) return;
+        this.log.info({ sessionId: session.sessionId }, 'voice pause grace elapsed; ending session');
+        void this.endSession(session.sessionId, 'pause_grace');
+      }, graceMs);
+      return;
+    }
+    session.callerMuted = false;
+    if (session.pauseTimer) {
+      clearTimeout(session.pauseTimer);
+      session.pauseTimer = null;
+    }
+  }
+
   async endSession(sessionId: string, reason: string): Promise<VoiceSessionRecord | null> {
     return this.endSessionWith(sessionId, reason, false);
   }
@@ -2090,6 +2134,10 @@ export class VoiceRuntime {
     if (session.holdTimer) {
       clearTimeout(session.holdTimer);
       session.holdTimer = null;
+    }
+    if (session.pauseTimer) {
+      clearTimeout(session.pauseTimer);
+      session.pauseTimer = null;
     }
     // Taken in the same tick as `ending` is set, so a drain that runs later
     // finds nothing to join; paired below rather than left unpaired.

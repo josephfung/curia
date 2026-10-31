@@ -30,6 +30,8 @@ export interface UseVoiceCallResult {
    * the agent publishes a silent audio track at connect time.
    */
   heardAssistant: boolean;
+  /** The mic was muted by the phone, not by the Mute button. */
+  backgroundPaused: boolean;
   startCall: () => Promise<void>;
   toggleMute: () => Promise<void>;
   hangUp: () => Promise<void>;
@@ -70,6 +72,8 @@ export function useVoiceCall(): UseVoiceCallResult {
   const [voiceAvailable, setVoiceAvailable] = useState(false);
   const [callState, setCallState] = useState<VoiceCallState>('idle');
   const [muted, setMuted] = useState(false);
+  const [backgroundPaused, setBackgroundPaused] = useState(false);
+  const userMuteRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [heardAssistant, setHeardAssistant] = useState(false);
@@ -215,6 +219,17 @@ export function useVoiceCall(): UseVoiceCallResult {
           if (mountedRef.current) setHeardAssistant(true);
         }
       });
+      callRoom.on(RoomEvent.TrackMuted, (publication, participant) => {
+        if (participant.identity !== callRoom.localParticipant.identity) return;
+        if (publication.kind !== Track.Kind.Audio) return;
+        if (userMuteRef.current) return;
+        if (mountedRef.current) setBackgroundPaused(true);
+      });
+      callRoom.on(RoomEvent.TrackUnmuted, (publication, participant) => {
+        if (participant.identity !== callRoom.localParticipant.identity) return;
+        if (publication.kind !== Track.Kind.Audio) return;
+        if (mountedRef.current) setBackgroundPaused(false);
+      });
       callRoom.on(RoomEvent.Disconnected, () => {
         if (roomRef.current !== callRoom) return;
         resetLocalCall(callRoom);
@@ -261,6 +276,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     if (!room || callState !== 'connected') return;
 
     const nextMuted = !muted;
+    userMuteRef.current = nextMuted;
     try {
       await room.localParticipant.setMicrophoneEnabled(!nextMuted);
       if (mountedRef.current) {
@@ -268,6 +284,7 @@ export function useVoiceCall(): UseVoiceCallResult {
         setError(null);
       }
     } catch (err) {
+      userMuteRef.current = muted;
       if (mountedRef.current) setError(voiceErrorMessage(err));
     }
   }, [callState, muted]);
@@ -305,6 +322,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     voiceAvailable,
     callState,
     muted,
+    backgroundPaused,
     error,
     sessionId,
     heardAssistant,

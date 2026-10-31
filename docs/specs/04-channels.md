@@ -142,6 +142,7 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - **Shared prompt modules (ADR-038, #1595):** voice and the text coordinator compose the same guardrail modules from `src/agents/prompts/` (the date-resolve guardrail first) rather than maintaining two drifting prompts. Only modules that measurably pay for themselves are composed; the rest stay on hold.
 - **Trust:** `high`, `unknown_sender: ignore`, `threaded: false` (`config/channel-trust.yaml`). Console calls are authenticated as the principal by the bootstrap secret; Signal calls carry the caller's own resolved tier as described above rather than inheriting the channel's `high`.
 - **Health:** three probes cover distinct failure modes — `signal` (Signal messaging RPC socket), `voice` (LiveKit management `listRooms()`), and `signal_voice` (a **connect** to the shared PulseAudio socket, #1760). See [spec 08](08-operations.md#health--monitoring).
+- **Background pause (#2341):** when the installed app is backgrounded, the phone mutes the caller mic and the room stays up. The console shows "Paused while Curia is in the background". Curia does not speak into that muted call. The server ends the call after about two minutes of pause, or immediately when the participant disconnects.
 - **Scope:** PSTN/SIP remains a deferred transport that should reuse `VoiceRuntime`.
 
 ### HTTP

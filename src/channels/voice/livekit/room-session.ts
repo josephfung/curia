@@ -68,6 +68,7 @@ export class LiveKitRoomSession implements AudioTransport {
   private readonly readers = new Set<ReadableStreamDefaultReader<AudioFrame>>();
   private readonly remoteCallbacks: Array<(frame: PcmFrame) => void> = [];
   private readonly closeCallbacks: Array<(reason: AudioTransportCloseReason) => void> = [];
+  private readonly callerMutedCallbacks: Array<(muted: boolean) => void> = [];
   private connected = false;
   private disconnecting = false;
   private closeEmitted = false;
@@ -128,6 +129,19 @@ export class LiveKitRoomSession implements AudioTransport {
           this.log.info({ identity: participant.identity }, 'Caller left LiveKit room');
           this.emitClose('principal_disconnected');
         }
+      });
+
+      // iOS mutes the mic when the installed app is backgrounded. The room stays
+      // connected. VoiceRuntime stops speaking and starts the pause grace period.
+      room.on(rtc.RoomEvent.TrackMuted, (publication, participant) => {
+        if (participant.identity !== callerIdentity) return;
+        if (publication.kind !== rtc.TrackKind.KIND_AUDIO) return;
+        this.emitCallerMuted(true);
+      });
+      room.on(rtc.RoomEvent.TrackUnmuted, (publication, participant) => {
+        if (participant.identity !== callerIdentity) return;
+        if (publication.kind !== rtc.TrackKind.KIND_AUDIO) return;
+        this.emitCallerMuted(false);
       });
 
       room.on(rtc.RoomEvent.Disconnected, () => {
@@ -216,6 +230,20 @@ export class LiveKitRoomSession implements AudioTransport {
 
   onClose(cb: (reason: AudioTransportCloseReason) => void): void {
     this.closeCallbacks.push(cb);
+  }
+
+  onCallerMuted(cb: (muted: boolean) => void): void {
+    this.callerMutedCallbacks.push(cb);
+  }
+
+  private emitCallerMuted(muted: boolean): void {
+    for (const cb of this.callerMutedCallbacks) {
+      try {
+        cb(muted);
+      } catch (err) {
+        this.log.warn({ err, muted }, 'audio transport onCallerMuted callback threw');
+      }
+    }
   }
 
   async publishAudio(frame: PcmFrame): Promise<void> {

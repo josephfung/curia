@@ -118,6 +118,7 @@ class FakeCallTransport {
   disconnect = vi.fn(async () => undefined);
   onRemoteAudio = vi.fn();
   onClose = vi.fn();
+  onCallerMuted = vi.fn();
   publishAudio = vi.fn(async () => undefined);
 }
 

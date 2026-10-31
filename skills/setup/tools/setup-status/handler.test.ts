@@ -72,6 +72,7 @@ function makeCtx(overrides: Partial<{
   secretError: Error;
   principal: { pronouns: string | null } | null;
   principalLookupError: Error;
+  phoneAppReady: () => Promise<boolean>;
 }> = {}): ToolContext {
   const secrets = overrides.secrets ?? {};
   return {
@@ -111,6 +112,7 @@ function makeCtx(overrides: Partial<{
         return jobs as unknown[];
       }),
     } as unknown as ToolContext['schedulerService'],
+    ...(overrides.phoneAppReady ? { phoneAppReady: overrides.phoneAppReady } : {}),
   } as unknown as ToolContext;
 }
 
@@ -167,6 +169,24 @@ describe('setup-status', () => {
       const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
       const debrief = data.tasks.find(t => t.id === 'debrief');
       expect(debrief?.status).toBe('pending');
+    });
+
+    it('phone_app: done when a paired phone has a live notification subscription', async () => {
+      const result = await handler.execute(makeCtx({ phoneAppReady: async () => true }));
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; docs_url: string | null }> } }).data;
+      const task = data.tasks.find(t => t.id === 'phone_app');
+      expect(task?.status).toBe('done');
+      expect(task?.docs_url).toBeNull();
+    });
+
+    it('phone_app: pending when the check is absent or reports no subscription', async () => {
+      for (const ctx of [makeCtx(), makeCtx({ phoneAppReady: async () => false })]) {
+        const result = await handler.execute(ctx);
+        expect(result.success).toBe(true);
+        const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
+        expect(data.tasks.find(t => t.id === 'phone_app')?.status).toBe('pending');
+      }
     });
 
     it('capability_tour: always done', async () => {

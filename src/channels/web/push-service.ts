@@ -520,6 +520,19 @@ function setupDetail(status: number, err: unknown): string {
   return `Push setup was rejected (${status}): ${clean}`;
 }
 
+/** A paired phone still has a push subscription. Used by the setup catalog. */
+export async function hasLivePairedSubscription(pool: WebThreadQueryable): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1
+     FROM push_subscriptions
+     JOIN sessions ON sessions.id = push_subscriptions.session_id
+     WHERE sessions.kind = 'paired_device'
+       AND sessions.expires_at > NOW()
+     LIMIT 1`,
+  );
+  return result.rows.length > 0;
+}
+
 /** True when this origin can be a VAPID subject Apple will accept. */
 export function vapidSubject(
   appOrigin: string | undefined,
