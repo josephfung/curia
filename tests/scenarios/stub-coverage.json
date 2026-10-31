@@ -396,12 +396,16 @@
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
     "inbox cron leaves a running drain cycle alone": {
-      "unstubbed": null,
-      "reason": "New in #2378; not yet run (paid suite, awaiting the maintainer's go-ahead)."
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-31T16:31:30.100Z"
     },
     "inbox cron takes over a stalled drain task": {
-      "unstubbed": null,
-      "reason": "New in #2378; not yet run (paid suite, awaiting the maintainer's go-ahead)."
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-31T16:32:10.745Z"
     },
     "inbox delegated rules request runs no triage": {
       "unstubbed": 0,
@@ -417,15 +421,15 @@
     },
     "inbox drain wake completes the drain task when empty": {
       "unstubbed": 0,
-      "runs": 5,
+      "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-10-31T16:36:20.166Z"
     },
     "inbox drain wake triages and re-arms the drain task": {
       "unstubbed": 0,
-      "runs": 5,
+      "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-10-31T16:36:03.752Z"
     },
     "inbox fixes a draft in place instead of recreating it": {
       "unstubbed": 0,
@@ -435,9 +439,9 @@
     },
     "inbox makes no promise it cannot back with a task": {
       "unstubbed": 0,
-      "runs": 5,
+      "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-10-31T16:35:38.333Z"
     },
     "inbox peer request answered on the thread": {
       "unstubbed": 0,
@@ -465,9 +469,9 @@
     },
     "inbox triage settles each message's end state": {
       "unstubbed": 0,
-      "runs": 5,
+      "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-10-31T16:34:01.864Z"
     },
     "mid-turn correction switches the sign-in channel": {
       "unstubbed": 0,
