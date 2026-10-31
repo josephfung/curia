@@ -228,6 +228,54 @@ describe('DelegateHandler date-resolve brief validation (#1612)', () => {
     expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
   });
 
+  // #2379: the model writes the date into the brief; the clock confirms it, so no
+  // date-resolve round. These are the briefs from two voice calls prod refused.
+  describe('checked against the clock', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('sends a brief whose stated date matches today', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-31T16:45:00Z') });
+      const { bus, published } = makeBus();
+      useCalendarRegistry();
+      const task = 'Give the principal a summary of his calendar for today, Saturday October 31, 2026, America/Toronto.';
+
+      const result = await new DelegateHandler().execute(
+        makeCtx(bus, { input: { agent: 'calendar', task }, timezone: 'America/Toronto' }),
+      );
+      expect(result.success).toBe(true);
+      const sent = published.find(e => e.type === 'agent.task') as AgentTaskEvent | undefined;
+      expect(sent?.payload.content).toBe(task);
+    });
+
+    it('adds the date to a brief that only says "tomorrow"', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-31T16:45:00Z') });
+      const { bus, published } = makeBus();
+      useCalendarRegistry();
+
+      const result = await new DelegateHandler().execute(
+        makeCtx(bus, { input: { agent: 'calendar', task: "What's on my calendar tomorrow?" }, timezone: 'America/Toronto' }),
+      );
+      expect(result.success).toBe(true);
+      const sent = published.find(e => e.type === 'agent.task') as AgentTaskEvent | undefined;
+      expect(sent?.payload.content).toBe("What's on my calendar tomorrow?\n\n(Dates: tomorrow is Sunday, November 1, 2026.)");
+    });
+
+    it('rejects a brief whose weekday contradicts its date', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-31T16:45:00Z') });
+      const { bus, published } = makeBus();
+      useCalendarRegistry();
+
+      const result = await new DelegateHandler().execute(
+        makeCtx(bus, { input: { agent: 'calendar', task: 'Calendar for today, Friday, October 31, 2026.' }, timezone: 'America/Toronto' }),
+      );
+      if (result.success) throw new Error('expected a contradicted brief to be rejected');
+      expect(result.error).toMatch(/which is a Saturday/);
+      expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
+    });
+  });
+
   it('skips date validation when resuming with a resume_token', async () => {
     const { bus, published } = makeBus();
     useCalendarRegistry();

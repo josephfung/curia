@@ -19,10 +19,20 @@ export interface ValidateDelegateBriefDatesInput {
   agent: string;
   task: string;
   priorDateResolves: readonly TurnDateResolveResult[];
+  /**
+   * The current time in the office timezone. When present, a brief with no
+   * date-resolve this turn is checked against the clock instead of refused
+   * outright (#2379); see {@link verifyBriefDatesAgainstClock}.
+   */
+  now?: DateTime;
 }
 
+/**
+ * `task` is set when the brief was accepted with a note naming the dates its
+ * day words resolve to; the caller sends that brief instead of the original.
+ */
 export type ValidateDelegateBriefDatesResult =
-  | { ok: true }
+  | { ok: true; task?: string }
   | { ok: false; error: string };
 
 const CALENDAR_AGENT_PATTERN = /calendar/i;
@@ -187,30 +197,168 @@ export function briefContainsResolvedDate(
   return monthDayCitedWithoutConflictingYear(brief, [month, monthShort], day, year);
 }
 
+const MONTH_NAME =
+  'january|february|march|april|may|june|july|august|september|october|november|december' +
+  '|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec';
+
+/** "October 31, 2026", "Oct 19", "Nov 1st 2026", or "2026-10-31". Groups: month, day, year | iso. */
+const CONCRETE_DATE = String.raw`(?:(${MONTH_NAME})\.?\s+(\d{1,2})${DAY_ORDINAL}?\b(?:,?\s+(\d{4})\b)?|(\d{4}-\d{2}-\d{2})\b)`;
+
+/** A weekday written directly before a concrete date: "Saturday, October 31, 2026". */
+const WEEKDAY_WITH_DATE = new RegExp(String.raw`\b(${WEEKDAY})\b,?\s+${CONCRETE_DATE}`, 'gi');
+const ANY_WEEKDAY = new RegExp(String.raw`\b(?:${WEEKDAY})\b`, 'gi');
+const QUALIFIED_WEEKDAY = new RegExp(String.raw`\b(?:next|this)\s+(?:${WEEKDAY})\b`, 'i');
+const DAY_WORD = new RegExp(String.raw`\b(${RELATIVE_DAY_WORDS})\b`, 'gi');
+const SHORT_WEEKDAY = 'mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun';
+/**
+ * A day word with the date it names written right after it: "today, Saturday,
+ * October 31, 2026", "tomorrow's calendar (Thu Oct 22, 2026)", "yesterday (Oct 27)".
+ */
+const DAY_WORD_WITH_DATE = new RegExp(
+  String.raw`\b(${RELATIVE_DAY_WORDS})(?:'s)?(?:\s+calendar)?\s*[,(]?\s*(?:(?:${WEEKDAY}|${SHORT_WEEKDAY})\.?,?\s+)?${CONCRETE_DATE}`,
+  'gi',
+);
+
+/** The date a CONCRETE_DATE match names; a missing year is the one nearest `now`. */
+function concreteDate(match: RegExpExecArray, offset: number, now: DateTime): DateTime | null {
+  const [month, day, year, iso] = match.slice(offset, offset + 4);
+  if (iso) {
+    const dt = DateTime.fromISO(iso, { zone: now.zone });
+    return dt.isValid ? dt : null;
+  }
+  const parse = (y: number): DateTime | null => {
+    const dt = DateTime.fromFormat(`${month!.slice(0, 3)} ${day} ${y}`, 'LLL d yyyy', { zone: now.zone });
+    return dt.isValid ? dt : null;
+  };
+  if (year) return parse(Number(year));
+  const candidates = [now.year - 1, now.year, now.year + 1]
+    .map(parse)
+    .filter((dt): dt is DateTime => dt !== null);
+  if (candidates.length === 0) return null;
+  return candidates.reduce((best, dt) =>
+    Math.abs(dt.diff(now).toMillis()) < Math.abs(best.diff(now).toMillis()) ? dt : best);
+}
+
+export type ClockVerification =
+  | { status: 'verified'; resolved: TurnDateResolveResult[]; task: string }
+  | { status: 'contradicted'; error: string }
+  /** Phrasing the clock alone cannot settle ("next Monday", a weekday with no date). */
+  | { status: 'unverifiable' };
+
+/**
+ * Check a calendar brief's day phrasing against the clock, so a brief that
+ * already states its dates needs no date-resolve round (#2379). The model
+ * nearly always writes "today, Saturday, October 31, 2026"; the gate used to
+ * refuse that and cost a round (98 refusals in 30 days of prod, 82 of them
+ * from scheduled jobs). What it still catches is what #1612 is for: a wrong
+ * date. Day words resolve from `now`. A weekday must sit directly before a date
+ * and be that date's weekday. "next/this <weekday>" and a weekday with no date
+ * are left to date-resolve. Day words whose date the brief does not state get
+ * a note appended, so the specialist reads an absolute date.
+ */
+export function verifyBriefDatesAgainstClock(task: string, now: DateTime): ClockVerification {
+  if (QUALIFIED_WEEKDAY.test(task)) return { status: 'unverifiable' };
+
+  const resolved: TurnDateResolveResult[] = [];
+  const record = (dt: DateTime): void => {
+    const isoDate = dt.toISODate();
+    if (isoDate && !resolved.some(r => r.isoDate === isoDate)) {
+      resolved.push({ isoDate, formatted: dt.toFormat('cccc, LLLL d, yyyy') });
+    }
+  };
+
+  // Every weekday must be one written before a date, and must match it.
+  const weekdayCount = [...task.matchAll(ANY_WEEKDAY)].length;
+  let pairedCount = 0;
+  for (const match of task.matchAll(WEEKDAY_WITH_DATE)) {
+    const dt = concreteDate(match, 2, now);
+    if (!dt) return { status: 'unverifiable' };
+    const written = match[1]!;
+    if (dt.toFormat('cccc').toLowerCase() !== written.toLowerCase()) {
+      return {
+        status: 'contradicted',
+        error:
+          `Brief says ${written} for ${dt.toFormat('LLLL d, yyyy')}, which is a ${dt.toFormat('cccc')}. ` +
+          'Correct the date or the weekday (date-resolve can check it), then delegate again.',
+      };
+    }
+    pairedCount += 1;
+    record(dt);
+  }
+  if (pairedCount < weekdayCount) return { status: 'unverifiable' };
+
+  // A day word written beside a date must name that date: "today, Saturday, October 24"
+  // on the 31st is a wrong date, even though the 24th is a Saturday.
+  for (const match of task.matchAll(DAY_WORD_WITH_DATE)) {
+    const word = match[1]!.toLowerCase();
+    const written = concreteDate(match, 2, now);
+    if (!written) return { status: 'unverifiable' };
+    const actual = now.startOf('day').plus({ days: RELATIVE_DAY_OFFSETS.get(word)! });
+    if (written.toISODate() !== actual.toISODate()) {
+      return {
+        status: 'contradicted',
+        error:
+          `Brief says ${word} is ${written.toFormat('LLLL d, yyyy')}, but ${word} is ` +
+          `${actual.toFormat('cccc, LLLL d, yyyy')}. Correct the date, then delegate again.`,
+      };
+    }
+  }
+
+  const notes: string[] = [];
+  for (const match of task.matchAll(DAY_WORD)) {
+    const word = match[1]!.toLowerCase();
+    const dt = now.startOf('day').plus({ days: RELATIVE_DAY_OFFSETS.get(word)! });
+    record(dt);
+    const result = resolved.find(r => r.isoDate === dt.toISODate())!;
+    if (!briefContainsResolvedDate(task, result) && !notes.some(n => n.startsWith(`${word} `))) {
+      notes.push(`${word} is ${result.formatted}`);
+    }
+  }
+
+  return {
+    status: 'verified',
+    resolved,
+    task: notes.length > 0 ? `${task}\n\n(Dates: ${notes.join('; ')}.)` : task,
+  };
+}
+
 export function validateDelegateBriefDates(
   input: ValidateDelegateBriefDatesInput,
 ): ValidateDelegateBriefDatesResult {
-  const { agent, task, priorDateResolves } = input;
+  const { agent, priorDateResolves: turnResolves, now } = input;
+  let { task } = input;
+  let priorDateResolves = turnResolves;
+  let rewritten = false;
 
   if (!isCalendarDelegation(agent, task)) {
     return { ok: true };
   }
 
   const needsResolved = calendarBriefNeedsResolvedDate(task);
-  const hasDateLike = briefHasDateLikeContent(task);
 
-  // Relative/day-of-week asks must call date-resolve this turn. The error names the next step
-  // (#2227): with the bare refusal, a coordinator sometimes gave up on the calendar and went
-  // on without reading it (scenario 25k: a booking-page slot picked blind, 2 of 9 runs).
+  // Relative/day-of-week asks need a resolved date this turn. A brief that states its dates
+  // is checked against the clock instead of costing a date-resolve round (#2379). Otherwise
+  // the error names the next step (#2227): with the bare refusal, a coordinator sometimes
+  // gave up on the calendar and went on without reading it (scenario 25k: a booking-page
+  // slot picked blind, 2 of 9 runs).
   if (needsResolved && priorDateResolves.length === 0) {
-    return {
-      ok: false,
-      error:
-        'Calendar specialist requires date-resolve first — no resolved date was produced this turn. ' +
-        'Call date-resolve for the days the brief names ("next week", "Monday"), then delegate again ' +
-        'with the resolved dates in the brief.',
-    };
+    const checked = now ? verifyBriefDatesAgainstClock(task, now) : { status: 'unverifiable' as const };
+    if (checked.status === 'contradicted') return { ok: false, error: checked.error };
+    if (checked.status === 'unverifiable') {
+      return {
+        ok: false,
+        error:
+          'Calendar specialist requires date-resolve first — no resolved date was produced this turn. ' +
+          'Call date-resolve for the days the brief names ("next week", "Monday"), then delegate again ' +
+          'with the resolved dates in the brief.',
+      };
+    }
+    rewritten = checked.task !== task;
+    task = checked.task;
+    priorDateResolves = checked.resolved;
   }
+
+  const hasDateLike = briefHasDateLikeContent(task);
 
   // When the brief states a date (relative ask, or concrete date-like text) and
   // date-resolve already ran, require the brief to cite one of those results.
@@ -228,7 +376,7 @@ export function validateDelegateBriefDates(
     }
   }
 
-  return { ok: true };
+  return rewritten ? { ok: true, task } : { ok: true };
 }
 
 /** Tracks date-resolve outputs within one agent turn (text or voice). */

@@ -113,6 +113,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Voice turn hold** — 350 ms instead of 600, so replies start sooner; `channels.voice.turn_hold_ms` overrides. (#2379)
+- **Calendar date check** — briefs that state correct dates skip date-resolve; wrong weekdays or dates are still refused. (#2379)
 - **Voice phrasing** — calls no longer name specialists, the coordinator or the off-ramp. (#2379)
 - **Voice barge-in** — logged at info with detection time and queued audio; console calls drop queued audio. (#2379)
 - **agent.task / llm.call / llm.error / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started`, `reasoning_delta` and `output_started` added. (#2371)
@@ -239,6 +240,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`voice.session.ended`** — keeps `turnStats` when the transport and Signal hangup paths race. (#2379)
+- **Voice filler** — "One moment." plays once per turn, not once per tool round. (#2379)
 - **Principal inbox paging** — follow-up pages keep their folder/unread filters, ending drain re-triage of handled mail. (#2377)
 - **Calendar write tools** — `calendar-create-event` and `calendar-update-event` refuse undeclared inputs instead of silently dropping them. (#2385)
 - **Signal call bridge** — logs every call event; a call ended mid-resolution is skipped with its reason. (#2372)

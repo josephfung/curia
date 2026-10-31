@@ -53,6 +53,7 @@ import {
   formatPausedProgressMessage,
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
+import { DateTime } from 'luxon';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 import {
   CLARIFICATION_NEXT_STEP,
@@ -373,6 +374,17 @@ function formatStructuredFailureMessage(agent: string, reason: AgentResponseFail
 }
 
 
+/**
+ * The current time in the office timezone, for checking a calendar brief's dates
+ * against the clock (#2379). Undefined for a missing or invalid zone, which keeps
+ * the old refusal: a wrong zone would verify the wrong day.
+ */
+function officeNow(timezone: string | undefined): DateTime | undefined {
+  if (!timezone) return undefined;
+  const now = DateTime.now().setZone(timezone);
+  return now.isValid ? now : undefined;
+}
+
 export class DelegateHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     // The outbound-context entry this delegation answers, if any (#1972). Linked
@@ -403,7 +415,7 @@ export class DelegateHandler implements ToolHandler {
     link: LinkedOutboundEntry | null,
     onTaskCreated: (taskEventId: string) => void,
   ): Promise<ToolResult> {
-    const { agent, task, conversation_id, timeout_ms, resume_token } = ctx.input as {
+    const { agent, task: inputTask, conversation_id, timeout_ms, resume_token } = ctx.input as {
       agent?: string;
       task?: string;
       conversation_id?: string;
@@ -415,9 +427,11 @@ export class DelegateHandler implements ToolHandler {
     if (!agent || typeof agent !== 'string') {
       return { success: false, error: 'Missing required input: agent (string)' };
     }
-    if (!task || typeof task !== 'string') {
+    if (!inputTask || typeof inputTask !== 'string') {
       return { success: false, error: 'Missing required input: task (string)' };
     }
+    // Reassigned once, below, when the calendar date check adds a dates note (#2379).
+    let task: string = inputTask;
 
     // timeout_ms is NOT part of this skill's LLM-facing input schema — the runtime is its only
     // source, and it discards anything the model emits before the call reaches here (#1797).
@@ -485,6 +499,7 @@ export class DelegateHandler implements ToolHandler {
         agent,
         task,
         priorDateResolves: ctx.turnDateResolveResults ?? [],
+        now: officeNow(ctx.timezone),
       });
       if (!briefValidation.ok) {
         ctx.log.warn(
@@ -493,6 +508,7 @@ export class DelegateHandler implements ToolHandler {
         );
         return { success: false, error: briefValidation.error };
       }
+      if (briefValidation.task !== undefined) task = briefValidation.task;
     }
 
     // Identical-delegation guard (#1171): resume continuations are exempt — they carry new
