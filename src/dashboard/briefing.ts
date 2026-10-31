@@ -7,9 +7,6 @@
 
 import { buildApprovalDetails } from '../autonomy/approval-notification.js';
 
-/** Successful tool/skill invocations count as this many minutes each. One place, on purpose. */
-export const MINUTES_PER_SUCCESSFUL_ACTION = 1;
-
 export const HISTOGRAM_DAYS = 14;
 export const STATS_WINDOW_DAYS = 7;
 

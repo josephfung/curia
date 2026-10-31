@@ -2,11 +2,13 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   describeToolCall,
+  describerMinutes,
   describerRefs,
   formatTally,
   hasDescriber,
   hiddenToolNames,
   isVisibleTool,
+  minutesForTool,
   visibleToolNames,
   researchKind,
   type DescribeContext,
@@ -124,6 +126,55 @@ describe('describeToolCall', () => {
   it('hides a dry-run merge and a hold that was not placed', () => {
     expect(describeToolCall(call('contact-merge', { primary_contact_id: 'a', secondary_contact_id: 'b', dry_run: true }, {}), ctx())?.prominence).toBe('hidden');
     expect(describeToolCall(call('calendar-create-hold', { start: '2026-10-31T10:00:00Z' }, { held: false }), ctx())?.prominence).toBe('hidden');
+  });
+});
+
+describe('minutesForTool', () => {
+  it('counts one visible action in a turn full of reads and plumbing', () => {
+    const turn = [
+      'contact-lookup',
+      'entity-context',
+      'ceo-inbox-search',
+      'extract-facts',
+      'web-search',
+      'memory-store',
+      'ceo-inbox-draft-reply',
+    ];
+    const minutes = turn.reduce((sum, name) => sum + minutesForTool(name), 0);
+    expect(minutes).toBe(5);
+    expect(minutes).toBe(minutesForTool('ceo-inbox-draft-reply'));
+  });
+
+  it('weights an archive, a draft, and a meeting apart', () => {
+    expect(minutesForTool('email-archive')).toBe(0.5);
+    expect(minutesForTool('ceo-inbox-archive')).toBe(0.5);
+    expect(minutesForTool('ceo-inbox-draft-reply')).toBe(5);
+    expect(minutesForTool('calendar-create-event')).toBe(10);
+    expect(minutesForTool('file-parse')).toBe(0);
+    expect(minutesForTool('constructor')).toBe(0);
+  });
+
+  it('declares minutes on every visible describer and on no hidden one', () => {
+    for (const name of visibleToolNames()) {
+      const minutes = describerMinutes(name);
+      expect(minutes, name).toEqual(expect.any(Number));
+      expect(minutes!, name).toBeGreaterThanOrEqual(0);
+    }
+    for (const name of hiddenToolNames()) {
+      expect(describerMinutes(name), name).toBeUndefined();
+    }
+  });
+
+  it('shares an estimate across the same action on two tools', () => {
+    const pairs = [
+      ['ceo-inbox-archive', 'email-archive'],
+      ['ceo-inbox-label', 'email-label'],
+      ['ceo-inbox-mark-read', 'email-mark-read'],
+      ['ceo-inbox-draft-compose', 'email-draft-save'],
+    ] as const;
+    for (const [left, right] of pairs) {
+      expect(minutesForTool(left), `${left} vs ${right}`).toBe(minutesForTool(right));
+    }
   });
 });
 

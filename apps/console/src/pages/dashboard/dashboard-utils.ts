@@ -379,9 +379,16 @@ export function caughtUpDetail(clearedToday: number, curiaHandling: number): str
   return `${clearedToday} cleared today · ${handling}`;
 }
 
-export function formatTimeSaved(actions: number, minutesPerAction: number): string {
-  const hours = (actions * minutesPerAction) / 60;
-  return `≈${(Math.round(hours * 10) / 10).toFixed(1)}h`;
+function oneDecimal(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+/** Principal-minutes. Under an hour the tenths stay visible; from an hour up, hours. */
+export function formatTimeSaved(minutes: number): string {
+  const rounded = Math.round(minutes * 10) / 10;
+  if (rounded < 60) return `≈${oneDecimal(rounded)}m`;
+  return `≈${(Math.round((rounded / 60) * 10) / 10).toFixed(1)}h`;
 }
 
 export interface SignedDelta {
@@ -398,17 +405,21 @@ export function formatCountDelta(current: number, previous: number): SignedDelta
   return { direction: 'down', text: `▼ ${Math.abs(pct)}%` };
 }
 
-export function formatHoursDelta(currentHours: number, previousHours: number): SignedDelta {
-  const diff = currentHours - previousHours;
-  const rounded = Math.round(Math.abs(diff) * 10) / 10;
-  if (rounded === 0) return { direction: 'flat', text: '0h vs last wk' };
+/** Week-over-week change for the time-saved tile. Minutes while both weeks are under an hour. */
+export function formatTimeSavedDelta(currentMinutes: number, previousMinutes: number): SignedDelta {
+  const diff = currentMinutes - previousMinutes;
+  const absMinutes = Math.round(Math.abs(diff) * 10) / 10;
+  if (currentMinutes < 60 && previousMinutes < 60) {
+    if (absMinutes === 0) return { direction: 'flat', text: '0m vs last wk' };
+    const direction = diff > 0 ? 'up' : 'down';
+    const arrow = diff > 0 ? '▲' : '▼';
+    return { direction, text: `${arrow} ${oneDecimal(absMinutes)}m vs last wk` };
+  }
+  const hours = Math.round((absMinutes / 60) * 10) / 10;
+  if (hours === 0) return { direction: 'flat', text: '0h vs last wk' };
   const direction = diff > 0 ? 'up' : 'down';
   const arrow = diff > 0 ? '▲' : '▼';
-  return { direction, text: `${arrow} ${rounded.toFixed(1)}h vs last wk` };
-}
-
-export function hoursFromActions(actions: number, minutesPerAction: number): number {
-  return (actions * minutesPerAction) / 60;
+  return { direction, text: `${arrow} ${hours.toFixed(1)}h vs last wk` };
 }
 
 function localDayKey(date: Date, timeZone: string): string {
@@ -566,8 +577,8 @@ export interface WaitingData {
 
 export interface StatsData {
   timezone: string;
-  minutesPerAction: number;
-  successfulActions: { current: number; previous: number };
+  /** Principal-minutes in the current and previous 7 days. */
+  minutesSaved: { current: number; previous: number };
   done: { current: number; previous: number };
   contacts: { total: number; newThisWeek: number };
   hiccups: { current: number; byDay: number[] };
@@ -630,7 +641,7 @@ export async function fetchWaiting(signal?: AbortSignal): Promise<WaitingData> {
 
 export async function fetchStats(signal?: AbortSignal): Promise<StatsData> {
   const data = await fetchJson<Record<string, unknown>>('/api/dashboard/stats', signal);
-  const actions = requireRecord(data['successfulActions'], '/api/dashboard/stats actions');
+  const minutesSaved = requireRecord(data['minutesSaved'], '/api/dashboard/stats minutes');
   const done = requireRecord(data['done'], '/api/dashboard/stats done');
   const contacts = requireRecord(data['contacts'], '/api/dashboard/stats contacts');
   const hiccups = requireRecord(data['hiccups'], '/api/dashboard/stats hiccups');
@@ -644,10 +655,9 @@ export async function fetchStats(signal?: AbortSignal): Promise<StatsData> {
   }
   return {
     timezone,
-    minutesPerAction: requireNumber(data['minutesPerAction'], '/api/dashboard/stats'),
-    successfulActions: {
-      current: requireNumber(actions['current'], '/api/dashboard/stats actions'),
-      previous: requireNumber(actions['previous'], '/api/dashboard/stats actions'),
+    minutesSaved: {
+      current: requireNumber(minutesSaved['current'], '/api/dashboard/stats minutes'),
+      previous: requireNumber(minutesSaved['previous'], '/api/dashboard/stats minutes'),
     },
     done: {
       current: requireNumber(done['current'], '/api/dashboard/stats done'),

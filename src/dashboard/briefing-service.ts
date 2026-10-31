@@ -4,7 +4,7 @@
 // reports unavailable) so the card can show an error instead of a false zero.
 
 import type { Pool } from 'pg';
-import { visibleToolNames } from '../activity/describers.js';
+import { visibleToolNames, visibleToolWeights } from '../activity/describers.js';
 import { OPEN_TASK_STATUSES } from '../agents/prompts/backlog-line.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import type { DisclosureDecisionRecorder } from '../autonomy/disclosure-decisions.js';
@@ -17,7 +17,6 @@ import {
   AGGREGATE_CACHE_MS,
   BULLPEN_IN_FLIGHT_MS,
   HISTOGRAM_DAYS,
-  MINUTES_PER_SUCCESSFUL_ACTION,
   STATS_WINDOW_DAYS,
   addCalendarDays,
   approvalNeedsDraft,
@@ -70,9 +69,11 @@ export interface WaitingResponse {
 
 export interface StatsResponse {
   timezone: string;
-  /** Echo of {@link MINUTES_PER_SUCCESSFUL_ACTION} so the console does not keep a second copy. */
-  minutesPerAction: number;
-  successfulActions: { current: number; previous: number };
+  /**
+   * Principal-minutes saved in the current and previous 7 local days.
+   * Sum of each successful visible tool's estimate. Reads and plumbing are 0.
+   */
+  minutesSaved: { current: number; previous: number };
   done: { current: number; previous: number };
   contacts: { total: number; newThisWeek: number };
   hiccups: { current: number; byDay: number[] };
@@ -179,15 +180,14 @@ export class BriefingService {
     const currentStart = localMidnight(model.days[HISTOGRAM_DAYS - STATS_WINDOW_DAYS]!.key, timezone);
     const previousStart = localMidnight(model.days[0]!.key, timezone);
 
-    const [actions, contacts] = await Promise.all([
-      this.actionCounts(previousStart, currentStart, now),
+    const [minutesSaved, contacts] = await Promise.all([
+      this.minutesSaved(previousStart, currentStart, now),
       this.contactCounts(currentStart),
     ]);
 
     return {
       timezone,
-      minutesPerAction: MINUTES_PER_SUCCESSFUL_ACTION,
-      successfulActions: actions,
+      minutesSaved,
       done: {
         current: outcomeTotal(last7, DONE_OUTCOMES),
         previous: outcomeTotal(prev7, DONE_OUTCOMES),
@@ -312,23 +312,53 @@ export class BriefingService {
     return shapeHistogramFromCounts(counts, to, timezone);
   }
 
-  private async actionCounts(
+  /**
+   * Sum of per-tool minutes for successful calls the activity feed would show.
+   * The tool name is resolved the same way as HISTOGRAM_SQL (invoke first, then
+   * the result). A read, a hidden tool, or a result with no invoke adds nothing.
+   */
+  private async minutesSaved(
     previousStart: Date,
     currentStart: Date,
     now: Date,
   ): Promise<{ current: number; previous: number }> {
+    const weights = visibleToolWeights();
     const result = await this.deps.pool.query<{ current: number; previous: number }>(
       `SELECT
-         count(*) FILTER (WHERE timestamp >= $2 AND timestamp < $3)::int AS current,
-         count(*) FILTER (WHERE timestamp >= $1 AND timestamp < $2)::int AS previous
-       FROM audit_log
-       WHERE event_type = ANY($4::text[])
-         AND timestamp >= $1 AND timestamp < $3
+         COALESCE(SUM(w.minutes) FILTER (WHERE r.timestamp >= $2 AND r.timestamp < $3), 0)::float8 AS current,
+         COALESCE(SUM(w.minutes) FILTER (WHERE r.timestamp >= $1 AND r.timestamp < $2), 0)::float8 AS previous
+       FROM audit_log r
+       JOIN audit_log i
+         ON r.parent_event_id = i.id::text
+        AND i.event_type = ANY(ARRAY['tool.invoke', 'skill.invoke']::text[])
+       JOIN unnest($4::text[], $5::float8[]) AS w(name, minutes)
+         ON w.name = COALESCE(
+           CASE
+             WHEN i.target_type = 'skill'
+               AND i.target_id IS NOT NULL
+               AND i.target_id <> ''
+               AND i.target_id <> '[EXTRACTION_FAILED]'
+             THEN i.target_id
+           END,
+           i.payload->>'toolName',
+           i.payload->>'skillName',
+           CASE
+             WHEN r.target_type = 'skill'
+               AND r.target_id IS NOT NULL
+               AND r.target_id <> ''
+               AND r.target_id <> '[EXTRACTION_FAILED]'
+             THEN r.target_id
+           END,
+           r.payload->>'toolName',
+           r.payload->>'skillName'
+         )
+       WHERE r.event_type = ANY($6::text[])
+         AND r.timestamp >= $1 AND r.timestamp < $3
          AND (
-           outcome = 'success'
-           OR (outcome IS NULL AND payload->'result'->>'success' = 'true')
+           r.outcome = 'success'
+           OR (r.outcome IS NULL AND r.payload->'result'->>'success' = 'true')
          )`,
-      [previousStart, currentStart, now, ['tool.result', 'skill.result']],
+      [previousStart, currentStart, now, weights.names, weights.minutes, ['tool.result', 'skill.result']],
     );
     const row = result.rows[0];
     return {

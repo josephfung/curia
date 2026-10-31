@@ -116,6 +116,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Calendar date check** — briefs that state correct dates skip date-resolve; wrong weekdays or dates are still refused. (#2379)
 - **Voice phrasing** — calls no longer name specialists, the coordinator or the off-ramp. (#2379)
 - **Voice barge-in** — logged at info with detection time and queued audio; console calls drop queued audio. (#2379)
+- **Time saved** — weights visible actions by kind so reads and plumbing no longer inflate the tile. (#2349)
 - **agent.task / llm.call / llm.error / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started`, `reasoning_delta` and `output_started` added. (#2371)
 - **LLM calls** — agent and infra calls on Anthropic and OpenRouter now stream internally. (#2371)
 - **Console API paths** — tasks, contacts, chat and grants move to `/api/*`; old tabs work for one release. (#872)

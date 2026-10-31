@@ -290,6 +290,111 @@ describeIf('briefing service against Postgres', () => {
       client.release();
     }
   });
+
+  it('sums weighted visible actions and leaves reads and plumbing at zero', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      const now = await emptyFortnight(client);
+      const bus = { publish: async () => {} } as unknown as EventBus;
+      const service = new BriefingService({
+        pool: client as unknown as pg.Pool,
+        actionLogRepo: new ActionLogRepo(client as unknown as pg.Pool, logger),
+        taskRepo: new TaskRepo(client as unknown as pg.Pool, bus, logger),
+        contactService: { findContactBySystemRole: async () => null },
+        officeTimezone: 'UTC',
+        logger,
+      });
+
+      // One turn: lookups, plumbing, a file read, then the actions that count.
+      const currentAt = new Date(now.getTime() - 60 * 60_000);
+      const root = await seedAudit(client, {
+        timestamp: currentAt,
+        eventType: 'agent.task',
+        payload: { agentId: 'coordinator' },
+      });
+      let step = 0;
+      const succeed = async (
+        parent: string,
+        tool: string,
+        at: Date,
+        opts: { eventType?: string; targetId?: string; outcome?: string | null; skillName?: boolean } = {},
+      ) => {
+        step += 1;
+        const atInvoke = new Date(at.getTime() + step * 1000);
+        const invokeType = opts.eventType === 'skill.result' ? 'skill.invoke' : 'tool.invoke';
+        const resultType = opts.eventType ?? 'tool.result';
+        const named = opts.skillName ? { skillName: tool } : { toolName: tool };
+        const invoke = await seedAudit(client, {
+          timestamp: atInvoke,
+          eventType: invokeType,
+          parentEventId: parent,
+          payload: opts.targetId ? {} : named,
+          targetType: opts.targetId ? 'skill' : undefined,
+          targetId: opts.targetId,
+        });
+        const outcome = opts.outcome === undefined ? 'success' : opts.outcome;
+        await seedAudit(client, {
+          timestamp: new Date(atInvoke.getTime() + 1),
+          eventType: resultType,
+          parentEventId: invoke,
+          // Null outcome still counts when the payload says the call worked.
+          ...(outcome === null ? {} : { outcome }),
+          // A target_id-only call must not also carry the name in the payload.
+          payload: opts.targetId ? { result: { success: true } } : { ...named, result: { success: true } },
+        });
+      };
+
+      for (const tool of ['contact-lookup', 'entity-context', 'ceo-inbox-search', 'extract-facts', 'web-search', 'file-parse']) {
+        await succeed(root, tool, currentAt);
+      }
+      await succeed(root, 'ceo-inbox-draft-reply', currentAt);
+      await succeed(root, 'email-archive', currentAt);
+      await succeed(root, 'calendar-create-event', currentAt);
+      // Name lives only on the invoke's structured column.
+      await succeed(root, 'email-archive', currentAt, { targetId: 'email-archive' });
+      // Pre-rename rows, and a null outcome whose payload says success.
+      await succeed(root, 'email-label', currentAt, { eventType: 'skill.result', skillName: true, outcome: null });
+
+      const failedInvoke = await seedAudit(client, {
+        timestamp: new Date(currentAt.getTime() + 30_000),
+        eventType: 'tool.invoke',
+        parentEventId: root,
+        payload: { toolName: 'email-send' },
+      });
+      await seedAudit(client, {
+        timestamp: new Date(currentAt.getTime() + 31_000),
+        eventType: 'tool.result',
+        parentEventId: failedInvoke,
+        outcome: 'failure',
+        payload: { toolName: 'email-send', result: { success: false } },
+      });
+      // A result whose parent is the task, not an invoke, is not a call.
+      await seedAudit(client, {
+        timestamp: new Date(currentAt.getTime() + 32_000),
+        eventType: 'tool.result',
+        parentEventId: root,
+        outcome: 'success',
+        payload: { toolName: 'calendar-create-event', result: { success: true } },
+      });
+
+      const previousAt = new Date(now.getTime() - 10 * 86_400_000);
+      const previousRoot = await seedAudit(client, {
+        timestamp: previousAt,
+        eventType: 'agent.task',
+        payload: { agentId: 'calendar' },
+      });
+      await succeed(previousRoot, 'calendar-create-event', previousAt);
+
+      const stats = await service.stats(now);
+      // 5 draft + 0.5 archive + 10 meeting + 0.5 archive-by-target-id + 0.5 label.
+      expect(stats.minutesSaved.current).toBeCloseTo(16.5);
+      expect(stats.minutesSaved.previous).toBeCloseTo(10);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
 });
 
 async function emptyFortnight(client: pg.PoolClient): Promise<Date> {
