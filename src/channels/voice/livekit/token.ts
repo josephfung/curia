@@ -33,6 +33,9 @@ export async function mintVoiceParticipantToken(
     room: input.roomName,
     canPublish: true,
     canSubscribe: true,
+    // The console sets `curia.mute=user` before it mutes, so the agent can
+    // tell a Mute-button press from the phone muting a backgrounded app.
+    canUpdateOwnMetadata: true,
   });
   return token.toJwt();
 }

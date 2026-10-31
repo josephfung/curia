@@ -2222,17 +2222,6 @@ table.records-table tbody tr.active td { background: transparent; }
   flex: 1;
 }
 
-/* The installed app sits over the home indicator; Hang up must stay tappable. */
-.voice-call-hangup {
-  flex-shrink: 0;
-}
-
-@media (display-mode: standalone) {
-  .chat-input-area {
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
-  }
-}
-
 .chat-composer {
   flex: none;
   min-width: 0;

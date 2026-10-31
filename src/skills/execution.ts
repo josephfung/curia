@@ -521,6 +521,7 @@ export class ExecutionLayer {
       taskRepo: this.taskRepo,
       workingDocs: this.workingDocsRepo,
       voiceSessions: this.voiceSessions,
+      phoneAppReady: this.phoneAppReady,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).
       // Listed here so the missing-cap guard knows it's configured when this.tempFileStore is set.
@@ -2582,9 +2583,6 @@ export class ExecutionLayer {
       },
       log: skillLogger,
       agentPersona: this.agentPersona,
-      ...(manifest.name === 'setup-status' && this.phoneAppReady
-        ? { phoneAppReady: this.phoneAppReady }
-        : {}),
       caller,
       agentContactId: this.agentContactId,
       // contactService is available to all skills — read-only contact lookups

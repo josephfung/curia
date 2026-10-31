@@ -1,0 +1,70 @@
+// The phone mutes the local mic when the installed app is backgrounded.
+// LiveKit's room TrackMuted event does not fire for that path: the OS mute
+// becomes TrackEvent.UpstreamPaused after a debounce, and the underlying
+// MediaStreamTrack fires mute immediately. A Mute-button press is a different
+// event and is ignored here via isUserMute.
+
+import { TrackEvent } from 'livekit-client';
+
+/** Participant attribute the console sets before a Mute-button press. */
+export const USER_MUTE_ATTRIBUTE = 'curia.mute';
+export const USER_MUTE_VALUE = 'user';
+
+export interface PausableMicTrack {
+  readonly mediaStreamTrack: MediaStreamTrack;
+  on(event: string, cb: () => void): void;
+  off(event: string, cb: () => void): void;
+}
+
+/**
+ * Listen for an OS mute on the local mic. `getTrack` is read again after
+ * TrackEvent.Restarted, because a foregrounded phone replaces the stream.
+ * Returns an unbind function.
+ */
+export function bindMicPause(
+  getTrack: () => PausableMicTrack,
+  opts: {
+    isUserMute: () => boolean;
+    onPaused: () => void;
+    onResumed: () => void;
+  },
+): () => void {
+  let track = getTrack();
+  let stream = track.mediaStreamTrack;
+
+  const onPaused = () => {
+    if (opts.isUserMute()) return;
+    opts.onPaused();
+  };
+  const onResumed = () => {
+    opts.onResumed();
+  };
+  const attachStream = (next: MediaStreamTrack) => {
+    next.addEventListener('mute', onPaused);
+    next.addEventListener('unmute', onResumed);
+  };
+  const detachStream = (prev: MediaStreamTrack) => {
+    prev.removeEventListener('mute', onPaused);
+    prev.removeEventListener('unmute', onResumed);
+  };
+
+  attachStream(stream);
+
+  const onRestarted = () => {
+    detachStream(stream);
+    track = getTrack();
+    stream = track.mediaStreamTrack;
+    attachStream(stream);
+  };
+
+  track.on(TrackEvent.UpstreamPaused, onPaused);
+  track.on(TrackEvent.UpstreamResumed, onResumed);
+  track.on(TrackEvent.Restarted, onRestarted);
+
+  return () => {
+    detachStream(stream);
+    track.off(TrackEvent.UpstreamPaused, onPaused);
+    track.off(TrackEvent.UpstreamResumed, onResumed);
+    track.off(TrackEvent.Restarted, onRestarted);
+  };
+}

@@ -121,14 +121,14 @@ tasks:
   - id: phone_app
     label: "Phone app"
     value_prop: "Install Curia on your phone, pair it, and hear from it when the chat is closed."
-    tier: instant
+    tier: medium
     handoff: console
     handoff_path: /settings/devices
     optional: true
     completion_check:
       type: paired_push_subscription
-    credential_how_to: "On a computer, open Settings → Devices and show a pairing code. On the phone, open the link or type the code, add Curia to your home screen, then turn on notifications."
-    docs_url: null
+    credential_how_to: "Needs Curia on an https:// address with a hostname. On a computer, open Settings → Devices and show a pairing code. On the phone, open the link or type the code, add Curia to your home screen, then turn on notifications. On http://, a bare IP, or a LAN name, the phone gets the plain mobile site and this task cannot finish."
+    docs_url: /channels/phone-app
 
   - id: web_research
     label: "Web research (Tavily)"

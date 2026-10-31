@@ -177,7 +177,7 @@ describe('setup-status', () => {
       const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; docs_url: string | null }> } }).data;
       const task = data.tasks.find(t => t.id === 'phone_app');
       expect(task?.status).toBe('done');
-      expect(task?.docs_url).toBeNull();
+      expect(task?.docs_url).toBe('/channels/phone-app');
     });
 
     it('phone_app: pending when the check is absent or reports no subscription', async () => {

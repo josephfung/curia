@@ -54,8 +54,6 @@ describe('VoiceCallBar (#1571)', () => {
     expect(html).toContain('Hang up');
   });
 
-  // The muted branch had no coverage at all: `props()` hardcodes `muted: false` and nothing
-  // overrode it, so the status string and both mute labels could invert unnoticed.
   it('says the call is paused when the phone backgrounds the app', () => {
     const html = renderToStaticMarkup(
       <VoiceCallBar {...props({ callState: 'connected', heardAssistant: true, backgroundPaused: true })} />,
@@ -65,6 +63,8 @@ describe('VoiceCallBar (#1571)', () => {
     expect(html).toContain('Hang up');
   });
 
+  // The muted branch had no coverage at all: `props()` hardcodes `muted: false` and nothing
+  // overrode it, so the status string and both mute labels could invert unnoticed.
   it('renders the muted status and Unmute control while muted', () => {
     const html = renderToStaticMarkup(
       <VoiceCallBar {...props({ callState: 'connected', heardAssistant: true, muted: true })} />,

@@ -59,7 +59,7 @@ export interface ToolManifest {
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
-   *  voiceSessions.
+   *  voiceSessions, phoneAppReady.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -169,8 +169,9 @@ export interface ToolContext {
    *  Populated whenever the ExecutionLayer has a contactService instance. */
   contactService?: import('../contacts/contact-service.js').ContactService;
   /**
-   * True when a paired phone has a live push subscription. Set only for
-   * setup-status. Absent means the check cannot run and the task stays pending.
+   * True when push is configured and a live session has a subscription.
+   * Injected for skills that declare optional capability `phoneAppReady`.
+   * Absent means the check cannot run and the setup task stays pending.
    */
   phoneAppReady?: () => Promise<boolean>;
   /** Contact confidence scoring pipeline — available to skills declaring 'confidencePipeline'

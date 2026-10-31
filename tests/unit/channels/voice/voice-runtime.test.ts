@@ -3166,61 +3166,155 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
   });
 
   it('does not speak into a muted call and ends it after the pause grace', async () => {
-    const llm = new FakeStreamProvider([
-      [
-        { type: 'text_delta', text: 'Hi there. ' },
-        { type: 'message_end', content: 'Hi there.', usage, provenance },
-      ],
-    ]);
-    const { store, endReasons } = fakeStore();
-    const { runtime, stt, transport } = makeRuntime({
-      llm,
-      tts: new SlowTtsProvider(3, 1),
-      store,
-      pauseGraceMs: 30,
-    });
+    vi.useFakeTimers();
+    try {
+      const saved: string[] = [];
+      const workingMemory = {
+        addTurn: async (_conversationId: string, _agentId: string, turn: { role: string; content: string }) => {
+          saved.push(`${turn.role}:${turn.content}`);
+        },
+      } as unknown as WorkingMemory;
+      const llm = new FakeStreamProvider([replyScript('Hi there.')]);
+      const { store, endReasons } = fakeStore();
+      const { runtime, stt, transport } = makeRuntime({
+        llm,
+        store,
+        workingMemory,
+        pauseGraceMs: 120_000,
+      });
 
-    await runtime.startSession({
-      sessionId: 's-pause',
-      conversationId: 'voice:s-pause',
-      roomName: 'voice-s-pause',
-      agentToken: 'tok',
-      caller: principalCaller(),
-      openingGreeting: false,
-    });
+      await runtime.startSession({
+        sessionId: 's-pause',
+        conversationId: 'voice:s-pause',
+        roomName: 'voice-s-pause',
+        agentToken: 'tok',
+        caller: principalCaller(),
+        openingGreeting: false,
+      });
 
-    transport.emitCallerMuted(true);
-    stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
-    await runtime.awaitIdle('s-pause');
-    expect(transport.publishedFrames.length).toBe(0);
-    await vi.waitFor(() => {
+      transport.emitCallerMuted(true);
+      stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
+      await runtime.awaitIdle('s-pause');
+      expect(transport.publishedFrames.length).toBe(0);
+      expect(llm.seenMessages).toHaveLength(0);
+      expect(saved.filter((row) => row.startsWith('assistant:'))).toEqual([]);
+      await vi.advanceTimersByTimeAsync(120_000);
       expect(endReasons).toContain('pause_grace');
-    });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the call when the mic unmutes before the pause grace', async () => {
-    const llm = new FakeStreamProvider([[]]);
+    vi.useFakeTimers();
+    try {
+      const llm = new FakeStreamProvider([[]]);
+      const { store, endReasons } = fakeStore();
+      const { runtime, transport } = makeRuntime({
+        llm,
+        store,
+        pauseGraceMs: 120_000,
+      });
+
+      await runtime.startSession({
+        sessionId: 's-unpause',
+        conversationId: 'voice:s-unpause',
+        roomName: 'voice-s-unpause',
+        agentToken: 'tok',
+        caller: principalCaller(),
+        openingGreeting: false,
+      });
+
+      transport.emitCallerMuted(true);
+      transport.emitCallerMuted(false);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(endReasons).not.toContain('pause_grace');
+    } finally {
+      vi.useRealTimers();
+    }
+    // endSession uses the real clock; the fake-timer block already checked the grace.
+  });
+
+  it('answers a held utterance when the mic returns, and survives several mute cycles', async () => {
+    const saved: string[] = [];
+    const workingMemory = {
+      addTurn: async (_conversationId: string, _agentId: string, turn: { role: string; content: string }) => {
+        saved.push(`${turn.role}:${turn.content}`);
+      },
+      getHistory: async () => saved.map((row) => {
+        const split = row.indexOf(':');
+        return { role: row.slice(0, split), content: row.slice(split + 1) };
+      }),
+    } as unknown as WorkingMemory;
+    const llm = new FakeStreamProvider([replyScript('Hello back.')]);
     const { store, endReasons } = fakeStore();
-    const { runtime, transport } = makeRuntime({
+    const { runtime, stt, transport } = makeRuntime({
       llm,
       store,
-      pauseGraceMs: 80,
+      workingMemory,
+      pauseGraceMs: 60_000,
     });
-
     await runtime.startSession({
-      sessionId: 's-unpause',
-      conversationId: 'voice:s-unpause',
-      roomName: 'voice-s-unpause',
+      sessionId: 's-hold',
+      conversationId: 'voice:s-hold',
+      roomName: 'voice-s-hold',
       agentToken: 'tok',
       caller: principalCaller(),
       openingGreeting: false,
     });
 
+    for (let i = 0; i < 3; i += 1) {
+      transport.emitCallerMuted(true);
+      transport.emitCallerMuted(false);
+    }
     transport.emitCallerMuted(true);
+    stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-hold');
+    expect(llm.seenMessages).toHaveLength(0);
+    expect(saved.filter((row) => row.startsWith('assistant:'))).toEqual([]);
+
     transport.emitCallerMuted(false);
-    await delay(120);
+    await runtime.awaitIdle('s-hold');
+    expect(llm.seenMessages).toHaveLength(1);
+    expect(saved).toContain('assistant:Hello back.');
     expect(endReasons).not.toContain('pause_grace');
-    await runtime.endSession('s-unpause', 'test');
+    await runtime.endSession('s-hold', 'test');
+  });
+
+  it('cancels speech when the mic mutes mid-reply and does not save the unheard reply', async () => {
+    const saved: string[] = [];
+    const workingMemory = {
+      addTurn: async (_conversationId: string, _agentId: string, turn: { role: string; content: string }) => {
+        saved.push(`${turn.role}:${turn.content}`);
+      },
+      getHistory: async () => [],
+      purgeExpired: async () => 0,
+    } as unknown as WorkingMemory;
+    const llm = new FakeStreamProvider([replyScript('A long answer.')]);
+    const tts = new SlowTtsProvider(5, 200);
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts,
+      workingMemory,
+      pauseGraceMs: 60_000,
+    });
+    await runtime.startSession({
+      sessionId: 's-mid',
+      conversationId: 'voice:s-mid',
+      roomName: 'voice-s-mid',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
+    await vi.waitFor(() => {
+      expect(tts.requests.length).toBeGreaterThan(0);
+    });
+    transport.emitCallerMuted(true);
+    await runtime.awaitIdle('s-mid');
+    expect(tts.cancelled.size).toBeGreaterThan(0);
+    expect(saved.filter((row) => row.startsWith('assistant:'))).toEqual([]);
+    await runtime.endSession('s-mid', 'test');
   });
 
   // #2347: one recap, one path. The delegation sentence must agree with the

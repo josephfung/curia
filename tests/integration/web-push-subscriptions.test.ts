@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { randomUUID } from 'node:crypto';
-import { WebPushService, type PushSender } from '../../src/channels/web/push-service.js';
+import { WebPushService, hasLivePairedSubscription, type PushSender } from '../../src/channels/web/push-service.js';
 import { createLogger } from '../../src/logger.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -28,6 +28,16 @@ describeIf('web push subscriptions (integration)', () => {
     } finally {
       await pool.end();
     }
+  });
+
+  it('counts any live session when push is configured', async () => {
+    await pool.query(
+      `INSERT INTO push_subscriptions (session_id, endpoint, p256dh, auth_secret)
+       VALUES ($1, $2, 'p256', 'auth')`,
+      [sessionId, `https://updates.push.services.mozilla.com/wpush/v2/${sessionId}`],
+    );
+    expect(await hasLivePairedSubscription(pool, false)).toBe(false);
+    expect(await hasLivePairedSubscription(pool)).toBe(true);
   });
 
   it('deletes the subscription when the session is deleted', async () => {

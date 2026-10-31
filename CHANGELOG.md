@@ -20,6 +20,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`operator.session`** — **public API:** audit event for login, logout, revoke, and signing out other devices. (#2341)
 - **Phone app setup task** — done when a paired phone has a live notification subscription. (#2341)
 - **`ToolContext`** — **public API:** setup-status can see a paired phone's notifications. (#2341)
+- **Phone app setup task** — done when push is on and a live session is subscribed. (#2341)
+- **`ToolContext`** — **public API:** `phoneAppReady` added for setup-status. (#2341)
 - **Phone install** — web manifest, Curia home-screen icons, and an update prompt. (#2341)
 - **Phone pairing** — a 10-minute QR or short code signs one phone in. (#2341)
 - **Web push** — the phone app alerts when nobody has the chat open. (#2341)

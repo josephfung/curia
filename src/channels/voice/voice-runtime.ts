@@ -620,6 +620,8 @@ interface ActiveSession {
   loopDelay: ELDHistogram;
   /** The caller's mic is muted, so TTS must not be published. */
   callerMuted: boolean;
+  /** A background mute aborted a turn that unmute should speak. */
+  pauseHeld: boolean;
   /** Fires when a background mute outlasts the grace period. */
   pauseTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -693,6 +695,19 @@ export class VoiceRuntime {
     const publishSampleRate = transport.publishSampleRate ?? DEFAULT_PUBLISH_SAMPLE_RATE;
 
     let stt: SttSession | undefined;
+    // Registered before connect so a mute during connect or STT startup is
+    // not dropped. The session object does not exist yet, so the first events
+    // are remembered and applied once it does.
+    let pendingMute = false;
+    let session: ActiveSession | undefined;
+    transport.onCallerMuted(muted => {
+      if (!session) {
+        pendingMute = muted;
+        return;
+      }
+      if (session.ending) return;
+      this.handleCallerMuted(session, muted);
+    });
     try {
       // connect() lives inside the try (not before it) so a rejection here
       // still reaches the catch below and calls transport.disconnect() —
@@ -717,7 +732,7 @@ export class VoiceRuntime {
         },
       });
 
-      const session: ActiveSession = {
+      const active: ActiveSession = {
         sessionId: params.sessionId,
         conversationId: params.conversationId,
         roomName: params.roomName,
@@ -754,33 +769,32 @@ export class VoiceRuntime {
         turnAudioMs: 0,
         audioStats: { chunks: 0, audioMs: 0, gapMs: 0, starvedMs: 0, starvedCount: 0 },
         loopDelay: monitorEventLoopDelay({ resolution: 10 }),
-        callerMuted: false,
+        callerMuted: pendingMute,
+        pauseHeld: false,
         pauseTimer: null,
       };
-      session.loopDelay.enable();
-      this.sessions.set(params.sessionId, session);
+      session = active;
+      active.loopDelay.enable();
+      this.sessions.set(params.sessionId, active);
+      if (pendingMute) this.handleCallerMuted(active, true);
 
       // Pipe principal audio → STT.
       transport.onRemoteAudio(frame => {
-        session.stt.sendAudio(frame);
+        active.stt.sendAudio(frame);
       });
 
       // Principal left / room dropped without DELETE — end the Curia session so
       // STT sockets and voice_sessions rows are not left active. Ignore while
       // endSession is already tearing down (avoids racing hangup → 404).
       transport.onClose(reason => {
-        if (session.ending) return;
+        if (active.ending) return;
         this.log.info({ sessionId: params.sessionId, reason }, 'Audio transport closed; ending voice session');
         void this.endSessionWith(params.sessionId, reason, true);
       });
 
-      transport.onCallerMuted(muted => {
-        this.handleCallerMuted(session, muted);
-      });
-
       // Handle transcripts (interim → barge-in; final+endpoint → turn).
       stt.onTranscript(event => {
-        this.handleTranscript(session, event);
+        this.handleTranscript(active, event);
       });
 
       // Inbound console calls: Curia opens the conversation (#1596). Enqueued on
@@ -788,7 +802,7 @@ export class VoiceRuntime {
       // user turn. Per-session flag — outbound (Curia-initiated) callers pass
       // openingGreeting: false when that path exists.
       if (params.openingGreeting !== false) {
-        this.enqueueGreetingTurn(session);
+        this.enqueueGreetingTurn(active);
       }
 
       this.log.info(
@@ -926,13 +940,19 @@ export class VoiceRuntime {
   private bargeIn(session: ActiveSession, event: SttTranscriptEvent): void {
     const controller = session.currentController;
     if (!controller || controller.signal.aborted) return;
+    this.stopSpeaking(session, true);
+  }
 
+  /** Stop TTS and abort the in-flight turn. A mute does not count as a barge-in. */
+  private stopSpeaking(session: ActiveSession, countAsBargeIn: boolean): void {
     const startedAt = Date.now();
     for (const streamId of session.activeTtsStreamIds) {
       this.config.tts.cancel(streamId);
     }
-    controller.abort();
+    const controller = session.currentController;
+    if (controller && !controller.signal.aborted) controller.abort();
     session.ttsActive = false;
+    if (!countAsBargeIn) return;
     session.turnStats.bargeInCancels += 1;
     const stopMs = Date.now() - startedAt;
 
@@ -990,43 +1010,54 @@ export class VoiceRuntime {
     session.queuedFragments += fragments;
     // The latest utterance's timing is the gap the caller waits through.
     session.queuedTiming = timing;
+    this.scheduleDrain(session);
+  }
+
+  /**
+   * Serialize turns onto the tail so a barged-in turn fully unwinds before the
+   * next starts. A muted caller leaves the queue where it is; unmute drains it.
+   */
+  private scheduleDrain(session: ActiveSession): void {
     if (session.drainScheduled) return;
     session.drainScheduled = true;
-
-    // Serialize turns onto the tail so a barged-in turn fully unwinds before the
-    // next starts. Log rejections — never silently erase them or break the chain.
     session.turnTail = session.turnTail
       .catch(err => {
         this.log.warn({ sessionId: session.sessionId, err }, 'previous voice turn rejected; continuing chain');
       })
       .then(async () => {
-        session.drainScheduled = false;
-        // endSession takes any carry-over itself, synchronously with setting ending.
-        if (session.ending) return;
-        const carry = session.carryOver;
-        const queued = session.queuedUtterance;
-        const queuedFragments = session.queuedFragments;
-        const timing = session.queuedTiming;
-        session.carryOver = null;
-        session.queuedUtterance = '';
-        session.queuedFragments = 0;
-        session.queuedTiming = null;
-
-        let next = joinUtterances(carry?.utterance ?? '', queued);
-        let nextFragments = (carry?.fragments ?? 0) + queuedFragments;
-        const maxBytes = this.config.maxUtteranceBytes ?? DEFAULT_MAX_UTTERANCE_BYTES;
-        if (carry && Buffer.byteLength(next, 'utf8') > maxBytes) {
-          this.log.warn(
-            { sessionId: session.sessionId, maxBytes },
-            'joined voice utterance exceeded maxUtteranceBytes; dropping the carried-over part',
-          );
-          await this.pairCarriedUtterance(session, carry);
-          next = queued;
-          nextFragments = queuedFragments;
-        }
-        if (next.length === 0) return;
-        await this.runUserTurn(session, next, nextFragments, timing);
+        await this.drainQueuedTurn(session);
       });
+  }
+
+  private async drainQueuedTurn(session: ActiveSession): Promise<void> {
+    session.drainScheduled = false;
+    // endSession takes any carry-over itself, synchronously with setting ending.
+    if (session.ending) return;
+    // Hold the turn while the phone has the mic muted. Unmute drains it.
+    if (session.callerMuted) return;
+    const carry = session.carryOver;
+    const queued = session.queuedUtterance;
+    const queuedFragments = session.queuedFragments;
+    const timing = session.queuedTiming;
+    session.carryOver = null;
+    session.queuedUtterance = '';
+    session.queuedFragments = 0;
+    session.queuedTiming = null;
+
+    let next = joinUtterances(carry?.utterance ?? '', queued);
+    let nextFragments = (carry?.fragments ?? 0) + queuedFragments;
+    const maxBytes = this.config.maxUtteranceBytes ?? DEFAULT_MAX_UTTERANCE_BYTES;
+    if (carry && Buffer.byteLength(next, 'utf8') > maxBytes) {
+      this.log.warn(
+        { sessionId: session.sessionId, maxBytes },
+        'joined voice utterance exceeded maxUtteranceBytes; dropping the carried-over part',
+      );
+      await this.pairCarriedUtterance(session, carry);
+      next = queued;
+      nextFragments = queuedFragments;
+    }
+    if (next.length === 0) return;
+    await this.runUserTurn(session, next, nextFragments, timing);
   }
 
   /**
@@ -1272,8 +1303,18 @@ export class VoiceRuntime {
       });
 
       const result = await runner.runTurn({ messages, signal: controller.signal });
+      // A turn that finished while the mic was muted was not heard. Do not
+      // record it as something Curia said. An unheard turn is held instead.
+      if (session.callerMuted && !audioPlayed) {
+        spokenForPairing = undefined;
+        return;
+      }
       if (result.aborted || session.ending || result.finalText.length === 0) {
-        spokenForPairing = result.finalText;
+        spokenForPairing = audioPlayed ? result.finalText : undefined;
+        return;
+      }
+      if (session.callerMuted) {
+        spokenForPairing = audioPlayed ? result.finalText : undefined;
         return;
       }
 
@@ -1286,14 +1327,19 @@ export class VoiceRuntime {
       }
     } finally {
       this.clearTurnState(session, controller);
+      if (completed) session.pauseHeld = false;
       if (!completed) {
-        // Only barge-in and endSession abort the controller; endSession sets ending.
+        // Barge-in, a background mute, and endSession abort the controller.
+        // endSession sets ending. A mute that lands after the model finished,
+        // before any audio, is the same hold: the caller did not hear it.
         // A turn that invoked a tool is never joined: rerunning its request in the
         // next turn could repeat a side effect (a send, a booking). The filler can
         // finish without a frame, so `audioPlayed` alone does not rule that out.
         const cancelledSilently =
-          controller.signal.aborted && !session.ending && !audioPlayed && !toolInvoked;
+          (controller.signal.aborted || session.callerMuted)
+          && !session.ending && !audioPlayed && !toolInvoked;
         await this.safePersistIncomplete(opts.persistIncomplete, session, spokenForPairing, cancelledSilently);
+        if (!cancelledSilently) session.pauseHeld = false;
       }
     }
   }
@@ -1989,6 +2035,12 @@ export class VoiceRuntime {
             persisted: userTurnPersisted,
             fragments,
           };
+          // A barge-in leaves the carry for the next utterance. A background
+          // mute speaks it on unmute. If unmute already happened, speak now.
+          if (session.pauseHeld && !session.callerMuted) {
+            session.pauseHeld = false;
+            this.resumeHeldTurn(session);
+          }
           onCarried();
           this.log.debug(
             { sessionId: session.sessionId, fragments },
@@ -2037,16 +2089,17 @@ export class VoiceRuntime {
 
   /**
    * A muted caller mic means the installed app is in the background. Stop
-   * speaking immediately. End the call if it stays muted for the grace period.
-   * Unmute cancels that timer; a disconnect still ends the call at once.
+   * speaking immediately and hold any turn that has not been heard. End the
+   * call if it stays muted for the grace period. Unmute cancels that timer
+   * and speaks the held turn. A disconnect still ends the call at once.
+   * A Mute-button press never reaches here: the transport ignores it.
    */
   private handleCallerMuted(session: ActiveSession, muted: boolean): void {
     if (session.ending) return;
     if (muted) {
       session.callerMuted = true;
-      if (session.currentController && !session.currentController.signal.aborted) {
-        session.currentController.abort();
-      }
+      session.pauseHeld = true;
+      this.stopSpeaking(session, false);
       if (session.pauseTimer) return;
       const graceMs = this.config.pauseGraceMs ?? 120_000;
       session.pauseTimer = setTimeout(() => {
@@ -2062,6 +2115,19 @@ export class VoiceRuntime {
       clearTimeout(session.pauseTimer);
       session.pauseTimer = null;
     }
+    const held = (session.carryOver?.utterance ?? '').trim().length > 0
+      || session.queuedUtterance.trim().length > 0;
+    if (held) session.pauseHeld = false;
+    this.resumeHeldTurn(session);
+  }
+
+  /** Speak a turn that was queued or carried while the mic was muted. */
+  private resumeHeldTurn(session: ActiveSession): void {
+    if (session.ending || session.callerMuted) return;
+    const held = (session.carryOver?.utterance ?? '').trim().length > 0
+      || session.queuedUtterance.trim().length > 0;
+    if (!held) return;
+    this.scheduleDrain(session);
   }
 
   async endSession(sessionId: string, reason: string): Promise<VoiceSessionRecord | null> {

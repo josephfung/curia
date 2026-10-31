@@ -32,10 +32,11 @@ describe('mintVoiceParticipantToken', () => {
     const payload = JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8')) as {
       exp: number;
       iat?: number;
-      video?: { room: string; roomJoin: boolean };
+      video?: { room: string; roomJoin: boolean; canUpdateOwnMetadata?: boolean };
     };
     expect(payload.video?.room).toBe('voice-test');
     expect(payload.video?.roomJoin).toBe(true);
+    expect(payload.video?.canUpdateOwnMetadata).toBe(true);
     const iat = payload.iat ?? Math.floor(Date.now() / 1000);
     const lifetimeSec = payload.exp - iat;
     // 1h ± a few seconds of clock skew in encoding
