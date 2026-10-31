@@ -27,9 +27,16 @@ function createLogger(): Logger {
   } as unknown as Logger;
 }
 
-// Minimal pool mock — the chat endpoints never touch the DB.
-function createPool(): Pick<Pool, 'query'> {
-  return { query: vi.fn() } as unknown as Pick<Pool, 'query'>;
+// The shared thread is one SELECT. Tests that care about the id pass it in.
+function createPool(conversationId = 'server-thread'): Pick<Pool, 'query'> {
+  return {
+    query: vi.fn(async (sql: string) => {
+      if (sql.includes('FROM web_thread')) {
+        return { rows: [{ conversation_id: conversationId }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    }),
+  } as unknown as Pick<Pool, 'query'>;
 }
 
 // The ack-and-stream POST no longer calls waitForResponse; it only publishes and
@@ -39,6 +46,7 @@ function createMockEventRouter(): EventRouter {
     waitForResponse: vi.fn(),
     cancelPending: vi.fn(),
     addSseClient: vi.fn().mockReturnValue(() => { /* cleanup noop */ }),
+    broadcastChatEvent: vi.fn(),
     setupSubscriptions: vi.fn(),
   } as unknown as EventRouter;
 }
@@ -123,17 +131,29 @@ describe('chatRoutes', () => {
       method: 'POST',
       url: '/api/chat/messages',
       headers: { 'x-web-bootstrap-secret': 'test-secret' },
-      payload: { message: 'What is on the agenda?', conversationId: 'test-convo-1' },
+      payload: { message: 'What is on the agenda?', conversationId: 'client-fork', clientMessageId: 'client-msg-1' },
     });
 
     expect(response.statusCode).toBe(202);
     const body = response.json();
-    expect(body.conversationId).toBe('test-convo-1');
+    // The client id is ignored. The server thread is the one that was stored.
+    expect(body.conversationId).toBe('server-thread');
     // The reply now arrives over SSE, not in the POST body.
     expect(body.reply).toBeUndefined();
 
     // The inbound message was published; the handler does NOT block on a reply.
     expect(bus.publish).toHaveBeenCalledOnce();
+    const published = vi.mocked(bus.publish).mock.calls[0]?.[1];
+    expect(published && 'payload' in published && published.payload).toMatchObject({
+      conversationId: 'server-thread',
+      content: 'What is on the agenda?',
+    });
+    expect(eventRouter.broadcastChatEvent).toHaveBeenCalledWith('server-thread', {
+      type: 'user_message',
+      conversationId: 'server-thread',
+      content: 'What is on the agenda?',
+      clientMessageId: 'client-msg-1',
+    });
     expect(eventRouter.waitForResponse).not.toHaveBeenCalled();
 
     await app.close();
@@ -191,7 +211,7 @@ describe('chatRoutes', () => {
     await app.close();
   });
 
-  it('POST /api/chat/messages — auto-generates conversationId when omitted', async () => {
+  it('POST /api/chat/messages — uses the shared thread when the client sends no id', async () => {
     const bus = createMockBus();
     const eventRouter = createMockEventRouter();
 
@@ -214,11 +234,60 @@ describe('chatRoutes', () => {
     });
 
     expect(response.statusCode).toBe(202);
-    const body = response.json();
-    expect(typeof body.conversationId).toBe('string');
-    expect(body.conversationId.length).toBeGreaterThan(0);
+    expect(response.json()).toMatchObject({ conversationId: 'server-thread' });
     expect(eventRouter.waitForResponse).not.toHaveBeenCalled();
 
+    await app.close();
+  });
+
+  it('GET /api/chat/conversation — returns the shared thread id', async () => {
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(chatRoutes, {
+      pool: createPool('shared-abc') as Pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'test-secret',
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
+      sessions: new Map() as unknown as SessionStore,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/chat/conversation',
+      headers: { 'x-web-bootstrap-secret': 'test-secret' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ conversationId: 'shared-abc' });
+    await app.close();
+  });
+
+  it('POST /api/chat/messages — still acks when the echo broadcast throws', async () => {
+    const eventRouter = createMockEventRouter();
+    vi.mocked(eventRouter.broadcastChatEvent).mockImplementation(() => {
+      throw new Error('sse write failed');
+    });
+
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(chatRoutes, {
+      pool: createPool() as Pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'test-secret',
+      bus: createMockBus(),
+      eventRouter,
+      sessions: new Map() as unknown as SessionStore,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/chat/messages',
+      headers: { 'x-web-bootstrap-secret': 'test-secret' },
+      payload: { message: 'hello' },
+    });
+
+    expect(response.statusCode).toBe(202);
     await app.close();
   });
 

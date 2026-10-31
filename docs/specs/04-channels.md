@@ -147,7 +147,10 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 ### HTTP
 
 The always-on Fastify adapter. It serves the console, `GET /api/health`, bearer-gated operator routes such as `GET /api/agents/status`, and the session-authenticated console APIs. It is not itself a chat ingress.
-- Console chat is `POST /api/chat/messages`, `GET /api/chat/stream`, and `GET /api/chat/history`, on the `web` channel. Auth is the session cookie or `x-web-bootstrap-secret`. The sender is the principal.
+- Console chat is `POST /api/chat/messages`, `GET /api/chat/stream`, `GET /api/chat/history`, and `GET /api/chat/conversation`, on the `web` channel. Auth is the session cookie or `x-web-bootstrap-secret`. The sender is the principal.
+- The conversation id is server-owned (`web_thread`, one row). A client-supplied id is ignored, so every browser and paired phone shows the same thread. The operator's own message is echoed on the chat SSE stream (`user_message`); the sender ignores its own echo via `clientMessageId`.
+- The stream stays open while the document is visible and reconnects with backoff. It closes when the tab is hidden. A reply does not close it.
+- Proxies must not compress `/api/chat/stream`. The in-repo Caddyfile does not gzip that path; the production exclusion lives in curia-deploy (companion change noted in ADR-055). `X-Accel-Buffering: no` is already set on the response.
 - `POST /api/messages` and `GET /api/messages/stream` were removed ([ADR-057](../adr/057-two-http-chat-surfaces.md)). Tests were the only in-repo callers.
 - **Non-toggleable** (`isToggleable: false`): always starts, cannot be disabled — disabling HTTP would lock operators out of the registry API itself.
 

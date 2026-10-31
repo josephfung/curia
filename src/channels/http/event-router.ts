@@ -380,6 +380,14 @@ export class EventRouter {
     }
   }
 
+  /**
+   * Push one JSON event to the chat SSE clients watching `conversationId`.
+   * Ant Farm clients are a different set and are not written.
+   */
+  broadcastChatEvent(conversationId: string, payload: Record<string, unknown>): void {
+    this.broadcastToSseClients(JSON.stringify(payload), conversationId);
+  }
+
   /** Register an SSE client. Returns a cleanup function. */
   addSseClient(client: SseClient): () => void {
     this.sseClients.add(client);

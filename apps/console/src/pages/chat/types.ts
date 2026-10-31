@@ -18,7 +18,8 @@ export interface Message {
 export type SseEvent =
   | { kind: 'status'; text: string }
   | { kind: 'reply'; text: string; html: string | null }
-  | { kind: 'rejected'; text: string };
+  | { kind: 'rejected'; text: string }
+  | { kind: 'user'; text: string; clientMessageId: string | null };
 
 /** A chat history row as returned by GET /api/chat/history. */
 export interface HistoryMessage {

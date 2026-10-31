@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseSseEvent, makeMessage, formatTimestamp, linkifyText, pickRecoveredReply } from './chat-utils.js';
+import { parseSseEvent, makeMessage, formatTimestamp, linkifyText, mergeLiveTail, nextReconnectDelayMs, pickRecoveredReply } from './chat-utils.js';
+import type { Message } from './types.js';
 
 describe('parseSseEvent', () => {
   it('returns a status event for tool.invoke', () => {
@@ -40,6 +41,19 @@ describe('parseSseEvent', () => {
     expect(result.text).toContain('blocked_sender');
   });
 
+  it('returns a user event so another device can append the echo', () => {
+    const data = JSON.stringify({
+      type: 'user_message',
+      content: 'from the phone',
+      clientMessageId: 'client-1',
+    });
+    expect(parseSseEvent(data)).toEqual({
+      kind: 'user',
+      text: 'from the phone',
+      clientMessageId: 'client-1',
+    });
+  });
+
   it('returns null for tool.result events (not displayed)', () => {
     expect(parseSseEvent(JSON.stringify({ type: 'tool.result', skill: 'memory.recall' }))).toBeNull();
   });
@@ -55,6 +69,34 @@ describe('parseSseEvent', () => {
   it('returns null for non-object JSON', () => {
     expect(parseSseEvent('42')).toBeNull();
     expect(parseSseEvent('"hello"')).toBeNull();
+  });
+});
+
+describe('mergeLiveTail', () => {
+  const user = (text: string): Message => ({ id: text, kind: 'user', text });
+  const agent = (text: string): Message => ({ id: text, kind: 'agent', text });
+
+  it('keeps a turn that arrived live while history was loading', () => {
+    const history = [user('older'), agent('reply')];
+    const live = [user('from the phone')];
+    expect(mergeLiveTail(history, live).map((m) => m.text)).toEqual(['older', 'reply', 'from the phone']);
+  });
+
+  it('drops the overlap when history already contains the live tail', () => {
+    const history = [user('older'), user('from the phone')];
+    const live = [user('from the phone')];
+    expect(mergeLiveTail(history, live)).toHaveLength(2);
+    expect(mergeLiveTail(history, live)[1]?.id).toBe('from the phone');
+  });
+});
+
+describe('nextReconnectDelayMs', () => {
+  it('doubles from one second and stops at thirty', () => {
+    expect(nextReconnectDelayMs(0)).toBe(1_000);
+    expect(nextReconnectDelayMs(1)).toBe(2_000);
+    expect(nextReconnectDelayMs(2)).toBe(4_000);
+    expect(nextReconnectDelayMs(5)).toBe(30_000);
+    expect(nextReconnectDelayMs(9)).toBe(30_000);
   });
 });
 

@@ -4,7 +4,6 @@
 // the sender to the principal. Auth: session cookie or x-web-bootstrap-secret
 // via assertSecret. The bearer /api/messages routes were removed (ADR-057).
 
-import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { EventBus } from '../../../bus/bus.js';
@@ -15,6 +14,7 @@ import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.j
 import { writeSseHead } from '../console-sessions.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
+import { getOrCreateWebThread, readClientMessageId } from '../web-thread.js';
 
 export interface ChatRouteOptions {
   pool: Pool;
@@ -53,8 +53,13 @@ export async function chatRoutes(
   /**
    * POST /api/chat/messages — publish a chat message and ack immediately.
    *
-   * Body: { message: string, conversationId?: string }
+   * Body: { message: string, clientMessageId?: string }
    * Response: 202 { conversationId }
+   *
+   * The conversation id is the server-owned web thread. A client-supplied id
+   * is ignored so a second browser cannot fork the history. The operator's
+   * own message is echoed on the SSE stream so other open devices append it
+   * without a reload. `clientMessageId` lets the sender ignore that echo.
    *
    * Ack-and-stream (#985): the handler publishes the inbound message and returns
    * 202 without waiting for the agent's reply. The final reply and intermediate
@@ -66,15 +71,19 @@ export async function chatRoutes(
   app.post('/api/chat/messages', CONSOLE_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
-    const body = request.body as { message?: unknown; conversationId?: unknown };
+    const body = request.body as { message?: unknown; clientMessageId?: unknown };
     if (typeof body?.message !== 'string' || body.message.trim().length === 0) {
       return reply.status(400).send({ error: 'Missing required field: message (non-empty string)' });
     }
 
-    const conversationId =
-      typeof body.conversationId === 'string' && body.conversationId.length > 0
-        ? body.conversationId
-        : `kg-web-${randomUUID()}`;
+    let conversationId: string;
+    try {
+      conversationId = await getOrCreateWebThread(pool);
+    } catch (err) {
+      logger.error({ err }, 'chat thread lookup failed');
+      return reply.status(503).send({ error: 'Chat is temporarily unavailable. Please try again.' });
+    }
+    const clientMessageId = readClientMessageId(body.clientMessageId);
 
     try {
       await bus.publish('channel', createInboundMessage({
@@ -93,8 +102,36 @@ export async function chatRoutes(
       return reply.status(500).send({ error: 'Failed to publish chat message.' });
     }
 
+    try {
+      eventRouter.broadcastChatEvent(conversationId, {
+        type: 'user_message',
+        conversationId,
+        content: body.message,
+        clientMessageId,
+      });
+    } catch (err) {
+      // The inbound is already published. A missed echo shows up on the next
+      // history load; failing the ack would make the client send it twice.
+      logger.error({ err, conversationId }, 'chat user-message echo failed');
+    }
+
     // Ack: the reply is delivered over the SSE stream, not this response.
     return reply.status(202).send({ conversationId });
+  });
+
+  /**
+   * GET /api/chat/conversation — the principal's shared web thread.
+   * Created on first read. Every device uses this id.
+   */
+  app.get('/api/chat/conversation', CONSOLE_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    try {
+      const conversationId = await getOrCreateWebThread(pool);
+      return reply.send({ conversationId });
+    } catch (err) {
+      logger.error({ err }, 'GET /api/chat/conversation failed');
+      return reply.status(503).send({ error: 'Chat is temporarily unavailable. Please try again.' });
+    }
   });
 
   /**

@@ -58,6 +58,11 @@ export function parseSseEvent(data: string): SseEvent | null {
       const reason = typeof p['reason'] === 'string' ? p['reason'] : 'unknown';
       return { kind: 'rejected', text: rejectionText(reason) };
     }
+    case 'user_message': {
+      const text = typeof p['content'] === 'string' ? p['content'] : '';
+      const clientMessageId = typeof p['clientMessageId'] === 'string' ? p['clientMessageId'] : null;
+      return { kind: 'user', text, clientMessageId };
+    }
     default:
       return null;
   }
@@ -96,13 +101,51 @@ export function pickRecoveredReply(
   return null;
 }
 
-/** Returns a new Message with a stable random ID. */
+/** Returns a new Message with a stable random ID, or `opts.id` when the caller has one. */
 export function makeMessage(
   kind: Message['kind'],
   text: string,
-  opts?: { html?: string; timestamp?: Date },
+  opts?: { id?: string; html?: string; timestamp?: Date },
 ): Message {
-  return { id: crypto.randomUUID(), kind, text, ...opts };
+  const { id, ...rest } = opts ?? {};
+  return { id: id ?? crypto.randomUUID(), kind, text, ...rest };
+}
+
+/**
+ * Delay before the next SSE reconnect. Attempt 0 waits 1s, then doubles, and
+ * stops growing at 30s.
+ */
+export function nextReconnectDelayMs(attempt: number): number {
+  const step = Math.min(Math.max(attempt, 0), 5);
+  return Math.min(30_000, 1000 * 2 ** step);
+}
+
+/**
+ * Prepend history in front of messages that arrived live while history was
+ * loading. A shared suffix/prefix (the same turn observed both ways) is kept
+ * once, from the live copy.
+ */
+export function mergeLiveTail(history: Message[], live: Message[]): Message[] {
+  if (live.length === 0) return history;
+  if (history.length === 0) return live;
+  const max = Math.min(history.length, live.length);
+  let overlap = 0;
+  for (let n = max; n > 0; n -= 1) {
+    let same = true;
+    for (let i = 0; i < n; i += 1) {
+      const older = history[history.length - n + i];
+      const newer = live[i];
+      if (!older || !newer || older.kind !== newer.kind || older.text !== newer.text) {
+        same = false;
+        break;
+      }
+    }
+    if (same) {
+      overlap = n;
+      break;
+    }
+  }
+  return [...history, ...live.slice(overlap)];
 }
 
 /**
