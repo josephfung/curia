@@ -207,10 +207,12 @@ export async function chatRoutes(
     }, logger);
     reply.raw.write(':connected\n\n');
 
-    const cleanup = eventRouter.addSseClient({
+    const client = {
       res: reply.raw,
       conversationId,
-    });
+      lastSeen: Date.now(),
+    };
+    const cleanup = eventRouter.addSseClient(client);
 
     // 30s data heartbeat. An SSE comment (`:ping`) never reaches the browser,
     // so a half-open phone socket would look healthy. The client reconnects
@@ -218,6 +220,7 @@ export async function chatRoutes(
     const heartbeat = setInterval(() => {
       try {
         reply.raw.write('data: {"type":"ping"}\n\n');
+        eventRouter.touchSseClient(client);
       } catch (err) {
         // Write failed — client likely disconnected without a clean TCP close.
         // Clear the interval and explicitly remove the SSE client to prevent a leak

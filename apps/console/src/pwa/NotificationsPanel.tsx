@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api';
 import { currentInstallEnvironment, installCapabilityWarning } from './capabilities';
-import { enablePush, thisBrowserIsSubscribed } from './push-client';
+import { enablePush, syncPushSubscription } from './push-client';
+import { isStandaloneDisplay } from './standalone';
 
 interface PushNotice {
   id: string;
@@ -13,6 +14,7 @@ interface PushNotice {
 interface PushConfig {
   publicKey: string | null;
   configured: boolean;
+  subscribed: boolean;
   hidePreviews: boolean;
   notices: PushNotice[];
 }
@@ -31,6 +33,7 @@ function isConfig(value: unknown): value is PushConfig {
   const row = value as Record<string, unknown>;
   return (row['publicKey'] === null || typeof row['publicKey'] === 'string')
     && typeof row['configured'] === 'boolean'
+    && typeof row['subscribed'] === 'boolean'
     && typeof row['hidePreviews'] === 'boolean'
     && Array.isArray(row['notices'])
     && row['notices'].every(isNotice);
@@ -44,12 +47,13 @@ export function NotificationsPanel() {
   const capability = installCapabilityWarning(currentInstallEnvironment());
 
   const load = useCallback(async () => {
+    await syncPushSubscription().catch(() => false);
     const res = await apiFetch('/api/push/config');
     if (!res.ok) throw new Error('Could not load notification settings.');
     const body: unknown = await res.json();
     if (!isConfig(body)) throw new Error('Malformed notification settings.');
     setConfig(body);
-    setSubscribed(await thisBrowserIsSubscribed());
+    setSubscribed(body.subscribed);
     setError(null);
   }, []);
 
@@ -77,6 +81,20 @@ export function NotificationsPanel() {
     }
   }
 
+  async function turnOff() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await apiFetch('/api/push/subscriptions', { method: 'DELETE' });
+      if (!res.ok) throw new Error('Could not turn off notifications.');
+      setSubscribed(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not turn off notifications.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function setHidePreviews(hidePreviews: boolean) {
     setBusy(true);
     setError(null);
@@ -95,21 +113,6 @@ export function NotificationsPanel() {
     }
   }
 
-  async function dismiss(id: string) {
-    setBusy(true);
-    try {
-      const res = await apiFetch(`/api/push/notices/${id}/dismiss`, { method: 'POST' });
-      if (!res.ok) throw new Error('Could not dismiss the notice.');
-      setConfig((current) => current
-        ? { ...current, notices: current.notices.filter((notice) => notice.id !== id) }
-        : current);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not dismiss the notice.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <section className="pair-panel" aria-label="Notifications">
       <h3 className="settings-section-title">Notifications</h3>
@@ -121,18 +124,19 @@ export function NotificationsPanel() {
         <p className="pair-warning" role="status">Notifications need an HTTPS address for this Curia.</p>
       )}
       {error && <p className="autonomy-error">{error}</p>}
-      {config?.notices.map((notice) => (
-        <div key={notice.id} className="pair-warning" role="status">
-          <p>{notice.detail}</p>
-          <button type="button" className="btn" disabled={busy} onClick={() => void dismiss(notice.id)}>
-            Dismiss
-          </button>
-        </div>
-      ))}
       {config?.configured && !capability && (
         <div className="device-actions">
           {subscribed ? (
-            <p className="device-meta">Notifications are on for this phone.</p>
+            <>
+              <p className="device-meta">
+                {isStandaloneDisplay()
+                  ? 'Notifications are on for this phone.'
+                  : 'Notifications are on for this browser.'}
+              </p>
+              <button type="button" className="btn" disabled={busy} onClick={() => void turnOff()}>
+                Turn off notifications
+              </button>
+            </>
           ) : (
             <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void turnOn()}>
               {busy ? 'Turning on…' : 'Turn on notifications'}

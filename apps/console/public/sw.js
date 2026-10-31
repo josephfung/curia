@@ -39,12 +39,18 @@ self.addEventListener('push', (event) => {
   let title = 'Curia';
   let body = 'New message from Curia';
   let url = '/chat';
+  let tag = 'curia';
+  let conversationId = '';
+  let messageId = '';
   try {
     if (event.data) {
       const payload = event.data.json();
       if (payload && typeof payload.title === 'string' && payload.title) title = payload.title;
       if (payload && typeof payload.body === 'string' && payload.body) body = payload.body;
       if (payload && typeof payload.url === 'string' && payload.url.startsWith('/')) url = payload.url;
+      if (payload && typeof payload.tag === 'string' && payload.tag) tag = payload.tag;
+      if (payload && typeof payload.conversationId === 'string') conversationId = payload.conversationId;
+      if (payload && typeof payload.messageId === 'string') messageId = payload.messageId;
     }
   } catch {
     // A malformed payload still shows the generic Curia alert.
@@ -52,7 +58,9 @@ self.addEventListener('push', (event) => {
   event.waitUntil(self.registration.showNotification(title, {
     body,
     icon: '/icons/curia-192.png',
-    data: { url },
+    tag,
+    renotify: true,
+    data: { url, conversationId, messageId },
   }));
 });
 
@@ -62,10 +70,31 @@ self.addEventListener('notificationclick', (event) => {
   const target = data && typeof data.url === 'string' ? data.url : '/chat';
   event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
     for (const client of windowClients) {
-      const path = new URL(client.url).pathname;
-      if (path === '/chat' || path.startsWith('/chat/')) return client.focus();
+      let clientUrl;
+      try {
+        clientUrl = new URL(client.url);
+      } catch {
+        continue;
+      }
+      if (clientUrl.origin !== self.location.origin) continue;
+      const focused = client.focus();
+      if (typeof client.navigate === 'function') {
+        return focused.then(() => client.navigate(target));
+      }
+      return focused;
     }
     return self.clients.openWindow(target);
+  }));
+});
+
+self.addEventListener('pushsubscriptionchange', (event) => {
+  const next = event.newSubscription;
+  if (!next) return;
+  event.waitUntil(fetch('/api/push/subscriptions', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(next.toJSON()),
   }));
 });
 

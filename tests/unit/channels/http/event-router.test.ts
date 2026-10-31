@@ -8,7 +8,7 @@
 // WaitResult", which makes an unhandled rejection structurally impossible.
 
 import { describe, it, expect, vi } from 'vitest';
-import { EventRouter, MessageRejectedError } from '../../../../src/channels/http/event-router.js';
+import { EventRouter, MessageRejectedError, SSE_WATCH_QUIET_MS } from '../../../../src/channels/http/event-router.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { BusEvent } from '../../../../src/bus/events.js';
 import type { Logger } from '../../../../src/logger.js';
@@ -287,6 +287,21 @@ describe('EventRouter web reply push', () => {
     });
     emit(webReply('again'));
     expect(seen).toEqual([]);
+  });
+
+  it('does not treat a client with no thread, or a quiet client, as watching', () => {
+    const { router } = makeRouter();
+    router.addSseClient({
+      res: { write: () => true } as unknown as ServerResponse,
+    });
+    expect(router.hasChatListener('c1')).toBe(false);
+    expect(router.hasAnyChatListener()).toBe(false);
+    router.addSseClient({
+      res: { write: () => true } as unknown as ServerResponse,
+      conversationId: 'c1',
+      lastSeen: Date.now() - SSE_WATCH_QUIET_MS - 1,
+    });
+    expect(router.hasChatListener('c1')).toBe(false);
   });
 
   it('does not notify for a reply on another channel', () => {

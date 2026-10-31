@@ -249,12 +249,6 @@ export class HttpAdapter implements Channel {
           logger.error({ err, conversationId }, 'web reply push failed');
         });
       });
-      try {
-        const existing = await pool.query(`SELECT 1 FROM push_subscriptions LIMIT 1`);
-        webPush.noteSubscribed(existing.rows.length > 0);
-      } catch (err) {
-        logger.error({ err }, 'web push: could not count subscriptions at boot');
-      }
     }
 
     // Cookie parsing — required for the KG session cookie auth flow.

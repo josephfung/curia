@@ -130,7 +130,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Shared web thread** — every browser shows one server-owned chat, live while it is open. (#2341)
 - **Web thread adoption** — pre-090 rows with a null channel start a fresh thread. (#2341)
 - **Chat echo** — the operator's message is broadcast before the agent turn starts. (#2341)
-- **Reach order** — default is Signal, SMS, the phone app, Slack, then email. (#2341)
 - **agent.task / llm.call / llm.error / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started`, `reasoning_delta` and `output_started` added. (#2371)
 - **LLM calls** — agent and infra calls on Anthropic and OpenRouter now stream internally. (#2371)
 - **Console API paths** — tasks, contacts, chat and grants move to `/api/*`; old tabs work for one release. (#872)

@@ -206,7 +206,7 @@ export class ApprovalExpirySweep {
     // The live channel list, not deliver()'s `available`: that one leaves out channels that
     // failed earlier in this process, which is right for an agent choosing its next try but
     // would retire a channel for good after one transient outage. Each tick tries them all.
-    const order: ApprovalChannel[] = ['email', ...approvalDelivery.availableChannels().filter((c) => c !== 'email')];
+    const order: ApprovalChannel[] = ['email', ...(await approvalDelivery.availableChannels()).filter((c) => c !== 'email')];
     let result: DeliverResult | undefined;
     for (const channel of order) {
       result = await approvalDelivery.deliver(shortRef, channel);

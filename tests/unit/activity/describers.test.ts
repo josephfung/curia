@@ -127,6 +127,13 @@ describe('describeToolCall', () => {
     expect(describeToolCall(send, ctx({ 'c-1': 'Jane Roe' }))?.text).toBe("couldn't email Jane Roe");
   });
 
+  it('names the phone app, and the fallback channel when the phone could not take it', () => {
+    const onPhone = call('web-send', { recipient: 'principal', message: 'hi' }, { channel: 'web' });
+    expect(describeToolCall(onPhone, ctx())?.text).toBe('messaged the principal on the phone app');
+    const onSignal = call('web-send', { recipient: 'principal', message: 'hi' }, { channel: 'signal' });
+    expect(describeToolCall(onSignal, ctx())?.text).toBe('messaged the principal on Signal');
+  });
+
   it('resolves the principal alias and strips #label hints', () => {
     const send = call('signal-send', { recipient: 'principal#personal', message: 'hi' }, { delivered_to: '+1555' });
     expect(describerRefs(send)).toEqual(['principal']);

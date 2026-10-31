@@ -29,6 +29,7 @@ import { quoteParticipants } from './_shared/reply-quote.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput } from './_shared/read-attachments.js';
 import type { EmailRecipientSource, EmailSendRequest } from '../channels/email/outbound-request.js';
 import type { WebOutboundRequest } from '../channels/web/outbound-request.js';
+import { orderFallbackChannels, type FallbackChannel } from '../agents/principal-reach.js';
 import type { SignalOutboundRequest } from '../channels/signal/outbound-request.js';
 import type { SlackOutboundRequest } from '../channels/slack/outbound-request.js';
 import type { SmsOutboundRequest } from '../channels/sms/outbound-request.js';
@@ -282,6 +283,12 @@ export interface OutboundGatewayConfig {
 
   /** Phone-app push (#2341). Absent in tests and when the app is not configured. */
   webPush?: import('../channels/web/push-service.js').WebPushService;
+
+  /**
+   * The standing preference that names a channel, when one is set. web-send
+   * uses it to order the fallback. Absent: the default order of configured channels.
+   */
+  reachPreferenceText?: () => string | null;
 
   contactService: ContactService;
   contentFilter: OutboundContentFilter;
@@ -682,6 +689,7 @@ export class OutboundGateway {
   private readonly slackClient?: SlackClient;
   private readonly smsClient?: SmsClient;
   private readonly webPush?: import('../channels/web/push-service.js').WebPushService;
+  private readonly reachPreferenceText?: () => string | null;
   private readonly contactService: ContactService;
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
@@ -715,6 +723,7 @@ export class OutboundGateway {
     this.slackClient = config.slackClient;
     this.smsClient = config.smsClient;
     this.webPush = config.webPush;
+    this.reachPreferenceText = config.reachPreferenceText;
     this.contactService = config.contactService;
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
@@ -744,6 +753,25 @@ export class OutboundGateway {
       // spot-check pool (#2159 Phase 3), and that should not be invisible.
       this.log.warn({ actionLogRepo: false }, 'outbound-gateway: spot-check pool disabled: no actionLogRepo');
     }
+  }
+
+  /**
+   * Channels that can take a web-send fallback, configured clients only, with a
+   * standing preference's named channels first.
+   */
+  configuredFallbackChannels(): FallbackChannel[] {
+    const configured: FallbackChannel[] = [];
+    if (this.signalClient && this.signalPhoneNumber) configured.push('signal');
+    if (this.smsClient) configured.push('sms');
+    if (this.slackClient) configured.push('slack');
+    if (this.nylasClients.size > 0) configured.push('email');
+    let preference: string | null = null;
+    try {
+      preference = this.reachPreferenceText?.() ?? null;
+    } catch (err) {
+      this.log.warn({ err }, 'outbound-gateway: could not read the reach preference');
+    }
+    return orderFallbackChannels(configured, preference);
   }
 
   /**

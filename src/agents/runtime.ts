@@ -32,6 +32,7 @@ import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer, InvokeOptions } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef, PrincipalProfileRef } from '../contacts/types.js';
+import type { PrincipalReach } from './principal-reach.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { splitRelayNote } from './principal-note.js';
@@ -241,6 +242,11 @@ export interface AgentConfig {
   pinnedContext?: import('./pinned-context.js').PinnedContextEntry[];
   /** Reads for the pinned-context block. Absent with entries declared, each renders as unavailable. */
   pinnedContextReader?: import('./pinned-context.js').PinnedContextReader;
+  /**
+   * Channels this agent can use to reach the principal, read every turn.
+   * Absent for an agent with no send skill, so the reach block is omitted.
+   */
+  principalReach?: () => Promise<PrincipalReach | null> | PrincipalReach | null;
   /** Optional identity service — when provided, the freshly-compiled identity block is
    *  PREPENDED to the system prompt as a preamble (above the body) on every task turn.
    *  This enables hot-reload: identity changes via the API or file watcher take effect

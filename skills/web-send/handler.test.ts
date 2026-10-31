@@ -62,5 +62,42 @@ describe('web-send', () => {
       });
     }
     expect(send).toHaveBeenCalledTimes(2);
+    const fallbackCall = send.mock.calls[1] as unknown as [unknown, { principalDirected?: boolean; holdRecipe?: { toolName?: string } }];
+    expect(fallbackCall[1]?.principalDirected).toBe(false);
+    expect(fallbackCall[1]?.holdRecipe?.toolName).toBe('web-send');
+  });
+
+  it('does not try another channel when no phone is subscribed', async () => {
+    const send = vi.fn(async () => ({
+      success: false,
+      webDelivery: 'unavailable' as const,
+      blockedReason: 'No phone is subscribed to notifications.',
+    }));
+    const result = await handler.execute(ctx(send));
+    expect(result.success).toBe(false);
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('skips a channel that is not configured', async () => {
+    const send = vi.fn(async (request: { channel: string }) => {
+      if (request.channel === 'web') {
+        return { success: false, webDelivery: 'fallback' as const, blockedReason: 'dead' };
+      }
+      return { success: true };
+    });
+    const base = ctx(send);
+    const gateway = base.outboundGateway as NonNullable<typeof base.outboundGateway> & {
+      configuredFallbackChannels: () => string[];
+    };
+    gateway.configuredFallbackChannels = () => ['email'];
+    (gateway.resolveRecipientReference as ReturnType<typeof vi.fn>).mockImplementation(async (channel: string) => (
+      channel === 'email'
+        ? { ok: true, identifier: 'a@example.com', kind: 'alias', contactId: 'c1' }
+        : { ok: false, error: 'no' }
+    ));
+    const result = await handler.execute(base);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ channel: 'email' });
+    expect(send.mock.calls.map((call) => (call[0] as { channel: string }).channel)).toEqual(['web', 'email']);
   });
 });

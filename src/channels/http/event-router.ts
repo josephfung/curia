@@ -111,9 +111,14 @@ export interface PendingResponse {
   timeout: NodeJS.Timeout;
 }
 
+/** A client that has not been written to for this long is not watching the thread. */
+export const SSE_WATCH_QUIET_MS = 60_000;
+
 export interface SseClient {
   res: ServerResponse;
   conversationId?: string; // Optional filter
+  /** Epoch ms of the last successful write, including the heartbeat. */
+  lastSeen?: number;
 }
 
 /** Event types forwarded to Ant Farm live stream (interpreter catalog superset). */
@@ -379,6 +384,7 @@ export class EventRouter {
       if (!shouldSend) continue;
       try {
         client.res.write(`data: ${sseData}\n\n`);
+        client.lastSeen = Date.now();
       } catch (err) {
         // Client connection is dead — remove it. The 'close' event handler
         // will also fire eventually, but cleaning up here prevents repeated
@@ -397,17 +403,34 @@ export class EventRouter {
     this.broadcastToSseClients(JSON.stringify(payload), conversationId);
   }
 
-  /** True when a chat SSE client has this thread, or is listening to every thread. */
+  /** True when a client is watching this thread. A client with no thread, or quiet for a minute, is not. */
   hasChatListener(conversationId: string): boolean {
+    const now = Date.now();
     for (const client of this.sseClients) {
-      if (!client.conversationId || client.conversationId === conversationId) return true;
+      if (!this.isWatching(client, now)) continue;
+      if (client.conversationId === conversationId) return true;
     }
     return false;
   }
 
-  /** True when any chat SSE client is connected, whatever thread it filtered to. */
+  /** True when any chat SSE client is watching a thread. */
   hasAnyChatListener(): boolean {
-    return this.sseClients.size > 0;
+    const now = Date.now();
+    for (const client of this.sseClients) {
+      if (this.isWatching(client, now)) return true;
+    }
+    return false;
+  }
+
+  /** A successful heartbeat counts as the client still being there. */
+  touchSseClient(client: SseClient): void {
+    client.lastSeen = Date.now();
+  }
+
+  private isWatching(client: SseClient, now: number): boolean {
+    if (!client.conversationId) return false;
+    const seen = client.lastSeen ?? 0;
+    return now - seen < SSE_WATCH_QUIET_MS;
   }
 
   /**
@@ -422,6 +445,7 @@ export class EventRouter {
 
   /** Register an SSE client. Returns a cleanup function. */
   addSseClient(client: SseClient): () => void {
+    if (client.lastSeen === undefined) client.lastSeen = Date.now();
     this.sseClients.add(client);
     this.logger.debug({ conversationId: client.conversationId }, 'SSE client connected');
     return () => {

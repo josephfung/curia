@@ -115,12 +115,13 @@ agents keep choosing the channel. Code decides only whether the app is reachable
    devices, so every screen shows the same conversation live.
 
 5. **Web push on a principal-only `web` channel.**
-   - **Delivery.** Delivering on `web` does three things. It appends the message to the
-     shared thread in working memory, so the coordinator has the context when the operator
-     replies there. It broadcasts the message to open clients. And it pushes to every
+   - **Delivery.** Delivering on `web` writes the shared thread when a browser is watching
+     it or a push is accepted, so a fallback does not also leave a copy there. It broadcasts
+     the message to open clients in the same shape as a live reply. And it pushes to every
      subscribed device of the principal, unless one of the principal's clients has the thread
      on screen right now. That suppression happens **on the server**, because every push that
      is sent must show a notification: iOS may revoke a subscription whose pushes show none.
+     A client with no conversation, or quiet for about a minute, is not watching.
      Curia's replies to messages sent from the app follow the same rule, so a reply that lands
      after the phone is locked still alerts.
    - **VAPID keys.** The keys are generated once and kept in the vault (ADR-020/021).
@@ -145,8 +146,13 @@ agents keep choosing the channel. Code decides only whether the app is reachable
      - A 403 or other 4xx is a **setup error**, such as a bad VAPID subject. The subscription
        is kept, the message goes out on the next channel, and the console shows the push
        service's reason.
-     - A 429 or 5xx is retried with backoff.
-     - A 2xx counts as delivered. There are no receipts.
+     - A 429 is tried once more when the service sends Retry-After, capped at ten seconds.
+       A 5xx or a local failure is not retried on a timer. If the push is not accepted, the
+       message goes out on the next channel. Nothing promises a later retry.
+     - No subscription is a structured failure. The message is not sent on another channel,
+       and the console does not call a phone that never subscribed dead.
+     - A 2xx counts as delivered. There are no receipts. Five consecutive failures delete
+       the subscription.
 
 6. **Voice: paused, not dropped.** The existing LiveKit call runs unchanged in the installed
    app. The spike showed that when iOS backgrounds the app or the phone locks, the mic track is

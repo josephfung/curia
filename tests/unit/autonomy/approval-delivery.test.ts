@@ -62,7 +62,7 @@ function makeDelivery(opts: {
 }
 
 describe('ApprovalDelivery.availableChannels', () => {
-  it('lists verified, active channels in the order signal, sms, slack, email', () => {
+  it('lists verified, active channels in the order signal, sms, slack, email', async () => {
     const { delivery } = makeDelivery({
       identities: [
         identity('email', 'principal@example.com'),
@@ -71,10 +71,10 @@ describe('ApprovalDelivery.availableChannels', () => {
         identity('signal', '+15550001111', { verified: false }),
       ],
     });
-    expect(delivery.availableChannels()).toEqual(['sms', 'slack', 'email']);
+    expect(await delivery.availableChannels()).toEqual(['sms', 'slack', 'email']);
   });
 
-  it('offers the phone app between SMS and Slack when a device can receive it', () => {
+  it('offers the phone app between SMS and Slack when a device can receive it', async () => {
     const { delivery } = makeDelivery({
       identities: [
         identity('sms', '+15550002222'),
@@ -82,12 +82,12 @@ describe('ApprovalDelivery.availableChannels', () => {
       ],
       webReachable: () => true,
     });
-    expect(delivery.availableChannels()).toEqual(['sms', 'web', 'slack', 'email']);
+    expect(await delivery.availableChannels()).toEqual(['sms', 'web', 'slack', 'email']);
   });
 
-  it('counts email when only the principal email ref is bound', () => {
+  it('counts email when only the principal email ref is bound', async () => {
     const { delivery } = makeDelivery({ identities: [] });
-    expect(delivery.availableChannels()).toEqual(['email']);
+    expect(await delivery.availableChannels()).toEqual(['email']);
   });
 });
 

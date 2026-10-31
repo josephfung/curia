@@ -1,7 +1,7 @@
 {
   "name": "deliver-approval",
   "description": "Send a pending approval to the principal on ONE channel. A personal-data ask is urgent: deliver it now. Use the channel their standing preferences name for urgent items, else Signal, then SMS, then the phone app, then Slack, then email. If delivery fails, the error lists the channels left; try the next one. An approval is delivered once, then mentioned only in the next digest.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

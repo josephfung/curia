@@ -842,10 +842,11 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    // Security stays at the top. The reach-order injection sits between it and the body.
+    // Security stays at the top, ahead of the body. An agent with no send skill
+    // is not given a reach order.
     expect(systemMsg.startsWith('## Security\nPolicy here.\n\n')).toBe(true);
-    expect(systemMsg.indexOf('## Security')).toBeLessThan(systemMsg.indexOf('## Reaching the principal'));
-    expect(systemMsg.indexOf('## Reaching the principal')).toBeLessThan(systemMsg.indexOf('Body text.'));
+    expect(systemMsg).not.toContain('## Reaching the principal');
+    expect(systemMsg.indexOf('## Security')).toBeLessThan(systemMsg.indexOf('Body text.'));
     // Block appears exactly once (no duplicate append).
     expect(systemMsg.indexOf('## Security')).toBe(systemMsg.lastIndexOf('## Security'));
   });

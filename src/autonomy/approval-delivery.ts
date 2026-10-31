@@ -58,7 +58,7 @@ export interface ApprovalDeliveryDeps {
   principalEmail: string | PrincipalEmailRef;
   logger: Logger;
   /** The phone app can take an approval when a device is subscribed or the chat is open. */
-  webReachable?: () => boolean;
+  webReachable?: () => boolean | Promise<boolean>;
 }
 
 // Approvals live 24–48h; anything older than this many registrations has long since been
@@ -92,21 +92,25 @@ export class ApprovalDelivery {
   }
 
   /** Channels the principal has a verified, active identity on, in APPROVAL_CHANNELS order. */
-  availableChannels(): ApprovalChannel[] {
-    return APPROVAL_CHANNELS.filter((channel) => this.recipientFor(channel) !== null);
+  async availableChannels(): Promise<ApprovalChannel[]> {
+    const available: ApprovalChannel[] = [];
+    for (const channel of APPROVAL_CHANNELS) {
+      if (await this.recipientFor(channel) !== null) available.push(channel);
+    }
+    return available;
   }
 
   /** Send one pending approval on one channel. Never throws. */
   async deliver(shortRef: string, channel: ApprovalChannel): Promise<DeliverResult> {
     const { actionLogRepo, logger } = this.deps;
     const failed = this.failedChannels.get(shortRef);
-    const available = this.availableChannels().filter((c) => !failed?.has(c));
+    const available = (await this.availableChannels()).filter((c) => !failed?.has(c));
 
     const row = await actionLogRepo.findPendingByShortRef(shortRef);
     if (!row) return { delivered: false, reason: 'not_found', available };
     if (row.notificationSentAt) return { delivered: false, reason: 'already_delivered', available };
 
-    const recipient = this.recipientFor(channel);
+    const recipient = await this.recipientFor(channel);
     if (recipient === null) return { delivered: false, reason: 'channel_unavailable', available };
 
     // Build before claiming: a payload the renderer chokes on must not leave a claim behind,
@@ -205,8 +209,8 @@ export class ApprovalDelivery {
     }
   }
 
-  private recipientFor(channel: ApprovalChannel): string | null {
-    if (channel === 'web') return this.deps.webReachable?.() ? 'principal' : null;
+  private async recipientFor(channel: ApprovalChannel): Promise<string | null> {
+    if (channel === 'web') return (await this.deps.webReachable?.()) ? 'principal' : null;
     if (channel === 'email') {
       const email = resolvePrincipalEmail(this.deps.principalEmail);
       if (email) return email;

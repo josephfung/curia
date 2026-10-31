@@ -41,6 +41,7 @@ import {
 } from './prompts/verification-block.js';
 import { formatTurnBudgetBlock } from './turn-budget.js';
 import { renderPinnedContextBlock, type PinnedContextReader } from './pinned-context.js';
+import { formatPrincipalReachBlock } from './principal-reach.js';
 import type { AgentConfig } from './runtime.js';
 
 /**
@@ -67,6 +68,7 @@ export type SystemPromptSources = Pick<
   | 'browserSessionAlive'
   | 'pinnedContext'
   | 'pinnedContextReader'
+  | 'principalReach'
 >;
 
 /** Stands in when no reader is wired: every declared entry renders as unavailable. */
@@ -89,7 +91,8 @@ export function resolveMaxTurns(errorBudget: AgentConfig['errorBudget']): number
  *
  * Order (do not change without updating the tests that pin it):
  *   identity → security → ## Your Contact Details → ## Who you serve (with
- *   ### Principal Contact Details) → YAML body → ## Available Specialists →
+ *   ### Principal Contact Details) → ## Reaching the principal (send-capable
+ *   agents only) → YAML body → ## Available Specialists →
  *   ## Pinned context → autonomy → live sign-in verifications (coordinator, ceo-inbox) → date guardrail
  *   (coordinator) → time → turn budget
  *
@@ -179,16 +182,20 @@ export async function buildBaseSystemPrompt(
     if (block) preambleParts.push(block);
   }
 
-  // Default reach order (#2341, ADR-046). Injected every turn so it is not copied
-  // into each agent's system_prompt. Standing preferences and an explicit request
-  // still win; this is only the order when the principal has not named a channel.
-  preambleParts.push(
-    '## Reaching the principal\n'
-    + 'When they have not named a channel, reach them in this order: Signal, then SMS, then the phone app (`web-send` with recipient "principal"), then Slack, then email. '
-    + 'Their standing preferences and an explicit request override this order. '
-    + 'If web-send says the push service is busy, leave the message there. '
-    + 'If it says the phone was unreachable and names the channel it already used, do not send the message again.',
-  );
+  // Default reach order (#2341, ADR-046), beside Who you serve. Only an agent
+  // with a send skill receives it, and only for channels that are configured.
+  // The phone is listed only while a device can receive it. A standing
+  // preference is stated first and overrides the order.
+  if (sources.principalReach) {
+    try {
+      const reach = await sources.principalReach();
+      const block = reach ? formatPrincipalReachBlock(reach) : null;
+      if (block) preambleParts.push(block);
+    } catch (err) {
+      failBlock('reach', err);
+      logger.error({ err, agentId }, 'Failed to build the reach block — omitted this turn');
+    }
+  }
 
   if (preambleParts.length > 0) {
     prompt = preambleParts.join('\n\n') + '\n\n' + prompt;

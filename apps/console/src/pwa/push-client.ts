@@ -13,6 +13,26 @@ export function urlBase64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
+/** Tell the server about a subscription the browser already has. Called at app start. */
+export async function syncPushSubscription(): Promise<boolean> {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
+  const registration = await navigator.serviceWorker.getRegistration();
+  if (!registration) return false;
+  const subscription = await registration.pushManager.getSubscription();
+  if (!subscription) return false;
+  const json = subscription.toJSON();
+  const endpoint = json.endpoint;
+  const p256dh = json.keys?.p256dh;
+  const auth = json.keys?.auth;
+  if (!endpoint || !p256dh || !auth) return false;
+  const res = await apiFetch('/api/push/subscriptions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint, keys: { p256dh, auth } }),
+  });
+  return res.ok;
+}
+
 export async function thisBrowserIsSubscribed(): Promise<boolean> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
   const registration = await navigator.serviceWorker.getRegistration();

@@ -1,24 +1,41 @@
 // web-send — reach the principal on the phone app (#2341, ADR-055).
 //
-// Principal only. A dead subscription or a push setup error is sent onward by
-// this handler, on Signal, then SMS, then Slack, then email. A busy push
-// service is not sent onward.
+// Principal only. A dead subscription, a push setup error, or a push the
+// service did not accept is sent onward by this handler, through the same
+// gateway checks as the phone send. The order is the configured channels,
+// with a standing preference's named channel first. No subscription is a
+// failure and is not sent onward.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import type { OutboundSendRequest } from '../../src/skills/outbound-gateway.js';
+import type { OutboundGateway, OutboundSendRequest } from '../../src/skills/outbound-gateway.js';
 import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../src/skills/_shared/principal-directed.js';
+import { FALLBACK_CHANNELS, type FallbackChannel } from '../../src/agents/principal-reach.js';
 
 const MAX_MESSAGE_LENGTH = 4000;
 
-const FALLBACK: ReadonlyArray<{
-  channel: 'signal' | 'sms' | 'slack' | 'email';
-  request: (identifier: string, message: string) => OutboundSendRequest;
-}> = [
-  { channel: 'signal', request: (identifier, message) => ({ channel: 'signal', recipient: identifier, message }) },
-  { channel: 'sms', request: (identifier, message) => ({ channel: 'sms', recipient: identifier, message }) },
-  { channel: 'slack', request: (identifier, message) => ({ channel: 'slack', slackChannelId: identifier, slackUserId: identifier, message }) },
-  { channel: 'email', request: (identifier, message) => ({ channel: 'email', to: identifier, subject: 'Message from Curia', body: message }) },
-];
+const FALLBACK_REQUEST: Record<FallbackChannel, (identifier: string, message: string) => OutboundSendRequest> = {
+  signal: (identifier, message) => ({ channel: 'signal', recipient: identifier, message }),
+  sms: (identifier, message) => ({ channel: 'sms', recipient: identifier, message }),
+  slack: (identifier, message) => ({ channel: 'slack', slackChannelId: identifier, slackUserId: identifier, message }),
+  email: (identifier, message) => ({ channel: 'email', to: identifier, subject: 'Message from Curia', body: message }),
+};
+
+function sendOptions(ctx: ToolContext): NonNullable<Parameters<OutboundGateway['send']>[1]> {
+  return {
+    taskEventId: ctx.taskEventId,
+    conversationId: ctx.conversationId,
+    principalDirected: isPrincipalDirectedSend(ctx),
+    ...originatorOption(ctx),
+    humanApproved: ctx.humanApproved,
+    holdRecipe: { toolName: 'web-send', partialPayload: ctx.input, description: 'Message on the phone app' },
+  };
+}
+
+function fallbackOrder(gateway: OutboundGateway): readonly FallbackChannel[] {
+  return typeof gateway.configuredFallbackChannels === 'function'
+    ? gateway.configuredFallbackChannels()
+    : FALLBACK_CHANNELS;
+}
 
 export class WebSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -40,14 +57,7 @@ export class WebSendHandler implements ToolHandler {
     try {
       result = await ctx.outboundGateway.send(
         { channel: 'web', recipient: 'principal', message },
-        {
-          taskEventId: ctx.taskEventId,
-          conversationId: ctx.conversationId,
-          principalDirected: isPrincipalDirectedSend(ctx),
-          ...originatorOption(ctx),
-          humanApproved: ctx.humanApproved,
-          holdRecipe: { toolName: 'web-send', partialPayload: ctx.input, description: 'Message on the phone app' },
-        },
+        sendOptions(ctx),
       );
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : String(err);
@@ -69,28 +79,27 @@ export class WebSendHandler implements ToolHandler {
     }
 
     const notice = result.webDeliveryDetail ?? result.blockedReason ?? 'The phone could not be reached.';
-    for (const candidate of FALLBACK) {
-      const resolved = await ctx.outboundGateway.resolveRecipientReference(candidate.channel, 'principal', { field: 'recipient' });
+    const options = sendOptions(ctx);
+    for (const channel of fallbackOrder(ctx.outboundGateway)) {
+      const resolved = await ctx.outboundGateway.resolveRecipientReference(channel, 'principal', { field: 'recipient' });
       if (!resolved.ok) continue;
       try {
-        const sent = await ctx.outboundGateway.send(candidate.request(resolved.identifier, message), {
-          taskEventId: ctx.taskEventId,
-          conversationId: ctx.conversationId,
-          principalDirected: true,
-          humanApproved: ctx.humanApproved,
-        });
+        const sent = await ctx.outboundGateway.send(FALLBACK_REQUEST[channel](resolved.identifier, message), options);
+        if (sent.deferredToDigest) {
+          return { success: true, data: { channel, app_notice: notice, ...relayDeferredData(sent) } };
+        }
         if (sent.success) {
           return {
             success: true,
             data: {
-              channel: candidate.channel,
+              channel,
               app_notice: notice,
               ...redactionData(sent),
             },
           };
         }
       } catch (err) {
-        ctx.log.error({ err, channel: candidate.channel }, 'web-send: fallback send threw');
+        ctx.log.error({ err, channel }, 'web-send: fallback send threw');
       }
     }
     return { success: false, error: `${notice} No other channel could take the message.` };

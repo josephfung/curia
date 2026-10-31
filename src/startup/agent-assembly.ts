@@ -18,6 +18,7 @@ import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentConfig } from '../agents/runtime.js';
 import type { SystemPromptSources } from '../agents/system-prompt.js';
+import { agentCanSend, type PrincipalReach } from '../agents/principal-reach.js';
 import type { AgentYamlConfig } from '../agents/loader.js';
 import { interpolateRuntimeContext } from '../agents/loader.js';
 import { parsePinnedContext, pinnedDocPaths, type PinnedContextReader } from '../agents/pinned-context.js';
@@ -362,6 +363,11 @@ export interface AgentAssemblyContext {
   taskRepo?: TaskRepo;
   /** Shared with the dispatcher. Absent in callers that predate turn lanes. */
   turnLanes?: TurnLanes;
+  /**
+   * Reach block for one agent's pinned tools. Absent: no agent is told a
+   * default channel order. Called every turn.
+   */
+  principalReach?: (pinnedTools: readonly string[]) => Promise<PrincipalReach | null> | PrincipalReach | null;
 }
 
 export interface AssembledAgent {
@@ -462,6 +468,9 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     // agentId, systemPrompt, and every field buildBaseSystemPrompt() reads — including
     // the coordinator-only gating. Decided in one place; see resolveSystemPromptSources.
     ...resolveSystemPromptSources(agentConfig, systemPrompt, ctx),
+    ...(agentCanSend(pinnedToolNames) && ctx.principalReach
+      ? { principalReach: () => ctx.principalReach!(pinnedToolNames) }
+      : {}),
     provider: binding.provider,
     resolvedModel: binding.resolvedModel,
     tier: binding.tier,
