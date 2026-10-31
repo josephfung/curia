@@ -239,6 +239,10 @@ export class LiveKitRoomSession implements AudioTransport {
     this.source?.clearQueue();
   }
 
+  queuedAudioMs(): number {
+    return this.source?.queuedDuration ?? 0;
+  }
+
   async disconnect(): Promise<void> {
     if (this.disconnecting) return;
     this.disconnecting = true;

@@ -40,6 +40,13 @@ export class FakeAudioTransport implements AudioTransport {
     this.clearQueuedAudioCount += 1;
   }
 
+  /** Test knob for queuedAudioMs(). */
+  queuedMs = 0;
+
+  queuedAudioMs(): number {
+    return this.queuedMs;
+  }
+
   /** Test helper: simulate an inbound audio frame arriving from the principal. */
   emitRemoteAudio(frame: PcmFrame): void {
     for (const cb of this.remoteCallbacks) cb(frame);

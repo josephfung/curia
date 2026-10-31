@@ -86,9 +86,9 @@ describe('VOICE_TOOL_NAMES', () => {
     expect(beyondCoordinator).toEqual([]);
   });
 
+  // Measured as voice sends them: with the voice-only spoken notes (#2379).
   it(`keeps the tool definitions under ${VOICE_TOOL_DEFINITION_BYTES_BUDGET} bytes`, () => {
-    const bytes = registry
-      .toToolDefinitions([...VOICE_TOOL_NAMES])
+    const bytes = withVoiceSpokenNotes(registry.toToolDefinitions([...VOICE_TOOL_NAMES]))
       .reduce((sum, def) => sum + Buffer.byteLength(JSON.stringify(def), 'utf8'), 0);
     expect(bytes).toBeLessThanOrEqual(VOICE_TOOL_DEFINITION_BYTES_BUDGET);
   });
@@ -131,13 +131,30 @@ describe('voice spoken phrasing (#2379)', () => {
     }
   });
 
-  it('keeps every quoted example in voice prompt and tool text free of internal terms', () => {
+  function voiceTexts(): string[] {
     const prompt = buildVoiceSystemPrompt({
       identityBlock: null,
       specialistRoster: '- @calendar: Calendar and scheduling.',
       audience: { liveTurn: true },
     });
-    const texts = [prompt, VOICE_GREETING_INSTRUCTION, ...voiceDefs.flatMap(def => descriptions(def))];
+    return [prompt, VOICE_GREETING_INSTRUCTION, ...voiceDefs.flatMap(def => descriptions(def))];
+  }
+
+  // How the 10-30 call failed: the prompt said not to name the coordinator or the
+  // off-ramp, and the model read those words back. A rule about speech says what to
+  // talk about instead, without the words.
+  it('names no internal term in a sentence about what not to say', () => {
+    const aboutSpeech = /\b(?:say|said|speak|spoken|unspoken|aloud|out loud|name|mention)\b/i;
+    const negated = /\b(?:never|not|don't|do not|avoid|unspoken)\b/i;
+    const offending = voiceTexts()
+      .flatMap(text => text.split(/(?<=[.!?])\s+/))
+      .filter(sentence => aboutSpeech.test(sentence) && negated.test(sentence))
+      .filter(sentence => findInternalJargon(sentence).length > 0);
+    expect(offending).toEqual([]);
+  });
+
+  it('keeps every quoted example in voice prompt and tool text free of internal terms', () => {
+    const texts = voiceTexts();
     const offending = texts
       .flatMap(quotedExamples)
       .filter(example => findInternalJargon(example).length > 0);

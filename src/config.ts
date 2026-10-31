@@ -1284,6 +1284,14 @@ export function loadYamlConfig(configDir: string): YamlConfig {
 
   resolveIdentityGateMode(config.filter);
 
+  // channels.voice.turn_hold_ms is meant to be set in config/local.yaml (#2379), which
+  // is merged but not schema-checked. It becomes a setTimeout delay on every spoken
+  // turn, so a string, fraction, negative, or minutes-long value must fail at boot.
+  const turnHoldMs: unknown = config.channels?.voice?.turn_hold_ms;
+  if (turnHoldMs !== undefined && (!Number.isInteger(turnHoldMs) || (turnHoldMs as number) < 0 || (turnHoldMs as number) > 5_000)) {
+    throw new Error(`channels.voice.turn_hold_ms must be an integer from 0 to 5000, got: ${String(turnHoldMs)}`);
+  }
+
   // Validate the browser block. config/local.yaml is deep-merged above but not
   // schema-validated, so a bad override (e.g. sweepIntervalMs: 0 or -1) would otherwise
   // reach BrowserService and schedule near-continuous sweeps. Reject malformed values here.

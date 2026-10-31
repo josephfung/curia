@@ -58,6 +58,7 @@
             "turn_hold_ms": {
               "type": "integer",
               "minimum": 0,
+              "maximum": 5000,
               "description": "Wait (ms) after end-of-speech before a spoken turn starts. Absent: the runtime default. 0: no hold."
             }
           }

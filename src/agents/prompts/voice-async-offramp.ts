@@ -31,7 +31,7 @@ export const VOICE_ASYNC_OFFRAMP_GUIDANCE = [
   '   call the `async-offramp` tool with a crisp brief of what to do and how to',
   '   follow up (Signal or email). Then tell them plainly that you are on it,',
   '   for example: "I\'ll work on that after we hang up and email it to you."',
-  '   The off-ramp and the coordinator are internal: never name them out loud.',
+  '   Talk about the work, not about how it is handed off.',
   '4. If they want to stay on the call and shrink the ask, help them narrow it.',
   '',
   'Prefer the off-ramp over a partial or wrong spoken answer. Never claim a',

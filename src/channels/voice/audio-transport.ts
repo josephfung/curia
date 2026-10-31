@@ -34,4 +34,10 @@ export interface AudioTransport {
    * transport without it plays out what it already has.
    */
   clearQueuedAudio?(): void;
+  /**
+   * Published audio the transport still holds before playout, in ms, when it can
+   * tell (#2379). LiveKit reports its AudioSource queue. The Signal pipe cannot see
+   * what PulseAudio buffers past pacat, so it leaves this out.
+   */
+  queuedAudioMs?(): number;
 }
