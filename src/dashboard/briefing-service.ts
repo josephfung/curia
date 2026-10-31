@@ -403,10 +403,11 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
  * payload says otherwise. A failed root reply with no successful visible call
  * is a failure; mixed with successes it is partial.
  *
- * Minutes are not a column here. `saved_calls` carries the input and result data
- * so `minutesForCall` can run the same `done()` the feed uses, minus the fields
- * describers never read (message bodies, and a document's body). A flat weight
- * cannot see a dry run, an unplaced hold, or a scratch note.
+ * Minutes are not a column here. A visible call carries its input and result data,
+ * minus the fields describers never read (message bodies, and a document's body),
+ * so `minutesForCall` can run the same `done()` the feed uses. A flat weight
+ * cannot see a dry run, an unplaced hold, or a scratch note. An unlisted call
+ * carries neither: the default depends only on the name.
  */
 const HISTOGRAM_SQL = `
 WITH RECURSIVE chain AS (
@@ -540,8 +541,8 @@ SELECT
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'day', to_char(root_ts AT TIME ZONE $4, 'YYYY-MM-DD'),
       'tool', tool_name,
-      'input', input,
-      'data', data
+      'input', CASE WHEN tool_name = ANY($6::text[]) THEN input ELSE '{}'::jsonb END,
+      'data', CASE WHEN tool_name = ANY($6::text[]) THEN data ELSE NULL END
     )), '[]'::jsonb)
     FROM calls
     WHERE kind = 'ok'

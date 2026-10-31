@@ -738,7 +738,7 @@ export function timeSavedHelp(): string {
   const reply = flatMinutes('ceo-inbox-draft-reply');
   const filing = flatMinutes('email-archive');
   const filingText = filing === 0.5 ? '½' : String(filing);
-  return `Rough estimate of your time behind the actions in Recent Activity. A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. Reads don't count. An unlisted tool ≈${UNDESCRIBED_CALL_MINUTES} min.`;
+  return `Rough estimate of your time. A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. A listed read doesn't count. Anything not listed ≈${UNDESCRIBED_CALL_MINUTES} min.`;
 }
 
 /**

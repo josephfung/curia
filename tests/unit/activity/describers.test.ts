@@ -269,7 +269,7 @@ describe('minutesForCall', () => {
 
   it('states the tile definition from the same weights', () => {
     expect(timeSavedHelp()).toBe(
-      "Rough estimate of your time behind the actions in Recent Activity. A meeting ≈10 min, a reply ≈5, filing ≈½. Reads don't count. An unlisted tool ≈0.052 min.",
+      "Rough estimate of your time. A meeting ≈10 min, a reply ≈5, filing ≈½. A listed read doesn't count. Anything not listed ≈0.052 min.",
     );
     expect(timeSavedDetail()).toBe(
       'A new document ≈15 min, an edit ≈3. Scratch notes don\'t count. Each action counts, including a repeat.',
