@@ -122,6 +122,39 @@ describeIf('Scheduler: wakes for finished tasks (#2378)', () => {
     expect(await wakeStatus(jobId)).toBe('cancelled');
   });
 
+  // publishFire closes a delegation-retry task as soon as the wake goes out (the task only
+  // holds the brief). If the agent run then errors, the job is left failed and the poll
+  // retries it; the task being done must not drop that retry.
+  it('still retries a failed delegation-retry wake whose task the fire already closed', async () => {
+    const { taskId, jobId } = await taskWithFailedWake('delegation-retry');
+    const delegationRetry = {
+      conversationId: 'conv-2378', channelId: 'signal', senderId: 'sender-2378',
+      targetAgent: 'research-analyst', brief: 'Look into the Q3 numbers.', attempt: 1,
+    };
+    const payload = { type: 'task-wake', task_id: taskId, delegationRetry };
+    await pool.query(`UPDATE scheduled_jobs SET task_payload = $2::jsonb WHERE id = $1`, [jobId, JSON.stringify(payload)]);
+    await pool.query(`UPDATE tasks SET status = 'done' WHERE id = $1`, [taskId]);
+
+    const outcome = await fireJob({ ...jobRow(jobId, taskId), taskPayload: payload });
+
+    expect(outcome).toBe('dispatched');
+    await vi.waitFor(() => expect(fired).toEqual([AGENT_ID]));
+  });
+
+  // The guard is NULL-safe: a one-shot linked to a finished task but with no payload type is
+  // not a task wake, so it is claimed as before rather than left due and skipped every poll.
+  it('still claims a typeless one-shot linked to a finished task', async () => {
+    const { taskId, jobId } = await taskWithFailedWake('typeless');
+    const payload = { task: 'follow up' };
+    await pool.query(`UPDATE scheduled_jobs SET task_payload = $2::jsonb WHERE id = $1`, [jobId, JSON.stringify(payload)]);
+    await pool.query(`UPDATE tasks SET status = 'done' WHERE id = $1`, [taskId]);
+
+    const outcome = await fireJob({ ...jobRow(jobId, taskId), taskPayload: payload });
+
+    expect(outcome).toBe('dispatched');
+    await vi.waitFor(() => expect(fired).toEqual([AGENT_ID]));
+  });
+
   it('still fires a failed wake whose task is open', async () => {
     const { taskId, jobId } = await taskWithFailedWake('open');
 

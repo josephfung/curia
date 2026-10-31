@@ -1,6 +1,6 @@
 # ceo-inbox, the hourly triage cron finds a stalled drain task (#2378). Rule: the hourly
 # `schedule:` payload in agents/ceo-inbox.yaml: a drain task with neither next_wake_at nor
-# wake_running is stalled and becomes THE drain task for this run, so the cron triages and
+# wake_state is stalled and becomes THE drain task for this run, so the cron triages and
 # re-arms it in Step 6 rather than leaving the inbox unworked or creating a second task.
 #
 # Unread mail remains behind this batch (has_more true). task-create and task-complete
@@ -19,12 +19,14 @@ inbound:
   from: scheduler
   content: >
     First call task-list with status 'open,in_progress' and tag 'inbox-drain'.
-    If a returned task has next_wake_at set or wake_running true, a drain cycle
-    is already working the inbox: exit immediately without any output. If one
-    has neither, it is stalled: it is THE drain task for this run. Then check
-    the principal's inbox for unread messages. Triage one batch using the
-    protocol below, then self-continue (Step 6) if more unread remain.
-    If there are no unread messages, follow Step 3 and exit without output.
+    A returned task with next_wake_at or wake_state set is live; one with
+    neither is stalled. If any is live, a drain cycle owns the inbox:
+    task-complete each stalled one ("stalled duplicate"), then exit without
+    output. Otherwise the first stalled task is THE drain task for this run;
+    task-complete any other stalled ones. Then check the principal's inbox for
+    unread messages. Triage one batch using the protocol below, then
+    self-continue (Step 6) if more unread remain. If there are no unread
+    messages, follow Step 3 and exit without output.
 tool_stubs:
   task-list:
     - match: {}
@@ -39,7 +41,7 @@ tool_stubs:
             age: today
             last_progress_note: batch done, more queued
             next_wake_at: null
-            wake_running: false
+            wake_state: null
             source_agent_id: ceo-inbox
             blocked_by_task_id: null
             parent_task_id: null

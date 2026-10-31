@@ -63,12 +63,14 @@ schedule:
   - cron: "0 6-23 * * *"  # hourly, 6am–11pm local time; dead hours don't justify the cost
     task: >
       First call task-list with status 'open,in_progress' and tag 'inbox-drain'.
-      If a returned task has next_wake_at set or wake_running true, a drain cycle
-      is already working the inbox: exit immediately without any output. If one
-      has neither, it is stalled: it is THE drain task for this run. Then check
-      the principal's inbox for unread messages. Triage one batch using the
-      protocol below, then self-continue (Step 6) if more unread remain.
-      If there are no unread messages, follow Step 3 and exit without output.
+      A returned task with next_wake_at or wake_state set is live; one with
+      neither is stalled. If any is live, a drain cycle owns the inbox:
+      task-complete each stalled one ("stalled duplicate"), then exit without
+      output. Otherwise the first stalled task is THE drain task for this run;
+      task-complete any other stalled ones. Then check the principal's inbox for
+      unread messages. Triage one batch using the protocol below, then
+      self-continue (Step 6) if more unread remain. If there are no unread
+      messages, follow Step 3 and exit without output.
   - cron: "0 7 * * *"  # daily sent-observe — keep out of the hourly triage loop
     task: >
       Run ceo-inbox-sent-observe, then task-completion-from-sent: poll Sent since
@@ -873,7 +875,8 @@ system_prompt: |
   the batch, decide whether to keep draining:
 
   1. **More unread remain** (`has_more` was true in Step 3). Schedule the next
-     batch on THE drain task (see Step 3), or create one if this run has none:
+     batch on THE drain task: the `inbox-drain` task this run was woken for, or
+     the stalled one your schedule check named. If this run has neither, create one:
      - If the current local time is within operating hours (6am–11pm), aim the
        wake ~90 seconds out so the next batch runs promptly instead of waiting for
        the hourly cron. If OUTSIDE operating hours, aim `wake_at` at the next

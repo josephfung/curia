@@ -284,20 +284,45 @@ describeIf('TaskRepo.updateTask running-wake reschedule (#1938)', () => {
     expect(plainRow!.nextWakeAt).toBeNull();
   });
 
-  // A mid-batch wake run has no next_wake_at, so a caller checking "is this task being
-  // worked?" would read it as stalled (#2378). wakeRunning says a wake is running now.
-  it('flags a task whose wake is running now, and not one whose wake is only pending', async () => {
-    const running = await taskWithRunningWake('list-wake-running');
-    await pool.query(`UPDATE tasks SET priority = 1000 WHERE id = $1`, [running.taskId]);
+  // A mid-batch wake run has no next_wake_at, so a caller checking "is a cycle still
+  // alive?" would read it as stalled (#2378). wakeState reports the task wake's own state,
+  // including a failed wake the scheduler will retry and a suspended one held for a person.
+  it('reports the state of the task wake the scheduler still owns', async () => {
+    const { taskId, jobId } = await taskWithRunningWake('list-wake-state');
+    await pool.query(`UPDATE tasks SET priority = 1000 WHERE id = $1`, [taskId]);
+    const stateNow = async (): Promise<string | null> =>
+      (await repo.listTasks({ limit: 1000 })).find((row) => row.id === taskId)!.wakeState;
 
-    const listed = await repo.listTasks({ limit: 1000 });
-    const runningRow = listed.find((row) => row.id === running.taskId);
-    expect(runningRow).toBeDefined();
-    expect(runningRow!.wakeRunning).toBe(true);
+    expect(await stateNow()).toBe('running');
 
-    await pool.query(`UPDATE scheduled_jobs SET status = 'pending' WHERE id = $1`, [running.jobId]);
-    const relisted = await repo.listTasks({ limit: 1000 });
-    expect(relisted.find((row) => row.id === running.taskId)!.wakeRunning).toBe(false);
+    await pool.query(`UPDATE scheduled_jobs SET status = 'pending' WHERE id = $1`, [jobId]);
+    expect(await stateNow()).toBe('pending');
+
+    // completeJobRun leaves a failed one-shot with its past next_run_at; the poll re-claims it.
+    await pool.query(
+      `UPDATE scheduled_jobs SET status = 'failed', next_run_at = now() - interval '1 minute' WHERE id = $1`,
+      [jobId],
+    );
+    expect(await stateNow()).toBe('retrying');
+
+    // A failed row with no next_run_at is never selected again: nothing owns the task.
+    await pool.query(`UPDATE scheduled_jobs SET next_run_at = NULL WHERE id = $1`, [jobId]);
+    expect(await stateNow()).toBeNull();
+
+    await pool.query(`UPDATE scheduled_jobs SET status = 'suspended' WHERE id = $1`, [jobId]);
+    expect(await stateNow()).toBe('suspended');
+
+    await pool.query(`UPDATE scheduled_jobs SET status = 'completed' WHERE id = $1`, [jobId]);
+    expect(await stateNow()).toBeNull();
+  });
+
+  it('ignores a job on the task that is not a task wake', async () => {
+    const { taskId, jobId } = await taskWithRunningWake('list-wake-state-nonwake');
+    await pool.query(`UPDATE tasks SET priority = 1000 WHERE id = $1`, [taskId]);
+    await pool.query(`UPDATE scheduled_jobs SET task_payload = '{"task":"other"}'::jsonb WHERE id = $1`, [jobId]);
+
+    const row = (await repo.listTasks({ limit: 1000 })).find((r) => r.id === taskId);
+    expect(row!.wakeState).toBeNull();
   });
 
   it('retries when two reschedules race a completion that already armed the wake', async () => {

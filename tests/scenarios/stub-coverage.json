@@ -395,11 +395,23 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
+    "inbox cron closes a stalled drain task when the inbox is empty": {
+      "unstubbed": null,
+      "reason": "New in the #2390 review; not yet run (paid suite, awaiting the maintainer's go-ahead)."
+    },
+    "inbox cron closes a stalled duplicate beside a live drain task": {
+      "unstubbed": null,
+      "reason": "New in the #2390 review; not yet run (paid suite, awaiting the maintainer's go-ahead)."
+    },
     "inbox cron leaves a running drain cycle alone": {
       "unstubbed": 0,
       "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-31T16:31:30.100Z"
+    },
+    "inbox cron leaves a running drain cycle alone with mail waiting": {
+      "unstubbed": null,
+      "reason": "New in the #2390 review; not yet run (paid suite, awaiting the maintainer's go-ahead)."
     },
     "inbox cron takes over a stalled drain task": {
       "unstubbed": 0,

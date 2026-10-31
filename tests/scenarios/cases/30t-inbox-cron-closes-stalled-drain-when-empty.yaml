@@ -1,0 +1,77 @@
+# ceo-inbox, the hourly triage cron finds a stalled drain task and an empty inbox (#2378).
+# Rule: the hourly `schedule:` payload in agents/ceo-inbox.yaml makes a stalled drain task
+# (neither next_wake_at nor wake_state) THE drain task for this run, and "Step 3" completes
+# THE drain task when the count is 0. Without that the stalled task stays open forever.
+#
+# task-update and task-create succeed, so re-arming or a new drain task is available.
+name: inbox cron closes a stalled drain task when the inbox is empty
+description: >
+  ceo-inbox's hourly triage fires. Its inbox-drain task is open but has no wake scheduled
+  or running, and the inbox has nothing unread. ceo-inbox completes that drain task and
+  exits. It does not re-arm it and creates no new drain task.
+tags: [specialist-ceo-inbox, ceo-inbox, scheduler, triage, inbox-drain]
+agent: ceo-inbox
+timeout_seconds: 300
+stub_sets: [ceo-inbox-mailroom, deferred-work]
+inbound:
+  from: scheduler
+  content: >
+    First call task-list with status 'open,in_progress' and tag 'inbox-drain'.
+    A returned task with next_wake_at or wake_state set is live; one with
+    neither is stalled. If any is live, a drain cycle owns the inbox:
+    task-complete each stalled one ("stalled duplicate"), then exit without
+    output. Otherwise the first stalled task is THE drain task for this run;
+    task-complete any other stalled ones. Then check the principal's inbox for
+    unread messages. Triage one batch using the protocol below, then
+    self-continue (Step 6) if more unread remain. If there are no unread
+    messages, follow Step 3 and exit without output.
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        tasks:
+          - task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000308
+            title: Drain principal inbox backlog
+            status: in_progress
+            owner: curia
+            priority: 3
+            tags: [inbox-drain]
+            age: today
+            last_progress_note: batch done, more queued
+            next_wake_at: null
+            wake_state: null
+            source_agent_id: ceo-inbox
+            blocked_by_task_id: null
+            parent_task_id: null
+        count: 1
+        displayTimezone: "{{timezone}}"
+  task-update:
+    - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000308 }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000308, title: Drain principal inbox backlog, status: in_progress, owner: curia, priority: 3, tags: [inbox-drain], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  task-complete:
+    - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000308 }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000308, title: Drain principal inbox backlog, status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  ceo-inbox-list:
+    - match: {}
+      return: { count: 0, has_more: false, messages: [] }
+expected_behaviors:
+  - id: completes_stalled_task
+    weight: critical
+    description: Completes the stalled drain task.
+    check:
+      called: task-complete
+      with: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000308 }
+  - id: no_rearm
+    weight: critical
+    description: Does not re-arm the drain task with a new wake.
+    check:
+      not_called: [task-update]
+      contains: { wake_at: "20" }
+  - id: no_new_drain_task
+    weight: critical
+    description: Creates no new drain task.
+    check:
+      not_called: [task-create]
+failure_modes:
+  - Leaves the stalled drain task open, so it lingers
+  - Re-arms the drain task although the inbox is empty

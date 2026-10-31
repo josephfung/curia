@@ -43,7 +43,7 @@ function makeListRow(overrides: Partial<TaskListRow> = {}): TaskListRow {
     tags: ['board-prep'],
     originator: null,
     nextWakeAt: null,
-    wakeRunning: false,
+    wakeState: null,
     ...overrides,
   };
 }
@@ -167,10 +167,10 @@ describe('TaskListHandler', () => {
     expect(data.tasks[0]!.next_wake_at).not.toBeNull();
   });
 
-  it('reports wake_running so a mid-batch task is not read as stalled', async () => {
+  it('reports wake_state so a task the scheduler still owns is not read as stalled', async () => {
     const taskRepo = makeTaskRepo({
       listTasks: vi.fn().mockResolvedValue([
-        makeListRow({ wakeRunning: true }),
+        makeListRow({ wakeState: 'retrying' }),
         makeListRow({ id: '00000000-0000-0000-0000-000000000002' }),
       ]),
     });
@@ -178,9 +178,9 @@ describe('TaskListHandler', () => {
 
     const result = await new TaskListHandler().execute(ctx);
 
-    const data = (result as { success: true; data: { tasks: Array<{ wake_running: boolean }> } }).data;
-    expect(data.tasks[0]!.wake_running).toBe(true);
-    expect(data.tasks[1]!.wake_running).toBe(false);
+    const data = (result as { success: true; data: { tasks: Array<{ wake_state: string | null }> } }).data;
+    expect(data.tasks[0]!.wake_state).toBe('retrying');
+    expect(data.tasks[1]!.wake_state).toBeNull();
   });
 
   it('returns displayTimezone in the result', async () => {
