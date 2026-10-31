@@ -6,7 +6,19 @@ const require = createRequire(import.meta.url);
 const pkg = require('./package.json') as { version: string };
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'sw-no-cache',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          const urlPath = req.url?.split('?', 1)[0];
+          if (urlPath === '/sw.js') res.setHeader('Cache-Control', 'no-cache');
+          next();
+        });
+      },
+    },
+  ],
   define: {
     // Injected at build time so the version from package.json is available
     // without a runtime fetch or a vite env file that needs manual updates.

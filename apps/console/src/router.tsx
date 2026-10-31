@@ -7,6 +7,7 @@ import {
   redirect,
 } from '@tanstack/react-router';
 import LoginPage from './pages/LoginPage';
+import { PwaChrome } from './pwa/PwaChrome';
 import { getSessionInfo } from './api';
 import { clampWizardStep } from './pages/wizard-utils';
 import { noteResolvedPath } from './pages/chat/ask-handoff';
@@ -34,6 +35,7 @@ const ChannelsPage = lazy(() =>
 const McpToolsPage = lazy(() => import('./pages/McpToolsPage'));
 const WizardPage = lazy(() => import('./pages/WizardPage'));
 const SecretCapturePage = lazy(() => import('./pages/SecretCapturePage'));
+const PairPage = lazy(() => import('./pages/PairPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
 const TasksPage = lazy(() => import('./pages/TasksPage'));
@@ -43,9 +45,12 @@ const ChatPage = lazy(() => import('./pages/ChatPage'));
 
 const rootRoute = createRootRoute({
   component: () => (
-    <Suspense fallback={null}>
-      <Outlet />
-    </Suspense>
+    <>
+      <PwaChrome />
+      <Suspense fallback={null}>
+        <Outlet />
+      </Suspense>
+    </>
   ),
 });
 
@@ -195,6 +200,14 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
+// Public pairing page. The code in the URL fragment is the credential; the
+// session it creates is the cookie, not localStorage (#2341).
+const pairRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/pair',
+  component: PairPage,
+});
+
 // Public secret-capture form (#971). Child of rootRoute — NOT authedRoute — so it renders
 // without a session: the single-use token in the path is the only credential.
 const secretCaptureRoute = createRoute({
@@ -308,6 +321,7 @@ const routeTree = rootRoute.addChildren([
     ]),
   ]),
   loginRoute,
+  pairRoute,
   secretCaptureRoute,
 ]);
 

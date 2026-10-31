@@ -147,6 +147,8 @@ describe('registerSecurityHeaders', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain("script-src 'self'");
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('cdn.tailwindcss.com');
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain("manifest-src 'self'");
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain("worker-src 'self'");
   });
 
   it('does not allow data: images in the strict console CSP', async () => {

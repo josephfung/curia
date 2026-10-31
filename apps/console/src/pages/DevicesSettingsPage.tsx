@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { apiFetch } from '../api';
 import { endConsoleSession } from '../auth/log-out.js';
 import { timeAgo } from '../components/settings/ConfigHistory';
+import { PairPhonePanel } from './devices/PairPhonePanel';
 import { SettingsLayout } from './SettingsPage';
 
 interface DeviceSession {
@@ -174,6 +175,8 @@ function DevicesSection() {
           Browsers and phones signed in to this Curia. A device stays signed in for 90 days after its last use. Signing it out here ends that session immediately.
         </p>
       </div>
+
+      <PairPhonePanel />
 
       {loadError && <p className="autonomy-error" role="alert">{loadError}</p>}
       {actionError && <p className="autonomy-error" role="alert">{actionError}</p>}

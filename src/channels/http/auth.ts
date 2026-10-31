@@ -52,6 +52,7 @@ const SELF_AUTHED_API_PREFIXES = [
   '/api/contacts',
   '/api/chat',
   '/api/sessions',
+  '/api/pairing',
   '/api/grant-recommendations',
   '/api/voice',
   '/api/identity',

@@ -51,6 +51,11 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
       // missing / not a file / escape — all become SPA fallback rather than probing.
       const contained = await containedStaticFile(consoleDist, urlPath);
       if (contained) {
+        // The service worker must not be cached across deploys, or phones
+        // keep running the previous worker and miss the update prompt.
+        if (contained.safeRel === 'sw.js') {
+          reply.header('Cache-Control', 'no-cache');
+        }
         return reply.sendFile(contained.safeRel, contained.rootReal);
       }
     }

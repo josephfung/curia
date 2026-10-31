@@ -73,6 +73,7 @@ import type { AutonomyService } from '../../autonomy/autonomy-service.js';
 import { bindSessionRenewer, sessionExpiresAt, type SessionStore } from './session-auth.js';
 import { loadActiveSessions, SessionKeeper } from './console-sessions.js';
 import { sessionRoutes } from './routes/sessions.js';
+import { pairingRoutes } from './routes/pairing.js';
 import type { Channel } from '../channel.js';
 import type { AuditLogRepo } from '../../audit/audit-log-repo.js';
 import { DEFAULT_SCRATCH_DOC_TTL_DAYS } from '../../agents/document-workspace.js';
@@ -610,6 +611,15 @@ export class HttpAdapter implements Channel {
         webAppBootstrapSecret,
         bus,
         logger,
+      });
+      await this.app.register(pairingRoutes, {
+        pool,
+        sessions,
+        webAppBootstrapSecret,
+        bus,
+        logger,
+        secureCookies,
+        appOrigin,
       });
       await this.app.register(knowledgeGraphRoutes, {
         ...consoleBase,

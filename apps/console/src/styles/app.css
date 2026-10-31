@@ -935,6 +935,70 @@ a.dash-activity-headline:hover { text-decoration: underline; }
   font: inherit;
 }
 
+.pair-panel {
+  max-width: 720px;
+  margin-bottom: 28px;
+  padding: 16px 20px 20px;
+  background: var(--app-card);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+}
+.pair-warning {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--app-teal-soft);
+  color: var(--app-fg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.pair-form, .pair-done { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.pair-origin { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--app-fg-muted); }
+.pair-origin input, .pair-card input {
+  padding: 8px 10px;
+  border: 1px solid var(--app-input-bd);
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: var(--app-fg);
+  font: inherit;
+}
+.pair-code { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 14px; }
+.pair-qr { width: 220px; height: 220px; background: var(--app-bg); border-radius: 8px; }
+.pair-short {
+  margin: 0;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 22px;
+  letter-spacing: 0.08em;
+  color: var(--app-fg);
+}
+.pair-card { max-width: 420px; }
+.pwa-update {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: calc(8px + env(safe-area-inset-top)) 16px 8px;
+  background: var(--app-teal);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+}
+.pwa-update button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ── 11. Autonomy view ───────────────────────────────────────────────── */
 .autonomy-current {
   display: flex; align-items: baseline; gap: 12px;
