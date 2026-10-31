@@ -419,8 +419,10 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     //          rules are edited as sections of a /shared/ document (#2339).
     // 0.24.1 = decision tagging reads `enabled` from a richer value, and toggling it keeps
     //          the other fields (#2339 follow-up: prod's value carries needs_decision).
+    // 0.24.2 = the hourly cron leaves a running drain cycle alone, and a drained run
+    //          completes only its own drain task (#2378).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.24.1');
+    expect(config.version).toBe('0.24.2');
   });
 });
 

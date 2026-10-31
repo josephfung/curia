@@ -395,6 +395,14 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
+    "inbox cron leaves a running drain cycle alone": {
+      "unstubbed": null,
+      "reason": "New in #2378; not yet run (paid suite, awaiting the maintainer's go-ahead)."
+    },
+    "inbox cron takes over a stalled drain task": {
+      "unstubbed": null,
+      "reason": "New in #2378; not yet run (paid suite, awaiting the maintainer's go-ahead)."
+    },
     "inbox delegated rules request runs no triage": {
       "unstubbed": 0,
       "runs": 5,

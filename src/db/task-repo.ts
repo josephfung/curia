@@ -185,6 +185,9 @@ export interface ListAllTasksResult {
 // Extended row returned by list — includes the next pending wake-up time if any.
 export interface TaskListRow extends TaskRow {
   nextWakeAt: string | null;
+  /** A wake for this task is running now. A running wake that has not deferred a next
+   *  wake has a null nextWakeAt, so without this a mid-run task reads as stalled (#2378). */
+  wakeRunning: boolean;
 }
 
 // Terminal statuses: no transitions out of these.
@@ -490,7 +493,11 @@ export class TaskRepo {
              )
            ORDER BY COALESCE(sj.deferred_wake_at, sj.run_at) ASC
            LIMIT 1
-        ) AS next_wake_at
+        ) AS next_wake_at,
+        EXISTS (
+          SELECT 1 FROM scheduled_jobs sj
+           WHERE sj.task_id = t.id AND sj.status = 'running'
+        ) AS wake_running
       FROM tasks t
       ${whereClause}
       ORDER BY t.priority DESC, t.due_at ASC NULLS LAST, t.id ASC
@@ -498,9 +505,10 @@ export class TaskRepo {
     `;
 
     const { rows } = await this.pool.query(sql, queryParams);
-    return (rows as Array<DbTaskRow & { next_wake_at: string | null }>).map(r => ({
+    return (rows as Array<DbTaskRow & { next_wake_at: string | null; wake_running: boolean }>).map(r => ({
       ...mapTaskRow(r),
       nextWakeAt: r.next_wake_at,
+      wakeRunning: r.wake_running === true,
     }));
   }
 

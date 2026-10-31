@@ -284,6 +284,22 @@ describeIf('TaskRepo.updateTask running-wake reschedule (#1938)', () => {
     expect(plainRow!.nextWakeAt).toBeNull();
   });
 
+  // A mid-batch wake run has no next_wake_at, so a caller checking "is this task being
+  // worked?" would read it as stalled (#2378). wakeRunning says a wake is running now.
+  it('flags a task whose wake is running now, and not one whose wake is only pending', async () => {
+    const running = await taskWithRunningWake('list-wake-running');
+    await pool.query(`UPDATE tasks SET priority = 1000 WHERE id = $1`, [running.taskId]);
+
+    const listed = await repo.listTasks({ limit: 1000 });
+    const runningRow = listed.find((row) => row.id === running.taskId);
+    expect(runningRow).toBeDefined();
+    expect(runningRow!.wakeRunning).toBe(true);
+
+    await pool.query(`UPDATE scheduled_jobs SET status = 'pending' WHERE id = $1`, [running.jobId]);
+    const relisted = await repo.listTasks({ limit: 1000 });
+    expect(relisted.find((row) => row.id === running.taskId)!.wakeRunning).toBe(false);
+  });
+
   it('retries when two reschedules race a completion that already armed the wake', async () => {
     const { taskId, jobId } = await taskWithRunningWake('retry-race');
     const client = await pool.connect();

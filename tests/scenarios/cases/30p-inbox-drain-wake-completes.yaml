@@ -1,7 +1,7 @@
 # ceo-inbox, an inbox-drain task wake that finds the inbox empty (#2025, P2). Rule: the
 # `inbox-drain` tag steps (agents/ceo-inbox.yaml "Scheduled-wake resume" on main;
 # src/agents/prompts/ceo-inbox-wake-guidance.ts after P2) and "Step 3" / "Step 6": with no
-# unread mail, complete every open drain task and exit; do not re-arm it.
+# unread mail, complete the drain task it was woken for and exit; do not re-arm it (#2378).
 #
 # task-update and task-create succeed, so re-arming or a new drain task is available.
 name: inbox drain wake completes the drain task when empty

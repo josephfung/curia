@@ -234,6 +234,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Inbox triage cron** — skips while a drain cycle is running, so it no longer completes the drain mid-batch. (#2378)
+- **Scheduler task wakes** — a wake for a done or cancelled task is cancelled instead of firing. (#2378)
 - **Principal inbox paging** — follow-up pages keep their folder/unread filters, ending drain re-triage of handled mail. (#2377)
 - **Calendar write tools** — `calendar-create-event` and `calendar-update-event` refuse undeclared inputs instead of silently dropping them. (#2385)
 - **Signal call bridge** — logs every call event; a call ended mid-resolution is skipped with its reason. (#2372)
