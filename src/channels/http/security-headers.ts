@@ -55,8 +55,6 @@ export const ANTFARM_CONTENT_SECURITY_POLICY = [
   "font-src https://fonts.gstatic.com",
   "img-src 'self' data: blob:",
   "connect-src 'self'",
-  "manifest-src 'self'",
-  "worker-src 'self'",
   "base-uri 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",

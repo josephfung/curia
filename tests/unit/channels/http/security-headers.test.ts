@@ -197,5 +197,7 @@ describe('registerSecurityHeaders', () => {
     expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("script-src 'self'");
     expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
     expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("img-src 'self' data: blob:");
+    expect(ANTFARM_CONTENT_SECURITY_POLICY).not.toContain('manifest-src');
+    expect(ANTFARM_CONTENT_SECURITY_POLICY).not.toContain('worker-src');
   });
 });
