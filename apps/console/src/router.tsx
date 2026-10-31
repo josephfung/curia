@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-router';
 import LoginPage from './pages/LoginPage';
 import { PwaChrome } from './pwa/PwaChrome';
+import { isStandaloneDisplay, signedOutPath } from './pwa/standalone';
 import { getSessionInfo } from './api';
 import { clampWizardStep } from './pages/wizard-utils';
 import { noteResolvedPath } from './pages/chat/ask-handoff';
@@ -61,7 +62,7 @@ const authedRoute = createRoute({
   id: 'authed',
   beforeLoad: async ({ location }) => {
     const session = await getSessionInfo();
-    if (!session.valid) throw redirect({ to: '/login' });
+    if (!session.valid) throw redirect({ to: signedOutPath(isStandaloneDisplay()) });
     // First-run redirect: push to /setup if not yet configured, unless already
     // heading there (avoids a redirect loop).
     if (!session.configured && location.pathname !== '/setup') {
@@ -197,6 +198,11 @@ const workspaceRedirect = createRoute({
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
+  beforeLoad: async () => {
+    if (!isStandaloneDisplay()) return;
+    const session = await getSessionInfo();
+    if (!session.valid) throw redirect({ to: '/pair' });
+  },
   component: LoginPage,
 });
 

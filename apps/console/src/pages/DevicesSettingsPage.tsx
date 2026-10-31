@@ -176,7 +176,7 @@ function DevicesSection() {
         </p>
       </div>
 
-      <PairPhonePanel />
+      <PairPhonePanel onPaired={() => { void load().catch(() => undefined); }} />
 
       {loadError && <p className="autonomy-error" role="alert">{loadError}</p>}
       {actionError && <p className="autonomy-error" role="alert">{actionError}</p>}

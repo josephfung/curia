@@ -2,13 +2,29 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { CuriaWordmark } from '../components/Icons';
 import { apiFetch } from '../api';
-import { currentInstallEnvironment, installCapabilityWarning } from '../pwa/capabilities';
-import { readFragmentToken } from './devices/fragment-token';
+import { PAIRING_LIMIT_MESSAGE } from '../../../../src/phone/phone-docs.js';
+import {
+  currentInstallEnvironment,
+  installCapabilityWarning,
+  pairPageNotice,
+} from '../pwa/capabilities';
+import {
+  BROWSER_INSTALL_HINT,
+  IOS_SHARE_STEPS,
+  installGuidance,
+  type InstallGuidance,
+} from '../pwa/install-guidance';
+import { PhoneNotice } from '../pwa/PhoneNotice';
+import { rememberFragmentToken, redeemFragmentOnce } from './devices/pair-visit';
 
 type Phase =
   | { kind: 'working' }
   | { kind: 'form' }
   | { kind: 'done'; warning: string | null };
+
+interface InstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+}
 
 export default function PairPage() {
   const navigate = useNavigate();
@@ -16,19 +32,28 @@ export default function PairPage() {
   const [shortCode, setShortCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
 
   useEffect(() => {
-    const token = readFragmentToken(window.location.hash);
-    // The token must not linger in the address bar or in storage.
-    if (window.location.hash) {
-      window.history.replaceState(null, '', '/pair');
+    const onPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
+    };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', onPrompt);
+  }, []);
+
+  useEffect(() => {
+    const token = rememberFragmentToken(window.location.hash);
+    if (window.location.hash.length > 0) {
+      void navigate({ to: '/pair', replace: true });
     }
     if (!token) {
       setPhase({ kind: 'form' });
       return;
     }
     let cancelled = false;
-    void redeem({ token }).then((result) => {
+    void redeemFragmentOnce(token, () => redeem({ token })).then((result) => {
       if (cancelled) return;
       if (result.ok) setPhase({ kind: 'done', warning: result.warning });
       else {
@@ -37,7 +62,7 @@ export default function PairPage() {
       }
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [navigate]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -49,8 +74,15 @@ export default function PairPage() {
     else setError(result.error);
   }
 
-  const capability = installCapabilityWarning(currentInstallEnvironment());
+  const environment = currentInstallEnvironment();
+  const capability = installCapabilityWarning(environment);
   const originWarning = phase.kind === 'done' ? phase.warning : null;
+  const notice = pairPageNotice(originWarning, capability);
+  const guidance = installGuidance({
+    ios: environment.ios,
+    standalone: environment.standalone,
+    promptAvailable: installPrompt !== null,
+  });
 
   return (
     <div className="login-root">
@@ -71,7 +103,7 @@ export default function PairPage() {
               autoComplete="one-time-code"
               required
             />
-            {error && <p className="login-error">{error}</p>}
+            {error && <p className="login-error" role="alert">{error}</p>}
             <button type="submit" className="btn btn-primary" disabled={busy}>
               {busy ? 'Signing in…' : 'Sign in'}
             </button>
@@ -79,20 +111,41 @@ export default function PairPage() {
         )}
         {phase.kind === 'done' && (
           <div className="pair-done">
-            {originWarning && <p className="pair-warning" role="status">{originWarning}</p>}
-            {capability && <p className="pair-warning" role="status">{capability}</p>}
-            <p className="device-meta">
-              To keep Curia on your home screen, use the browser share menu and choose Add to Home Screen.
-            </p>
+            {notice && <PhoneNotice text={notice} />}
+            {originWarning === null && (
+              <InstallHelp
+                guidance={guidance}
+                onInstall={() => { void installPrompt?.prompt(); }}
+              />
+            )}
             <button type="button" className="btn btn-primary" onClick={() => void navigate({ to: '/chat' })}>
               Open chat
             </button>
           </div>
         )}
-        {phase.kind !== 'done' && capability && <p className="pair-warning" role="status">{capability}</p>}
+        {phase.kind !== 'done' && notice && <PhoneNotice text={notice} />}
       </div>
     </div>
   );
+}
+
+function InstallHelp({ guidance, onInstall }: { guidance: InstallGuidance; onInstall: () => void }) {
+  if (guidance.kind === 'installed') return null;
+  if (guidance.kind === 'prompt') {
+    return (
+      <button type="button" className="btn" onClick={onInstall}>
+        Install Curia
+      </button>
+    );
+  }
+  if (guidance.kind === 'ios-share') {
+    return (
+      <ol className="pair-steps">
+        {IOS_SHARE_STEPS.map((step) => <li key={step}>{step}</li>)}
+      </ol>
+    );
+  }
+  return <p className="device-meta">{BROWSER_INSTALL_HINT}</p>;
 }
 
 async function redeem(body: { token: string } | { shortCode: string }): Promise<
@@ -105,6 +158,7 @@ async function redeem(body: { token: string } | { shortCode: string }): Promise<
       body: JSON.stringify(body),
     });
     const payload: unknown = await res.json().catch(() => null);
+    if (res.status === 429) return { ok: false, error: PAIRING_LIMIT_MESSAGE };
     if (!res.ok) {
       const message = typeof payload === 'object' && payload !== null && typeof (payload as { error?: unknown }).error === 'string'
         ? (payload as { error: string }).error

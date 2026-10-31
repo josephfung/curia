@@ -1,16 +1,21 @@
 // pairing.ts — desktop mint and phone redeem (#2341, ADR-055).
 //
-// GET  /api/pairing/origin   — which origin the QR should use, and the warning.
-// POST /api/pairing/codes    — mint a code. Authenticated.
-// POST /api/pairing/redeem   — the code is the credential. Sets the session cookie.
+// GET  /api/pairing/origin      — which origin the QR should use, and the warning.
+// POST /api/pairing/codes       — mint a code. Authenticated.
+// GET  /api/pairing/codes/:id   — which credentials have been redeemed.
+// POST /api/pairing/redeem      — the code is the credential. Sets the session cookie.
 //
 // Redeem is rate-limited harder than other console routes: the short code is
-// typed, so guessing has to be slow.
+// typed, so guessing has to be slow. The limit keys on request.ip, the same
+// as /auth. trustProxy stays unset, so behind a reverse proxy the limit is
+// shared by everyone using that proxy (ADR-055).
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { EventBus } from '../../../bus/bus.js';
 import { createOperatorSession } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
+import { isUuid } from '../../../util/uuid.js';
+import { PAIRING_LIMIT_MESSAGE } from '../../../phone/phone-docs.js';
 import {
   deleteSession,
   deviceNameFromUserAgent,
@@ -25,6 +30,7 @@ import {
   installabilityWarning,
   mintPairingCode,
   normalizeShortCode,
+  readPairingCodeStatus,
   releasePairingCode,
   type PairingCredential,
   type PairingQueryable,
@@ -51,15 +57,28 @@ export async function pairingRoutes(
 ): Promise<void> {
   const { pool, sessions, webAppBootstrapSecret, bus, logger, secureCookies, appOrigin } = options;
 
+  app.setErrorHandler((error, _request, reply) => {
+    const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error
+      ? (error as { statusCode?: unknown }).statusCode
+      : undefined;
+    if (statusCode === 429) {
+      return reply.status(429).send({ error: PAIRING_LIMIT_MESSAGE });
+    }
+    return reply.send(error);
+  });
+
   function requireAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
 
   app.get('/api/pairing/origin', READ_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
-    const query = request.query as { desktopOrigin?: unknown };
+    const query = request.query as { desktopOrigin?: unknown; requested?: unknown };
     const desktopOrigin = typeof query.desktopOrigin === 'string' ? query.desktopOrigin : null;
-    return reply.send(choosePairOrigin({ desktopOrigin, appOrigin }));
+    const requested = typeof query.requested === 'string' ? query.requested : null;
+    // JSON from choosePairOrigin (origin, warning, askForOrigin). Not HTML.
+    // nosemgrep: javascript.express.security.audit.xss.direct-response-write.direct-response-write
+    return reply.send(choosePairOrigin({ requested, desktopOrigin, appOrigin }));
   });
 
   app.post('/api/pairing/codes', MINT_RATE, async (request, reply) => {
@@ -76,6 +95,7 @@ export async function pairingRoutes(
       const minted = await mintPairingCode(pool, choice.origin);
       logger.info({ pairingCodeId: minted.id }, 'pairing code minted');
       return reply.status(201).send({
+        id: minted.id,
         pairUrl: minted.pairUrl,
         shortCode: minted.shortCode,
         expiresAt: minted.expiresAt,
@@ -87,14 +107,31 @@ export async function pairingRoutes(
     }
   });
 
+  app.get<{ Params: { id: string } }>('/api/pairing/codes/:id', READ_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    const id = request.params.id;
+    if (!isUuid(id)) return reply.status(404).send({ error: 'That pairing code was not found.' });
+    try {
+      const status = await readPairingCodeStatus(pool, id);
+      if (!status) return reply.status(404).send({ error: 'That pairing code was not found.' });
+      // JSON status for the desktop poll. The device name is our own label.
+      // nosemgrep: javascript.express.security.audit.xss.direct-response-write.direct-response-write
+      return reply.send(status);
+    } catch (err) {
+      logger.error({ err, pairingCodeId: id }, 'GET /api/pairing/codes/:id failed');
+      return reply.status(503).send({ error: 'Could not read the pairing code. Please try again.' });
+    }
+  });
+
   app.post('/api/pairing/redeem', REDEEM_RATE, async (request, reply) => {
     const credential = readCredential(request.body);
     if (!credential) {
       return reply.status(400).send({ error: 'Provide the pairing code from the QR link or the short code.' });
     }
-    let consumed: { id: string; origin: string } | null;
+    const name = deviceNameFromUserAgent(readUserAgent(request));
+    let consumed: Awaited<ReturnType<typeof consumePairingCode>>;
     try {
-      consumed = await consumePairingCode(pool, credential);
+      consumed = await consumePairingCode(pool, credential, name);
     } catch (err) {
       logger.error({ err }, 'POST /api/pairing/redeem failed to read the code');
       return reply.status(503).send({ error: 'Pairing is temporarily unavailable. Please try again.' });
@@ -102,8 +139,13 @@ export async function pairingRoutes(
     if (!consumed) {
       return reply.status(401).send({ error: 'That code is invalid or has expired.' });
     }
+    if (consumed.otherAlreadyRedeemed) {
+      logger.warn(
+        { pairingCodeId: consumed.id, kind: credential.kind },
+        'second pairing credential redeemed',
+      );
+    }
 
-    const name = deviceNameFromUserAgent(readUserAgent(request));
     let issued: Awaited<ReturnType<typeof issueSession>>;
     try {
       issued = await issueSession(pool, sessions, {
@@ -126,6 +168,7 @@ export async function pairingRoutes(
         sessionId: issued.id,
         kind: 'paired_device',
         name,
+        ...(consumed.otherAlreadyRedeemed ? { secondCredential: true } : {}),
       }));
     } catch (err) {
       logger.error({ err, sessionId: issued.id }, 'Failed to record pairing audit — session removed');

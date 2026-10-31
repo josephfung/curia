@@ -2,10 +2,12 @@
 //
 // The desktop mints a code. The QR encodes `https://<origin>/pair#c=<token>` so
 // the token stays in the fragment and never reaches a proxy log. A short code
-// is the typed fallback. Each credential redeems once, within 10 minutes, and
-// the resulting session lives only in the cookie.
+// is the typed fallback. Each credential redeems once. After the token is
+// redeemed, the short code's remaining life is capped at two minutes. The
+// resulting session lives only in the cookie.
 
 import { randomBytes } from 'node:crypto';
+import { PHONE_DOCS_URL } from '../../phone/phone-docs.js';
 import { hashToken } from './session-auth.js';
 
 export const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -13,8 +15,25 @@ export const PAIRING_TTL_MS = 10 * 60 * 1000;
 /** Unambiguous alphabet: no 0/O or 1/I. 32 symbols, so a random byte is uniform. */
 const SHORT_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
+/** One trailing label. `.example` matches `my.example` and not `curia.example.com`. */
+const PRIVATE_SUFFIXES = [
+  '.local',
+  '.lan',
+  '.home',
+  '.home.arpa',
+  '.internal',
+  '.intranet',
+  '.corp',
+  '.localdomain',
+  '.localhost',
+  '.test',
+  '.example',
+  '.invalid',
+];
+
 const INSTALL_WARNING =
-  "This address can't install the phone app. Notifications and the home-screen icon need HTTPS on a real hostname. Curia still opens in the phone's browser.";
+  "This address can't install the phone app. Notifications and the home-screen icon need HTTPS on a real hostname. Curia still opens in the phone's browser. "
+  + PHONE_DOCS_URL;
 
 export interface PairingQueryable {
   query: (
@@ -38,6 +57,20 @@ export interface MintedPairingCode {
   warning: string | null;
 }
 
+export interface ConsumedPairingCode {
+  id: string;
+  origin: string;
+  /** The other credential on this row was already redeemed. */
+  otherAlreadyRedeemed: boolean;
+}
+
+export interface PairingCodeStatus {
+  tokenRedeemed: boolean;
+  shortRedeemed: boolean;
+  expired: boolean;
+  deviceName: string | null;
+}
+
 function cleanOrigin(raw: string | null | undefined): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
@@ -59,18 +92,25 @@ function isIpLiteral(hostname: string): boolean {
   return host.includes(':');
 }
 
+function hasPrivateSuffix(host: string): boolean {
+  return PRIVATE_SUFFIXES.some((suffix) => host.endsWith(suffix) || host === suffix.slice(1));
+}
+
 /**
  * Why this origin cannot be the installed app, or null when it can.
- * A bare IP, localhost, a single-label name, `.local`, and plain HTTP all warn.
+ * HTTP, localhost, an IP, a single-label name, and the private suffixes
+ * above all warn. One trailing dot is ignored so `localhost.` still warns
+ * and `curia.example.com.` does not.
  */
 export function installabilityWarning(origin: string): string | null {
   const cleaned = cleanOrigin(origin);
   if (!cleaned) return 'That address is not a usable origin.';
   const url = new URL(cleaned);
-  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  let host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (host.endsWith('.')) host = host.slice(0, -1);
   const badProtocol = url.protocol !== 'https:';
-  const localhost = host === 'localhost' || host.endsWith('.localhost') || host === '::1';
-  const bareName = !host.includes('.') || host.endsWith('.local');
+  const localhost = host === 'localhost' || host === '::1';
+  const bareName = !host.includes('.') || hasPrivateSuffix(host);
   if (badProtocol || localhost || isIpLiteral(host) || bareName) return INSTALL_WARNING;
   return null;
 }
@@ -103,13 +143,6 @@ export function pairingUrl(origin: string, token: string): string {
   const base = cleanOrigin(origin);
   if (!base) throw new Error('pairing URL requires an http(s) origin');
   return `${base}/pair#c=${encodeURIComponent(token)}`;
-}
-
-export function readFragmentToken(hash: string): string | null {
-  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-  const token = new URLSearchParams(raw).get('c');
-  if (!token || !/^[A-Za-z0-9_-]{20,200}$/.test(token)) return null;
-  return token;
 }
 
 export function randomShortCode(nextBytes: (size: number) => Buffer = randomBytes): string {
@@ -182,40 +215,81 @@ export async function mintPairingCode(
 
 export type PairingCredential = { kind: 'token'; token: string } | { kind: 'short'; code: string };
 
+const CONSUME_TOKEN_SQL = `UPDATE pairing_codes
+     SET token_redeemed_at = NOW(),
+         expires_at = LEAST(expires_at, NOW() + interval '2 minutes'),
+         redeemed_device_name = $2
+     WHERE token_hash = $1
+       AND token_redeemed_at IS NULL
+       AND expires_at > NOW()
+     RETURNING id, origin, short_redeemed_at`;
+
+const CONSUME_SHORT_SQL = `UPDATE pairing_codes
+     SET short_redeemed_at = NOW(),
+         redeemed_device_name = $2
+     WHERE short_code_hash = $1
+       AND short_redeemed_at IS NULL
+       AND expires_at > NOW()
+     RETURNING id, origin, token_redeemed_at`;
+
 /**
- * Mark one credential used. The other credential on the same row stays valid
- * until it is used or the row expires, so a typed code still works when the
- * browser cookie did not carry into the installed app.
+ * Mark one credential used. The token path also caps the row's remaining
+ * life at two minutes, so the short code cannot sit unused for the rest of
+ * the original ten. The other credential stays valid until it is used or
+ * that deadline passes.
  */
 export async function consumePairingCode(
   pool: PairingQueryable,
   credential: PairingCredential,
-): Promise<{ id: string; origin: string } | null> {
-  const redeemedColumn = credential.kind === 'token' ? 'token_redeemed_at' : 'short_redeemed_at';
-  const hashColumn = credential.kind === 'token' ? 'token_hash' : 'short_code_hash';
+  deviceName: string | null,
+): Promise<ConsumedPairingCode | null> {
   const secret = credential.kind === 'token' ? credential.token : credential.code;
   const result = await pool.query(
-    `UPDATE pairing_codes
-     SET ${redeemedColumn} = NOW()
-     WHERE ${hashColumn} = $1
-       AND ${redeemedColumn} IS NULL
-       AND expires_at > NOW()
-     RETURNING id, origin`,
-    [hashToken(secret)],
+    credential.kind === 'token' ? CONSUME_TOKEN_SQL : CONSUME_SHORT_SQL,
+    [hashToken(secret), deviceName],
   );
   const row = result.rows[0];
   if (!row) return null;
-  return { id: asString(row['id'], 'id'), origin: asString(row['origin'], 'origin') };
+  const otherColumn = credential.kind === 'token' ? 'short_redeemed_at' : 'token_redeemed_at';
+  return {
+    id: asString(row['id'], 'id'),
+    origin: asString(row['origin'], 'origin'),
+    otherAlreadyRedeemed: row[otherColumn] != null,
+  };
 }
+
+const RELEASE_TOKEN_SQL = `UPDATE pairing_codes SET token_redeemed_at = NULL WHERE id = $1`;
+const RELEASE_SHORT_SQL = `UPDATE pairing_codes SET short_redeemed_at = NULL WHERE id = $1`;
 
 export async function releasePairingCode(
   pool: PairingQueryable,
   id: string,
   kind: PairingCredential['kind'],
 ): Promise<void> {
-  const redeemedColumn = kind === 'token' ? 'token_redeemed_at' : 'short_redeemed_at';
-  await pool.query(
-    `UPDATE pairing_codes SET ${redeemedColumn} = NULL WHERE id = $1`,
+  await pool.query(kind === 'token' ? RELEASE_TOKEN_SQL : RELEASE_SHORT_SQL, [id]);
+}
+
+export async function readPairingCodeStatus(
+  pool: PairingQueryable,
+  id: string,
+): Promise<PairingCodeStatus | null> {
+  const result = await pool.query(
+    `SELECT
+       (token_redeemed_at IS NOT NULL) AS token_redeemed,
+       (short_redeemed_at IS NOT NULL) AS short_redeemed,
+       (expires_at <= NOW()) AS expired,
+       redeemed_device_name
+     FROM pairing_codes
+     WHERE id = $1`,
     [id],
   );
+  const row = result.rows[0];
+  if (!row) return null;
+  const deviceName = row['redeemed_device_name'];
+  return {
+    tokenRedeemed: row['token_redeemed'] === true,
+    shortRedeemed: row['short_redeemed'] === true,
+    expired: row['expired'] === true,
+    deviceName: typeof deviceName === 'string' && deviceName.length > 0 ? deviceName : null,
+  };
 }

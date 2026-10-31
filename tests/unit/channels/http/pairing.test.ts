@@ -8,9 +8,9 @@ import {
   normalizeShortCode,
   pairingUrl,
   randomShortCode,
-  readFragmentToken,
   type PairingQueryable,
 } from '../../../../src/channels/http/pairing.js';
+import { PHONE_DOCS_URL } from '../../../../src/phone/phone-docs.js';
 import { hashToken } from '../../../../src/channels/http/session-auth.js';
 
 describe('installabilityWarning', () => {
@@ -19,18 +19,36 @@ describe('installabilityWarning', () => {
     expect(installabilityWarning('https://curia.example.com/chat')).toBeNull();
   });
 
-  it('warns for http, localhost, a bare IP, and a single-label name', () => {
+  it('warns for http, localhost, a bare IP, a single-label name, and private suffixes', () => {
     for (const origin of [
       'http://curia.example.com',
       'https://localhost:3000',
+      'https://localhost.',
       'https://127.0.0.1',
       'https://192.168.1.20',
       'https://10.0.0.4',
       'https://curia.local',
+      'https://curia.local.',
+      'https://nas.lan',
+      'https://nas.home',
+      'https://nas.home.arpa',
+      'https://nas.internal',
+      'https://nas.intranet',
+      'https://nas.corp',
+      'https://nas.localdomain',
+      'https://app.localhost',
+      'https://my.test',
+      'https://my.example',
+      'https://my.invalid',
       'http://curia',
     ]) {
       expect(installabilityWarning(origin), origin).toMatch(/can't install/i);
+      expect(installabilityWarning(origin), origin).toContain(PHONE_DOCS_URL);
     }
+  });
+
+  it('accepts one trailing dot on a hostname that can host the app', () => {
+    expect(installabilityWarning('https://curia.example.com.')).toBeNull();
   });
 });
 
@@ -75,14 +93,6 @@ describe('pairingUrl', () => {
     expect(parsed.search).toBe('');
     expect(parsed.hash).toBe('#c=abcDEF1234567890_-token');
     expect(url).not.toContain('?');
-  });
-});
-
-describe('readFragmentToken', () => {
-  it('reads c from the hash and rejects anything else', () => {
-    expect(readFragmentToken('#c=abcDEF1234567890_-token')).toBe('abcDEF1234567890_-token');
-    expect(readFragmentToken('#c=short')).toBeNull();
-    expect(readFragmentToken('')).toBeNull();
   });
 });
 
@@ -134,16 +144,33 @@ describe('consumePairingCode', () => {
         return { rows: [{ id: 'code-1', origin: 'https://curia.example.com' }], rowCount: 1 };
       }),
     };
-    const consumed = await consumePairingCode(pool, { kind: 'token', token: 'a'.repeat(32) });
-    expect(consumed).toEqual({ id: 'code-1', origin: 'https://curia.example.com' });
-    expect(sql).toContain('token_redeemed_at');
+    const consumed = await consumePairingCode(pool, { kind: 'token', token: 'a'.repeat(32) }, 'iPhone · Safari');
+    expect(consumed).toEqual({ id: 'code-1', origin: 'https://curia.example.com', otherAlreadyRedeemed: false });
+    expect(sql).toContain('token_redeemed_at = NOW()');
+    expect(sql).toContain("interval '2 minutes'");
     expect(sql).not.toContain('short_redeemed_at = NOW()');
+    expect(sql).not.toContain('${');
+  });
+
+  it('does not shorten the row when the short code is redeemed first', async () => {
+    let sql = '';
+    const pool: PairingQueryable = {
+      query: vi.fn(async (statement: string) => {
+        sql = statement;
+        return { rows: [{ id: 'code-1', origin: 'https://curia.example.com', token_redeemed_at: null }], rowCount: 1 };
+      }),
+    };
+    const consumed = await consumePairingCode(pool, { kind: 'short', code: 'ABCD2345' }, null);
+    expect(consumed?.otherAlreadyRedeemed).toBe(false);
+    expect(sql).toContain('short_redeemed_at = NOW()');
+    expect(sql).not.toContain('token_redeemed_at = NOW()');
+    expect(sql).not.toContain('LEAST');
   });
 
   it('returns null when the code is already used', async () => {
     const pool: PairingQueryable = {
       query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
     };
-    await expect(consumePairingCode(pool, { kind: 'short', code: 'ABCD2345' })).resolves.toBeNull();
+    await expect(consumePairingCode(pool, { kind: 'short', code: 'ABCD2345' }, null)).resolves.toBeNull();
   });
 });

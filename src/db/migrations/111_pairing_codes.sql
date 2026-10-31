@@ -1,9 +1,11 @@
 -- 111_pairing_codes.sql
 --
 -- Single-use phone pairing codes (#2341, ADR-055). The token and the short
--- code are stored hashed. Each can be redeemed once before expires_at, so a
--- typed code still works when the Safari cookie did not reach the home-screen
--- app. The plaintext never lands in this table.
+-- code are stored hashed. Each can be redeemed once before expires_at.
+-- Redeeming the token caps the remaining life at two minutes, so the typed
+-- code cannot sit unused for the rest of the original ten. The plaintext
+-- never lands in this table. redeemed_device_name is the label of the phone
+-- that redeemed a credential, for the desktop status poll.
 
 -- Up Migration
 
@@ -15,6 +17,7 @@ CREATE TABLE pairing_codes (
   expires_at TIMESTAMPTZ NOT NULL,
   token_redeemed_at TIMESTAMPTZ,
   short_redeemed_at TIMESTAMPTZ,
+  redeemed_device_name TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

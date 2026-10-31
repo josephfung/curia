@@ -38,6 +38,22 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
   await app.register(fastifyStatic, {
     root: consoleDist,
     wildcard: false,
+    setHeaders(res, filePath) {
+      // @fastify/static passes the Fastify reply here, which has header(), not setHeader().
+      if (!filePath.endsWith('sw.js')) return;
+      const writable = res as unknown as {
+        header?: (name: string, value: string) => void;
+        setHeader?: (name: string, value: string) => void;
+      };
+      if (typeof writable.header === 'function') writable.header('Cache-Control', 'no-cache');
+      else writable.setHeader?.('Cache-Control', 'no-cache');
+    },
+  });
+
+  app.addHook('onSend', async (request, reply, payload) => {
+    const pathOnly = request.url.split('?', 1)[0];
+    if (pathOnly === '/sw.js') reply.header('Cache-Control', 'no-cache');
+    return payload;
   });
 
   // SPA fallback: any GET path not resolved to a real file in dist/ → index.html.
@@ -54,7 +70,10 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
         // The service worker must not be cached across deploys, or phones
         // keep running the previous worker and miss the update prompt.
         if (contained.safeRel === 'sw.js') {
+          // @fastify/send overwrites Cache-Control unless cacheControl is off.
+          const sent = reply.sendFile(contained.safeRel, contained.rootReal, { cacheControl: false });
           reply.header('Cache-Control', 'no-cache');
+          return sent;
         }
         return reply.sendFile(contained.safeRel, contained.rootReal);
       }

@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../api';
+import { PAIRING_LIMIT_MESSAGE } from '../../../../../src/phone/phone-docs.js';
+import { PhoneNotice } from '../../pwa/PhoneNotice';
 import { PairingQr } from './PairingQr';
+import { readPairingOrigin, writePairingOrigin } from './pair-origin-memory';
 
 interface OriginChoice {
   origin: string | null;
@@ -9,10 +12,18 @@ interface OriginChoice {
 }
 
 interface MintedCode {
+  id: string;
   pairUrl: string;
   shortCode: string;
   expiresAt: string;
   warning: string | null;
+}
+
+interface PairingStatus {
+  tokenRedeemed: boolean;
+  shortRedeemed: boolean;
+  expired: boolean;
+  deviceName: string | null;
 }
 
 function isOriginChoice(value: unknown): value is OriginChoice {
@@ -26,18 +37,40 @@ function isOriginChoice(value: unknown): value is OriginChoice {
 function isMintedCode(value: unknown): value is MintedCode {
   if (typeof value !== 'object' || value === null) return false;
   const row = value as Record<string, unknown>;
-  return typeof row['pairUrl'] === 'string'
+  return typeof row['id'] === 'string'
+    && typeof row['pairUrl'] === 'string'
     && typeof row['shortCode'] === 'string'
     && typeof row['expiresAt'] === 'string'
     && (row['warning'] === null || typeof row['warning'] === 'string');
 }
 
-export function PairPhonePanel() {
+function isPairingStatus(value: unknown): value is PairingStatus {
+  if (typeof value !== 'object' || value === null) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row['tokenRedeemed'] === 'boolean'
+    && typeof row['shortRedeemed'] === 'boolean'
+    && typeof row['expired'] === 'boolean'
+    && (row['deviceName'] === null || typeof row['deviceName'] === 'string');
+}
+
+function errorMessage(body: unknown, fallback: string): string {
+  if (typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string') {
+    return (body as { error: string }).error;
+  }
+  return fallback;
+}
+
+export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
   const [choice, setChoice] = useState<OriginChoice | null>(null);
+  const [needsOrigin, setNeedsOrigin] = useState(false);
   const [originDraft, setOriginDraft] = useState('');
   const [minted, setMinted] = useState<MintedCode | null>(null);
+  const [status, setStatus] = useState<PairingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const seen = useRef({ token: false, short: false });
+  const onPairedRef = useRef(onPaired);
+  onPairedRef.current = onPaired;
 
   useEffect(() => {
     const desktopOrigin = window.location.origin;
@@ -47,30 +80,84 @@ export function PairPhonePanel() {
         const body: unknown = await res.json();
         if (!isOriginChoice(body)) throw new Error('Could not check this address.');
         setChoice(body);
+        const ask = body.askForOrigin || !body.origin;
+        setNeedsOrigin(ask);
         if (body.origin && !body.askForOrigin) setOriginDraft(body.origin);
+        else {
+          const saved = readPairingOrigin(window.localStorage);
+          if (saved) setOriginDraft(saved);
+        }
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Could not check this address.');
       });
   }, []);
 
+  useEffect(() => {
+    if (!minted) return;
+    let stop = false;
+    const poll = () => {
+      void apiFetch(`/api/pairing/codes/${minted.id}`)
+        .then(async (res) => {
+          if (stop || !res.ok) return;
+          const body: unknown = await res.json();
+          if (!isPairingStatus(body)) return;
+          setStatus(body);
+          if (body.tokenRedeemed && !seen.current.token) {
+            seen.current.token = true;
+            onPairedRef.current?.();
+          }
+          if (body.shortRedeemed && !seen.current.short) {
+            seen.current.short = true;
+            onPairedRef.current?.();
+          }
+        })
+        .catch((err: unknown) => {
+          console.error('[pair] status poll failed:', err);
+        });
+    };
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
+  }, [minted]);
+
+  async function checkDraft() {
+    const draft = originDraft.trim();
+    if (!draft) return;
+    writePairingOrigin(window.localStorage, draft);
+    try {
+      const res = await apiFetch(`/api/pairing/origin?requested=${encodeURIComponent(draft)}`);
+      if (!res.ok) return;
+      const body: unknown = await res.json();
+      if (!isOriginChoice(body)) return;
+      setChoice((current) => current
+        ? { ...current, origin: body.origin, warning: body.warning }
+        : body);
+    } catch (err) {
+      console.error('[pair] origin check failed:', err);
+    }
+  }
+
   async function mint() {
     setBusy(true);
     setError(null);
+    const draft = originDraft.trim();
+    writePairingOrigin(window.localStorage, draft);
     try {
       const res = await apiFetch('/api/pairing/codes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ origin: originDraft.trim() }),
+        body: JSON.stringify({ origin: draft }),
       });
       const body: unknown = await res.json().catch(() => null);
-      if (!res.ok) {
-        const message = typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
-          ? (body as { error: string }).error
-          : 'Could not create a pairing code.';
-        throw new Error(message);
-      }
+      if (res.status === 429) throw new Error(PAIRING_LIMIT_MESSAGE);
+      if (!res.ok) throw new Error(errorMessage(body, 'Could not create a pairing code.'));
       if (!isMintedCode(body)) throw new Error('Could not create a pairing code.');
+      seen.current = { token: false, short: false };
+      setStatus(null);
       setMinted(body);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create a pairing code.');
@@ -79,7 +166,13 @@ export function PairPhonePanel() {
     }
   }
 
-  const warning = minted?.warning ?? choice?.warning ?? null;
+  function reset() {
+    setMinted(null);
+    setStatus(null);
+  }
+
+  const warning = minted ? minted.warning : (choice?.warning ?? null);
+  const showQr = minted !== null && !status?.tokenRedeemed && !status?.expired;
 
   return (
     <section className="pair-panel">
@@ -87,16 +180,30 @@ export function PairPhonePanel() {
       <p className="settings-section-sub">
         Scan the code with the phone, or type the short code. The phone stays signed in for 90 days after its last use. The sign-in lives in the cookie, so add Curia to the home screen from the same browser that opened the link.
       </p>
-      {warning && <p className="pair-warning" role="status">{warning}</p>}
-      {error && <p className="autonomy-error">{error}</p>}
+      {warning && <PhoneNotice text={warning} />}
+      {error && <p className="autonomy-error" role="alert">{error}</p>}
       {minted ? (
         <div className="pair-code">
-          <PairingQr value={minted.pairUrl} />
-          <p className="pair-short" aria-label="Short pairing code">{minted.shortCode}</p>
-          <p className="device-meta">
-            Expires {new Date(minted.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.
-            The QR works once, and the short code works once.
-          </p>
+          {showQr && <PairingQr value={minted.pairUrl} />}
+          {status?.tokenRedeemed && (
+            <p className="pair-paired" role="status">
+              QR · Paired ✓{status.deviceName ? ` · ${status.deviceName}` : ''}
+            </p>
+          )}
+          {status?.shortRedeemed && (
+            <p className="pair-paired" role="status">Short code · Paired ✓</p>
+          )}
+          {status?.expired ? (
+            <button type="button" className="btn" onClick={reset}>Expired · Create a new code</button>
+          ) : (
+            <>
+              <p className="pair-short" aria-label="Short pairing code">{minted.shortCode}</p>
+              <p className="device-meta">
+                Expires {new Date(minted.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.
+                The QR works once, and the short code works once.
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <form
@@ -106,7 +213,7 @@ export function PairPhonePanel() {
             void mint();
           }}
         >
-          {(choice?.askForOrigin || !choice?.origin) && (
+          {needsOrigin && (
             <label className="pair-origin">
               Phone address
               <input
@@ -114,6 +221,7 @@ export function PairPhonePanel() {
                 placeholder="https://curia.example.com"
                 value={originDraft}
                 onChange={(event) => setOriginDraft(event.target.value)}
+                onBlur={() => { void checkDraft(); }}
                 inputMode="url"
                 autoCapitalize="none"
                 autoCorrect="off"

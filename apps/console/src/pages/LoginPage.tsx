@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { CuriaWordmark } from '../components/Icons';
 import { apiFetch } from '../api';
 
@@ -54,6 +54,9 @@ export default function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
+        <p className="login-pair">
+          <Link to="/pair">Pair with a code from your computer</Link>
+        </p>
       </div>
     </div>
   );

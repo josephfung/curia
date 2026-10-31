@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Source art for the home-screen PNGs. curia-maskable-512.png matches curia-512.png because the mark sits inside the 80% safe zone. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <rect width="512" height="512" fill="#F5F4F1"/>
   <g transform="translate(76.8 76.8) scale(0.35)">

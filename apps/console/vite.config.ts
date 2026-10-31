@@ -1,23 +1,49 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react-oxc';
 import { createRequire } from 'node:module';
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json') as { version: string };
 
+const serviceWorkerBuildId = process.env['CURIA_CONSOLE_BUILD_ID'] ?? randomBytes(8).toString('hex');
+
+function stampServiceWorkerSource(source: string, buildId: string): string {
+  if (!source.includes('__BUILD_ID__')) {
+    throw new Error('service worker is missing __BUILD_ID__');
+  }
+  return source.replaceAll('__BUILD_ID__', buildId);
+}
+
+function stampServiceWorker(buildId: string): Plugin {
+  const swPath = path.resolve(import.meta.dirname, 'public/sw.js');
+  return {
+    name: 'stamp-service-worker',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const urlPath = req.url?.split('?', 1)[0];
+        if (urlPath !== '/sw.js') {
+          next();
+          return;
+        }
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+        res.end(stampServiceWorkerSource(readFileSync(swPath, 'utf8'), buildId));
+      });
+    },
+    closeBundle() {
+      const built = path.resolve(import.meta.dirname, 'dist/sw.js');
+      if (!existsSync(built)) return;
+      writeFileSync(built, stampServiceWorkerSource(readFileSync(built, 'utf8'), buildId));
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
-    {
-      name: 'sw-no-cache',
-      configureServer(server) {
-        server.middlewares.use((req, res, next) => {
-          const urlPath = req.url?.split('?', 1)[0];
-          if (urlPath === '/sw.js') res.setHeader('Cache-Control', 'no-cache');
-          next();
-        });
-      },
-    },
+    stampServiceWorker(serviceWorkerBuildId),
   ],
   define: {
     // Injected at build time so the version from package.json is available
@@ -43,6 +69,8 @@ export default defineConfig({
         import.meta.dirname,
         path.resolve(import.meta.dirname, '../../node_modules'),
         path.resolve(import.meta.dirname, '../../src/contacts'),
+        // The console imports the phone-docs URL constant from here.
+        path.resolve(import.meta.dirname, '../../src/phone'),
       ],
     },
     // In dev, proxy backend-served paths to the Fastify server on :3000.
