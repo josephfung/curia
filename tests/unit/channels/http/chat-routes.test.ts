@@ -54,6 +54,7 @@ function createMockEventRouter(): EventRouter {
 function createMockBus(): EventBus {
   return {
     publish: vi.fn().mockResolvedValue(undefined),
+    stagePublish: vi.fn(async () => ({ deliver: vi.fn().mockResolvedValue(undefined) })),
     subscribe: vi.fn(),
   } as unknown as EventBus;
 }
@@ -141,18 +142,18 @@ describe('chatRoutes', () => {
     // The reply now arrives over SSE, not in the POST body.
     expect(body.reply).toBeUndefined();
 
-    // The inbound message was published; the handler does NOT block on a reply.
-    expect(bus.publish).toHaveBeenCalledOnce();
-    const published = vi.mocked(bus.publish).mock.calls[0]?.[1];
+    // The inbound is staged, not held for the agent turn.
+    expect(bus.stagePublish).toHaveBeenCalledOnce();
+    const published = vi.mocked(bus.stagePublish).mock.calls[0]?.[1];
     expect(published && 'payload' in published && published.payload).toMatchObject({
       conversationId: 'server-thread',
       content: 'What is on the agenda?',
     });
     expect(eventRouter.broadcastChatEvent).toHaveBeenCalledWith('server-thread', {
-      type: 'user_message',
-      conversationId: 'server-thread',
+      type: 'user.message',
+      conversation_id: 'server-thread',
       content: 'What is on the agenda?',
-      clientMessageId: 'client-msg-1',
+      client_message_id: 'client-msg-1',
     });
     expect(eventRouter.waitForResponse).not.toHaveBeenCalled();
 
@@ -186,6 +187,7 @@ describe('chatRoutes', () => {
   it('POST /api/chat/messages — 500 when publish fails synchronously', async () => {
     const bus = {
       publish: vi.fn().mockRejectedValue(new Error('bus down')),
+      stagePublish: vi.fn().mockRejectedValue(new Error('bus down')),
       subscribe: vi.fn(),
     } as unknown as EventBus;
 
@@ -260,6 +262,44 @@ describe('chatRoutes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ conversationId: 'shared-abc' });
+    await app.close();
+  });
+
+  it('POST /api/chat/messages — echoes before subscriber delivery starts', async () => {
+    const order: string[] = [];
+    const bus = {
+      stagePublish: vi.fn(async () => ({
+        deliver: () => {
+          order.push('deliver');
+          return Promise.resolve();
+        },
+      })),
+      subscribe: vi.fn(),
+    } as unknown as EventBus;
+    const eventRouter = createMockEventRouter();
+    vi.mocked(eventRouter.broadcastChatEvent).mockImplementation(() => {
+      order.push('echo');
+    });
+    const logger = createLogger();
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(chatRoutes, {
+      pool: createPool() as Pool,
+      logger,
+      webAppBootstrapSecret: 'test-secret',
+      bus,
+      eventRouter,
+      sessions: new Map() as unknown as SessionStore,
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/chat/messages',
+      headers: { 'x-web-bootstrap-secret': 'test-secret' },
+      payload: { message: 'from the phone', conversationId: 'old-tab' },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(order).toEqual(['echo', 'deliver']);
+    expect(logger.warn).toHaveBeenCalled();
     await app.close();
   });
 

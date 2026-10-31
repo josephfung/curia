@@ -58,9 +58,11 @@ export function parseSseEvent(data: string): SseEvent | null {
       const reason = typeof p['reason'] === 'string' ? p['reason'] : 'unknown';
       return { kind: 'rejected', text: rejectionText(reason) };
     }
-    case 'user_message': {
+    case 'ping':
+      return null;
+    case 'user.message': {
       const text = typeof p['content'] === 'string' ? p['content'] : '';
-      const clientMessageId = typeof p['clientMessageId'] === 'string' ? p['clientMessageId'] : null;
+      const clientMessageId = typeof p['client_message_id'] === 'string' ? p['client_message_id'] : null;
       return { kind: 'user', text, clientMessageId };
     }
     default:
@@ -121,31 +123,39 @@ export function nextReconnectDelayMs(attempt: number): number {
 }
 
 /**
- * Prepend history in front of messages that arrived live while history was
- * loading. A shared suffix/prefix (the same turn observed both ways) is kept
- * once, from the live copy.
+ * Fold a live tail into a history page. The same turn seen both ways is kept
+ * once, and the live copy wins so its id (the sender's clientMessageId) stays.
+ * Status rows are not in history, so they are skipped while matching and kept
+ * in the result.
  */
 export function mergeLiveTail(history: Message[], live: Message[]): Message[] {
   if (live.length === 0) return history;
   if (history.length === 0) return live;
-  const max = Math.min(history.length, live.length);
-  let overlap = 0;
-  for (let n = max; n > 0; n -= 1) {
-    let same = true;
-    for (let i = 0; i < n; i += 1) {
-      const older = history[history.length - n + i];
-      const newer = live[i];
-      if (!older || !newer || older.kind !== newer.kind || older.text !== newer.text) {
-        same = false;
+
+  const pairs: Array<{ h: number; l: number }> = [];
+  let hCursor = 0;
+  for (let l = 0; l < live.length; l += 1) {
+    const newer = live[l]!;
+    if (newer.kind === 'status') continue;
+    for (let h = hCursor; h < history.length; h += 1) {
+      const older = history[h]!;
+      if (older.kind === newer.kind && older.text === newer.text) {
+        pairs.push({ h, l });
+        hCursor = h + 1;
         break;
       }
     }
-    if (same) {
-      overlap = n;
-      break;
-    }
   }
-  return [...history, ...live.slice(overlap)];
+  if (pairs.length === 0) return [...history, ...live];
+
+  const first = pairs[0]!;
+  const last = pairs[pairs.length - 1]!;
+  return [
+    ...history.slice(0, first.h),
+    ...live.slice(0, first.l).filter((message) => message.kind === 'status'),
+    ...live.slice(first.l),
+    ...history.slice(last.h + 1),
+  ];
 }
 
 /**

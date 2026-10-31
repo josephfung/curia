@@ -18,6 +18,17 @@ function conversationIdOf(row: Record<string, unknown> | undefined): string | nu
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+// The row is written once and then only read. A process-local cache skips the
+// SELECT on later messages. Keyed by pool so tests with a fresh stub do not
+// share an id. Rows written before migration 090 have a NULL channel_id and
+// are not adopted; an upgrade from that era starts a new thread.
+const threadIds = new WeakMap<WebThreadQueryable, string>();
+
+/** Drop a cached id. Tests delete the row and need the next call to read again. */
+export function clearWebThreadCache(pool: WebThreadQueryable): void {
+  threadIds.delete(pool);
+}
+
 /**
  * Return the shared conversation id, creating the row if this is the first call.
  * Concurrent callers collide on the primary key; the loser reads the winner.
@@ -26,11 +37,17 @@ export async function getOrCreateWebThread(
   pool: WebThreadQueryable,
   opts?: { newId?: () => string },
 ): Promise<string> {
+  const cached = threadIds.get(pool);
+  if (cached) return cached;
+
   const existing = await pool.query(
     `SELECT conversation_id FROM web_thread WHERE id = 1`,
   );
   const stored = conversationIdOf(existing.rows[0]);
-  if (stored) return stored;
+  if (stored) {
+    threadIds.set(pool, stored);
+    return stored;
+  }
 
   const recent = await pool.query(
     `SELECT conversation_id
@@ -53,13 +70,17 @@ export async function getOrCreateWebThread(
     [adopted],
   );
   const won = conversationIdOf(inserted.rows[0]);
-  if (won) return won;
+  if (won) {
+    threadIds.set(pool, won);
+    return won;
+  }
 
   const winner = await pool.query(
     `SELECT conversation_id FROM web_thread WHERE id = 1`,
   );
   const resolved = conversationIdOf(winner.rows[0]);
   if (!resolved) throw new Error('web_thread insert lost the race and the row is missing');
+  threadIds.set(pool, resolved);
   return resolved;
 }
 

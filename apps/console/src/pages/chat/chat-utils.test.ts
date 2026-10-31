@@ -43,9 +43,9 @@ describe('parseSseEvent', () => {
 
   it('returns a user event so another device can append the echo', () => {
     const data = JSON.stringify({
-      type: 'user_message',
+      type: 'user.message',
       content: 'from the phone',
-      clientMessageId: 'client-1',
+      client_message_id: 'client-1',
     });
     expect(parseSseEvent(data)).toEqual({
       kind: 'user',
@@ -73,20 +73,33 @@ describe('parseSseEvent', () => {
 });
 
 describe('mergeLiveTail', () => {
-  const user = (text: string): Message => ({ id: text, kind: 'user', text });
-  const agent = (text: string): Message => ({ id: text, kind: 'agent', text });
+  const user = (text: string, id = text): Message => ({ id, kind: 'user', text });
+  const agent = (text: string, id = text): Message => ({ id, kind: 'agent', text });
+  const status = (text: string, id = text): Message => ({ id, kind: 'status', text });
 
   it('keeps a turn that arrived live while history was loading', () => {
-    const history = [user('older'), agent('reply')];
-    const live = [user('from the phone')];
+    const history = [user('older', 'h-older'), agent('reply', 'h-reply')];
+    const live = [user('from the phone', 'live-phone')];
     expect(mergeLiveTail(history, live).map((m) => m.text)).toEqual(['older', 'reply', 'from the phone']);
   });
 
-  it('drops the overlap when history already contains the live tail', () => {
-    const history = [user('older'), user('from the phone')];
-    const live = [user('from the phone')];
-    expect(mergeLiveTail(history, live)).toHaveLength(2);
-    expect(mergeLiveTail(history, live)[1]?.id).toBe('from the phone');
+  it('keeps the live copy when history already contains the same turn', () => {
+    const history = [user('older', 'h-older'), user('from the phone', 'h-phone')];
+    const live = [user('from the phone', 'live-phone')];
+    const merged = mergeLiveTail(history, live);
+    expect(merged).toHaveLength(2);
+    expect(merged[1]?.id).toBe('live-phone');
+  });
+
+  it('does not duplicate a turn when a status row sits between the live messages', () => {
+    const history = [user('question', 'h-user'), agent('answer', 'h-agent')];
+    const live = [
+      user('question', 'live-user'),
+      status('invoking calendar', 'live-status'),
+      agent('answer', 'live-agent'),
+    ];
+    const merged = mergeLiveTail(history, live);
+    expect(merged.map((m) => m.id)).toEqual(['live-user', 'live-status', 'live-agent']);
   });
 });
 

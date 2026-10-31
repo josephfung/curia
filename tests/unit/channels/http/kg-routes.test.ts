@@ -629,13 +629,18 @@ describe('console routes (kg / tasks / contacts / chat)', () => {
   });
 
   it('rewrites LLM failure marker turns to the user-facing error in chat history (#1767)', async () => {
-    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      rows: [
-        { id: '4', role: 'assistant', content: 'Hi', created_at: new Date('2026-01-01T00:00:03Z'), created_at_iso: '2026-01-01T00:00:03.000000Z' },
-        { id: '3', role: 'user', content: 'Retry', created_at: new Date('2026-01-01T00:00:02Z'), created_at_iso: '2026-01-01T00:00:02.000000Z' },
-        { id: '2', role: 'assistant', content: LLM_FAILURE_TURN_CONTENT, created_at: new Date('2026-01-01T00:00:01Z'), created_at_iso: '2026-01-01T00:00:01.000000Z' },
-        { id: '1', role: 'user', content: 'Hello', created_at: new Date('2026-01-01T00:00:00Z'), created_at_iso: '2026-01-01T00:00:00.000000Z' },
-      ],
+    (pool.query as ReturnType<typeof vi.fn>).mockImplementation(async (sql: string) => {
+      if (String(sql).includes('FROM web_thread')) {
+        return { rows: [{ conversation_id: 'c1' }], rowCount: 1 };
+      }
+      return {
+        rows: [
+          { id: '4', role: 'assistant', content: 'Hi', created_at: new Date('2026-01-01T00:00:03Z'), created_at_iso: '2026-01-01T00:00:03.000000Z' },
+          { id: '3', role: 'user', content: 'Retry', created_at: new Date('2026-01-01T00:00:02Z'), created_at_iso: '2026-01-01T00:00:02.000000Z' },
+          { id: '2', role: 'assistant', content: LLM_FAILURE_TURN_CONTENT, created_at: new Date('2026-01-01T00:00:01Z'), created_at_iso: '2026-01-01T00:00:01.000000Z' },
+          { id: '1', role: 'user', content: 'Hello', created_at: new Date('2026-01-01T00:00:00Z'), created_at_iso: '2026-01-01T00:00:00.000000Z' },
+        ],
+      };
     });
 
     const app = Fastify();
@@ -677,7 +682,10 @@ describe('console routes (kg / tasks / contacts / chat)', () => {
     ];
     const allNewestFirst = [...cueRows].reverse().concat(older);
 
-    (pool.query as ReturnType<typeof vi.fn>).mockImplementation((_sql: string, params: unknown[]) => {
+    (pool.query as ReturnType<typeof vi.fn>).mockImplementation((sql: string, params: unknown[] = []) => {
+      if (String(sql).includes('FROM web_thread')) {
+        return { rows: [{ conversation_id: 'c1' }], rowCount: 1 };
+      }
       const before = params[1] as string | null;
       const beforeId = params[2] as string | null;
       const fetchLimit = params[3] as number;

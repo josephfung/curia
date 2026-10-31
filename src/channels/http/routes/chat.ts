@@ -34,6 +34,27 @@ const WEB_CHANNEL_ID = 'web';
 // short-circuits to the principal contact for this channel regardless of the sender string.
 const WEB_SENDER_ID = 'ceo-web-user';
 
+/**
+ * Stream and history follow the shared thread. A missing id, and an id from a
+ * tab opened before this deploy, both land on that thread. A differing id is
+ * logged so the old call is visible.
+ */
+async function resolveStreamConversation(
+  pool: Pool,
+  logger: Logger,
+  requested: string | undefined,
+): Promise<string> {
+  const conversationId = await getOrCreateWebThread(pool);
+  const supplied = requested?.trim() ?? '';
+  if (supplied && supplied !== conversationId) {
+    logger.warn(
+      { suppliedId: supplied, conversationId },
+      'client conversationId does not match the shared web thread; using the shared thread',
+    );
+  }
+  return conversationId;
+}
+
 export async function chatRoutes(
   app: FastifyInstance,
   options: ChatRouteOptions,
@@ -71,7 +92,7 @@ export async function chatRoutes(
   app.post('/api/chat/messages', CONSOLE_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
-    const body = request.body as { message?: unknown; clientMessageId?: unknown };
+    const body = request.body as { message?: unknown; clientMessageId?: unknown; conversationId?: unknown };
     if (typeof body?.message !== 'string' || body.message.trim().length === 0) {
       return reply.status(400).send({ error: 'Missing required field: message (non-empty string)' });
     }
@@ -83,10 +104,21 @@ export async function chatRoutes(
       logger.error({ err }, 'chat thread lookup failed');
       return reply.status(503).send({ error: 'Chat is temporarily unavailable. Please try again.' });
     }
+    const suppliedId = typeof body.conversationId === 'string' ? body.conversationId.trim() : '';
+    if (suppliedId && suppliedId !== conversationId) {
+      logger.warn(
+        { suppliedId, conversationId },
+        'ignoring client conversationId; the shared web thread is used',
+      );
+    }
     const clientMessageId = readClientMessageId(body.clientMessageId);
 
+    // stagePublish persists the inbound without waiting for the agent turn.
+    // The echo goes out before deliver(), so other devices see the question
+    // before the reply. deliver() is not awaited: spec 08 acks the POST now.
+    let staged: { deliver: () => Promise<void> };
     try {
-      await bus.publish('channel', createInboundMessage({
+      staged = await bus.stagePublish('channel', createInboundMessage({
         conversationId,
         channelId: WEB_CHANNEL_ID,
         senderId: WEB_SENDER_ID,
@@ -104,16 +136,17 @@ export async function chatRoutes(
 
     try {
       eventRouter.broadcastChatEvent(conversationId, {
-        type: 'user_message',
-        conversationId,
+        type: 'user.message',
+        conversation_id: conversationId,
         content: body.message,
-        clientMessageId,
+        client_message_id: clientMessageId,
       });
     } catch (err) {
-      // The inbound is already published. A missed echo shows up on the next
+      // The inbound is already staged. A missed echo shows up on the next
       // history load; failing the ack would make the client send it twice.
       logger.error({ err, conversationId }, 'chat user-message echo failed');
     }
+    void staged.deliver();
 
     // Ack: the reply is delivered over the SSE stream, not this response.
     return reply.status(202).send({ conversationId });
@@ -144,6 +177,13 @@ export async function chatRoutes(
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
     const query = request.query as { conversationId?: string };
+    let conversationId: string;
+    try {
+      conversationId = await resolveStreamConversation(pool, logger, query.conversationId);
+    } catch (err) {
+      logger.error({ err }, 'GET /api/chat/stream failed to resolve the thread');
+      return reply.status(503).send({ error: 'Chat is temporarily unavailable. Please try again.' });
+    }
 
     // Hand the raw socket over to us — Fastify won't send a default response after the
     // handler returns, which is what we want for a long-lived SSE stream.
@@ -159,18 +199,20 @@ export async function chatRoutes(
 
     const cleanup = eventRouter.addSseClient({
       res: reply.raw,
-      conversationId: query.conversationId,
+      conversationId,
     });
 
-    // 30s heartbeat keeps intermediary proxies from closing the connection on idle.
+    // 30s data heartbeat. An SSE comment (`:ping`) never reaches the browser,
+    // so a half-open phone socket would look healthy. The client reconnects
+    // if this stops arriving.
     const heartbeat = setInterval(() => {
       try {
-        reply.raw.write(':ping\n\n');
+        reply.raw.write('data: {"type":"ping"}\n\n');
       } catch (err) {
         // Write failed — client likely disconnected without a clean TCP close.
         // Clear the interval and explicitly remove the SSE client to prevent a leak
         // in the case where the 'close' event on request.raw doesn't fire.
-        logger.debug({ err, conversationId: query.conversationId }, 'chat SSE heartbeat write failed — removing client');
+        logger.debug({ err, conversationId }, 'chat SSE heartbeat write failed — removing client');
         clearInterval(heartbeat);
         cleanup();
       }
@@ -186,7 +228,7 @@ export async function chatRoutes(
    * GET /api/chat/history — fetch paginated chat history from working_memory.
    *
    * Query params:
-   *   - conversationId: string (required)
+   *   - conversationId: string (optional; a different id is ignored in favor of the shared thread)
    *   - before: string (optional ISO timestamp — returns messages older than this cursor;
    *     microseconds are preserved; do not round-trip through JS Date)
    *   - limit: number (optional, default 25, max 50)
@@ -210,10 +252,13 @@ export async function chatRoutes(
       limit?: string;
     };
 
-    if (typeof query.conversationId !== 'string' || query.conversationId.trim().length === 0) {
-      return reply.status(400).send({ error: 'Missing required query param: conversationId' });
+    let conversationId: string;
+    try {
+      conversationId = await resolveStreamConversation(pool, logger, query.conversationId);
+    } catch (err) {
+      logger.error({ err }, 'GET /api/chat/history failed to resolve the thread');
+      return reply.status(503).send({ error: 'Chat is temporarily unavailable. Please try again.' });
     }
-    const conversationId = query.conversationId.trim();
 
     const rawLimit = parseInt(query.limit ?? '25', 10);
     const limit = isNaN(rawLimit) || rawLimit < 1 ? 25 : Math.min(rawLimit, 50);

@@ -13,7 +13,7 @@ import { useHandedOffQuestion } from './chat/ask-handoff.js';
 export default function ChatPage() {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { messages, sending, hasMore, loadingHistory, send, loadMore } = useChatSession();
+  const { messages, sending, hasMore, loadingHistory, connectionError, send, loadMore } = useChatSession();
   const voiceCall = useVoiceCall();
   useHandedOffQuestion(send);
 
@@ -33,6 +33,9 @@ export default function ChatPage() {
         <main className="main">
           <Topbar crumb="Curia" title="Chat" />
           <div className="chat-page">
+            {connectionError && (
+              <p className="chat-connection" role="status">{connectionError}</p>
+            )}
             <ChatThread
               messages={messages}
               hasMore={hasMore}

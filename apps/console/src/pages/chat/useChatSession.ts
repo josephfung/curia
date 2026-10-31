@@ -1,12 +1,17 @@
 // apps/console/src/pages/chat/useChatSession.ts
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { apiFetch } from '../../api.js';
 import { makeMessage, mergeLiveTail, nextReconnectDelayMs, parseSseEvent, pickRecoveredReply } from './chat-utils.js';
 import type { Message, HistoryMessage, SseEvent } from './types.js';
 
 // Onboarding kickoff — set by the setup wizard page after form submission.
 const ONBOARDING_KICKOFF_KEY = 'curia:onboarding:welcome-banner-pending';
+const LEGACY_CONVERSATION_KEY = 'curia:chat:conversationId';
 const KICKOFF_TEXT = 'Just finished setup — say hi!';
+const CANT_REACH_TEXT = "Can't reach Curia, retrying";
+/** Reconnect when no SSE bytes, including the data ping, have arrived. */
+const STREAM_SILENCE_MS = 60_000;
 
 const HISTORY_PAGE_SIZE = 25;
 
@@ -19,6 +24,9 @@ const REPLY_WATCHDOG_MS = 5 * 60_000;
 // How long to wait for the SSE connection to open before POSTing anyway. If the
 // stream is degraded the POST still publishes and the watchdog recovers the reply.
 const SSE_OPEN_TIMEOUT_MS = 3_000;
+// Shown only by the five-minute watchdog, after a history fetch that succeeded
+// and still had no reply. A hide or a dropped socket must not use this copy:
+// the reconnect catch-up is what settles that turn.
 const STILL_WORKING_TEXT =
   'This is taking longer than usual. The reply will appear here if it arrives — you can also resend.';
 const RECOVERY_FAILED_TEXT =
@@ -29,6 +37,7 @@ interface ChatSession {
   sending: boolean;
   hasMore: boolean;
   loadingHistory: boolean;
+  connectionError: string | null;
   send: (text: string) => Promise<void>;
   loadMore: () => Promise<void>;
 }
@@ -37,6 +46,8 @@ interface HistoryResponse {
   messages: HistoryMessage[];
   hasMore: boolean;
 }
+
+class SessionEnded extends Error {}
 
 function historyToMessages(items: HistoryMessage[]): Message[] {
   return items.map((item) => ({
@@ -49,11 +60,16 @@ function historyToMessages(items: HistoryMessage[]): Message[] {
 }
 
 export function useChatSession(): ChatSession {
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [sending, setSending] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
+  // isSending and isLoadingMore are refs so their guards are immune to stale
+  // closures. State would re-render the composer and re-mount the thread on
+  // every loadMore cycle, which could cause a double-fetch.
   const isSending = useRef(false);
   const isLoadingMore = useRef(false);
   const sourceRef = useRef<EventSource | null>(null);
@@ -69,7 +85,12 @@ export function useChatSession(): ChatSession {
   const conversationId = useRef<string | null>(null);
   const conversationPromise = useRef<Promise<string> | null>(null);
   const oldestTimestamp = useRef<string | null>(null);
-  const onDeadRef = useRef<(() => void) | null>(null);
+  const lastActivity = useRef(0);
+  const streamOpened = useRef(false);
+  const settleTurnRef = useRef<(() => void) | null>(null);
+  // One identical SSE reply is dropped after catch-up already rendered it.
+  // A later repeat is a real message and is kept.
+  const suppressNextReply = useRef<string | null>(null);
 
   const pendingKickoff = useRef(
     (() => {
@@ -101,8 +122,10 @@ export function useChatSession(): ChatSession {
     }
     if (parsed.kind === 'reply') {
       setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.kind === 'agent' && last.text === parsed.text) return prev;
+        if (suppressNextReply.current === parsed.text) {
+          suppressNextReply.current = null;
+          return prev;
+        }
         return [...prev, makeMessage('agent', parsed.text, {
           html: parsed.html ?? undefined,
           timestamp: new Date(),
@@ -132,6 +155,29 @@ export function useChatSession(): ChatSession {
     sourceRef.current = null;
   }, []);
 
+  const catchUp = useCallback(async (convId: string) => {
+    try {
+      const res = await apiFetch(
+        `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
+      );
+      if (res.status === 401) {
+        await navigate({ to: '/login' });
+        return;
+      }
+      if (!res.ok) return;
+      const data = (await res.json()) as HistoryResponse;
+      const loaded = historyToMessages(data.messages);
+      setMessages((prev) => mergeLiveTail(loaded, prev));
+      const recovered = pickRecoveredReply(data.messages);
+      if (recovered && isSending.current) {
+        suppressNextReply.current = recovered.text;
+        settleTurnRef.current?.();
+      }
+    } catch (err) {
+      console.error('[useChatSession] catch-up history failed:', err);
+    }
+  }, [navigate]);
+
   const openStream = useCallback((convId: string) => {
     if (!mountedRef.current) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
@@ -143,8 +189,16 @@ export function useChatSession(): ChatSession {
       { withCredentials: true },
     );
     sourceRef.current = source;
-    source.onopen = () => { reconnectAttempt.current = 0; };
+    const touch = () => { lastActivity.current = Date.now(); };
+    source.onopen = () => {
+      touch();
+      reconnectAttempt.current = 0;
+      const first = !streamOpened.current;
+      streamOpened.current = true;
+      if (!first) void catchUp(convId);
+    };
     source.onmessage = (event: MessageEvent<string>) => {
+      touch();
       const parsed = parseSseEvent(event.data);
       if (parsed) onEventRef.current(parsed);
     };
@@ -153,23 +207,41 @@ export function useChatSession(): ChatSession {
       console.error('[useChatSession] SSE stream error (readyState=%d)', source.readyState);
       source.close();
       if (sourceRef.current === source) sourceRef.current = null;
-      onDeadRef.current?.();
       if (reconnectTimer.current || !mountedRef.current) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      const delay = nextReconnectDelayMs(reconnectAttempt.current);
+      const attempt = reconnectAttempt.current;
       reconnectAttempt.current += 1;
+      const delay = nextReconnectDelayMs(attempt);
       reconnectTimer.current = setTimeout(() => {
         reconnectTimer.current = null;
-        openStream(convId);
+        void (async () => {
+          if (attempt >= 1) {
+            try {
+              const probe = await apiFetch('/api/chat/conversation');
+              if (probe.status === 401) {
+                await navigate({ to: '/login' });
+                return;
+              }
+            } catch (err) {
+              console.error('[useChatSession] session probe failed:', err);
+            }
+          }
+          if (!mountedRef.current) return;
+          openStream(convId);
+        })();
       }, delay);
     };
-  }, []);
+  }, [catchUp, navigate]);
 
   const ensureConversationId = useCallback(async (): Promise<string> => {
     if (conversationId.current) return conversationId.current;
     if (!conversationPromise.current) {
       conversationPromise.current = (async () => {
         const res = await apiFetch('/api/chat/conversation');
+        if (res.status === 401) {
+          await navigate({ to: '/login' });
+          throw new SessionEnded();
+        }
         if (!res.ok) throw new Error(`conversation fetch returned ${res.status}`);
         const data = await res.json() as { conversationId?: unknown };
         if (typeof data.conversationId !== 'string' || data.conversationId.length === 0) {
@@ -183,31 +255,33 @@ export function useChatSession(): ChatSession {
       });
     }
     return conversationPromise.current;
-  }, []);
+  }, [navigate]);
 
-  const loadInitialHistory = useCallback(async (convId: string) => {
+  const loadInitialHistory = useCallback(async (convId: string): Promise<boolean> => {
     setLoadingHistory(true);
     try {
       const res = await apiFetch(
         `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
       );
+      if (res.status === 401) {
+        await navigate({ to: '/login' });
+        throw new SessionEnded();
+      }
       if (!res.ok) {
-        console.error('[useChatSession] initial history fetch returned non-ok status:', res.status);
-        return;
+        throw new Error(`initial history fetch returned ${res.status}`);
       }
       const data = (await res.json()) as HistoryResponse;
-      if (data.messages.length === 0) return;
+      if (data.messages.length === 0) return false;
       const loaded = historyToMessages(data.messages);
       setMessages((prev) => mergeLiveTail(loaded, prev));
       setHasMore(data.hasMore);
       const first = data.messages[0];
       if (first) oldestTimestamp.current = first.timestamp;
-    } catch (err: unknown) {
-      console.error('[useChatSession] initial history fetch failed:', err);
+      return true;
     } finally {
       setLoadingHistory(false);
     }
-  }, []);
+  }, [navigate]);
 
   const loadMore = useCallback(async () => {
     const convId = conversationId.current;
@@ -223,6 +297,8 @@ export function useChatSession(): ChatSession {
         `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}${cursor}`,
       );
       if (!res.ok) {
+        // A failed page must stop the loader. Leaving hasMore true re-triggers
+        // loadMore in an infinite retry loop.
         console.error('[useChatSession] loadMore returned non-ok status:', res.status);
         setHasMore(false);
         return;
@@ -238,6 +314,7 @@ export function useChatSession(): ChatSession {
       const first = data.messages[0];
       if (first) oldestTimestamp.current = first.timestamp;
     } catch (err) {
+      // Network errors are terminal too (same infinite-retry guard as non-ok).
       console.error('[useChatSession] loadMore failed:', err);
       setHasMore(false);
     } finally {
@@ -279,10 +356,11 @@ export function useChatSession(): ChatSession {
     const settle = () => {
       if (settled) return;
       settled = true;
-      onDeadRef.current = null;
+      settleTurnRef.current = null;
       onEventRef.current = appendEvent;
       unlock();
     };
+    settleTurnRef.current = settle;
 
     const runRecovery = async () => {
       if (recoveryStarted || settled) return;
@@ -332,7 +410,6 @@ export function useChatSession(): ChatSession {
       appendEvent(parsed);
       if (parsed.kind === 'reply' || parsed.kind === 'rejected') settle();
     };
-    onDeadRef.current = () => { void runRecovery(); };
 
     try {
       openStream(convId);
@@ -382,37 +459,83 @@ export function useChatSession(): ChatSession {
   useEffect(() => {
     mountedRef.current = true;
     let cancelled = false;
+    try {
+      localStorage.removeItem(LEGACY_CONVERSATION_KEY);
+    } catch (err) {
+      console.error('[useChatSession] failed to clear the legacy conversation id:', err);
+    }
     // Captured before a strict-mode remount re-inits the ref from an already
     // cleared flag. The in-flight call still sends once.
     const kickoff = pendingKickoff.current;
     pendingKickoff.current = false;
 
-    void (async () => {
-      try {
-        const id = await ensureConversationId();
-        if (!cancelled) await loadInitialHistory(id);
-        if (!cancelled && document.visibilityState === 'visible') openStream(id);
-        if (kickoff) void send(KICKOFF_TEXT);
-      } catch (err) {
-        console.error('[useChatSession] failed to open the shared thread:', err);
-      }
-    })();
+    const openThread = (attempt = 0) => {
+      void (async () => {
+        try {
+          const id = await ensureConversationId();
+          if (cancelled) return;
+          const hadHistory = await loadInitialHistory(id);
+          if (cancelled) return;
+          setConnectionError(null);
+          if (document.visibilityState === 'visible') openStream(id);
+          // A wizard re-run must not post "say hi" into a thread that already
+          // has messages. Every device would see it.
+          if (kickoff && !hadHistory) void send(KICKOFF_TEXT);
+        } catch (err) {
+          if (err instanceof SessionEnded) return;
+          console.error('[useChatSession] failed to open the shared thread:', err);
+          if (cancelled) return;
+          setConnectionError(CANT_REACH_TEXT);
+          const delay = nextReconnectDelayMs(attempt);
+          reconnectTimer.current = setTimeout(() => {
+            reconnectTimer.current = null;
+            if (!cancelled) openThread(attempt + 1);
+          }, delay);
+        }
+      })();
+    };
+    openThread();
 
     const onVisibility = () => {
       const id = conversationId.current;
       if (document.visibilityState === 'hidden') {
         closeStream();
-        onDeadRef.current?.();
         return;
       }
-      if (id) openStream(id);
+      if (id) {
+        void catchUp(id);
+        openStream(id);
+        return;
+      }
+      openThread();
+    };
+    const onOnline = () => {
+      const id = conversationId.current;
+      if (id) {
+        void catchUp(id);
+        openStream(id);
+        return;
+      }
+      openThread();
     };
     document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('online', onOnline);
+    const silence = setInterval(() => {
+      const source = sourceRef.current;
+      const id = conversationId.current;
+      if (!source || source.readyState !== EventSource.OPEN || !id) return;
+      if (Date.now() - lastActivity.current < STREAM_SILENCE_MS) return;
+      source.close();
+      if (sourceRef.current === source) sourceRef.current = null;
+      openStream(id);
+    }, 15_000);
 
     return () => {
       cancelled = true;
       mountedRef.current = false;
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('online', onOnline);
+      clearInterval(silence);
       closeStream();
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
     };
@@ -421,5 +544,5 @@ export function useChatSession(): ChatSession {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { messages, sending, hasMore, loadingHistory, send, loadMore };
+  return { messages, sending, hasMore, loadingHistory, connectionError, send, loadMore };
 }

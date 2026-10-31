@@ -20,6 +20,7 @@ describe('getOrCreateWebThread', () => {
       throw new Error(`unexpected ${sql}`);
     });
     await expect(getOrCreateWebThread(pool)).resolves.toBe('shared-1');
+    await expect(getOrCreateWebThread(pool)).resolves.toBe('shared-1');
     expect(pool.sql).toHaveLength(1);
   });
 
