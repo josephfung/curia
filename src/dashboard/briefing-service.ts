@@ -399,7 +399,8 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
  * is a failure; mixed with successes it is partial.
  *
  * Minutes are not a column here. `saved_calls` carries the input and result data
- * so `minutesForCall` can run the same `done()` the feed uses. A flat weight
+ * so `minutesForCall` can run the same `done()` the feed uses, minus the fields
+ * describers never read (message bodies, and a document's body). A flat weight
  * cannot see a dry run, an unplaced hold, or a scratch note.
  */
 const HISTOGRAM_SQL = `
@@ -465,11 +466,13 @@ calls AS (
       ELSE 'bad'
     END AS kind,
     CASE
-      WHEN jsonb_typeof(i.payload->'input') = 'object' THEN i.payload->'input'
+      WHEN jsonb_typeof(i.payload->'input') = 'object'
+      THEN (i.payload->'input') - ARRAY['body', 'content', 'message', 'prompt', 'html', 'text']
       ELSE '{}'::jsonb
     END AS input,
     CASE
-      WHEN jsonb_typeof(r.payload->'result'->'data') = 'object' THEN r.payload->'result'->'data'
+      WHEN jsonb_typeof(r.payload->'result'->'data') = 'object'
+      THEN ((r.payload->'result'->'data') - ARRAY['body', 'content', 'message', 'html', 'text']) #- '{document,body}'::text[]
       ELSE NULL
     END AS data
   FROM audit_log r

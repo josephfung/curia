@@ -237,7 +237,7 @@ function isScratchWrite(call: ToolCall): boolean {
 }
 
 function docWriteMinutes(call: ToolCall): number {
-  if (isScratchWrite(call)) return 0;
+  if (isScratchWrite(call) || call.data?.conflict === true) return 0;
   return call.data?.action === 'created' ? DOC_CREATED_MINUTES : DOC_EDIT_MINUTES;
 }
 
@@ -564,7 +564,8 @@ const DESCRIBERS: Record<string, Describer> = {
     minutes: docWriteMinutes,
     tally: { verb: 'wrote', one: 'a document', many: 'documents' },
     done: (call) => {
-      if (isScratchWrite(call)) return null;
+      // A version mismatch is success: true with conflict: true, and nothing was written.
+      if (isScratchWrite(call) || call.data?.conflict === true) return null;
       const doc = rec(call.data?.document);
       const title = str(rec(doc?.frontmatter)?.title) ?? str(doc?.path) ?? str(call.input.path) ?? 'a document';
       const verb = call.data?.action === 'created' ? 'wrote' : 'updated';
@@ -729,21 +730,12 @@ export function timeSavedHelp(): string {
   return `Rough estimate of your time behind the actions in Recent Activity. A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. Reads don't count.`;
 }
 
-/** Longer note for the tile's tooltip, still drawn from the same weights. */
+/**
+ * Extra note for the tile's tooltip. The footnote already states the definition,
+ * so this is only the part that sentence does not say.
+ */
 export function timeSavedDetail(): string {
-  const created = docWriteMinutes({
-    toolName: 'doc-write',
-    input: { path: '/projects/q/brief.md' },
-    data: { action: 'created', document: { path: '/projects/q/brief.md' } },
-    ok: true,
-  });
-  const edited = docWriteMinutes({
-    toolName: 'doc-write',
-    input: { path: '/projects/q/brief.md' },
-    data: { action: 'appended', document: { path: '/projects/q/brief.md' } },
-    ok: true,
-  });
-  return `${timeSavedHelp()} A new document ≈${created} min, an edit ≈${edited}. Scratch notes don't count. Each action counts, including a repeat.`;
+  return `A new document ≈${DOC_CREATED_MINUTES} min, an edit ≈${DOC_EDIT_MINUTES}. Scratch notes don't count. Each action counts, including a repeat.`;
 }
 
 /** Research kind of a web tool, or undefined. */

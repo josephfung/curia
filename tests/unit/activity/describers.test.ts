@@ -28,6 +28,25 @@ function call(toolName: string, input: Record<string, unknown>, data: Record<str
   return { toolName, input, data, ok };
 }
 
+/** Same keys the minutes query drops: message bodies, and a document's body. */
+function stripHeavy(record: Record<string, unknown>, isInput: boolean): Record<string, unknown> {
+  const keys = isInput
+    ? ['body', 'content', 'message', 'prompt', 'html', 'text']
+    : ['body', 'content', 'message', 'html', 'text'];
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (keys.includes(key)) continue;
+    if (key === 'document' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      const doc: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+      delete doc.body;
+      out[key] = doc;
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 describe('describer coverage', () => {
   it('every tool at action_risk medium or above has a describer', () => {
     const threshold = AutonomyService.minScoreForActionRisk('medium');
@@ -183,6 +202,60 @@ describe('minutesForCall', () => {
     expect(describeToolCall(note, ctx())?.prominence).toBe('hidden');
     expect(describeToolCall(created, ctx())?.text).toContain('wrote');
     expect(describeToolCall(edited, ctx())?.text).toContain('updated');
+    const conflict = call('doc-write', { path: project }, { conflict: true, path: project, version: 4 });
+    expect(describeToolCall(conflict, ctx())?.prominence).toBe('hidden');
+    expect(minutesForCall(conflict)).toBe(0);
+  });
+
+  it('keeps every describer line when message and document bodies are removed', () => {
+    const heavyInput = {
+      to: 'c-1',
+      recipient: 'c-1',
+      contact_id: 'c-1',
+      primary_contact_id: 'c-1',
+      path: '/projects/q/brief.md',
+      title: 'Board',
+      subject: 'Hi',
+      start: '2026-10-31T15:00:00Z',
+      action: 'approve_voice',
+      filename: 'brief.pdf',
+      label: 'Work',
+      display_name: 'Ada',
+      role: 'advisor',
+      tier: 'inner',
+      permission: 'calendar',
+      response: 'accept',
+      score: 70,
+      body: 'SECRET BODY',
+      content: 'SECRET CONTENT',
+      message: 'SECRET MESSAGE',
+      prompt: 'SECRET PROMPT',
+      html: '<p>SECRET</p>',
+      text: 'SECRET TEXT',
+    };
+    const heavyData = {
+      subject: 'Hi',
+      to: [{ email: 'a@b.co' }],
+      action: 'created',
+      held: true,
+      proposed: true,
+      title: 'Board',
+      response: 'accept',
+      document: { path: '/projects/q/brief.md', frontmatter: { title: 'Board brief' }, body: 'SECRET DOC' },
+      body: 'SECRET BODY',
+      content: 'SECRET CONTENT',
+      message: 'SECRET MESSAGE',
+      html: '<p>SECRET</p>',
+      text: 'SECRET TEXT',
+    };
+    const leanInput = stripHeavy(heavyInput, true);
+    const leanData = stripHeavy(heavyData, false);
+    for (const name of visibleToolNames()) {
+      const full = call(name, heavyInput, heavyData);
+      const lean = call(name, leanInput, leanData);
+      expect(describeToolCall(full, ctx()), name).toEqual(describeToolCall(lean, ctx()));
+      expect(minutesForCall(full), name).toBe(minutesForCall(lean));
+    }
   });
 
   it('shares an estimate across the same action on two tools', () => {
@@ -201,8 +274,10 @@ describe('minutesForCall', () => {
     expect(timeSavedHelp()).toBe(
       "Rough estimate of your time behind the actions in Recent Activity. A meeting ≈10 min, a reply ≈5, filing ≈½. Reads don't count.",
     );
-    expect(timeSavedDetail()).toContain('A new document ≈15 min, an edit ≈3');
-    expect(timeSavedDetail()).toContain('including a repeat');
+    expect(timeSavedDetail()).toBe(
+      'A new document ≈15 min, an edit ≈3. Scratch notes don\'t count. Each action counts, including a repeat.',
+    );
+    expect(timeSavedDetail().includes('Rough estimate')).toBe(false);
   });
 });
 
