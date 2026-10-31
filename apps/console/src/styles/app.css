@@ -937,6 +937,14 @@ a.dash-activity-headline:hover { text-decoration: underline; }
   font: inherit;
 }
 
+.push-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--app-fg);
+}
 .pair-panel {
   max-width: 720px;
   margin-bottom: 28px;

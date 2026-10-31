@@ -74,6 +74,8 @@ import { bindSessionRenewer, sessionExpiresAt, type SessionStore } from './sessi
 import { loadActiveSessions, SessionKeeper } from './console-sessions.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { pairingRoutes } from './routes/pairing.js';
+import { pushRoutes } from './routes/push.js';
+import type { WebPushService } from '../web/push-service.js';
 import type { Channel } from '../channel.js';
 import type { AuditLogRepo } from '../../audit/audit-log-repo.js';
 import { DEFAULT_SCRATCH_DOC_TTL_DAYS } from '../../agents/document-workspace.js';
@@ -197,6 +199,8 @@ export interface HttpAdapterConfig {
    * handler installed by VoiceAdapter.start() (ADR-037).
    */
   voiceSessionBridge?: import('../voice/session-bridge.js').VoiceSessionBridge;
+  /** Phone-app push (#2341). Subscription routes mount with the bootstrap secret. */
+  webPush?: WebPushService;
 }
 
 export class HttpAdapter implements Channel {
@@ -230,6 +234,28 @@ export class HttpAdapter implements Channel {
     // Register shared bus subscriptions BEFORE starting the server.
     // One subscriber per event type, dispatches to HTTP clients via Maps/Sets.
     this.eventRouter.setupSubscriptions(bus);
+
+    const webPush = this.config.webPush;
+    if (webPush) {
+      webPush.setWatch(
+        (id) => this.eventRouter.hasChatListener(id),
+        () => this.eventRouter.hasAnyChatListener(),
+      );
+      webPush.setBroadcast((conversationId, payload) => {
+        this.eventRouter.broadcastChatEvent(conversationId, payload);
+      });
+      this.eventRouter.setWebReplyNotifier((content, conversationId) => {
+        void webPush.notifyReply(content, conversationId).catch((err: unknown) => {
+          logger.error({ err, conversationId }, 'web reply push failed');
+        });
+      });
+      try {
+        const existing = await pool.query(`SELECT 1 FROM push_subscriptions LIMIT 1`);
+        webPush.noteSubscribed(existing.rows.length > 0);
+      } catch (err) {
+        logger.error({ err }, 'web push: could not count subscriptions at boot');
+      }
+    }
 
     // Cookie parsing — required for the KG session cookie auth flow.
     await this.app.register(cookie);
@@ -621,6 +647,15 @@ export class HttpAdapter implements Channel {
         secureCookies,
         appOrigin,
       });
+      if (webPush) {
+        await this.app.register(pushRoutes, {
+          pool,
+          sessions,
+          webAppBootstrapSecret,
+          webPush,
+          logger,
+        });
+      }
       await this.app.register(knowledgeGraphRoutes, {
         ...consoleBase,
         secureCookies,

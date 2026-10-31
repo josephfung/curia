@@ -33,6 +33,7 @@ function makeDelivery(opts: {
   sendThrows?: boolean;
   identities?: ChannelIdentity[];
   principalEmail?: string;
+  webReachable?: () => boolean;
 } = {}) {
   const repo = {
     findPendingByShortRef: vi.fn().mockResolvedValue(opts.row === undefined ? makeRow() : opts.row),
@@ -55,6 +56,7 @@ function makeDelivery(opts: {
     ],
     principalEmail,
     logger: logger as unknown as Logger,
+    webReachable: opts.webReachable,
   });
   return { delivery, repo, send, logger };
 }
@@ -70,6 +72,17 @@ describe('ApprovalDelivery.availableChannels', () => {
       ],
     });
     expect(delivery.availableChannels()).toEqual(['sms', 'slack', 'email']);
+  });
+
+  it('offers the phone app between SMS and Slack when a device can receive it', () => {
+    const { delivery } = makeDelivery({
+      identities: [
+        identity('sms', '+15550002222'),
+        identity('slack', 'U123'),
+      ],
+      webReachable: () => true,
+    });
+    expect(delivery.availableChannels()).toEqual(['sms', 'web', 'slack', 'email']);
   });
 
   it('counts email when only the principal email ref is bound', () => {

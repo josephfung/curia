@@ -179,6 +179,17 @@ export async function buildBaseSystemPrompt(
     if (block) preambleParts.push(block);
   }
 
+  // Default reach order (#2341, ADR-046). Injected every turn so it is not copied
+  // into each agent's system_prompt. Standing preferences and an explicit request
+  // still win; this is only the order when the principal has not named a channel.
+  preambleParts.push(
+    '## Reaching the principal\n'
+    + 'When they have not named a channel, reach them in this order: Signal, then SMS, then the phone app (`web-send` with recipient "principal"), then Slack, then email. '
+    + 'Their standing preferences and an explicit request override this order. '
+    + 'If web-send says the push service is busy, leave the message there. '
+    + 'If it says the phone was unreachable and names the channel it already used, do not send the message again.',
+  );
+
   if (preambleParts.length > 0) {
     prompt = preambleParts.join('\n\n') + '\n\n' + prompt;
   }

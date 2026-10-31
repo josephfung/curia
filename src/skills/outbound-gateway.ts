@@ -28,6 +28,7 @@ import { deleteHeldDraft, findHeldDraft } from '../channels/email/held-draft.js'
 import { quoteParticipants } from './_shared/reply-quote.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput } from './_shared/read-attachments.js';
 import type { EmailRecipientSource, EmailSendRequest } from '../channels/email/outbound-request.js';
+import type { WebOutboundRequest } from '../channels/web/outbound-request.js';
 import type { SignalOutboundRequest } from '../channels/signal/outbound-request.js';
 import type { SlackOutboundRequest } from '../channels/slack/outbound-request.js';
 import type { SmsOutboundRequest } from '../channels/sms/outbound-request.js';
@@ -101,6 +102,7 @@ export type { EmailSendRequest } from '../channels/email/outbound-request.js';
 export type { SignalOutboundRequest } from '../channels/signal/outbound-request.js';
 export type { SlackOutboundRequest } from '../channels/slack/outbound-request.js';
 export type { SmsOutboundRequest } from '../channels/sms/outbound-request.js';
+export type { WebOutboundRequest } from '../channels/web/outbound-request.js';
 
 // Re-export so callers can construct attachment lists without importing from read-attachments directly.
 export type { OutboundAttachmentInput };
@@ -119,7 +121,8 @@ export type OutboundSendRequest =
   | EmailSendRequest
   | SignalOutboundRequest
   | SlackOutboundRequest
-  | SmsOutboundRequest;
+  | SmsOutboundRequest
+  | WebOutboundRequest;
 
 // Re-export the old name as an alias so existing callers don't break.
 // Previously OutboundSendRequest was a single interface (email-only). Now it's a
@@ -154,6 +157,13 @@ export interface OutboundSendResult {
   threadId?: string;
   /** Human-readable reason when success is false */
   blockedReason?: string;
+  /**
+   * Phone-app delivery (#2341). `fallback` means the subscription is dead or
+   * the push service rejected the setup, and the caller should use the next
+   * channel. `unavailable` means a 429/5xx after retries: do not fall back yet.
+   */
+  webDelivery?: 'delivered' | 'visible' | 'fallback' | 'unavailable' | 'unconfigured';
+  webDeliveryDetail?: string;
   /**
    * Content-filter rule name(s) that triggered a block (e.g. `llm-judge-audience-leak`).
    * Populated by both `send()` (#1051) and `sendEmailDraft()` (#1158) when the content
@@ -269,6 +279,9 @@ export interface OutboundGatewayConfig {
    * Telnyx SMS client. Optional — only when SMS channel is enabled.
    */
   smsClient?: SmsClient;
+
+  /** Phone-app push (#2341). Absent in tests and when the app is not configured. */
+  webPush?: import('../channels/web/push-service.js').WebPushService;
 
   contactService: ContactService;
   contentFilter: OutboundContentFilter;
@@ -444,6 +457,8 @@ function relayNoticeRequest(request: OutboundSendRequest, text: string, subject:
       return { channel: 'slack', slackChannelId: request.slackChannelId, ...(request.slackUserId ? { slackUserId: request.slackUserId } : {}), message: text };
     case 'sms':
       return { channel: 'sms', recipient: request.recipient, message: text };
+    case 'web':
+      return { channel: 'web', recipient: 'principal', message: text };
     case 'signal':
       return { channel: 'signal', ...(request.recipient ? { recipient: request.recipient } : {}), message: text };
   }
@@ -608,7 +623,7 @@ export class UnknownEmailAccountError extends Error {
 
 // How a spot-check summary names each kind of send (#2159 Phase 3), e.g. 'Emailed dana@example.com'.
 const SENT_VERB: Record<OutboundSendRequest['channel'], string> = {
-  email: 'Emailed', signal: 'Sent a Signal message to', sms: 'Texted', slack: 'Sent a Slack message to',
+  email: 'Emailed', signal: 'Sent a Signal message to', sms: 'Texted', slack: 'Sent a Slack message to', web: 'Sent a phone message to',
 };
 // A recipient whose contact is younger than this counts as a first contact (#2159 Phase 3).
 const FIRST_CONTACT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -666,6 +681,7 @@ export class OutboundGateway {
   private readonly signalPhoneNumber?: string;
   private readonly slackClient?: SlackClient;
   private readonly smsClient?: SmsClient;
+  private readonly webPush?: import('../channels/web/push-service.js').WebPushService;
   private readonly contactService: ContactService;
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
@@ -698,6 +714,7 @@ export class OutboundGateway {
     this.signalPhoneNumber = config.signalPhoneNumber;
     this.slackClient = config.slackClient;
     this.smsClient = config.smsClient;
+    this.webPush = config.webPush;
     this.contactService = config.contactService;
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
@@ -972,12 +989,12 @@ export class OutboundGateway {
     // Derive a stable recipient identifier for the blocked-contact check and logging.
     // Email: the To address. Signal: phone number (1:1) or base64 group ID.
     // Slack: prefer the peer user id (U…); fall back to conversation id only for logging.
-    // SMS: peer E.164.
+    // SMS: peer E.164. Web: the reserved principal alias.
     const recipientId = request.channel === 'email'
       ? request.to
       : request.channel === 'slack'
         ? (request.slackUserId ?? request.slackChannelId)
-        : request.channel === 'sms'
+        : request.channel === 'sms' || request.channel === 'web'
           ? request.recipient
           : (request.recipient ?? request.groupId ?? '');
 
@@ -1705,6 +1722,39 @@ export class OutboundGateway {
           conversationId: options?.conversationId,
           taskEventId: options?.taskEventId,
           messageId: result.messageId,
+          parentEventId: options?.parentEventId,
+          ...disclosed,
+        });
+        if (sampled) await this.recordSentAction({ ...sampleArgs, preview: redactedBody });
+      }
+      if (bandReport && result.success) await this.publishBandReport(bandReport, options);
+      if (relaySlot && !result.success) this.relayBudget!.release(relaySlot);
+      return this.withRedactions(result, appliedRedactions, sendBody);
+    }
+
+    if (request.channel === 'web') {
+      const delivery = this.webPush
+        ? await this.webPush.deliver(sendBody)
+        : { outcome: 'unconfigured' as const, detail: 'The phone app is not available on this Curia.' };
+      let result: OutboundSendResult;
+      if ('detail' in delivery) {
+        result = {
+          success: false,
+          webDelivery: delivery.outcome,
+          blockedReason: delivery.detail,
+          webDeliveryDetail: delivery.detail,
+        };
+      } else {
+        result = { success: true, webDelivery: delivery.outcome };
+      }
+      if (result.success) {
+        await this.publishDelivered({
+          channel: 'web',
+          recipientId,
+          recipientContactId,
+          content: auditBody,
+          conversationId: options?.conversationId,
+          taskEventId: options?.taskEventId,
           parentEventId: options?.parentEventId,
           ...disclosed,
         });
@@ -2704,7 +2754,7 @@ export class OutboundGateway {
    * send conditional on the audit subsystem.
    */
   private async publishDelivered(payload: {
-    channel: 'signal' | 'email' | 'slack' | 'sms';
+    channel: 'signal' | 'email' | 'slack' | 'sms' | 'web';
     recipientId: string;
     recipientContactId?: string;
     content: string;

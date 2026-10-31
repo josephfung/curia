@@ -21,6 +21,7 @@ import { emailPrincipalRules } from '../channels/email/principal-rules.js';
 import { signalPrincipalRules } from '../channels/signal/principal-rules.js';
 import { slackPrincipalRules } from '../channels/slack/principal-rules.js';
 import { smsPrincipalRules } from '../channels/sms/principal-rules.js';
+import { webPrincipalRules } from '../channels/web/principal-rules.js';
 
 /** Flatten `carveoutSkill` + `carveoutSkills` on one contribution. */
 export function listCarveoutSkills(
@@ -65,6 +66,7 @@ export const PRINCIPAL_CHANNEL_RULES: readonly PrincipalChannelRules[] = [
   signalPrincipalRules,
   slackPrincipalRules,
   smsPrincipalRules,
+  webPrincipalRules,
 ];
 
 assertPrincipalChannelRegistryUnique(PRINCIPAL_CHANNEL_RULES);

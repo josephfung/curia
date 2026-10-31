@@ -279,7 +279,8 @@ export async function findSessionByTokenHash(
 
 export async function listDeviceSessions(pool: SessionQueryable): Promise<DeviceSession[]> {
   const result = await pool.query(
-    `SELECT id, kind, name, user_agent, created_at, last_seen_at, expires_at
+    `SELECT id, kind, name, user_agent, created_at, last_seen_at, expires_at,
+            EXISTS (SELECT 1 FROM push_subscriptions WHERE session_id = sessions.id) AS notifications_enabled
      FROM sessions
      WHERE expires_at > NOW()
      ORDER BY last_seen_at DESC`,
@@ -292,7 +293,7 @@ export async function listDeviceSessions(pool: SessionQueryable): Promise<Device
     createdAt: asDate(row['created_at'], 'created_at').toISOString(),
     lastSeenAt: asDate(row['last_seen_at'], 'last_seen_at').toISOString(),
     expiresAt: asDate(row['expires_at'], 'expires_at').toISOString(),
-    notificationsEnabled: false,
+    notificationsEnabled: row['notifications_enabled'] === true,
   }));
 }
 

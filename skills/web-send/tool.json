@@ -1,0 +1,25 @@
+{
+  "name": "web-send",
+  "description": "Send a message to the principal's phone app. recipient must be \"principal\". The message is saved on the shared web thread. If a browser has that thread open, no notification is sent. If the phone's subscription is dead or push setup is rejected, this sends the same message on the next channel that can reach them and tells you which one, so you do not send it again. If the push service is busy, nothing else is sent.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "medium",
+  "inputs": {
+    "recipient": "string (must be \"principal\")",
+    "message": "string"
+  },
+  "outputs": {
+    "channel": "string (web, or the channel used when the phone could not be reached)",
+    "app_notice": "string? (why the phone was skipped)",
+    "deferred_to_digest": "boolean?",
+    "note": "string?",
+    "redactions": "array?",
+    "redaction_note": "string?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": [
+    "outboundGateway"
+  ]
+}

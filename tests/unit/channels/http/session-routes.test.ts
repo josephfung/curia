@@ -154,6 +154,7 @@ describe('session routes', () => {
           created_at: created,
           last_seen_at: seen,
           expires_at: expires,
+          notifications_enabled: true,
         }),
       ],
       rowCount: 2,
@@ -180,7 +181,7 @@ describe('session routes', () => {
       kind: 'paired_device',
       name: 'iPhone · Safari',
       current: false,
-      notificationsEnabled: false,
+      notificationsEnabled: true,
     });
     await app.close();
   });

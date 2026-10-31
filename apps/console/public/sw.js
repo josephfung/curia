@@ -35,6 +35,40 @@ self.addEventListener('message', (event) => {
   if (data && data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
+self.addEventListener('push', (event) => {
+  let title = 'Curia';
+  let body = 'New message from Curia';
+  let url = '/chat';
+  try {
+    if (event.data) {
+      const payload = event.data.json();
+      if (payload && typeof payload.title === 'string' && payload.title) title = payload.title;
+      if (payload && typeof payload.body === 'string' && payload.body) body = payload.body;
+      if (payload && typeof payload.url === 'string' && payload.url.startsWith('/')) url = payload.url;
+    }
+  } catch {
+    // A malformed payload still shows the generic Curia alert.
+  }
+  event.waitUntil(self.registration.showNotification(title, {
+    body,
+    icon: '/icons/curia-192.png',
+    data: { url },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const data = event.notification.data;
+  const target = data && typeof data.url === 'string' ? data.url : '/chat';
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+    for (const client of windowClients) {
+      const path = new URL(client.url).pathname;
+      if (path === '/chat' || path.startsWith('/chat/')) return client.focus();
+    }
+    return self.clients.openWindow(target);
+  }));
+});
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET') return;

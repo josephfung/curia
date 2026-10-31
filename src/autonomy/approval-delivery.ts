@@ -23,10 +23,10 @@ import type { Logger } from '../logger.js';
 import { buildApprovalNotificationBody } from './approval-notification.js';
 import { askPreamble } from './disclosure-decisions.js';
 
-export type ApprovalChannel = 'signal' | 'sms' | 'slack' | 'email';
+export type ApprovalChannel = 'signal' | 'sms' | 'web' | 'slack' | 'email';
 
 /** Preference order when listing what is available. The agent still chooses. */
-export const APPROVAL_CHANNELS: readonly ApprovalChannel[] = ['signal', 'sms', 'slack', 'email'];
+export const APPROVAL_CHANNELS: readonly ApprovalChannel[] = ['signal', 'sms', 'web', 'slack', 'email'];
 
 export type DeliverResult =
   | { delivered: true; channel: ApprovalChannel }
@@ -57,6 +57,8 @@ export interface ApprovalDeliveryDeps {
   /** Live ref, so a post-boot email bind takes effect (#1514). */
   principalEmail: string | PrincipalEmailRef;
   logger: Logger;
+  /** The phone app can take an approval when a device is subscribed or the chat is open. */
+  webReachable?: () => boolean;
 }
 
 // Approvals live 24–48h; anything older than this many registrations has long since been
@@ -204,6 +206,7 @@ export class ApprovalDelivery {
   }
 
   private recipientFor(channel: ApprovalChannel): string | null {
+    if (channel === 'web') return this.deps.webReachable?.() ? 'principal' : null;
     if (channel === 'email') {
       const email = resolvePrincipalEmail(this.deps.principalEmail);
       if (email) return email;
@@ -260,6 +263,8 @@ export class ApprovalDelivery {
         return { channel: 'sms', recipient, message: body };
       case 'signal':
         return { channel: 'signal', recipient, message: body };
+      case 'web':
+        return { channel: 'web', recipient: 'principal', message: body };
     }
   }
 }

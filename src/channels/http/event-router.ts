@@ -219,6 +219,15 @@ export class EventRouter {
         timestamp: event.timestamp,
       });
       this.broadcastToSseClients(sseData, convId);
+      // A reply that landed while no browser had the thread open still alerts
+      // the phone. The notifier pushes; it does not write another copy (#2341).
+      if (event.payload.channelId === 'web' && !this.hasChatListener(convId)) {
+        try {
+          this.webReplyNotifier?.(event.payload.content, convId);
+        } catch (err) {
+          this.logger.error({ err, conversationId: convId }, 'web reply notifier failed');
+        }
+      }
     });
 
     // tool.invoke — observability stream for SSE clients
@@ -387,6 +396,29 @@ export class EventRouter {
   broadcastChatEvent(conversationId: string, payload: Record<string, unknown>): void {
     this.broadcastToSseClients(JSON.stringify(payload), conversationId);
   }
+
+  /** True when a chat SSE client has this thread, or is listening to every thread. */
+  hasChatListener(conversationId: string): boolean {
+    for (const client of this.sseClients) {
+      if (!client.conversationId || client.conversationId === conversationId) return true;
+    }
+    return false;
+  }
+
+  /** True when any chat SSE client is connected, whatever thread it filtered to. */
+  hasAnyChatListener(): boolean {
+    return this.sseClients.size > 0;
+  }
+
+  /**
+   * Called for a web reply that no open client will see. The phone push
+   * service registers this. It must not throw.
+   */
+  setWebReplyNotifier(notify: (content: string, conversationId: string) => void): void {
+    this.webReplyNotifier = notify;
+  }
+
+  private webReplyNotifier: ((content: string, conversationId: string) => void) | null = null;
 
   /** Register an SSE client. Returns a cleanup function. */
   addSseClient(client: SseClient): () => void {

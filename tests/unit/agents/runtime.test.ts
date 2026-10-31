@@ -842,8 +842,10 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    // Security block sits at the very top, immediately above the body.
-    expect(systemMsg.startsWith('## Security\nPolicy here.\n\nBody text.')).toBe(true);
+    // Security stays at the top. The reach-order injection sits between it and the body.
+    expect(systemMsg.startsWith('## Security\nPolicy here.\n\n')).toBe(true);
+    expect(systemMsg.indexOf('## Security')).toBeLessThan(systemMsg.indexOf('## Reaching the principal'));
+    expect(systemMsg.indexOf('## Reaching the principal')).toBeLessThan(systemMsg.indexOf('Body text.'));
     // Block appears exactly once (no duplicate append).
     expect(systemMsg.indexOf('## Security')).toBe(systemMsg.lastIndexOf('## Security'));
   });
