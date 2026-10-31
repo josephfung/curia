@@ -520,7 +520,9 @@ export class DelegateHandler implements ToolHandler {
     // re-run its side effects. This handler is the second gate — it is what actually publishes the
     // specialist task, and it validates only the token's agent, never the task — so the check has
     // to live here too, not only in the runtime.
-    const dKey = delegationKey(agent, task);
+    // Keyed on the brief as given, not one the date check added a note to: the runtime
+    // records failures and deliveries under the raw input (#2379 review).
+    const dKey = delegationKey(agent, inputTask);
     if (ctx.delegationGuard) {
       // The delivered record is keyed on the ORIGINAL task. A resume's `task` is the principal's new
       // direction, so the key has to be resolved from the token too — otherwise the block misses
@@ -528,7 +530,7 @@ export class DelegateHandler implements ToolHandler {
       const deliveredKey = findAlreadyDeliveredKey(
         ctx.delegationGuard,
         agent,
-        task,
+        inputTask,
         hasResumeToken ? resume_token : undefined,
       );
       const blockKey = deliveredKey

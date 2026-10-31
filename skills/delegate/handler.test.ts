@@ -7,6 +7,7 @@ import type { EventBus } from '../../src/bus/bus.js';
 import type { BusEvent, AgentTaskEvent } from '../../src/bus/events.js';
 import { createAgentResponse } from '../../src/bus/events.js';
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
+import { DelegationGuard, delegationKey } from '../../src/agents/delegation-guard.js';
 import type { VerificationRuntime } from '../../src/verification/index.js';
 import type { Verification } from '../../src/verification/types.js';
 
@@ -260,6 +261,28 @@ describe('DelegateHandler date-resolve brief validation (#1612)', () => {
       expect(result.success).toBe(true);
       const sent = published.find(e => e.type === 'agent.task') as AgentTaskEvent | undefined;
       expect(sent?.payload.content).toBe("What's on my calendar tomorrow?\n\n(Dates: tomorrow is Sunday, November 1, 2026.)");
+    });
+
+    // The runtime records failures under the brief as given; the dates note must not
+    // move this handler's guard onto a different key (#2389 review).
+    it('keys the identical-delegation guard on the brief as given, not the noted one', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-31T16:45:00Z') });
+      const { bus, published } = makeBus();
+      useCalendarRegistry();
+      const task = "What's on my calendar tomorrow?";
+      const delegationGuard = new DelegationGuard();
+      delegationGuard.recordFailure(delegationKey('calendar', task), {
+        agent: 'calendar',
+        reason: 'specialist_failed',
+        retryable: false,
+        message: 'calendar unavailable',
+      });
+
+      const result = await new DelegateHandler().execute(
+        makeCtx(bus, { input: { agent: 'calendar', task }, timezone: 'America/Toronto', delegationGuard }),
+      );
+      expect(result.success).toBe(true);
+      expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
     });
 
     it('rejects a brief whose weekday contradicts its date', async () => {
