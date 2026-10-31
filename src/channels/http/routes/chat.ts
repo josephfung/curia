@@ -12,6 +12,7 @@ import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
+import { writeSseHead } from '../console-sessions.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
 
@@ -110,7 +111,7 @@ export async function chatRoutes(
     // Hand the raw socket over to us — Fastify won't send a default response after the
     // handler returns, which is what we want for a long-lived SSE stream.
     reply.hijack();
-    reply.raw.writeHead(200, {
+    writeSseHead(reply, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',

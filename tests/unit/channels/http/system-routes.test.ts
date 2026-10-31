@@ -72,7 +72,7 @@ describe('resolveSystemSnapshot', () => {
 });
 
 describe('system routes', () => {
-  const sessions = new Map<string, number>();
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
 
   beforeEach(() => sessions.clear());
 
@@ -112,7 +112,7 @@ describe('system routes', () => {
 
     it('accepts a valid session cookie', async () => {
       const token = 'valid-session-token';
-      sessions.set(hashToken(token), Date.now() + 60_000);
+      sessions.set(hashToken(token), { id: 'test-session', expiresAt: Date.now() + 60_000, renewedAt: Date.now() });
       const app = await buildApp();
       const res = await app.inject({
         method: 'GET',
@@ -159,7 +159,7 @@ describe('system routes', () => {
 
     it('accepts a valid session cookie', async () => {
       const token = 'valid-session-token';
-      sessions.set(hashToken(token), Date.now() + 60_000);
+      sessions.set(hashToken(token), { id: 'test-session', expiresAt: Date.now() + 60_000, renewedAt: Date.now() });
       const scheduleShutdown = vi.fn();
       const app = await buildApp({ scheduleShutdown });
       const res = await app.inject({

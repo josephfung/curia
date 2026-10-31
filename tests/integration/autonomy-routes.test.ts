@@ -19,7 +19,7 @@ describeIf('Autonomy REST routes', () => {
   let autonomyService: AutonomyService;
 
   // Fake session store — pre-seed a valid session token for tests.
-  const sessions: Map<string, number> = new Map();
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
   const TEST_SECRET = 'test-bootstrap-secret';
   const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMobileMenu } from '../context/MobileMenu';
 import { apiFetch } from '../api.js';
+import { endConsoleSession } from '../auth/log-out.js';
 import {
   CuriaWordmark,
   IconHome,
@@ -131,17 +132,20 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
     return () => controller.abort();
   }, []);
 
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+
   const logOut = () => {
-    apiFetch('/auth/logout', { method: 'POST' })
-      .catch((err: unknown) => {
-        console.error('[Sidebar] logout failed:', err);
-      })
-      .finally(() => {
-        navigate({ to: '/login' }).catch((err: unknown) => {
-          console.error('[Sidebar] navigation to /login failed:', err);
-        });
-        setOpen(false);
+    setLogoutError(null);
+    void endConsoleSession().then((result) => {
+      if (!result.ok) {
+        setLogoutError(result.error);
+        return;
+      }
+      navigate({ to: '/login' }).catch((err: unknown) => {
+        console.error('[Sidebar] navigation to /login failed:', err);
       });
+      setOpen(false);
+    });
   };
 
   const go = (view: string) => {
@@ -290,6 +294,7 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
             <span className="sidebar-user-org">{version ? `v${version}` : ''}</span>
           </span>
         </button>
+        {logoutError && <p className="autonomy-error" role="alert">{logoutError}</p>}
         <button type="button" className="sidebar-logout" onClick={logOut}>
           Log out
         </button>

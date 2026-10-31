@@ -616,6 +616,7 @@ export class HttpAdapter implements Channel {
         secureCookies,
         contactService: this.config.contactService,
         nodeMergeService: this.config.nodeMergeService,
+        bus,
       });
       await this.app.register(taskRoutes, {
         ...consoleBase,

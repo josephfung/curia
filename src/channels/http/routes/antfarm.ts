@@ -11,6 +11,7 @@ import type { Logger } from '../../../logger.js';
 import { buildScript } from '../../../antfarm/interpreter.js';
 import type { AuditEventRow } from '@curia/shared-types';
 import { assertSecret, type SessionStore } from '../session-auth.js';
+import { writeSseHead } from '../console-sessions.js';
 import type { EventRouter } from '../event-router.js';
 
 export interface AntfarmRouteOptions {
@@ -138,7 +139,7 @@ export async function antfarmRoutes(
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
     reply.hijack();
-    reply.raw.writeHead(200, {
+    writeSseHead(reply, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',

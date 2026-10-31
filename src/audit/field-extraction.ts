@@ -100,6 +100,26 @@ const extractToolResult: Extractor = (p, fail) => ({
 const EXTRACTORS: Readonly<Record<string, Extractor>> = {
   // Console Documents page (#1822, #1823): the principal acting on one working document
   // (target = its path) or on the store in bulk — export/import (target = the scope).
+  // Console session login, logout, revoke, pairing, and sign-out-others (#2341).
+  // target is the session acted on (or the first id in a sign-out-others batch).
+  // initiator is the acting session, or bootstrap_secret when there is no cookie.
+  'operator.session': (p, fail) => {
+    const sessionId = typeof p.sessionId === 'string' ? p.sessionId : undefined;
+    const revoked = Array.isArray(p.revokedSessionIds)
+      ? p.revokedSessionIds.find((id): id is string => typeof id === 'string')
+      : undefined;
+    const actor = typeof p.actorSessionId === 'string' ? p.actorSessionId : undefined;
+    const target = sessionId ?? revoked ?? actor;
+    return {
+      action: str(p, 'action', fail),
+      outcome: p.stage === 'requested' ? 'pending' : p.stage === 'failed' ? 'failure' : 'success',
+      target_type: 'session',
+      target_id: target ?? str(p, 'action', fail),
+      initiator_type: p.initiatedBy === 'bootstrap_secret' ? 'system' : 'human',
+      initiator_id: actor ?? (p.initiatedBy === 'bootstrap_secret' ? 'bootstrap_secret' : str(p, 'initiatedBy', fail)),
+    };
+  },
+
   'document.console_action': (p, fail) => ({
     action: str(p, 'action', fail),
     // Two-stage, like agent.task: `requested` is written ahead of the change.

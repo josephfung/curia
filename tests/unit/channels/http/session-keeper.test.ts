@@ -33,7 +33,20 @@ describe('device labels', () => {
     expect(normalizeDeviceName('   ')).toBeNull();
     expect(normalizeDeviceName('a'.repeat(81))).toBeNull();
     expect(normalizeDeviceName('line\nbreak')).toBeNull();
+    expect(normalizeDeviceName(`hide${'\u202E'}me`)).toBeNull();
+    expect(normalizeDeviceName(`zero${'\u200B'}width`)).toBeNull();
     expect(normalizeDeviceName(12)).toBeNull();
+  });
+
+  it.each([
+    ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit CriOS/120.0.0.0 Mobile/15E148 Safari/604.1', 'iPhone · Chrome'],
+    ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit FxiOS/120.0 Mobile/15E148 Safari/605.1.15', 'iPhone · Firefox'],
+    ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit EdgiOS/120.0 Version/17.0 Mobile/15E148 Safari/604.1', 'iPhone · Edge'],
+    ['Mozilla/5.0 (Linux; Android 14) AppleWebKit Chrome/120.0.0.0 Mobile Safari/537.36 EdgA/120.0.0.0', 'Android · Edge'],
+    ['Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit Version/17.0 Mobile/15E148 Safari/604.1', 'iPad · Safari'],
+    ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit Version/17.0 Mobile/15E148 Safari/604.1', 'iPad · Safari'],
+  ])('labels %s', (ua, label) => {
+    expect(deviceNameFromUserAgent(ua)).toBe(label);
   });
 });
 
@@ -70,7 +83,8 @@ describe('SessionKeeper', () => {
       expect(updated.renewedAt).toBe(1_700_000_000_000);
     }
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain('UPDATE sessions');
+    expect(sql).toContain('COALESCE(name, $4)');
+    expect(sql).toContain('COALESCE(user_agent, $5)');
     expect(params[0]).toBe(hash);
     expect(params[1]).toEqual(new Date(1_700_000_000_000 + SESSION_IDLE_TTL_MS));
   });
@@ -79,6 +93,7 @@ describe('SessionKeeper', () => {
     let now = 5_000_000;
     const hash = hashToken('raw-token');
     const sessions: SessionStore = new Map([[hash, {
+      id: 'session-2',
       expiresAt: now + SESSION_IDLE_TTL_MS,
       renewedAt: now,
     }]]);
@@ -97,24 +112,32 @@ describe('SessionKeeper', () => {
     expect(query).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves a number-valued entry alone', () => {
+  it('evicts the map entry when the renewal matches no row', async () => {
+    const now = 4_000_000;
     const hash = hashToken('raw-token');
-    const sessions: SessionStore = new Map([[hash, Date.now() + 60_000]]);
-    const query = vi.fn();
+    const sessions: SessionStore = new Map([[hash, {
+      id: 'session-gone',
+      expiresAt: now + 1_000,
+      renewedAt: now - SESSION_RENEW_INTERVAL_MS,
+    }]]);
+    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
     const keeper = new SessionKeeper({
       pool: { query },
       sessions,
       secureCookies: false,
       logger: createSilentLogger(),
+      now: () => now,
     });
     keeper.touch(hash, 'raw-token', replyStub());
-    expect(query).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sessions.has(hash)).toBe(false);
   });
 
   it('rolls the in-memory claim back when the write fails so the next request retries', async () => {
     const now = 9_000_000;
     const hash = hashToken('raw-token');
     const original: SessionEntry = {
+      id: 'session-3',
       expiresAt: now + 1_000,
       renewedAt: now - SESSION_RENEW_INTERVAL_MS,
     };

@@ -24,6 +24,28 @@ describe('extractStructuredFields', () => {
     });
   });
 
+  it('maps operator.session onto the session and the actor', () => {
+    expect(extractStructuredFields(
+      'operator.session',
+      {
+        action: 'revoke',
+        stage: 'requested',
+        initiatedBy: 'session',
+        actorSessionId: 'actor-1',
+        sessionId: 'session-1',
+      },
+      'evt-session',
+      logger,
+    )).toMatchObject({
+      action: 'revoke',
+      outcome: 'pending',
+      target_type: 'session',
+      target_id: 'session-1',
+      initiator_type: 'human',
+      initiator_id: 'actor-1',
+    });
+  });
+
   it('maps a requested document.console_action as pending (write-ahead)', () => {
     expect(extractStructuredFields(
       'document.console_action',

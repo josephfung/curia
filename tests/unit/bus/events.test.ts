@@ -200,6 +200,9 @@ describe('Event Types', () => {
   it('creates an operator.session event', () => {
     const event = createOperatorSession({
       action: 'revoke',
+      stage: 'completed',
+      initiatedBy: 'session',
+      actorSessionId: 'actor-1',
       sessionId: 'session-1',
       kind: 'paired_device',
       name: 'iPhone · Safari',

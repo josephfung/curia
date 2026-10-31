@@ -44,7 +44,7 @@ describeIf('vault routes', () => {
       secretsService,
     );
 
-    const sessions: Map<string, number> = new Map();
+    const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
     app = Fastify();
     await app.register(cookie);
     await app.register(vaultRoutes, { secretsService, registryService, webAppBootstrapSecret: SECRET, sessions });

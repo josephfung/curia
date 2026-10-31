@@ -743,17 +743,30 @@ interface SystemRestartPayload {
   initiatedBy: string;
 }
 
-// OperatorSessionPayload — a console session was paired or ended, or every other
-// device was signed out (#2341). Audit-only. Never carries the token or its hash.
-interface OperatorSessionPayload {
-  action: 'logout' | 'revoke' | 'sign_out_others' | 'pair';
-  /** Public sessions.id. Absent for sign_out_others, which reports a count. */
+// OperatorSessionPayload — a console session was created, paired, or ended, or
+// every other device was signed out (#2341). Audit-only. Never carries the token
+// or its hash.
+//
+// Destructive actions are two-stage, like document.console_action. `requested`
+// is published before the row is deleted. `completed` follows a successful
+// delete. `failed` means the delete threw and the session is still alive.
+export interface OperatorSessionPayload {
+  action: 'login' | 'logout' | 'revoke' | 'sign_out_others' | 'pair';
+  /** `completed` for login. Destructive actions use all three stages. */
+  stage: 'requested' | 'completed' | 'failed';
+  /** A console session, or the bootstrap-secret header with no cookie. */
+  initiatedBy: 'session' | 'bootstrap_secret';
+  /** sessions.id of the actor. Absent when initiatedBy is bootstrap_secret. */
+  actorSessionId?: string;
+  /** Public sessions.id of the session being ended or created. */
   sessionId?: string;
   kind?: 'browser' | 'paired_device';
   /** Device label at the time of the action. */
   name?: string;
-  /** How many sessions sign_out_others ended. */
+  /** How many sessions sign_out_others ended or attempted. */
   revokedCount?: number;
+  /** sessions.id values sign_out_others targeted. */
+  revokedSessionIds?: string[];
 }
 
 // DocumentConsoleActionPayload — the principal changed or bulk-read the OKF working-

@@ -29,7 +29,7 @@ function createMockIdentityService(): OfficeIdentityService {
 const SECRET = 'test-bootstrap-secret';
 
 describe('GET /api/identity — configured flag', () => {
-  const sessions = new Map<string, number>();
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
 
   beforeEach(() => sessions.clear());
 
@@ -93,7 +93,7 @@ describe('GET /api/identity — configured flag', () => {
 
   it('accepts a valid session cookie in place of the header', async () => {
     const token = 'valid-session-token';
-    sessions.set(hashToken(token), Date.now() + 60_000);
+    sessions.set(hashToken(token), { id: 'test-session', expiresAt: Date.now() + 60_000, renewedAt: Date.now() });
 
     const pool = {
       query: vi.fn().mockResolvedValue({ rows: [{ configured: true }] }),
@@ -140,13 +140,13 @@ describe('GET /api/identity — configured flag', () => {
 });
 
 describe('PUT /api/identity — session cookie auth', () => {
-  const sessions = new Map<string, number>();
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
 
   beforeEach(() => sessions.clear());
 
   it('accepts PUT with a valid session cookie', async () => {
     const token = 'put-session-token';
-    sessions.set(hashToken(token), Date.now() + 60_000);
+    sessions.set(hashToken(token), { id: 'test-session', expiresAt: Date.now() + 60_000, renewedAt: Date.now() });
 
     const pool = { query: vi.fn() } as unknown as Pool;
     const identityService = createMockIdentityService();

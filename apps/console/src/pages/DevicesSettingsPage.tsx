@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { apiFetch } from '../api';
+import { endConsoleSession } from '../auth/log-out.js';
+import { timeAgo } from '../components/settings/ConfigHistory';
 import { SettingsLayout } from './SettingsPage';
 
 interface DeviceSession {
@@ -29,15 +31,10 @@ function deviceLabel(device: DeviceSession): string {
   return device.name && device.name.trim().length > 0 ? device.name : 'Unnamed device';
 }
 
-function formatWhen(iso: string): string {
+function formatCreated(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function kindLabel(kind: DeviceSession['kind']): string {
@@ -94,6 +91,10 @@ function DevicesSection() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: draftName }),
       });
+      if (res.status === 401) {
+        await navigate({ to: '/login' });
+        return;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { error?: string } | null;
         throw new Error(body?.error ?? 'Could not rename the device');
@@ -109,11 +110,18 @@ function DevicesSection() {
 
   async function revoke(device: DeviceSession) {
     const label = deviceLabel(device);
-    if (!window.confirm(`Sign out ${label}?`)) return;
+    const prompt = device.current
+      ? `Sign out ${label}? This ends your session on this device.`
+      : `Sign out ${label}?`;
+    if (!window.confirm(prompt)) return;
     setBusy(true);
     setActionError(null);
     try {
       const res = await apiFetch(`/api/sessions/${device.id}`, { method: 'DELETE' });
+      if (res.status === 401) {
+        await navigate({ to: '/login' });
+        return;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { error?: string } | null;
         throw new Error(body?.error ?? 'Could not revoke the device');
@@ -137,7 +145,14 @@ function DevicesSection() {
     setActionError(null);
     try {
       const res = await apiFetch('/api/sessions/revoke-others', { method: 'POST' });
-      if (!res.ok) throw new Error('Could not sign out other devices');
+      if (res.status === 401) {
+        await navigate({ to: '/login' });
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(body?.error ?? 'Could not sign out other devices');
+      }
       await load();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not sign out other devices');
@@ -147,11 +162,14 @@ function DevicesSection() {
   }
 
   async function logOut() {
+    if (!window.confirm('Log out of Curia on this device?')) return;
     setBusy(true);
-    try {
-      await apiFetch('/auth/logout', { method: 'POST' });
-    } catch (err) {
-      console.error('[Devices] logout failed:', err);
+    setActionError(null);
+    const result = await endConsoleSession();
+    if (!result.ok) {
+      setActionError(result.error);
+      setBusy(false);
+      return;
     }
     await navigate({ to: '/login' });
   }
@@ -165,8 +183,8 @@ function DevicesSection() {
         </p>
       </div>
 
-      {loadError && <p className="autonomy-error">{loadError}</p>}
-      {actionError && <p className="autonomy-error">{actionError}</p>}
+      {loadError && <p className="autonomy-error" role="alert">{loadError}</p>}
+      {actionError && <p className="autonomy-error" role="alert">{actionError}</p>}
 
       {devices === null && !loadError && (
         <p className="settings-muted-hint">Loading…</p>
@@ -183,8 +201,10 @@ function DevicesSection() {
                 </div>
                 <p className="device-meta">
                   {kindLabel(device.kind)}
-                  {' · Last seen '}
-                  {formatWhen(device.lastSeenAt)}
+                  {' · '}
+                  {device.current ? 'Active now' : `Last seen ${timeAgo(device.lastSeenAt)}`}
+                  {' · Created '}
+                  {formatCreated(device.createdAt)}
                   {' · '}
                   {device.notificationsEnabled ? 'Notifications on' : 'Notifications off'}
                 </p>
@@ -219,7 +239,7 @@ function DevicesSection() {
                       className="btn btn-secondary"
                       disabled={busy}
                       onClick={() => {
-                        setDraftName(deviceLabel(device));
+                        setDraftName(device.name ?? '');
                         setRenamingId(device.id);
                       }}
                     >
@@ -229,7 +249,7 @@ function DevicesSection() {
                       type="button"
                       className="btn btn-danger"
                       disabled={busy}
-                      onClick={() => void revoke(device)}
+                      onClick={() => void (device.current ? logOut() : revoke(device))}
                     >
                       {device.current ? 'Log out' : 'Sign out'}
                     </button>
@@ -241,9 +261,6 @@ function DevicesSection() {
           <div className="device-actions">
             <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void revokeOthers()}>
               Sign out all other devices
-            </button>
-            <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void logOut()}>
-              Log out
             </button>
           </div>
         </>

@@ -8,11 +8,15 @@
 
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
+import type { EventBus } from '../../../bus/bus.js';
+import { createOperatorSession } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import { assertSecret, compareSecrets, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
 import {
+  deleteSession,
   deviceNameFromUserAgent,
+  evictTokenHashes,
   issueSession,
   readUserAgent,
   sessionCookieOptions,
@@ -44,6 +48,8 @@ export interface KnowledgeGraphRouteOptions {
   // Optional so callers that never mount the merge (tests) need not build one; when absent
   // those two routes answer 503.
   nodeMergeService?: NodeMergeApi;
+  /** When set, a successful sign-in is audited as operator.session. */
+  bus?: EventBus;
 }
 
 interface KgNodeRow {
@@ -104,7 +110,7 @@ export async function knowledgeGraphRoutes(
   app: FastifyInstance,
   options: KnowledgeGraphRouteOptions,
 ): Promise<void> {
-  const { pool, logger, webAppBootstrapSecret, secureCookies, contactService, sessions, nodeMergeService } = options;
+  const { pool, logger, webAppBootstrapSecret, secureCookies, contactService, sessions, nodeMergeService, bus } = options;
   // sessions is managed by HttpAdapter — no local Map creation needed here.
 
   // POST /auth — exchanges the bootstrap secret for an HttpOnly session cookie.
@@ -138,6 +144,30 @@ export async function knowledgeGraphRoutes(
     } catch (err) {
       logger.error({ err }, 'Failed to persist session to Postgres');
       return reply.status(503).send({ error: 'Login is temporarily unavailable. Please try again.' });
+    }
+
+    if (bus) {
+      const name = deviceNameFromUserAgent(userAgent);
+      try {
+        await bus.publish('system', createOperatorSession({
+          action: 'login',
+          stage: 'completed',
+          initiatedBy: 'session',
+          actorSessionId: issued.id,
+          sessionId: issued.id,
+          kind: 'browser',
+          name,
+        }));
+      } catch (err) {
+        logger.error({ err, sessionId: issued.id }, 'POST /auth: failed to record login — removing the new session');
+        try {
+          await deleteSession(pool, issued.id);
+        } catch (deleteErr) {
+          logger.error({ err: deleteErr, sessionId: issued.id }, 'POST /auth: failed to roll back an unaudited session');
+        }
+        evictTokenHashes(sessions, [issued.tokenHash]);
+        return reply.status(500).send({ error: 'Failed to record the sign-in. Please try again.' });
+      }
     }
 
     reply.setCookie('curia_session', issued.token, sessionCookieOptions(secureCookies));

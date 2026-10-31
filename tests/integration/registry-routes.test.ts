@@ -38,7 +38,7 @@ describeIf('registry routes', () => {
     );
 
     // Minimal session store stub: empty Map forces header-secret auth path (no cookie).
-    const sessions: Map<string, number> = new Map();
+    const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
 
     app = Fastify();
     await app.register(cookie);

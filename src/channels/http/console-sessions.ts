@@ -69,6 +69,56 @@ export function clearSessionCookie(reply: FastifyReply): void {
   reply.clearCookie('curia_session', { path: '/' });
 }
 
+interface PendingCookie {
+  name: string;
+  value: string;
+  opts?: Record<string, unknown>;
+}
+
+/**
+ * @fastify/cookie keeps new cookies on a reply symbol and writes Set-Cookie
+ * in onSend. Hijacked SSE responses never reach that hook, so flush the jar
+ * onto the reply header first. The symbol is the plugin's private key
+ * (`fastify.reply.setCookies`); there is no public flush.
+ */
+function flushPendingCookies(reply: FastifyReply): void {
+  const holder = reply as unknown as Record<symbol, unknown>;
+  let jar: Map<string, PendingCookie> | undefined;
+  for (const sym of Object.getOwnPropertySymbols(reply)) {
+    if (sym.description !== 'fastify.reply.setCookies') continue;
+    const value = holder[sym];
+    if (value instanceof Map) jar = value as Map<string, PendingCookie>;
+  }
+  if (!jar || jar.size === 0) return;
+  const serialize = (reply.server as {
+    serializeCookie?: (name: string, value: string, opts?: Record<string, unknown>) => string;
+  }).serializeCookie;
+  if (!serialize) return;
+  const lines: string[] = [];
+  const existing = reply.getHeader('set-cookie');
+  if (typeof existing === 'string') lines.push(existing);
+  else if (Array.isArray(existing)) lines.push(...existing.map(String));
+  for (const cookie of jar.values()) {
+    lines.push(serialize(cookie.name, cookie.value, cookie.opts));
+  }
+  jar.clear();
+  reply.header('set-cookie', lines.length === 1 ? lines[0]! : lines);
+}
+
+/**
+ * SSE routes call `reply.hijack()` and `writeHead`, which skips @fastify/cookie's
+ * onSend hook. Copy a renewal Set-Cookie onto the raw response or the browser
+ * cookie lags the server's expiry until the next non-stream request.
+ */
+export function writeSseHead(reply: FastifyReply, headers: Record<string, string>): void {
+  flushPendingCookies(reply);
+  const setCookie = reply.getHeader('set-cookie');
+  const merged: Record<string, string | string[] | number> = { ...headers };
+  if (typeof setCookie === 'string' || typeof setCookie === 'number') merged['set-cookie'] = String(setCookie);
+  else if (Array.isArray(setCookie)) merged['set-cookie'] = setCookie.map(String);
+  reply.raw.writeHead(200, merged);
+}
+
 export function readUserAgent(request: FastifyRequest): string | null {
   const ua = request.headers['user-agent'];
   if (typeof ua !== 'string') return null;
@@ -83,15 +133,20 @@ export function readUserAgent(request: FastifyRequest): string | null {
  */
 export function deviceNameFromUserAgent(ua: string | null): string {
   const agent = ua ?? '';
+  // iPadOS 13+ often sends a Macintosh UA. "Mobile" with Macintosh is an iPad.
   const device = /iPhone/.test(agent) ? 'iPhone'
-    : /iPad/.test(agent) ? 'iPad'
+    : /iPad/.test(agent) || (/Macintosh/.test(agent) && /Mobile/.test(agent)) ? 'iPad'
     : /Android/.test(agent) ? 'Android'
     : /CrOS/.test(agent) ? 'Chromebook'
     : /Macintosh|Mac OS X/.test(agent) ? 'Mac'
     : /Windows/.test(agent) ? 'Windows'
     : /Linux/.test(agent) ? 'Linux'
     : 'Browser';
-  const browser = /Edg\//.test(agent) ? 'Edge'
+  const browser = /EdgiOS\//.test(agent) ? 'Edge'
+    : /EdgA\//.test(agent) ? 'Edge'
+    : /Edg\//.test(agent) ? 'Edge'
+    : /CriOS\//.test(agent) ? 'Chrome'
+    : /FxiOS\//.test(agent) ? 'Firefox'
     : /Chrome\//.test(agent) ? 'Chrome'
     : /Firefox\//.test(agent) ? 'Firefox'
     : /Safari\//.test(agent) ? 'Safari'
@@ -104,7 +159,7 @@ export function normalizeDeviceName(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const name = raw.trim();
   if (name.length < 1 || name.length > SESSION_NAME_MAX) return null;
-  if (/[\u0000-\u001F\u007F]/.test(name)) return null;
+  if (/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(name)) return null;
   return name;
 }
 
@@ -352,44 +407,42 @@ export class SessionKeeper {
   /**
    * Slide the idle window if the last write is older than an hour.
    * The claim is synchronous, so N requests in the same hour share one write.
-   * A number-valued map entry (tests that only set an expiry) is left alone.
+   * A missing name or user agent is filled from this request; a name the
+   * operator set is left alone.
    */
-  touch(tokenHash: string, rawToken: string, reply: FastifyReply): void {
+  touch(tokenHash: string, rawToken: string, reply: FastifyReply, userAgent?: string | null): void {
     const current = this.sessions.get(tokenHash);
-    if (typeof current !== 'object') return;
+    if (!current) return;
     const now = this.now();
     if (!sessionNeedsRenewal(current, now)) return;
 
     const expiresAt = now + SESSION_IDLE_TTL_MS;
     const claimed: SessionEntry = { ...current, expiresAt, renewedAt: now };
     this.sessions.set(tokenHash, claimed);
-    try {
-      reply.setCookie('curia_session', rawToken, sessionCookieOptions(this.secureCookies));
-    } catch (err) {
-      this.sessions.set(tokenHash, current);
-      this.logger.error({ err }, 'Session cookie renewal failed');
-      return;
-    }
+    reply.setCookie('curia_session', rawToken, sessionCookieOptions(this.secureCookies));
 
+    const ua = typeof userAgent === 'string' && userAgent.trim().length > 0
+      ? userAgent.trim().slice(0, USER_AGENT_MAX)
+      : null;
+    const label = ua ? deviceNameFromUserAgent(ua) : null;
     void this.pool.query(
       `UPDATE sessions
-       SET expires_at = $2, last_seen_at = $3
+       SET expires_at = $2,
+           last_seen_at = $3,
+           name = COALESCE(name, $4),
+           user_agent = COALESCE(user_agent, $5)
        WHERE token_hash = $1`,
-      [tokenHash, new Date(expiresAt), new Date(now)],
+      [tokenHash, new Date(expiresAt), new Date(now), label, ua],
     ).then((result) => {
       if ((result.rowCount ?? 1) === 0) {
         // The row is gone (revoked on another path). Drop the map entry too.
         const latest = this.sessions.get(tokenHash);
-        if (typeof latest === 'object' && latest.renewedAt === now) {
-          this.sessions.delete(tokenHash);
-        }
+        if (latest?.renewedAt === now) this.sessions.delete(tokenHash);
       }
     }).catch((err: unknown) => {
       this.logger.error({ err }, 'Session renewal write failed');
       const latest = this.sessions.get(tokenHash);
-      if (typeof latest === 'object' && latest.renewedAt === now) {
-        this.sessions.set(tokenHash, current);
-      }
+      if (latest?.renewedAt === now) this.sessions.set(tokenHash, current);
     });
   }
 }

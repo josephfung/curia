@@ -3,15 +3,21 @@
 // POST /auth/logout ends the caller's session.
 // GET    /api/sessions lists live sessions.
 // PATCH  /api/sessions/:id renames one.
-// DELETE /api/sessions/:id revokes one, and its push subscriptions when those exist.
-// POST   /api/sessions/revoke-others ends every session except the caller's.
+// DELETE /api/sessions/:id revokes one. Push subscriptions, once they exist,
+//           go with the row through ON DELETE CASCADE (web-push migration).
+// POST   /api/sessions/revoke-others ends every other live session when the
+//           caller has a cookie. With the bootstrap-secret header and no
+//           cookie it ends every live session, which is how an access-key
+//           rotation cuts off old browsers. Spec 12 says the same.
 //
-// Each destructive action is audited as operator.session before the rows go,
-// so a failed audit leaves the session in place.
+// Each destructive action publishes operator.session stage=requested first.
+// A failed audit leaves the session in place. stage=completed follows a
+// successful delete. stage=failed is published when the delete throws, so the
+// log does not claim a session ended while it is still alive.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { EventBus } from '../../../bus/bus.js';
-import { createOperatorSession } from '../../../bus/events.js';
+import { createOperatorSession, type OperatorSessionEvent } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import {
   clearSessionCookie,
@@ -30,10 +36,10 @@ import {
   assertSecret,
   hashToken,
   readSessionCookie,
+  CONSOLE_RATE,
   type SessionStore,
 } from '../session-auth.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../../../util/uuid.js';
 
 export interface SessionRouteOptions {
   pool: SessionQueryable;
@@ -53,7 +59,7 @@ export async function sessionRoutes(
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
 
-  const READ_RATE = { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } };
+  const READ_RATE = CONSOLE_RATE;
   const WRITE_RATE = { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } };
 
   app.post('/auth/logout', WRITE_RATE, async (request, reply) => {
@@ -75,20 +81,24 @@ export async function sessionRoutes(
       return reply.status(401).send({ error: 'Session already ended.' });
     }
 
-    const audited = await publishSession(bus, logger, reply, {
-      action: 'logout',
+    const audit = {
+      action: 'logout' as const,
+      initiatedBy: 'session' as const,
+      actorSessionId: current.id,
       sessionId: current.id,
       kind: current.kind,
       name: current.name ?? undefined,
-    });
-    if (!audited) return;
+    };
+    if (!await publishSession(bus, logger, reply, { ...audit, stage: 'requested' })) return;
 
     try {
       await deleteSession(pool, current.id);
     } catch (err) {
       logger.error({ err, sessionId: current.id }, 'POST /auth/logout: failed to delete the session');
+      await publishFailure(bus, logger, audit);
       return reply.status(503).send({ error: 'Logout is temporarily unavailable. Please try again.' });
     }
+    await publishCompletion(bus, logger, audit);
     evictTokenHashes(sessions, [tokenHash]);
     clearSessionCookie(reply);
     return reply.status(200).send({ ok: true });
@@ -101,7 +111,7 @@ export async function sessionRoutes(
     let currentId: string | null = null;
     if (tokenHash) {
       const entry = sessions.get(tokenHash);
-      currentId = typeof entry === 'object' ? (entry.id ?? null) : null;
+      currentId = entry?.id ?? null;
       if (!currentId) {
         try {
           currentId = (await findSessionByTokenHash(pool, tokenHash))?.id ?? null;
@@ -129,7 +139,7 @@ export async function sessionRoutes(
   app.patch<{ Params: { id: string } }>('/api/sessions/:id', WRITE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const id = request.params.id;
-    if (!UUID_RE.test(id)) {
+    if (!isUuid(id)) {
       return reply.status(400).send({ error: 'Unknown device.' });
     }
     const body = request.body as { name?: unknown };
@@ -151,7 +161,7 @@ export async function sessionRoutes(
   app.delete<{ Params: { id: string } }>('/api/sessions/:id', WRITE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const id = request.params.id;
-    if (!UUID_RE.test(id)) {
+    if (!isUuid(id)) {
       return reply.status(400).send({ error: 'Unknown device.' });
     }
 
@@ -166,20 +176,24 @@ export async function sessionRoutes(
 
     const token = readSessionCookie(request);
     const tokenHash = token ? hashToken(token) : null;
-    const audited = await publishSession(bus, logger, reply, {
-      action: 'revoke',
+    const actor = actorFromRequest(request, sessions);
+    const audit = {
+      action: 'revoke' as const,
+      ...actor,
       sessionId: target.id,
       kind: target.kind,
       name: target.name ?? undefined,
-    });
-    if (!audited) return;
+    };
+    if (!await publishSession(bus, logger, reply, { ...audit, stage: 'requested' })) return;
 
     try {
       await deleteSession(pool, id);
     } catch (err) {
       logger.error({ err, sessionId: id }, 'DELETE /api/sessions/:id: revoke failed');
+      await publishFailure(bus, logger, audit);
       return reply.status(503).send({ error: 'Could not revoke the device. Please try again.' });
     }
+    await publishCompletion(bus, logger, audit);
     evictTokenHashes(sessions, [target.tokenHash]);
     const current = target.tokenHash === tokenHash;
     if (current) clearSessionCookie(reply);
@@ -198,41 +212,69 @@ export async function sessionRoutes(
       return reply.status(503).send({ error: 'Could not sign out other devices. Please try again.' });
     }
 
-    const audited = await publishSession(bus, logger, reply, {
-      action: 'sign_out_others',
+    const actor = actorFromRequest(request, sessions);
+    const audit = {
+      action: 'sign_out_others' as const,
+      ...actor,
       revokedCount: others.length,
-    });
-    if (!audited) return;
+      revokedSessionIds: others.map((row) => row.id),
+    };
+    if (!await publishSession(bus, logger, reply, { ...audit, stage: 'requested' })) return;
 
     try {
       await deleteSessionsByIds(pool, others.map((row) => row.id));
     } catch (err) {
       logger.error({ err }, 'POST /api/sessions/revoke-others: delete failed');
+      await publishFailure(bus, logger, audit);
       return reply.status(503).send({ error: 'Could not sign out other devices. Please try again.' });
     }
+    await publishCompletion(bus, logger, audit);
     evictTokenHashes(sessions, others.map((row) => row.tokenHash));
     return reply.send({ revoked: others.length });
   });
+}
+
+type SessionAudit = Omit<OperatorSessionEvent['payload'], 'stage'>;
+
+function actorFromRequest(
+  request: FastifyRequest,
+  sessions: SessionStore,
+): { initiatedBy: 'session' | 'bootstrap_secret'; actorSessionId?: string } {
+  const token = readSessionCookie(request);
+  if (!token) return { initiatedBy: 'bootstrap_secret' };
+  const entry = sessions.get(hashToken(token));
+  if (!entry) return { initiatedBy: 'bootstrap_secret' };
+  return { initiatedBy: 'session', actorSessionId: entry.id };
 }
 
 async function publishSession(
   bus: EventBus,
   logger: Logger,
   reply: FastifyReply,
-  payload: {
-    action: 'logout' | 'revoke' | 'sign_out_others' | 'pair';
-    sessionId?: string;
-    kind?: 'browser' | 'paired_device';
-    name?: string;
-    revokedCount?: number;
-  },
+  payload: OperatorSessionEvent['payload'],
 ): Promise<boolean> {
   try {
     await bus.publish('system', createOperatorSession(payload));
     return true;
   } catch (err) {
-    logger.error({ err, action: payload.action }, 'Failed to record session audit event — session left in place');
+    logger.error({ err, action: payload.action, stage: payload.stage }, 'Failed to record session audit event — session left in place');
     reply.status(500).send({ error: 'Failed to record the change. The session was left in place.' });
     return false;
+  }
+}
+
+async function publishCompletion(bus: EventBus, logger: Logger, audit: SessionAudit): Promise<void> {
+  try {
+    await bus.publish('system', createOperatorSession({ ...audit, stage: 'completed' }));
+  } catch (err) {
+    logger.error({ err, action: audit.action }, 'Session ended but the completion audit could not be recorded');
+  }
+}
+
+async function publishFailure(bus: EventBus, logger: Logger, audit: SessionAudit): Promise<void> {
+  try {
+    await bus.publish('system', createOperatorSession({ ...audit, stage: 'failed' }));
+  } catch (err) {
+    logger.error({ err, action: audit.action }, 'Session delete failed and the failure audit could not be recorded');
   }
 }

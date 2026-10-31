@@ -12,31 +12,27 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 /**
  * One live session in the in-memory map. `renewedAt` is the last time the idle
  * window was written (login or a throttled renewal) and anchors the next write.
- * A bare number is accepted so older tests can keep storing just an expiry.
  */
 export interface SessionEntry {
   /** Epoch ms. A request at or after this instant is rejected. */
   expiresAt: number;
   /** Epoch ms of the last expiry write. */
   renewedAt: number;
-  /** sessions.id. Absent when a test planted only an expiry. */
-  id?: string;
+  /** sessions.id. */
+  id: string;
 }
 
-export type SessionStoreValue = SessionEntry | number;
-
-// token hash → expiry. Lives in HttpAdapter, shared across route registrations.
+// token hash → session. Lives in HttpAdapter, shared across route registrations.
 // Map keys are SHA-256 hashes of the raw token so the plaintext never touches the DB.
-export type SessionStore = Map<string, SessionStoreValue>;
+export type SessionStore = Map<string, SessionEntry>;
 
-export function sessionExpiresAt(value: SessionStoreValue | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  return typeof value === 'number' ? value : value.expiresAt;
+export function sessionExpiresAt(value: SessionEntry | undefined): number | undefined {
+  return value?.expiresAt;
 }
 
 /** Slides the idle window. Bound per store so route handlers stay unchanged. */
 export interface SessionRenewer {
-  touch(tokenHash: string, rawToken: string, reply: FastifyReply): void;
+  touch(tokenHash: string, rawToken: string, reply: FastifyReply, userAgent?: string | null): void;
 }
 
 const sessionRenewers = new WeakMap<SessionStore, SessionRenewer>();
@@ -113,7 +109,13 @@ export function assertSecret(
     const tokenHash = hashToken(sessionToken);
     const expiresAt = sessionExpiresAt(sessions.get(tokenHash));
     if (expiresAt !== undefined && Date.now() < expiresAt) {
-      sessionRenewers.get(sessions)?.touch(tokenHash, sessionToken, reply);
+      const ua = request.headers['user-agent'];
+      sessionRenewers.get(sessions)?.touch(
+        tokenHash,
+        sessionToken,
+        reply,
+        typeof ua === 'string' ? ua : null,
+      );
       return true;
     }
     // Expired or unknown token — fall through to header check below.

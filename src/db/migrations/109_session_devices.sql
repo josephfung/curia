@@ -1,8 +1,10 @@
 -- 109_session_devices.sql
 --
 -- Device identity for console sessions (#2341, ADR-055). Existing rows are
--- browser logins: kind defaults to 'browser' and name stays null until the
--- next sign-in fills it in. paired_device is minted by phone pairing.
+-- browser logins: kind defaults to 'browser'. name and user_agent stay null
+-- until the next throttled renewal, which fills them when the browser sends
+-- a user agent. A later sign-in is a new row. paired_device is minted by
+-- phone pairing.
 
 -- Up Migration
 
