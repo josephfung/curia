@@ -6,8 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
+import { timeSavedDetail, timeSavedHelp } from '../../src/activity/describers.js';
 import { BriefingService } from '../../src/dashboard/briefing-service.js';
-import { HISTOGRAM_DAYS, addCalendarDays, localDayKey, localMidnight } from '../../src/dashboard/briefing.js';
+import { HISTOGRAM_DAYS, STATS_WINDOW_DAYS, addCalendarDays, localDayKey, localMidnight } from '../../src/dashboard/briefing.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
@@ -318,7 +319,13 @@ describeIf('briefing service against Postgres', () => {
         parent: string,
         tool: string,
         at: Date,
-        opts: { eventType?: string; targetId?: string; outcome?: string | null; skillName?: boolean } = {},
+        opts: {
+          eventType?: string;
+          targetId?: string;
+          outcome?: string | null;
+          skillName?: boolean;
+          input?: Record<string, unknown>;
+        } = {},
       ) => {
         step += 1;
         const atInvoke = new Date(at.getTime() + step * 1000);
@@ -329,7 +336,10 @@ describeIf('briefing service against Postgres', () => {
           timestamp: atInvoke,
           eventType: invokeType,
           parentEventId: parent,
-          payload: opts.targetId ? {} : named,
+          payload: {
+            ...(opts.targetId ? {} : named),
+            ...(opts.input ? { input: opts.input } : {}),
+          },
           targetType: opts.targetId ? 'skill' : undefined,
           targetId: opts.targetId,
         });
@@ -355,6 +365,19 @@ describeIf('briefing service against Postgres', () => {
       await succeed(root, 'email-archive', currentAt, { targetId: 'email-archive' });
       // Pre-rename rows, and a null outcome whose payload says success.
       await succeed(root, 'email-label', currentAt, { eventType: 'skill.result', skillName: true, outcome: null });
+      // Any outcome other than failure, error, or denied still counts when the payload says success.
+      await succeed(root, 'email-archive', currentAt, { outcome: 'skipped' });
+      // The feed hides a dry run, so it adds nothing.
+      await succeed(root, 'contact-merge', currentAt, {
+        input: { dry_run: true, primary_contact_id: 'a', secondary_contact_id: 'b' },
+      });
+      // An invoke whose parent is not an agent.task never reaches Recent Activity.
+      const noise = await seedAudit(client, {
+        timestamp: new Date(currentAt.getTime() + 40_000),
+        eventType: 'agent.response',
+        payload: { text: 'not a task' },
+      });
+      await succeed(noise, 'calendar-create-event', currentAt);
 
       const failedInvoke = await seedAudit(client, {
         timestamp: new Date(currentAt.getTime() + 30_000),
@@ -386,10 +409,27 @@ describeIf('briefing service against Postgres', () => {
       });
       await succeed(previousRoot, 'calendar-create-event', previousAt);
 
+      // Starts 10 minutes before the current window; its result lands 10 minutes after.
+      // Both tiles use the root timestamp, so the meeting stays in the previous window.
+      const todayKey = localDayKey(now, 'UTC');
+      const windowStart = localMidnight(addCalendarDays(todayKey, -(STATS_WINDOW_DAYS - 1)), 'UTC');
+      const boundaryRoot = await seedAudit(client, {
+        timestamp: new Date(windowStart.getTime() - 10 * 60_000),
+        eventType: 'agent.task',
+        payload: { agentId: 'calendar' },
+      });
+      await succeed(boundaryRoot, 'calendar-create-event', new Date(windowStart.getTime() + 10 * 60_000));
+
       const stats = await service.stats(now);
-      // 5 draft + 0.5 archive + 10 meeting + 0.5 archive-by-target-id + 0.5 label.
-      expect(stats.minutesSaved.current).toBeCloseTo(16.5);
-      expect(stats.minutesSaved.previous).toBeCloseTo(10);
+      // 5 draft + 0.5 archive + 10 meeting + 0.5 archive-by-target-id + 0.5 label
+      // + 0.5 skipped-but-successful archive. Dry-run and the non-task invoke add 0.
+      expect(stats.minutesSaved.current).toBeCloseTo(17);
+      expect(stats.done.current).toBe(1);
+      // The earlier meeting plus the one that started just before this window.
+      expect(stats.minutesSaved.previous).toBeCloseTo(20);
+      expect(stats.done.previous).toBe(2);
+      expect(stats.minutesSaved.help).toBe(timeSavedHelp());
+      expect(stats.minutesSaved.detail).toBe(timeSavedDetail());
     } finally {
       await client.query('ROLLBACK');
       client.release();

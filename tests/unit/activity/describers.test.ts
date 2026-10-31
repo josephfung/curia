@@ -2,13 +2,14 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   describeToolCall,
-  describerMinutes,
   describerRefs,
   formatTally,
   hasDescriber,
   hiddenToolNames,
   isVisibleTool,
-  minutesForTool,
+  minutesForCall,
+  timeSavedDetail,
+  timeSavedHelp,
   visibleToolNames,
   researchKind,
   type DescribeContext,
@@ -129,7 +130,7 @@ describe('describeToolCall', () => {
   });
 });
 
-describe('minutesForTool', () => {
+describe('minutesForCall', () => {
   it('counts one visible action in a turn full of reads and plumbing', () => {
     const turn = [
       'contact-lookup',
@@ -140,29 +141,48 @@ describe('minutesForTool', () => {
       'memory-store',
       'ceo-inbox-draft-reply',
     ];
-    const minutes = turn.reduce((sum, name) => sum + minutesForTool(name), 0);
+    const minutes = turn.reduce((sum, name) => sum + minutesForCall(call(name, {}, {})), 0);
     expect(minutes).toBe(5);
-    expect(minutes).toBe(minutesForTool('ceo-inbox-draft-reply'));
+    expect(minutes).toBe(minutesForCall(call('ceo-inbox-draft-reply', {}, {})));
   });
 
-  it('weights an archive, a draft, and a meeting apart', () => {
-    expect(minutesForTool('email-archive')).toBe(0.5);
-    expect(minutesForTool('ceo-inbox-archive')).toBe(0.5);
-    expect(minutesForTool('ceo-inbox-draft-reply')).toBe(5);
-    expect(minutesForTool('calendar-create-event')).toBe(10);
-    expect(minutesForTool('file-parse')).toBe(0);
-    expect(minutesForTool('constructor')).toBe(0);
+  it('weights an archive, a draft, a send, and a meeting apart', () => {
+    expect(minutesForCall(call('email-archive', {}, {}))).toBe(0.5);
+    expect(minutesForCall(call('ceo-inbox-archive', {}, {}))).toBe(0.5);
+    expect(minutesForCall(call('ceo-inbox-draft-reply', {}, {}))).toBe(5);
+    expect(minutesForCall(call('email-send', { to: 'c-1' }, {}))).toBe(5);
+    expect(minutesForCall(call('email-reply', {}, {}))).toBe(5);
+    expect(minutesForCall(call('calendar-create-event', {}, {}))).toBe(10);
+    expect(minutesForCall(call('file-parse', {}, {}))).toBe(0);
+    expect(minutesForCall(call('constructor', {}, {}))).toBe(0);
+    expect(minutesForCall(call('calendar-create-event', {}, {}, false))).toBe(0);
   });
 
-  it('declares minutes on every visible describer and on no hidden one', () => {
-    for (const name of visibleToolNames()) {
-      const minutes = describerMinutes(name);
-      expect(minutes, name).toEqual(expect.any(Number));
-      expect(minutes!, name).toBeGreaterThanOrEqual(0);
-    }
+  it('adds nothing the feed would hide', () => {
+    expect(minutesForCall(call('contact-merge', { dry_run: true, primary_contact_id: 'a' }, {}))).toBe(0);
+    expect(minutesForCall(call('contact-merge', { primary_contact_id: 'a' }, {}))).toBe(5);
+    expect(minutesForCall(call('calendar-create-hold', { start: '2026-10-31T10:00:00Z' }, { held: false }))).toBe(0);
+    expect(minutesForCall(call('calendar-create-hold', { start: '2026-10-31T10:00:00Z' }, { held: true }))).toBe(3);
+    expect(minutesForCall(call('voice-learn', {}, { proposed: false }))).toBe(0);
+    expect(minutesForCall(call('voice-learn', {}, { proposed: true }))).toBe(2);
     for (const name of hiddenToolNames()) {
-      expect(describerMinutes(name), name).toBeUndefined();
+      expect(minutesForCall(call(name, {}, {})), name).toBe(0);
     }
+  });
+
+  it('weights a new document above an edit and ignores scratch notes', () => {
+    const project = '/projects/q/brief.md';
+    const scratch = '/scratch/conv-1/plan.md';
+    const created = call('doc-write', { path: project }, { action: 'created', document: { path: project } });
+    const edited = call('doc-write', { path: project }, { action: 'appended', document: { path: project } });
+    const note = call('doc-write', { path: scratch }, { action: 'appended', document: { path: scratch } });
+    expect(minutesForCall(created)).toBe(15);
+    expect(minutesForCall(edited)).toBe(3);
+    expect(minutesForCall(note)).toBe(0);
+    expect(minutesForCall(note) + minutesForCall(note) + minutesForCall(note)).toBe(0);
+    expect(describeToolCall(note, ctx())?.prominence).toBe('hidden');
+    expect(describeToolCall(created, ctx())?.text).toContain('wrote');
+    expect(describeToolCall(edited, ctx())?.text).toContain('updated');
   });
 
   it('shares an estimate across the same action on two tools', () => {
@@ -173,8 +193,16 @@ describe('minutesForTool', () => {
       ['ceo-inbox-draft-compose', 'email-draft-save'],
     ] as const;
     for (const [left, right] of pairs) {
-      expect(minutesForTool(left), `${left} vs ${right}`).toBe(minutesForTool(right));
+      expect(minutesForCall(call(left, {}, {})), `${left} vs ${right}`).toBe(minutesForCall(call(right, {}, {})));
     }
+  });
+
+  it('states the tile definition from the same weights', () => {
+    expect(timeSavedHelp()).toBe(
+      "Rough estimate of your time behind the actions in Recent Activity. A meeting ≈10 min, a reply ≈5, filing ≈½. Reads don't count.",
+    );
+    expect(timeSavedDetail()).toContain('A new document ≈15 min, an edit ≈3');
+    expect(timeSavedDetail()).toContain('including a repeat');
   });
 });
 

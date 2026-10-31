@@ -18,6 +18,8 @@
 // They never read a `body`, `message`, `content` or `prompt` field, because
 // console access is one shared secret and the operator may not be the principal.
 
+import { isScratchDocumentPath } from '../agents/document-workspace.js';
+
 export type Prominence = 'line' | 'count' | 'hidden';
 
 /** One tool call, as the projection hands it to a describer. */
@@ -59,14 +61,7 @@ export interface ToolDescription {
   research?: ResearchKind;
 }
 
-interface Describer {
-  prominence: Prominence;
-  /**
-   * Principal-minutes one successful call is worth on the time-saved tile.
-   * A guess, not a measurement. Required for line and count. Hidden entries
-   * omit it, and a read the feed still shows (file-parse) is 0.
-   */
-  minutes?: number;
+interface DescriberShared {
   tally?: Tally;
   research?: ResearchKind;
   /** Name references this call needs resolved before `done`/`attempt` run. */
@@ -76,6 +71,18 @@ interface Describer {
   /** Infinitive for the failure line, rendered as "couldn't <attempt>". */
   attempt?(call: ToolCall, ctx: DescribeContext): string;
 }
+
+/**
+ * A hidden describer has no minutes: the feed and the tile both skip it.
+ * A line or count must declare minutes. A number is the flat guess; a function
+ * is for a call whose worth depends on what it did (a new document versus an edit).
+ */
+type Describer =
+  | (DescriberShared & { prominence: 'hidden' })
+  | (DescriberShared & {
+      prominence: 'line' | 'count';
+      minutes: number | ((call: ToolCall) => number);
+    });
 
 // -- helpers --
 
@@ -218,6 +225,22 @@ function sendTo(call: ToolCall): string | null {
   return bareRef(call.input.to) ?? emailRefs(call.data?.to)[0] ?? null;
 }
 
+/** A new document the principal would have written. An edit is a few lines. */
+const DOC_CREATED_MINUTES = 15;
+const DOC_EDIT_MINUTES = 3;
+
+function isScratchWrite(call: ToolCall): boolean {
+  const fromDoc = str(rec(call.data?.document)?.path);
+  const fromInput = str(call.input.path);
+  return (fromDoc !== null && isScratchDocumentPath(fromDoc))
+    || (fromInput !== null && isScratchDocumentPath(fromInput));
+}
+
+function docWriteMinutes(call: ToolCall): number {
+  if (isScratchWrite(call)) return 0;
+  return call.data?.action === 'created' ? DOC_CREATED_MINUTES : DOC_EDIT_MINUTES;
+}
+
 const REPLY_DRAFT_TALLY: Tally = { verb: 'drafted', one: 'a reply', many: 'replies' };
 const EMAIL_DRAFT_TALLY: Tally = { verb: 'drafted', one: 'an email', many: 'emails' };
 
@@ -226,9 +249,10 @@ const EMAIL_DRAFT_TALLY: Tally = { verb: 'drafted', one: 'an email', many: 'emai
 // `minutes` guesses how long the principal would have spent doing the thing
 // once. Anchors from #2349: archiving an email 0.5, drafting a reply 5,
 // scheduling a meeting 10. Twin tools that are the same action share a number.
-// A send of a message the agent just wrote is a bit under a draft; delivering
-// an already approved reply is the small remainder. Reads and plumbing stay
-// at zero.
+// email-send is the whole job (write and send), so it matches a draft.
+// dispatcher-relay only delivers a reply that was already approved.
+// A new document is worth more than an edit. Scratch notes are hidden.
+// Reads and plumbing stay at zero.
 
 const DESCRIBERS: Record<string, Describer> = {
   // ── Mail drafts and sends ────────────────────────────────────────────────
@@ -272,7 +296,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'email-send': {
     prominence: 'line',
-    minutes: 4,
+    minutes: 5,
     tally: { verb: 'sent', one: 'an email', many: 'emails' },
     refs: (call) => { const r = sendTo(call); return r ? [r] : []; },
     done: (call, ctx) => {
@@ -285,7 +309,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'email-reply': {
     prominence: 'line',
-    minutes: 4,
+    minutes: 5,
     tally: { verb: 'sent', one: 'a reply', many: 'replies' },
     refs: (call) => emailRefs(call.data?.to),
     done: (call, ctx) => {
@@ -537,9 +561,10 @@ const DESCRIBERS: Record<string, Describer> = {
   // ── Documents, tasks, jobs ───────────────────────────────────────────────
   'doc-write': {
     prominence: 'line',
-    minutes: 15,
+    minutes: docWriteMinutes,
     tally: { verb: 'wrote', one: 'a document', many: 'documents' },
     done: (call) => {
+      if (isScratchWrite(call)) return null;
       const doc = rec(call.data?.document);
       const title = str(rec(doc?.frontmatter)?.title) ?? str(doc?.path) ?? str(call.input.path) ?? 'a document';
       const verb = call.data?.action === 'created' ? 'wrote' : 'updated';
@@ -669,31 +694,56 @@ export function visibleToolNames(): readonly string[] {
     .map(([name]) => name);
 }
 
+/** Names resolve to nothing. Hide/show decisions in `done()` do not depend on them. */
+const MINUTES_CTX: DescribeContext = { name: () => null, timezone: 'UTC' };
+
 /**
- * Minutes declared on a describer. Undefined when the tool is unknown, hidden,
- * or a visible entry that forgot the field. Zero is a real declaration
- * (file-parse: a read the feed may show and the tile does not count).
+ * Principal-minutes for one call the activity feed would show.
+ * Zero when the call failed, the tool is unknown or hidden, or `done()` returns
+ * null (a dry-run merge, a hold that was not placed, scratch notes).
  */
-export function describerMinutes(toolName: string): number | undefined {
+export function minutesForCall(call: ToolCall): number {
+  if (!call.ok) return 0;
+  const shown = describeToolCall(call, MINUTES_CTX);
+  if (!shown || shown.prominence === 'hidden') return 0;
+  const describer = lookup(call.toolName);
+  if (!describer || describer.prominence === 'hidden') return 0;
+  const raw = typeof describer.minutes === 'function' ? describer.minutes(call) : describer.minutes;
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
+function flatMinutes(toolName: string): number {
   const describer = lookup(toolName);
-  if (!describer || describer.prominence === 'hidden') return undefined;
+  if (!describer || describer.prominence === 'hidden' || typeof describer.minutes !== 'number') {
+    throw new Error(`time-saved help: ${toolName} has no flat minute weight`);
+  }
   return describer.minutes;
 }
 
-/** Minutes the time-saved tile adds for one successful call of this tool. */
-export function minutesForTool(toolName: string): number {
-  return describerMinutes(toolName) ?? 0;
+/** The tile's footnote. Numbers come from the describers so the sentence cannot drift. */
+export function timeSavedHelp(): string {
+  const meeting = flatMinutes('calendar-create-event');
+  const reply = flatMinutes('ceo-inbox-draft-reply');
+  const filing = flatMinutes('email-archive');
+  const filingText = filing === 0.5 ? '½' : String(filing);
+  return `Rough estimate of your time behind the actions in Recent Activity. A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. Reads don't count.`;
 }
 
-/** Parallel arrays for the time-saved query. Hidden and undescribed tools are absent. */
-export function visibleToolWeights(): { names: string[]; minutes: number[] } {
-  const names: string[] = [];
-  const minutes: number[] = [];
-  for (const name of visibleToolNames()) {
-    names.push(name);
-    minutes.push(minutesForTool(name));
-  }
-  return { names, minutes };
+/** Longer note for the tile's tooltip, still drawn from the same weights. */
+export function timeSavedDetail(): string {
+  const created = docWriteMinutes({
+    toolName: 'doc-write',
+    input: { path: '/projects/q/brief.md' },
+    data: { action: 'created', document: { path: '/projects/q/brief.md' } },
+    ok: true,
+  });
+  const edited = docWriteMinutes({
+    toolName: 'doc-write',
+    input: { path: '/projects/q/brief.md' },
+    data: { action: 'appended', document: { path: '/projects/q/brief.md' } },
+    ok: true,
+  });
+  return `${timeSavedHelp()} A new document ≈${created} min, an edit ≈${edited}. Scratch notes don't count. Each action counts, including a repeat.`;
 }
 
 /** Research kind of a web tool, or undefined. */

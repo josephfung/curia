@@ -384,11 +384,20 @@ function oneDecimal(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-/** Principal-minutes. Under an hour the tenths stay visible; from an hour up, hours. */
+function roundedMinutes(minutes: number): number {
+  return Math.round(minutes * 10) / 10;
+}
+
+/**
+ * Principal-minutes. An empty week is `0m`. Otherwise under an hour the tenths
+ * stay visible (`≈5m`, `≈0.5m`); from an hour up, hours, with the same rule
+ * for a trailing zero (`≈1h`, `≈3.6h`).
+ */
 export function formatTimeSaved(minutes: number): string {
-  const rounded = Math.round(minutes * 10) / 10;
+  const rounded = roundedMinutes(minutes);
+  if (rounded === 0) return '0m';
   if (rounded < 60) return `≈${oneDecimal(rounded)}m`;
-  return `≈${(Math.round((rounded / 60) * 10) / 10).toFixed(1)}h`;
+  return `≈${oneDecimal(rounded / 60)}h`;
 }
 
 export interface SignedDelta {
@@ -405,21 +414,27 @@ export function formatCountDelta(current: number, previous: number): SignedDelta
   return { direction: 'down', text: `▼ ${Math.abs(pct)}%` };
 }
 
-/** Week-over-week change for the time-saved tile. Minutes while both weeks are under an hour. */
+/**
+ * Week-over-week change for the time-saved tile. The unit follows the tile,
+ * which is chosen from `current` alone: 45 minutes beside a 65-minute last
+ * week stays in minutes. Once the tile is in hours, a change under 3 minutes
+ * rounds to 0h and shows as flat. That matches the tenths the tile itself shows.
+ */
 export function formatTimeSavedDelta(currentMinutes: number, previousMinutes: number): SignedDelta {
   const diff = currentMinutes - previousMinutes;
-  const absMinutes = Math.round(Math.abs(diff) * 10) / 10;
-  if (currentMinutes < 60 && previousMinutes < 60) {
+  const absMinutes = roundedMinutes(Math.abs(diff));
+  const tileHours = roundedMinutes(currentMinutes) >= 60;
+  if (!tileHours) {
     if (absMinutes === 0) return { direction: 'flat', text: '0m vs last wk' };
     const direction = diff > 0 ? 'up' : 'down';
     const arrow = diff > 0 ? '▲' : '▼';
     return { direction, text: `${arrow} ${oneDecimal(absMinutes)}m vs last wk` };
   }
-  const hours = Math.round((absMinutes / 60) * 10) / 10;
+  const hours = roundedMinutes(absMinutes / 60);
   if (hours === 0) return { direction: 'flat', text: '0h vs last wk' };
   const direction = diff > 0 ? 'up' : 'down';
   const arrow = diff > 0 ? '▲' : '▼';
-  return { direction, text: `${arrow} ${hours.toFixed(1)}h vs last wk` };
+  return { direction, text: `${arrow} ${oneDecimal(hours)}h vs last wk` };
 }
 
 function localDayKey(date: Date, timeZone: string): string {
@@ -577,8 +592,8 @@ export interface WaitingData {
 
 export interface StatsData {
   timezone: string;
-  /** Principal-minutes in the current and previous 7 days. */
-  minutesSaved: { current: number; previous: number };
+  /** Principal-minutes in the current and previous 7 days, plus the tile's explanation. */
+  minutesSaved: { current: number; previous: number; help: string; detail: string };
   done: { current: number; previous: number };
   contacts: { total: number; newThisWeek: number };
   hiccups: { current: number; byDay: number[] };
@@ -608,6 +623,13 @@ export interface BullpenData {
   available: boolean;
   count: number;
   agents: string[];
+}
+
+function requireText(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${label} returned an unexpected response`);
+  }
+  return value;
 }
 
 function requireNumber(value: unknown, label: string): number {
@@ -658,6 +680,8 @@ export async function fetchStats(signal?: AbortSignal): Promise<StatsData> {
     minutesSaved: {
       current: requireNumber(minutesSaved['current'], '/api/dashboard/stats minutes'),
       previous: requireNumber(minutesSaved['previous'], '/api/dashboard/stats minutes'),
+      help: requireText(minutesSaved['help'], '/api/dashboard/stats minutes'),
+      detail: requireText(minutesSaved['detail'], '/api/dashboard/stats minutes'),
     },
     done: {
       current: requireNumber(done['current'], '/api/dashboard/stats done'),

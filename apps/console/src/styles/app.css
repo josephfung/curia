@@ -597,7 +597,7 @@ a.dash-activity-headline:hover { text-decoration: underline; }
 .dash-delta.up { color: var(--app-green); }
 .dash-delta.down { color: var(--app-destructive); }
 .dash-delta.flat { color: var(--app-fg-muted); }
-.dash-num-foot { color: var(--app-fg-subtle); font-size: 11px; }
+.dash-num-foot { color: var(--app-fg-subtle); font-size: 11px; line-height: 1.35; }
 .dash-spark { width: 100%; height: 18px; display: block; }
 
 .dash-split {

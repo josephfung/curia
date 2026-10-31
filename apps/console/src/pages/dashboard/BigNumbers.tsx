@@ -51,9 +51,9 @@ export function BigNumbers({ onHandled, onTimezone }: BigNumbersProps) {
       <div className="dash-nums">
         <article className="dash-card dash-num">
           <div className="dash-card-title">Time saved · 7d</div>
-          <div className="dash-num-value">{data ? formatTimeSaved(data.minutesSaved.current) : (loading && !error ? '…' : '—')}</div>
+          <div className="dash-num-value" title={data?.minutesSaved.detail}>{data ? formatTimeSaved(data.minutesSaved.current) : (loading && !error ? '…' : '—')}</div>
           {savedDelta && <div className={`dash-delta ${savedDelta.direction}`}>{savedDelta.text}</div>}
-          {data && <div className="dash-num-foot">Reads don't count. A meeting counts more than filing mail.</div>}
+          {data && <div className="dash-num-foot" title={data.minutesSaved.detail}>{data.minutesSaved.help}</div>}
         </article>
         <article className="dash-card dash-num">
           <div className="dash-card-title">Done for you · 7d</div>
