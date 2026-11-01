@@ -360,6 +360,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'web-send': {
     prominence: 'line',
+    minutes: 2,
     tally: { verb: 'sent', one: 'a phone message', many: 'phone messages' },
     refs: contactRef('recipient'),
     done: (call, ctx) => {
