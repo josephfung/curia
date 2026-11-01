@@ -6,6 +6,12 @@ export interface Message {
   text: string;
   html?: string;     // Pre-rendered HTML for agent messages (server-side markdown conversion)
   timestamp?: Date;  // Display time; absent for status and error messages
+  /**
+   * The history row id, once known. A history row has it from the start. A
+   * row that arrived live keeps its client id as the React key and gets this
+   * when a catch-up page pairs it with its saved copy.
+   */
+  serverId?: string;
 }
 
 /**

@@ -73,36 +73,42 @@ describe('parseSseEvent', () => {
 });
 
 describe('mergeLiveTail', () => {
+  // A history row carries its server id; a live row (echo, reply, send) does not.
   const user = (text: string, id = text): Message => ({ id, kind: 'user', text });
   const agent = (text: string, id = text): Message => ({ id, kind: 'agent', text });
   const status = (text: string, id = text): Message => ({ id, kind: 'status', text });
+  const saved = (message: Message): Message => ({ ...message, serverId: message.id });
+  const ids = (messages: Message[]) => messages.map((m) => m.id);
 
-  it('keeps a turn that arrived live while history was loading', () => {
+  it('keeps the send in flight when the page replaces the thread', () => {
     const history = [user('older', 'h-older'), agent('reply', 'h-reply')];
-    const live = [user('from the phone', 'live-phone')];
-    expect(mergeLiveTail(history, live).map((m) => m.text)).toEqual(['older', 'reply', 'from the phone']);
+    const live = [user('my question', 'live-q')];
+    const merged = mergeLiveTail(history, live, { pendingId: 'live-q' });
+    expect(merged.messages.map((m) => m.text)).toEqual(['older', 'reply', 'my question']);
   });
 
-  it('keeps the live copy when history already contains the same turn', () => {
-    const history = [user('older', 'h-older'), user('from the phone', 'h-phone')];
-    const live = [user('from the phone', 'live-phone')];
-    const merged = mergeLiveTail(history, live);
+  it('keeps the live copy of the send in flight when the page already has it', () => {
+    const history = [user('older', 'h-older'), user('my question', 'h-q')];
+    const live = [user('my question', 'live-q')];
+    const merged = mergeLiveTail(history, live, { pendingId: 'live-q' }).messages;
     expect(merged).toHaveLength(2);
-    expect(merged[1]?.id).toBe('live-phone');
+    expect(merged[1]).toMatchObject({ id: 'live-q', serverId: 'h-q' });
   });
 
   it('keeps rows above the newest page', () => {
     const history = [user('q2', 'h-q2'), agent('r2', 'h-r2'), user('q3', 'h-q3'), agent('r3', 'h-r3')];
     const live = [
-      user('q1', 'h-q1'),
-      agent('r1', 'h-r1'),
-      user('q2', 'h-q2'),
-      agent('r2', 'h-r2'),
+      saved(user('q1', 'h-q1')),
+      saved(agent('r1', 'h-r1')),
+      saved(user('q2', 'h-q2')),
+      saved(agent('r2', 'h-r2')),
       user('q3', 'live-q3'),
       status('working', 'live-status'),
     ];
     const merged = mergeLiveTail(history, live);
-    expect(merged.map((m) => m.id)).toEqual(['h-q1', 'h-r1', 'h-q2', 'h-r2', 'live-q3', 'live-status', 'h-r3']);
+    expect(merged.replaced).toBe(false);
+    expect(ids(merged.messages)).toEqual(['h-q1', 'h-r1', 'h-q2', 'h-r2', 'live-q3', 'live-status', 'h-r3']);
+    expect(merged.messages[4]?.serverId).toBe('h-q3');
   });
 
   it('does not pair an older repeated reply with the new one', () => {
@@ -113,13 +119,13 @@ describe('mergeLiveTail', () => {
       agent('Done.', 'h-done'),
     ];
     const live = [
-      user('ok', 'old-ok'),
-      agent('Done.', 'old-done'),
+      saved(user('ok', 'old-ok')),
+      saved(agent('Done.', 'old-done')),
       user('ok', 'live-ok'),
       status('working', 'live-status'),
     ];
-    const merged = mergeLiveTail(history, live);
-    expect(merged.map((m) => m.id)).toEqual(['old-ok', 'old-done', 'live-ok', 'live-status', 'h-done']);
+    const merged = mergeLiveTail(history, live).messages;
+    expect(ids(merged)).toEqual(['old-ok', 'old-done', 'live-ok', 'live-status', 'h-done']);
   });
 
   it('keeps a phone turn ahead of the message this tab sent after it', () => {
@@ -132,11 +138,11 @@ describe('mergeLiveTail', () => {
       agent('r3', 'h-r3'),
     ];
     const live = [
-      user('q1', 'h-q1'),
-      agent('r1', 'h-r1'),
+      saved(user('q1', 'h-q1')),
+      saved(agent('r1', 'h-r1')),
       user('q3', 'live-q3'),
     ];
-    expect(mergeLiveTail(history, live).map((m) => m.id)).toEqual([
+    expect(ids(mergeLiveTail(history, live).messages)).toEqual([
       'h-q1', 'h-r1', 'h-p', 'h-pr', 'live-q3', 'h-r3',
     ]);
   });
@@ -148,8 +154,58 @@ describe('mergeLiveTail', () => {
       status('invoking calendar', 'live-status'),
       agent('answer', 'live-agent'),
     ];
-    const merged = mergeLiveTail(history, live);
-    expect(merged.map((m) => m.id)).toEqual(['live-user', 'live-status', 'live-agent']);
+    const merged = mergeLiveTail(history, live, { complete: true }).messages;
+    expect(ids(merged)).toEqual(['live-user', 'live-status', 'live-agent']);
+  });
+
+  it('keeps every row after many live turns and anchors the next merge on them', () => {
+    const live: Message[] = [saved(user('q0', 'h-q0')), saved(agent('r0', 'h-r0'))];
+    const page: Message[] = [user('q0', 'h-q0'), agent('r0', 'h-r0')];
+    for (let i = 1; i <= 13; i += 1) {
+      live.push(user(`q${i}`, `live-q${i}`), agent(`r${i}`, `live-r${i}`));
+      page.push(user(`q${i}`, `h-q${i}`), agent(`r${i}`, `h-r${i}`));
+    }
+    const first = mergeLiveTail(page, live, { complete: true });
+    expect(first.replaced).toBe(false);
+    expect(ids(first.messages)).toEqual(ids(live));
+    expect(first.messages.every((m) => m.serverId)).toBe(true);
+
+    // The next catch-up's newest page now shares server ids with the screen.
+    const next = [...page.slice(-24), user('q14', 'h-q14'), agent('r14', 'h-r14')];
+    const second = mergeLiveTail(next, first.messages);
+    expect(second.replaced).toBe(false);
+    expect(ids(second.messages)).toEqual([...ids(live), 'h-q14', 'h-r14']);
+  });
+
+  it('leaves page rows older than the screen to loadMore', () => {
+    const history = [user('q0', 'h-q0'), agent('r0', 'h-r0'), user('q1', 'h-q1'), agent('r1', 'h-r1')];
+    const live = [saved(user('q1', 'h-q1')), saved(agent('r1', 'h-r1'))];
+    expect(ids(mergeLiveTail(history, live).messages)).toEqual(['h-q1', 'h-r1']);
+  });
+
+  it('replaces the thread when the page shares nothing with it', () => {
+    const live = [saved(user('a1', 'h-a1')), saved(agent('b1', 'h-b1')), status('working', 'live-status')];
+    const page: Message[] = [];
+    for (let i = 1; i <= 13; i += 1) page.push(user(`p${i}`, `h-p${i}`), agent(`pr${i}`, `h-pr${i}`));
+    const merged = mergeLiveTail(page.slice(-25), live);
+    expect(merged.replaced).toBe(true);
+    expect(ids(merged.messages)).toEqual(ids(page.slice(-25)));
+  });
+
+  it('keeps a new repeated text from a gap and does not pair it with the old one', () => {
+    const live = [
+      saved(user('ok', 'h-ok-old')),
+      saved(agent('Done.', 'h-done-old')),
+      user('ok', 'live-ok-old'),
+      agent('Done.', 'live-done-old'),
+    ];
+    const page: Message[] = [];
+    for (let i = 1; i <= 12; i += 1) page.push(user(`p${i}`, `h-p${i}`), agent(`pr${i}`, `h-pr${i}`));
+    page.push(user('ok', 'h-ok-new'));
+    const merged = mergeLiveTail(page.slice(-25), live);
+    expect(merged.replaced).toBe(true);
+    expect(merged.messages.at(-1)?.id).toBe('h-ok-new');
+    expect(ids(merged.messages)).not.toContain('live-ok-old');
   });
 });
 

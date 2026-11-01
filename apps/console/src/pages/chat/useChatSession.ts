@@ -14,6 +14,9 @@ const CANT_REACH_TEXT = "Can't reach Curia, retrying";
 const STREAM_SILENCE_MS = 60_000;
 
 const HISTORY_PAGE_SIZE = 25;
+// Catch-up pages back until a page row is already on screen. After this many
+// pages without one, the newest pages replace the thread.
+const CATCH_UP_MAX_PAGES = 4;
 
 // Ack-and-stream (#985): the reply arrives over SSE, not the POST. If no terminal
 // event arrives within this window (rare: a suppressed-duplicate turn or an agent
@@ -77,6 +80,7 @@ function replyForInflight(
 function historyToMessages(items: HistoryMessage[]): Message[] {
   return items.map((item) => ({
     id: item.id,
+    serverId: item.id,
     kind: (item.role === 'assistant' ? 'agent' : 'user') as Message['kind'],
     text: item.content,
     html: item.html ?? undefined,
@@ -116,14 +120,12 @@ export function useChatSession(): ChatSession {
   // from the message it just added.
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
-  // The user text of the turn in flight, and the ids already on screen when it
-  // started. Catch-up settles only when history's last user row is that text
-  // and was not already on screen.
+  // The user row of the turn in flight, and the ids (client and server) already
+  // on screen when it started. Catch-up settles only when history's last user
+  // row is that text and was not already on screen.
   const inflightText = useRef<string | null>(null);
+  const inflightId = useRef<string | null>(null);
   const inflightKnownIds = useRef<Set<string>>(new Set());
-  // History ids folded onto a live copy. The live row keeps its client id, so
-  // the server id would otherwise look like a new turn.
-  const seenHistoryIds = useRef<Set<string>>(new Set());
   // Initial history has its own retry. closeStream() clears the SSE timer, and
   // hiding the tab must not cancel the thread open.
   const threadRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -193,27 +195,52 @@ export function useChatSession(): ChatSession {
 
   const catchUp = useCallback(async (convId: string) => {
     try {
-      const res = await apiFetch(
-        `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
-      );
-      if (res.status === 401) {
-        await navigate({ to: '/login' });
-        return;
+      // Newest page first. Page back while no row is on screen yet: a long
+      // live session has no server ids in the newest page, and a long gap
+      // has nothing in common with it.
+      let rows: HistoryMessage[] = [];
+      let olderExists = false;
+      for (let pageNo = 0; pageNo < CATCH_UP_MAX_PAGES; pageNo += 1) {
+        const before = rows[0]?.timestamp;
+        const cursor = before ? `&before=${encodeURIComponent(before)}` : '';
+        const res = await apiFetch(
+          `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}${cursor}`,
+        );
+        if (res.status === 401) {
+          await navigate({ to: '/login' });
+          return;
+        }
+        if (!res.ok) {
+          // A partial walk would read as a gap and replace the thread.
+          console.error('[useChatSession] catch-up history returned non-ok status:', res.status);
+          return;
+        }
+        const data = (await res.json()) as HistoryResponse;
+        rows = [...data.messages, ...rows];
+        olderExists = data.hasMore;
+        if (!data.hasMore || data.messages.length === 0) break;
+        const screen = messagesRef.current;
+        if (screen.length === 0) break;
+        const onScreen = new Set(screen.map((message) => message.serverId ?? message.id));
+        if (rows.some((item) => onScreen.has(item.id))) break;
       }
-      if (!res.ok) return;
-      const data = (await res.json()) as HistoryResponse;
-      const loaded = historyToMessages(data.messages);
-      const pairedOnto = new Map<string, string>();
-      const merged = mergeLiveTail(loaded, messagesRef.current, pairedOnto);
-      messagesRef.current = merged;
-      setMessages(() => merged);
+      const loaded = historyToMessages(rows);
+      const options = { complete: !olderExists, pendingId: inflightId.current };
+      const merged = mergeLiveTail(loaded, messagesRef.current, options);
+      messagesRef.current = merged.messages;
+      // An updater, so an SSE row appended since the last render is kept.
+      setMessages((prev) => mergeLiveTail(loaded, prev, options).messages);
+      if (merged.replaced) {
+        oldestTimestamp.current = rows[0]?.timestamp ?? null;
+        setHasMore(olderExists);
+      }
+      // A live row known when the turn started may only now carry its server
+      // id. That id is the previous turn, not the one in flight.
       const known = new Set(inflightKnownIds.current);
-      for (const [historyId, liveId] of pairedOnto) {
-        if (!known.has(liveId)) continue;
-        known.add(historyId);
-        seenHistoryIds.current.add(historyId);
+      for (const message of merged.messages) {
+        if (message.serverId && inflightKnownIds.current.has(message.id)) known.add(message.serverId);
       }
-      const recovered = replyForInflight(data.messages, inflightText.current, known);
+      const recovered = replyForInflight(rows, inflightText.current, known);
       if (recovered && isSending.current) {
         suppressNextReply.current = recovered.text;
         settleTurnRef.current?.();
@@ -318,7 +345,10 @@ export function useChatSession(): ChatSession {
       const data = (await res.json()) as HistoryResponse;
       if (data.messages.length === 0) return false;
       const loaded = historyToMessages(data.messages);
-      setMessages((prev) => mergeLiveTail(loaded, prev));
+      // The stream opens after this load, so the only rows already on screen
+      // are this tab's own: the page replaces them and keeps a send in flight.
+      const pendingId = inflightId.current;
+      setMessages((prev) => mergeLiveTail(loaded, prev, { pendingId }).messages);
       setHasMore(data.hasMore);
       const first = data.messages[0];
       if (first) oldestTimestamp.current = first.timestamp;
@@ -385,15 +415,16 @@ export function useChatSession(): ChatSession {
     // when the reply text happens to match.
     suppressNextReply.current = null;
     inflightText.current = text;
-    const known = new Set(messagesRef.current.map((message) => message.id));
-    for (const id of seenHistoryIds.current) known.add(id);
+    inflightId.current = clientMessageId;
+    const known = new Set<string>();
+    for (const message of messagesRef.current) {
+      known.add(message.id);
+      if (message.serverId) known.add(message.serverId);
+    }
     inflightKnownIds.current = known;
-    const next = [
-      ...messagesRef.current,
-      makeMessage('user', text, { id: clientMessageId, timestamp: new Date() }),
-    ];
-    messagesRef.current = next;
-    setMessages(() => next);
+    const sent = makeMessage('user', text, { id: clientMessageId, timestamp: new Date() });
+    messagesRef.current = [...messagesRef.current, sent];
+    setMessages((prev) => [...prev, sent]);
     isSending.current = true;
     setSending(true);
 
@@ -411,6 +442,7 @@ export function useChatSession(): ChatSession {
       if (settled) return;
       settled = true;
       inflightText.current = null;
+      inflightId.current = null;
       settleTurnRef.current = null;
       onEventRef.current = appendEvent;
       unlock();
