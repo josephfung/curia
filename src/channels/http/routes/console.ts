@@ -11,7 +11,7 @@
 
 import type { FastifyPluginAsync } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { containedStaticFile } from './static-path-guard.js';
 
@@ -40,7 +40,8 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
     wildcard: false,
     setHeaders(res, filePath) {
       // @fastify/static passes the Fastify reply here, which has header(), not setHeader().
-      if (!filePath.endsWith('sw.js')) return;
+      // Match the dist-root worker only. endsWith('sw.js') also matches widget-sw.js.
+      if (resolve(filePath) !== join(resolve(consoleDist), 'sw.js')) return;
       const writable = res as unknown as {
         header?: (name: string, value: string) => void;
         setHeader?: (name: string, value: string) => void;
@@ -48,12 +49,6 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
       if (typeof writable.header === 'function') writable.header('Cache-Control', 'no-cache');
       else writable.setHeader?.('Cache-Control', 'no-cache');
     },
-  });
-
-  app.addHook('onSend', async (request, reply, payload) => {
-    const pathOnly = request.url.split('?', 1)[0];
-    if (pathOnly === '/sw.js') reply.header('Cache-Control', 'no-cache');
-    return payload;
   });
 
   // SPA fallback: any GET path not resolved to a real file in dist/ → index.html.

@@ -24,6 +24,7 @@ type Phase =
 
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
 
 export default function PairPage() {
@@ -39,8 +40,13 @@ export default function PairPage() {
       event.preventDefault();
       setInstallPrompt(event as InstallPromptEvent);
     };
+    const onInstalled = () => setInstallPrompt(null);
     window.addEventListener('beforeinstallprompt', onPrompt);
-    return () => window.removeEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
   }, []);
 
   useEffect(() => {
@@ -115,7 +121,7 @@ export default function PairPage() {
             {originWarning === null && (
               <InstallHelp
                 guidance={guidance}
-                onInstall={() => { void installPrompt?.prompt(); }}
+                onInstall={() => { void runInstall(installPrompt, setInstallPrompt); }}
               />
             )}
             <button type="button" className="btn btn-primary" onClick={() => void navigate({ to: '/chat' })}>
@@ -124,9 +130,28 @@ export default function PairPage() {
           </div>
         )}
         {phase.kind !== 'done' && notice && <PhoneNotice text={notice} />}
+        {phase.kind !== 'done' && (
+          <a className="device-meta" href="/login?key=1">Sign in with an access key</a>
+        )}
       </div>
     </div>
   );
+}
+
+async function runInstall(
+  prompt: InstallPromptEvent | null,
+  setPrompt: (next: InstallPromptEvent | null) => void,
+): Promise<void> {
+  if (!prompt) return;
+  setPrompt(null);
+  try {
+    await prompt.prompt();
+    await prompt.userChoice;
+  } catch (err) {
+    console.error('[pair] install prompt failed:', err);
+  } finally {
+    setPrompt(null);
+  }
 }
 
 function InstallHelp({ guidance, onInstall }: { guidance: InstallGuidance; onInstall: () => void }) {

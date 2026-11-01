@@ -102,7 +102,8 @@ describe('pairing routes', () => {
             token_redeemed: true,
             short_redeemed: false,
             expired: false,
-            redeemed_device_name: 'iPhone · Safari',
+            token_device_name: 'iPhone · Safari',
+            short_device_name: null,
           }],
           rowCount: 1,
         };
@@ -120,7 +121,8 @@ describe('pairing routes', () => {
       tokenRedeemed: true,
       shortRedeemed: false,
       expired: false,
-      deviceName: 'iPhone · Safari',
+      tokenDeviceName: 'iPhone · Safari',
+      shortDeviceName: null,
     });
     await app.close();
   });
@@ -150,6 +152,7 @@ describe('pairing routes', () => {
     expect(bus.published[0]!.event.payload).toMatchObject({ action: 'pair', secondCredential: true });
     const sql = query.mock.calls.map((call) => String(call[0])).join('\n');
     expect(sql).toContain('short_redeemed_at = NOW()');
+    expect(sql).toContain("interval '2 minutes'");
     expect(sql).not.toContain('token_redeemed_at = NOW()');
     await app.close();
   });

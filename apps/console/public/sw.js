@@ -4,7 +4,8 @@
 // changes and browsers treat the file as a new worker. Served with
 // Cache-Control: no-cache.
 // Documents are network-first. A 502, 503, or 504, or a failed fetch, shows
-// the offline page. Hashed /assets/ are cache-first, except text/html.
+// the offline page. Precached offline files are cache-first. Hashed /assets/
+// are cache-first, except text/html.
 // /api and /auth are never intercepted. A new build waits for Reload.
 
 const BUILD_ID = '__BUILD_ID__';
@@ -40,6 +41,13 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (isApiOrAuth(url.pathname)) return;
+
+  if (PRECACHE.includes(url.pathname)) {
+    event.respondWith(
+      caches.open(SHELL_CACHE).then((cache) => cache.match(url.pathname)).then((hit) => hit || fetch(request)),
+    );
+    return;
+  }
 
   if (request.mode === 'navigate') {
     event.respondWith(networkFirstDocument(request));

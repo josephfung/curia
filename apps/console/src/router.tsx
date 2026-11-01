@@ -8,7 +8,7 @@ import {
 } from '@tanstack/react-router';
 import LoginPage from './pages/LoginPage';
 import { PwaChrome } from './pwa/PwaChrome';
-import { isStandaloneDisplay, signedOutPath } from './pwa/standalone';
+import { accessKeyLoginRequested, isStandaloneDisplay, signedOutPath } from './pwa/standalone';
 import { getSessionInfo } from './api';
 import { clampWizardStep } from './pages/wizard-utils';
 import { noteResolvedPath } from './pages/chat/ask-handoff';
@@ -200,6 +200,7 @@ const loginRoute = createRoute({
   path: '/login',
   beforeLoad: async () => {
     if (!isStandaloneDisplay()) return;
+    if (accessKeyLoginRequested(window.location.search)) return;
     const session = await getSessionInfo();
     if (!session.valid) throw redirect({ to: '/pair' });
   },

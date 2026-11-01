@@ -25,6 +25,7 @@ import {
   sessionCookieOptions,
 } from '../console-sessions.js';
 import {
+  capPairingWindow,
   choosePairOrigin,
   consumePairingCode,
   installabilityWarning,
@@ -175,6 +176,14 @@ export async function pairingRoutes(
       await deleteQuietly(pool, sessions, logger, issued.id, issued.tokenHash);
       await releaseQuietly(pool, logger, consumed.id, credential.kind);
       return reply.status(500).send({ error: 'Failed to record the pairing. The phone was not signed in.' });
+    }
+
+    try {
+      await capPairingWindow(pool, consumed.id);
+    } catch (err) {
+      // The session and the audit already succeeded. Removing them here would
+      // contradict the audit. The unused credential keeps the original window.
+      logger.error({ err, pairingCodeId: consumed.id }, 'pairing window was not capped');
     }
 
     reply.setCookie('curia_session', issued.token, sessionCookieOptions(secureCookies));

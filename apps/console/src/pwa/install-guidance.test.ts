@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { installGuidance } from './install-guidance.js';
-import { isIosBrowser, signedOutPath } from './standalone.js';
+import { accessKeyLoginRequested, isIosBrowser, signedOutPath } from './standalone.js';
 
 describe('signedOutPath', () => {
   it('sends the installed app to pairing and a browser to login', () => {
     expect(signedOutPath(true)).toBe('/pair');
     expect(signedOutPath(false)).toBe('/login');
+  });
+
+  it('keeps the access-key form only for ?key=1', () => {
+    expect(accessKeyLoginRequested('?key=1')).toBe(true);
+    expect(accessKeyLoginRequested('key=1')).toBe(true);
+    expect(accessKeyLoginRequested('?key=2')).toBe(false);
+    expect(accessKeyLoginRequested('')).toBe(false);
   });
 });
 

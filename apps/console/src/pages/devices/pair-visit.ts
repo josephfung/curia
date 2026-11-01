@@ -20,7 +20,10 @@ export function rememberFragmentToken(hash: string): string | null {
 export function redeemFragmentOnce<T>(token: string, run: (token: string) => Promise<T>): Promise<T> {
   const existing = inflight.get(token);
   if (existing) return existing as Promise<T>;
-  const pending = run(token);
+  const pending = run(token).finally(() => {
+    inflight.delete(token);
+    if (heldToken === token) heldToken = null;
+  });
   inflight.set(token, pending);
   return pending;
 }

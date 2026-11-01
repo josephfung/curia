@@ -2,9 +2,11 @@
 //
 // The desktop mints a code. The QR encodes `https://<origin>/pair#c=<token>` so
 // the token stays in the fragment and never reaches a proxy log. A short code
-// is the typed fallback. Each credential redeems once. After the token is
-// redeemed, the short code's remaining life is capped at two minutes. The
-// resulting session lives only in the cookie.
+// is the typed fallback. Each credential redeems once. Once the session and
+// its audit are recorded, the row's remaining life is capped at two minutes.
+// Consume itself does not shorten the row, so a failed sign-in can release
+// the credential and leave the original ten-minute window. The resulting
+// session lives only in the cookie.
 
 import { randomBytes } from 'node:crypto';
 import { PHONE_DOCS_URL } from '../../phone/phone-docs.js';
@@ -68,7 +70,8 @@ export interface PairingCodeStatus {
   tokenRedeemed: boolean;
   shortRedeemed: boolean;
   expired: boolean;
-  deviceName: string | null;
+  tokenDeviceName: string | null;
+  shortDeviceName: string | null;
 }
 
 function cleanOrigin(raw: string | null | undefined): string | null {
@@ -217,8 +220,7 @@ export type PairingCredential = { kind: 'token'; token: string } | { kind: 'shor
 
 const CONSUME_TOKEN_SQL = `UPDATE pairing_codes
      SET token_redeemed_at = NOW(),
-         expires_at = LEAST(expires_at, NOW() + interval '2 minutes'),
-         redeemed_device_name = $2
+         token_device_name = $2
      WHERE token_hash = $1
        AND token_redeemed_at IS NULL
        AND expires_at > NOW()
@@ -226,17 +228,16 @@ const CONSUME_TOKEN_SQL = `UPDATE pairing_codes
 
 const CONSUME_SHORT_SQL = `UPDATE pairing_codes
      SET short_redeemed_at = NOW(),
-         redeemed_device_name = $2
+         short_device_name = $2
      WHERE short_code_hash = $1
        AND short_redeemed_at IS NULL
        AND expires_at > NOW()
      RETURNING id, origin, token_redeemed_at`;
 
 /**
- * Mark one credential used. The token path also caps the row's remaining
- * life at two minutes, so the short code cannot sit unused for the rest of
- * the original ten. The other credential stays valid until it is used or
- * that deadline passes.
+ * Mark one credential used. This does not shorten the row. The route caps
+ * the window only after the session and the audit succeed, so a release
+ * can put the credential back without restoring an expiry it no longer has.
  */
 export async function consumePairingCode(
   pool: PairingQueryable,
@@ -258,8 +259,21 @@ export async function consumePairingCode(
   };
 }
 
-const RELEASE_TOKEN_SQL = `UPDATE pairing_codes SET token_redeemed_at = NULL WHERE id = $1`;
-const RELEASE_SHORT_SQL = `UPDATE pairing_codes SET short_redeemed_at = NULL WHERE id = $1`;
+const RELEASE_TOKEN_SQL = `UPDATE pairing_codes
+     SET token_redeemed_at = NULL, token_device_name = NULL
+     WHERE id = $1`;
+const RELEASE_SHORT_SQL = `UPDATE pairing_codes
+     SET short_redeemed_at = NULL, short_device_name = NULL
+     WHERE id = $1`;
+
+/** Cap the unused credential at two minutes. Call this only after the session exists. */
+const CAP_WINDOW_SQL = `UPDATE pairing_codes
+     SET expires_at = LEAST(expires_at, NOW() + interval '2 minutes')
+     WHERE id = $1`;
+
+export async function capPairingWindow(pool: PairingQueryable, id: string): Promise<void> {
+  await pool.query(CAP_WINDOW_SQL, [id]);
+}
 
 export async function releasePairingCode(
   pool: PairingQueryable,
@@ -278,18 +292,23 @@ export async function readPairingCodeStatus(
        (token_redeemed_at IS NOT NULL) AS token_redeemed,
        (short_redeemed_at IS NOT NULL) AS short_redeemed,
        (expires_at <= NOW()) AS expired,
-       redeemed_device_name
+       token_device_name,
+       short_device_name
      FROM pairing_codes
      WHERE id = $1`,
     [id],
   );
   const row = result.rows[0];
   if (!row) return null;
-  const deviceName = row['redeemed_device_name'];
   return {
     tokenRedeemed: row['token_redeemed'] === true,
     shortRedeemed: row['short_redeemed'] === true,
     expired: row['expired'] === true,
-    deviceName: typeof deviceName === 'string' && deviceName.length > 0 ? deviceName : null,
+    tokenDeviceName: deviceLabel(row['token_device_name']),
+    shortDeviceName: deviceLabel(row['short_device_name']),
   };
+}
+
+function deviceLabel(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }

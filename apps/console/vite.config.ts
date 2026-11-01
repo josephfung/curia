@@ -1,13 +1,13 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react-oxc';
 import { createRequire } from 'node:module';
-import { randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json') as { version: string };
 
-const serviceWorkerBuildId = process.env['CURIA_CONSOLE_BUILD_ID'] ?? randomBytes(8).toString('hex');
+const envBuildId = process.env['CURIA_CONSOLE_BUILD_ID'];
 
 function stampServiceWorkerSource(source: string, buildId: string): string {
   if (!source.includes('__BUILD_ID__')) {
@@ -16,10 +16,21 @@ function stampServiceWorkerSource(source: string, buildId: string): string {
   return source.replaceAll('__BUILD_ID__', buildId);
 }
 
-function stampServiceWorker(buildId: string): Plugin {
+/** Stable across identical builds. Chunk names already include their content hashes. */
+function bundleBuildId(bundle: Record<string, unknown>, workerSource: string): string {
+  const names = Object.keys(bundle).sort().join('\n');
+  return createHash('sha256').update(names).update('\0').update(workerSource).digest('hex').slice(0, 16);
+}
+
+function stampServiceWorker(): Plugin {
   const swPath = path.resolve(import.meta.dirname, 'public/sw.js');
+  let buildId = envBuildId ?? 'dev';
   return {
     name: 'stamp-service-worker',
+    generateBundle(_options, bundle) {
+      if (envBuildId) return;
+      buildId = bundleBuildId(bundle, readFileSync(swPath, 'utf8'));
+    },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const urlPath = req.url?.split('?', 1)[0];
@@ -43,7 +54,7 @@ function stampServiceWorker(buildId: string): Plugin {
 export default defineConfig({
   plugins: [
     react(),
-    stampServiceWorker(serviceWorkerBuildId),
+    stampServiceWorker(),
   ],
   define: {
     // Injected at build time so the version from package.json is available

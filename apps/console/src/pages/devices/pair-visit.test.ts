@@ -19,5 +19,13 @@ describe('pair visit', () => {
     expect(second).toBe(first);
     await expect(first).resolves.toBe('ok');
     expect(runs).toBe(1);
+    expect(rememberFragmentToken('')).toBeNull();
+    const third = redeemFragmentOnce(token, async () => {
+      runs += 1;
+      return 'again';
+    });
+    expect(third).not.toBe(first);
+    await expect(third).resolves.toBe('again');
+    expect(runs).toBe(2);
   });
 });

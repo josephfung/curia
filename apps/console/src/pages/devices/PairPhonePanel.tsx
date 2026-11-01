@@ -4,6 +4,7 @@ import { PAIRING_LIMIT_MESSAGE } from '../../../../../src/phone/phone-docs.js';
 import { PhoneNotice } from '../../pwa/PhoneNotice';
 import { PairingQr } from './PairingQr';
 import { readPairingOrigin, writePairingOrigin } from './pair-origin-memory';
+import { shouldStopPairingPoll } from './pairing-poll';
 
 interface OriginChoice {
   origin: string | null;
@@ -23,7 +24,8 @@ interface PairingStatus {
   tokenRedeemed: boolean;
   shortRedeemed: boolean;
   expired: boolean;
-  deviceName: string | null;
+  tokenDeviceName: string | null;
+  shortDeviceName: string | null;
 }
 
 function isOriginChoice(value: unknown): value is OriginChoice {
@@ -50,7 +52,8 @@ function isPairingStatus(value: unknown): value is PairingStatus {
   return typeof row['tokenRedeemed'] === 'boolean'
     && typeof row['shortRedeemed'] === 'boolean'
     && typeof row['expired'] === 'boolean'
-    && (row['deviceName'] === null || typeof row['deviceName'] === 'string');
+    && (row['tokenDeviceName'] === null || typeof row['tokenDeviceName'] === 'string')
+    && (row['shortDeviceName'] === null || typeof row['shortDeviceName'] === 'string');
 }
 
 function errorMessage(body: unknown, fallback: string): string {
@@ -96,10 +99,23 @@ export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
   useEffect(() => {
     if (!minted) return;
     let stop = false;
+    let inFlight = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const halt = () => {
+      stop = true;
+      if (timer !== undefined) clearInterval(timer);
+    };
     const poll = () => {
+      if (stop || document.hidden || inFlight) return;
+      inFlight = true;
       void apiFetch(`/api/pairing/codes/${minted.id}`)
         .then(async (res) => {
-          if (stop || !res.ok) return;
+          if (stop) return;
+          if (res.status === 404) {
+            halt();
+            return;
+          }
+          if (!res.ok) return;
           const body: unknown = await res.json();
           if (!isPairingStatus(body)) return;
           setStatus(body);
@@ -111,16 +127,24 @@ export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
             seen.current.short = true;
             onPairedRef.current?.();
           }
+          if (shouldStopPairingPoll(res.status, body)) halt();
         })
         .catch((err: unknown) => {
           console.error('[pair] status poll failed:', err);
+        })
+        .finally(() => {
+          inFlight = false;
         });
     };
     poll();
-    const timer = setInterval(poll, 2000);
+    timer = setInterval(poll, 2000);
+    const onVisible = () => {
+      if (!document.hidden) poll();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
-      stop = true;
-      clearInterval(timer);
+      halt();
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [minted]);
 
@@ -172,7 +196,8 @@ export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
   }
 
   const warning = minted ? minted.warning : (choice?.warning ?? null);
-  const showQr = minted !== null && !status?.tokenRedeemed && !status?.expired;
+  const redeemed = Boolean(status?.tokenRedeemed || status?.shortRedeemed);
+  const showQr = minted !== null && !redeemed && !status?.expired;
 
   return (
     <section className="pair-panel">
@@ -187,13 +212,17 @@ export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
           {showQr && <PairingQr value={minted.pairUrl} />}
           {status?.tokenRedeemed && (
             <p className="pair-paired" role="status">
-              QR · Paired ✓{status.deviceName ? ` · ${status.deviceName}` : ''}
+              QR · Paired ✓{status.tokenDeviceName ? ` · ${status.tokenDeviceName}` : ''}
             </p>
           )}
           {status?.shortRedeemed && (
-            <p className="pair-paired" role="status">Short code · Paired ✓</p>
+            <p className="pair-paired" role="status">
+              Short code · Paired ✓{status.shortDeviceName ? ` · ${status.shortDeviceName}` : ''}
+            </p>
           )}
-          {status?.expired ? (
+          {redeemed ? (
+            <button type="button" className="btn" onClick={reset}>Create another code</button>
+          ) : status?.expired ? (
             <button type="button" className="btn" onClick={reset}>Expired · Create a new code</button>
           ) : (
             <>

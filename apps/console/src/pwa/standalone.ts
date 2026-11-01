@@ -1,3 +1,8 @@
+/** `?key=1` keeps the access-key form available inside an installed desktop app. */
+export function accessKeyLoginRequested(search: string): boolean {
+  return new URLSearchParams(search).get('key') === '1';
+}
+
 /** Where a signed-out visit should land. The installed app pairs; a browser signs in. */
 export function signedOutPath(standalone: boolean): '/login' | '/pair' {
   return standalone ? '/pair' : '/login';

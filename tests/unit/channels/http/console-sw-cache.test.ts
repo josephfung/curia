@@ -15,6 +15,8 @@ describe('console service worker cache header', () => {
     await mkdir(DIST_DIR, { recursive: true });
     await writeFile(join(DIST_DIR, 'index.html'), '<!doctype html><title>Curia</title>');
     await writeFile(join(DIST_DIR, 'sw.js'), 'self.addEventListener("fetch", function () {});');
+    await mkdir(join(DIST_DIR, 'extra'), { recursive: true });
+    await writeFile(join(DIST_DIR, 'extra', 'widget-sw.js'), 'widget');
     process.chdir(FIXTURE_ROOT);
     app = Fastify();
     await app.register(consoleRoutes);
@@ -32,5 +34,12 @@ describe('console service worker cache header', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain('addEventListener');
     expect(String(res.headers['cache-control'])).toBe('no-cache');
+  });
+
+  it('does not force no-cache on a file that merely ends in sw.js', async () => {
+    const res = await app.inject({ method: 'GET', url: '/extra/widget-sw.js' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('widget');
+    expect(String(res.headers['cache-control'] ?? '')).not.toBe('no-cache');
   });
 });

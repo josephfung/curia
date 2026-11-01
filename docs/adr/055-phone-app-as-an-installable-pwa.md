@@ -78,8 +78,10 @@ agents keep choosing the channel. Code decides only whether the app is reachable
    a private or bare IP, or `http://`. On iOS the session cookie set in Safari carried over to
    the home-screen app, but `localStorage` did not. So **pairing state lives only in the
    cookie**. The typed code stays as an in-app fallback for platforms where even the cookie
-   does not carry over. Redeeming the QR token caps the short code's remaining life at
-   two minutes, so a photographed QR and a still-valid short code are not both long-lived.
+   does not carry over.    Once the session and its audit are recorded, either credential caps the row's
+   remaining life at two minutes, so a photographed QR and a still-valid short
+   code are not both long-lived. The cap is a later update: releasing a credential
+   after a failed sign-in leaves the original ten-minute window.
    The short code still works in that window when the cookie did not carry into the
    installed app, and that second redemption creates its own device session. The server
    logs it at warn level, and the `operator.session` pair event sets `secondCredential`.

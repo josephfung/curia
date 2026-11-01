@@ -172,6 +172,36 @@ describe('console service worker', () => {
     expect(await caches.keys()).toEqual([SHELL]);
   });
 
+  it('serves precached offline css and script when the network throws', async () => {
+    let installed = false;
+    const { listeners } = loadWorker(async (input) => {
+      if (installed) throw new Error('network down');
+      const url = String(input);
+      if (url === '/offline.css') return new Response('CSS');
+      if (url === '/offline.js') return new Response('JS');
+      return new Response('SHELL');
+    });
+    const install = listeners.get('install');
+    expect(install).toBeTypeOf('function');
+    await new Promise<void>((resolve, reject) => {
+      try {
+        install?.({
+          request: { method: 'GET', url: ORIGIN, mode: 'navigate' },
+          respondWith() { /* unused */ },
+          waitUntil(value) { resolve(Promise.resolve(value).then(() => undefined)); },
+        });
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+    installed = true;
+    for (const path of ['/offline.css', '/offline.js']) {
+      const handled = dispatch(listeners, { method: 'GET', url: `${ORIGIN}${path}`, mode: 'same-origin' });
+      expect(handled, path).toBeDefined();
+      expect(await (await handled)?.text()).toBe(path.endsWith('.css') ? 'CSS' : 'JS');
+    }
+  });
+
   it('points a failed navigation at a page with no inline style or script', () => {
     expect(workerSource).toContain("cache.match('/offline.html')");
     expect(offline).toContain("Can't reach your Curia");

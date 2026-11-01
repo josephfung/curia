@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  capPairingWindow,
   choosePairOrigin,
   consumePairingCode,
   formatShortCode,
@@ -8,6 +9,7 @@ import {
   normalizeShortCode,
   pairingUrl,
   randomShortCode,
+  releasePairingCode,
   type PairingQueryable,
 } from '../../../../src/channels/http/pairing.js';
 import { PHONE_DOCS_URL } from '../../../../src/phone/phone-docs.js';
@@ -147,7 +149,8 @@ describe('consumePairingCode', () => {
     const consumed = await consumePairingCode(pool, { kind: 'token', token: 'a'.repeat(32) }, 'iPhone · Safari');
     expect(consumed).toEqual({ id: 'code-1', origin: 'https://curia.example.com', otherAlreadyRedeemed: false });
     expect(sql).toContain('token_redeemed_at = NOW()');
-    expect(sql).toContain("interval '2 minutes'");
+    expect(sql).toContain('token_device_name = $2');
+    expect(sql).not.toContain('LEAST');
     expect(sql).not.toContain('short_redeemed_at = NOW()');
     expect(sql).not.toContain('${');
   });
@@ -163,8 +166,30 @@ describe('consumePairingCode', () => {
     const consumed = await consumePairingCode(pool, { kind: 'short', code: 'ABCD2345' }, null);
     expect(consumed?.otherAlreadyRedeemed).toBe(false);
     expect(sql).toContain('short_redeemed_at = NOW()');
+    expect(sql).toContain('short_device_name = $2');
     expect(sql).not.toContain('token_redeemed_at = NOW()');
     expect(sql).not.toContain('LEAST');
+  });
+
+  it('caps the window in its own statement, and release clears only that credential', async () => {
+    const statements: string[] = [];
+    const pool: PairingQueryable = {
+      query: vi.fn(async (statement: string) => {
+        statements.push(statement);
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    await capPairingWindow(pool, 'code-1');
+    await releasePairingCode(pool, 'code-1', 'token');
+    await releasePairingCode(pool, 'code-1', 'short');
+    expect(statements[0]).toContain('LEAST');
+    expect(statements[0]).toContain("interval '2 minutes'");
+    expect(statements[1]).toContain('token_redeemed_at = NULL');
+    expect(statements[1]).toContain('token_device_name = NULL');
+    expect(statements[1]).not.toContain('expires_at');
+    expect(statements[2]).toContain('short_redeemed_at = NULL');
+    expect(statements[2]).toContain('short_device_name = NULL');
+    expect(statements[2]).not.toContain('expires_at');
   });
 
   it('returns null when the code is already used', async () => {
