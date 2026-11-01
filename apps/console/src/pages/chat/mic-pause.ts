@@ -12,6 +12,7 @@ export const USER_MUTE_VALUE = 'user';
 
 export interface PausableMicTrack {
   readonly mediaStreamTrack: MediaStreamTrack;
+  readonly isUpstreamPaused: boolean;
   on(event: string, cb: () => void): void;
   off(event: string, cb: () => void): void;
 }
@@ -52,9 +53,15 @@ export function bindMicPause(
 
   const onRestarted = () => {
     detachStream(stream);
-    track = getTrack();
-    stream = track.mediaStreamTrack;
+    // Keep `track` as the object the listeners were bound to. Replacing it
+    // made unbind remove them from the new track and leave the original live.
+    const next = getTrack();
+    stream = next.mediaStreamTrack;
     attachStream(stream);
+    // A foregrounded phone replaces the stream without an unmute event.
+    if (!stream.muted && !next.isUpstreamPaused) {
+      opts.onResumed();
+    }
   };
 
   track.on(TrackEvent.UpstreamPaused, onPaused);

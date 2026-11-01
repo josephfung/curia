@@ -305,16 +305,29 @@ export function useVoiceCall(): UseVoiceCallResult {
         await room.localParticipant.setAttributes({ [USER_MUTE_ATTRIBUTE]: USER_MUTE_VALUE });
         await room.localParticipant.setMicrophoneEnabled(false);
       } else {
-        await room.localParticipant.setMicrophoneEnabled(true);
+        // Clear the mark before the mic returns. A failed unmute must not
+        // leave the server treating the next OS mute as a button press.
         await room.localParticipant.setAttributes({ [USER_MUTE_ATTRIBUTE]: '' });
+        await room.localParticipant.setMicrophoneEnabled(true);
       }
       if (mountedRef.current) {
         setMuted(nextMuted);
         setError(null);
       }
     } catch (err) {
-      userMuteRef.current = muted;
-      if (mountedRef.current) setError(voiceErrorMessage(err));
+      const micOn = room.localParticipant.isMicrophoneEnabled;
+      userMuteRef.current = !micOn;
+      try {
+        await room.localParticipant.setAttributes({
+          [USER_MUTE_ATTRIBUTE]: micOn ? '' : USER_MUTE_VALUE,
+        });
+      } catch (attrErr) {
+        console.error('[useVoiceCall] failed to resync mute attribute:', attrErr);
+      }
+      if (mountedRef.current) {
+        setMuted(!micOn);
+        setError(voiceErrorMessage(err));
+      }
     }
   }, [callState, muted]);
 

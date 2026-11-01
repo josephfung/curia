@@ -1070,6 +1070,28 @@ export class VoiceRuntime {
     session.turnStats.joinedUtterances += Math.max(fragments - 1, 0);
   }
 
+  /** Store a queued utterance that never became a turn, without inventing a reply. */
+  private async persistQueuedUtterance(session: ActiveSession, utterance: string): Promise<void> {
+    if (!this.config.workingMemory) return;
+    const stored = sanitizeOutput(utterance);
+    if (stored.length === 0) return;
+    try {
+      await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
+        role: 'user',
+        content: stored,
+      }, {
+        senderContactId: persistableCallerContactId(session.caller.contactId) ?? null,
+        channelId: 'voice',
+        summarize: 'background',
+      });
+    } catch (err) {
+      this.log.warn(
+        { sessionId: session.sessionId, err },
+        'failed to persist queued voice utterance — the backgrounded line will be missing from history',
+      );
+    }
+  }
+
   /**
    * Pair a carried-over utterance that will not join a later turn with the
    * failure marker, so its stored user row is not left unpaired (dropped from
@@ -2098,7 +2120,12 @@ export class VoiceRuntime {
     if (session.ending) return;
     if (muted) {
       session.callerMuted = true;
-      session.pauseHeld = true;
+      // Only a turn that is actually running is held. An idle mute must not
+      // leave this set, or the next barge-in before any audio speaks that
+      // half on its own (#2240).
+      if (session.currentController && !session.currentController.signal.aborted) {
+        session.pauseHeld = true;
+      }
       this.stopSpeaking(session, false);
       if (session.pauseTimer) return;
       const graceMs = this.config.pauseGraceMs ?? 120_000;
@@ -2115,9 +2142,9 @@ export class VoiceRuntime {
       clearTimeout(session.pauseTimer);
       session.pauseTimer = null;
     }
-    const held = (session.carryOver?.utterance ?? '').trim().length > 0
-      || session.queuedUtterance.trim().length > 0;
-    if (held) session.pauseHeld = false;
+    // The turn has already unwound, or there was none. Drop a stale hold so
+    // a later barge-in is joined instead of replayed.
+    if (!session.currentController) session.pauseHeld = false;
     this.resumeHeldTurn(session);
   }
 
@@ -2209,6 +2236,12 @@ export class VoiceRuntime {
     // finds nothing to join; paired below rather than left unpaired.
     const carry = session.carryOver;
     session.carryOver = null;
+    // A muted caller never starts the queued turn, so the grace-period
+    // hang-up would otherwise drop what they said. Keep it as a user row
+    // with no reply.
+    const queued = session.queuedUtterance.trim();
+    session.queuedUtterance = '';
+    session.queuedFragments = 0;
 
     if (session.currentController && !session.currentController.signal.aborted) {
       session.currentController.abort();
@@ -2243,6 +2276,9 @@ export class VoiceRuntime {
     // stored row so the next call's history keeps the request (#2240).
     if (carry) {
       await this.pairCarriedUtterance(session, carry);
+    }
+    if (queued.length > 0) {
+      await this.persistQueuedUtterance(session, queued);
     }
   }
 

@@ -3317,6 +3317,126 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     await runtime.endSession('s-mid', 'test');
   });
 
+  it('saves the heard sentence when mute lands after the first frame, and does not replay the rest', async () => {
+    const saved: string[] = [];
+    const workingMemory = {
+      addTurn: async (_conversationId: string, _agentId: string, turn: { role: string; content: string }) => {
+        saved.push(`${turn.role}:${turn.content}`);
+      },
+      getHistory: async () => saved.map((row) => {
+        const split = row.indexOf(':');
+        return { role: row.slice(0, split), content: row.slice(split + 1) };
+      }),
+      purgeExpired: async () => 0,
+    } as unknown as WorkingMemory;
+    const llm = new FakeStreamProvider([replyScript('Heard this. The rest stays quiet.')]);
+    const tts = new SlowTtsProvider(40, 20);
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts,
+      workingMemory,
+      pauseGraceMs: 60_000,
+    });
+    await runtime.startSession({
+      sessionId: 's-heard',
+      conversationId: 'voice:s-heard',
+      roomName: 'voice-s-heard',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
+    await waitForPublishedFrame(transport);
+    transport.emitCallerMuted(true);
+    await runtime.awaitIdle('s-heard');
+    expect(saved.filter((row) => row.startsWith('assistant:'))).toEqual(['assistant:Heard this.']);
+    expect(saved.some((row) => row.includes('The rest stays quiet'))).toBe(false);
+
+    transport.emitCallerMuted(false);
+    await runtime.awaitIdle('s-heard');
+    expect(llm.seenMessages).toHaveLength(1);
+    expect(tts.requests.map((request) => request.text)).toEqual(['Heard this.']);
+    await runtime.endSession('s-heard', 'test');
+  });
+
+  it('an idle mute does not replay a later barge-in as its own turn', async () => {
+    const outbound = new OutboundContextService(
+      { query: async () => ({ rows: [] }) } as never,
+      logger,
+    );
+    outbound.getActive = () => new Promise(() => {});
+    const llm = new FakeStreamProvider([replyScript('Afternoon only.')]);
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      outboundContextService: outbound,
+      historyReadTimeoutMs: 80,
+      pauseGraceMs: 60_000,
+    });
+    await runtime.startSession({
+      sessionId: 's-idle-barge',
+      conversationId: 'voice:s-idle-barge',
+      roomName: 'voice-s-idle-barge',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    transport.emitCallerMuted(true);
+    transport.emitCallerMuted(false);
+    stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
+    await delay(20);
+    stt.emit({ text: 'just the afternoon', isFinal: true, speechFinal: true, confidence: 0.9 });
+    await runtime.awaitIdle('s-idle-barge');
+
+    expect(llm.seenMessages).toHaveLength(1);
+    const messages = llm.seenMessages[0]!;
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: "what's on my calendar? just the afternoon",
+    });
+    await runtime.endSession('s-idle-barge', 'test');
+  });
+
+  it('keeps a muted utterance when the pause grace ends the call', async () => {
+    vi.useFakeTimers();
+    try {
+      const saved: string[] = [];
+      const workingMemory = {
+        addTurn: async (_conversationId: string, _agentId: string, turn: { role: string; content: string }) => {
+          saved.push(`${turn.role}:${turn.content}`);
+        },
+      } as unknown as WorkingMemory;
+      const llm = new FakeStreamProvider([replyScript('Hi there.')]);
+      const { store, endReasons } = fakeStore();
+      const { runtime, stt, transport } = makeRuntime({
+        llm,
+        store,
+        workingMemory,
+        pauseGraceMs: 120_000,
+      });
+      await runtime.startSession({
+        sessionId: 's-queued',
+        conversationId: 'voice:s-queued',
+        roomName: 'voice-s-queued',
+        agentToken: 'tok',
+        caller: principalCaller(),
+        openingGreeting: false,
+      });
+
+      transport.emitCallerMuted(true);
+      stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
+      await runtime.awaitIdle('s-queued');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(endReasons).toContain('pause_grace');
+      expect(saved).toContain('user:hello curia');
+      expect(saved.filter((row) => row.startsWith('assistant:'))).toEqual([]);
+      expect(llm.seenMessages).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // #2347: one recap, one path. The delegation sentence must agree with the
   // meeting-notes-start and async-offramp descriptions on the turn that chooses.
   it('names meeting-notes-start for the recap and async-offramp for other after-call sends', () => {

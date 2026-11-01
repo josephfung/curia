@@ -526,9 +526,9 @@ function setupDetail(status: number, err: unknown): string {
  * The caller passes false when push itself is off, so a leftover row does
  * not mark the setup task done.
  */
-export async function hasLivePairedSubscription(
+export async function hasLivePushSubscription(
   pool: WebThreadQueryable,
-  pushConfigured = true,
+  pushConfigured: boolean,
 ): Promise<boolean> {
   if (!pushConfigured) return false;
   const result = await pool.query(
