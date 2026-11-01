@@ -17,7 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Voice audio telemetry** — per-turn last-word gap, per-chunk TTS timing and starvation, per-call event-loop delay. (#2379)
 - **Recurring calendar events** — create, edit and delete a series or one occurrence; standing meetings become one event. (#2385)
-- **`operator.session`** — **public API:** audit event for logout, revoke, and signing out other devices. (#2341)
+- **`operator.session`** — **public API:** audit event for login, logout, revoke, and signing out other devices. (#2341)
 - **ADR-057** — retire bearer `/api/messages`; console chat on `/api/chat` is the only ingress. (#999)
 - **`doc-write` `section-delete`** — removes one `##` section and its heading; a missing section errors. (#2339)
 - **`migrate:standing-rules`** — one-off script moves inbox and calendar rule arrays into `/shared/` documents. (#2339)
@@ -122,8 +122,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Time saved footnote** — one line on a narrow screen, and readable against the card. (#2349)
 - **Recent Activity** — scratch notes and conflicted `doc-write` calls no longer appear. (#2349)
 - **Console sessions** — idle expiry is 90 days, with logout, rename, and revoke. (#2341)
-- **`operator.session`** — **public API:** adds stage, the actor, and login. (#2341)
-- **Console logout** — a failed sign-out stays on the page and shows the error. (#2341)
 - **agent.task / llm.call / llm.error / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started`, `reasoning_delta` and `output_started` added. (#2371)
 - **LLM calls** — agent and infra calls on Anthropic and OpenRouter now stream internally. (#2371)
 - **Console API paths** — tasks, contacts, chat and grants move to `/api/*`; old tabs work for one release. (#872)
@@ -213,11 +211,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Unseen approvals** — a send approval with personal details can't be approved until it's shown. (#2312)
 - **Disclosure audit** — **Public API:** `outbound.delivered` gains `disclosed`, labels of details sent as written. (#2312)
 - **Draft sends** — a draft edited after its checks is not sent. (#2312)
-
-### Fixed
-
-- **Console logout** — an already-ended session still returns to the login page. (#2341)
-- **SSE cookies** — an existing reply cookie stays when the session cookie is flushed. (#2341)
 
 ### Removed
 
