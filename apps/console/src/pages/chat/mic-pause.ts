@@ -30,7 +30,7 @@ export function bindMicPause(
     onResumed: () => void;
   },
 ): () => void {
-  let track = getTrack();
+  const track = getTrack();
   let stream = track.mediaStreamTrack;
 
   const onPaused = () => {
