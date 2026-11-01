@@ -4,7 +4,7 @@ const generateVAPIDKeys = vi.fn(() => ({ publicKey: 'generated-pub', privateKey:
 const setVapidDetails = vi.fn();
 const sendNotification = vi.fn();
 
-vi.mock('web-push', () => ({
+vi.mock('web-push', () => ({ default: {
   generateVAPIDKeys: () => generateVAPIDKeys(),
   setVapidDetails: (...args: unknown[]) => setVapidDetails(...args),
   sendNotification: (...args: unknown[]) => sendNotification(...args),
@@ -19,7 +19,7 @@ vi.mock('web-push', () => ({
       this.body = body;
     }
   },
-}));
+} }));
 
 import { loadVapidSetup, logVapidReadiness } from '../../../../src/channels/web/vapid.js';
 import type { Logger } from '../../../../src/logger.js';
@@ -106,7 +106,7 @@ describe('VAPID setup', () => {
   });
 
   it('sends with the push phase\'s timeout, a one-day TTL, and high urgency, and keeps the body', async () => {
-    const { WebPushError } = await import('web-push');
+    const { WebPushError } = (await import('web-push')).default;
     sendNotification.mockRejectedValueOnce(new WebPushError(
       'rejected',
       403,
