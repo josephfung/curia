@@ -1,5 +1,5 @@
 // apps/console/src/pages/chat/useChatSession.ts
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { apiFetch } from '../../api.js';
 import { makeMessage, mergeLiveTail, nextReconnectDelayMs, parseSseEvent, pickRecoveredReply } from './chat-utils.js';
@@ -119,7 +119,11 @@ export function useChatSession(): ChatSession {
   // Latest rendered thread, so send() can tell a catch-up page's last user row
   // from the message it just added.
   const messagesRef = useRef<Message[]>([]);
-  messagesRef.current = messages;
+  // Synced after commit, not during render, so catchUp() and send() never read a
+  // snapshot React later discards. Their own writes stay imperative.
+  useLayoutEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   // The user row of the turn in flight, and the ids (client and server) already
   // on screen when it started. Catch-up settles only when history's last user
   // row is that text and was not already on screen.
@@ -409,6 +413,8 @@ export function useChatSession(): ChatSession {
       setMessages((prev) => [...prev, makeMessage('error', 'Could not open the conversation. Try again.')]);
       return;
     }
+    // Another send() may have taken the turn while the thread id was loading.
+    if (isSending.current) return;
 
     const clientMessageId = crypto.randomUUID();
     // A suppression left over from the previous turn would swallow this one

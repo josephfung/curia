@@ -321,6 +321,36 @@ describe('useChatSession catch-up', () => {
     expect(texts()).toContain('Just finished setup — say hi!');
   });
 
+  it('posts once when two sends start while the thread id is loading', async () => {
+    let releaseThread: () => void = () => {};
+    const threadGate = new Promise<Response>((resolve) => {
+      releaseThread = () => resolve(json(200, { conversationId: 'conv-1' }));
+    });
+    let posts = 0;
+    apiFetch.mockImplementation((path: string) => {
+      if (String(path).startsWith('/api/chat/conversation')) return threadGate;
+      if (String(path).startsWith('/api/chat/history')) {
+        return Promise.resolve(json(200, historyPage(String(path))));
+      }
+      if (String(path) === '/api/chat/messages') {
+        posts += 1;
+        return Promise.resolve(json(202, { conversationId: 'conv-1' }));
+      }
+      return Promise.resolve(json(404, {}));
+    });
+    await mount();
+    await act(async () => {
+      container?.querySelector('[data-testid="send-q2"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      container?.querySelector('[data-testid="send-again"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    releaseThread();
+    await flush();
+    await act(async () => { latestSource().open(); });
+    await flush();
+    expect(posts).toBe(1);
+    expect(texts().filter((text) => text === 'q2' || text === 'again')).toHaveLength(1);
+  });
+
   it('ignores the echo of the message this tab just sent', async () => {
     await mount();
     await act(async () => { latestSource().open(); });
