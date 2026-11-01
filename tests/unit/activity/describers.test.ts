@@ -151,6 +151,20 @@ describe('describeToolCall', () => {
 });
 
 describe('minutesForCall', () => {
+  it('marks shipped zero-effort tools hidden, so they add nothing', () => {
+    for (const name of ['ceo-inbox-list', 'task-list', 'contact-register', 'bullpen-post', 'ceo-inbox-shadow-draft']) {
+      expect(hasDescriber(name), name).toBe(true);
+      expect(isVisibleTool(name), name).toBe(false);
+      expect(hiddenToolNames(), name).toContain(name);
+      expect(describeToolCall(call(name, {}, {}), ctx())?.prominence, name).toBe('hidden');
+      expect(minutesForCall(call(name, {}, {})), name).toBe(0);
+    }
+    expect(hasDescriber('bullpen')).toBe(false);
+    expect(hasDescriber('approval-expiry-sweep')).toBe(false);
+    expect(minutesForCall(call('bullpen', {}, {}))).toBe(UNDESCRIBED_CALL_MINUTES);
+    expect(minutesForCall(call('approval-expiry-sweep', {}, {}))).toBe(UNDESCRIBED_CALL_MINUTES);
+  });
+
   it('adds the default for an unlisted tool and zero for hidden plumbing', () => {
     const unlisted = ['contact-lookup', 'entity-context', 'ceo-inbox-search'];
     const hidden = ['extract-facts', 'web-search', 'memory-store'];
@@ -269,7 +283,7 @@ describe('minutesForCall', () => {
 
   it('states the tile definition from the same weights', () => {
     expect(timeSavedHelp()).toBe(
-      "Rough estimate of your time. A meeting ≈10 min, a reply ≈5, filing ≈½. A listed read doesn't count. Anything not listed ≈0.052 min.",
+      "Rough estimate of your time behind Curia's actions. A meeting ≈10 min, a reply ≈5, filing ≈½. Known lookups don't count; other tool work counts a few seconds each.",
     );
     expect(timeSavedDetail()).toBe(
       'A new document ≈15 min, an edit ≈3. Scratch notes don\'t count. Each action counts, including a repeat.',

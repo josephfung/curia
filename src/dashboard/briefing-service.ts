@@ -4,7 +4,7 @@
 // reports unavailable) so the card can show an error instead of a false zero.
 
 import type { Pool } from 'pg';
-import { hiddenToolNames, minutesForCall, timeSavedDetail, timeSavedHelp, visibleToolNames } from '../activity/describers.js';
+import { hiddenToolNames, minutesForCall, timeSavedDetail, timeSavedHelp, UNDESCRIBED_CALL_MINUTES, visibleToolNames } from '../activity/describers.js';
 import { OPEN_TASK_STATUSES } from '../agents/prompts/backlog-line.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import type { DisclosureDecisionRecorder } from '../autonomy/disclosure-decisions.js';
@@ -303,17 +303,17 @@ export class BriefingService {
   }
 
   private async loadModel(from: Date, to: Date, timezone: string): Promise<BriefingWindow> {
-    const result = await this.deps.pool.query<{ histogram: unknown; saved_calls: unknown }>(
+    const result = await this.deps.pool.query<{ histogram: unknown; saved_calls: unknown; undescribed_by_day: unknown }>(
       HISTOGRAM_SQL,
       [from, to, new Date(to.getTime() + DELEGATION_TAIL_MS), timezone, MAX_DELEGATION_DEPTH, visibleToolNames(), hiddenToolNames()],
     );
     const row = result.rows[0];
     const model = shapeHistogramFromCounts(parseHistogramRows(row?.histogram), to, timezone);
-    // Each visible call adds its describer minutes, and each undescribed call
-    // adds the flat default (ADR-058), including a repeat of the same tool.
-    // Recent Activity lists the visible ones, and a retry is not distinguishable
-    // from a second real action without a per-tool target (#2349). Hidden
-    // describers are omitted here; they are worth zero.
+    // Each visible call adds its describer minutes. Undescribed calls are a
+    // count per day times the flat default (ADR-058), including a repeat of
+    // the same tool. Recent Activity lists the visible ones, and a retry is
+    // not distinguishable from a second real action without a per-tool target
+    // (#2349). Hidden describers are omitted here; they are worth zero.
     const perDay = new Map<string, number>();
     for (const saved of parseSavedCalls(row?.saved_calls)) {
       const minutes = minutesForCall({
@@ -324,6 +324,9 @@ export class BriefingService {
       });
       if (minutes <= 0) continue;
       perDay.set(saved.day, (perDay.get(saved.day) ?? 0) + minutes);
+    }
+    for (const bucket of parseUndescribedByDay(row?.undescribed_by_day)) {
+      perDay.set(bucket.day, (perDay.get(bucket.day) ?? 0) + bucket.n * UNDESCRIBED_CALL_MINUTES);
     }
     return {
       model,
@@ -385,9 +388,10 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
 }
 
 /**
- * One row: `histogram` (day × actor × outcome counts) and `saved_calls` (the
- * successful calls the minutes are summed from: visible tools, plus any named
- * tool the describers do not list).
+ * One row: `histogram` (day × actor × outcome counts), `saved_calls` (each
+ * successful visible call, with the input and data its weight can depend on),
+ * and `undescribed_by_day` (a count per day of successful calls the describers
+ * do not name).
  *
  * Root jobs in [$1, $2). Delegated tasks fold into their root, up to $5 levels,
  * and may finish as late as $3. The day is the root task's timestamp in $4, for
@@ -396,8 +400,8 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
  * the result; target_id only when target_type is skill). $6 is the visible set:
  * described and not hidden. The histogram uses only that set, so an undescribed
  * call cannot become a hiccup. $7 is the hidden set. Minutes keep every
- * successful named call outside it, visible or undescribed. An unnamed call is
- * left out.
+ * successful named call outside it: visible calls one by one, undescribed
+ * calls as a count per day. Hidden and unnamed calls are left out.
  * Success is outcome 'success', or any other outcome except failure, error and
  * denied when the payload says success. Those three are failures even if the
  * payload says otherwise. A failed root reply with no successful visible call
@@ -406,8 +410,9 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
  * Minutes are not a column here. A visible call carries its input and result data,
  * minus the fields describers never read (message bodies, and a document's body),
  * so `minutesForCall` can run the same `done()` the feed uses. A flat weight
- * cannot see a dry run, an unplaced hold, or a scratch note. An unlisted call
- * carries neither: the default depends only on the name.
+ * cannot see a dry run, an unplaced hold, or a scratch note. An undescribed call
+ * contributes only to its day's count: the default depends on the name being
+ * absent, not on the payload.
  */
 const HISTOGRAM_SQL = `
 WITH RECURSIVE chain AS (
@@ -541,16 +546,32 @@ SELECT
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'day', to_char(root_ts AT TIME ZONE $4, 'YYYY-MM-DD'),
       'tool', tool_name,
-      'input', CASE WHEN tool_name = ANY($6::text[]) THEN input ELSE '{}'::jsonb END,
-      'data', CASE WHEN tool_name = ANY($6::text[]) THEN data ELSE NULL END
+      'input', input,
+      'data', data
     )), '[]'::jsonb)
     FROM calls
     WHERE kind = 'ok'
-      AND tool_name IS NOT NULL
-      AND tool_name <> ''
-      AND tool_name <> '[EXTRACTION_FAILED]'
-      AND NOT (tool_name = ANY($7::text[]))
-  ) AS saved_calls`;
+      AND tool_name = ANY($6::text[])
+  ) AS saved_calls,
+  (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'day', day,
+      'n', n
+    )), '[]'::jsonb)
+    FROM (
+      SELECT
+        to_char(root_ts AT TIME ZONE $4, 'YYYY-MM-DD') AS day,
+        count(*)::int AS n
+      FROM calls
+      WHERE kind = 'ok'
+        AND tool_name IS NOT NULL
+        AND tool_name <> ''
+        AND tool_name <> '[EXTRACTION_FAILED]'
+        AND NOT (tool_name = ANY($6::text[]))
+        AND NOT (tool_name = ANY($7::text[]))
+      GROUP BY 1
+    ) undescribed
+  ) AS undescribed_by_day`;
 
 function sumWindow(values: readonly number[]): number {
   let n = 0;
@@ -589,6 +610,24 @@ interface SavedCall {
   tool: string;
   input: Record<string, unknown>;
   data: Record<string, unknown> | null;
+}
+
+interface UndescribedDay {
+  day: string;
+  n: number;
+}
+
+function parseUndescribedByDay(value: unknown): UndescribedDay[] {
+  if (!Array.isArray(value)) return [];
+  const days: UndescribedDay[] = [];
+  for (const entry of value) {
+    const row = asRecord(entry);
+    if (!row || typeof row.day !== 'string') continue;
+    const n = typeof row.n === 'number' ? row.n : Number.NaN;
+    if (!Number.isFinite(n) || n <= 0) continue;
+    days.push({ day: row.day, n });
+  }
+  return days;
 }
 
 function parseSavedCalls(value: unknown): SavedCall[] {

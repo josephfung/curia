@@ -654,6 +654,15 @@ const DESCRIBERS: Record<string, Describer> = {
   'extract-facts': HIDDEN,
   'extract-relationships': HIDDEN,
   'activity-log': HIDDEN,
+  // Shipped tools whose success is not the principal's time. Hidden is an
+  // explicit zero, so these calls are outside the undescribed backstop.
+  // `bullpen` is the bundle name, not a tool. `approval-expiry-sweep` is a
+  // system interval, not a tool (#2013). Neither gets an entry.
+  'ceo-inbox-list': HIDDEN,
+  'task-list': HIDDEN,
+  'contact-register': HIDDEN,
+  'bullpen-post': HIDDEN,
+  'ceo-inbox-shadow-draft': HIDDEN,
 };
 
 // Own keys only: DESCRIBERS is a plain object, so a tool named "constructor" or
@@ -700,10 +709,11 @@ const MINUTES_CTX: DescribeContext = { name: () => null, timezone: 'UTC' };
 
 /**
  * Human-time backstop for a successful call the describers do not name (ADR-058).
- * The first census spread 2,390 minutes of likely human effort across 45,633
- * undescribed calls: 2,390 / 45,633 = 0.052 minutes.
+ * The census estimated 2,390 minutes of human effort. After the five shipped
+ * zero-effort tools above were marked hidden, 24,393 calls remained undescribed:
+ * 2,390 / 24,393 = 0.098 minutes.
  */
-export const UNDESCRIBED_CALL_MINUTES = 0.052;
+export const UNDESCRIBED_CALL_MINUTES = 0.098;
 
 /**
  * Principal-minutes for one successful call.
@@ -738,7 +748,7 @@ export function timeSavedHelp(): string {
   const reply = flatMinutes('ceo-inbox-draft-reply');
   const filing = flatMinutes('email-archive');
   const filingText = filing === 0.5 ? '½' : String(filing);
-  return `Rough estimate of your time. A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. A listed read doesn't count. Anything not listed ≈${UNDESCRIBED_CALL_MINUTES} min.`;
+  return `Rough estimate of your time behind Curia's actions. A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. Known lookups don't count; other tool work counts a few seconds each.`;
 }
 
 /**

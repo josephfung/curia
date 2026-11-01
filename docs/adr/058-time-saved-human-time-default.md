@@ -17,9 +17,9 @@ A perfect duration is not available, and it is not the goal. Agents finish work 
 
 Time saved is a human-time estimate. Each named tool keeps the anchor on its describer. Every successful call with no describer adds the same default. The default is the likely human effort of the work those undescribed calls accomplished, spread across every undescribed call.
 
-The effort is estimated once, offline, by reading the names. A call contributes its anchor when a person would plausibly have spent time doing that thing. The anchor is the nearest describer figure (half a minute for a click, 5 for writing a post, 3 for an edit, 15 for a new document). A lookup contributes nothing. So does bookkeeping the agent does for itself: stamping a sender as last-seen, an inter-agent thread, a sweep, a shadow draft that is never shown. Those calls stay in the denominator. They are part of the set the backstop covers, and the backstop does not sort them again at runtime.
+The effort is estimated once, offline, by reading the names. A call contributes its anchor when a person would plausibly have spent time doing that thing. The anchor is the nearest describer figure (half a minute for a click, 5 for writing a post, 3 for an edit, 15 for a new document). A lookup contributes nothing. So does bookkeeping the agent does for itself: stamping a sender as last-seen, an inter-agent thread, a sweep, a shadow draft that is never shown. Those calls stay in the denominator unless the tool is given a hidden describer, which takes it out of the set. The backstop does not sort calls again at runtime.
 
-The first census used the 60 days of production `audit_log` ending 31 October 2026. A call counts when it is a successful `tool.result` or `skill.result` whose invoke is a `tool.invoke` or `skill.invoke`, and that invoke's parent is an `agent.task`. The tool name is read the same way as the tile. "Described" means the name is a key of `DESCRIBERS` at `86911016`, hidden keys included.
+The first census used the 60 days of production `audit_log` ending 31 October 2026. A call counts when it is a successful `tool.result` or `skill.result` whose invoke is a `tool.invoke` or `skill.invoke`, and that invoke's parent is an `agent.task`. The tool name is read the same way as the tile. "Described" means the name is a key of `DESCRIBERS` at `86911016`, hidden keys included. Per-name counts from that window stay in the private ops notes. This ADR keeps the totals.
 
 | | Calls |
 |---|---:|
@@ -28,59 +28,32 @@ The first census used the 60 days of production `audit_log` ending 31 October 20
 | Undescribed | 45,633 |
 | Distinct undescribed names | 108 |
 
-Of the undescribed calls, 35,368 were lookups and 8,444 were bookkeeping. Both contribute 0 to the effort. The remaining 1,821 calls are the work a person would have done. At the describer anchors they come to **2,390 minutes**:
+Of the undescribed calls, 35,368 were lookups and 8,444 were bookkeeping. Both contribute 0 to the effort. The remaining 1,821 calls are the work a person would have done. At the describer anchors they come to **2,390 minutes**.
 
-| Minutes | Calls × anchor | What |
-|---:|---|---|
-| 379 | 758 × 0.5 | `like_post` |
-| 370 | 74 × 5 | `create_post` |
-| 300 | 20 × 15 | `create_drive_file` |
-| 261 | 87 × 3 | `modify_sheet_values` |
-| 255 | 17 × 15 | `create_doc` |
-| 227 | 454 × 0.5 | `bluesky-unfollow` |
-| 140 | 28 × 5 | `manage_event` (create, update, or delete; the update anchor) |
-| 129 | 129 × 1 | `repost` |
-| 60 | 4 × 15 | `import_to_google_doc` |
-| 56.5 | 113 × 0.5 | `follow_user` |
-| 55 | 11 × 5 | `reply_to_post` |
-| 48 | 16 × 3 | `update_drive_file` |
-| 32 | 64 × 0.5 | `contact-dedup-exclude` |
-| 14 | 7 × 2 | `behavioral-preferences-update` |
-| 12 | 4 × 3 | `find_and_replace_doc` |
-| 10 | 2 × 5 | `meeting-agenda-park` |
-| 8 | 4 × 2 | `manage_drive_access` |
-| 7 | 7 × 1 | `contact-unlink-identity` |
-| 6 | 6 × 1 | `contact-link-identity` |
-| 4 | 2 × 2 | `copy_drive_file` |
-| 3 | 1 × 3 | `batch_update_doc` |
-| 3 | 1 × 3 | `insert_doc_elements` |
-| 3 | 1 × 3 | `modify_doc_text` |
-| 2 | 4 × 0.5 | `dismiss-action` |
-| 1.5 | 3 × 0.5 | `approve-action` |
-| 1 | 1 × 1 | `contact-set-identity-status` |
-| 1 | 1 × 1 | `create_drive_folder` |
-| 1 | 1 × 1 | `deliver-approval` |
-| 1 | 1 × 1 | `deny-action` |
+Spread across every undescribed call, that effort is 2,390 / 45,633 = 0.052 minutes. Five shipped zero-effort tools were then marked hidden, an explicit zero, the same as `memory-store`: `ceo-inbox-list`, `task-list`, `contact-register`, `bullpen-post`, and `ceo-inbox-shadow-draft`. Together they were 21,240 of the undescribed calls, and none of them contributed to the 2,390. They leave the denominator. The effort does not change.
 
-The default divides that effort by every undescribed call, not only the 1,821:
+**2,390 / 24,393 = 0.098 minutes** (about 6 seconds).
 
-**2,390 / 45,633 = 0.052 minutes** (about 3 seconds).
+That is the backstop the tile uses. It replaces one minute per undescribed action. Multiplying 0.098 by 24,393 returns 2,391 minutes, within a minute of the 2,390. The code does not inspect the call to decide whether it was a read, bookkeeping, or work. Any name the describers do not list is worth 0.098 minutes. A hidden describer stays at zero.
 
-That is the backstop. It replaces one minute per undescribed action. Multiplying it back by 45,633 returns the 2,390 minutes. The code does not inspect the call to decide whether it was a read, bookkeeping, or work. Any name the describers do not list is worth 0.052 minutes.
+Two census names are not tools, so they were not given entries. `bullpen` is the skill bundle; its tools are `bullpen-post`, `bullpen-reply`, `bullpen-read`, and `bullpen-close`. `approval-expiry-sweep` was retired as a skill and is a system interval (#2013). Historical rows under those two names stay on the default.
 
-The largest bookkeeping names, all at zero effort, were `contact-register` (5,129), `bullpen` (1,095), `approval-expiry-sweep` (839), `bullpen-post` (472), and `ceo-inbox-shadow-draft` (432). The largest lookups were `ceo-inbox-list` (7,788) and `task-list` (7,419).
+Custom tools and MCP tools stay undescribed on purpose. They are not given anchors in the registry. A new shipped tool gets a describer when someone writes one; until then it takes the default.
 
 ### Recalculating
 
-1. Run the same census for a new window. Count described and undescribed successful calls, and list undescribed names with their counts.
+1. Run the same census for a new window. Count described and undescribed successful calls. Keep the per-name list in the private ops notes.
 2. Estimate the human effort of the work in that undescribed list, using the describer anchors. Lookups and self-bookkeeping contribute 0. New names get an anchor only in this step.
-3. Divide that total by the undescribed call count. Round to three decimal minutes.
-4. Replace the constant and the tables in this ADR, and record the window.
+3. Move any shipped zero-effort tool that now has a hidden describer out of the undescribed count. Do not change the effort if those calls contributed 0.
+4. Divide the effort by the undescribed call count that remains. Round to three decimal minutes.
+5. Replace the constant and the totals in this ADR, and record the window.
+
+Nothing in the running system notices when the mix of tools drifts. The constant is a snapshot until someone repeats these steps.
 
 ## Consequences
 
-- The formula is easy to state. Named actions use their anchors. Anything else is 0.052 minutes, from this office's 60 days ending 31 October 2026.
+- The formula is easy to state. Named actions use their anchors. A hidden describer is zero. Anything else is 0.098 minutes, from this office's 60 days ending 31 October 2026, after the five zero-effort tools above were taken out of the set.
 - The number will not match a stopwatch, an agent's elapsed time, or another person's pace. That is accepted. Another office, or a later window with a different mix of tools, recomputes the constant rather than inheriting this one by assumption.
-- Undescribed lookups add the default too. That is how 2,390 minutes of posts, edits, and new documents is spread across 45,633 calls. It is a property of the formula. A named read stays at 0, because its describer already says so.
-- Treating a new Drive file as a 2-minute save instead of a 15-minute document would have lowered the effort from 2,390 to 1,857 and the default from 0.052 to 0.041. The 15-minute anchor is the one the describers use for a new document, so the census uses it too.
-- The tile applies both parts. A named call uses its describer anchor. A successful call whose name is not in the describers adds 0.052 minutes, including a lookup. A hidden describer stays at zero. Replacing the constant means editing `UNDESCRIBED_CALL_MINUTES` and the tables in this ADR together.
+- Undescribed lookups add the default too. That is how 2,390 minutes of work is spread across the calls the describers do not name. It is a property of the formula. A lookup with a hidden describer stays at 0.
+- Treating a new file as a 2-minute save instead of a 15-minute document would have lowered the effort from 2,390 to 1,857. Spread across the 24,393 calls the default covers, that is 0.076 minutes instead of 0.098. The 15-minute anchor is the one the describers use for a new document, so the census uses it too.
+- The tile applies both parts. A named call uses its describer anchor. A successful call whose name is not in the describers adds 0.098 minutes, including a lookup. A hidden describer stays at zero. Replacing the constant means editing `UNDESCRIBED_CALL_MINUTES` and the totals in this ADR together.

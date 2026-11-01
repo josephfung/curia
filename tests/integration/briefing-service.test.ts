@@ -358,6 +358,10 @@ describeIf('briefing service against Postgres', () => {
       for (const tool of ['contact-lookup', 'entity-context', 'ceo-inbox-search', 'extract-facts', 'web-search', 'file-parse']) {
         await succeed(root, tool, currentAt);
       }
+      // Shipped zero-effort tools are hidden. They must not add the default.
+      for (const tool of ['ceo-inbox-list', 'task-list', 'contact-register', 'bullpen-post', 'ceo-inbox-shadow-draft']) {
+        await succeed(root, tool, currentAt);
+      }
       await succeed(root, 'ceo-inbox-draft-reply', currentAt);
       await succeed(root, 'email-archive', currentAt);
       await succeed(root, 'calendar-create-event', currentAt);
@@ -423,8 +427,9 @@ describeIf('briefing service against Postgres', () => {
       const stats = await service.stats(now);
       // 5 draft + 0.5 archive + 10 meeting + 0.5 archive-by-target-id + 0.5 label
       // + 0.5 skipped-but-successful archive. Three unlisted lookups add the
-      // default each. extract-facts, web-search, and file-parse add 0. Dry-run
-      // and the non-task invoke add 0.
+      // default each, as one day's count. extract-facts, web-search, file-parse,
+      // and the five hidden zero-effort tools add 0. Dry-run and the non-task
+      // invoke add 0.
       const unlistedLookups = 3 * UNDESCRIBED_CALL_MINUTES;
       expect(stats.minutesSaved.current).toBeCloseTo(17 + unlistedLookups);
       expect(stats.done.current).toBe(1);
