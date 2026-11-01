@@ -128,10 +128,16 @@ export function nextReconnectDelayMs(attempt: number): number {
  * The prefix of `live` (rows `loadMore` already pulled, or an older page) stays.
  * A page row whose id is already on screen is dropped. The rest is matched, by
  * kind and text, only against the live tail — echoes and `makeMessage` ids —
- * so an older "ok" cannot pair with a new one. The live copy wins. Whatever
- * is still unmatched is appended.
+ * so an older "ok" cannot pair with a new one. The live copy wins. An unmatched
+ * history row is inserted before the next tail row it precedes, so a phone turn
+ * stays ahead of the message this tab sent after it. `pairedOnto` records a
+ * history id that was folded onto a live id.
  */
-export function mergeLiveTail(history: Message[], live: Message[]): Message[] {
+export function mergeLiveTail(
+  history: Message[],
+  live: Message[],
+  pairedOnto?: Map<string, string>,
+): Message[] {
   if (live.length === 0) return history;
   if (history.length === 0) return live;
 
@@ -146,20 +152,25 @@ export function mergeLiveTail(history: Message[], live: Message[]): Message[] {
   }
 
   const incoming = history.filter((message) => !liveIds.has(message.id));
-  if (firstShared === -1) return foldByText(history, live);
+  if (firstShared === -1) return foldByText(history, live, pairedOnto);
 
   const prefix = live.slice(0, firstShared);
   const overlap = live.slice(firstShared, lastShared + 1);
   const tail = live.slice(lastShared + 1);
-  return [...prefix, ...overlap, ...appendUnmatched(incoming, tail)];
+  return [...prefix, ...overlap, ...appendUnmatched(incoming, tail, pairedOnto)];
 }
 
 /**
- * Keep `tail` in order. A tail row that matches the next incoming row by kind
- * and text consumes it (the tail copy wins). Incoming rows that never matched
- * are appended, so a status row between them stays put.
+ * Keep `tail` in order. A tail row that matches an incoming row by kind and
+ * text consumes it (the tail copy wins). Incoming rows that sit before that
+ * match are inserted first, so they keep the server's order. Whatever is
+ * still unmatched is appended.
  */
-function appendUnmatched(incoming: Message[], tail: Message[]): Message[] {
+function appendUnmatched(
+  incoming: Message[],
+  tail: Message[],
+  pairedOnto?: Map<string, string>,
+): Message[] {
   const used = new Set<number>();
   let cursor = 0;
   const out: Message[] = [];
@@ -168,7 +179,12 @@ function appendUnmatched(incoming: Message[], tail: Message[]): Message[] {
       for (let j = cursor; j < incoming.length; j += 1) {
         const row = incoming[j]!;
         if (row.kind === live.kind && row.text === live.text) {
+          for (let k = cursor; k < j; k += 1) {
+            if (!used.has(k)) out.push(incoming[k]!);
+            used.add(k);
+          }
           used.add(j);
+          pairedOnto?.set(row.id, live.id);
           cursor = j + 1;
           break;
         }
@@ -183,7 +199,11 @@ function appendUnmatched(incoming: Message[], tail: Message[]): Message[] {
 }
 
 /** Match `page` onto `tail` by kind and text. The tail copy wins. Status rows stay. */
-function foldByText(page: Message[], tail: Message[]): Message[] {
+function foldByText(
+  page: Message[],
+  tail: Message[],
+  pairedOnto?: Map<string, string>,
+): Message[] {
   const usedTail = new Set<number>();
   const out: Message[] = [];
   let cursor = 0;
@@ -201,6 +221,7 @@ function foldByText(page: Message[], tail: Message[]): Message[] {
       out.push(row);
       continue;
     }
+    pairedOnto?.set(row.id, tail[matched]!.id);
     for (let j = cursor; j <= matched; j += 1) {
       const live = tail[j]!;
       if (j === matched || live.kind === 'status') out.push(live);

@@ -121,6 +121,9 @@ export function useChatSession(): ChatSession {
   // and was not already on screen.
   const inflightText = useRef<string | null>(null);
   const inflightKnownIds = useRef<Set<string>>(new Set());
+  // History ids folded onto a live copy. The live row keeps its client id, so
+  // the server id would otherwise look like a new turn.
+  const seenHistoryIds = useRef<Set<string>>(new Set());
   // Initial history has its own retry. closeStream() clears the SSE timer, and
   // hiding the tab must not cancel the thread open.
   const threadRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -132,18 +135,13 @@ export function useChatSession(): ChatSession {
   const pendingKickoff = useRef(
     (() => {
       if (typeof window === 'undefined') return false;
-      let flag: string | null;
       try {
-        // getItem throws SecurityError in Safari private mode.
-        flag = localStorage.getItem(ONBOARDING_KICKOFF_KEY);
-      } catch { return false; }
-      if (flag === null) return false;
-      try {
-        localStorage.removeItem(ONBOARDING_KICKOFF_KEY);
-      } catch (err) {
-        console.error('[useChatSession] failed to clear onboarding kickoff flag:', err);
+        // getItem throws SecurityError in Safari private mode. The key stays
+        // until the kickoff is actually sent, so a cancelled open can retry.
+        return localStorage.getItem(ONBOARDING_KICKOFF_KEY) !== null;
+      } catch {
+        return false;
       }
-      return true;
     })(),
   );
 
@@ -159,16 +157,16 @@ export function useChatSession(): ChatSession {
       return;
     }
     if (parsed.kind === 'reply') {
-      setMessages((prev) => {
-        if (suppressNextReply.current === parsed.text) {
-          suppressNextReply.current = null;
-          return prev;
-        }
-        return [...prev, makeMessage('agent', parsed.text, {
-          html: parsed.html ?? undefined,
-          timestamp: new Date(),
-        })];
-      });
+      // Outside the updater: React may run an updater twice, and the first
+      // run would consume the suppression before the second appends.
+      if (suppressNextReply.current === parsed.text) {
+        suppressNextReply.current = null;
+        return;
+      }
+      setMessages((prev) => [...prev, makeMessage('agent', parsed.text, {
+        html: parsed.html ?? undefined,
+        timestamp: new Date(),
+      })]);
       return;
     }
     if (parsed.kind === 'status') {
@@ -205,12 +203,17 @@ export function useChatSession(): ChatSession {
       if (!res.ok) return;
       const data = (await res.json()) as HistoryResponse;
       const loaded = historyToMessages(data.messages);
-      setMessages((prev) => {
-        const merged = mergeLiveTail(loaded, prev);
-        messagesRef.current = merged;
-        return merged;
-      });
-      const recovered = replyForInflight(data.messages, inflightText.current, inflightKnownIds.current);
+      const pairedOnto = new Map<string, string>();
+      const merged = mergeLiveTail(loaded, messagesRef.current, pairedOnto);
+      messagesRef.current = merged;
+      setMessages(() => merged);
+      const known = new Set(inflightKnownIds.current);
+      for (const [historyId, liveId] of pairedOnto) {
+        if (!known.has(liveId)) continue;
+        known.add(historyId);
+        seenHistoryIds.current.add(historyId);
+      }
+      const recovered = replyForInflight(data.messages, inflightText.current, known);
       if (recovered && isSending.current) {
         suppressNextReply.current = recovered.text;
         settleTurnRef.current?.();
@@ -382,15 +385,15 @@ export function useChatSession(): ChatSession {
     // when the reply text happens to match.
     suppressNextReply.current = null;
     inflightText.current = text;
-    inflightKnownIds.current = new Set(messagesRef.current.map((message) => message.id));
-    setMessages((prev) => {
-      const next = [
-        ...prev,
-        makeMessage('user', text, { id: clientMessageId, timestamp: new Date() }),
-      ];
-      messagesRef.current = next;
-      return next;
-    });
+    const known = new Set(messagesRef.current.map((message) => message.id));
+    for (const id of seenHistoryIds.current) known.add(id);
+    inflightKnownIds.current = known;
+    const next = [
+      ...messagesRef.current,
+      makeMessage('user', text, { id: clientMessageId, timestamp: new Date() }),
+    ];
+    messagesRef.current = next;
+    setMessages(() => next);
     isSending.current = true;
     setSending(true);
 
@@ -527,16 +530,16 @@ export function useChatSession(): ChatSession {
     } catch (err) {
       console.error('[useChatSession] failed to clear the legacy conversation id:', err);
     }
-    // Captured before a strict-mode remount re-inits the ref from an already
-    // cleared flag. The in-flight call still sends once.
-    const kickoff = pendingKickoff.current;
-    pendingKickoff.current = false;
+    // True while an open is waiting on history. resume() must not start a
+    // second one: both would see an empty thread and post the kickoff.
+    let opening = false;
 
     const openThread = (attempt = 0) => {
       if (threadRetryTimer.current) {
         clearTimeout(threadRetryTimer.current);
         threadRetryTimer.current = null;
       }
+      opening = true;
       void (async () => {
         try {
           const id = await ensureConversationId();
@@ -546,9 +549,18 @@ export function useChatSession(): ChatSession {
           threadReady.current = true;
           setConnectionError(null);
           if (document.visibilityState === 'visible') openStream(id);
-          // A wizard re-run must not post "say hi" into a thread that already
-          // has messages. Every device would see it.
-          if (kickoff && !hadHistory) void send(KICKOFF_TEXT);
+          // Read here, not at effect start. A cancelled run leaves the flag
+          // for the next one. A wizard re-run must not post "say hi" into a
+          // thread that already has messages.
+          if (pendingKickoff.current && !hadHistory) {
+            pendingKickoff.current = false;
+            try {
+              localStorage.removeItem(ONBOARDING_KICKOFF_KEY);
+            } catch (err) {
+              console.error('[useChatSession] failed to clear onboarding kickoff flag:', err);
+            }
+            void send(KICKOFF_TEXT);
+          }
         } catch (err) {
           if (err instanceof SessionEnded) return;
           console.error('[useChatSession] failed to open the shared thread:', err);
@@ -559,21 +571,19 @@ export function useChatSession(): ChatSession {
             threadRetryTimer.current = null;
             if (!cancelled) openThread(attempt + 1);
           }, delay);
+        } finally {
+          opening = false;
         }
       })();
     };
     openThread();
 
     const resume = () => {
-      if (!threadReady.current) {
-        openThread();
+      if (!threadReady.current || !conversationId.current) {
+        if (!opening) openThread();
         return;
       }
       const id = conversationId.current;
-      if (!id) {
-        openThread();
-        return;
-      }
       // onopen catches up. Drop a half-open OPEN socket first: openStream
       // leaves one that is not CLOSED in place.
       const source = sourceRef.current;

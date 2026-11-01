@@ -76,8 +76,9 @@ function Probe(): ReactElement {
           <li key={message.id} data-id={message.id} data-kind={message.kind}>{message.text}</li>
         ))}
       </ul>
-      <button type="button" onClick={() => { void session.send('q2'); }}>send-q2</button>
-      <button type="button" onClick={() => { void session.send('again'); }}>send-again</button>
+      <button type="button" data-testid="send-q2" onClick={() => { void session.send('q2'); }}>send-q2</button>
+      <button type="button" data-testid="send-again" onClick={() => { void session.send('again'); }}>send-again</button>
+      <button type="button" data-testid="send-ok" onClick={() => { void session.send('ok'); }}>send-ok</button>
     </div>
   );
 }
@@ -136,6 +137,7 @@ afterEach(() => {
   container = null;
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  localStorage.removeItem('curia:onboarding:welcome-banner-pending');
 });
 
 describe('useChatSession catch-up', () => {
@@ -220,6 +222,71 @@ describe('useChatSession catch-up', () => {
     await flush();
     expect(container?.querySelector('[data-testid="error"]')?.textContent).toBe('');
     expect(texts()).toEqual(['q1', 'back']);
+  });
+
+  it('does not settle a repeated ok with the previous reply', async () => {
+    history = [row('q1', 'user', 'q1'), row('r1', 'assistant', 'first')];
+    await mount();
+    await act(async () => { latestSource().open(); });
+    await flush();
+    await act(async () => {
+      container?.querySelector('[data-testid="send-ok"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flush();
+    await act(async () => {
+      latestSource().emit({ type: 'message', content: 'Done.', html: null });
+    });
+    latestSource().close();
+    history = [
+      row('q1', 'user', 'q1'),
+      row('r1', 'assistant', 'first'),
+      row('srv-ok', 'user', 'ok'),
+      row('srv-done', 'assistant', 'Done.'),
+    ];
+    await act(async () => {
+      container?.querySelector('[data-testid="send-ok"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flush();
+    await act(async () => { latestSource().open(); });
+    await flush();
+    expect(container?.querySelector('[data-testid="sending"]')?.textContent).toBe('yes');
+    expect(texts().filter((text) => text === 'Done.')).toHaveLength(1);
+    expect(texts().filter((text) => text === 'ok')).toHaveLength(2);
+  });
+
+  it('posts the onboarding kickoff once when the tab comes online during load', async () => {
+    history = [];
+    localStorage.setItem('curia:onboarding:welcome-banner-pending', '1');
+    let releaseHistory: () => void = () => {};
+    const historyGate = new Promise<Response>((resolve) => {
+      releaseHistory = () => resolve(json(200, { messages: [], hasMore: false }));
+    });
+    let posts = 0;
+    apiFetch.mockImplementation((path: string) => {
+      if (String(path).startsWith('/api/chat/conversation')) {
+        return Promise.resolve(json(200, { conversationId: 'conv-1' }));
+      }
+      if (String(path).startsWith('/api/chat/history')) return historyGate;
+      if (String(path) === '/api/chat/messages') {
+        posts += 1;
+        return Promise.resolve(json(202, { conversationId: 'conv-1' }));
+      }
+      return Promise.resolve(json(404, {}));
+    });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<Probe />);
+    });
+    await flush();
+    window.dispatchEvent(new Event('online'));
+    releaseHistory();
+    await flush();
+    await act(async () => { latestSource().open(); });
+    await flush();
+    expect(posts).toBe(1);
+    expect(texts()).toContain('Just finished setup — say hi!');
   });
 
   it('ignores the echo of the message this tab just sent', async () => {

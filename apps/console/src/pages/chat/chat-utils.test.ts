@@ -122,6 +122,25 @@ describe('mergeLiveTail', () => {
     expect(merged.map((m) => m.id)).toEqual(['old-ok', 'old-done', 'live-ok', 'live-status', 'h-done']);
   });
 
+  it('keeps a phone turn ahead of the message this tab sent after it', () => {
+    const history = [
+      user('q1', 'h-q1'),
+      agent('r1', 'h-r1'),
+      user('from the phone', 'h-p'),
+      agent('phone reply', 'h-pr'),
+      user('q3', 'h-q3'),
+      agent('r3', 'h-r3'),
+    ];
+    const live = [
+      user('q1', 'h-q1'),
+      agent('r1', 'h-r1'),
+      user('q3', 'live-q3'),
+    ];
+    expect(mergeLiveTail(history, live).map((m) => m.id)).toEqual([
+      'h-q1', 'h-r1', 'h-p', 'h-pr', 'live-q3', 'h-r3',
+    ]);
+  });
+
   it('does not duplicate a turn when a status row sits between the live messages', () => {
     const history = [user('question', 'h-user'), agent('answer', 'h-agent')];
     const live = [

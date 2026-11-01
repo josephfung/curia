@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { clearWebThreadCache, getOrCreateWebThread } from '../../src/channels/http/web-thread.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -11,6 +12,7 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 
 describeIf('web thread (integration)', () => {
   let pool: pg.Pool;
+  let verified = false;
   const conversations = [
     'wt-web-old',
     'wt-web-new',
@@ -23,6 +25,8 @@ describeIf('web thread (integration)', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
+    verified = true;
     await pool.query('DELETE FROM web_thread WHERE id = 1');
     await pool.query('DELETE FROM working_memory WHERE conversation_id = ANY($1::text[])', [conversations]);
     clearWebThreadCache(pool);
@@ -43,8 +47,10 @@ describeIf('web thread (integration)', () => {
 
   afterAll(async () => {
     try {
-      await pool.query('DELETE FROM web_thread WHERE id = 1');
-      await pool.query('DELETE FROM working_memory WHERE conversation_id = ANY($1::text[])', [conversations]);
+      if (verified) {
+        await pool.query('DELETE FROM web_thread WHERE id = 1');
+        await pool.query('DELETE FROM working_memory WHERE conversation_id = ANY($1::text[])', [conversations]);
+      }
     } finally {
       await pool.end();
     }
