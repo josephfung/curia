@@ -279,7 +279,9 @@ overrides:
   # pins ^5.3.1, so only an override moves it across the major. 6.0's one breaking change
   # refuses separate FTP transfer hosts by default (bounce-attack hardening); get-uri
   # calls only access/list/lastMod/downloadTo/close, which are unchanged.
-  'get-uri>basic-ftp': '>=6.2.2'
+  # Raised 2026-11-01 (#2388): upstream-only GHSA-5pm8-86m8-9m6r and GHSA-r4jh-29pc-gfqr
+  # (both MED) cover 6.2.2 and 6.2.3; 6.2.4 (2026-10-30) is the first clean release.
+  'get-uri>basic-ftp': '>=6.2.4'
   # HIGH CVE from Trivy, 2026-10-24 (code-scanning #321, #323):
   # GHSA-mrhx-c7xc-m3w5 / CVE-2023-54404 (HIGH, <4.6.6): memory-exhaustion DoS when an
   # unbounded z.array()/set/map schema validates a large failing input. Unpinned, the
