@@ -27,6 +27,8 @@ export interface VapidSetup {
   configured: boolean;
   publicKey: string | null;
   sender: PushSender;
+  /** Why push is off: no https APP_ORIGIN, or the vault's key pair could not be used. */
+  disabledReason: 'origin' | 'keys' | null;
 }
 
 export async function loadVapidSetup(
@@ -36,13 +38,22 @@ export async function loadVapidSetup(
 ): Promise<VapidSetup> {
   const subject = vapidSubject(appOrigin, logger);
   if (!subject) {
-    return { configured: false, publicKey: null, sender: disabledSender() };
+    return { configured: false, publicKey: null, sender: disabledSender(), disabledReason: 'origin' };
   }
-  const keys = await loadOrCreateKeys(secrets, logger);
-  setVapidDetails(subject, keys.publicKey, keys.privateKey);
+  // Push is optional. A vault read that fails, or a stored pair web-push rejects,
+  // turns push off instead of stopping Curia from starting.
+  let keys: VapidKeys;
+  try {
+    keys = await loadOrCreateKeys(secrets, logger);
+    setVapidDetails(subject, keys.publicKey, keys.privateKey);
+  } catch (err) {
+    logger.error({ err }, 'web push: the VAPID keys could not be loaded or used, so push stays off');
+    return { configured: false, publicKey: null, sender: disabledSender(), disabledReason: 'keys' };
+  }
   const publicKey = keys.publicKey;
   return {
     configured: true,
+    disabledReason: null,
     publicKey,
     sender: {
       async send(sub: PushSubscriptionRow, body: string): Promise<void> {
@@ -100,12 +111,20 @@ function retryAfterHeader(headers: Record<string, string> | undefined): number |
   return retryAfterMs(headers);
 }
 
-/** Boot log. An origin that is set but not https is an error; an unset origin is not. */
-export function logVapidReadiness(logger: Logger, appOrigin: string | undefined, configured: boolean): void {
-  if (configured) {
+/**
+ * Boot log. An origin that is set but not https is an error; an unset origin is not.
+ * A key failure was already logged by loadVapidSetup, so it is not blamed on the origin.
+ */
+export function logVapidReadiness(
+  logger: Logger,
+  appOrigin: string | undefined,
+  setup: Pick<VapidSetup, 'configured' | 'disabledReason'>,
+): void {
+  if (setup.configured) {
     logger.info('web push: VAPID ready');
     return;
   }
+  if (setup.disabledReason === 'keys') return;
   if (appOrigin) {
     logger.error(
       { appOrigin },

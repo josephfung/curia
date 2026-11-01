@@ -844,7 +844,7 @@ describe('AgentRuntime', () => {
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
     // Security stays at the top, ahead of the body. An agent with no send skill
     // is not given a reach order.
-    expect(systemMsg.startsWith('## Security\nPolicy here.\n\n')).toBe(true);
+    expect(systemMsg.startsWith('## Security\nPolicy here.\n\nBody text.')).toBe(true);
     expect(systemMsg).not.toContain('## Reaching the principal');
     expect(systemMsg.indexOf('## Security')).toBeLessThan(systemMsg.indexOf('Body text.'));
     // Block appears exactly once (no duplicate append).

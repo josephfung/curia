@@ -1819,7 +1819,7 @@ async function main(): Promise<void> {
     publicKey: vapidSetup.publicKey,
     memory,
   });
-  logVapidReadiness(logger, config.appOrigin, vapidSetup.configured);
+  logVapidReadiness(logger, config.appOrigin, vapidSetup);
 
   let outboundGateway: OutboundGateway | undefined;
   const registryGatedOutbound = gateOutboundClientsForRegistry(

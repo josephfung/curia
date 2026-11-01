@@ -92,6 +92,22 @@ describe('ApprovalDelivery.availableChannels', () => {
 });
 
 describe('ApprovalDelivery.deliver', () => {
+  it('checks phone reachability once per delivery, and again on the next one', async () => {
+    const webReachable = vi.fn(() => true);
+    const { delivery, send } = makeDelivery({ webReachable });
+
+    await expect(delivery.deliver('abcd1234', 'web')).resolves.toEqual({ delivered: true, channel: 'web' });
+    expect(webReachable).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toMatchObject({ channel: 'web', recipient: 'principal' });
+
+    webReachable.mockReturnValue(false);
+    await expect(delivery.deliver('abcd1234', 'web')).resolves.toMatchObject({
+      delivered: false,
+      reason: 'channel_unavailable',
+    });
+    expect(webReachable).toHaveBeenCalledTimes(2);
+  });
+
   it('sends once on Signal, binds the message for reactions, and keeps the claim', async () => {
     const { delivery, repo, send } = makeDelivery();
 

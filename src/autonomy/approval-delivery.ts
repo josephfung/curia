@@ -93,24 +93,23 @@ export class ApprovalDelivery {
 
   /** Channels the principal has a verified, active identity on, in APPROVAL_CHANNELS order. */
   async availableChannels(): Promise<ApprovalChannel[]> {
-    const available: ApprovalChannel[] = [];
-    for (const channel of APPROVAL_CHANNELS) {
-      if (await this.recipientFor(channel) !== null) available.push(channel);
-    }
-    return available;
+    return [...(await this.resolveRecipients()).keys()];
   }
 
   /** Send one pending approval on one channel. Never throws. */
   async deliver(shortRef: string, channel: ApprovalChannel): Promise<DeliverResult> {
     const { actionLogRepo, logger } = this.deps;
     const failed = this.failedChannels.get(shortRef);
-    const available = (await this.availableChannels()).filter((c) => !failed?.has(c));
+    // One lookup per delivery: `web` reachability is a live query, so it is not repeated
+    // for the chosen channel, and not cached across deliveries either.
+    const recipients = await this.resolveRecipients();
+    const available = [...recipients.keys()].filter((c) => !failed?.has(c));
 
     const row = await actionLogRepo.findPendingByShortRef(shortRef);
     if (!row) return { delivered: false, reason: 'not_found', available };
     if (row.notificationSentAt) return { delivered: false, reason: 'already_delivered', available };
 
-    const recipient = await this.recipientFor(channel);
+    const recipient = recipients.get(channel) ?? null;
     if (recipient === null) return { delivered: false, reason: 'channel_unavailable', available };
 
     // Build before claiming: a payload the renderer chokes on must not leave a claim behind,
@@ -207,6 +206,16 @@ export class ApprovalDelivery {
       // The row now looks delivered when it was not: nothing else will retry it.
       this.deps.logger.error({ err, rowId }, 'approval-delivery: could not release the claim after a failed send — the approval will not be retried');
     }
+  }
+
+  /** Each channel with a recipient right now, in APPROVAL_CHANNELS order. */
+  private async resolveRecipients(): Promise<Map<ApprovalChannel, string>> {
+    const recipients = new Map<ApprovalChannel, string>();
+    for (const channel of APPROVAL_CHANNELS) {
+      const recipient = await this.recipientFor(channel);
+      if (recipient !== null) recipients.set(channel, recipient);
+    }
+    return recipients;
   }
 
   private async recipientFor(channel: ApprovalChannel): Promise<string | null> {

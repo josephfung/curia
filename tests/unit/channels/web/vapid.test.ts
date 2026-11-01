@@ -67,10 +67,42 @@ describe('VAPID setup', () => {
 
   it('logs an error when the origin is set but not https, and info when it is unset', () => {
     const log = { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
-    logVapidReadiness(log as unknown as Logger, 'http://curia.local', false);
+    logVapidReadiness(log as unknown as Logger, 'http://curia.local', { configured: false, disabledReason: 'origin' });
     expect(log.error).toHaveBeenCalled();
-    logVapidReadiness(log as unknown as Logger, undefined, false);
+    logVapidReadiness(log as unknown as Logger, undefined, { configured: false, disabledReason: 'origin' });
     expect(log.info).toHaveBeenCalledWith('web push: not configured (APP_ORIGIN is unset)');
+  });
+
+  it('turns push off, without throwing, when the vault read fails', async () => {
+    const vault = secrets();
+    vault.getJSON = async () => {
+      throw new Error('vault unavailable');
+    };
+    const log = { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const setup = await loadVapidSetup(vault, 'https://curia.example.com', log as unknown as Logger);
+    expect(setup).toMatchObject({ configured: false, publicKey: null, disabledReason: 'keys' });
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      'web push: the VAPID keys could not be loaded or used, so push stays off',
+    );
+    await expect(setup.sender.send({
+      id: 's', endpoint: 'https://fcm.googleapis.com/fcm/send/abc', p256dh: 'p', authSecret: 'a', deviceName: null,
+    }, '{}')).rejects.toMatchObject({ statusCode: 0 });
+  });
+
+  it('turns push off when web-push rejects the stored key pair', async () => {
+    setVapidDetails.mockImplementationOnce(() => {
+      throw new Error('Vapid public key should be 65 bytes long when decoded.');
+    });
+    const setup = await loadVapidSetup(secrets({ publicKey: 'short', privateKey: 'priv' }), 'https://curia.example.com', logger);
+    expect(setup).toMatchObject({ configured: false, disabledReason: 'keys' });
+  });
+
+  it('does not blame APP_ORIGIN when the keys disabled push', () => {
+    const log = { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    logVapidReadiness(log as unknown as Logger, 'https://curia.example.com', { configured: false, disabledReason: 'keys' });
+    expect(log.error).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
   });
 
   it('sends with a ten-second timeout, a one-day TTL, and high urgency, and keeps the body', async () => {
