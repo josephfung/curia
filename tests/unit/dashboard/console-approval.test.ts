@@ -22,7 +22,9 @@ function row(overrides: Partial<ActionLogRow> = {}): ActionLogRow {
     notificationSentAt: new Date('2026-10-28T12:00:00.000Z'),
     resolvedAt: null,
     resolvedBy: null,
-    expiresAt: new Date('2026-11-01T00:00:00.000Z'),
+    // Relative to the real clock: approve/deny default `now` to new Date(), so a fixed
+    // date here expired the fixture once the calendar passed it (2026-11-01).
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     parentActionId: null,
     shortRef: 'abc',
     approvalNumber: 3,
