@@ -4,7 +4,12 @@
 // deploy would silently break every subscription. The subject is APP_ORIGIN
 // and must be https — Apple rejects a mailto subject with 403 BadJwtToken.
 
-import { generateVAPIDKeys, sendNotification, setVapidDetails, WebPushError } from 'web-push';
+// web-push is CommonJS. Under Node's ESM loader only WebPushError is a named
+// export, so a named import of the functions crashes the built app at startup.
+// Use the default export (the module object) for all of them.
+import webpush from 'web-push';
+
+const { generateVAPIDKeys, sendNotification, setVapidDetails, WebPushError } = webpush;
 import type { Logger } from '../../logger.js';
 import type { SecretsService } from '../../secrets/secrets-service.js';
 import type { PushSender, PushSendOptions, PushSubscriptionRow } from './push-service.js';
