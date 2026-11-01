@@ -940,19 +940,13 @@ export class VoiceRuntime {
   private bargeIn(session: ActiveSession, event: SttTranscriptEvent): void {
     const controller = session.currentController;
     if (!controller || controller.signal.aborted) return;
-    this.stopSpeaking(session, true);
-  }
 
-  /** Stop TTS and abort the in-flight turn. A mute does not count as a barge-in. */
-  private stopSpeaking(session: ActiveSession, countAsBargeIn: boolean): void {
     const startedAt = Date.now();
     for (const streamId of session.activeTtsStreamIds) {
       this.config.tts.cancel(streamId);
     }
-    const controller = session.currentController;
-    if (controller && !controller.signal.aborted) controller.abort();
+    controller.abort();
     session.ttsActive = false;
-    if (!countAsBargeIn) return;
     session.turnStats.bargeInCancels += 1;
     const stopMs = Date.now() - startedAt;
 
@@ -992,6 +986,16 @@ export class VoiceRuntime {
       },
       'voice barge-in: cancelled assistant turn',
     );
+  }
+
+  /** Stop TTS and abort the in-flight turn. A mute does not count as a barge-in. */
+  private stopSpeaking(session: ActiveSession): void {
+    for (const streamId of session.activeTtsStreamIds) {
+      this.config.tts.cancel(streamId);
+    }
+    const controller = session.currentController;
+    if (controller && !controller.signal.aborted) controller.abort();
+    session.ttsActive = false;
   }
 
   /**
@@ -2126,7 +2130,7 @@ export class VoiceRuntime {
       if (session.currentController && !session.currentController.signal.aborted) {
         session.pauseHeld = true;
       }
-      this.stopSpeaking(session, false);
+      this.stopSpeaking(session);
       if (session.pauseTimer) return;
       const graceMs = this.config.pauseGraceMs ?? 120_000;
       session.pauseTimer = setTimeout(() => {
