@@ -413,6 +413,110 @@ describe('VoiceRuntime', () => {
     expect(events.filter(e => e.type === 'voice.session.ended').length).toBe(1);
   });
 
+  it('keeps turnStats and the bridge\'s remote_hangup reason when the hangup paths race (#2379)', async () => {
+    const llm = new FakeStreamProvider([replyScript('Sure.')]);
+    // Holds disconnect open, as the Signal transport does while pacat exits.
+    let releaseDisconnect!: () => void;
+    const disconnectGate = new Promise<void>(resolve => {
+      releaseDisconnect = resolve;
+    });
+    class SlowDisconnectTransport extends FakeAudioTransport {
+      override async disconnect(): Promise<void> {
+        await disconnectGate;
+        await super.disconnect();
+      }
+    }
+    const transport = new SlowDisconnectTransport();
+    const { store, endReasons } = fakeStore();
+    const { runtime, events, stt } = makeRuntime({ llm, transport, store, tts: new SlowTtsProvider(2, 1) });
+
+    await runtime.startSession({
+      sessionId: 's-race',
+      conversationId: 'voice:s-race',
+      roomName: 'voice-s-race',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'hello there', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-race');
+
+    // SignalCallBridge.handleEnded: notifyRemoteHangup() fires onClose, which starts
+    // ending the session and parks in disconnect; then it calls endSession itself.
+    transport.emitClose('principal_disconnected');
+    const remote = runtime.endSession('s-race', 'remote_hangup');
+    await delay(10);
+    releaseDisconnect();
+    const record = await remote;
+    await delay(10);
+
+    // The explicit hangup reason wins over the transport close, as it did before.
+    expect(endReasons).toEqual(['remote_hangup']);
+    expect(record?.endReason).toBe('remote_hangup');
+    expect(endedTurnStats(events)).toEqual({ utterances: 1, turns: 1, bargeInCancels: 0, joinedUtterances: 0 });
+  });
+
+  it('joins an endSession fired from inside teardown instead of racing it (#2379)', async () => {
+    const llm = new FakeStreamProvider([replyScript('This is a long answer that keeps going.')], 3);
+    let reenter: (() => void) | null = null;
+    // tts.cancel runs in teardown's synchronous prefix; a provider error path
+    // that ends the session from there must not publish an event without stats.
+    class ReentrantTts extends SlowTtsProvider {
+      override cancel(streamId: string): void {
+        super.cancel(streamId);
+        reenter?.();
+      }
+    }
+    const { store, endReasons } = fakeStore();
+    const { runtime, events, stt, transport } = makeRuntime({ llm, store, tts: new ReentrantTts(50, 5) });
+    await runtime.startSession({
+      sessionId: 's-reenter',
+      conversationId: 'voice:s-reenter',
+      roomName: 'voice-s-reenter',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'tell me a story', isFinal: true, speechFinal: true });
+    await waitForPublishedFrame(transport);
+
+    let inner: Promise<unknown> | null = null;
+    reenter = () => {
+      reenter = null;
+      inner = runtime.endSession('s-reenter', 'tts_error');
+    };
+    await runtime.endSession('s-reenter', 'console_hangup');
+    expect(inner).not.toBeNull();
+    await inner;
+
+    expect(endReasons).toEqual(['console_hangup']);
+    expect(endedTurnStats(events)).toMatchObject({ utterances: 1 });
+  });
+
+  it('persists the end even when teardown throws (#2379)', async () => {
+    const llm = new FakeStreamProvider([]);
+    const { store, endReasons } = fakeStore();
+    const { runtime, events } = makeRuntime({ llm, store });
+    await runtime.startSession({
+      sessionId: 's-teardown-fail',
+      conversationId: 'voice:s-teardown-fail',
+      roomName: 'voice-s-teardown-fail',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    vi.spyOn(runtime as unknown as { teardownSession: () => Promise<void> }, 'teardownSession')
+      .mockRejectedValue(new Error('boom'));
+
+    const record = await runtime.endSession('s-teardown-fail', 'console_hangup');
+
+    expect(record).not.toBeNull();
+    expect(endReasons).toEqual(['console_hangup']);
+    expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(1);
+    // The entry is gone: a later call goes straight to the (deduping) store.
+    expect(await runtime.endSession('s-teardown-fail', 'console_hangup')).toBeNull();
+  });
+
   it('endSession resolves (not rejects) when the store write fails', async () => {
     const llm = new FakeStreamProvider([[{ type: 'message_end', content: 'ok', usage, provenance }]]);
     // endSession() is fired-and-forgotten (`void this.endSession(...)`) from
@@ -3068,5 +3172,203 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     expect(prompt).toContain('reading the principal\'s inbox');
     expect(prompt).toContain('A recap of this call is meeting-notes-start.');
     expect(prompt).toContain('such as links or research results, goes to async-offramp, not a specialist');
+  });
+});
+
+describe('VoiceRuntime audio timing telemetry (#2379)', () => {
+  function spyLogger(): { logger: Logger; info: ReturnType<typeof vi.fn> } {
+    const info = vi.fn();
+    const logger = {
+      debug: vi.fn(),
+      info,
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      trace: vi.fn(),
+      child: () => logger,
+    } as unknown as Logger;
+    return { logger, info };
+  }
+
+  function infoFields(info: ReturnType<typeof vi.fn>, message: string): Array<Record<string, unknown>> {
+    return info.mock.calls
+      .filter(([, msg]) => msg === message)
+      .map(([fields]) => fields as Record<string, unknown>);
+  }
+
+  /** TTS with 100 ms frames, delivered much faster than real time. */
+  class BigFrameTtsProvider extends SlowTtsProvider {
+    override async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
+      for await (const frame of super.synthesize(opts)) {
+        yield { ...frame, pcm: new Int16Array(2400) };
+      }
+    }
+  }
+
+  it('logs the end-of-speech wait, queue wait and last word → first audio on the TTFA line', async () => {
+    const { logger, info } = spyLogger();
+    const llm = new FakeStreamProvider([replyScript('Sure.')]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), logger });
+    await runtime.startSession({
+      sessionId: 'gap',
+      conversationId: 'voice:gap',
+      roomName: 'voice-gap',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: 'what is on today', isFinal: true, speechFinal: true, speechStartedAgoMs: 1500, speechEndedAgoMs: 400 });
+    await runtime.awaitIdle('gap');
+
+    const [ttfa] = infoFields(info, 'voice time-to-first-audio');
+    expect(ttfa).toBeDefined();
+    const wait = ttfa!['voice.end_of_speech_wait_ms'] as number;
+    const queued = ttfa!['voice.turn_queue_wait_ms'] as number;
+    const toAudio = ttfa!['voice.last_word_to_audio_ms'] as number;
+    expect(wait).toBeGreaterThanOrEqual(400);
+    expect(queued).toBeGreaterThanOrEqual(0);
+    expect(toAudio).toBeGreaterThanOrEqual(wait + queued);
+  });
+
+  it('omits the gap fields when the utterance had no word timings, never reusing an older one', async () => {
+    const { logger, info } = spyLogger();
+    const llm = new FakeStreamProvider([replyScript('Sure.'), replyScript('Okay.')]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), logger });
+    await runtime.startSession({
+      sessionId: 'gap-stale',
+      conversationId: 'voice:gap-stale',
+      roomName: 'voice-gap-stale',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: 'what is on today', isFinal: true, speechFinal: true, speechEndedAgoMs: 400 });
+    await runtime.awaitIdle('gap-stale');
+    // A final with no word timings: its gap is unknown, not the previous one's.
+    stt.emit({ text: 'and tomorrow', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('gap-stale');
+
+    const lines = infoFields(info, 'voice time-to-first-audio');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toHaveProperty(['voice.end_of_speech_wait_ms']);
+    expect(lines[1]).not.toHaveProperty(['voice.end_of_speech_wait_ms']);
+    expect(lines[1]).not.toHaveProperty(['voice.last_word_to_audio_ms']);
+  });
+
+  it('logs barge-in detect time and queued audio at info, and flushes the transport queue', async () => {
+    const { logger, info } = spyLogger();
+    const llm = new FakeStreamProvider([replyScript('This is a fairly long spoken answer.')], 2);
+    const { runtime, stt, transport } = makeRuntime({ llm, tts: new BigFrameTtsProvider(50, 2), logger });
+    await runtime.startSession({
+      sessionId: 'barge-log',
+      conversationId: 'voice:barge-log',
+      roomName: 'voice-barge-log',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'tell me a story', isFinal: true, speechFinal: true });
+    await vi.waitFor(() => expect(transport.publishedFrames.length).toBeGreaterThan(5));
+    transport.queuedMs = 840;
+
+    stt.emit({ text: 'actually wait', isFinal: false, confidence: 0.9, speechStartedAgoMs: 350 });
+    await runtime.awaitIdle('barge-log');
+
+    const [barge] = infoFields(info, 'voice barge-in: cancelled assistant turn');
+    expect(barge).toMatchObject({
+      'voice.barge_in_detect_ms': 350,
+      'voice.barge_in_transport_queued_ms': 840,
+      flushed: true,
+    });
+    // 100 ms frames are accepted every ~2 ms, far ahead of the wall clock.
+    expect(barge!['voice.barge_in_accepted_ahead_ms']).toBeGreaterThan(200);
+    expect(barge!['voice.barge_in_turn_audio_ms']).toBeGreaterThan(500);
+    expect(transport.clearQueuedAudioCount).toBe(1);
+  });
+
+  it('clears again when a frame finishes publishing after the barge-in flush', async () => {
+    const llm = new FakeStreamProvider([replyScript('This is a fairly long spoken answer.')], 2);
+    // Holds the third frame inside publishAudio, so barge-in lands mid-publish.
+    let releasePublish!: () => void;
+    const publishGate = new Promise<void>(resolve => {
+      releasePublish = resolve;
+    });
+    class SlowPublishTransport extends FakeAudioTransport {
+      override async publishAudio(frame: PcmFrame): Promise<void> {
+        if (this.publishedFrames.length === 2) await publishGate;
+        await super.publishAudio(frame);
+      }
+    }
+    const transport = new SlowPublishTransport();
+    const { runtime, stt } = makeRuntime({ llm, transport, tts: new SlowTtsProvider(20, 1) });
+    await runtime.startSession({
+      sessionId: 'late-frame',
+      conversationId: 'voice:late-frame',
+      roomName: 'voice-late-frame',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'tell me a story', isFinal: true, speechFinal: true });
+    await vi.waitFor(() => expect(transport.publishedFrames.length).toBe(2));
+    await delay(10);
+
+    stt.emit({ text: 'actually wait', isFinal: false, confidence: 0.9 });
+    expect(transport.clearQueuedAudioCount).toBe(1);
+    releasePublish();
+    await runtime.awaitIdle('late-frame');
+
+    expect(transport.clearQueuedAudioCount).toBe(2);
+  });
+
+  it('warns with the terms (not the sentence) when a reply names an internal component', async () => {
+    const warn = vi.fn();
+    const logger = {
+      debug: vi.fn(), info: vi.fn(), warn, error: vi.fn(), fatal: vi.fn(), trace: vi.fn(),
+      child: () => logger,
+    } as unknown as Logger;
+    const llm = new FakeStreamProvider([replyScript("I'll ask the calendar specialist.")]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), logger });
+    await runtime.startSession({
+      sessionId: 'jargon',
+      conversationId: 'voice:jargon',
+      roomName: 'voice-jargon',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'am I free tomorrow', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('jargon');
+
+    const named = warn.mock.calls.filter(([, msg]) => msg === 'voice reply named an internal component');
+    expect(named).toHaveLength(1);
+    expect(named[0]![0]).toEqual({ sessionId: 'jargon', terms: ['calendar specialist'] });
+  });
+
+  it('logs TTS chunks that arrive slower than real time as starved, and a call summary', async () => {
+    const { logger, info } = spyLogger();
+    const llm = new FakeStreamProvider([replyScript('Sure.')]);
+    // 160-sample frames are 6.7 ms of audio at 24 kHz, delivered every 20 ms.
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(5, 20), logger });
+    await runtime.startSession({
+      sessionId: 'starve',
+      conversationId: 'voice:starve',
+      roomName: 'voice-starve',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'hello there', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('starve');
+
+    const [chunk] = infoFields(info, 'voice TTS chunk delivered');
+    expect(chunk).toMatchObject({ starvedCount: 4, chars: 5, aborted: false });
+    expect(chunk!['voice.tts_starved_ms']).toBeGreaterThan(0);
+
+    await runtime.endSession('starve', 'test');
+    const [summary] = infoFields(info, 'voice session audio summary');
+    expect(summary).toMatchObject({ 'voice.tts_chunks': 1, 'voice.tts_starved_count': 4 });
   });
 });

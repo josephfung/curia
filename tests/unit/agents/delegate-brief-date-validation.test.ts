@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { DateTime } from 'luxon';
 import {
   briefContainsResolvedDate,
   briefHasDateLikeContent,
@@ -7,6 +8,7 @@ import {
   isCalendarDelegation,
   TurnDateResolveTracker,
   validateDelegateBriefDates,
+  verifyBriefDatesAgainstClock,
 } from '../../../src/agents/delegate-brief-date-validation.js';
 import { RELATIVE_DAY_OFFSETS } from '../../../src/time/relative-days.js';
 
@@ -312,5 +314,89 @@ describe('TurnDateResolveTracker', () => {
       { isoDate: '2026-07-28', formatted: 'Tuesday, July 28, 2026' },
       { isoDate: '2026-07-31', formatted: 'Friday, July 31, 2026' },
     ]);
+  });
+});
+
+// Briefs that state their dates are checked against the clock instead of costing a
+// date-resolve round (#2379). The phrasings are the ones prod refused.
+describe('verifyBriefDatesAgainstClock (#2379)', () => {
+  // Saturday, October 31, 2026, midday in the office timezone.
+  const now = DateTime.fromISO('2026-10-31T12:00:00', { zone: 'America/Toronto' });
+
+  it.each([
+    'Give the principal a summary of his calendar for today, Saturday October 31, 2026, America/Toronto.',
+    'List all events for tomorrow, Sunday November 1, 2026, America/Toronto timezone.',
+    'Check tomorrow, Sunday 2026-11-01, full day.',
+    "Tomorrow's calendar (Sun Nov 1, 2026): list the events.",
+    'Anything new today (Sat Oct 31)?',
+    'Events Monday Oct 26 through Sunday Nov 1, 2026.',
+    'Summarize Saturday 2026-10-31 and Sunday 2026-11-01.',
+    'What changed yesterday (Oct 30)?',
+  ])('verifies a brief that states its dates: %s', (task) => {
+    const result = verifyBriefDatesAgainstClock(task, now);
+    expect(result).toMatchObject({ status: 'verified', task });
+  });
+
+  it('adds a dates note when a day word has no written date', () => {
+    const task = 'List calendar events added, moved or cancelled today.';
+    const result = verifyBriefDatesAgainstClock(task, now);
+    if (result.status !== 'verified') throw new Error(`expected verified, got ${result.status}`);
+    expect(result.task).toBe(`${task}\n\n(Dates: today is Saturday, October 31, 2026.)`);
+    expect(result.resolved).toEqual([{ isoDate: '2026-10-31', formatted: 'Saturday, October 31, 2026' }]);
+  });
+
+  it('rejects a weekday that does not match its date', () => {
+    const result = verifyBriefDatesAgainstClock('Calendar for today, Friday, October 31, 2026.', now);
+    expect(result.status).toBe('contradicted');
+    if (result.status !== 'contradicted') return;
+    expect(result.error).toMatch(/Friday for October 31, 2026, which is a Saturday/);
+  });
+
+  it('rejects a day word written beside the wrong date, even when the weekday fits', () => {
+    // October 24, 2026 is a Saturday, but it is not today.
+    const result = verifyBriefDatesAgainstClock('Calendar for today, Saturday, October 24, 2026.', now);
+    expect(result.status).toBe('contradicted');
+    if (result.status !== 'contradicted') return;
+    expect(result.error).toMatch(/today is October 24, 2026, but today is Saturday, October 31, 2026/);
+  });
+
+  it.each([
+    "What's on my calendar next Tuesday?",
+    'Book something this Friday at 2pm.',
+    'Find a slot on Monday so I can see next week start.',
+  ])('leaves phrasing the clock cannot settle to date-resolve: %s', (task) => {
+    expect(verifyBriefDatesAgainstClock(task, now)).toEqual({ status: 'unverifiable' });
+  });
+
+  it('accepts a dated brief through validateDelegateBriefDates when given the clock', () => {
+    const result = validateDelegateBriefDates({
+      agent: 'calendar',
+      task: 'Summary of his calendar for today, Saturday October 31, 2026.',
+      priorDateResolves: [],
+      now,
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('returns the noted brief through validateDelegateBriefDates', () => {
+    const result = validateDelegateBriefDates({
+      agent: 'calendar',
+      task: 'What is on my calendar tomorrow?',
+      priorDateResolves: [],
+      now,
+    });
+    expect(result).toEqual({
+      ok: true,
+      task: 'What is on my calendar tomorrow?\n\n(Dates: tomorrow is Sunday, November 1, 2026.)',
+    });
+  });
+
+  it('still refuses without the clock (no office timezone)', () => {
+    const result = validateDelegateBriefDates({
+      agent: 'calendar',
+      task: 'Summary of his calendar for today, Saturday October 31, 2026.',
+      priorDateResolves: [],
+    });
+    expect(result.ok).toBe(false);
   });
 });

@@ -26,6 +26,7 @@
 // satisfied for the call's full duration. This widening is deliberate — a
 // voice session is one live conversation, not a sequence of independent
 // messages — and must not be copied onto text channels.
+import { monitorEventLoopDelay, type ELDHistogram } from 'node:perf_hooks';
 import type { EventBus } from '../../bus/bus.js';
 import { createInboundMessage, createVoiceSessionEnded } from '../../bus/events.js';
 import type { VoiceSessionTurnStats } from '../../bus/events.js';
@@ -58,6 +59,7 @@ import {
 import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from '../../speech/index.js';
 import { TtsHttpError } from '../../speech/index.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
+import { findInternalJargon } from './spoken-jargon.js';
 import { VoiceTurnError, VoiceTurnRunner } from './turn-runner.js';
 
 export {
@@ -99,11 +101,12 @@ const BARGE_IN_MIN_CONFIDENCE = 0.4;
  * Wait after the STT end-of-speech signal before starting a turn (#2240). Speech
  * inside the window keeps the utterance open, so a principal who pauses
  * mid-thought ("His school is… Oakbridge") is answered once, not per fragment.
- * Added to Deepgram's 400 ms endpointing, a turn starts about a second after the
- * last word — the same point Deepgram's own UtteranceEnd (utterance_end_ms=1000)
- * would fire.
+ * 600 ms (a turn about a second after the last word) felt sluggish on calls, so
+ * it is 350 (#2379): a pause longer than ~750 ms now starts a turn, and speech
+ * that resumes during that turn still joins it via barge-in carry-over.
+ * Overridable with channels.voice.turn_hold_ms.
  */
-const DEFAULT_TURN_HOLD_MS = 600;
+const DEFAULT_TURN_HOLD_MS = 350;
 /** Agent id used when writing voice turns into working_memory (chat history). */
 const VOICE_HISTORY_AGENT_ID = 'coordinator';
 /** Default max utterance size — matches Dispatcher maxMessageBytes. */
@@ -189,6 +192,12 @@ function isHistoryPrefix(prefix: Message[], full: Message[]): boolean {
  * Spoken-style guidance shared by every voice audience. The audience line
  * ("You are speaking to …") is composed separately by buildVoiceAudienceLine()
  * so a non-principal caller never inherits the principal framing (#1598).
+ *
+ * Known limitation (#2379): a form of address sounds spliced in ("Good morning,
+ * Boss" like an old IVR) because Cartesia pauses on the comma before it, and
+ * the model writes that comma by habit. A prompt line telling the model to drop
+ * it failed on claude-haiku-5-5 (comma in 10/10 turns). Rewriting the text before
+ * TTS was declined as a patch. Revisit when models or TTS handle this better.
  */
 export const VOICE_SPOKEN_STYLE_ADDENDUM =
   'Reply in a natural, ' +
@@ -261,6 +270,11 @@ export const VOICE_TOOL_RESULT_POLICY =
  * reached the caller as "the email tool refused" (#2347). The recap of the call
  * itself belongs to meeting-notes-start; this sentence must agree with that
  * tool's and async-offramp's descriptions on the turn the model chooses.
+ *
+ * The closing examples replaced a bare "never mention specialists" clause: the
+ * model read the names back ("I'll ask the calendar specialist", #2379). Quoted
+ * examples and "never say" sentences here must not name internal terms
+ * (spoken-jargon.ts; voice-tools.test.ts).
  */
 export const VOICE_DELEGATION_GUIDANCE =
   'Many requests are handled by delegating to a specialist with the delegate tool: ' +
@@ -271,8 +285,10 @@ export const VOICE_DELEGATION_GUIDANCE =
   'falls in a specialist\'s domain, delegate rather than answering from memory or ' +
   'guessing. Resolve pronouns before delegating: "my calendar" spoken by the ' +
   'principal means the principal\'s calendar. Fold the specialist\'s result into ' +
-  'your own short spoken answer — never mention specialists, delegation, or tools ' +
-  'out loud.';
+  'your own short spoken answer. The caller hears one person doing the work, so ' +
+  'say what you are doing in their terms: "Let me check your calendar." "I\'ll ' +
+  'take care of that after we hang up." Talk about the work itself, never about ' +
+  'how it gets done.';
 
 /**
  * Assemble the per-turn system prompt for a spoken turn. Static sections come
@@ -500,6 +516,20 @@ interface StartVoiceSessionParams {
   agendas?: SessionAgendas;
 }
 
+/** When an utterance's speech ended, for the turn-gap timings (#2379). */
+interface UtteranceTiming {
+  /** The last word's end; null without word timings. */
+  lastWordAt: number | null;
+  /** When the hold fired and the utterance joined the turn queue. */
+  endOfSpeechAt: number;
+}
+
+/** An utterance's timing plus when its turn left the queue. */
+interface TurnGap {
+  timing: UtteranceTiming | null;
+  startedAt: number;
+}
+
 interface CarriedUtterance {
   utterance: string;
   /** The user row as stored (sanitized), for the pairing check. */
@@ -564,11 +594,42 @@ interface ActiveSession {
   agendaIndex: AgendaIndexEntry[];
   /** Notes the caller asked for (#2347), from meeting-notes-start's result; restated in every later turn's prompt. */
   notes: { recap: boolean } | null;
+  /**
+   * Wall-clock estimate of when the pending utterance's last word ended (#2379).
+   * Null when its latest final had no word timings, so a stale time never
+   * stands in for this utterance's.
+   */
+  pendingLastWordAt: number | null;
+  /** Timing of the latest utterance in `queuedUtterance`, for the turn-gap log. */
+  queuedTiming: UtteranceTiming | null;
+  /**
+   * When published audio finishes playing, assuming the far end plays it in
+   * real time from the first frame. Ahead of now = audio still queued (#2379).
+   */
+  playoutEndsAt: number;
+  /** Audio published by the current assistant turn, ms. */
+  turnAudioMs: number;
+  /** Call-wide TTS delivery stats, logged when the session ends (#2379). */
+  audioStats: { chunks: number; audioMs: number; gapMs: number; starvedMs: number; starvedCount: number };
+  /** Event-loop delay over the call; the host shares one small box (#2379). */
+  loopDelay: ELDHistogram;
+}
+
+/** A session whose end is in progress: one caller tears it down and persists it. */
+interface EndingSession {
+  session: ActiveSession;
+  /** Reason to persist. An explicit caller's reason replaces a transport close's. */
+  reason: string;
+  fromTransport: boolean;
+  /** Settles with the persisted record (null if the store write failed or found it ended). */
+  done: Promise<VoiceSessionRecord | null>;
 }
 
 export class VoiceRuntime {
   private readonly log: Logger;
   private readonly sessions = new Map<string, ActiveSession>();
+  /** Sessions whose end is in progress; see endSessionWith (#2379). */
+  private readonly endingSessions = new Map<string, EndingSession>();
   private toolBridge: VoiceToolBridge | null = null;
 
   constructor(private readonly config: VoiceRuntimeConfig) {
@@ -678,7 +739,14 @@ export class VoiceRuntime {
         loadedAgendas: [...(params.agendas?.loaded ?? [])],
         agendaIndex: [...(params.agendas?.index ?? [])],
         notes: null,
+        pendingLastWordAt: null,
+        queuedTiming: null,
+        playoutEndsAt: 0,
+        turnAudioMs: 0,
+        audioStats: { chunks: 0, audioMs: 0, gapMs: 0, starvedMs: 0, starvedCount: 0 },
+        loopDelay: monitorEventLoopDelay({ resolution: 10 }),
       };
+      session.loopDelay.enable();
       this.sessions.set(params.sessionId, session);
 
       // Pipe principal audio → STT.
@@ -692,7 +760,7 @@ export class VoiceRuntime {
       transport.onClose(reason => {
         if (session.ending) return;
         this.log.info({ sessionId: params.sessionId, reason }, 'Audio transport closed; ending voice session');
-        void this.endSession(params.sessionId, reason);
+        void this.endSessionWith(params.sessionId, reason, true);
       });
 
       // Handle transcripts (interim → barge-in; final+endpoint → turn).
@@ -713,6 +781,7 @@ export class VoiceRuntime {
         'Voice session runtime started',
       );
     } catch (err) {
+      this.sessions.get(params.sessionId)?.loopDelay.disable();
       this.sessions.delete(params.sessionId);
       if (stt) {
         try {
@@ -741,7 +810,11 @@ export class VoiceRuntime {
 
     // Barge-in: speech while the assistant talks cancels it.
     if (isSpeech && (session.llmActive || session.ttsActive)) {
-      this.bargeIn(session);
+      this.bargeIn(session, event);
+    }
+
+    if (event.isFinal && text.length > 0) {
+      session.pendingLastWordAt = event.speechEndedAgoMs !== undefined ? Date.now() - event.speechEndedAgoMs : null;
     }
 
     // Speech inside the hold window: the caller resumed. Restart the hold rather
@@ -827,11 +900,15 @@ export class VoiceRuntime {
     session.pendingFinalText = '';
     session.pendingFragments = 0;
     if (utterance.length > 0) {
-      this.enqueueUtterance(session, utterance, fragments);
+      this.enqueueUtterance(session, utterance, fragments, {
+        lastWordAt: session.pendingLastWordAt,
+        endOfSpeechAt: Date.now(),
+      });
     }
+    session.pendingLastWordAt = null;
   }
 
-  private bargeIn(session: ActiveSession): void {
+  private bargeIn(session: ActiveSession, event: SttTranscriptEvent): void {
     const controller = session.currentController;
     if (!controller || controller.signal.aborted) return;
 
@@ -842,8 +919,42 @@ export class VoiceRuntime {
     controller.abort();
     session.ttsActive = false;
     session.turnStats.bargeInCancels += 1;
-    this.log.debug(
-      { sessionId: session.sessionId, 'voice.barge_in_stop_ms': Date.now() - startedAt },
+    const stopMs = Date.now() - startedAt;
+
+    // Audio already handed to the transport keeps playing unless it is dropped.
+    // `aheadMs` is how far the transport has accepted writes ahead of the wall
+    // clock, which is not what the caller still hears: on Signal, pacat's pipe paces
+    // writes to real time once full, and PulseAudio's buffer never enters it. The
+    // transport's own figure, when it has one, is the real queue (LiveKit).
+    const aheadMs = Math.max(0, session.playoutEndsAt - Date.now());
+    let transportQueuedMs: number | undefined;
+    try {
+      transportQueuedMs = session.transport.queuedAudioMs?.();
+    } catch (err) {
+      this.log.debug({ sessionId: session.sessionId, err }, 'transport queued-audio read failed');
+    }
+    let flushed = false;
+    if (session.transport.clearQueuedAudio) {
+      try {
+        session.transport.clearQueuedAudio();
+        session.playoutEndsAt = Date.now();
+        flushed = true;
+      } catch (err) {
+        this.log.warn({ sessionId: session.sessionId, err }, 'failed to clear queued audio on barge-in');
+      }
+    }
+    // info: speech onset → heard silence is detect + stop + whatever queued audio
+    // still plays (#2379). Detect comes from the STT's word timings when present.
+    this.log.info(
+      {
+        sessionId: session.sessionId,
+        'voice.barge_in_detect_ms': event.speechStartedAgoMs,
+        'voice.barge_in_stop_ms': stopMs,
+        'voice.barge_in_accepted_ahead_ms': Math.round(aheadMs),
+        'voice.barge_in_transport_queued_ms': transportQueuedMs === undefined ? undefined : Math.round(transportQueuedMs),
+        'voice.barge_in_turn_audio_ms': Math.round(session.turnAudioMs),
+        flushed,
+      },
       'voice barge-in: cancelled assistant turn',
     );
   }
@@ -854,9 +965,16 @@ export class VoiceRuntime {
    * replaying one turn per fragment (#2240). A carried-over utterance from a
    * silently cancelled turn is joined in front at drain time.
    */
-  private enqueueUtterance(session: ActiveSession, utterance: string, fragments: number): void {
+  private enqueueUtterance(
+    session: ActiveSession,
+    utterance: string,
+    fragments: number,
+    timing: UtteranceTiming,
+  ): void {
     session.queuedUtterance = joinUtterances(session.queuedUtterance, utterance);
     session.queuedFragments += fragments;
+    // The latest utterance's timing is the gap the caller waits through.
+    session.queuedTiming = timing;
     if (session.drainScheduled) return;
     session.drainScheduled = true;
 
@@ -873,9 +991,11 @@ export class VoiceRuntime {
         const carry = session.carryOver;
         const queued = session.queuedUtterance;
         const queuedFragments = session.queuedFragments;
+        const timing = session.queuedTiming;
         session.carryOver = null;
         session.queuedUtterance = '';
         session.queuedFragments = 0;
+        session.queuedTiming = null;
 
         let next = joinUtterances(carry?.utterance ?? '', queued);
         let nextFragments = (carry?.fragments ?? 0) + queuedFragments;
@@ -890,7 +1010,7 @@ export class VoiceRuntime {
           nextFragments = queuedFragments;
         }
         if (next.length === 0) return;
-        await this.runUserTurn(session, next, nextFragments);
+        await this.runUserTurn(session, next, nextFragments, timing);
       });
   }
 
@@ -971,6 +1091,11 @@ export class VoiceRuntime {
       withTools: boolean;
       /** The user turn's inbound.message id, passed to the tool bridge for audit (#1968). */
       turnEventId?: string;
+      /**
+       * Turn-gap timings (#2379), user turns only: the utterance's timing, and when
+       * the turn left the queue (before its bus/history preamble).
+       */
+      turnGap?: TurnGap;
       /** Persist a completed spoken reply (in-process + working_memory). */
       persistSuccess: (finalText: string) => Promise<void>;
       /**
@@ -1028,15 +1153,29 @@ export class VoiceRuntime {
       if (session.ending || controller.signal.aborted) return;
 
       const turnStartedAt = Date.now();
+      session.turnAudioMs = 0;
       let ttfaRecorded = false;
       const onSpeechText = this.createSpeechHandler(session, controller, {
         onFirstAudio: () => {
           audioPlayed = true;
           if (ttfaRecorded) return;
           ttfaRecorded = true;
+          const now = Date.now();
+          // The gap the caller hears, split (#2379): last word → hold fired is the
+          // end-of-speech wait (endpointing + hold); hold fired → turn start is time
+          // queued behind a running turn; last word → audio is the whole gap.
+          // Omitted when this utterance had no word timings.
+          const gap = opts.turnGap;
+          const gaps = gap && gap.timing?.lastWordAt != null
+            ? {
+              'voice.end_of_speech_wait_ms': gap.timing.endOfSpeechAt - gap.timing.lastWordAt,
+              'voice.turn_queue_wait_ms': gap.startedAt - gap.timing.endOfSpeechAt,
+              'voice.last_word_to_audio_ms': now - gap.timing.lastWordAt,
+            }
+            : {};
           // info: what the caller hears, logged beside llm_ttft_ms for ADR-038's check (#2245).
           this.log.info(
-            { sessionId: session.sessionId, [opts.ttfaLogKey]: Date.now() - turnStartedAt },
+            { sessionId: session.sessionId, [opts.ttfaLogKey]: now - turnStartedAt, ...gaps },
             opts.ttfaLogMessage,
           );
         },
@@ -1253,9 +1392,25 @@ export class VoiceRuntime {
   ): (sentence: string, meta: { streamId: string }) => Promise<void> {
     return async (sentence: string, meta: { streamId: string }): Promise<void> => {
       if (controller.signal.aborted || session.ending) return;
+      // A prod signal for #2379, not a filter: the sentence is still spoken.
+      // Terms only — the sentence itself is call content.
+      const jargon = findInternalJargon(sentence);
+      if (jargon.length > 0) {
+        this.log.warn({ sessionId: session.sessionId, terms: jargon }, 'voice reply named an internal component');
+      }
       const ttsStreamId = `${meta.streamId}:${session.ttsSeq++}`;
       session.activeTtsStreamIds.add(ttsStreamId);
       session.ttsActive = true;
+      // Chunk timing (#2379): provider latency, and the playout clock running
+      // dry, which the caller hears as silence. Dry before the chunk's first
+      // frame is a gap between sentences (or a tool pause after the filler);
+      // dry after it means audio arrived slower than real time: choppy speech.
+      const requestedAt = Date.now();
+      let firstFrameAt: number | null = null;
+      let gapBeforeMs = 0;
+      let chunkAudioMs = 0;
+      let starvedMs = 0;
+      let starvedCount = 0;
       try {
         for await (const frame of this.config.tts.synthesize({
           text: sentence,
@@ -1266,6 +1421,16 @@ export class VoiceRuntime {
         })) {
           if (controller.signal.aborted || session.ending) break;
           opts.onFirstAudio?.();
+          const arrivedAt = Date.now();
+          // The turn's first frame starts from silence, so only later frames can find the clock dry.
+          const dryMs = session.turnAudioMs > 0 ? Math.max(0, arrivedAt - session.playoutEndsAt) : 0;
+          if (firstFrameAt === null) {
+            firstFrameAt = arrivedAt;
+            gapBeforeMs = dryMs;
+          } else if (dryMs > 0) {
+            starvedMs += dryMs;
+            starvedCount += 1;
+          }
           // Publish is outside the TTS failure streak — a LiveKit blip must not
           // be recorded as tts_error (#1556 review).
           try {
@@ -1277,9 +1442,40 @@ export class VoiceRuntime {
             );
             break;
           }
+          // Barge-in can land while this frame is inside publishAudio, after its
+          // clear: drop the frame again so a flushed queue stays flushed.
+          if (controller.signal.aborted) {
+            session.transport.clearQueuedAudio?.();
+            break;
+          }
+          const frameMs = (frame.pcm.length / frame.channels / frame.sampleRate) * 1000;
+          session.playoutEndsAt = Math.max(session.playoutEndsAt, Date.now()) + frameMs;
+          session.turnAudioMs += frameMs;
+          chunkAudioMs += frameMs;
         }
         // Healthy synthesis (including barge-in abort mid-stream) clears the streak.
         if (!session.ending) session.consecutiveTtsFailures = 0;
+        if (firstFrameAt !== null) {
+          session.audioStats.chunks += 1;
+          session.audioStats.audioMs += chunkAudioMs;
+          session.audioStats.gapMs += gapBeforeMs;
+          session.audioStats.starvedMs += starvedMs;
+          session.audioStats.starvedCount += starvedCount;
+          this.log.info(
+            {
+              sessionId: session.sessionId,
+              'voice.tts_first_byte_ms': firstFrameAt - requestedAt,
+              'voice.tts_total_ms': Date.now() - requestedAt,
+              'voice.tts_audio_ms': Math.round(chunkAudioMs),
+              'voice.tts_gap_before_ms': Math.round(gapBeforeMs),
+              'voice.tts_starved_ms': Math.round(starvedMs),
+              starvedCount,
+              chars: sentence.length,
+              aborted: controller.signal.aborted,
+            },
+            'voice TTS chunk delivered',
+          );
+        }
       } catch (err) {
         if (controller.signal.aborted || session.ending) return;
         session.consecutiveTtsFailures += 1;
@@ -1660,16 +1856,22 @@ export class VoiceRuntime {
   }
 
   /** `fragments` counts the end-of-speech pieces in `utterance`, for turn stats. */
-  private async runUserTurn(session: ActiveSession, utterance: string, fragments: number): Promise<void> {
+  private async runUserTurn(
+    session: ActiveSession,
+    utterance: string,
+    fragments: number,
+    timing: UtteranceTiming | null,
+  ): Promise<void> {
     // Register the turn before the preamble's awaits (bus publish, history read,
     // user-row write). Speech during them then barges in and joins this
     // utterance, instead of queuing as a second turn that answers it (#2240).
     const controller = new AbortController();
     session.currentController = controller;
     session.llmActive = true;
+    const turnGap: TurnGap = { timing, startedAt: Date.now() };
     let carried = false;
     try {
-      await this.runUserTurnBody(session, utterance, fragments, controller, () => {
+      await this.runUserTurnBody(session, utterance, fragments, controller, turnGap, () => {
         carried = true;
       });
     } finally {
@@ -1683,6 +1885,7 @@ export class VoiceRuntime {
     utterance: string,
     fragments: number,
     controller: AbortController,
+    turnGap: TurnGap,
     onCarried: () => void,
   ): Promise<void> {
     if (session.ending) return;
@@ -1755,6 +1958,7 @@ export class VoiceRuntime {
       contactRecent: turnContext.contactRecent,
       withTools: true,
       turnEventId,
+      turnGap,
       controller,
       persistIncomplete: async (spokenText, { cancelledSilently }) => {
         if (cancelledSilently) {
@@ -1817,55 +2021,149 @@ export class VoiceRuntime {
   }
 
   async endSession(sessionId: string, reason: string): Promise<VoiceSessionRecord | null> {
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      session.ending = true;
-      this.sessions.delete(sessionId);
-      if (session.holdTimer) {
-        clearTimeout(session.holdTimer);
-        session.holdTimer = null;
-      }
-      // Taken in the same tick as `ending` is set, so a drain that runs later
-      // finds nothing to join; paired below rather than left unpaired.
-      const carry = session.carryOver;
-      session.carryOver = null;
+    return this.endSessionWith(sessionId, reason, false);
+  }
 
-      if (session.currentController && !session.currentController.signal.aborted) {
-        session.currentController.abort();
+  /**
+   * End a session once, however many paths ask. Hangups race (#2379): the Signal
+   * bridge fires the transport's onClose (`principal_disconnected`) and then calls
+   * endSession with `remote_hangup` while the first teardown waits on pacat. The
+   * first caller tears down and persists; later callers wait for it and get the
+   * same record. An explicit caller's reason replaces a transport close's, so the
+   * row keeps the reason the hangup's owner gave, and the ended event keeps the
+   * session's turnStats.
+   */
+  private async endSessionWith(
+    sessionId: string,
+    reason: string,
+    fromTransport: boolean,
+  ): Promise<VoiceSessionRecord | null> {
+    const ending = this.endingSessions.get(sessionId);
+    if (ending) {
+      if (ending.fromTransport && !fromTransport) {
+        ending.reason = reason;
+        ending.fromTransport = false;
       }
-      for (const streamId of session.activeTtsStreamIds) {
-        this.config.tts.cancel(streamId);
-      }
+      return ending.done;
+    }
+
+    const live = this.sessions.get(sessionId);
+    if (!live) {
+      // Already ended (or never started here): the store dedupes, so no second event.
+      return this.persistSessionEnd(sessionId, reason, undefined);
+    }
+
+    live.ending = true;
+    this.sessions.delete(sessionId);
+    let resolveDone!: (record: VoiceSessionRecord | null) => void;
+    const entry: EndingSession = {
+      session: live,
+      reason,
+      fromTransport,
+      done: new Promise(resolve => {
+        resolveDone = resolve;
+      }),
+    };
+    // Registered before teardown's first step, so a re-entrant call during it
+    // (an STT or TTS error fired by cancel) joins this end instead of racing it.
+    this.endingSessions.set(sessionId, entry);
+    let record: VoiceSessionRecord | null = null;
+    try {
       try {
-        session.stt.cancel();
+        await this.teardownSession(live);
       } catch (err) {
-        this.log.debug({ sessionId, err }, 'error cancelling STT session');
+        // Persist the end anyway: a row left active would never close.
+        this.log.error({ sessionId, err }, 'voice session teardown failed; persisting the end anyway');
       }
+      record = await this.persistSessionEnd(sessionId, entry.reason, live);
+      return record;
+    } finally {
+      this.endingSessions.delete(sessionId);
+      resolveDone(record);
+    }
+  }
+
+  /** Stop the session's media and pair any carried-over utterance. Never throws. */
+  private async teardownSession(session: ActiveSession): Promise<void> {
+    const sessionId = session.sessionId;
+    this.logAudioSummary(session);
+    if (session.holdTimer) {
+      clearTimeout(session.holdTimer);
+      session.holdTimer = null;
+    }
+    // Taken in the same tick as `ending` is set, so a drain that runs later
+    // finds nothing to join; paired below rather than left unpaired.
+    const carry = session.carryOver;
+    session.carryOver = null;
+
+    if (session.currentController && !session.currentController.signal.aborted) {
+      session.currentController.abort();
+    }
+    for (const streamId of session.activeTtsStreamIds) {
+      this.config.tts.cancel(streamId);
+    }
+    try {
+      session.stt.cancel();
+    } catch (err) {
+      this.log.debug({ sessionId, err }, 'error cancelling STT session');
+    }
+    try {
+      await session.transport.disconnect();
+    } catch (err) {
+      this.log.warn({ sessionId, err }, 'error disconnecting transport');
+    }
+
+    // Cleanup LiveKit room after hangup. Room delete does not revoke JWTs —
+    // a leaked token remains valid until TTL and may auto-create the room.
+    // Skipped for externally-supplied transports (#1672): there is no
+    // LiveKit room this runtime created, so nothing to delete.
+    if (this.config.deleteRoom && !session.externalTransport) {
       try {
-        await session.transport.disconnect();
+        await this.config.deleteRoom(session.roomName);
       } catch (err) {
-        this.log.warn({ sessionId, err }, 'error disconnecting transport');
-      }
-
-      // Cleanup LiveKit room after hangup. Room delete does not revoke JWTs —
-      // a leaked token remains valid until TTL and may auto-create the room.
-      // Skipped for externally-supplied transports (#1672): there is no
-      // LiveKit room this runtime created, so nothing to delete.
-      if (this.config.deleteRoom && !session.externalTransport) {
-        try {
-          await this.config.deleteRoom(session.roomName);
-        } catch (err) {
-          this.log.warn({ sessionId, roomName: session.roomName, err }, 'failed to delete LiveKit room after session end');
-        }
-      }
-
-      // A silently cancelled utterance the caller never continued: pair its
-      // stored row so the next call's history keeps the request (#2240).
-      if (carry) {
-        await this.pairCarriedUtterance(session, carry);
+        this.log.warn({ sessionId, roomName: session.roomName, err }, 'failed to delete LiveKit room after session end');
       }
     }
 
+    // A silently cancelled utterance the caller never continued: pair its
+    // stored row so the next call's history keeps the request (#2240).
+    if (carry) {
+      await this.pairCarriedUtterance(session, carry);
+    }
+  }
+
+  /**
+   * One line per call for diagnosing choppy audio (#2379): TTS delivery totals,
+   * and event-loop delay over the call (Curia shares its host with LiveKit and
+   * the Signal bridge; a stalled loop delays every audio frame).
+   */
+  private logAudioSummary(session: ActiveSession): void {
+    const loop = session.loopDelay;
+    loop.disable();
+    const nsToMs = (ns: number): number => Math.round(ns / 1e4) / 100;
+    const stats = session.audioStats;
+    this.log.info(
+      {
+        sessionId: session.sessionId,
+        'voice.tts_chunks': stats.chunks,
+        'voice.tts_audio_ms': Math.round(stats.audioMs),
+        'voice.tts_gap_ms': Math.round(stats.gapMs),
+        'voice.tts_starved_ms': Math.round(stats.starvedMs),
+        'voice.tts_starved_count': stats.starvedCount,
+        // NaN until the histogram has a sample (a call shorter than one tick).
+        'voice.loop_delay_p50_ms': loop.count > 0 ? nsToMs(loop.percentile(50)) : null,
+        'voice.loop_delay_p99_ms': loop.count > 0 ? nsToMs(loop.percentile(99)) : null,
+        'voice.loop_delay_max_ms': loop.count > 0 ? nsToMs(loop.max) : null,
+      },
+      'voice session audio summary',
+    );
+  }
+
+  private async persistSessionEnd(
+    sessionId: string,
+    reason: string,
+    session: ActiveSession | undefined,
+  ): Promise<VoiceSessionRecord | null> {
     // store.endSession returns null when the row is already 'ended', so the ended
     // event is published at most once even if the adapter and runtime both call in.
     // Wrapped like every other side-effect here: endSession is fire-and-forgotten

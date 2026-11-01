@@ -186,6 +186,9 @@ export class VoiceTurnRunner {
     // streams no text, so a first token in round ≥1 includes the tool run and is
     // not model latency. ADR-038's gate keeps round 0 only (#2271).
     let currentRound = 0;
+    // One filler per turn: a turn can take several tool rounds, and repeating it
+    // stuttered ("One moment. One moment. One moment.", #2379).
+    let fillerSpoken = false;
     // Everything handed to TTS this turn, so finalText matches what was heard
     // even when we fall out of the loop without a message_end.
     let spokenText = '';
@@ -236,7 +239,8 @@ export class VoiceTurnRunner {
           // line is not silent while the tool runs.
           const remainder = chunker.flush();
           if (remainder) await speak(remainder);
-          if (this.config.onFiller) {
+          if (this.config.onFiller && !fillerSpoken) {
+            fillerSpoken = true;
             await this.config.onFiller(DEFAULT_FILLER);
             // Filler is heard but is not part of the assistant reply transcript.
           }

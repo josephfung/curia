@@ -90,7 +90,20 @@ function parseConfidence(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
 }
 
-function parseDeepgramTranscript(data: unknown): SttTranscriptEvent | undefined {
+/** First word's start and last word's end, in stream seconds; undefined without word timings. */
+function parseWordSpan(alternative: Record<string, unknown> | undefined): { start: number; end: number } | undefined {
+  const words = Array.isArray(alternative?.words) ? alternative.words : [];
+  const first = asRecord(words[0]);
+  const last = asRecord(words[words.length - 1]);
+  if (typeof first?.start !== 'number' || typeof last?.end !== 'number') return undefined;
+  return { start: first.start, end: last.end };
+}
+
+/**
+ * Parse one streaming message. `audioSentSeconds` is the stream audio sent so
+ * far, so a word's offset converts to how long ago it was spoken (#2379).
+ */
+function parseDeepgramTranscript(data: unknown, audioSentSeconds = 0): SttTranscriptEvent | undefined {
   const payload = asRecord(data);
   if (!payload) return undefined;
 
@@ -112,10 +125,15 @@ function parseDeepgramTranscript(data: unknown): SttTranscriptEvent | undefined 
     return undefined;
   }
 
+  const span = transcript ? parseWordSpan(firstAlternative) : undefined;
+  const agoMs = (offsetSeconds: number): number =>
+    Math.max(0, Math.round((audioSentSeconds - offsetSeconds) * 1000));
+
   return {
     text: transcript,
     isFinal: payload.is_final === true || speechFinal,
     ...(speechFinal ? { speechFinal } : {}),
+    ...(span ? { speechStartedAgoMs: agoMs(span.start), speechEndedAgoMs: agoMs(span.end) } : {}),
     ...(parseConfidence(firstAlternative?.confidence) !== undefined
       ? { confidence: parseConfidence(firstAlternative?.confidence) }
       : {}),
@@ -176,6 +194,8 @@ class DeepgramSttSession implements SttSession {
   private cancelled = false;
   private closed = false;
   private connectionErrorReported = false;
+  /** Seconds of audio sent on this stream; Deepgram's word offsets count from its start. */
+  private audioSentSeconds = 0;
 
   constructor(
     private readonly socket: ProviderWebSocket,
@@ -197,6 +217,7 @@ class DeepgramSttSession implements SttSession {
     const bytes = new Uint8Array(frame.pcm.byteLength);
     bytes.set(new Uint8Array(frame.pcm.buffer, frame.pcm.byteOffset, frame.pcm.byteLength));
     this.socket.send(bytes);
+    this.audioSentSeconds += frame.pcm.length / frame.channels / frame.sampleRate;
   }
 
   async end(): Promise<void> {
@@ -240,7 +261,7 @@ class DeepgramSttSession implements SttSession {
       }
     }
 
-    const event = parseDeepgramTranscript(parsed);
+    const event = parseDeepgramTranscript(parsed, this.audioSentSeconds);
     if (!event) return;
 
     for (const cb of this.transcriptCallbacks) {

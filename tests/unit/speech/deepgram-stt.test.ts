@@ -112,6 +112,34 @@ describe('DeepgramSttProvider', () => {
     ]);
   });
 
+  it('reports how long ago the first word started and the last word ended (#2379)', async () => {
+    const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
+    const sessionPromise = provider.startSession({ sampleRate: 16000 });
+    const socket = MockWebSocket.instances[0]!;
+    socket.open();
+    const session = await sessionPromise;
+    const events: SttTranscriptEvent[] = [];
+    session.onTranscript(event => events.push(event));
+
+    // 3 s of audio sent; the words ran from 1.2 s to 2.5 s of the stream.
+    session.sendAudio({ pcm: new Int16Array(48_000), sampleRate: 16000, channels: 1 });
+    socket.message(JSON.stringify({
+      type: 'Results',
+      is_final: true,
+      channel: {
+        alternatives: [{
+          transcript: 'hello there',
+          confidence: 0.9,
+          words: [{ word: 'hello', start: 1.2, end: 1.6 }, { word: 'there', start: 1.9, end: 2.5 }],
+        }],
+      },
+    }));
+
+    expect(events).toEqual([
+      { text: 'hello there', isFinal: true, confidence: 0.9, speechStartedAgoMs: 1800, speechEndedAgoMs: 500 },
+    ]);
+  });
+
   it('sends PCM bytes and closes cleanly on end', async () => {
     const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
     const sessionPromise = provider.startSession({ sampleRate: 16000 });
