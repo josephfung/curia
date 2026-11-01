@@ -2127,6 +2127,8 @@ export class VoiceRuntime {
   private handleCallerMuted(session: ActiveSession, muted: boolean): void {
     if (session.ending) return;
     if (muted) {
+      // Logged so a device check can see that the phone's background mute reached the server.
+      if (!session.callerMuted) this.log.info({ sessionId: session.sessionId }, 'voice caller paused (mic muted)');
       session.callerMuted = true;
       // Only a turn that is actually running is held. An idle mute must not
       // leave this set, or the next barge-in before any audio speaks that
@@ -2148,6 +2150,7 @@ export class VoiceRuntime {
     // No pause to end. Resuming here would drain a barge-in's carry before the
     // caller finishes the sentence, splitting it in two (#2240).
     if (!session.callerMuted) return;
+    this.log.info({ sessionId: session.sessionId }, 'voice caller resumed (mic unmuted)');
     session.callerMuted = false;
     if (session.pauseTimer) {
       clearTimeout(session.pauseTimer);
