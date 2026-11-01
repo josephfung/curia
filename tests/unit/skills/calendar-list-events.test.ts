@@ -253,7 +253,8 @@ describe('CalendarListEventsHandler', () => {
       // Wall-clock digits should be in EDT (UTC-4), not UTC
       expect(data.events[0].startTime).toBe('2026-04-06T11:30:00.000-04:00');
       expect(data.events[0].endTime).toBe('2026-04-06T12:00:00.000-04:00');
-      expect(data.displayTimezone).toContain('EDT');
+      // The label reflects today's offset in Toronto (EDT or EST), not the event's.
+      expect(data.displayTimezone).toMatch(/^E[DS]T \(UTC-0[45]:00\)$/);
     }
   });
 

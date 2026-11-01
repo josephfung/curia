@@ -243,6 +243,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Timezone label tests** — no longer fail when Toronto switches between daylight and standard time.
 - **Inbox triage cron** — skips while a drain cycle is running, so it no longer completes the drain mid-batch. (#2378)
 - **Scheduler task wakes** — a wake for a done or cancelled task is cancelled instead of firing. (#2378)
 - **`voice.session.ended`** — keeps `turnStats` when the transport and Signal hangup paths race. (#2379)
