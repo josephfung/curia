@@ -134,6 +134,13 @@ describe('describeToolCall', () => {
     expect(describeToolCall(onSignal, ctx())?.text).toBe('messaged the principal on Signal');
   });
 
+  it('says a web-send held for the digest was queued, not sent', () => {
+    const queued = call('web-send', { recipient: 'principal', message: 'hi' }, { channel: 'web', deferred_to_digest: true });
+    expect(describeToolCall(queued, ctx())?.text).toBe('queued a message to the principal for the digest');
+    const queuedFallback = call('web-send', { recipient: 'principal', message: 'hi' }, { channel: 'email', deferred_to_digest: true });
+    expect(describeToolCall(queuedFallback, ctx({ principal: 'Joseph' }))?.text).toBe('queued a message to Joseph for the digest');
+  });
+
   it('resolves the principal alias and strips #label hints', () => {
     const send = call('signal-send', { recipient: 'principal#personal', message: 'hi' }, { delivered_to: '+1555' });
     expect(describerRefs(send)).toEqual(['principal']);

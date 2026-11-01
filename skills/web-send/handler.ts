@@ -8,7 +8,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { OutboundGateway, OutboundSendRequest, OutboundSendResult } from '../../src/skills/outbound-gateway.js';
-import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../src/skills/_shared/principal-directed.js';
+import { RELAY_DEFERRED_NOTE, isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../src/skills/_shared/principal-directed.js';
 import { FALLBACK_CHANNELS, type FallbackChannel } from '../../src/agents/principal-reach.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
@@ -100,9 +100,17 @@ export class WebSendHandler implements ToolHandler {
           return { success: false, error: sent.blockedReason ?? 'The message was not sent.' };
         }
         if (sent.deferredToDigest) {
+          // Both notes: the queue one keeps the agent from re-sending, and the
+          // preference one still applies to the channel the digest will use.
           return {
             success: true,
-            data: { channel, delivered_to: resolved.identifier, app_notice: notice, note: preferenceNote, ...relayDeferredData(sent) },
+            data: {
+              channel,
+              delivered_to: resolved.identifier,
+              app_notice: notice,
+              deferred_to_digest: true,
+              note: `${RELAY_DEFERRED_NOTE} ${preferenceNote}`,
+            },
           };
         }
         if (sent.success) {

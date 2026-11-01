@@ -366,6 +366,7 @@ const DESCRIBERS: Record<string, Describer> = {
     done: (call, ctx) => {
       const channel = str(call.data?.channel);
       const person = who(bareRef(call.input.recipient), ctx);
+      if (call.data?.deferred_to_digest === true) return `queued a message to ${person} for the digest`;
       if (channel && channel !== 'web') return `messaged ${person} on ${fallbackChannelLabel(channel)}`;
       return `messaged ${person} on the phone app`;
     },

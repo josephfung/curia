@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { WebSendHandler } from './handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import type { OutboundSendResult } from '../../src/skills/outbound-gateway.js';
+import { RELAY_DEFERRED_NOTE } from '../../src/skills/_shared/principal-directed.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const manifest = JSON.parse(readFileSync(join(import.meta.dirname, 'tool.json'), 'utf-8')) as {
+  inputs: Record<string, string>;
+};
 
 function ctx(send: (request: { channel: string }) => Promise<OutboundSendResult>, resolveOk = true): ToolContext {
   return {
@@ -144,5 +151,56 @@ describe('web-send', () => {
     expect(delivered.success).toBe(true);
     if (delivered.success) expect(delivered.data).toMatchObject({ channel: 'signal', delivered_to: '+15555550123' });
     expect(register).toHaveBeenCalled();
+  });
+
+  it('keeps both notes when the fallback channel defers to the digest', async () => {
+    const send = vi.fn(async (request: { channel: string }) => {
+      if (request.channel === 'web') {
+        return { success: false, webDelivery: 'fallback' as const, blockedReason: 'dead' };
+      }
+      return { success: true, deferredToDigest: true };
+    });
+    const base = ctx(send);
+    const gateway = base.outboundGateway as NonNullable<typeof base.outboundGateway> & {
+      configuredFallbackChannels: () => string[];
+    };
+    gateway.configuredFallbackChannels = () => ['signal'];
+    const result = await handler.execute(base);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toMatchObject({ channel: 'signal', deferred_to_digest: true });
+    const note = (result.data as { note: string }).note;
+    expect(note).toContain(RELAY_DEFERRED_NOTE);
+    expect(note).toContain('Standing preferences were not applied. Skipped sms, slack, email because they are not configured.');
+  });
+
+  it('registers the given context bridge for a delivered fallback, and declares the input', async () => {
+    const register = vi.fn(async (_entry: unknown) => undefined);
+    const send = vi.fn(async (request: { channel: string }) => {
+      if (request.channel === 'web') {
+        return { success: false, webDelivery: 'fallback' as const, blockedReason: 'dead' };
+      }
+      return { success: true, sentContent: 'The board moved to Thursday.' };
+    });
+    const base = ctx(send);
+    const outboundContext = { register, explicitExpiryHours: 6, defaultExpiryHoursFor: () => 6 };
+    const bridge = JSON.stringify({ agent_id: 'coordinator', expected_reply: 'yes or no', expires_in_hours: 48 });
+    const result = await handler.execute({
+      ...base,
+      input: { ...base.input, context_bridge: bridge },
+      outboundContext,
+    } as unknown as ToolContext);
+    expect(result.success).toBe(true);
+    expect(register).toHaveBeenCalledOnce();
+    expect(JSON.stringify(register.mock.calls[0]![0])).toContain('yes or no');
+    expect(manifest.inputs).toHaveProperty('context_bridge');
+  });
+
+  it('declares each output once', () => {
+    const raw = readFileSync(join(import.meta.dirname, 'tool.json'), 'utf-8');
+    const outputs = raw.slice(raw.indexOf('"outputs"'), raw.indexOf('"permissions"'));
+    const keys = [...outputs.matchAll(/^\s*"([a-z_]+)":/gm)].map((m) => m[1]);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toContain('note');
   });
 });
