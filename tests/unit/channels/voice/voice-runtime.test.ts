@@ -3441,6 +3441,51 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     await runtime.endSession('s-stray-unmute', 'test');
   });
 
+  it('a mute and unmute during the greeting leave no hold for a later barge-in', async () => {
+    const outbound = new OutboundContextService(
+      { query: async () => ({ rows: [] }) } as never,
+      logger,
+    );
+    outbound.getActive = () => new Promise(() => {});
+    const llm = new FakeStreamProvider([replyScript('Afternoon only.'), replyScript('Afternoon only.')]);
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      outboundContextService: outbound,
+      historyReadTimeoutMs: 80,
+      pauseGraceMs: 60_000,
+    });
+    await runtime.startSession({
+      sessionId: 's-greet-mute',
+      conversationId: 'voice:s-greet-mute',
+      roomName: 'voice-s-greet-mute',
+      agentToken: 'tok',
+      caller: principalCaller(),
+    });
+
+    // The greeting is still loading context: no audio yet.
+    await delay(10);
+    transport.emitCallerMuted(true);
+    transport.emitCallerMuted(false);
+    await runtime.awaitIdle('s-greet-mute');
+    expect(llm.seenMessages).toHaveLength(0);
+
+    stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
+    await delay(20);
+    stt.emit({ text: 'just the', isFinal: false, speechFinal: false, confidence: 0.9 });
+    await delay(300);
+    stt.emit({ text: 'just the afternoon', isFinal: true, speechFinal: true, confidence: 0.9 });
+    await runtime.awaitIdle('s-greet-mute');
+
+    expect(llm.seenMessages).toHaveLength(1);
+    const messages = llm.seenMessages[0]!;
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: "what's on my calendar? just the afternoon",
+    });
+    await runtime.endSession('s-greet-mute', 'test');
+  });
+
   it('keeps a muted utterance when the pause grace ends the call', async () => {
     vi.useFakeTimers();
     try {

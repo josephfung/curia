@@ -1365,7 +1365,9 @@ export class VoiceRuntime {
           (controller.signal.aborted || session.callerMuted)
           && !session.ending && !audioPlayed && !toolInvoked;
         await this.safePersistIncomplete(opts.persistIncomplete, session, spokenForPairing, cancelledSilently);
-        if (!cancelledSilently) session.pauseHeld = false;
+        // Only a carry is held for unmute, and the greeting leaves none. A hold
+        // left from a greeting muted before audio would split a later barge-in.
+        if (!cancelledSilently || !opts.persistIncomplete) session.pauseHeld = false;
       }
     }
   }
