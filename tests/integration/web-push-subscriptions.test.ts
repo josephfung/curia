@@ -13,6 +13,7 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 describeIf('web push subscriptions (integration)', () => {
   let pool: pg.Pool;
   const sessionId = randomUUID();
+  const doomedSessionId = randomUUID();
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
@@ -24,7 +25,7 @@ describeIf('web push subscriptions (integration)', () => {
 
   afterAll(async () => {
     try {
-      await pool.query(`DELETE FROM sessions WHERE id = $1`, [sessionId]);
+      await pool.query(`DELETE FROM sessions WHERE id = ANY($1::uuid[])`, [[sessionId, doomedSessionId]]);
     } finally {
       await pool.end();
     }
@@ -41,15 +42,20 @@ describeIf('web push subscriptions (integration)', () => {
   });
 
   it('deletes the subscription when the session is deleted', async () => {
+    // Own session: the live-count case above leaves a row on sessionId.
+    await pool.query(
+      `INSERT INTO sessions (id, token_hash, expires_at) VALUES ($1, $2, NOW() + interval '1 hour')`,
+      [doomedSessionId, `test-${doomedSessionId}`],
+    );
     await pool.query(
       `INSERT INTO push_subscriptions (session_id, endpoint, p256dh, auth_secret)
        VALUES ($1, $2, 'p256', 'auth')`,
-      [sessionId, `https://fcm.googleapis.com/fcm/send/${sessionId}`],
+      [doomedSessionId, `https://fcm.googleapis.com/fcm/send/${doomedSessionId}`],
     );
-    const before = await pool.query(`SELECT id FROM push_subscriptions WHERE session_id = $1`, [sessionId]);
+    const before = await pool.query(`SELECT id FROM push_subscriptions WHERE session_id = $1`, [doomedSessionId]);
     expect(before.rows).toHaveLength(1);
-    await pool.query(`DELETE FROM sessions WHERE id = $1`, [sessionId]);
-    const after = await pool.query(`SELECT id FROM push_subscriptions WHERE session_id = $1`, [sessionId]);
+    await pool.query(`DELETE FROM sessions WHERE id = $1`, [doomedSessionId]);
+    const after = await pool.query(`SELECT id FROM push_subscriptions WHERE session_id = $1`, [doomedSessionId]);
     expect(after.rows).toHaveLength(0);
   });
 
