@@ -169,9 +169,9 @@ describe('CalendarCreateHoldHandler -- toggle ON (null)', () => {
   });
 
   it('returns a non-empty display string labelled with the timezone', async () => {
-    // Context uses America/Toronto with a June start date (UTC-04:00 / EDT).
-    // formatDisplayTimezone returns "EDT (UTC-04:00)" for this combination,
-    // so the display string must contain the UTC offset and displayTimezone must match.
+    // Context uses America/Toronto with a June start date (UTC-04:00 / EDT), so the
+    // hold's timestamps carry -04:00. displayTimezone is labelled from today's offset,
+    // which is EDT or EST depending on the time of year.
     const ctx = makeCtx({ toggleValue: null });
 
     const result = await handler.execute(ctx);
@@ -191,9 +191,8 @@ describe('CalendarCreateHoldHandler -- toggle ON (null)', () => {
       // displayTimezone should also be present and contain the same timezone info
       const displayTimezone = data.displayTimezone as string;
       expect(typeof displayTimezone).toBe('string');
-      const tzHasOffset = displayTimezone.includes('-04:00');
-      const tzHasAbbr = displayTimezone.includes('EDT');
-      expect(tzHasOffset || tzHasAbbr).toBe(true);
+      // The label reflects today's offset in Toronto (EDT or EST), not the hold's date.
+      expect(displayTimezone).toMatch(/^E[DS]T \(UTC-0[45]:00\)$/);
     }
   });
 });

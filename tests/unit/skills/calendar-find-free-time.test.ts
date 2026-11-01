@@ -258,7 +258,8 @@ describe('CalendarFindFreeTimeHandler', () => {
       expect(data.freeWindows[0].end).toBe('2026-04-06T09:00:00.000-04:00');
       expect(data.freeWindows[1].start).toBe('2026-04-06T10:00:00.000-04:00');
       expect(data.freeWindows[1].end).toBe('2026-04-06T12:00:00.000-04:00');
-      expect(data.displayTimezone).toContain('EDT');
+      // The label reflects today's offset in Toronto (EDT or EST), not the event's.
+      expect(data.displayTimezone).toMatch(/^E[DS]T \(UTC-0[45]:00\)$/);
     }
   });
 

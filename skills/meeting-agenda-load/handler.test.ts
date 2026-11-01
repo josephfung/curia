@@ -148,7 +148,8 @@ describe('meeting-agenda-load', () => {
     };
     expect(data.agenda.scheduledFor).toBe('2026-10-28T12:00:00.000-04:00');
     expect(data.agenda.history[0]?.date).toBe('2026-10-21T14:00:00.000-04:00');
-    expect(data.displayTimezone).toMatch(/UTC-04:00/);
+    // The label reflects today's offset in Toronto (EDT or EST), not the meeting's.
+    expect(data.displayTimezone).toMatch(/^E[DS]T \(UTC-0[45]:00\)$/);
     expect(parseAgendaLoadResult(JSON.stringify({ agenda: data.agenda }))).toMatchObject({
       scheduledFor: '2026-10-28T12:00:00.000-04:00',
       history: [expect.objectContaining({ date: '2026-10-21T14:00:00.000-04:00' })],
