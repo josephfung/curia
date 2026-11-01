@@ -3386,6 +3386,10 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     transport.emitCallerMuted(false);
     stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
     await delay(20);
+    // The barge-in is an interim; its final comes later. A stale hold would
+    // speak the first half alone in the gap between them.
+    stt.emit({ text: 'just the', isFinal: false, speechFinal: false, confidence: 0.9 });
+    await delay(300);
     stt.emit({ text: 'just the afternoon', isFinal: true, speechFinal: true, confidence: 0.9 });
     await runtime.awaitIdle('s-idle-barge');
 
