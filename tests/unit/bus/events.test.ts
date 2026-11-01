@@ -11,6 +11,7 @@ import {
   createVoiceSessionEnded,
   createOutboundNoReply,
   createSystemRestart,
+  createOperatorSession,
   createDocumentConsoleAction,
   createKgNodesMerged,
   createActivitySummary,
@@ -194,6 +195,22 @@ describe('Event Types', () => {
     expect(event.sourceLayer).toBe('system');
     expect(event.payload.bootedAt).toBe('2026-09-10T12:00:00.000Z');
     expect(event.payload.initiatedBy).toBe('operator');
+  });
+
+  it('creates an operator.session event', () => {
+    const event = createOperatorSession({
+      action: 'revoke',
+      stage: 'completed',
+      initiatedBy: 'session',
+      actorSessionId: 'actor-1',
+      sessionId: 'session-1',
+      kind: 'paired_device',
+      name: 'iPhone · Safari',
+    });
+    expect(event.type).toBe('operator.session');
+    expect(event.sourceLayer).toBe('system');
+    expect(event.payload.action).toBe('revoke');
+    expect(event.payload.sessionId).toBe('session-1');
   });
 
   it('creates a document.console_action event (#1822)', () => {

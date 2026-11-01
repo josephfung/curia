@@ -56,7 +56,7 @@ describeIf('/api/setup/* routes', () => {
   let bootStartedAtSetupMode: string;
   let bootStartedAtNormalMode: string;
   // Sessions intentionally empty — tests use the bootstrap-secret header.
-  const sessions: Map<string, number> = new Map();
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
   // Captured calls into the injected scheduleProcessExit hook; assert on this
   // instead of actually exiting the test runner.
   const processExitCalls: number[] = [];

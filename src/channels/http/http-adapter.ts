@@ -70,7 +70,9 @@ import type { OfficeIdentityService } from '../../identity/service.js';
 import type { ExecutiveProfileService } from '../../executive/service.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import type { AutonomyService } from '../../autonomy/autonomy-service.js';
-import { type SessionStore } from './session-auth.js';
+import { bindSessionRenewer, sessionExpiresAt, type SessionStore } from './session-auth.js';
+import { loadActiveSessions, SessionKeeper } from './console-sessions.js';
+import { sessionRoutes } from './routes/sessions.js';
 import type { Channel } from '../channel.js';
 import type { AuditLogRepo } from '../../audit/audit-log-repo.js';
 import { DEFAULT_SCRATCH_DOC_TTL_DAYS } from '../../agents/document-workspace.js';
@@ -295,17 +297,12 @@ export class HttpAdapter implements Channel {
     const sessions: SessionStore = new Map();
 
     // Restore active sessions from Postgres so existing browser tabs survive a process restart.
-    // Only rows that haven't expired yet are loaded; the cookie expiry on the client enforces the
-    // 24-hour TTL independently, so there's no risk of surfacing stale sessions here.
+    // Only rows that haven't expired yet are loaded. The idle window is 90 days and slides
+    // on use, so a deploy does not log anyone out (ADR-055).
     try {
-      const { rows } = await pool.query<{ token_hash: string; expires_at: Date }>(
-        'SELECT token_hash, expires_at FROM sessions WHERE expires_at > NOW()',
-      );
-      for (const row of rows) {
-        sessions.set(row.token_hash, row.expires_at.getTime());
-      }
-      if (rows.length > 0) {
-        logger.info({ count: rows.length }, 'Restored sessions from Postgres');
+      const restored = await loadActiveSessions(pool, sessions);
+      if (restored > 0) {
+        logger.info({ count: restored }, 'Restored sessions from Postgres');
       }
     } catch (err) {
       // 42P01 = undefined_table: migration 047 has not been applied yet. Log and continue so
@@ -332,8 +329,9 @@ export class HttpAdapter implements Channel {
     let isPruningCaptureTokens = false;
     const pruneInterval = setInterval(() => {
       const now = Date.now();
-      for (const [tokenHash, expiresAt] of sessions) {
-        if (now > expiresAt) sessions.delete(tokenHash);
+      for (const [tokenHash, entry] of sessions) {
+        const expiresAt = sessionExpiresAt(entry);
+        if (expiresAt !== undefined && now > expiresAt) sessions.delete(tokenHash);
       }
 
       // Prune expired secret-capture tokens. These rows hold only a hash + metadata (no secret
@@ -587,6 +585,16 @@ export class HttpAdapter implements Channel {
       });
     }
 
+    // Slide idle expiry for every console route that calls assertSecret. Bound on the
+    // shared map so the route files themselves do not each learn about renewal.
+    const secureCookies = appOrigin?.startsWith('https://') ?? false;
+    bindSessionRenewer(sessions, new SessionKeeper({
+      pool,
+      sessions,
+      secureCookies,
+      logger,
+    }));
+
     // Only register console session-authed routes when the secret is configured —
     // if unset, the routes don't exist at all (404) rather than leaking a 503 that
     // reveals the feature exists. Tasks/contacts/chat live under /api/* (#872);
@@ -595,13 +603,20 @@ export class HttpAdapter implements Channel {
       // secureCookies: true only when serving over HTTPS (i.e. APP_ORIGIN is https://).
       // In local dev (no APP_ORIGIN), cookies are set without the Secure flag so they
       // work on plain http://localhost.
-      const secureCookies = appOrigin?.startsWith('https://') ?? false;
       const consoleBase = { pool, logger, webAppBootstrapSecret, sessions };
+      await this.app.register(sessionRoutes, {
+        pool,
+        sessions,
+        webAppBootstrapSecret,
+        bus,
+        logger,
+      });
       await this.app.register(knowledgeGraphRoutes, {
         ...consoleBase,
         secureCookies,
         contactService: this.config.contactService,
         nodeMergeService: this.config.nodeMergeService,
+        bus,
       });
       await this.app.register(taskRoutes, {
         ...consoleBase,

@@ -743,6 +743,32 @@ interface SystemRestartPayload {
   initiatedBy: string;
 }
 
+// OperatorSessionPayload — a console session was created, paired, or ended, or
+// every other device was signed out (#2341). Audit-only. Never carries the token
+// or its hash.
+//
+// Destructive actions are two-stage, like document.console_action. `requested`
+// is published before the row is deleted. `completed` follows a successful
+// delete. `failed` means the delete threw and the session is still alive.
+export interface OperatorSessionPayload {
+  action: 'login' | 'logout' | 'revoke' | 'sign_out_others' | 'pair';
+  /** `completed` for login. Destructive actions use all three stages. */
+  stage: 'requested' | 'completed' | 'failed';
+  /** A console session, or the bootstrap-secret header with no cookie. */
+  initiatedBy: 'session' | 'bootstrap_secret';
+  /** sessions.id of the actor. Absent when initiatedBy is bootstrap_secret. */
+  actorSessionId?: string;
+  /** Public sessions.id of the session being ended or created. */
+  sessionId?: string;
+  kind?: 'browser' | 'paired_device';
+  /** Device label at the time of the action. */
+  name?: string;
+  /** How many sessions sign_out_others ended or attempted. */
+  revokedCount?: number;
+  /** sessions.id values sign_out_others targeted. */
+  revokedSessionIds?: string[];
+}
+
 // DocumentConsoleActionPayload — the principal changed or bulk-read the OKF working-
 // document store from the console Documents page (#1822, #1823). Audit-only: nothing
 // subscribes to act on it. The store holds sensitive personal content, so an export is
@@ -1554,6 +1580,12 @@ export interface SystemRestartEvent extends BaseEvent {
   payload: SystemRestartPayload;
 }
 
+export interface OperatorSessionEvent extends BaseEvent {
+  type: 'operator.session';
+  sourceLayer: 'system';
+  payload: OperatorSessionPayload;
+}
+
 export interface DocumentConsoleActionEvent extends BaseEvent {
   type: 'document.console_action';
   sourceLayer: 'system';
@@ -2137,6 +2169,7 @@ export type BusEvent =
   | ScheduleDriftPausedEvent  // Scheduler: job paused due to intent drift detection
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
   | SystemRestartEvent       // System: operator-initiated process restart (#1765)
+  | OperatorSessionEvent     // System: console session paired, revoked, or ended (#2341)
   | DocumentConsoleActionEvent // System: principal edited the document store from the console (#1822)
   | KgNodesMergedEvent       // Console: two knowledge-graph nodes merged (#2233)
   | ActivitySummaryEvent     // System: one-line summary of a finished conversational job (#2251)
@@ -3077,6 +3110,16 @@ export function createSystemRestart(payload: SystemRestartPayload): SystemRestar
     id: randomUUID(),
     timestamp: new Date(),
     type: 'system.restart',
+    sourceLayer: 'system',
+    payload,
+  };
+}
+
+export function createOperatorSession(payload: OperatorSessionPayload): OperatorSessionEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'operator.session',
     sourceLayer: 'system',
     payload,
   };

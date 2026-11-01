@@ -14,7 +14,7 @@ describeIf('Ant Farm REST routes', () => {
   let app: ReturnType<typeof Fastify>;
   let pool: pg.Pool;
   let repo: AuditLogRepo;
-  const sessions = new Map<string, number>();
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
   const TEST_SECRET = 'test-antfarm-secret';
   const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
   const sourceLayer = 'test-antfarm-routes';

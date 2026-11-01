@@ -9,6 +9,7 @@ import type { ChannelIdentity, Contact } from '../../../../../src/contacts/types
 import type { Pool } from 'pg';
 import type { Logger } from '../../../../../src/logger.js';
 import type { NodeMergeApi } from '../../../../../src/kg-merge/service.js';
+import type { EventBus } from '../../../../../src/bus/bus.js';
 import {
   InvalidResolutionError,
   MergeBlockedError,
@@ -653,6 +654,7 @@ async function buildWithMerge(
     contactService: contacts,
     sessions: new Map(),
     nodeMergeService: mergeService,
+    bus: { async publish() { /* login audit is not under test */ } } as unknown as EventBus,
   });
   return app;
 }

@@ -45,7 +45,7 @@ describe('assertSecret', () => {
   it('accepts a valid session cookie', () => {
     const token = 'valid-token-abc';
     // Map is keyed by hash; assertSecret hashes the cookie value before lookup.
-    sessions.set(hashToken(token), Date.now() + 60_000);
+    sessions.set(hashToken(token), { id: 'test-session', expiresAt: Date.now() + 60_000, renewedAt: Date.now() });
     const request = makeRequest({ sessionToken: token });
     const reply = makeReply();
     expect(assertSecret(request, reply as unknown as FastifyReply, configuredSecret, sessions)).toBe(true);
@@ -53,7 +53,7 @@ describe('assertSecret', () => {
 
   it('rejects an expired session cookie', () => {
     const token = 'expired-token';
-    sessions.set(hashToken(token), Date.now() - 1000);
+    sessions.set(hashToken(token), { id: 'test-session', expiresAt: Date.now() - 1000, renewedAt: Date.now() - 1000 });
     const request = makeRequest({ sessionToken: token });
     const reply = makeReply();
     expect(assertSecret(request, reply as unknown as FastifyReply, configuredSecret, sessions)).toBe(false);

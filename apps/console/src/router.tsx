@@ -20,6 +20,7 @@ const PersonalityPage = lazy(() => import('./pages/PersonalitySettingsPage'));
 const GhostwritingPage = lazy(() => import('./pages/GhostwritingSettingsPage'));
 const PosturePage = lazy(() => import('./pages/PostureSettingsPage'));
 const MemoryPage = lazy(() => import('./pages/MemorySettingsPage'));
+const DevicesPage = lazy(() => import('./pages/DevicesSettingsPage'));
 const SystemPage = lazy(() => import('./pages/SystemSettingsPage'));
 const ToolsPage = lazy(() =>
   import('./pages/RegistrySettings').then(m => ({ default: m.ToolsPage })),
@@ -137,6 +138,12 @@ const memoryRoute = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/memory',
   component: MemoryPage,
+});
+
+const devicesRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/devices',
+  component: DevicesPage,
 });
 
 // System is a standalone top-level page (peer to Tools/Agents/Channels), no
@@ -292,6 +299,7 @@ const routeTree = rootRoute.addChildren([
       postureRoute,
       autonomyRoute,
       memoryRoute,
+      devicesRoute,
       systemSettingsRedirect,
       assistantRedirect,
       workspaceRedirect,

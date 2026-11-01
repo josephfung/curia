@@ -24,6 +24,56 @@ describe('extractStructuredFields', () => {
     });
   });
 
+  it('maps a failed operator.session and a header-only sign-out', () => {
+    expect(extractStructuredFields(
+      'operator.session',
+      { action: 'revoke', stage: 'failed', initiatedBy: 'session', actorSessionId: 'actor-1', sessionId: 'session-1' },
+      'evt-session-fail',
+      logger,
+    )).toMatchObject({ outcome: 'failure', target_id: 'session-1', initiator_id: 'actor-1' });
+
+    expect(extractStructuredFields(
+      'operator.session',
+      { action: 'sign_out_others', stage: 'completed', initiatedBy: 'bootstrap_secret', revokedSessionIds: [] },
+      'evt-session-all',
+      logger,
+    )).toMatchObject({
+      outcome: 'success',
+      target_id: 'all_sessions',
+      initiator_type: 'system',
+      initiator_id: 'bootstrap_secret',
+    });
+
+    expect(extractStructuredFields(
+      'operator.session',
+      { action: 'login', stage: 'nope', initiatedBy: 'bootstrap_secret' },
+      'evt-session-stage',
+      logger,
+    ).outcome).toBe(EXTRACTION_FAILED);
+  });
+
+  it('maps operator.session onto the session and the actor', () => {
+    expect(extractStructuredFields(
+      'operator.session',
+      {
+        action: 'revoke',
+        stage: 'requested',
+        initiatedBy: 'session',
+        actorSessionId: 'actor-1',
+        sessionId: 'session-1',
+      },
+      'evt-session',
+      logger,
+    )).toMatchObject({
+      action: 'revoke',
+      outcome: 'pending',
+      target_type: 'session',
+      target_id: 'session-1',
+      initiator_type: 'human',
+      initiator_id: 'actor-1',
+    });
+  });
+
   it('maps a requested document.console_action as pending (write-ahead)', () => {
     expect(extractStructuredFields(
       'document.console_action',

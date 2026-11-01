@@ -110,6 +110,32 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     initiator_id: str(p, 'initiatedBy', fail),
   }),
 
+  // Console session login, logout, revoke, pairing, and sign-out-others (#2341).
+  // target is the session acted on, the first id in a sign-out-others batch,
+  // or all_sessions when that batch revoked nothing.
+  // initiator is the acting session, or bootstrap_secret when the access key acted.
+  'operator.session': (p, fail) => {
+    const sessionId = typeof p.sessionId === 'string' ? p.sessionId : undefined;
+    const revoked = Array.isArray(p.revokedSessionIds)
+      ? p.revokedSessionIds.find((id): id is string => typeof id === 'string')
+      : undefined;
+    const actor = typeof p.actorSessionId === 'string' ? p.actorSessionId : undefined;
+    const target = sessionId ?? revoked
+      ?? (p.action === 'sign_out_others' ? 'all_sessions' : actor);
+    const stage = p.stage === 'requested' ? 'pending'
+      : p.stage === 'failed' ? 'failure'
+      : p.stage === 'completed' ? 'success'
+      : fail('stage');
+    return {
+      action: str(p, 'action', fail),
+      outcome: stage,
+      target_type: 'session',
+      target_id: target ?? str(p, 'action', fail),
+      initiator_type: p.initiatedBy === 'bootstrap_secret' ? 'system' : 'human',
+      initiator_id: actor ?? (p.initiatedBy === 'bootstrap_secret' ? 'bootstrap_secret' : str(p, 'initiatedBy', fail)),
+    };
+  },
+
   // Same-contact follow-up drained into a live turn (#2018). The host task id
   // is not a structured column here — the logger maps payload.hostTaskEventId
   // onto task_id, and the factory sets parent_event_id to the inbound. No

@@ -47,7 +47,7 @@ describe('resolveMemoryRetentionSnapshot', () => {
 });
 
 describe('GET /api/memory/retention', () => {
-  const sessions = new Map<string, number>();
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
 
   beforeEach(() => sessions.clear());
 
@@ -76,7 +76,7 @@ describe('GET /api/memory/retention', () => {
 
   it('accepts a valid session cookie', async () => {
     const token = 'valid-session-token';
-    sessions.set(hashToken(token), Date.now() + 60_000);
+    sessions.set(hashToken(token), { id: 'test-session', expiresAt: Date.now() + 60_000, renewedAt: Date.now() });
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',

@@ -82,7 +82,7 @@ async function registerConsoleRoutes(
     pool: Pool;
     logger: Logger;
     webAppBootstrapSecret: string | undefined;
-    sessions: Map<string, number>;
+    sessions: Map<string, { id: string; expiresAt: number; renewedAt: number }>;
     contactService: ContactService;
     bus?: EventBus;
     eventRouter?: EventRouter;
@@ -102,6 +102,7 @@ async function registerConsoleRoutes(
       ...consoleBase,
       secureCookies: false,
       contactService: opts.contactService,
+      bus: opts.bus ?? createMockBus(),
     });
   }
   if (include.has('tasks')) {
