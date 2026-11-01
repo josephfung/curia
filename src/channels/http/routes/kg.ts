@@ -48,8 +48,8 @@ export interface KnowledgeGraphRouteOptions {
   // Optional so callers that never mount the merge (tests) need not build one; when absent
   // those two routes answer 503.
   nodeMergeService?: NodeMergeApi;
-  /** When set, a successful sign-in is audited as operator.session. */
-  bus?: EventBus;
+  /** A successful sign-in is audited as operator.session. */
+  bus: EventBus;
 }
 
 interface KgNodeRow {
@@ -146,28 +146,26 @@ export async function knowledgeGraphRoutes(
       return reply.status(503).send({ error: 'Login is temporarily unavailable. Please try again.' });
     }
 
-    if (bus) {
-      const name = deviceNameFromUserAgent(userAgent);
+    const name = deviceNameFromUserAgent(userAgent);
+    try {
+      // The access key is what authenticated. The new session is the target.
+      await bus.publish('system', createOperatorSession({
+        action: 'login',
+        stage: 'completed',
+        initiatedBy: 'bootstrap_secret',
+        sessionId: issued.id,
+        kind: 'browser',
+        name,
+      }));
+    } catch (err) {
+      logger.error({ err, sessionId: issued.id }, 'POST /auth: failed to record login — removing the new session');
       try {
-        await bus.publish('system', createOperatorSession({
-          action: 'login',
-          stage: 'completed',
-          initiatedBy: 'session',
-          actorSessionId: issued.id,
-          sessionId: issued.id,
-          kind: 'browser',
-          name,
-        }));
-      } catch (err) {
-        logger.error({ err, sessionId: issued.id }, 'POST /auth: failed to record login — removing the new session');
-        try {
-          await deleteSession(pool, issued.id);
-        } catch (deleteErr) {
-          logger.error({ err: deleteErr, sessionId: issued.id }, 'POST /auth: failed to roll back an unaudited session');
-        }
-        evictTokenHashes(sessions, [issued.tokenHash]);
-        return reply.status(500).send({ error: 'Failed to record the sign-in. Please try again.' });
+        await deleteSession(pool, issued.id);
+      } catch (deleteErr) {
+        logger.error({ err: deleteErr, sessionId: issued.id }, 'POST /auth: failed to roll back an unaudited session');
       }
+      evictTokenHashes(sessions, [issued.tokenHash]);
+      return reply.status(500).send({ error: 'Failed to record the sign-in. Please try again.' });
     }
 
     reply.setCookie('curia_session', issued.token, sessionCookieOptions(secureCookies));

@@ -110,10 +110,7 @@ function DevicesSection() {
 
   async function revoke(device: DeviceSession) {
     const label = deviceLabel(device);
-    const prompt = device.current
-      ? `Sign out ${label}? This ends your session on this device.`
-      : `Sign out ${label}?`;
-    if (!window.confirm(prompt)) return;
+    if (!window.confirm(`Sign out ${label}?`)) return;
     setBusy(true);
     setActionError(null);
     try {
@@ -125,11 +122,6 @@ function DevicesSection() {
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { error?: string } | null;
         throw new Error(body?.error ?? 'Could not revoke the device');
-      }
-      const body = await res.json() as { current?: boolean };
-      if (body.current) {
-        await navigate({ to: '/login' });
-        return;
       }
       await load();
     } catch (err) {

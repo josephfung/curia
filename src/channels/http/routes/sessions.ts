@@ -145,7 +145,7 @@ export async function sessionRoutes(
     const body = request.body as { name?: unknown };
     const name = normalizeDeviceName(body?.name);
     if (!name) {
-      return reply.status(400).send({ error: 'Name must be 1–80 characters.' });
+      return reply.status(400).send({ error: 'Name must be 1–80 characters and cannot include hidden characters.' });
     }
     let renamed: boolean;
     try {
@@ -243,7 +243,9 @@ function actorFromRequest(
   const token = readSessionCookie(request);
   if (!token) return { initiatedBy: 'bootstrap_secret' };
   const entry = sessions.get(hashToken(token));
-  if (!entry) return { initiatedBy: 'bootstrap_secret' };
+  // An expired cookie still in the map did not authenticate this request.
+  // The header did, so the actor is the access key.
+  if (!entry || entry.expiresAt <= Date.now()) return { initiatedBy: 'bootstrap_secret' };
   return { initiatedBy: 'session', actorSessionId: entry.id };
 }
 

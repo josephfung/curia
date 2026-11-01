@@ -81,7 +81,7 @@ interface PendingCookie {
  * onto the reply header first. The symbol is the plugin's private key
  * (`fastify.reply.setCookies`); there is no public flush.
  */
-function flushPendingCookies(reply: FastifyReply): void {
+function flushPendingCookies(reply: FastifyReply, logger?: Pick<Logger, 'warn'>): void {
   const holder = reply as unknown as Record<symbol, unknown>;
   let jar: Map<string, PendingCookie> | undefined;
   for (const sym of Object.getOwnPropertySymbols(reply)) {
@@ -93,15 +93,18 @@ function flushPendingCookies(reply: FastifyReply): void {
   const serialize = (reply.server as {
     serializeCookie?: (name: string, value: string, opts?: Record<string, unknown>) => string;
   }).serializeCookie;
-  if (!serialize) return;
+  if (!serialize) {
+    logger?.warn('SSE renewal cookie was dropped: serializeCookie is unavailable');
+    return;
+  }
   const lines: string[] = [];
-  const existing = reply.getHeader('set-cookie');
-  if (typeof existing === 'string') lines.push(existing);
-  else if (Array.isArray(existing)) lines.push(...existing.map(String));
   for (const cookie of jar.values()) {
     lines.push(serialize(cookie.name, cookie.value, cookie.opts));
   }
   jar.clear();
+  // reply.header appends to an existing set-cookie. Clear first so a cookie
+  // already on the reply is not sent twice.
+  reply.removeHeader('set-cookie');
   reply.header('set-cookie', lines.length === 1 ? lines[0]! : lines);
 }
 
@@ -110,8 +113,12 @@ function flushPendingCookies(reply: FastifyReply): void {
  * onSend hook. Copy a renewal Set-Cookie onto the raw response or the browser
  * cookie lags the server's expiry until the next non-stream request.
  */
-export function writeSseHead(reply: FastifyReply, headers: Record<string, string>): void {
-  flushPendingCookies(reply);
+export function writeSseHead(
+  reply: FastifyReply,
+  headers: Record<string, string>,
+  logger?: Pick<Logger, 'warn'>,
+): void {
+  flushPendingCookies(reply, logger);
   const setCookie = reply.getHeader('set-cookie');
   const merged: Record<string, string | string[] | number> = { ...headers };
   if (typeof setCookie === 'string' || typeof setCookie === 'number') merged['set-cookie'] = String(setCookie);
@@ -154,12 +161,19 @@ export function deviceNameFromUserAgent(ua: string | null): string {
   return `${device} · ${browser}`;
 }
 
-/** Null when the name is empty, too long, or contains a control character. */
+/**
+ * Hidden characters a device name must not contain. U+200D (ZWJ) is allowed
+ * so an emoji sequence such as "👨‍💻 laptop" is a valid name.
+ * Cc, bidi controls, zero-width / invisible characters, and line separators.
+ */
+const HIDDEN_NAME_CHARS = /[\p{Cc}\u202A-\u202E\u2066-\u2069\u200B\u2060\uFEFF\u2028\u2029]/u;
+
+/** Null when the name is empty, too long, or contains a hidden character. */
 export function normalizeDeviceName(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const name = raw.trim();
   if (name.length < 1 || name.length > SESSION_NAME_MAX) return null;
-  if (/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(name)) return null;
+  if (HIDDEN_NAME_CHARS.test(name)) return null;
   return name;
 }
 

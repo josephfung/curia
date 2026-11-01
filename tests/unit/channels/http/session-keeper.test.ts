@@ -35,6 +35,7 @@ describe('device labels', () => {
     expect(normalizeDeviceName('line\nbreak')).toBeNull();
     expect(normalizeDeviceName(`hide${'\u202E'}me`)).toBeNull();
     expect(normalizeDeviceName(`zero${'\u200B'}width`)).toBeNull();
+    expect(normalizeDeviceName('👨‍💻 laptop')).toBe('👨‍💻 laptop');
     expect(normalizeDeviceName(12)).toBeNull();
   });
 

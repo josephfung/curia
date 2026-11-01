@@ -66,11 +66,11 @@ describe('POST /auth login audit', () => {
       expect(event.payload).toMatchObject({
         action: 'login',
         stage: 'completed',
-        initiatedBy: 'session',
-        actorSessionId: SESSION_ID,
+        initiatedBy: 'bootstrap_secret',
         sessionId: SESSION_ID,
         kind: 'browser',
       });
+      expect(event.payload.actorSessionId).toBeUndefined();
     }
     expect(sessions.size).toBe(1);
     await app.close();

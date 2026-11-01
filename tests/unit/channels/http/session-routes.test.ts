@@ -314,6 +314,33 @@ describe('session routes', () => {
     await app.close();
   });
 
+  it('attributes a header request to the access key when the cookie has expired', async () => {
+    const token = 'expired-cookie';
+    const tokenHash = hashToken(token);
+    const sessions: SessionStore = new Map([[
+      tokenHash,
+      { expiresAt: Date.now() - 1_000, renewedAt: Date.now() - 1_000, id: SESSION_ID },
+    ]]);
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+    const bus = makeBus();
+    const { app } = await build({ sessions, query, bus });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/revoke-others',
+      headers: { cookie: `curia_session=${token}`, 'x-web-bootstrap-secret': SECRET },
+    });
+    expect(res.statusCode).toBe(200);
+    const event = bus.published[0]!.event;
+    if (event.type === 'operator.session') {
+      expect(event.payload.initiatedBy).toBe('bootstrap_secret');
+      expect(event.payload.actorSessionId).toBeUndefined();
+    }
+    await app.close();
+  });
+
   it('revoke-others with only the bootstrap header ends every live session', async () => {
     const query = vi.fn(async (sql: string, params?: unknown[]) => {
       if (sql.includes('SELECT')) {

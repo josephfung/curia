@@ -7,7 +7,6 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   issueSession,
   loadActiveSessions,
-  SESSION_RENEW_INTERVAL_MS,
   SessionKeeper,
 } from '../../src/channels/http/console-sessions.js';
 import { assertSecret, bindSessionRenewer, hashToken, type SessionStore } from '../../src/channels/http/session-auth.js';
@@ -69,20 +68,19 @@ describeIf('console sessions survive a restart (integration)', () => {
   });
 
   it('keeps a slid expiry after the in-memory map is reloaded', async () => {
+    const day = 24 * 60 * 60 * 1000;
     const first = new Map() as SessionStore;
     const issued = await issueSession(pool, first, {
       kind: 'browser',
       name: 'Mac · Chrome',
       userAgent: 'Mozilla/5.0 (test)',
+      now: Date.now() - 30 * day,
     });
     created.push(issued.tokenHash);
-    const planted = first.get(issued.tokenHash);
-    expect(planted).toBeDefined();
-    first.set(issued.tokenHash, {
-      id: planted!.id,
-      expiresAt: planted!.expiresAt,
-      renewedAt: Date.now() - SESSION_RENEW_INTERVAL_MS - 1_000,
-    });
+    await pool.query(
+      'UPDATE sessions SET name = NULL, user_agent = NULL WHERE token_hash = $1',
+      [issued.tokenHash],
+    );
     const keeper = new SessionKeeper({
       pool,
       sessions: first,
@@ -91,14 +89,20 @@ describeIf('console sessions survive a restart (integration)', () => {
     });
     bindSessionRenewer(first, keeper);
     const reply = { setCookie() { /* cookie is not under test */ } } as unknown as FastifyReply;
-    keeper.touch(issued.tokenHash, issued.token, reply, 'Mozilla/5.0 (test)');
+    keeper.touch(issued.tokenHash, issued.token, reply, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await viWaitForRow(pool, issued.tokenHash);
 
     const restarted = new Map() as SessionStore;
     await loadActiveSessions(pool, restarted);
     const restored = restarted.get(issued.tokenHash);
     expect(restored).toBeDefined();
-    expect(restored!.expiresAt).toBeGreaterThan(Date.now() + 80 * 24 * 60 * 60 * 1000);
+    expect(restored!.expiresAt).toBeGreaterThan(Date.now() + 89 * day);
+    const row = await pool.query(
+      'SELECT name, user_agent FROM sessions WHERE token_hash = $1',
+      [issued.tokenHash],
+    );
+    expect(row.rows[0]?.name).toBe('Mac · Chrome');
+    expect(row.rows[0]?.user_agent).toContain('Chrome/120');
   });
 });
 

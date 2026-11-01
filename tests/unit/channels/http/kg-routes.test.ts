@@ -102,6 +102,7 @@ async function registerConsoleRoutes(
       ...consoleBase,
       secureCookies: false,
       contactService: opts.contactService,
+      bus: opts.bus ?? createMockBus(),
     });
   }
   if (include.has('tasks')) {

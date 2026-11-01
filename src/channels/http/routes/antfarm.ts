@@ -144,7 +144,7 @@ export async function antfarmRoutes(
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
-    });
+    }, logger);
     reply.raw.write(':connected\n\n');
 
     const cleanup = eventRouter.addAntfarmClient({ res: reply.raw });

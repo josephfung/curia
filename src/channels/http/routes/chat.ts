@@ -117,7 +117,7 @@ export async function chatRoutes(
       'Connection': 'keep-alive',
       // Nginx/ALB/Cloudflare buffer SSE by default — this header disables that.
       'X-Accel-Buffering': 'no',
-    });
+    }, logger);
     reply.raw.write(':connected\n\n');
 
     const cleanup = eventRouter.addSseClient({
