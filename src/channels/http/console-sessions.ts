@@ -102,9 +102,8 @@ function flushPendingCookies(reply: FastifyReply, logger?: Pick<Logger, 'warn'>)
     lines.push(serialize(cookie.name, cookie.value, cookie.opts));
   }
   jar.clear();
-  // reply.header appends to an existing set-cookie. Clear first so a cookie
-  // already on the reply is not sent twice.
-  reply.removeHeader('set-cookie');
+  // Fastify 5 appends when set-cookie is already present, so a header cookie
+  // set before the jar is kept alongside the renewal cookie.
   reply.header('set-cookie', lines.length === 1 ? lines[0]! : lines);
 }
 

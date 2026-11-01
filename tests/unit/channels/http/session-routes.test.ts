@@ -501,4 +501,22 @@ describe('session routes', () => {
     expect(String(res.headers['set-cookie'])).toContain('Max-Age=7776000');
     await app.close();
   });
+
+  it('keeps a set-cookie already on the reply when flushing the session jar', async () => {
+    const app = Fastify();
+    await app.register(cookie);
+    app.get('/stream', async (_request, reply) => {
+      reply.header('set-cookie', 'other=1; Path=/');
+      reply.setCookie('curia_session', 'renewed-token', sessionCookieOptions(true));
+      reply.hijack();
+      writeSseHead(reply, { 'Content-Type': 'text/event-stream' });
+      reply.raw.end('data: ok\n\n');
+    });
+    const res = await app.inject({ method: 'GET', url: '/stream' });
+    const setCookie = res.headers['set-cookie'];
+    const cookies = Array.isArray(setCookie) ? setCookie.join('\n') : String(setCookie);
+    expect(cookies).toContain('other=1');
+    expect(cookies).toContain('curia_session=renewed-token');
+    await app.close();
+  });
 });

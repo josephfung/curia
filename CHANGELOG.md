@@ -217,6 +217,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Console logout** — an already-ended session still returns to the login page. (#2341)
+- **SSE cookies** — an existing reply cookie stays when the session cookie is flushed. (#2341)
 
 ### Removed
 
