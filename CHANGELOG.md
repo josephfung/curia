@@ -119,6 +119,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Voice barge-in** — logged at info with detection time and queued audio; console calls drop queued audio. (#2379)
 - **Time saved** — rough human-time estimate, on the same clock as Done-for-you. (#2349)
 - **Time saved** — undescribed calls add 0.098 minutes; known zero-effort tools add none. (#2349)
+- **Time saved** — the tile footnote is one short line. (#2349)
 - **agent.task / llm.call / llm.error / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started`, `reasoning_delta` and `output_started` added. (#2371)
 - **LLM calls** — agent and infra calls on Anthropic and OpenRouter now stream internally. (#2371)
 - **Console API paths** — tasks, contacts, chat and grants move to `/api/*`; old tabs work for one release. (#872)

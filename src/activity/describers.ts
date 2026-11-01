@@ -742,21 +742,21 @@ function flatMinutes(toolName: string): number {
   return describer.minutes;
 }
 
-/** The tile's footnote. Numbers come from the describers so the sentence cannot drift. */
+/** Always-visible footnote. One short line; the weights live on hover. */
 export function timeSavedHelp(): string {
+  return 'Rough estimate of equivalent human effort.';
+}
+
+/**
+ * Hover note for the number and the footnote. Weights come from the describers
+ * so the sentence cannot drift.
+ */
+export function timeSavedDetail(): string {
   const meeting = flatMinutes('calendar-create-event');
   const reply = flatMinutes('ceo-inbox-draft-reply');
   const filing = flatMinutes('email-archive');
   const filingText = filing === 0.5 ? '½' : String(filing);
-  return `Rough estimate of your time behind Curia's actions. A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. Known lookups don't count; other tool work counts a few seconds each.`;
-}
-
-/**
- * Extra note for the tile's tooltip. The footnote already states the definition,
- * so this is only the part that sentence does not say.
- */
-export function timeSavedDetail(): string {
-  return `A new document ≈${DOC_CREATED_MINUTES} min, an edit ≈${DOC_EDIT_MINUTES}. Scratch notes don't count. Each action counts, including a repeat.`;
+  return `A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. A new document ≈${DOC_CREATED_MINUTES} min, an edit ≈${DOC_EDIT_MINUTES}. Known lookups don't count. Each action counts, including a repeat.`;
 }
 
 /** Research kind of a web tool, or undefined. */
