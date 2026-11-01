@@ -140,13 +140,22 @@ export async function chatRoutes(
         conversation_id: conversationId,
         content: body.message,
         client_message_id: clientMessageId,
+        timestamp: new Date().toISOString(),
       });
     } catch (err) {
       // The inbound is already staged. A missed echo shows up on the next
       // history load; failing the ack would make the client send it twice.
       logger.error({ err, conversationId }, 'chat user-message echo failed');
     }
-    void staged.deliver();
+    // deliver() cannot reject today (the bus swallows subscriber errors).
+    // Attach the catch anyway so a future throw is a log, not an unhandled rejection.
+    try {
+      void Promise.resolve(staged.deliver()).catch((err: unknown) => {
+        logger.error({ err, conversationId }, 'chat message deliver failed');
+      });
+    } catch (err) {
+      logger.error({ err, conversationId }, 'chat message deliver failed');
+    }
 
     // Ack: the reply is delivered over the SSE stream, not this response.
     return reply.status(202).send({ conversationId });
@@ -168,10 +177,11 @@ export async function chatRoutes(
   });
 
   /**
-   * GET /api/chat/stream — SSE stream of agent events for the web console.
+   * GET /api/chat/stream — SSE stream of the shared web thread.
    *
-   * Streams outbound.message, tool.invoke, and tool.result events from the EventRouter,
-   * optionally filtered by ?conversationId=xxx.
+   * Always the server-owned thread. A `conversationId` that differs is logged
+   * and ignored. Events: `user.message`, `message`, `tool.invoke`,
+   * `tool.result`, `message.rejected`, and a `ping` data heartbeat.
    */
   app.get('/api/chat/stream', CONSOLE_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;

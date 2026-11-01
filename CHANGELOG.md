@@ -215,6 +215,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Disclosure audit** — **Public API:** `outbound.delivered` gains `disclosed`, labels of details sent as written. (#2312)
 - **Draft sends** — a draft edited after its checks is not sent. (#2312)
 
+### Fixed
+
+
 ### Removed
 
 - **`/api/messages`** — **public API:** bearer message and SSE routes removed; console chat is `/api/chat`. (#999)

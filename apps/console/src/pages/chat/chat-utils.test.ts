@@ -91,6 +91,37 @@ describe('mergeLiveTail', () => {
     expect(merged[1]?.id).toBe('live-phone');
   });
 
+  it('keeps rows above the newest page', () => {
+    const history = [user('q2', 'h-q2'), agent('r2', 'h-r2'), user('q3', 'h-q3'), agent('r3', 'h-r3')];
+    const live = [
+      user('q1', 'h-q1'),
+      agent('r1', 'h-r1'),
+      user('q2', 'h-q2'),
+      agent('r2', 'h-r2'),
+      user('q3', 'live-q3'),
+      status('working', 'live-status'),
+    ];
+    const merged = mergeLiveTail(history, live);
+    expect(merged.map((m) => m.id)).toEqual(['h-q1', 'h-r1', 'h-q2', 'h-r2', 'live-q3', 'live-status', 'h-r3']);
+  });
+
+  it('does not pair an older repeated reply with the new one', () => {
+    const history = [
+      user('ok', 'old-ok'),
+      agent('Done.', 'old-done'),
+      user('ok', 'h-ok'),
+      agent('Done.', 'h-done'),
+    ];
+    const live = [
+      user('ok', 'old-ok'),
+      agent('Done.', 'old-done'),
+      user('ok', 'live-ok'),
+      status('working', 'live-status'),
+    ];
+    const merged = mergeLiveTail(history, live);
+    expect(merged.map((m) => m.id)).toEqual(['old-ok', 'old-done', 'live-ok', 'live-status', 'h-done']);
+  });
+
   it('does not duplicate a turn when a status row sits between the live messages', () => {
     const history = [user('question', 'h-user'), agent('answer', 'h-agent')];
     const live = [

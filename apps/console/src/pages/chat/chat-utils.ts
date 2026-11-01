@@ -123,39 +123,95 @@ export function nextReconnectDelayMs(attempt: number): number {
 }
 
 /**
- * Fold a live tail into a history page. The same turn seen both ways is kept
- * once, and the live copy wins so its id (the sender's clientMessageId) stays.
- * Status rows are not in history, so they are skipped while matching and kept
- * in the result.
+ * Fold a history page into the thread already on screen.
+ *
+ * The prefix of `live` (rows `loadMore` already pulled, or an older page) stays.
+ * A page row whose id is already on screen is dropped. The rest is matched, by
+ * kind and text, only against the live tail — echoes and `makeMessage` ids —
+ * so an older "ok" cannot pair with a new one. The live copy wins. Whatever
+ * is still unmatched is appended.
  */
 export function mergeLiveTail(history: Message[], live: Message[]): Message[] {
   if (live.length === 0) return history;
   if (history.length === 0) return live;
 
-  const pairs: Array<{ h: number; l: number }> = [];
-  let hCursor = 0;
-  for (let l = 0; l < live.length; l += 1) {
-    const newer = live[l]!;
-    if (newer.kind === 'status') continue;
-    for (let h = hCursor; h < history.length; h += 1) {
-      const older = history[h]!;
-      if (older.kind === newer.kind && older.text === newer.text) {
-        pairs.push({ h, l });
-        hCursor = h + 1;
+  const historyIds = new Set(history.map((message) => message.id));
+  const liveIds = new Set(live.map((message) => message.id));
+  let firstShared = -1;
+  let lastShared = -1;
+  for (let i = 0; i < live.length; i += 1) {
+    if (!historyIds.has(live[i]!.id)) continue;
+    if (firstShared === -1) firstShared = i;
+    lastShared = i;
+  }
+
+  const incoming = history.filter((message) => !liveIds.has(message.id));
+  if (firstShared === -1) return foldByText(history, live);
+
+  const prefix = live.slice(0, firstShared);
+  const overlap = live.slice(firstShared, lastShared + 1);
+  const tail = live.slice(lastShared + 1);
+  return [...prefix, ...overlap, ...appendUnmatched(incoming, tail)];
+}
+
+/**
+ * Keep `tail` in order. A tail row that matches the next incoming row by kind
+ * and text consumes it (the tail copy wins). Incoming rows that never matched
+ * are appended, so a status row between them stays put.
+ */
+function appendUnmatched(incoming: Message[], tail: Message[]): Message[] {
+  const used = new Set<number>();
+  let cursor = 0;
+  const out: Message[] = [];
+  for (const live of tail) {
+    if (live.kind !== 'status') {
+      for (let j = cursor; j < incoming.length; j += 1) {
+        const row = incoming[j]!;
+        if (row.kind === live.kind && row.text === live.text) {
+          used.add(j);
+          cursor = j + 1;
+          break;
+        }
+      }
+    }
+    out.push(live);
+  }
+  for (let j = 0; j < incoming.length; j += 1) {
+    if (!used.has(j)) out.push(incoming[j]!);
+  }
+  return out;
+}
+
+/** Match `page` onto `tail` by kind and text. The tail copy wins. Status rows stay. */
+function foldByText(page: Message[], tail: Message[]): Message[] {
+  const usedTail = new Set<number>();
+  const out: Message[] = [];
+  let cursor = 0;
+  for (const row of page) {
+    let matched = -1;
+    for (let j = cursor; j < tail.length; j += 1) {
+      const live = tail[j]!;
+      if (live.kind === 'status') continue;
+      if (live.kind === row.kind && live.text === row.text) {
+        matched = j;
         break;
       }
     }
+    if (matched < 0) {
+      out.push(row);
+      continue;
+    }
+    for (let j = cursor; j <= matched; j += 1) {
+      const live = tail[j]!;
+      if (j === matched || live.kind === 'status') out.push(live);
+      usedTail.add(j);
+    }
+    cursor = matched + 1;
   }
-  if (pairs.length === 0) return [...history, ...live];
-
-  const first = pairs[0]!;
-  const last = pairs[pairs.length - 1]!;
-  return [
-    ...history.slice(0, first.h),
-    ...live.slice(0, first.l).filter((message) => message.kind === 'status'),
-    ...live.slice(first.l),
-    ...history.slice(last.h + 1),
-  ];
+  for (let j = 0; j < tail.length; j += 1) {
+    if (!usedTail.has(j)) out.push(tail[j]!);
+  }
+  return out;
 }
 
 /**

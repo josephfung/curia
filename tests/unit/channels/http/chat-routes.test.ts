@@ -149,12 +149,13 @@ describe('chatRoutes', () => {
       conversationId: 'server-thread',
       content: 'What is on the agenda?',
     });
-    expect(eventRouter.broadcastChatEvent).toHaveBeenCalledWith('server-thread', {
+    expect(eventRouter.broadcastChatEvent).toHaveBeenCalledWith('server-thread', expect.objectContaining({
       type: 'user.message',
       conversation_id: 'server-thread',
       content: 'What is on the agenda?',
       client_message_id: 'client-msg-1',
-    });
+      timestamp: expect.any(String),
+    }));
     expect(eventRouter.waitForResponse).not.toHaveBeenCalled();
 
     await app.close();

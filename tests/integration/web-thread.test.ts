@@ -17,6 +17,8 @@ describeIf('web thread (integration)', () => {
     'wt-web-archived',
     'wt-signal-newer',
     'wt-null-channel',
+    'wt-race-a',
+    'wt-race-b',
   ];
 
   beforeAll(async () => {
@@ -65,12 +67,18 @@ describeIf('web thread (integration)', () => {
 
   it('concurrent first use agrees on one id', async () => {
     await pool.query('DELETE FROM web_thread WHERE id = 1');
+    await pool.query(
+      `UPDATE working_memory SET archived = true
+       WHERE conversation_id = ANY($1::text[])`,
+      [['wt-web-old', 'wt-web-new']],
+    );
     clearWebThreadCache(pool);
     const [a, b] = await Promise.all([
-      getOrCreateWebThread(pool),
-      getOrCreateWebThread(pool),
+      getOrCreateWebThread(pool, { newId: () => 'wt-race-a' }),
+      getOrCreateWebThread(pool, { newId: () => 'wt-race-b' }),
     ]);
     expect(a).toBe(b);
+    expect(['wt-race-a', 'wt-race-b']).toContain(a);
     const stored = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
     expect(stored.rows[0]?.conversation_id).toBe(a);
   });
