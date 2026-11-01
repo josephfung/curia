@@ -155,6 +155,35 @@ describe('VoiceTurnRunner', () => {
     expect(provider.streamCalls).toBe(2);
   });
 
+  // A calendar ask took three tool rounds on prod calls (delegate refused, date-resolve,
+  // delegate) and the caller heard the filler three times (#2379).
+  it('speaks the filler once per turn, however many tool rounds it takes', async () => {
+    const call = (id: string, name: string): ToolCall => ({ id, name, input: {} });
+    const provider = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [call('c1', 'delegate')], content: '', usage, provenance }],
+      [{ type: 'tool_use', toolCalls: [call('c2', 'date-resolve')], content: '', usage, provenance }],
+      [{ type: 'tool_use', toolCalls: [call('c3', 'delegate')], content: '', usage, provenance }],
+      [textDelta('You have two things today. '), { type: 'message_end', content: 'You have two things today.', usage, provenance }],
+    ]);
+    const fillers: string[] = [];
+    const runner = new VoiceTurnRunner({
+      provider,
+      model: 'fake',
+      logger,
+      tools: [{ name: 'delegate', description: 'd', input_schema: { type: 'object', properties: {} } }],
+      invokeTool: async () => ({ content: 'ok' }),
+      onFiller: async text => {
+        fillers.push(text);
+      },
+      onSpeechText: async () => {},
+    });
+
+    const result = await runner.runTurn({ messages: [{ role: 'user', content: 'calendar?' }], signal: new AbortController().signal });
+
+    expect(result.toolRounds).toBe(3);
+    expect(fillers).toEqual(['One moment.']);
+  });
+
   it('uses a placeholder tool result when invokeTool is not provided', async () => {
     const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
     let capturedResultContent: string | undefined;

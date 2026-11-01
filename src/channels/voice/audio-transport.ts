@@ -28,4 +28,16 @@ export interface AudioTransport {
   onClose(cb: (reason: AudioTransportCloseReason) => void): void;
   /** Publish an outbound (assistant / TTS) audio frame to the remote peer. */
   publishAudio(frame: PcmFrame): Promise<void>;
+  /**
+   * Drop published audio that has not played yet, so a barge-in stops the
+   * assistant at once instead of after the queue drains (#2379). Optional: a
+   * transport without it plays out what it already has.
+   */
+  clearQueuedAudio?(): void;
+  /**
+   * Published audio the transport still holds before playout, in ms, when it can
+   * tell (#2379). LiveKit reports its AudioSource queue. The Signal pipe cannot see
+   * what PulseAudio buffers past pacat, so it leaves this out.
+   */
+  queuedAudioMs?(): number;
 }

@@ -40,6 +40,10 @@ channels:
     # default reaches the `livekit` service on the internal network. Host-side
     # `pnpm dev` with published ports: override to http://localhost:7880 in local.yaml.
     livekit_management_url: "http://livekit:7880"
+    # Wait (ms) after the caller stops speaking before Curia answers, on top of
+    # Deepgram's 400 ms endpointing. Speech inside it joins the same turn (#2240).
+    # Unset = the runtime default (350). Raise it if callers get cut off mid-thought.
+    # turn_hold_ms: 350
 
 # Rate limits for automatic contact creation from email participants.
 # Prevents spam campaigns from flooding the contacts table.
