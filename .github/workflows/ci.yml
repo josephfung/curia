@@ -79,6 +79,18 @@ jobs:
       - name: Build console
         run: pnpm --filter @curia/console run build
 
+      # Typecheck and vitest never load the built bundle, and vitest's CommonJS
+      # interop accepts named imports that Node's own ESM loader rejects. #2393
+      # passed CI and then crash-looped production on `import { generateVAPIDKeys }
+      # from 'web-push'` (#2410). Build the bundle the image runs and load every
+      # package it imports with plain Node.
+      # The same command as the Dockerfile, so this checks the bundle the image ships.
+      - name: Build backend bundle
+        run: pnpm exec tsup src/index.ts --format esm --no-dts
+
+      - name: Check bundle imports under Node ESM
+        run: pnpm run check:dist-imports
+
       - name: Lint
         run: pnpm run lint
 

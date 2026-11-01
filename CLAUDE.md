@@ -21,6 +21,7 @@ Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 ### TypeScript
 - ESM only (`"type": "module"`, `.js` extensions on all relative imports)
 - Node 24+, use `import.meta.dirname` instead of `__dirname`
+- **CommonJS packages: use the default import** (`import webpush from 'web-push'`, then read names off it). Named imports work only for packages that ship ESM. Vitest's interop accepts a named import that Node's own loader rejects, so it passes every test and crashes the built app at startup (#2410). CI's `check:dist-imports` step loads the built bundle's imports with plain Node to catch it; run `pnpm exec tsup src/index.ts --format esm --no-dts && pnpm run check:dist-imports` locally when you add a dependency.
 - No `any` — use proper types, generics, or discriminated unions
 - All event types defined as discriminated unions in `src/bus/events.ts`
 - All errors normalized to `AgentError` type (see `docs/specs/05-error-recovery.md`)

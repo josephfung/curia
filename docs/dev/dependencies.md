@@ -33,6 +33,23 @@ framework, a new external API the architecture depends on) also warrants an
 [Architecture Decision Record](../adr/) documenting why it was chosen over the
 alternatives.
 
+### Check its module format before importing it
+
+Curia is ESM-only and the production image runs the tsup bundle under plain
+Node. Many packages are still CommonJS. Under Node's ESM loader a CommonJS
+package's functions are often available **only on its default export**: its
+`package.json` has no `"type": "module"` and no `import` condition in `exports`.
+
+- For a CommonJS package, use the default import and read names from it:
+  `import webpush from 'web-push'; const { sendNotification } = webpush;`
+- A named import (`import { sendNotification } from 'web-push'`) typechecks and
+  passes vitest, whose interop is lenient, and then fails at startup with
+  `does not provide an export named …`. That crash-looped production once (#2410).
+- CI builds the bundle and runs `pnpm run check:dist-imports`
+  (`scripts/check-dist-imports.mjs`), which loads every package the bundle
+  imports with plain Node and fails on a missing binding. Run it locally after
+  `pnpm exec tsup src/index.ts --format esm --no-dts` when you add a dependency.
+
 ## Obtaining dependencies
 
 - **Package manager: pnpm.** Curia uses pnpm exclusively. Do not use `npm` or
