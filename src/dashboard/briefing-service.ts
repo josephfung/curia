@@ -70,9 +70,10 @@ export interface WaitingResponse {
 export interface StatsResponse {
   timezone: string;
   /**
-   * Principal-minutes behind the actions Recent Activity would show, in the
-   * current and previous 7 local days. `help` is the tile footnote. `detail`
-   * is the longer tooltip. Both are built from the describer weights.
+   * Estimated principal-minutes in the current and previous 7 local days.
+   * Visible calls use their describer weight. Calls with no describer add
+   * `UNDESCRIBED_CALL_MINUTES` each (ADR-058). Hidden describers add zero.
+   * `help` is the tile footnote. `detail` is the longer note.
    */
   minutesSaved: { current: number; previous: number; help: string; detail: string };
   done: { current: number; previous: number };

@@ -1,7 +1,7 @@
 // Four value tiles. One stats request feeds all of them. A failure renders an
 // em dash and an error — never a zero that would look like a quiet week.
 
-import { useEffect } from 'react';
+import { useEffect, useId, useState } from 'react';
 import {
   fetchStats,
   formatCountDelta,
@@ -33,6 +33,8 @@ function Sparkline({ values }: { values: number[] }) {
 
 export function BigNumbers({ onHandled, onTimezone }: BigNumbersProps) {
   const { data, error, loading, retry } = useAsyncData(fetchStats);
+  const [weightsOpen, setWeightsOpen] = useState(false);
+  const weightsId = useId();
 
   useEffect(() => {
     if (error || !data) {
@@ -53,7 +55,23 @@ export function BigNumbers({ onHandled, onTimezone }: BigNumbersProps) {
           <div className="dash-card-title">Time saved · 7d</div>
           <div className="dash-num-value" title={data?.minutesSaved.detail}>{data ? formatTimeSaved(data.minutesSaved.current) : (loading && !error ? '…' : '—')}</div>
           {savedDelta && <div className={`dash-delta ${savedDelta.direction}`}>{savedDelta.text}</div>}
-          {data && <div className="dash-num-foot" title={data.minutesSaved.detail}>{data.minutesSaved.help}</div>}
+          {data && (
+            <>
+              <button
+                type="button"
+                className="dash-num-foot dash-num-weights"
+                title={data.minutesSaved.detail}
+                aria-expanded={weightsOpen}
+                aria-controls={weightsId}
+                onClick={() => setWeightsOpen((open) => !open)}
+              >
+                {data.minutesSaved.help}
+              </button>
+              <p id={weightsId} className="dash-num-weights-note" hidden={!weightsOpen}>
+                {data.minutesSaved.detail}
+              </p>
+            </>
+          )}
         </article>
         <article className="dash-card dash-num">
           <div className="dash-card-title">Done for you · 7d</div>

@@ -252,7 +252,8 @@ const EMAIL_DRAFT_TALLY: Tally = { verb: 'drafted', one: 'an email', many: 'emai
 // email-send is the whole job (write and send), so it matches a draft.
 // dispatcher-relay only delivers a reply that was already approved.
 // A new document is worth more than an edit. Scratch notes are hidden.
-// Reads and plumbing stay at zero.
+// A hidden describer is an explicit zero. A call with no describer, a read
+// included, takes UNDESCRIBED_CALL_MINUTES (ADR-058).
 
 const DESCRIBERS: Record<string, Describer> = {
   // ── Mail drafts and sends ────────────────────────────────────────────────
@@ -756,7 +757,7 @@ export function timeSavedDetail(): string {
   const reply = flatMinutes('ceo-inbox-draft-reply');
   const filing = flatMinutes('email-archive');
   const filingText = filing === 0.5 ? '½' : String(filing);
-  return `A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. A new document ≈${DOC_CREATED_MINUTES} min, an edit ≈${DOC_EDIT_MINUTES}. Known lookups don't count. Each action counts, including a repeat.`;
+  return `A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. A new document ≈${DOC_CREATED_MINUTES} min, an edit ≈${DOC_EDIT_MINUTES}. Known lookups don't count. Other tool work counts a few seconds each. Each action counts, including a repeat.`;
 }
 
 /** Research kind of a web tool, or undefined. */

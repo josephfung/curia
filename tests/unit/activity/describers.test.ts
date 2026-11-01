@@ -284,7 +284,7 @@ describe('minutesForCall', () => {
   it('states the tile definition from the same weights', () => {
     expect(timeSavedHelp()).toBe('Rough estimate of equivalent human effort.');
     expect(timeSavedDetail()).toBe(
-      'A meeting ≈10 min, a reply ≈5, filing ≈½. A new document ≈15 min, an edit ≈3. Known lookups don\'t count. Each action counts, including a repeat.',
+      'A meeting ≈10 min, a reply ≈5, filing ≈½. A new document ≈15 min, an edit ≈3. Known lookups don\'t count. Other tool work counts a few seconds each. Each action counts, including a repeat.',
     );
     expect(timeSavedDetail().includes('Rough estimate')).toBe(false);
   });
