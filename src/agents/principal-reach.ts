@@ -87,8 +87,10 @@ export function formatPrincipalReachBlock(reach: PrincipalReach): string | null 
     '## Reaching the principal',
     `When they have not named a channel, reach them in this order: ${order}.`,
     'Their standing preferences and an explicit request override this order.',
-    'If the phone could not take the message, the tool names the channel it already used. Do not send the message again.',
   ];
+  if (reach.channels.includes('web')) {
+    lines.push('If the phone could not take the message, the tool names the channel it already used. Do not send the message again.');
+  }
   return lines.join('\n');
 }
 

@@ -163,10 +163,16 @@ export class WebPushService {
       return { outcome: 'visible' };
     }
     const pushed = await this.pushText(message, conversationId);
-    if (pushed.outcome === 'delivered') {
-      await this.record(conversationId, message);
-      this.broadcastMessage(conversationId, message);
+    if (pushed.outcome !== 'delivered') return pushed;
+    // The notification opens the shared thread, so a push without the saved
+    // message is not a delivery. No fallback runs: the phone was already notified.
+    if (!(await this.record(conversationId, message))) {
+      return {
+        outcome: 'unavailable',
+        detail: 'The phone was notified, but the message could not be saved on the shared thread.',
+      };
     }
+    this.broadcastMessage(conversationId, message);
     return pushed;
   }
 

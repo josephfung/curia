@@ -164,6 +164,21 @@ describe('WebPushService', () => {
     }));
   });
 
+  it('reports a failure, without broadcasting, when an accepted push cannot be saved on the thread', async () => {
+    const state = { hide: false, subs: [sub()], notices: [] };
+    const sender: PushSender = { send: vi.fn().mockResolvedValue(undefined) };
+    const thread: WebThreadWriter = { addTurn: vi.fn().mockRejectedValue(new Error('db down')) };
+    const broadcast = vi.fn();
+    const push = service({ pool: createPool(state), sender, thread });
+    push.setBroadcast(broadcast);
+    await expect(push.deliver('The board moved.')).resolves.toEqual({
+      outcome: 'unavailable',
+      detail: 'The phone was notified, but the message could not be saved on the shared thread.',
+    });
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
   it('does not write the thread when the only subscription is gone', async () => {
     const state = { hide: false, subs: [sub()], notices: [] };
     const sender: PushSender = { send: vi.fn().mockRejectedValue(fail(410)) };

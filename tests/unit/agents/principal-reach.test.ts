@@ -34,6 +34,12 @@ describe('principal reach', () => {
     expect(prompt).toContain('Signal, then email');
     expect(prompt).not.toContain('phone app');
     expect(prompt).not.toContain('Slack');
+    expect(prompt).not.toContain('If the phone could not take the message');
+  });
+
+  it('adds the phone fallback note only when the phone app is a channel', () => {
+    const block = formatPrincipalReachBlock({ channels: ['web', 'signal'] });
+    expect(block).toContain('If the phone could not take the message, the tool names the channel it already used.');
   });
 
   it('keeps the default order and does not quote a standing preference', () => {
