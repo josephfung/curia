@@ -767,6 +767,8 @@ export interface OperatorSessionPayload {
   revokedCount?: number;
   /** sessions.id values sign_out_others targeted. */
   revokedSessionIds?: string[];
+  /** The other credential on this pairing code was already redeemed. */
+  secondCredential?: boolean;
 }
 
 // DocumentConsoleActionPayload — the principal changed or bulk-read the OKF working-

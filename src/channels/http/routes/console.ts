@@ -11,7 +11,7 @@
 
 import type { FastifyPluginAsync } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { containedStaticFile } from './static-path-guard.js';
 
@@ -38,6 +38,17 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
   await app.register(fastifyStatic, {
     root: consoleDist,
     wildcard: false,
+    setHeaders(res, filePath) {
+      // @fastify/static passes the Fastify reply here, which has header(), not setHeader().
+      // Match the dist-root worker only. endsWith('sw.js') also matches widget-sw.js.
+      if (resolve(filePath) !== join(resolve(consoleDist), 'sw.js')) return;
+      const writable = res as unknown as {
+        header?: (name: string, value: string) => void;
+        setHeader?: (name: string, value: string) => void;
+      };
+      if (typeof writable.header === 'function') writable.header('Cache-Control', 'no-cache');
+      else writable.setHeader?.('Cache-Control', 'no-cache');
+    },
   });
 
   // SPA fallback: any GET path not resolved to a real file in dist/ → index.html.
@@ -51,6 +62,15 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
       // missing / not a file / escape — all become SPA fallback rather than probing.
       const contained = await containedStaticFile(consoleDist, urlPath);
       if (contained) {
+        // The service worker must not be cached across deploys, or phones
+        // keep running the previous worker and miss the update prompt.
+        if (contained.safeRel === 'sw.js') {
+          // @fastify/send overwrites Cache-Control unless cacheControl is off.
+          // A literal path: safeRel is already known to be 'sw.js' here.
+          const sent = reply.sendFile('sw.js', contained.rootReal, { cacheControl: false });
+          reply.header('Cache-Control', 'no-cache');
+          return sent;
+        }
         return reply.sendFile(contained.safeRel, contained.rootReal);
       }
     }

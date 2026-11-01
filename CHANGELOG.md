@@ -18,6 +18,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Voice audio telemetry** — per-turn last-word gap, per-chunk TTS timing and starvation, per-call event-loop delay. (#2379)
 - **Recurring calendar events** — create, edit and delete a series or one occurrence; standing meetings become one event. (#2385)
 - **`operator.session`** — **public API:** audit event for login, logout, revoke, and signing out other devices. (#2341)
+- **Phone install** — web manifest, Curia home-screen icons, and an update prompt. (#2341)
+- **Phone pairing** — a 10-minute QR or short code signs one phone in. (#2341)
 - **ADR-057** — retire bearer `/api/messages`; console chat on `/api/chat` is the only ingress. (#999)
 - **`doc-write` `section-delete`** — removes one `##` section and its heading; a missing section errors. (#2339)
 - **`migrate:standing-rules`** — one-off script moves inbox and calendar rule arrays into `/shared/` documents. (#2339)

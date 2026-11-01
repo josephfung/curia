@@ -78,7 +78,22 @@ agents keep choosing the channel. Code decides only whether the app is reachable
    a private or bare IP, or `http://`. On iOS the session cookie set in Safari carried over to
    the home-screen app, but `localStorage` did not. So **pairing state lives only in the
    cookie**. The typed code stays as an in-app fallback for platforms where even the cookie
-   does not carry over.
+   does not carry over. Once the session and its audit are recorded, either credential caps
+   the row's remaining life at two minutes, so a photographed QR and a still-valid short code
+   are not both long-lived. The cap is a later, best-effort update. If it fails, the sign-in
+   still succeeds and the server logs an error, and the unused credential keeps the original
+   ten-minute window. Releasing a credential after a failed sign-in leaves the row's current
+   expiry as it is: it does not restore ten minutes if the other credential already capped it.
+   The short code still works until that expiry when the cookie did not carry into the
+   installed app, and that second redemption creates
+   its own device session. The server logs it at warn level, and the `operator.session` pair
+   event sets `secondCredential`. The desktop shows each credential's redemption on its own.
+   Rate limiting stays keyed on `request.ip`, the same as `/auth`. `trustProxy` stays off,
+   because turning it on would change the client address for every route. Behind a reverse
+   proxy the pairing limit is therefore shared: anyone who can reach the server can use up
+   the eight attempts and make other phones get a 429, which tells the operator to wait a few
+   minutes. Only new pairings are affected. Access-key login and paired sessions have their own
+   limits. A deployment that needs per-client limits can enforce them at its proxy.
 
 3. **Sessions slide and are per device.** Every session, desktop and phone alike, expires
    after **90 days without use**. Each authenticated request pushes the expiry forward,
