@@ -60,7 +60,7 @@ confirmed, a weekly session agreed) marks the end of *capture*. Reliance builds 
 - **Inputs:** Curia, set up (from the operator's Setup); the principal's mail and calendar
   history.
 - **Controls:**
-  - **Onboarding plan.** Seeded from a fixture in the repo when Setup completes; the principal may edit it.
+  - **Onboarding plan.** Seeded from a fixture in the repo when the operator starts onboarding; the principal may edit it.
   - **Minutes structuring.** The existing `meeting-minutes-structuring` skill.
   - **Inference heuristics.** Not written yet (#2362).
   - **Triage switch.** Doesn't exist yet (#2360).
@@ -80,8 +80,9 @@ them.
 
 ### A1: Invite and hold the first conversation
 
-Curia invites the principal by email once Setup is complete; when the route is the phone app,
-the email carries the link that installs it. The first
+When the operator starts onboarding, they send the principal a 48-hour invitation link that
+installs the phone app (or Curia says hello on Signal or SMS). Curia then greets the principal and
+invites them to the first conversation. The first
 conversation runs by voice or chat, from an agenda generated from the onboarding plan.
 
 - **Input:** Curia, set up; what the principal says about how they work.
@@ -205,12 +206,12 @@ what happened that week.
 | **Operator** | Whoever installs and runs Curia. Often the principal; sometimes an assistant or IT. |
 | **Setup** | The operator's phase: install Curia, then connect its email, messaging to the principal, voice, the principal's mailbox sign-in and Google Docs. |
 | **Onboarding** | The principal's phase: the invitation, the first conversation, the deep dive, the review, check-ins and the weekly session. |
-| **Onboarding plan** | One editable document per principal, seeded from a repo fixture when Setup completes. It holds *what to cover* (sessions, topics) separately from *what's happened* (covered, left, the principal's timing and interests), so the agenda generator can tell "skipped" from "not part of onboarding". |
+| **Onboarding plan** | One editable document per principal, seeded from a repo fixture when the operator starts onboarding. It holds *what to cover* (sessions, topics) separately from *what's happened* (covered, left, the principal's timing and interests), so the agenda generator can tell "skipped" from "not part of onboarding". |
 | **Directed change** | Something the principal explicitly asked for on a call. The minutes structuring skill carries it out (still within the autonomy score). Suggestions nobody asked for are mentioned, not done. |
 | **Receipt** | A message sent after Curia applies a change, showing the result. It doesn't wait for a reply. Distinct from a **check-in**, which asks before acting. |
 | **Autonomy score / band** | A 0–100 setting that decides which actions need the principal's approval. New installs start at 75, "approval-required", until the principal picks a band in the first conversation. |
 | **Standing rules** | The principal's inbox and calendar rules, one `##` section per rule, in `/shared/inbox/rules.md` and `/shared/calendar/rules.md`. |
-| **Triage switch** | A ceo-inbox config value that turns scheduled triage on or off. Written off when onboarding starts on a fresh install; missing means on, so existing installs are unaffected. |
+| **Triage switch** | A ceo-inbox config value that turns scheduled triage on or off. Written off when the operator starts onboarding; missing means on, so existing installs are unaffected. |
 | **Draft (rules, priorities or voice)** | An inference not yet confirmed. Nothing acts on it. |
 
 ## Notes on applying HAWD

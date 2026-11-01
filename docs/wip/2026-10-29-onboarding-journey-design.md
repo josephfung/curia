@@ -21,7 +21,10 @@ Feedback from a principal and from operators changed the journey in five ways:
    **Onboarding** (the principal). The operator decides and connects every channel before the
    principal hears anything. The principal is never asked to set up voice or pick a messaging
    app. "Give Curia a desk" is retired.
-2. **Curia reaches out first.** The principal's first experience is an invitation from Curia.
+2. **The operator says "go", then Curia reaches out first.** When Setup is complete and the
+   operator is ready, they start onboarding from the console and send the principal an
+   invitation link through whatever channel they normally use with them. The principal's first
+   experience of Curia itself is Curia greeting them and inviting them to a first conversation.
 3. **One first conversation, by voice or chat, mostly multiple choice.** It sets Curia's working
    style and autonomy, gives "what to expect", has the principal connect their own email and
    calendar through a sign-in link, and asks how they'd like to review what Curia drafts.
@@ -154,7 +157,7 @@ the topology question (local, domain or proxy). The local option stays, labelled
 | Item | Required for onboarding | Default route | Alternatives | The operator decides |
 |---|---|---|---|---|
 | **Curia's own email** | Yes | Nylas grant for a dedicated mailbox | — | The address |
-| **Messaging to the principal** | Yes | PWA, ready for the principal to install from the invitation | Signal, SMS (Telnyx) | Which route the principal will use |
+| **Messaging to the principal** | Yes | PWA, ready for the principal to install from the invitation link | Signal, SMS (Telnyx) | Which route the principal will use |
 | **Voice** | Yes | LiveKit (bundled) + Deepgram + Cartesia | — | Curia's spoken voice (Cartesia voice id) |
 | **Principal mailbox sign-in** | Yes | Nylas hosted authentication: the operator configures the connector once, the principal signs in during onboarding | — | Nothing: Google only in this milestone |
 | **Google Docs access** | Yes | Curia's own Google account, through the Google Workspace tools | — | Which Google account Curia works from |
@@ -165,8 +168,8 @@ pricing at write time; don't copy numbers from memory.
 
 **"Ready" for messaging means ready for the principal,** not tested on them. The operator
 can't pair the principal's phone, and Setup must not message the principal before the
-invitation. So the PWA route counts as done when HTTPS, push and the pairing link are working;
-the principal installs the app from the invitation (2.1). Signal and SMS count as done when the
+invitation. So the PWA route counts as done when HTTPS and push are working and an invitation
+link can be generated; the principal installs the app from that link (2.1). Signal and SMS count as done when the
 channel is healthy and the principal's number is linked to their contact. A principal on Signal
 or SMS usually doesn't need the PWA.
 
@@ -227,9 +230,11 @@ Workspace tools (`skills/google-workspace/references/drive-files.md`; the princi
 The setup catalog gets an entry for it, which it lacks today.
 
 **Readiness.** `setup-status` reports `setup_complete` when every required item is complete and
-verified (not just configured). That one flag starts Onboarding. There is no partial start and
-no "voice later" path: until Setup is complete, Curia doesn't contact the principal, and the
-console checklist and the setup agent show the operator what's left. Voice is never auto-deferred.
+verified (not just configured). It doesn't start Onboarding by itself: it unlocks the console's
+**Start onboarding** step, and the operator decides when to press it (2.1). There is no partial
+start and no "voice later" path: until Setup is complete, the step stays locked, Curia doesn't
+contact the principal, and the console checklist and the setup agent show the operator what's
+left. Voice is never auto-deferred.
 
 ### The setup agent
 
@@ -244,9 +249,11 @@ The setup-wizard agent becomes the operator's guide through Setup, and only Setu
   Signal or SMS as well, Curia's name and spoken voice, which Google account Curia uses;
 - hands off credential entry to the console, as today;
 - never claims an item works without a live `setup-status` check, as today;
-- ends by confirming Setup is complete, saying who Curia will contact and how, and that Curia
-  will now invite the principal. Someone setting Curia up for themselves is offered the first
-  conversation straight away, instead of waiting for the invitation email.
+- ends by confirming Setup is complete and explaining the next step: when the operator is ready,
+  **Start onboarding** in the console gives them a link to send the principal, valid for 48
+  hours, so they should send it when the principal can act on it. Someone setting Curia up for
+  themselves is offered the first conversation straight away, and pairs their own phone the
+  usual way.
 
 It no longer offers "instant wins", persona capture, or anything about the principal's tone,
 autonomy or priorities. That content moves into Onboarding's first conversation.
@@ -261,8 +268,8 @@ is added (#2365 stays off the critical path). Two rules keep the hand-over clean
 - **Setup chat is not the principal speaking.** While Setup is incomplete, console chat goes to
   the setup agent, and nothing said there is stored as the principal's preference, priority or
   fact.
-- **The principal starts with a clean thread.** When Setup completes for someone else, the setup
-  conversation is moved out of the shared thread (kept in the audit log), so the principal's
+- **The principal starts with a clean thread.** When the operator starts onboarding for someone
+  else, the setup conversation is moved out of the shared thread (kept in the audit log), so the principal's
   first view of the console or phone app is their own. *(Builder's call.)*
 
 After the hand-over, an operator who still uses the console is working in the principal's
@@ -274,7 +281,7 @@ of chat.
 The form keeps what the operator legitimately knows:
 
 - the operator's own details;
-- the principal's name, email and timezone, which Curia needs in order to invite them;
+- the principal's name, email and timezone, which Curia needs in order to work for them;
 - Curia's name.
 
 Its **Tone & style** and **Autonomy & preferences** steps move to Onboarding. Until the
@@ -285,7 +292,7 @@ autonomy 75).
 
 ### The onboarding plan
 
-When Setup completes on a fresh install, Curia seeds one onboarding plan for the principal under
+When the operator starts onboarding, Curia seeds one onboarding plan for the principal under
 `/meetings/`, copied from a fixture in the repo. It keeps two things apart:
 
 - **What to cover:** the sessions and the topics each should reach.
@@ -296,12 +303,11 @@ The principal may edit the plan at any time. Curia records coverage in *what's h
 each session's minutes. It changes *what to cover* only with what the principal agreed in a
 session (a directed change), never on its own judgment.
 
-Onboarding starts automatically only on a fresh install: no onboarding plan, no principal
-mailbox grant, and no message history with the principal, reaching `setup_complete` for the first
-time. Existing installs (prod included) never start it on their own, so nobody gets an
-unexpected "Hi, I'm Curia" and triage is not switched off under them; the principal or operator
-can start it on request. *(Builder's call, settled after review.)* The fixture is the
-onboarding playbook: improving it improves onboarding for every principal who starts after.
+Onboarding never starts on its own: the operator starts it (2.1), or the principal asks for it.
+So existing installs (prod included) are never pulled in, nobody gets an unexpected "Hi, I'm
+Curia", and triage is not switched off under them. On an install that already has a working
+principal, the console warns before starting it. The fixture is the onboarding playbook:
+improving it improves onboarding for every principal who starts after.
 
 **Sessions are booked one at a time.** At the end of each session the principal and Curia agree
 the next one, and the post-session structuring pass (`meeting-minutes-structuring`) books only
@@ -338,30 +344,48 @@ same agenda:
   principal says they're done, or it has been idle for a set time. Uncovered topics carry to the
   next session, and the minutes are produced from the transcript at that point.
 
-### 2.1 The invitation (Curia reaches out first)
+### 2.1 The invitation (the operator says "go", Curia reaches out)
 
-When `setup_complete` first becomes true, Curia invites the principal **by email**, from its
-own address.
+**The operator decides when.** Setup can finish days before the principal is ready, and the
+operator knows the principal's week. So nothing goes to the principal when Setup completes.
+Instead the console's **Start onboarding** step unlocks, and the operator presses it when the
+time is right.
 
-The invitation:
+**Starting onboarding** seeds the onboarding plan, writes the triage switch off (see *Triage
+switch*) and gives the operator what they need to bring the principal in:
+
+- **Phone app route:** an **invitation link** to send the principal through whatever channel the
+  operator knows works best (a text, a Slack message, a note in person), with suggested wording
+  the operator can copy and adapt. The link installs and pairs the app on the phone it's opened
+  on. It is valid for **48 hours**, and the console and suggested wording both say so, so the
+  operator can tell the principal to do it soon.
+- **Signal or SMS route:** no link is needed. Starting onboarding has Curia send the principal a
+  short hello on that channel, and the console shows the operator what was sent.
+
+Curia doesn't email the invitation. The operator's own channel carries more weight with the
+principal than a message from an assistant they haven't met, and it keeps the link out of an
+inbox.
+
+**Then Curia reaches out first.** As soon as the app is paired, or with the Signal or SMS hello,
+Curia greets the principal and invites them to the first conversation. The greeting:
 - introduces Curia by name, in a sentence or two, and says who set it up;
-- **if the route is the PWA:** opens with one step, "Put me on your phone", and a link that
-  installs and pairs the app on the phone it's opened on;
-- **if the route is Signal or SMS:** says Curia will be in touch there, and Curia sends a short
-  hello on that channel at the same time;
 - says what the first conversation is for and roughly how long it takes (about 20 minutes);
 - offers voice or chat, and how to start each ("tap here to call me", or just reply);
 - doesn't ask anything else.
 
-**The emailed pairing link changes ADR-055.** Today a pairing code is minted on the desktop
-console and expires after 10 minutes. An emailed link has to last days and sits in an inbox, so
-it is a credential with a longer life: single-use, bound to the principal, expiring after about
-7 days, with the token kept in the URL fragment as now, and a notice to the principal's other
-devices and the operator's checklist when it is redeemed. A fresh link can be sent on request.
-This needs an amendment to ADR-055. *(Builder's call on the details.)*
+If the principal doesn't reply, Curia follows up, politely and with a cap on frequency, then
+stops and tells the operator through the console. It stays usable for ad-hoc chat throughout.
 
-If there's no reply, Curia follows up, politely and with a cap on frequency, then stops and
-tells the operator through the setup checklist. It stays usable for ad-hoc chat throughout.
+**The invitation link changes ADR-055.** Today's pairing code is minted for the person holding
+the desktop console and expires after 10 minutes. The invitation link is minted by the operator
+for someone else and has to survive being sent and waiting to be opened:
+- single-use, bound to the principal, and expiring after **48 hours**;
+- minted only from an authenticated console session;
+- the token stays in the URL fragment, as now, so it never reaches proxy or server logs;
+- generating a new link invalidates the previous one;
+- the console shows the operator whether the link is waiting, redeemed or expired.
+
+This needs an amendment to ADR-055.
 
 ### 2.2 The first conversation (voice or chat)
 
@@ -577,7 +601,8 @@ Operators told us they didn't know what to expect or how to get set up. An audit
 3. **Every Setup page has the same shape:** what it's for; what you'll need (accounts, time,
    cost, dated); steps; **check it works**; what the principal will notice.
 4. **One finish line.** A "Check your setup" page is the definition of done. It matches
-   `setup_complete` item for item and ends with "Curia will now invite your principal."
+   `setup_complete` item for item and ends with **Start onboarding**: when to press it, and
+   sending the principal the 48-hour link.
 5. **Each fact lives in one place.** The install page links to channel pages instead of
    repeating their steps.
 6. **Ship the Setup half now.** It describes today's behaviour and fixes the operator pain
@@ -592,13 +617,13 @@ Operators told us they didn't know what to expect or how to get set up. An audit
 | Overview | **What to expect** | Both | The two phases, who does what, time and cost, the "you'll need" checklist, what the principal experiences | `index.mdx`, `introduction.mdx` (trimmed), this design |
 | Setup | **1. Install Curia** | Operator | Image install, HTTPS by default, local labelled try-out | `installation.mdx:1-110`, `deployment.mdx:9-20` |
 | | **2. Curia's own email** | Operator | Nylas account and a dedicated mailbox | `email-setup.mdx`, `installation.mdx:121-149` |
-| | **3. Reach your principal** | Operator | Choosing the route: phone app by default (the principal installs it from the invitation), Signal or SMS; linking the principal's identity | New; links to `signal-setup`, `sms-setup` |
+| | **3. Reach your principal** | Operator | Choosing the route: phone app by default (the principal installs it from the invitation link), Signal or SMS; linking the principal's identity | New; links to `signal-setup`, `sms-setup` |
 | | **4. Voice** | Operator | LiveKit, Deepgram, Cartesia; choosing Curia's voice; calling from the phone app | `voice-setup.mdx` |
 | | **5. Your principal's email and calendar** | Operator | Preparing the sign-in the principal will use (Google accounts; today: the hand-made grant) | New |
 | | **6. Google Docs** | Operator | Curia's Google account and Drive access | Port of `curia/docs/dev/google-drive.md` |
 | | **7. Optional: search and memory** | Operator | Embeddings, Tavily | `installation.mdx:151-188`, `integrations/*` |
-| | **8. Check your setup** | Operator | The finish line: every item verified, then the hand-off, and what the operator does (and doesn't do) in the console afterwards | New; parts of `health-monitoring.mdx` |
-| Onboarding | **Your first conversation with Curia** | Principal | The invitation, putting Curia on your phone, voice or chat, what Curia will ask and why | Rewrite of `playbooks.mdx:8-50` |
+| | **8. Check your setup** | Operator | The finish line: every item verified, then Start onboarding and the invitation link, and what the operator does (and doesn't do) in the console afterwards | New; parts of `health-monitoring.mdx` |
+| Onboarding | **Your first conversation with Curia** | Principal | Putting Curia on your phone from the link, Curia's greeting, voice or chat, what Curia will ask and why | Rewrite of `playbooks.mdx:8-50` |
 | | **Connecting your email and calendar** | Principal | What delegated access means, what Curia will and won't do, what to expect | New |
 | | **Reviewing what Curia learned** | Principal | The three drafts, how to edit or comment, what happens on confirm | New |
 | | **Check-ins and your weekly session** | Principal | What they cover; changing autonomy and routines; new plays | New; `examples/*` |
@@ -633,8 +658,8 @@ pages are written.
 | Curia's name and spoken voice | Chosen by the operator in Setup | Joseph |
 | Setup agent scope | Setup only; no persona, tone, autonomy or priorities content | Joseph |
 | Voice in Setup | Required, so the principal's voice-or-chat choice is real | builder's call |
-| Readiness | One `setup_complete` flag, all required items verified; replaces `kickoff_ready` / `sessions_ready` | builder's call |
-| First contact | Curia invites the principal | Joseph |
+| Readiness | One `setup_complete` flag, all required items verified; replaces `kickoff_ready` / `sessions_ready`; unlocks **Start onboarding** rather than starting it | builder's call (flag); Joseph (operator starts) |
+| First contact | The operator starts onboarding when ready and sends the invitation link through their own channel; Curia then greets the principal first | Joseph |
 | First conversation | One session, voice or chat: style, autonomy, preferences, what to expect, mailbox sign-in, review format | Joseph |
 | Question style | Mostly multiple choice with described options; Curia infers settings and reads them back | Joseph |
 | Autonomy options on day one | Three bands (Draft only, Ask first, Spot-check), "Ask first" recommended | builder's call |
@@ -642,8 +667,8 @@ pages are written.
 | Principal mailbox | Nylas hosted authentication; operator configures the provider in Setup; principal signs in during the first conversation | Joseph |
 | Principal accounts | Google only in this milestone; Microsoft 365 is a follow-up | Joseph |
 | Console identity | The operator's during Setup, the principal's after; setup agent asks "for yourself or for someone else?"; setup chat never stored as the principal's | Joseph (rule); builder's call (clean thread) |
-| Invitation channel | Email, carrying the PWA install-and-pair link when that's the route; a hello on Signal or SMS when that's the route | Joseph |
-| Emailed pairing link | Single-use, principal-bound, about 7 days; ADR-055 amendment | builder's call |
+| Invitation channel | Phone app: an operator-generated link sent by the operator; Signal or SMS: a hello from Curia on that channel. Curia doesn't email the invitation | Joseph |
+| Invitation link | Single-use, principal-bound, 48 hours, minted from the console; ADR-055 amendment | Joseph (48 hours, operator-sent); builder's call (rest) |
 | Sessions on the calendar | Real busy events once the calendar is connected; the agenda, nudge and delivery follow the event when it moves | Joseph |
 | Deep dive | One read, three drafts: working rules, priorities, writing voice; strongest tier; no cost cap | Joseph |
 | Writing voice | Seeds the existing writing-voice profile; `voice-learn` refines it afterwards | builder's call |
@@ -665,10 +690,10 @@ Tracked in milestone **v0.48 - Onboarding Journey** (#29).
 |---|---|---|---|
 | #2356 **Getting-started docs: Setup, then Onboarding** | Retitled. Two-phase framing replaces "install, then desk"; the curia-docs restructure in *How the docs tell it*; Appendix A fixes. The Setup half can ship before the features, describing today's behaviour; Onboarding pages land with the features. | — | L → XL |
 | #2357 Installer: HTTPS-first, voice on by default | Closing message points at the Setup checklist; wording only. | — | L |
-| #2341 PWA | Adds the emailed pairing link and the ADR-055 amendment (or a small follow-up issue if #2341 is already in flight). | — | XXL |
+| #2341 PWA | Adds the operator-generated invitation link and the ADR-055 amendment (or a small follow-up issue if #2341 is already in flight). | — | XXL |
 | #2358 **Setup status: `setup_complete`** | One readiness flag over all required items, replacing `kickoff_ready` / `sessions_ready`; adds `principal_mailbox` (sign-in configured) and Google Docs entries. | — | M |
 | #2359 Console and PWA calls load the parked agenda | Unchanged. | — | S |
-| #2360 **Onboarding program** | Rewritten: invitation; one first conversation by voice or chat with multiple-choice style, autonomy and preferences; review-format choice; review session that adapts; check-ins; weekly session. Absorbs chat sessions (#2364) and the setup agent's onboarding content. | #2358, #2359, #2361, and #2341 for the default route (Signal or SMS work without it) | XL → XXL; consider splitting the weekly session out |
+| #2360 **Onboarding program** | Rewritten: the console's Start onboarding step and Curia's greeting; one first conversation by voice or chat with multiple-choice style, autonomy and preferences; review-format choice; review session that adapts; check-ins; weekly session. Absorbs chat sessions (#2364) and the setup agent's onboarding content. | #2358, #2359, #2361, and #2341 for the default route (Signal or SMS work without it) | XL → XXL; consider splitting the weekly session out |
 | #2361 **Principal mailbox sign-in** | Rewritten: Nylas hosted authentication (Google connector) with a callback on the Curia server, picking up the grant without a restart, an operator Setup guide, the in-conversation link, and the "connected" event. Replaces the hand-made grant guide. | #2358 | M → L |
 | #2362 **Deep dive** | Adds writing voice as the third draft; delivery as Google Docs, one email and a review session on the calendar; confirmation from the docs and the review session instead of the numbered-list email. The ADR also covers writing voice and drafts held in Google Drive. | #2360, #2361, #2338 | XL → XXL |
 | #2363 Voice loads priorities | Unchanged. | #2362 | S |
