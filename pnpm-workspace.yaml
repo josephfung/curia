@@ -272,13 +272,6 @@ overrides:
   # pino-pretty (dev, and via @livekit/rtc-node in prod) resolved 4.0.3. Patched in 4.1.0 on
   # the 4.x line that pino-pretty depends on (2.2.0 / 3.1.0 on older lines, not in our tree).
   fast-copy: '>=4.1.0'
-  # HIGH advisory from pnpm audit, 2026-10-15:
-  # GHSA-c475-qrg2-pj4r (HIGH, <=6.2.0): quadratic-time DoS in Client.list(); 6.2.1 still
-  # carries upstream-only GHSA-5rfr-xx34-2xxv (MED), hence 6.2.2. Dev-only:
-  # promptfoo -> proxy-agent -> pac-proxy-agent -> get-uri, whose latest (8.0.1) still
-  # pins ^5.3.1, so only an override moves it across the major. 6.0's one breaking change
-  # refuses separate FTP transfer hosts by default (bounce-attack hardening); get-uri
-  # calls only access/list/lastMod/downloadTo/close, which are unchanged.
   # Raised 2026-11-01 (#2388): upstream-only GHSA-5pm8-86m8-9m6r and GHSA-r4jh-29pc-gfqr
   # (both MED) cover 6.2.2 and 6.2.3; 6.2.4 (2026-10-30) is the first clean release.
   'get-uri>basic-ftp': '>=6.2.4'
