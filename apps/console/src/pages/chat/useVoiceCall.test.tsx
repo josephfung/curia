@@ -11,6 +11,13 @@ const { apiFetch, mic } = vi.hoisted(() => ({
     order: [] as string[],
     on: true,
     fail: null as null | 'enable' | 'disable',
+    // The local mic track getTrackPublication returns, when a test sets one.
+    track: null as null | {
+      mediaStreamTrack: EventTarget & { muted: boolean };
+      isUpstreamPaused: boolean;
+      on: () => void;
+      off: () => void;
+    },
   },
 }));
 
@@ -32,7 +39,7 @@ vi.mock('livekit-client', () => {
         if (mic.fail === 'disable' && !enabled) throw new Error('mic failed');
         mic.on = enabled;
       },
-      getTrackPublication: () => undefined,
+      getTrackPublication: () => (mic.track ? { track: mic.track } : undefined),
     };
     on(): this {
       return this;
@@ -51,6 +58,7 @@ vi.mock('livekit-client', () => {
       Disconnected: 'Disconnected',
     },
     Track: { Source: { Microphone: 'microphone' }, Kind: { Audio: 'audio' } },
+    TrackEvent: { UpstreamPaused: 'upstreamPaused', UpstreamResumed: 'upstreamResumed', Restarted: 'restarted' },
   };
 });
 
@@ -73,6 +81,7 @@ function Probe(): ReactElement {
     <div>
       <p data-testid="state">{call.callState}</p>
       <p data-testid="muted">{call.muted ? 'yes' : 'no'}</p>
+      <p data-testid="paused">{call.backgroundPaused ? 'yes' : 'no'}</p>
       <p data-testid="error">{call.error ?? ''}</p>
       <button type="button" onClick={() => { void call.startCall(); }}>start</button>
       <button type="button" onClick={() => { void call.toggleMute(); }}>mute</button>
@@ -114,6 +123,7 @@ beforeEach(() => {
   mic.order = [];
   mic.on = true;
   mic.fail = null;
+  mic.track = null;
   apiFetch.mockImplementation((path: string, init?: { method?: string }) => {
     if (path === '/api/voice/status') return Promise.resolve(json(200, { enabled: true }));
     if (path === '/api/voice/sessions' && init?.method === 'POST') {
@@ -154,6 +164,35 @@ describe('useVoiceCall toggleMute', () => {
     expect(mic.order).toEqual(['attr:', 'mic-on']);
     expect(text('muted')).toBe('no');
     expect(text('error')).toBe('');
+  });
+
+  it('a Mute press replaces a background pause, and unmuting restores it while the OS holds the mic', async () => {
+    const stream = Object.assign(new EventTarget(), { muted: false });
+    mic.track = { mediaStreamTrack: stream, isUpstreamPaused: false, on: () => undefined, off: () => undefined };
+    await mount();
+    await click('start');
+    expect(text('state')).toBe('connected');
+
+    stream.muted = true;
+    await act(async () => {
+      stream.dispatchEvent(new Event('mute'));
+    });
+    expect(text('paused')).toBe('yes');
+
+    await click('mute');
+    expect(text('muted')).toBe('yes');
+    expect(text('paused')).toBe('no');
+
+    // The OS still holds the mic, so clearing the user mute shows the pause again.
+    await click('mute');
+    expect(text('muted')).toBe('no');
+    expect(text('paused')).toBe('yes');
+
+    stream.muted = false;
+    await act(async () => {
+      stream.dispatchEvent(new Event('unmute'));
+    });
+    expect(text('paused')).toBe('no');
   });
 
   it('matches the mute mark to the microphone when either step fails', async () => {

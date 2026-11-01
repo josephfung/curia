@@ -3310,11 +3310,61 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     await vi.waitFor(() => {
       expect(tts.requests.length).toBeGreaterThan(0);
     });
+    const clearsBefore = transport.clearQueuedAudioCount;
     transport.emitCallerMuted(true);
+    // Audio already queued in the transport must not play after the mute.
+    expect(transport.clearQueuedAudioCount).toBe(clearsBefore + 1);
     await runtime.awaitIdle('s-mid');
     expect(tts.cancelled.size).toBeGreaterThan(0);
     expect(saved.filter((row) => row.startsWith('assistant:'))).toEqual([]);
     await runtime.endSession('s-mid', 'test');
+  });
+
+  it('does not save a sentence that was sent to TTS but muted before its first frame', async () => {
+    const saved: string[] = [];
+    const workingMemory = {
+      addTurn: async (_conversationId: string, _agentId: string, turn: { role: string; content: string }) => {
+        saved.push(`${turn.role}:${turn.content}`);
+      },
+      getHistory: async () => saved.map((row) => {
+        const split = row.indexOf(':');
+        return { role: row.slice(0, split), content: row.slice(split + 1) };
+      }),
+      purgeExpired: async () => 0,
+    } as unknown as WorkingMemory;
+    // The second sentence reaches TTS but its first frame is slow.
+    class SlowSecondSentenceTts extends SlowTtsProvider {
+      readonly asked: string[] = [];
+      override async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
+        this.asked.push(opts.text);
+        if (opts.text.includes('Never heard')) await delay(400);
+        yield* super.synthesize(opts);
+      }
+    }
+    const llm = new FakeStreamProvider([replyScript('First one. Never heard this part.')]);
+    const tts = new SlowSecondSentenceTts(3, 5);
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts,
+      workingMemory,
+      pauseGraceMs: 60_000,
+    });
+    await runtime.startSession({
+      sessionId: 's-queued',
+      conversationId: 'voice:s-queued',
+      roomName: 'voice-s-queued',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
+    await vi.waitFor(() => {
+      expect(tts.asked).toContain('Never heard this part.');
+    });
+    transport.emitCallerMuted(true);
+    await runtime.awaitIdle('s-queued');
+    expect(saved.filter((row) => row.startsWith('assistant:'))).toEqual(['assistant:First one.']);
+    await runtime.endSession('s-queued', 'test');
   });
 
   it('saves the heard sentence when mute lands after the first frame, and does not replay the rest', async () => {

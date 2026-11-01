@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TrackEvent } from 'livekit-client';
-import { bindMicPause, type PausableMicTrack } from './mic-pause.js';
+import { bindMicPause, isMicPaused, type PausableMicTrack } from './mic-pause.js';
 
 class FakeStream extends EventTarget {
   muted = false;
@@ -36,6 +36,29 @@ function fakeTrack(stream: FakeStream): PausableMicTrack & {
 }
 
 describe('bindMicPause', () => {
+  it('reports a pause that began before it was bound, unless it is a Mute-button mute', () => {
+    const muted = new FakeStream('muted-early');
+    muted.muted = true;
+    const paused = vi.fn();
+    bindMicPause(() => fakeTrack(muted), { isUserMute: () => false, onPaused: paused, onResumed: vi.fn() });
+    expect(paused).toHaveBeenCalledTimes(1);
+
+    const upstream = fakeTrack(new FakeStream('upstream-early'));
+    upstream.isUpstreamPaused = true;
+    const pausedUpstream = vi.fn();
+    bindMicPause(() => upstream, { isUserMute: () => false, onPaused: pausedUpstream, onResumed: vi.fn() });
+    expect(pausedUpstream).toHaveBeenCalledTimes(1);
+
+    const button = vi.fn();
+    bindMicPause(() => fakeTrack(muted), { isUserMute: () => true, onPaused: button, onResumed: vi.fn() });
+    expect(button).not.toHaveBeenCalled();
+
+    const live = vi.fn();
+    bindMicPause(() => fakeTrack(new FakeStream('live')), { isUserMute: () => false, onPaused: live, onResumed: vi.fn() });
+    expect(live).not.toHaveBeenCalled();
+    expect(isMicPaused(fakeTrack(new FakeStream('live')))).toBe(false);
+  });
+
   it('shows a pause on an OS mute and ignores a Mute-button mute', () => {
     const stream = new FakeStream('mic');
     const track = fakeTrack(stream);

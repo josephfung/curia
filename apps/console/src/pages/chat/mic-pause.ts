@@ -17,6 +17,11 @@ export interface PausableMicTrack {
   off(event: string, cb: () => void): void;
 }
 
+/** Whether the mic is held by the OS right now, whatever events fired before. */
+export function isMicPaused(track: PausableMicTrack): boolean {
+  return track.mediaStreamTrack.muted || track.isUpstreamPaused;
+}
+
 /**
  * Listen for an OS mute on the local mic. `getTrack` is read again after
  * TrackEvent.Restarted, because a foregrounded phone replaces the stream.
@@ -67,6 +72,10 @@ export function bindMicPause(
   track.on(TrackEvent.UpstreamPaused, onPaused);
   track.on(TrackEvent.UpstreamResumed, onResumed);
   track.on(TrackEvent.Restarted, onRestarted);
+
+  // The mic can be paused before these listeners exist (a slow publish while
+  // the app is backgrounded), so its mute events have already fired.
+  if (isMicPaused(track)) onPaused();
 
   return () => {
     detachStream(stream);

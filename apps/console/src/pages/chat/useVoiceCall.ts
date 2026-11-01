@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
 import type { RemoteTrack } from 'livekit-client';
 import { apiFetch } from '../../api.js';
-import { bindMicPause, USER_MUTE_ATTRIBUTE, USER_MUTE_VALUE } from './mic-pause.js';
+import { bindMicPause, isMicPaused, USER_MUTE_ATTRIBUTE, USER_MUTE_VALUE } from './mic-pause.js';
 
 export type VoiceCallState = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -310,7 +310,14 @@ export function useVoiceCall(): UseVoiceCallResult {
         await room.localParticipant.setAttributes({ [USER_MUTE_ATTRIBUTE]: '' });
         await room.localParticipant.setMicrophoneEnabled(true);
       }
+      // The pause filter reads userMuteRef only when a mute event fires, so
+      // reconcile here: a user mute replaces a background pause, and clearing it
+      // brings the pause back if the OS still holds the mic.
+      const mic = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+      const paused = !nextMuted && mic !== undefined && isMicPaused(mic);
+      backgroundPausedRef.current = paused;
       if (mountedRef.current) {
+        setBackgroundPaused(paused);
         setMuted(nextMuted);
         setError(null);
       }

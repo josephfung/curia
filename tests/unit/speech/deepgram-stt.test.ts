@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSilentLogger } from '../../../src/logger.js';
-import { DeepgramSttProvider } from '../../../src/speech/deepgram-stt.js';
+import { DeepgramSttProvider, KEEPALIVE_INTERVAL_MS } from '../../../src/speech/deepgram-stt.js';
 import { SttHttpError, type SttTranscriptEvent } from '../../../src/speech/types.js';
 
 type MockSocketPayload = string | Uint8Array;
@@ -156,6 +156,54 @@ describe('DeepgramSttProvider', () => {
       JSON.stringify({ type: 'Finalize' }),
       JSON.stringify({ type: 'CloseStream' }),
     ]);
+  });
+
+  it('sends KeepAlive while no audio arrives, only after the first frame, and stops on end', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
+      const sessionPromise = provider.startSession({ sampleRate: 16000 });
+      const socket = MockWebSocket.instances[0]!;
+      socket.open();
+      const session = await sessionPromise;
+      const keepAlive = JSON.stringify({ type: 'KeepAlive' });
+      const keepAlives = () => socket.sent.filter((m) => m === keepAlive).length;
+
+      // Before any audio, KeepAlive does not reset Deepgram's first-audio timeout.
+      await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS * 2);
+      expect(keepAlives()).toBe(0);
+
+      session.sendAudio({ pcm: new Int16Array([1, -2]), sampleRate: 16000, channels: 1 });
+      // A caller pause: no audio for a minute keeps the stream alive.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(keepAlives()).toBeGreaterThanOrEqual(12);
+
+      await session.end();
+      const afterEnd = keepAlives();
+      await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS * 3);
+      expect(keepAlives()).toBe(afterEnd);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not send KeepAlive while audio is flowing', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
+      const sessionPromise = provider.startSession({ sampleRate: 16000 });
+      const socket = MockWebSocket.instances[0]!;
+      socket.open();
+      const session = await sessionPromise;
+      for (let i = 0; i < 40; i += 1) {
+        session.sendAudio({ pcm: new Int16Array(320), sampleRate: 16000, channels: 1 });
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(socket.sent).not.toContain(JSON.stringify({ type: 'KeepAlive' }));
+      session.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports dropped connections through onError after the session opens', async () => {

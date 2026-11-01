@@ -1201,6 +1201,11 @@ export class VoiceRuntime {
     let completed = false;
     let spokenForPairing: string | undefined;
     let audioPlayed = false;
+    // Reply sentences that reached the caller as audio. A sentence queued
+    // before its first frame was not heard, so a cut-off turn records only these.
+    const heardSentences: string[] = [];
+    const heardText = (): string | undefined =>
+      heardSentences.length > 0 ? heardSentences.join(' ') : undefined;
     // A turn that reached a tool may have had side effects, heard or not.
     let toolInvoked = false;
     try {
@@ -1227,7 +1232,11 @@ export class VoiceRuntime {
       const turnStartedAt = Date.now();
       session.turnAudioMs = 0;
       let ttfaRecorded = false;
+      const fillerStreamId = `${session.sessionId}-filler`;
       const onSpeechText = this.createSpeechHandler(session, controller, {
+        onSentenceAudio: (sentence, meta) => {
+          if (meta.streamId !== fillerStreamId) heardSentences.push(sentence.trim());
+        },
         onFirstAudio: () => {
           audioPlayed = true;
           if (ttfaRecorded) return;
@@ -1313,7 +1322,7 @@ export class VoiceRuntime {
             : undefined;
 
         onFiller = async filler => {
-          await onSpeechText(filler, { streamId: `${session.sessionId}-filler` });
+          await onSpeechText(filler, { streamId: fillerStreamId });
         };
       }
 
@@ -1336,11 +1345,11 @@ export class VoiceRuntime {
         return;
       }
       if (result.aborted || session.ending || result.finalText.length === 0) {
-        spokenForPairing = audioPlayed ? result.finalText : undefined;
+        spokenForPairing = heardText();
         return;
       }
       if (session.callerMuted) {
-        spokenForPairing = audioPlayed ? result.finalText : undefined;
+        spokenForPairing = heardText();
         return;
       }
 
@@ -1477,7 +1486,7 @@ export class VoiceRuntime {
   private createSpeechHandler(
     session: ActiveSession,
     controller: AbortController,
-    opts: { onFirstAudio?: () => void },
+    opts: { onFirstAudio?: () => void; onSentenceAudio?: (sentence: string, meta: { streamId: string }) => void },
   ): (sentence: string, meta: { streamId: string }) => Promise<void> {
     return async (sentence: string, meta: { streamId: string }): Promise<void> => {
       if (controller.signal.aborted || session.ending || session.callerMuted) return;
@@ -1516,6 +1525,7 @@ export class VoiceRuntime {
           if (firstFrameAt === null) {
             firstFrameAt = arrivedAt;
             gapBeforeMs = dryMs;
+            opts.onSentenceAudio?.(sentence, meta);
           } else if (dryMs > 0) {
             starvedMs += dryMs;
             starvedCount += 1;
@@ -2137,6 +2147,15 @@ export class VoiceRuntime {
         session.pauseHeld = true;
       }
       this.stopSpeaking(session);
+      // Audio already queued in the transport would still play after the mute.
+      if (session.transport.clearQueuedAudio) {
+        try {
+          session.transport.clearQueuedAudio();
+          session.playoutEndsAt = Date.now();
+        } catch (err) {
+          this.log.warn({ sessionId: session.sessionId, err }, 'failed to clear queued audio on caller mute');
+        }
+      }
       if (session.pauseTimer) return;
       const graceMs = this.config.pauseGraceMs ?? 120_000;
       session.pauseTimer = setTimeout(() => {
