@@ -1,7 +1,7 @@
 // minutes-task.ts — when a meeting-minutes task still needs repair (#2322).
 //
 // A tagged task is enough to suppress a second minutes.ready only once it can
-// actually run: non-terminal, the structuring skill is active, and a wake is
+// actually run: non-terminal, the meetings bundle is active, and a wake is
 // pending or running. nextWakeAt is not that check — a running wake with no
 // deferred time has a null nextWakeAt and would look unfinished.
 
@@ -10,7 +10,8 @@ import { readActiveSkillNames } from '../db/active-skills-progress.js';
 import { consoleOrigin } from '../scheduler/job-notification-context.js';
 import type { MinutesRecap } from './types.js';
 
-export const MINUTES_STRUCTURING_SKILL = 'meeting-minutes-structuring';
+// The meetings bundle carries the follow-up playbook (#2400).
+export const MINUTES_FOLLOW_UP_SKILL = 'meetings';
 
 /** Office link that opens a working document in the console's Documents view (#2347). */
 export function documentConsoleUrl(appOrigin: string | undefined, httpPort: number, path: string): string {
@@ -64,7 +65,7 @@ export function minutesTaskNeedsRepair(
   hasActiveWake: boolean,
 ): boolean {
   if (isTerminalMinutesTask(task.status)) return false;
-  if (!readActiveSkillNames(task.progress).includes(MINUTES_STRUCTURING_SKILL)) return true;
+  if (!readActiveSkillNames(task.progress).includes(MINUTES_FOLLOW_UP_SKILL)) return true;
   return !hasActiveWake;
 }
 

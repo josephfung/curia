@@ -304,7 +304,7 @@ describeIf('MinutesPipeline (integration, #2322)', () => {
     const listed = await tasks.listTasks({ tag: `meeting-minutes:${sessionId}` });
     expect(listed).toHaveLength(1);
     expect(listed[0]?.id).toBe(created.id);
-    expect(readActiveSkillNames(listed[0]!.progress)).toEqual(['meeting-minutes-structuring']);
+    expect(readActiveSkillNames(listed[0]!.progress)).toEqual(['meetings']);
   });
 
   it('does not republish when the tagged task already has the skill and a wake', async () => {
@@ -322,7 +322,7 @@ describeIf('MinutesPipeline (integration, #2322)', () => {
     });
     const written = await tasks.setActiveSkillsBlock(
       created.id,
-      replaceActiveSkillsBlock(['meeting-minutes-structuring']),
+      replaceActiveSkillsBlock(['meetings']),
     );
     expect('ok' in written && written.ok === false).toBe(false);
     activeWakes.add(created.id);
