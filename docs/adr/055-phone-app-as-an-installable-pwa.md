@@ -82,8 +82,10 @@ agents keep choosing the channel. Code decides only whether the app is reachable
    the row's remaining life at two minutes, so a photographed QR and a still-valid short code
    are not both long-lived. The cap is a later, best-effort update. If it fails, the sign-in
    still succeeds and the server logs an error, and the unused credential keeps the original
-   ten-minute window. Releasing a credential after a failed sign-in also leaves that window. The short code still works in that window
-   when the cookie did not carry into the installed app, and that second redemption creates
+   ten-minute window. Releasing a credential after a failed sign-in leaves the row's current
+   expiry as it is: it does not restore ten minutes if the other credential already capped it.
+   The short code still works until that expiry when the cookie did not carry into the
+   installed app, and that second redemption creates
    its own device session. The server logs it at warn level, and the `operator.session` pair
    event sets `secondCredential`. The desktop shows each credential's redemption on its own.
    Rate limiting stays keyed on `request.ip`, the same as `/auth`. `trustProxy` stays off,
