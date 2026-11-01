@@ -3398,6 +3398,49 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     await runtime.endSession('s-idle-barge', 'test');
   });
 
+  it('an unmute with no pause in effect does not speak a barge-in carry alone', async () => {
+    const outbound = new OutboundContextService(
+      { query: async () => ({ rows: [] }) } as never,
+      logger,
+    );
+    outbound.getActive = () => new Promise(() => {});
+    const llm = new FakeStreamProvider([replyScript('Afternoon only.'), replyScript('Afternoon only.')]);
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      outboundContextService: outbound,
+      historyReadTimeoutMs: 80,
+      pauseGraceMs: 60_000,
+    });
+    await runtime.startSession({
+      sessionId: 's-stray-unmute',
+      conversationId: 'voice:s-stray-unmute',
+      roomName: 'voice-s-stray-unmute',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
+    await delay(20);
+    stt.emit({ text: 'just the', isFinal: false, speechFinal: false, confidence: 0.9 });
+    await delay(150);
+    // A Mute-button release (curia.mute=user, or the track unmuting) with no
+    // background pause before it.
+    transport.emitCallerMuted(false);
+    await runtime.awaitIdle('s-stray-unmute');
+    stt.emit({ text: 'just the afternoon', isFinal: true, speechFinal: true, confidence: 0.9 });
+    await runtime.awaitIdle('s-stray-unmute');
+
+    expect(llm.seenMessages).toHaveLength(1);
+    const messages = llm.seenMessages[0]!;
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: "what's on my calendar? just the afternoon",
+    });
+    await runtime.endSession('s-stray-unmute', 'test');
+  });
+
   it('keeps a muted utterance when the pause grace ends the call', async () => {
     vi.useFakeTimers();
     try {

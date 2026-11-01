@@ -2118,7 +2118,9 @@ export class VoiceRuntime {
    * speaking immediately and hold any turn that has not been heard. End the
    * call if it stays muted for the grace period. Unmute cancels that timer
    * and speaks the held turn. A disconnect still ends the call at once.
-   * A Mute-button press never reaches here: the transport ignores it.
+   * The transport does not report a Mute-button press as a mute, but it does
+   * report unmutes for it (the `curia.mute=user` attribute, the track unmuting).
+   * An unmute with no pause in effect is ignored.
    */
   private handleCallerMuted(session: ActiveSession, muted: boolean): void {
     if (session.ending) return;
@@ -2141,6 +2143,9 @@ export class VoiceRuntime {
       }, graceMs);
       return;
     }
+    // No pause to end. Resuming here would drain a barge-in's carry before the
+    // caller finishes the sentence, splitting it in two (#2240).
+    if (!session.callerMuted) return;
     session.callerMuted = false;
     if (session.pauseTimer) {
       clearTimeout(session.pauseTimer);
