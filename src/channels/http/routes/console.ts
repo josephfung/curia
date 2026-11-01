@@ -66,7 +66,8 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
         // keep running the previous worker and miss the update prompt.
         if (contained.safeRel === 'sw.js') {
           // @fastify/send overwrites Cache-Control unless cacheControl is off.
-          const sent = reply.sendFile(contained.safeRel, contained.rootReal, { cacheControl: false });
+          // A literal path: safeRel is already known to be 'sw.js' here.
+          const sent = reply.sendFile('sw.js', contained.rootReal, { cacheControl: false });
           reply.header('Cache-Control', 'no-cache');
           return sent;
         }

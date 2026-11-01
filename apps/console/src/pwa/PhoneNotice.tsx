@@ -9,7 +9,7 @@ export function PhoneNotice({ text }: { text: string }) {
   return (
     <p className="pair-warning" role="status">
       {text.slice(0, index)}
-      <a href={PHONE_DOCS_URL}>Using Curia on your phone</a>
+      <a href={PHONE_DOCS_URL}>Use Curia on your phone</a>
       {text.slice(index + PHONE_DOCS_URL.length)}
     </p>
   );
