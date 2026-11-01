@@ -691,15 +691,14 @@ Tracked in milestone **v0.48 - Onboarding Journey** (#29).
 | #2356 **Getting-started docs: Setup, then Onboarding** | Retitled. Two-phase framing replaces "install, then desk"; the curia-docs restructure in *How the docs tell it*; Appendix A fixes. The Setup half can ship before the features, describing today's behaviour; Onboarding pages land with the features. | — | L → XL |
 | #2357 Installer: HTTPS-first, voice on by default | Closing message points at the Setup checklist; wording only. | — | L |
 | #2341 PWA | Adds the operator-generated invitation link and the ADR-055 amendment (or a small follow-up issue if #2341 is already in flight). | — | XXL |
-| #2358 **Setup status: `setup_complete`** | One readiness flag over all required items, replacing `kickoff_ready` / `sessions_ready`; adds `principal_mailbox` (sign-in configured) and Google Docs entries. | — | M |
+| #2358 **Setup status: `setup_complete`, Setup-only setup agent and `/setup` form** | One readiness flag over all required items, replacing `kickoff_ready` / `sessions_ready`; adds `principal_mailbox` (sign-in configured) and Google Docs entries. Also reworks the setup agent around the *1b* items and operator decisions (opening with "for yourself or for someone else?"), keeps setup chat out of the principal's memory, and removes the form's Tone & style and Autonomy steps. | — | M → L |
 | #2359 Console and PWA calls load the parked agenda | Unchanged. | — | S |
 | #2360 **Onboarding program** | Rewritten: the console's Start onboarding step and Curia's greeting; one first conversation by voice or chat with multiple-choice style, autonomy and preferences; review-format choice; review session that adapts; check-ins; weekly session. Absorbs chat sessions (#2364) and the setup agent's onboarding content. | #2358, #2359, #2361, and #2341 for the default route (Signal or SMS work without it) | XL → XXL; consider splitting the weekly session out |
 | #2361 **Principal mailbox sign-in** | Rewritten: Nylas hosted authentication (Google connector) with a callback on the Curia server, picking up the grant without a restart, an operator Setup guide, the in-conversation link, and the "connected" event. Replaces the hand-made grant guide. | #2358 | M → L |
 | #2362 **Deep dive** | Adds writing voice as the third draft; delivery as Google Docs, one email and a review session on the calendar; confirmation from the docs and the review session instead of the numbered-list email. The ADR also covers writing voice and drafts held in Google Drive. | #2360, #2361, #2338 | XL → XXL |
 | #2363 Voice loads priorities | Unchanged. | #2362 | S |
-| #2364 Spike: text-chat sessions | Folded into #2360; close. | — | — |
+| #2364 Spike: text-chat sessions | Folded into #2360; closed. | — | — |
 | #2365 Design: operator role | Unchanged, still off the critical path. | — | S |
-| **New: setup agent and `/setup` form, Setup only** | Rework the setup-wizard agent around the *1b* items and operator decisions, opening with "for yourself or for someone else?"; keep setup chat out of the principal's memory and thread; move the form's Tone & style and Autonomy steps out. Could fold into #2358. | #2358 | L |
 
 **Critical path:** #2358 and #2361 → #2360 → #2362. #2356 (Setup half), #2357, #2359 and #2365
 can run in parallel.
