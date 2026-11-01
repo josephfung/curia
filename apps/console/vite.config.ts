@@ -19,11 +19,14 @@ function stampServiceWorkerSource(source: string, buildId: string): string {
 function stampServiceWorker(): Plugin {
   const swPath = path.resolve(import.meta.dirname, 'public/sw.js');
   let buildId = envBuildId ?? 'dev';
+  // The dev server also calls closeBundle when it shuts down. Only stamp after a real build,
+  // or a stale dist/sw.js would be stamped twice and throw.
+  let bundleGenerated = false;
   return {
     name: 'stamp-service-worker',
     generateBundle(_options, bundle) {
-      if (envBuildId) return;
-      buildId = bundleBuildId(bundle, readFileSync(swPath, 'utf8'));
+      if (!envBuildId) buildId = bundleBuildId(bundle, readFileSync(swPath, 'utf8'));
+      bundleGenerated = true;
     },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
@@ -38,6 +41,7 @@ function stampServiceWorker(): Plugin {
       });
     },
     closeBundle() {
+      if (!bundleGenerated) return;
       const built = path.resolve(import.meta.dirname, 'dist/sw.js');
       if (!existsSync(built)) return;
       writeFileSync(built, stampServiceWorkerSource(readFileSync(built, 'utf8'), buildId));

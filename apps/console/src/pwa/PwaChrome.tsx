@@ -7,6 +7,9 @@ import { useEffect, useRef, useState } from 'react';
  */
 export function PwaChrome() {
   const [waiting, setWaiting] = useState<ServiceWorker | null>(null);
+  // The banner sits over the top bar, so the operator can put it away without reloading
+  // (a reload would drop an unsent chat draft). The next launch offers the update again.
+  const [dismissed, setDismissed] = useState(false);
   const reloadRequested = useRef(false);
 
   useEffect(() => {
@@ -54,7 +57,7 @@ export function PwaChrome() {
     };
   }, []);
 
-  if (!waiting) return null;
+  if (!waiting || dismissed) return null;
 
   return (
     <div className="pwa-update" role="status">
@@ -71,6 +74,9 @@ export function PwaChrome() {
         }}
       >
         Reload
+      </button>
+      <button type="button" onClick={() => setDismissed(true)}>
+        Later
       </button>
     </div>
   );

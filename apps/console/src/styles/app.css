@@ -981,6 +981,11 @@ a.dash-activity-headline:hover { text-decoration: underline; }
   color: var(--app-fg-muted);
 }
 .pair-warning a { color: var(--app-teal); }
+/* Dark teal on the dark warning tint is about 3.2:1; use the body colour, underlined. */
+[data-theme="dark"] .pair-warning a { color: var(--app-fg); text-decoration: underline; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .pair-warning a { color: var(--app-fg); text-decoration: underline; }
+}
 .pair-card { max-width: 420px; }
 .pwa-update {
   position: fixed;
