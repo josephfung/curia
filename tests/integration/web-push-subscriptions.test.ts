@@ -31,18 +31,40 @@ describeIf('web push subscriptions (integration)', () => {
     }
   });
 
-  it('counts any live session when push is configured', async () => {
-    await pool.query(
-      `INSERT INTO push_subscriptions (session_id, endpoint, p256dh, auth_secret)
-       VALUES ($1, $2, 'p256', 'auth')`,
-      [sessionId, `https://updates.push.services.mozilla.com/wpush/v2/${sessionId}`],
-    );
-    expect(await hasLivePushSubscription(pool, false)).toBe(false);
-    expect(await hasLivePushSubscription(pool, true)).toBe(true);
+  it('counts a live session when push is configured, and not an expired one', async () => {
+    // One client in a transaction that is rolled back: the other subscriptions in
+    // a shared database are hidden, so each answer comes from this test's rows.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM push_subscriptions');
+      const expiredSessionId = randomUUID();
+      await client.query(
+        `INSERT INTO sessions (id, token_hash, expires_at) VALUES ($1, $2, NOW() - interval '1 hour')`,
+        [expiredSessionId, `test-${expiredSessionId}`],
+      );
+      await client.query(
+        `INSERT INTO push_subscriptions (session_id, endpoint, p256dh, auth_secret)
+         VALUES ($1, $2, 'p256', 'auth')`,
+        [expiredSessionId, `https://updates.push.services.mozilla.com/wpush/v2/${expiredSessionId}`],
+      );
+      expect(await hasLivePushSubscription(client, true)).toBe(false);
+
+      await client.query(
+        `INSERT INTO push_subscriptions (session_id, endpoint, p256dh, auth_secret)
+         VALUES ($1, $2, 'p256', 'auth')`,
+        [sessionId, `https://updates.push.services.mozilla.com/wpush/v2/${sessionId}`],
+      );
+      expect(await hasLivePushSubscription(client, true)).toBe(true);
+      expect(await hasLivePushSubscription(client, false)).toBe(false);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
   });
 
   it('deletes the subscription when the session is deleted', async () => {
-    // Own session: the live-count case above leaves a row on sessionId.
+    // Own session, so deleting it cannot reach a row another case relies on.
     await pool.query(
       `INSERT INTO sessions (id, token_hash, expires_at) VALUES ($1, $2, NOW() + interval '1 hour')`,
       [doomedSessionId, `test-${doomedSessionId}`],
