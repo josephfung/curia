@@ -218,6 +218,7 @@ export type SystemPromptSourceContext = Pick<
   | 'verification'
   | 'browserSessionAlive'
   | 'pinnedContextReader'
+  | 'principalReach'
 >;
 
 /**
@@ -241,6 +242,7 @@ export const SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS = [
   'verification',
   'browserSessionAlive',
   'pinnedContextReader',
+  'principalReach',
 ] as const satisfies readonly (keyof SystemPromptSourceContext)[];
 
 type UnlistedSourceContextKey = Exclude<
@@ -267,6 +269,7 @@ export function resolveSystemPromptSources(
   agentConfig: AgentYamlConfig,
   systemPrompt: string,
   ctx: SystemPromptSourceContext,
+  pinnedTools: readonly string[] = [],
 ): SystemPromptSources {
   const isCoordinator = agentConfig.role === 'coordinator';
   return {
@@ -314,6 +317,9 @@ export function resolveSystemPromptSources(
     // Any agent may declare them; an agent with none gets no block.
     pinnedContext: parsePinnedContext(agentConfig.pinned_context, agentConfig.name),
     pinnedContextReader: ctx.pinnedContextReader,
+    principalReach: agentCanSend(pinnedTools) && ctx.principalReach
+      ? () => ctx.principalReach!(pinnedTools)
+      : undefined,
     // Map YAML snake_case to AgentConfig camelCase, defaulting omitted fields.
     errorBudget: agentConfig.error_budget ? {
       maxTurns: agentConfig.error_budget.max_turns ?? DEFAULT_ERROR_BUDGET.maxTurns,
@@ -467,10 +473,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
   const runtimeConfig: AgentConfig = {
     // agentId, systemPrompt, and every field buildBaseSystemPrompt() reads — including
     // the coordinator-only gating. Decided in one place; see resolveSystemPromptSources.
-    ...resolveSystemPromptSources(agentConfig, systemPrompt, ctx),
-    ...(agentCanSend(pinnedToolNames) && ctx.principalReach
-      ? { principalReach: () => ctx.principalReach!(pinnedToolNames) }
-      : {}),
+    ...resolveSystemPromptSources(agentConfig, systemPrompt, ctx, pinnedToolNames),
     provider: binding.provider,
     resolvedModel: binding.resolvedModel,
     tier: binding.tier,

@@ -113,7 +113,7 @@ function bareRef(value: unknown): string | null {
   return hash > 0 ? s.slice(0, hash) : s;
 }
 
-/** A reference's display name, or a neutral fallback that never leaks an id. */
+/** The channel named in an activity line. */
 function fallbackChannelLabel(channel: string): string {
   if (channel === 'signal') return 'Signal';
   if (channel === 'sms') return 'SMS';
@@ -122,6 +122,7 @@ function fallbackChannelLabel(channel: string): string {
   return channel;
 }
 
+/** A reference's display name, or a neutral fallback that never leaks an id. */
 function who(ref: string | null, ctx: DescribeContext): string {
   if (!ref) return 'someone';
   const name = ctx.name(ref);

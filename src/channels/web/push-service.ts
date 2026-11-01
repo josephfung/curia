@@ -7,7 +7,6 @@
 // fallback, and it does not record a dead-phone notice. A push the service
 // does not accept is not described as waiting for a retry that never runs.
 
-import { randomUUID } from 'node:crypto';
 import type { Logger } from '../../logger.js';
 import { markdownToHtml } from '../../format/markdown-to-html.js';
 import { getOrCreateWebThread, type WebThreadQueryable } from '../http/web-thread.js';
@@ -18,6 +17,7 @@ export interface PushSubscriptionRow {
   endpoint: string;
   p256dh: string;
   authSecret: string;
+  deviceName: string | null;
 }
 
 export interface PushSender {
@@ -54,8 +54,16 @@ export interface PushServiceDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** Consecutive failures after which a subscription is treated as dead. */
+/**
+ * Consecutive transport failures after which a subscription is treated as dead.
+ * Setup rejections (403 and other 4xx) do not count: those are a bad
+ * configuration, and deleting the row would blame a working phone.
+ */
 const DEAD_AFTER = 5;
+/** Two retries, about 1s then 2s, so the whole push phase stays under 12s. */
+const RETRY_BACKOFF_MS = [1_000, 2_000];
+const PUSH_PHASE_MS = 12_000;
+const RETRY_AFTER_CAP_MS = 5_000;
 
 const NO_SUBSCRIPTION = 'No phone is subscribed to notifications.';
 const PUSH_REJECTED = 'The push service did not accept the message.';
@@ -144,41 +152,57 @@ export class WebPushService {
   }
 
   private async pushText(message: string, conversationId: string): Promise<WebDelivery> {
-    const hide = await this.hidePreviews();
-    const messageId = randomUUID();
+    let hide: boolean;
+    try {
+      hide = await this.hidePreviews();
+    } catch (err) {
+      this.deps.logger.error({ err }, 'web push: could not read preview settings');
+      return { outcome: 'unavailable', detail: 'Notifications are temporarily unavailable.' };
+    }
+    // Turns have no stored id, so the notification opens the thread rather than
+    // a message that does not exist.
     const body = JSON.stringify({
       title: 'Curia',
       body: pushPreview(message, hide),
       url: '/chat',
       tag: `curia-${conversationId}`,
       conversationId,
-      messageId,
     });
-    const subs = await this.listSubscriptions();
+    let subs: PushSubscriptionRow[];
+    try {
+      subs = await this.listSubscriptions();
+    } catch (err) {
+      this.deps.logger.error({ err }, 'web push: could not list subscriptions');
+      return { outcome: 'unavailable', detail: 'Notifications are temporarily unavailable.' };
+    }
     if (subs.length === 0) {
       return { outcome: 'unavailable', detail: NO_SUBSCRIPTION };
     }
 
-    const first = await Promise.all(subs.map((sub) => this.attempt(sub, body)));
-    const retries = first.filter((row): row is Extract<Attempt, { kind: 'retry' }> => row.kind === 'retry' && row.retryAfterMs !== undefined);
-    const retryIds = new Set(retries.map((row) => row.id));
-    const wait = retries.reduce((max, row) => Math.max(max, row.retryAfterMs ?? 0), 0);
-    const second = new Map<string, Attempt>();
-    if (retryIds.size > 0) {
-      if (wait > 0) await this.sleep(wait);
-      const again = await Promise.all(
-        subs.filter((sub) => retryIds.has(sub.id)).map((sub) => this.attempt(sub, body)),
-      );
-      for (const row of again) second.set(row.id, row);
+    const started = Date.now();
+    const latest = new Map<string, Attempt>();
+    let pending = subs;
+    for (let round = 0; round <= RETRY_BACKOFF_MS.length; round += 1) {
+      if (pending.length === 0) break;
+      if (round > 0) {
+        const wait = this.retryWait(pending, latest, RETRY_BACKOFF_MS[round - 1]!, started);
+        if (wait <= 0) break;
+        await this.sleep(wait);
+      }
+      const rows = await Promise.all(pending.map((sub) => this.attempt(sub, body)));
+      for (const row of rows) latest.set(row.id, row);
+      pending = subs.filter((sub) => latest.get(sub.id)?.kind === 'retry');
     }
 
     const gone: string[] = [];
+    const goneNames: Array<string | null> = [];
     let delivered = 0;
     let setupDetail: string | null = null;
     let rejected = false;
 
     for (const sub of subs) {
-      const result = second.get(sub.id) ?? first.find((row) => row.id === sub.id)!;
+      const result = latest.get(sub.id);
+      if (!result) continue;
       if (result.kind === 'ok') {
         delivered += 1;
         await this.noteSuccess(sub.id);
@@ -186,12 +210,16 @@ export class WebPushService {
       }
       if (result.kind === 'gone' || result.kind === 'dead') {
         gone.push(sub.id);
+        goneNames.push(sub.deviceName);
+        this.deps.logger.warn(
+          { endpointHost: endpointHost(sub.endpoint), device: sub.deviceName },
+          'web push: subscription is gone',
+        );
         continue;
       }
       if (result.kind === 'setup') {
         setupDetail = result.detail;
         this.deps.logger.error({ endpoint: sub.endpoint, detail: result.detail }, 'web push: setup rejected');
-        if (await this.noteFailure(sub.id)) gone.push(sub.id);
         continue;
       }
       rejected = true;
@@ -199,20 +227,46 @@ export class WebPushService {
         { endpoint: sub.endpoint, status: result.kind === 'failed' || result.kind === 'retry' ? result.status : 0 },
         'web push: the push service did not accept the message',
       );
-      if (await this.noteFailure(sub.id)) gone.push(sub.id);
+      if (await this.noteFailure(sub.id)) {
+        gone.push(sub.id);
+        goneNames.push(sub.deviceName);
+      }
     }
 
-    if (gone.length > 0) await this.deleteSubscriptions(gone);
+    if (gone.length > 0) {
+      try {
+        await this.deleteSubscriptions(gone);
+      } catch (err) {
+        this.deps.logger.error({ err }, 'web push: failed to delete a dead subscription');
+      }
+      await this.recordNotice('dead', stoppedNotice(goneNames));
+    }
     if (setupDetail) await this.recordNotice('setup', setupDetail);
 
     if (delivered > 0) return { outcome: 'delivered' };
-    if (subs.length === gone.length) {
-      await this.recordNotice('dead', PHONE_DEAD);
-      return { outcome: 'fallback', detail: PHONE_DEAD };
+    if (gone.length > 0 && gone.length === subs.length) {
+      return { outcome: 'fallback', detail: stoppedNotice(goneNames) };
     }
     if (setupDetail) return { outcome: 'fallback', detail: setupDetail };
     if (rejected) return { outcome: 'fallback', detail: PUSH_REJECTED };
     return { outcome: 'fallback', detail: PUSH_REJECTED };
+  }
+
+  /** Retry-After when the service sent one, otherwise the round's backoff, inside the phase. */
+  private retryWait(
+    pending: readonly PushSubscriptionRow[],
+    latest: ReadonlyMap<string, Attempt>,
+    backoffMs: number,
+    started: number,
+  ): number {
+    let hinted = 0;
+    for (const sub of pending) {
+      const row = latest.get(sub.id);
+      if (row?.kind === 'retry' && row.retryAfterMs !== undefined) hinted = Math.max(hinted, row.retryAfterMs);
+    }
+    const base = hinted > 0 ? Math.min(hinted, RETRY_AFTER_CAP_MS) : jitter(backoffMs);
+    const remaining = PUSH_PHASE_MS - (Date.now() - started);
+    return Math.min(base, remaining);
   }
 
   private async attempt(sub: PushSubscriptionRow, body: string): Promise<Attempt> {
@@ -277,13 +331,16 @@ export class WebPushService {
 
   private async listSubscriptions(): Promise<PushSubscriptionRow[]> {
     const result = await this.deps.pool.query(
-      `SELECT id, endpoint, p256dh, auth_secret FROM push_subscriptions`,
+      `SELECT id, endpoint, p256dh, auth_secret,
+              (SELECT name FROM sessions WHERE sessions.id = push_subscriptions.session_id) AS device_name
+       FROM push_subscriptions`,
     );
     return result.rows.map((row) => ({
       id: String(row['id']),
       endpoint: String(row['endpoint']),
       p256dh: String(row['p256dh']),
       authSecret: String(row['auth_secret']),
+      deviceName: typeof row['device_name'] === 'string' && row['device_name'].length > 0 ? row['device_name'] : null,
     }));
   }
 
@@ -369,6 +426,28 @@ function retryAfterOf(err: unknown): number | undefined {
     if (typeof value === 'number') return value;
   }
   return undefined;
+}
+
+function endpointHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return 'unknown';
+  }
+}
+
+function jitter(ms: number): number {
+  const delta = Math.floor(Math.random() * 201) - 100;
+  return Math.max(0, ms + delta);
+}
+
+function stoppedNotice(names: ReadonlyArray<string | null>): string {
+  const labelled = names.filter((name): name is string => typeof name === 'string' && name.length > 0);
+  if (labelled.length === 0) return PHONE_DEAD;
+  if (labelled.length === 1) {
+    return `Your ${labelled[0]} stopped receiving notifications. Open the Curia app on it to reconnect.`;
+  }
+  return `Your ${labelled.join(' and ')} stopped receiving notifications. Open the Curia app on them to reconnect.`;
 }
 
 function setupDetail(status: number, err: unknown): string {

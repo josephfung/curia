@@ -12,11 +12,24 @@ interface SubRow {
   p256dh: string;
   auth_secret: string;
   consecutive_failures: number;
+  device_name?: string;
 }
 
-function createPool(state: { hide: boolean; subs: SubRow[]; notices: string[] }): WebThreadQueryable {
+function createPool(state: {
+  hide: boolean;
+  subs: SubRow[];
+  notices: string[];
+  failDelete?: boolean;
+  failRead?: boolean;
+}): WebThreadQueryable {
   return {
     async query(sql: string, params?: unknown[]) {
+      if (state.failRead && (sql.includes('hide_previews') || sql.includes('SELECT id, endpoint'))) {
+        throw new Error('db down');
+      }
+      if (state.failDelete && sql.includes('DELETE FROM push_subscriptions')) {
+        throw new Error('delete failed');
+      }
       if (sql.includes('SELECT conversation_id FROM web_thread')) {
         return { rows: [{ conversation_id: 'conv-1' }] };
       }
@@ -89,6 +102,7 @@ describe('push preview', () => {
   it('strips markdown, keeps emoji whole, and cuts on a word', () => {
     expect(pushPreview('  hello   board  ', false)).toBe('hello board');
     expect(pushPreview('**Board** moved', false)).toBe('Board moved');
+    expect(pushPreview('Rename file_name_v2 to 5 * 3 * 2', false)).toBe('Rename file_name_v2 to 5 * 3 * 2');
     expect(pushPreview('[notes](https://example.com) today', false)).toBe('notes today');
     expect(pushPreview('x'.repeat(100), false)).toHaveLength(100);
     const long = `${'word '.repeat(40)}tail`;
@@ -168,7 +182,30 @@ describe('WebPushService', () => {
     expect(state.notices[0]).toMatch(/setup:Push setup was rejected \(403\): status 403 BadJwtToken/);
   });
 
-  it('does not promise a retry when the push service rejects without Retry-After', async () => {
+  it('retries a 5xx twice before falling back, and a third success does not fall back', async () => {
+    const state = { hide: false, subs: [sub()], notices: [] };
+    let calls = 0;
+    const sender: PushSender = {
+      send: vi.fn(async () => {
+        calls += 1;
+        if (calls < 3) throw fail(503);
+      }),
+    };
+    const sleep = vi.fn(async (_ms: number) => undefined);
+    const thread = memory();
+    const push = service({ pool: createPool(state), sender, sleep, thread });
+    await expect(push.deliver('hello')).resolves.toEqual({ outcome: 'delivered' });
+    expect(sender.send).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    const waits = sleep.mock.calls.map((call) => call[0]);
+    expect(waits[0]).toBeGreaterThanOrEqual(900);
+    expect(waits[0]).toBeLessThanOrEqual(1_100);
+    expect(waits[1]).toBeGreaterThanOrEqual(1_900);
+    expect(waits[1]).toBeLessThanOrEqual(2_100);
+    expect(thread.calls).toHaveLength(1);
+  });
+
+  it('does not promise a later retry after the short backoff is spent', async () => {
     const state = { hide: false, subs: [sub()], notices: [] };
     const sender: PushSender = { send: vi.fn().mockRejectedValue(fail(429)) };
     const sleep = vi.fn(async () => undefined);
@@ -177,8 +214,8 @@ describe('WebPushService', () => {
     const result = await push.deliver('hello');
     expect(result).toMatchObject({ outcome: 'fallback' });
     if (result.outcome === 'fallback') expect(result.detail).not.toMatch(/retried/);
-    expect(sender.send).toHaveBeenCalledTimes(1);
-    expect(sleep).not.toHaveBeenCalled();
+    expect(sender.send).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
     expect(thread.calls).toEqual([]);
   });
 
@@ -222,6 +259,58 @@ describe('WebPushService', () => {
     expect(body).toContain(HIDDEN_PREVIEW);
     expect(body).not.toContain('secret');
     expect(body).toContain('"tag":"curia-conv-1"');
+  });
+
+  it('keeps the row after six setup rejections', async () => {
+    const state = { hide: false, subs: [sub()], notices: [] as string[] };
+    const sender: PushSender = { send: vi.fn().mockRejectedValue(fail(403, { body: 'BadJwtToken' })) };
+    const push = service({ pool: createPool(state), sender, sleep: async () => undefined });
+    for (let i = 0; i < 6; i += 1) {
+      await push.deliver('hello');
+    }
+    expect(state.subs).toHaveLength(1);
+    expect(state.subs[0]?.consecutive_failures).toBe(0);
+    expect(state.notices.every((notice) => notice.startsWith('setup:'))).toBe(true);
+  });
+
+  it('records a named dead notice when one device is gone and another accepts', async () => {
+    const state = {
+      hide: false,
+      subs: [{ ...sub('ok'), device_name: 'Android' }, { ...sub('gone'), device_name: 'iPhone' }],
+      notices: [] as string[],
+    };
+    const sender: PushSender = {
+      send: vi.fn(async (row: { id: string }) => {
+        if (row.id === 'gone') throw fail(410);
+      }),
+    };
+    const push = service({ pool: createPool(state), sender });
+    await expect(push.deliver('hello')).resolves.toEqual({ outcome: 'delivered' });
+    expect(state.subs.map((row) => row.id)).toEqual(['ok']);
+    expect(state.notices[0]).toMatch(/dead:Your iPhone stopped receiving notifications/);
+  });
+
+  it('returns unavailable when the subscription read fails, and stays delivered when cleanup fails', async () => {
+    const unread = { hide: false, subs: [sub()], notices: [], failRead: true };
+    const blocked = service({ pool: createPool(unread), sender: { send: vi.fn() } });
+    await expect(blocked.deliver('hello')).resolves.toEqual({
+      outcome: 'unavailable',
+      detail: 'Notifications are temporarily unavailable.',
+    });
+
+    const state = {
+      hide: false,
+      subs: [sub('ok'), sub('gone')],
+      notices: [] as string[],
+      failDelete: true,
+    };
+    const sender: PushSender = {
+      send: vi.fn(async (row: { id: string }) => {
+        if (row.id === 'gone') throw fail(410);
+      }),
+    };
+    const push = service({ pool: createPool(state), sender });
+    await expect(push.deliver('hello')).resolves.toEqual({ outcome: 'delivered' });
   });
 
   it('does not announce an empty subscription list for a chat reply', async () => {

@@ -2,14 +2,16 @@
 //
 // Principal only. A dead subscription, a push setup error, or a push the
 // service did not accept is sent onward by this handler, through the same
-// gateway checks as the phone send. The order is the configured channels,
-// with a standing preference's named channel first. No subscription is a
-// failure and is not sent onward.
+// gateway checks as the phone send. The order is the configured channels.
+// Standing preferences are not parsed. No subscription is a failure and is
+// not sent onward. A hold or a content-filter block stops the fallback.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import type { OutboundGateway, OutboundSendRequest } from '../../src/skills/outbound-gateway.js';
+import type { OutboundGateway, OutboundSendRequest, OutboundSendResult } from '../../src/skills/outbound-gateway.js';
 import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../src/skills/_shared/principal-directed.js';
 import { FALLBACK_CHANNELS, type FallbackChannel } from '../../src/agents/principal-reach.js';
+import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
+import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
 
 const MAX_MESSAGE_LENGTH = 4000;
 
@@ -39,7 +41,11 @@ function fallbackOrder(gateway: OutboundGateway): readonly FallbackChannel[] {
 
 export class WebSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { recipient, message } = ctx.input as { recipient?: unknown; message?: unknown };
+    const { recipient, message, context_bridge: contextBridgeRaw } = ctx.input as {
+      recipient?: unknown;
+      message?: unknown;
+      context_bridge?: unknown;
+    };
     if (typeof message !== 'string' || message.trim().length === 0) {
       return { success: false, error: 'Missing required input: message (string)' };
     }
@@ -74,26 +80,40 @@ export class WebSendHandler implements ToolHandler {
         data: { channel: 'web', ...redactionData(result) },
       };
     }
-    if (result.webDelivery === 'unavailable' || result.webDelivery === 'unconfigured' || result.webDelivery !== 'fallback') {
+    if (result.webDelivery !== 'fallback') {
       return { success: false, error: result.blockedReason ?? 'Phone app send failed' };
     }
 
     const notice = result.webDeliveryDetail ?? result.blockedReason ?? 'The phone could not be reached.';
     const options = sendOptions(ctx);
-    for (const channel of fallbackOrder(ctx.outboundGateway)) {
+    const order = fallbackOrder(ctx.outboundGateway);
+    const skipped = FALLBACK_CHANNELS.filter((channel) => !order.includes(channel));
+    const preferenceNote = skipped.length > 0
+      ? `Standing preferences were not applied. Skipped ${skipped.join(', ')} because they are not configured.`
+      : 'Standing preferences were not applied.';
+    for (const channel of order) {
       const resolved = await ctx.outboundGateway.resolveRecipientReference(channel, 'principal', { field: 'recipient' });
       if (!resolved.ok) continue;
       try {
         const sent = await ctx.outboundGateway.send(FALLBACK_REQUEST[channel](resolved.identifier, message), options);
+        if (sent.gated || (sent.blockedRules !== undefined && sent.blockedRules.length > 0)) {
+          return { success: false, error: sent.blockedReason ?? 'The message was not sent.' };
+        }
         if (sent.deferredToDigest) {
-          return { success: true, data: { channel, app_notice: notice, ...relayDeferredData(sent) } };
+          return {
+            success: true,
+            data: { channel, delivered_to: resolved.identifier, app_notice: notice, note: preferenceNote, ...relayDeferredData(sent) },
+          };
         }
         if (sent.success) {
+          await registerFallback(ctx, channel, message, contextBridgeRaw, resolved, sent);
           return {
             success: true,
             data: {
               channel,
+              delivered_to: resolved.identifier,
               app_notice: notice,
+              note: preferenceNote,
               ...redactionData(sent),
             },
           };
@@ -104,4 +124,24 @@ export class WebSendHandler implements ToolHandler {
     }
     return { success: false, error: `${notice} No other channel could take the message.` };
   }
+}
+
+async function registerFallback(
+  ctx: ToolContext,
+  channel: FallbackChannel,
+  message: string,
+  contextBridgeRaw: unknown,
+  resolved: { identifier: string; contactId?: string },
+  sent: OutboundSendResult,
+): Promise<void> {
+  if (sent.deferredToDigest) return;
+  await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
+    channelId: channel,
+    content: sent.sentContent ?? message,
+    agentId: ctx.agentId ?? 'coordinator',
+    log: ctx.log,
+    boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
+    recipientContactIds: resolved.contactId ? [resolved.contactId] : [],
+    outreach: { turn: ctx, via: channel, addresses: [resolved.identifier] },
+  });
 }

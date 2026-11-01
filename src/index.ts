@@ -26,7 +26,7 @@ import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { WebPushService } from './channels/web/push-service.js';
 import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
-import { reachChannelsFor, urgentPreference, type ReachChannel } from './agents/principal-reach.js';
+import { reachChannelsFor, type ReachChannel } from './agents/principal-reach.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
 import { resolveSystemSnapshot } from './channels/http/routes/system.js';
 import { createPool } from './db/connection.js';
@@ -1929,14 +1929,6 @@ async function main(): Promise<void> {
       slackClient: registryGatedOutbound.slackClient,
       smsClient: registryGatedOutbound.smsClient,
       webPush,
-      reachPreferenceText: () => {
-        try {
-          return urgentPreference(officeIdentityService.get().behavioralPreferences);
-        } catch (err) {
-          logger.warn({ err }, 'web-send: could not read standing preferences');
-          return null;
-        }
-      },
       contactService,
       contentFilter: outboundFilter,
       bus,
@@ -2864,21 +2856,17 @@ async function main(): Promise<void> {
     taskRepo,
     turnLanes,
     principalReach: async (tools) => {
+      const identified = new Set(principalIdentities.map((identity) => identity.channel));
+      if (principalPrimaryEmail.current) identified.add('email');
       const configured = new Set<ReachChannel>();
-      if (registryGatedOutbound.signalClient && registryGatedOutbound.signalPhoneNumber) configured.add('signal');
-      if (registryGatedOutbound.smsClient) configured.add('sms');
-      if (registryGatedOutbound.slackClient) configured.add('slack');
-      if (registryGatedOutbound.nylasClients && registryGatedOutbound.nylasClients.size > 0) configured.add('email');
+      if (registryGatedOutbound.signalClient && registryGatedOutbound.signalPhoneNumber && identified.has('signal')) configured.add('signal');
+      if (registryGatedOutbound.smsClient && identified.has('sms')) configured.add('sms');
+      if (registryGatedOutbound.slackClient && identified.has('slack')) configured.add('slack');
+      if (registryGatedOutbound.nylasClients && registryGatedOutbound.nylasClients.size > 0 && identified.has('email')) configured.add('email');
       if (await webPush.reachableNow()) configured.add('web');
       const channels = reachChannelsFor(tools, configured);
       if (channels.length === 0) return null;
-      let preference: string | null = null;
-      try {
-        preference = urgentPreference(officeIdentityService.get().behavioralPreferences);
-      } catch (err) {
-        logger.warn({ err }, 'reach block: could not read standing preferences');
-      }
-      return { channels, preference };
+      return { channels };
     },
   };
   for (const agentConfig of agentConfigs) {

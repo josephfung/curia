@@ -33,14 +33,6 @@ export async function syncPushSubscription(): Promise<boolean> {
   return res.ok;
 }
 
-export async function thisBrowserIsSubscribed(): Promise<boolean> {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
-  const registration = await navigator.serviceWorker.getRegistration();
-  if (!registration) return false;
-  const subscription = await registration.pushManager.getSubscription();
-  return subscription !== null;
-}
-
 export async function enablePush(publicKey: string): Promise<void> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') {
     throw new Error('This browser cannot receive notifications.');

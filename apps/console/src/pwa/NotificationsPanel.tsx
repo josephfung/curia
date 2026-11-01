@@ -85,6 +85,11 @@ export function NotificationsPanel() {
     setBusy(true);
     setError(null);
     try {
+      if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.getRegistration();
+        const subscription = await registration?.pushManager.getSubscription();
+        await subscription?.unsubscribe();
+      }
       const res = await apiFetch('/api/push/subscriptions', { method: 'DELETE' });
       if (!res.ok) throw new Error('Could not turn off notifications.');
       setSubscribed(false);

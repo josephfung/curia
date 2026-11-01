@@ -159,9 +159,10 @@ export interface OutboundSendResult {
   /** Human-readable reason when success is false */
   blockedReason?: string;
   /**
-   * Phone-app delivery (#2341). `fallback` means the subscription is dead or
-   * the push service rejected the setup, and the caller should use the next
-   * channel. `unavailable` means a 429/5xx after retries: do not fall back yet.
+   * Phone-app delivery (#2341). `fallback` means the subscription is dead, the
+   * push service rejected the setup, or a push was not accepted after a short
+   * retry, and the caller should use the next channel. `unavailable` means no
+   * phone is subscribed, or the thread could not be saved.
    */
   webDelivery?: 'delivered' | 'visible' | 'fallback' | 'unavailable' | 'unconfigured';
   webDeliveryDetail?: string;
@@ -283,12 +284,6 @@ export interface OutboundGatewayConfig {
 
   /** Phone-app push (#2341). Absent in tests and when the app is not configured. */
   webPush?: import('../channels/web/push-service.js').WebPushService;
-
-  /**
-   * The standing preference that names a channel, when one is set. web-send
-   * uses it to order the fallback. Absent: the default order of configured channels.
-   */
-  reachPreferenceText?: () => string | null;
 
   contactService: ContactService;
   contentFilter: OutboundContentFilter;
@@ -689,7 +684,6 @@ export class OutboundGateway {
   private readonly slackClient?: SlackClient;
   private readonly smsClient?: SmsClient;
   private readonly webPush?: import('../channels/web/push-service.js').WebPushService;
-  private readonly reachPreferenceText?: () => string | null;
   private readonly contactService: ContactService;
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
@@ -723,7 +717,6 @@ export class OutboundGateway {
     this.slackClient = config.slackClient;
     this.smsClient = config.smsClient;
     this.webPush = config.webPush;
-    this.reachPreferenceText = config.reachPreferenceText;
     this.contactService = config.contactService;
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
@@ -756,8 +749,8 @@ export class OutboundGateway {
   }
 
   /**
-   * Channels that can take a web-send fallback, configured clients only, with a
-   * standing preference's named channels first.
+   * Channels that can take a web-send fallback, configured clients only, in the
+   * default order. Standing preferences are not parsed.
    */
   configuredFallbackChannels(): FallbackChannel[] {
     const configured: FallbackChannel[] = [];
@@ -765,13 +758,7 @@ export class OutboundGateway {
     if (this.smsClient) configured.push('sms');
     if (this.slackClient) configured.push('slack');
     if (this.nylasClients.size > 0) configured.push('email');
-    let preference: string | null = null;
-    try {
-      preference = this.reachPreferenceText?.() ?? null;
-    } catch (err) {
-      this.log.warn({ err }, 'outbound-gateway: could not read the reach preference');
-    }
-    return orderFallbackChannels(configured, preference);
+    return orderFallbackChannels(configured);
   }
 
   /**

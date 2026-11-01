@@ -12,7 +12,8 @@ function stripMarkdown(text: string): string {
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/(\*\*|__)(.*?)\1/g, '$2')
-    .replace(/(\*|_)(.*?)\1/g, '$2')
+    .replace(/(^|\s)\*(\S(?:.*?\S)?)\*(?=\s|$)/g, '$1$2')
+    .replace(/(^|\s)_(\S(?:.*?\S)?)_(?=\s|$)/g, '$1$2')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/^\s*\d+\.\s+/gm, '');
 }
@@ -46,14 +47,14 @@ export function classifyPushStatus(status: number): PushStatusClass {
   return 'failed';
 }
 
-/** Cap a Retry-After hint at ten seconds. Absent or unreadable means no wait. */
+/** Cap a Retry-After hint at five seconds. Absent or unreadable means no wait. */
 export function retryAfterMs(headers: Record<string, string> | undefined): number | undefined {
   if (!headers) return undefined;
   const raw = headers['retry-after'] ?? headers['Retry-After'];
   if (!raw) return undefined;
   const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 10_000);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 5_000);
   const when = Date.parse(raw);
   if (Number.isNaN(when)) return undefined;
-  return Math.min(Math.max(when - Date.now(), 0), 10_000);
+  return Math.min(Math.max(when - Date.now(), 0), 5_000);
 }

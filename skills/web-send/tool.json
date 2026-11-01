@@ -1,7 +1,7 @@
 {
   "name": "web-send",
   "description": "Send a message to the principal's phone app. recipient must be \"principal\". If a browser has the thread open, no notification is sent. If no phone is subscribed, this fails and does not send another way. If a subscription is dead, push setup is rejected, or the push service does not accept the message, this sends on the next configured channel and tells you which one, so you do not send it again.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
@@ -10,7 +10,9 @@
   },
   "outputs": {
     "channel": "string (web, or the channel used when the phone could not be reached)",
+    "delivered_to": "string? (the address the fallback channel used)",
     "app_notice": "string? (why the phone was skipped)",
+    "note": "string? (standing preferences were not applied to the fallback order)",
     "deferred_to_digest": "boolean?",
     "note": "string?",
     "redactions": "array?",
@@ -20,6 +22,7 @@
   "secrets": [],
   "timeout": 30000,
   "capabilities": [
-    "outboundGateway"
+    "outboundGateway",
+    "outboundContext"
   ]
 }

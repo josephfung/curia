@@ -8,7 +8,10 @@ function key(bytes: number): string {
 describe('push endpoint', () => {
   it('accepts a public https endpoint on port 443', () => {
     expect(isDeliverablePushEndpoint('https://fcm.googleapis.com/fcm/send/abc')).toBe(true);
+    expect(isDeliverablePushEndpoint('https://android.googleapis.com/gcm/send/abc')).toBe(true);
+    expect(isDeliverablePushEndpoint('https://web.push.apple.com/abc')).toBe(true);
     expect(isDeliverablePushEndpoint('https://updates.push.services.mozilla.com/wpush/v2/abc')).toBe(true);
+    expect(isDeliverablePushEndpoint('https://wns.notify.windows.com/abc')).toBe(true);
   });
 
   it('rejects http, a non-443 port, an IP, and a private name', () => {
@@ -22,6 +25,10 @@ describe('push endpoint', () => {
     expect(isDeliverablePushEndpoint('https://[fd12::1]/push')).toBe(false);
     expect(isDeliverablePushEndpoint('https://printer.local/push')).toBe(false);
     expect(isDeliverablePushEndpoint('https://my.example/push')).toBe(false);
+    expect(isDeliverablePushEndpoint('https://postgres/push')).toBe(false);
+    expect(isDeliverablePushEndpoint('https://web.push.apple.com.attacker.com/push')).toBe(false);
+    expect(isDeliverablePushEndpoint('https://evilpush.apple.com/push')).toBe(false);
+    expect(isDeliverablePushEndpoint('https://localtest.me/push')).toBe(false);
   });
 
   it('requires a 65-byte p256dh and a 16-byte auth secret', () => {

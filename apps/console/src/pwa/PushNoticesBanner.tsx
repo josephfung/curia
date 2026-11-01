@@ -31,10 +31,18 @@ export function PushNoticesBanner() {
 
   useEffect(() => {
     let cancelled = false;
-    load().catch(() => {
-      if (!cancelled) setNotices([]);
-    });
-    return () => { cancelled = true; };
+    const refresh = () => {
+      if (document.visibilityState === 'hidden') return;
+      load().catch(() => {
+        if (!cancelled) setNotices([]);
+      });
+    };
+    refresh();
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', refresh);
+    };
   }, [load]);
 
   async function dismiss(id: string) {

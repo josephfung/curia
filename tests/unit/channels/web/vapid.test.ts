@@ -88,6 +88,7 @@ describe('VAPID setup', () => {
       endpoint: 'https://fcm.googleapis.com/fcm/send/abc',
       p256dh: 'p',
       authSecret: 'a',
+      deviceName: null,
     }, '{}')).rejects.toMatchObject({ statusCode: 403, body: 'BadJwtToken', retryAfterMs: 2000 });
     expect(sendNotification).toHaveBeenCalledWith(
       expect.objectContaining({ endpoint: 'https://fcm.googleapis.com/fcm/send/abc' }),

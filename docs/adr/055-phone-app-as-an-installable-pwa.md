@@ -146,13 +146,16 @@ agents keep choosing the channel. Code decides only whether the app is reachable
      - A 403 or other 4xx is a **setup error**, such as a bad VAPID subject. The subscription
        is kept, the message goes out on the next channel, and the console shows the push
        service's reason.
-     - A 429 is tried once more when the service sends Retry-After, capped at ten seconds.
-       A 5xx or a local failure is not retried on a timer. If the push is not accepted, the
-       message goes out on the next channel. Nothing promises a later retry.
+     - A 429 or 5xx is retried twice, about one second then two, for every failing
+       subscription at once. Retry-After is used when the service sends it, capped at
+       five seconds, and the whole push phase stays under about twelve seconds. If the
+       push is still not accepted, the message goes out on the next channel. Nothing
+       promises a later retry.
      - No subscription is a structured failure. The message is not sent on another channel,
        and the console does not call a phone that never subscribed dead.
-     - A 2xx counts as delivered. There are no receipts. Five consecutive failures delete
-       the subscription.
+     - A 2xx counts as delivered. There are no receipts. Five consecutive transport
+       failures (`failed` or a retry that never succeeds) delete the subscription. A
+       setup rejection does not count toward that, and does not delete the row.
 
 6. **Voice: paused, not dropped.** The existing LiveKit call runs unchanged in the installed
    app. The spike showed that when iOS backgrounds the app or the phone locks, the mic track is

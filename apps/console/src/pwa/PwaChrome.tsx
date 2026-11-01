@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { syncPushSubscription } from './push-client';
 
 /**
  * Registers /sw.js and offers a reload when a new build is waiting.
@@ -47,6 +48,11 @@ export function PwaChrome() {
       watch(registered.waiting);
       registered.addEventListener('updatefound', () => watch(registered.installing));
       checkForUpdate();
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        void syncPushSubscription().catch((err: unknown) => {
+          console.error('[pwa] push subscription sync failed:', err);
+        });
+      }
     }).catch((err: unknown) => {
       console.error('[pwa] service worker registration failed:', err);
     });

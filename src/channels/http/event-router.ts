@@ -111,13 +111,15 @@ export interface PendingResponse {
   timeout: NodeJS.Timeout;
 }
 
-/** A client that has not been written to for this long is not watching the thread. */
+/** A client that has not checked in for this long is not watching the thread. */
 export const SSE_WATCH_QUIET_MS = 60_000;
 
 export interface SseClient {
   res: ServerResponse;
   conversationId?: string; // Optional filter
-  /** Epoch ms of the last successful write, including the heartbeat. */
+  /** sessions.id, when the stream was opened with a session cookie. */
+  sessionId?: string;
+  /** Epoch ms of the SSE connect, or the last presence check-in. Server writes do not move it. */
   lastSeen?: number;
 }
 
@@ -384,7 +386,6 @@ export class EventRouter {
       if (!shouldSend) continue;
       try {
         client.res.write(`data: ${sseData}\n\n`);
-        client.lastSeen = Date.now();
       } catch (err) {
         // Client connection is dead — remove it. The 'close' event handler
         // will also fire eventually, but cleaning up here prevents repeated
@@ -422,9 +423,19 @@ export class EventRouter {
     return false;
   }
 
-  /** A successful heartbeat counts as the client still being there. */
-  touchSseClient(client: SseClient): void {
-    client.lastSeen = Date.now();
+  /**
+   * The browser checked in. Only an existing stream for this session and
+   * thread counts; a presence post with no stream does not.
+   */
+  notePresence(sessionId: string, conversationId: string): boolean {
+    const now = Date.now();
+    let touched = false;
+    for (const client of this.sseClients) {
+      if (client.sessionId !== sessionId || client.conversationId !== conversationId) continue;
+      client.lastSeen = now;
+      touched = true;
+    }
+    return touched;
   }
 
   private isWatching(client: SseClient, now: number): boolean {

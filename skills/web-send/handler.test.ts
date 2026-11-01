@@ -99,5 +99,50 @@ describe('web-send', () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.data).toMatchObject({ channel: 'email' });
     expect(send.mock.calls.map((call) => (call[0] as { channel: string }).channel)).toEqual(['web', 'email']);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        delivered_to: 'a@example.com',
+        note: expect.stringContaining('Standing preferences were not applied'),
+      });
+    }
+  });
+
+  it('stops when a fallback is held for review, and registers a delivered fallback', async () => {
+    const register = vi.fn(async () => undefined);
+    const send = vi.fn(async (request: { channel: string }) => {
+      if (request.channel === 'web') {
+        return { success: false, webDelivery: 'fallback' as const, blockedReason: 'dead' };
+      }
+      if (request.channel === 'signal') {
+        return { success: false, gated: true, blockedReason: 'Held for review.' };
+      }
+      return { success: true, sentContent: 'sent' };
+    });
+    const base = ctx(send);
+    const gateway = base.outboundGateway as NonNullable<typeof base.outboundGateway> & {
+      configuredFallbackChannels: () => string[];
+    };
+    gateway.configuredFallbackChannels = () => ['signal', 'sms'];
+    (gateway.resolveRecipientReference as ReturnType<typeof vi.fn>).mockImplementation(async (channel: string) => (
+      channel === 'signal' || channel === 'sms'
+        ? { ok: true, identifier: channel === 'signal' ? '+15555550123' : '+15555550199', kind: 'alias', contactId: 'c1' }
+        : { ok: false, error: 'no' }
+    ));
+    const outboundContext = { register, explicitExpiryHours: 6, defaultExpiryHoursFor: () => 6 };
+    const held = await handler.execute({ ...base, outboundContext } as unknown as ToolContext);
+    expect(held.success).toBe(false);
+    if (!held.success) expect(held.error).toBe('Held for review.');
+    expect(send.mock.calls.map((call) => (call[0] as { channel: string }).channel)).toEqual(['web', 'signal']);
+
+    send.mockImplementation(async (request: { channel: string }) => {
+      if (request.channel === 'web') {
+        return { success: false, webDelivery: 'fallback' as const, blockedReason: 'dead' };
+      }
+      return { success: true, sentContent: 'sent' };
+    });
+    const delivered = await handler.execute({ ...base, outboundContext } as unknown as ToolContext);
+    expect(delivered.success).toBe(true);
+    if (delivered.success) expect(delivered.data).toMatchObject({ channel: 'signal', delivered_to: '+15555550123' });
+    expect(register).toHaveBeenCalled();
   });
 });

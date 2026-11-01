@@ -304,6 +304,22 @@ describe('EventRouter web reply push', () => {
     expect(router.hasChatListener('c1')).toBe(false);
   });
 
+  it('does not treat server writes as the client still watching', () => {
+    const { router } = makeRouter();
+    const client = {
+      res: { write: () => true } as unknown as ServerResponse,
+      conversationId: 'c1',
+      sessionId: 'sess-1',
+      lastSeen: Date.now() - SSE_WATCH_QUIET_MS - 1,
+    };
+    router.addSseClient(client);
+    router.broadcastChatEvent('c1', { type: 'ping' });
+    expect(router.hasChatListener('c1')).toBe(false);
+    expect(router.notePresence('sess-1', 'c1')).toBe(true);
+    expect(router.hasChatListener('c1')).toBe(true);
+    expect(router.notePresence('other', 'c1')).toBe(false);
+  });
+
   it('does not notify for a reply on another channel', () => {
     const { router, emit } = makeRouter();
     const seen: string[] = [];

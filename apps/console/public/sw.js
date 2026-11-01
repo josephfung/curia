@@ -78,8 +78,15 @@ self.addEventListener('notificationclick', (event) => {
       }
       if (clientUrl.origin !== self.location.origin) continue;
       const focused = client.focus();
+      let targetPath = '/chat';
+      try {
+        targetPath = new URL(target, self.location.origin).pathname;
+      } catch {
+        targetPath = '/chat';
+      }
+      if (clientUrl.pathname === targetPath) return focused;
       if (typeof client.navigate === 'function') {
-        return focused.then(() => client.navigate(target));
+        return focused.then(() => client.navigate(target)).catch(() => client.focus());
       }
       return focused;
     }
@@ -88,14 +95,19 @@ self.addEventListener('notificationclick', (event) => {
 });
 
 self.addEventListener('pushsubscriptionchange', (event) => {
-  const next = event.newSubscription;
-  if (!next) return;
-  event.waitUntil(fetch('/api/push/subscriptions', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(next.toJSON()),
-  }));
+  event.waitUntil((async () => {
+    let next = event.newSubscription;
+    if (!next && event.oldSubscription) {
+      next = await self.registration.pushManager.subscribe(event.oldSubscription.options);
+    }
+    if (!next) return;
+    await fetch('/api/push/subscriptions', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next.toJSON()),
+    });
+  })());
 });
 
 self.addEventListener('fetch', (event) => {

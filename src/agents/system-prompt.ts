@@ -182,21 +182,6 @@ export async function buildBaseSystemPrompt(
     if (block) preambleParts.push(block);
   }
 
-  // Default reach order (#2341, ADR-046), beside Who you serve. Only an agent
-  // with a send skill receives it, and only for channels that are configured.
-  // The phone is listed only while a device can receive it. A standing
-  // preference is stated first and overrides the order.
-  if (sources.principalReach) {
-    try {
-      const reach = await sources.principalReach();
-      const block = reach ? formatPrincipalReachBlock(reach) : null;
-      if (block) preambleParts.push(block);
-    } catch (err) {
-      failBlock('reach', err);
-      logger.error({ err, agentId }, 'Failed to build the reach block — omitted this turn');
-    }
-  }
-
   if (preambleParts.length > 0) {
     prompt = preambleParts.join('\n\n') + '\n\n' + prompt;
   }
@@ -275,6 +260,19 @@ export async function buildBaseSystemPrompt(
   // model-visible prompt and duplicate the heading).
   if (agentId === 'coordinator') {
     prompt += '\n\n' + DATE_RESOLVE_GUARDRAIL;
+  }
+
+  // Reach order changes when a browser opens or closes the chat, so it stays
+  // out of the cached prefix (#2341). Standing preferences are not parsed here.
+  if (sources.principalReach) {
+    try {
+      const reach = await sources.principalReach();
+      const block = reach ? formatPrincipalReachBlock(reach) : null;
+      if (block) prompt += '\n\n' + block;
+    } catch (err) {
+      failBlock('reach', err);
+      logger.error({ err, agentId }, 'Failed to build the reach block — omitted this turn');
+    }
   }
 
   // Current date/time — refreshed every turn so the agent always has the correct

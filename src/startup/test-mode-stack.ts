@@ -110,6 +110,7 @@ export type TierReasoningOverride = Partial<Record<Tier, ReasoningSetting>>;
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import type { LLMProvider } from '../agents/llm/provider.js';
 import { buildBaseSystemPrompt, formatTaskTailBlocks } from '../agents/system-prompt.js';
+import { reachChannelsFor, type ReachChannel } from '../agents/principal-reach.js';
 import { AutonomyService, type AutonomyConfig } from '../autonomy/autonomy-service.js';
 import type { AutonomyGating } from '../autonomy/band-policy.js';
 import { resolveBypassLadder } from '../autonomy/effective-standing.js';
@@ -1503,6 +1504,16 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       conversationEntities,
       // No taskRepo or workingDocsRepo — see header.
       turnLanes,
+      // Same reach block production injects. This stack has no push service, so
+      // the phone is omitted. Standing preferences are not parsed.
+      principalReach: (tools) => {
+        const configured = new Set<ReachChannel>();
+        if (signalPhoneNumber) configured.add('signal');
+        if (smsFromNumber) configured.add('sms');
+        if (selfEmails.length > 0) configured.add('email');
+        const channels = reachChannelsFor(tools, configured);
+        return channels.length === 0 ? null : { channels };
+      },
     });
     for (const assembled of agents) {
       new AgentRuntime(assembled.runtimeConfig).register();

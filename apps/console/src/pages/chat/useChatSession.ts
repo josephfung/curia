@@ -12,6 +12,8 @@ const KICKOFF_TEXT = 'Just finished setup — say hi!';
 const CANT_REACH_TEXT = "Can't reach Curia, retrying";
 /** Reconnect when no SSE bytes, including the data ping, have arrived. */
 const STREAM_SILENCE_MS = 60_000;
+/** How often a visible chat tells the server it is still watching. */
+const PRESENCE_MS = 20_000;
 
 const HISTORY_PAGE_SIZE = 25;
 // Catch-up pages back until a page row is already on screen. After this many
@@ -643,6 +645,17 @@ export function useChatSession(): ChatSession {
     };
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('online', onOnline);
+    const presence = setInterval(() => {
+      const id = conversationId.current;
+      if (!id || document.visibilityState !== 'visible') return;
+      void apiFetch('/api/chat/presence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: id }),
+      }).catch((err: unknown) => {
+        console.error('[useChatSession] presence failed:', err);
+      });
+    }, PRESENCE_MS);
     const silence = setInterval(() => {
       const source = sourceRef.current;
       const id = conversationId.current;
@@ -658,6 +671,7 @@ export function useChatSession(): ChatSession {
       mountedRef.current = false;
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('online', onOnline);
+      clearInterval(presence);
       clearInterval(silence);
       if (threadRetryTimer.current) clearTimeout(threadRetryTimer.current);
       closeStream();
