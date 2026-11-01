@@ -14,6 +14,7 @@ import {
   installGuidance,
   type InstallGuidance,
 } from '../pwa/install-guidance';
+import { NotificationsPanel } from '../pwa/NotificationsPanel';
 import { PhoneNotice } from '../pwa/PhoneNotice';
 import { rememberFragmentToken, redeemFragmentOnce } from './devices/pair-visit';
 
@@ -124,6 +125,7 @@ export default function PairPage() {
                 onInstall={() => { void runInstall(installPrompt, setInstallPrompt); }}
               />
             )}
+            <NotificationsPanel />
             <button type="button" className="btn btn-primary" onClick={() => void navigate({ to: '/chat' })}>
               Open chat
             </button>

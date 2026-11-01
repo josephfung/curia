@@ -106,8 +106,10 @@ interface AgentBudget {
 // record-outreach pinned as a standalone tool (#2312): web forms and calls leave a task_outreach
 // row so the organization's reply can find its task (sends record theirs in code): +677 bytes,
 // 82,671 over 74 local tools. The budget rises by exactly that delta.
+// web-send pinned, and deliver-approval names the phone app (#2341): +613 bytes,
+// 83,284 over 75 local tools. The budget rises by exactly that delta.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 82_671, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 83_284, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   // Standing rules moved to a pinned document (#2339): the config-store JSON-array steps came

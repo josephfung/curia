@@ -49,6 +49,7 @@ tools:
   - signal-send
   - sms-send
   - slack-send
+  - web-send
   # Memory + knowledge
   - entity-context
   # Config

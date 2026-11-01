@@ -24,6 +24,9 @@ import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, re
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
+import { WebPushService } from './channels/web/push-service.js';
+import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
+import { configuredReachChannels, reachChannelsFor } from './agents/principal-reach.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
 import { resolveSystemSnapshot } from './channels/http/routes/system.js';
 import { createPool } from './db/connection.js';
@@ -1807,6 +1810,17 @@ async function main(): Promise<void> {
   // Outbound gateway — single choke-point for all outbound external communication.
   // Runs blocked-contact checks and content filtering before any message leaves Curia.
   // Clients are gated on channelShouldStart so disabled/uninstalled channels cannot egress.
+  const vapidSetup = await loadVapidSetup(secretsService, config.appOrigin, logger);
+  const webPush = new WebPushService({
+    pool,
+    sender: vapidSetup.sender,
+    logger,
+    configured: vapidSetup.configured,
+    publicKey: vapidSetup.publicKey,
+    memory,
+  });
+  logVapidReadiness(logger, config.appOrigin, vapidSetup);
+
   let outboundGateway: OutboundGateway | undefined;
   const registryGatedOutbound = gateOutboundClientsForRegistry(
     channelShouldStart,
@@ -1888,7 +1902,7 @@ async function main(): Promise<void> {
     })
     : undefined;
 
-  if (hasAnyOutboundClient && outboundFilter && !setupRequiredAtBoot) {
+  if ((hasAnyOutboundClient || vapidSetup.configured) && outboundFilter && !setupRequiredAtBoot) {
     const outboundQueue = new OutboundQueueRepo(pool);
     // Channels that implement Channel.supportsOutboundQueue register readiness
     // probes here (client-backed) or via setOutboundQueueReadiness after the
@@ -1914,6 +1928,7 @@ async function main(): Promise<void> {
       signalPhoneNumber: registryGatedOutbound.signalPhoneNumber,
       slackClient: registryGatedOutbound.slackClient,
       smsClient: registryGatedOutbound.smsClient,
+      webPush,
       contactService,
       contentFilter: outboundFilter,
       bus,
@@ -1943,9 +1958,12 @@ async function main(): Promise<void> {
       hasSignal: !!registryGatedOutbound.signalClient,
       hasSlack: !!registryGatedOutbound.slackClient,
       hasSms: !!registryGatedOutbound.smsClient,
+      hasWebPush: vapidSetup.configured,
       queueableChannels: [...outboundQueueReadiness.keys()],
       channelShouldStart: [...channelShouldStart],
     }, 'Outbound gateway initialized');
+  } else if (vapidSetup.configured && !outboundFilter && !setupRequiredAtBoot) {
+    logger.warn('Outbound gateway NOT initialized — phone push is configured but the content filter is not ready');
   } else if (nylasClientMap.size > 0 && !outboundFilter) {
     // Nylas clients are available but outboundFilter is missing (no coordinator config found).
     // Email skills will be unavailable because they check ctx.outboundGateway before sending.
@@ -2557,7 +2575,14 @@ async function main(): Promise<void> {
   // the principal's standing preferences via deliver-approval. Absent without an outbound
   // stack (setup-required mode); approvals are then still listed in the digest.
   const approvalDelivery = outboundGateway
-    ? new ApprovalDelivery({ actionLogRepo, outboundGateway, principalIdentities, principalEmail, logger })
+    ? new ApprovalDelivery({
+      actionLogRepo,
+      outboundGateway,
+      principalIdentities,
+      principalEmail,
+      logger,
+      webReachable: () => webPush.reachableNow(),
+    })
     : undefined;
   // The gateway's own gate sites register displays too; set after construction because
   // ApprovalDelivery sends through the gateway.
@@ -2830,6 +2855,22 @@ async function main(): Promise<void> {
     workingDocsRepo,
     taskRepo,
     turnLanes,
+    principalReach: async (tools) => {
+      const configured = configuredReachChannels({
+        clients: {
+          signal: !!(registryGatedOutbound.signalClient && registryGatedOutbound.signalPhoneNumber),
+          sms: !!registryGatedOutbound.smsClient,
+          slack: !!registryGatedOutbound.slackClient,
+          email: (registryGatedOutbound.nylasClients?.size ?? 0) > 0,
+        },
+        principalIdentities,
+        principalPrimaryEmail: principalPrimaryEmail.current,
+        webReachable: await webPush.reachableNow(),
+      });
+      const channels = reachChannelsFor(tools, new Set(configured));
+      if (channels.length === 0) return null;
+      return { channels };
+    },
   };
   for (const agentConfig of agentConfigs) {
     let assembled: AssembledAgent;
@@ -3444,6 +3485,7 @@ async function main(): Promise<void> {
       process.kill(process.pid, 'SIGTERM');
     },
     voiceSessionBridge,
+    webPush,
   });
 
   try {

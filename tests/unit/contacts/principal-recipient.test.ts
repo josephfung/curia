@@ -46,6 +46,7 @@ describe('principal-recipient', () => {
         'signal-send',
         'slack-send',
         'sms-send',
+        'web-send',
       ]);
       const slack = PRINCIPAL_CHANNEL_RULES.find((r) => r.channel === 'slack');
       expect(slack).toBeDefined();
@@ -132,6 +133,11 @@ describe('principal-recipient', () => {
 
     it('fails closed for an unregistered channel', () => {
       expect(isPrincipalIdentity('telegram', 'ceo@example.com', PRINCIPAL_IDENTITIES)).toBe(false);
+    });
+
+    it('treats web recipient principal as the principal even with no stored identity', () => {
+      expect(isPrincipalIdentity('web', 'principal', [])).toBe(true);
+      expect(isPrincipalIdentity('web', 'someone', [])).toBe(false);
     });
   });
 

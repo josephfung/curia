@@ -37,6 +37,7 @@ import {
   FixtureAutonomyService,
   readOnlyBullpen,
   readOnlyView,
+  reachClientsFrom,
   TEST_MODE_PASSTHROUGH_SECRETS,
 } from '../../../src/startup/test-mode-stack.js';
 
@@ -473,5 +474,36 @@ describe('agentLayerAutonomy', () => {
     const { invoke, review } = bandGateCLayer(() => true);
     await invoke();
     expect(review).toHaveBeenCalledOnce();
+  });
+});
+
+describe('reachClientsFrom', () => {
+  const none = {
+    signalSocketPath: undefined,
+    signalPhoneNumber: undefined,
+    smsApiKey: undefined,
+    smsFromNumber: undefined,
+    smsWebhookPublicKey: undefined,
+    slackBotToken: undefined,
+    slackAppToken: undefined,
+    nylasApiKey: undefined,
+  };
+
+  it('needs every credential production builds a client from', () => {
+    expect(reachClientsFrom(none)).toEqual({ signal: false, sms: false, slack: false, email: false });
+    // A Signal number alone is not a client: production also needs the socket.
+    expect(reachClientsFrom({ ...none, signalPhoneNumber: '+15550003333' }).signal).toBe(false);
+    expect(reachClientsFrom({ ...none, smsApiKey: 'k', smsFromNumber: '+15550004444' }).sms).toBe(false);
+    expect(reachClientsFrom({ ...none, slackBotToken: 'xoxb-1' }).slack).toBe(false);
+    expect(reachClientsFrom({
+      signalSocketPath: '/run/signal-cli/socket',
+      signalPhoneNumber: '+15550003333',
+      smsApiKey: 'k',
+      smsFromNumber: '+15550004444',
+      smsWebhookPublicKey: 'pk',
+      slackBotToken: 'xoxb-1',
+      slackAppToken: 'xapp-1',
+      nylasApiKey: 'nyk',
+    })).toEqual({ signal: true, sms: true, slack: true, email: true });
   });
 });

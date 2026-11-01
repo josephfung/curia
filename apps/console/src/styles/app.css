@@ -937,6 +937,28 @@ a.dash-activity-headline:hover { text-decoration: underline; }
   font: inherit;
 }
 
+.push-banner-stack { display: flex; flex-direction: column; }
+.push-banner {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: 10px 16px;
+  background: var(--app-teal-soft);
+  color: var(--app-fg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.push-banner p { margin: 0; }
+.push-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--app-fg);
+}
 .pair-panel {
   max-width: 720px;
   margin-bottom: 28px;

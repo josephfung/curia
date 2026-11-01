@@ -113,6 +113,15 @@ function bareRef(value: unknown): string | null {
   return hash > 0 ? s.slice(0, hash) : s;
 }
 
+/** The channel named in an activity line. */
+function fallbackChannelLabel(channel: string): string {
+  if (channel === 'signal') return 'Signal';
+  if (channel === 'sms') return 'SMS';
+  if (channel === 'slack') return 'Slack';
+  if (channel === 'email') return 'email';
+  return channel;
+}
+
 /** A reference's display name, or a neutral fallback that never leaks an id. */
 function who(ref: string | null, ctx: DescribeContext): string {
   if (!ref) return 'someone';
@@ -348,6 +357,20 @@ const DESCRIBERS: Record<string, Describer> = {
     refs: contactRef('recipient'),
     done: (call, ctx) => `texted ${who(bareRef(call.input.recipient), ctx)}`,
     attempt: (call, ctx) => `text ${who(bareRef(call.input.recipient), ctx)}`,
+  },
+  'web-send': {
+    prominence: 'line',
+    minutes: 2,
+    tally: { verb: 'sent', one: 'a phone message', many: 'phone messages' },
+    refs: contactRef('recipient'),
+    done: (call, ctx) => {
+      const channel = str(call.data?.channel);
+      const person = who(bareRef(call.input.recipient), ctx);
+      if (call.data?.deferred_to_digest === true) return `queued a message to ${person} for the digest`;
+      if (channel && channel !== 'web') return `messaged ${person} on ${fallbackChannelLabel(channel)}`;
+      return `messaged ${person} on the phone app`;
+    },
+    attempt: (call, ctx) => `message ${who(bareRef(call.input.recipient), ctx)} on the phone app`,
   },
   'slack-send': {
     prominence: 'line',

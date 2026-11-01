@@ -11,6 +11,7 @@ import { APPROVAL_CHANNELS, type ApprovalChannel } from '../../../../src/autonom
 const CHANNEL_NAMES: Record<ApprovalChannel, string> = {
   signal: 'Signal',
   sms: 'SMS',
+  web: 'the phone app',
   slack: 'Slack',
   email: 'Email',
 };

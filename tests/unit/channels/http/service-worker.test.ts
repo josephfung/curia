@@ -90,6 +90,19 @@ describe('console service worker', () => {
     expect(workerSource).not.toContain('__BUILD_ID__');
   });
 
+  it('shows a Curia notification and opens the chat when it is tapped', () => {
+    expect(workerSource).toContain("self.addEventListener('push'");
+    expect(workerSource).toContain('showNotification');
+    expect(workerSource).toContain("icon: '/icons/curia-192.png'");
+    expect(workerSource).toContain("self.addEventListener('notificationclick'");
+    expect(workerSource).toContain('clients.openWindow');
+    expect(workerSource).toContain("'/chat'");
+    expect(workerSource).toContain('tag');
+    expect(workerSource).toContain('conversationId');
+    expect(workerSource).toContain('client.navigate');
+    expect(workerSource).toContain("self.addEventListener('pushsubscriptionchange'");
+  });
+
   it('does not intercept /api or /auth, and does intercept /apis and /assets', async () => {
     let fetches = 0;
     const { listeners } = loadWorker(async () => {

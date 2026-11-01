@@ -32,6 +32,9 @@ export function isPrincipalIdentity(
   identifier: string | undefined | null,
   principalIdentities: readonly ChannelIdentity[],
 ): boolean {
+  // The phone app has no stored address. A web send is only ever to the principal,
+  // including a deployment that has no other channel identity yet (#2341).
+  if (channel === 'web') return identifier === 'principal';
   if (!identifier || principalIdentities.length === 0) return false;
   const rules = findPrincipalChannelRules(channel);
   if (!rules) return false;

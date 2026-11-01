@@ -24,6 +24,7 @@
 //   - security.trust_thresholds in config/default.yaml
 //   - Specialist agents (agents/*.yaml) or their registry enablement
 //   - The principal's verified channel identities, or Curia's own email / Signal number
+//   - Which outbound channels are configured (Signal, SMS, Slack, email)
 //   - A pinned_context document or setting any agent declares (#2339)
 //
 // Requires: DATABASE_URL pointing at a migrated Curia instance, and SECRET_ENCRYPTION_KEY.
@@ -90,6 +91,14 @@ export interface PromptInputsSnapshot {
    */
   disabled_skills: string[];
   /**
+   * Channels that reach the principal on this deployment, in the default order: a
+   * configured client and a verified principal identity (configuredReachChannels, the
+   * rule production uses). `web` is never included: it depends on a live phone
+   * subscription. The harness narrows these to each agent's send tools with
+   * reachChannelsFor, as production does.
+   */
+  principal_reach_channels: string[];
+  /**
    * Every pinned_context entry a loaded agent declares (#2339), read as a turn reads it:
    * a document's read result (null when it was never created), a setting's value (null
    * when not set). Keyed by path and by `<namespace>/<key>`, sorted. A failed read fails
@@ -129,7 +138,7 @@ async function readPinnedContext(
 
 /** Read every input from the coordinator's runtime config, which is what production feeds the builder. */
 export async function buildPromptInputsSnapshot(
-  stack: Pick<TestModeStack, 'agent' | 'agents' | 'principalContactId' | 'skillRegistry'>,
+  stack: Pick<TestModeStack, 'agent' | 'agents' | 'principalContactId' | 'principalReachChannels' | 'skillRegistry'>,
   curiaVersion: string,
   /** Every SKILL.md bundle discovered on disk — the stack's skills dir. */
   discoveredSkillNames: readonly string[],
@@ -196,6 +205,9 @@ export async function buildPromptInputsSnapshot(
     },
     // The stack's SkillRegistry holds exactly what production's reconcile enables.
     disabled_skills: discoveredSkillNames.filter((name) => !stack.skillRegistry.get(name)).sort(),
+    // The stack has no push service, so `web` cannot appear; filtered anyway, because
+    // the field's contract is that it never does.
+    principal_reach_channels: stack.principalReachChannels().filter((channel) => channel !== 'web'),
     pinned_context: await readPinnedContext(stack.agents),
   };
 }

@@ -18,6 +18,7 @@ import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentConfig } from '../agents/runtime.js';
 import type { SystemPromptSources } from '../agents/system-prompt.js';
+import { agentCanSend, type PrincipalReach } from '../agents/principal-reach.js';
 import type { AgentYamlConfig } from '../agents/loader.js';
 import { interpolateRuntimeContext } from '../agents/loader.js';
 import { parsePinnedContext, pinnedDocPaths, type PinnedContextReader } from '../agents/pinned-context.js';
@@ -217,6 +218,7 @@ export type SystemPromptSourceContext = Pick<
   | 'verification'
   | 'browserSessionAlive'
   | 'pinnedContextReader'
+  | 'principalReach'
 >;
 
 /**
@@ -240,6 +242,7 @@ export const SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS = [
   'verification',
   'browserSessionAlive',
   'pinnedContextReader',
+  'principalReach',
 ] as const satisfies readonly (keyof SystemPromptSourceContext)[];
 
 type UnlistedSourceContextKey = Exclude<
@@ -266,6 +269,7 @@ export function resolveSystemPromptSources(
   agentConfig: AgentYamlConfig,
   systemPrompt: string,
   ctx: SystemPromptSourceContext,
+  pinnedTools: readonly string[] = [],
 ): SystemPromptSources {
   const isCoordinator = agentConfig.role === 'coordinator';
   return {
@@ -313,6 +317,9 @@ export function resolveSystemPromptSources(
     // Any agent may declare them; an agent with none gets no block.
     pinnedContext: parsePinnedContext(agentConfig.pinned_context, agentConfig.name),
     pinnedContextReader: ctx.pinnedContextReader,
+    principalReach: agentCanSend(pinnedTools) && ctx.principalReach
+      ? () => ctx.principalReach!(pinnedTools)
+      : undefined,
     // Map YAML snake_case to AgentConfig camelCase, defaulting omitted fields.
     errorBudget: agentConfig.error_budget ? {
       maxTurns: agentConfig.error_budget.max_turns ?? DEFAULT_ERROR_BUDGET.maxTurns,
@@ -362,6 +369,11 @@ export interface AgentAssemblyContext {
   taskRepo?: TaskRepo;
   /** Shared with the dispatcher. Absent in callers that predate turn lanes. */
   turnLanes?: TurnLanes;
+  /**
+   * Reach block for one agent's pinned tools. Absent: no agent is told a
+   * default channel order. Called every turn.
+   */
+  principalReach?: (pinnedTools: readonly string[]) => Promise<PrincipalReach | null> | PrincipalReach | null;
 }
 
 export interface AssembledAgent {
@@ -461,7 +473,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
   const runtimeConfig: AgentConfig = {
     // agentId, systemPrompt, and every field buildBaseSystemPrompt() reads — including
     // the coordinator-only gating. Decided in one place; see resolveSystemPromptSources.
-    ...resolveSystemPromptSources(agentConfig, systemPrompt, ctx),
+    ...resolveSystemPromptSources(agentConfig, systemPrompt, ctx, pinnedToolNames),
     provider: binding.provider,
     resolvedModel: binding.resolvedModel,
     tier: binding.tier,

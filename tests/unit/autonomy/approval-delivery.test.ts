@@ -33,6 +33,7 @@ function makeDelivery(opts: {
   sendThrows?: boolean;
   identities?: ChannelIdentity[];
   principalEmail?: string;
+  webReachable?: () => boolean;
 } = {}) {
   const repo = {
     findPendingByShortRef: vi.fn().mockResolvedValue(opts.row === undefined ? makeRow() : opts.row),
@@ -55,12 +56,13 @@ function makeDelivery(opts: {
     ],
     principalEmail,
     logger: logger as unknown as Logger,
+    webReachable: opts.webReachable,
   });
   return { delivery, repo, send, logger };
 }
 
 describe('ApprovalDelivery.availableChannels', () => {
-  it('lists verified, active channels in the order signal, sms, slack, email', () => {
+  it('lists verified, active channels in the order signal, sms, slack, email', async () => {
     const { delivery } = makeDelivery({
       identities: [
         identity('email', 'principal@example.com'),
@@ -69,16 +71,43 @@ describe('ApprovalDelivery.availableChannels', () => {
         identity('signal', '+15550001111', { verified: false }),
       ],
     });
-    expect(delivery.availableChannels()).toEqual(['sms', 'slack', 'email']);
+    expect(await delivery.availableChannels()).toEqual(['sms', 'slack', 'email']);
   });
 
-  it('counts email when only the principal email ref is bound', () => {
+  it('offers the phone app between SMS and Slack when a device can receive it', async () => {
+    const { delivery } = makeDelivery({
+      identities: [
+        identity('sms', '+15550002222'),
+        identity('slack', 'U123'),
+      ],
+      webReachable: () => true,
+    });
+    expect(await delivery.availableChannels()).toEqual(['sms', 'web', 'slack', 'email']);
+  });
+
+  it('counts email when only the principal email ref is bound', async () => {
     const { delivery } = makeDelivery({ identities: [] });
-    expect(delivery.availableChannels()).toEqual(['email']);
+    expect(await delivery.availableChannels()).toEqual(['email']);
   });
 });
 
 describe('ApprovalDelivery.deliver', () => {
+  it('checks phone reachability once per delivery, and again on the next one', async () => {
+    const webReachable = vi.fn(() => true);
+    const { delivery, send } = makeDelivery({ webReachable });
+
+    await expect(delivery.deliver('abcd1234', 'web')).resolves.toEqual({ delivered: true, channel: 'web' });
+    expect(webReachable).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toMatchObject({ channel: 'web', recipient: 'principal' });
+
+    webReachable.mockReturnValue(false);
+    await expect(delivery.deliver('abcd1234', 'web')).resolves.toMatchObject({
+      delivered: false,
+      reason: 'channel_unavailable',
+    });
+    expect(webReachable).toHaveBeenCalledTimes(2);
+  });
+
   it('sends once on Signal, binds the message for reactions, and keeps the claim', async () => {
     const { delivery, repo, send } = makeDelivery();
 

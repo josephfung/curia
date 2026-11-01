@@ -4,13 +4,13 @@
 // the sender to the principal. Auth: session cookie or x-web-bootstrap-secret
 // via assertSecret. The bearer /api/messages routes were removed (ADR-057).
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { EventRouter } from '../event-router.js';
-import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
+import { assertSecret, CONSOLE_RATE, hashToken, readSessionCookie, type SessionStore } from '../session-auth.js';
 import { writeSseHead } from '../console-sessions.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
@@ -39,6 +39,14 @@ const WEB_SENDER_ID = 'ceo-web-user';
  * tab opened before this deploy, both land on that thread. A differing id is
  * logged so the old call is visible.
  */
+function sessionIdFromRequest(request: FastifyRequest, sessions: SessionStore): string | null {
+  const token = readSessionCookie(request);
+  if (!token) return null;
+  const entry = sessions.get(hashToken(token));
+  if (!entry || entry.expiresAt <= Date.now()) return null;
+  return entry.id;
+}
+
 async function resolveStreamConversation(
   pool: Pool,
   logger: Logger,
@@ -207,10 +215,13 @@ export async function chatRoutes(
     }, logger);
     reply.raw.write(':connected\n\n');
 
-    const cleanup = eventRouter.addSseClient({
+    const client = {
       res: reply.raw,
       conversationId,
-    });
+      sessionId: sessionIdFromRequest(request, sessions) ?? undefined,
+      lastSeen: Date.now(),
+    };
+    const cleanup = eventRouter.addSseClient(client);
 
     // 30s data heartbeat. An SSE comment (`:ping`) never reaches the browser,
     // so a half-open phone socket would look healthy. The client reconnects
@@ -253,6 +264,31 @@ export async function chatRoutes(
    * LLM-failure rewrite, outbound-context preamble) live in
    * `chat-history-page.ts`.
    */
+  /**
+   * POST /api/chat/presence — the open chat is still on screen.
+   *
+   * Body: { conversationId: string }
+   * A server write, including the SSE ping, does not count. The browser posts
+   * this about every 20 seconds while the document is visible.
+   */
+  app.post('/api/chat/presence', CONSOLE_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const body = request.body as { conversationId?: unknown };
+    const requested = typeof body?.conversationId === 'string' ? body.conversationId : '';
+    if (!requested) return reply.status(400).send({ error: 'Provide the conversation id.' });
+    const sessionId = sessionIdFromRequest(request, sessions);
+    if (!sessionId) return reply.send({ ok: true, watching: false });
+    let conversationId: string;
+    try {
+      conversationId = await resolveStreamConversation(pool, logger, requested);
+    } catch (err) {
+      logger.error({ err }, 'POST /api/chat/presence failed to resolve the thread');
+      return reply.status(503).send({ error: 'Chat is temporarily unavailable. Please try again.' });
+    }
+    const watching = eventRouter.notePresence(sessionId, conversationId);
+    return reply.send({ ok: true, watching });
+  });
+
   app.get('/api/chat/history', CONSOLE_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 

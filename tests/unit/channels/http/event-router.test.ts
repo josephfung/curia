@@ -8,7 +8,7 @@
 // WaitResult", which makes an unhandled rejection structurally impossible.
 
 import { describe, it, expect, vi } from 'vitest';
-import { EventRouter, MessageRejectedError } from '../../../../src/channels/http/event-router.js';
+import { EventRouter, MessageRejectedError, SSE_WATCH_QUIET_MS } from '../../../../src/channels/http/event-router.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { BusEvent } from '../../../../src/bus/events.js';
 import type { Logger } from '../../../../src/logger.js';
@@ -257,5 +257,78 @@ describe('EventRouter Ant Farm SSE', () => {
 
     router.broadcastToAntfarm(directives);
     expect(writeCount).toBe(firstPassWrites);
+  });
+});
+
+describe('EventRouter web reply push', () => {
+  function webReply(content: string, conversationId = 'c1'): BusEvent {
+    return {
+      type: 'outbound.message',
+      timestamp: '2026-10-31T00:00:00.000Z',
+      payload: { channelId: 'web', conversationId, content },
+    } as unknown as BusEvent;
+  }
+
+  it('notifies the phone when no chat client is watching', () => {
+    const { router, emit } = makeRouter();
+    const seen: string[] = [];
+    router.setWebReplyNotifier((content, id) => { seen.push(`${id}:${content}`); });
+    emit(webReply('hello'));
+    expect(seen).toEqual(['c1:hello']);
+  });
+
+  it('stays quiet when a chat client already has the thread', () => {
+    const { router, emit } = makeRouter();
+    const seen: string[] = [];
+    router.setWebReplyNotifier((content) => { seen.push(content); });
+    router.addSseClient({
+      res: { write: () => true } as unknown as ServerResponse,
+      conversationId: 'c1',
+    });
+    emit(webReply('again'));
+    expect(seen).toEqual([]);
+  });
+
+  it('does not treat a client with no thread, or a quiet client, as watching', () => {
+    const { router } = makeRouter();
+    router.addSseClient({
+      res: { write: () => true } as unknown as ServerResponse,
+    });
+    expect(router.hasChatListener('c1')).toBe(false);
+    expect(router.hasAnyChatListener()).toBe(false);
+    router.addSseClient({
+      res: { write: () => true } as unknown as ServerResponse,
+      conversationId: 'c1',
+      lastSeen: Date.now() - SSE_WATCH_QUIET_MS - 1,
+    });
+    expect(router.hasChatListener('c1')).toBe(false);
+  });
+
+  it('does not treat server writes as the client still watching', () => {
+    const { router } = makeRouter();
+    const client = {
+      res: { write: () => true } as unknown as ServerResponse,
+      conversationId: 'c1',
+      sessionId: 'sess-1',
+      lastSeen: Date.now() - SSE_WATCH_QUIET_MS - 1,
+    };
+    router.addSseClient(client);
+    router.broadcastChatEvent('c1', { type: 'ping' });
+    expect(router.hasChatListener('c1')).toBe(false);
+    expect(router.notePresence('sess-1', 'c1')).toBe(true);
+    expect(router.hasChatListener('c1')).toBe(true);
+    expect(router.notePresence('other', 'c1')).toBe(false);
+  });
+
+  it('does not notify for a reply on another channel', () => {
+    const { router, emit } = makeRouter();
+    const seen: string[] = [];
+    router.setWebReplyNotifier(() => { seen.push('called'); });
+    emit({
+      type: 'outbound.message',
+      timestamp: '2026-10-31T00:00:00.000Z',
+      payload: { channelId: 'signal', conversationId: 'c1', content: 'hello' },
+    } as unknown as BusEvent);
+    expect(seen).toEqual([]);
   });
 });

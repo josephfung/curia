@@ -111,9 +111,16 @@ export interface PendingResponse {
   timeout: NodeJS.Timeout;
 }
 
+/** A client that has not checked in for this long is not watching the thread. */
+export const SSE_WATCH_QUIET_MS = 60_000;
+
 export interface SseClient {
   res: ServerResponse;
   conversationId?: string; // Optional filter
+  /** sessions.id, when the stream was opened with a session cookie. */
+  sessionId?: string;
+  /** Epoch ms of the SSE connect, or the last presence check-in. Server writes do not move it. */
+  lastSeen?: number;
 }
 
 /** Event types forwarded to Ant Farm live stream (interpreter catalog superset). */
@@ -219,6 +226,15 @@ export class EventRouter {
         timestamp: event.timestamp,
       });
       this.broadcastToSseClients(sseData, convId);
+      // A reply that landed while no browser had the thread open still alerts
+      // the phone. The notifier pushes; it does not write another copy (#2341).
+      if (event.payload.channelId === 'web' && !this.hasChatListener(convId)) {
+        try {
+          this.webReplyNotifier?.(event.payload.content, convId);
+        } catch (err) {
+          this.logger.error({ err, conversationId: convId }, 'web reply notifier failed');
+        }
+      }
     });
 
     // tool.invoke — observability stream for SSE clients
@@ -388,8 +404,59 @@ export class EventRouter {
     this.broadcastToSseClients(JSON.stringify(payload), conversationId);
   }
 
+  /** True when a client is watching this thread. A client with no thread, or quiet for a minute, is not. */
+  hasChatListener(conversationId: string): boolean {
+    const now = Date.now();
+    for (const client of this.sseClients) {
+      if (!this.isWatching(client, now)) continue;
+      if (client.conversationId === conversationId) return true;
+    }
+    return false;
+  }
+
+  /** True when any chat SSE client is watching a thread. */
+  hasAnyChatListener(): boolean {
+    const now = Date.now();
+    for (const client of this.sseClients) {
+      if (this.isWatching(client, now)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The browser checked in. Only an existing stream for this session and
+   * thread counts; a presence post with no stream does not.
+   */
+  notePresence(sessionId: string, conversationId: string): boolean {
+    const now = Date.now();
+    let touched = false;
+    for (const client of this.sseClients) {
+      if (client.sessionId !== sessionId || client.conversationId !== conversationId) continue;
+      client.lastSeen = now;
+      touched = true;
+    }
+    return touched;
+  }
+
+  private isWatching(client: SseClient, now: number): boolean {
+    if (!client.conversationId) return false;
+    const seen = client.lastSeen ?? 0;
+    return now - seen < SSE_WATCH_QUIET_MS;
+  }
+
+  /**
+   * Called for a web reply that no open client will see. The phone push
+   * service registers this. It must not throw.
+   */
+  setWebReplyNotifier(notify: (content: string, conversationId: string) => void): void {
+    this.webReplyNotifier = notify;
+  }
+
+  private webReplyNotifier: ((content: string, conversationId: string) => void) | null = null;
+
   /** Register an SSE client. Returns a cleanup function. */
   addSseClient(client: SseClient): () => void {
+    if (client.lastSeen === undefined) client.lastSeen = Date.now();
     this.sseClients.add(client);
     this.logger.debug({ conversationId: client.conversationId }, 'SSE client connected');
     return () => {

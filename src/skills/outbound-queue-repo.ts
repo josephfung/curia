@@ -180,5 +180,8 @@ function recipientLabel(request: OutboundSendRequest): string {
   if (request.channel === 'sms') {
     return request.recipient;
   }
+  if (request.channel === 'web') {
+    return 'principal';
+  }
   return 'unknown';
 }

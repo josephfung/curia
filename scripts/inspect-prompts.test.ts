@@ -7,6 +7,7 @@ import type { AgentConfig } from '../src/agents/runtime.js';
 import type { AssembledAgent } from '../src/startup/agent-assembly.js';
 import type { SkillRegistry } from '../src/skills/skill-registry.js';
 import type { PinnedContextEntry, PinnedContextReader } from '../src/agents/pinned-context.js';
+import type { ReachChannel } from '../src/agents/principal-reach.js';
 import { buildPromptInputsSnapshot } from './inspect-prompts.js';
 
 const AGENT_CONTACT_ID = '11111111-1111-4111-8111-111111111111';
@@ -43,9 +44,13 @@ function coordinatorConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 const ENABLED_SKILLS = new Set(['tasks', 'documents']);
 const DISCOVERED = ['documents', 'tasks', 'ceo-inbox', 'calendar'];
 
-function stackWith(rc: AgentConfig, opts: { noPrincipal?: boolean; agents?: AssembledAgent[] } = {}) {
+function stackWith(
+  rc: AgentConfig,
+  opts: { noPrincipal?: boolean; agents?: AssembledAgent[]; reach?: ReachChannel[] } = {},
+) {
   const principalContactId = opts.noPrincipal ? undefined : PRINCIPAL_CONTACT_ID;
   return {
+    principalReachChannels: () => opts.reach ?? ['signal', 'email'],
     skillRegistry: { get: (name: string) => (ENABLED_SKILLS.has(name) ? {} : undefined) } as unknown as SkillRegistry,
     agents: [{ runtimeConfig: rc } as AssembledAgent, ...(opts.agents ?? [])],
     agent: (name: string) => {
@@ -79,8 +84,17 @@ describe('buildPromptInputsSnapshot', () => {
       // phone mirrors signal for curia-deploy's loader until it reads signal/sms.
       channel_accounts: { email: 'curia@example.com', signal: '+15550003333', sms: null, phone: '+15550003333' },
       disabled_skills: ['calendar', 'ceo-inbox'],
+      principal_reach_channels: ['signal', 'email'],
       pinned_context: { docs: {}, configs: {} },
     });
+  });
+
+  it('records the deployment-wide reach channels, never the phone app (#2341)', async () => {
+    const reach: ReachChannel[] = ['signal', 'sms', 'web', 'slack', 'email'];
+    const snapshot = await buildPromptInputsSnapshot(stackWith(coordinatorConfig(), { reach }), '0.44.0', DISCOVERED);
+    expect(snapshot.principal_reach_channels).toEqual(['signal', 'sms', 'slack', 'email']);
+    const none = await buildPromptInputsSnapshot(stackWith(coordinatorConfig(), { reach: [] }), '0.44.0', DISCOVERED);
+    expect(none.principal_reach_channels).toEqual([]);
   });
 
   it('reads every declared pinned_context entry once, through the declaring agent\'s reader (#2339)', async () => {
@@ -185,6 +199,7 @@ describe('buildPromptInputsSnapshot', () => {
       agent: () => { throw new Error("Agent 'coordinator' is not loaded in this stack"); },
       agents: [],
       principalContactId: undefined,
+      principalReachChannels: () => [],
       skillRegistry: {} as SkillRegistry,
     };
     await expect(buildPromptInputsSnapshot(stack, '0.44.0', DISCOVERED)).rejects.toThrow(/not loaded/);

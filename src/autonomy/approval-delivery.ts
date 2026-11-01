@@ -23,10 +23,10 @@ import type { Logger } from '../logger.js';
 import { buildApprovalNotificationBody } from './approval-notification.js';
 import { askPreamble } from './disclosure-decisions.js';
 
-export type ApprovalChannel = 'signal' | 'sms' | 'slack' | 'email';
+export type ApprovalChannel = 'signal' | 'sms' | 'web' | 'slack' | 'email';
 
 /** Preference order when listing what is available. The agent still chooses. */
-export const APPROVAL_CHANNELS: readonly ApprovalChannel[] = ['signal', 'sms', 'slack', 'email'];
+export const APPROVAL_CHANNELS: readonly ApprovalChannel[] = ['signal', 'sms', 'web', 'slack', 'email'];
 
 export type DeliverResult =
   | { delivered: true; channel: ApprovalChannel }
@@ -57,6 +57,8 @@ export interface ApprovalDeliveryDeps {
   /** Live ref, so a post-boot email bind takes effect (#1514). */
   principalEmail: string | PrincipalEmailRef;
   logger: Logger;
+  /** The phone app can take an approval when a device is subscribed or the chat is open. */
+  webReachable?: () => boolean | Promise<boolean>;
 }
 
 // Approvals live 24–48h; anything older than this many registrations has long since been
@@ -90,21 +92,24 @@ export class ApprovalDelivery {
   }
 
   /** Channels the principal has a verified, active identity on, in APPROVAL_CHANNELS order. */
-  availableChannels(): ApprovalChannel[] {
-    return APPROVAL_CHANNELS.filter((channel) => this.recipientFor(channel) !== null);
+  async availableChannels(): Promise<ApprovalChannel[]> {
+    return [...(await this.resolveRecipients()).keys()];
   }
 
   /** Send one pending approval on one channel. Never throws. */
   async deliver(shortRef: string, channel: ApprovalChannel): Promise<DeliverResult> {
     const { actionLogRepo, logger } = this.deps;
     const failed = this.failedChannels.get(shortRef);
-    const available = this.availableChannels().filter((c) => !failed?.has(c));
+    // One lookup per delivery: `web` reachability is a live query, so it is not repeated
+    // for the chosen channel, and not cached across deliveries either.
+    const recipients = await this.resolveRecipients();
+    const available = [...recipients.keys()].filter((c) => !failed?.has(c));
 
     const row = await actionLogRepo.findPendingByShortRef(shortRef);
     if (!row) return { delivered: false, reason: 'not_found', available };
     if (row.notificationSentAt) return { delivered: false, reason: 'already_delivered', available };
 
-    const recipient = this.recipientFor(channel);
+    const recipient = recipients.get(channel) ?? null;
     if (recipient === null) return { delivered: false, reason: 'channel_unavailable', available };
 
     // Build before claiming: a payload the renderer chokes on must not leave a claim behind,
@@ -203,7 +208,18 @@ export class ApprovalDelivery {
     }
   }
 
-  private recipientFor(channel: ApprovalChannel): string | null {
+  /** Each channel with a recipient right now, in APPROVAL_CHANNELS order. */
+  private async resolveRecipients(): Promise<Map<ApprovalChannel, string>> {
+    const recipients = new Map<ApprovalChannel, string>();
+    for (const channel of APPROVAL_CHANNELS) {
+      const recipient = await this.recipientFor(channel);
+      if (recipient !== null) recipients.set(channel, recipient);
+    }
+    return recipients;
+  }
+
+  private async recipientFor(channel: ApprovalChannel): Promise<string | null> {
+    if (channel === 'web') return (await this.deps.webReachable?.()) ? 'principal' : null;
     if (channel === 'email') {
       const email = resolvePrincipalEmail(this.deps.principalEmail);
       if (email) return email;
@@ -260,6 +276,8 @@ export class ApprovalDelivery {
         return { channel: 'sms', recipient, message: body };
       case 'signal':
         return { channel: 'signal', recipient, message: body };
+      case 'web':
+        return { channel: 'web', recipient: 'principal', message: body };
     }
   }
 }

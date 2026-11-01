@@ -41,6 +41,7 @@ import {
 } from './prompts/verification-block.js';
 import { formatTurnBudgetBlock } from './turn-budget.js';
 import { renderPinnedContextBlock, type PinnedContextReader } from './pinned-context.js';
+import { formatPrincipalReachBlock } from './principal-reach.js';
 import type { AgentConfig } from './runtime.js';
 
 /**
@@ -67,6 +68,7 @@ export type SystemPromptSources = Pick<
   | 'browserSessionAlive'
   | 'pinnedContext'
   | 'pinnedContextReader'
+  | 'principalReach'
 >;
 
 /** Stands in when no reader is wired: every declared entry renders as unavailable. */
@@ -89,7 +91,8 @@ export function resolveMaxTurns(errorBudget: AgentConfig['errorBudget']): number
  *
  * Order (do not change without updating the tests that pin it):
  *   identity → security → ## Your Contact Details → ## Who you serve (with
- *   ### Principal Contact Details) → YAML body → ## Available Specialists →
+ *   ### Principal Contact Details) → ## Reaching the principal (send-capable
+ *   agents only) → YAML body → ## Available Specialists →
  *   ## Pinned context → autonomy → live sign-in verifications (coordinator, ceo-inbox) → date guardrail
  *   (coordinator) → time → turn budget
  *
@@ -257,6 +260,19 @@ export async function buildBaseSystemPrompt(
   // model-visible prompt and duplicate the heading).
   if (agentId === 'coordinator') {
     prompt += '\n\n' + DATE_RESOLVE_GUARDRAIL;
+  }
+
+  // Reach order changes when a browser opens or closes the chat, so it stays
+  // out of the cached prefix (#2341). Standing preferences are not parsed here.
+  if (sources.principalReach) {
+    try {
+      const reach = await sources.principalReach();
+      const block = reach ? formatPrincipalReachBlock(reach) : null;
+      if (block) prompt += '\n\n' + block;
+    } catch (err) {
+      failBlock('reach', err);
+      logger.error({ err, agentId }, 'Failed to build the reach block — omitted this turn');
+    }
   }
 
   // Current date/time — refreshed every turn so the agent always has the correct

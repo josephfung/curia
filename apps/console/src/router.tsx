@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-router';
 import LoginPage from './pages/LoginPage';
 import { PwaChrome } from './pwa/PwaChrome';
+import { PushNoticesBanner } from './pwa/PushNoticesBanner';
 import { accessKeyLoginRequested, isStandaloneDisplay, signedOutPath } from './pwa/standalone';
 import { getSessionInfo } from './api';
 import { clampWizardStep } from './pages/wizard-utils';
@@ -60,6 +61,12 @@ const rootRoute = createRootRoute({
 const authedRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'authed',
+  component: () => (
+    <>
+      <PushNoticesBanner />
+      <Outlet />
+    </>
+  ),
   beforeLoad: async ({ location }) => {
     const session = await getSessionInfo();
     if (!session.valid) throw redirect({ to: signedOutPath(isStandaloneDisplay()) });
