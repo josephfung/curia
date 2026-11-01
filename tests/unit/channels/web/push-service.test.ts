@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebPushService, vapidSubject, type PushSender, type WebThreadWriter } from '../../../../src/channels/web/push-service.js';
 import { HIDDEN_PREVIEW, classifyPushStatus, pushPreview } from '../../../../src/channels/web/push-preview.js';
 import type { Logger } from '../../../../src/logger.js';
@@ -13,6 +13,8 @@ interface SubRow {
   auth_secret: string;
   consecutive_failures: number;
   device_name?: string;
+  /** The owning session has expired; the service's queries must skip the row. */
+  expired?: boolean;
 }
 
 function createPool(state: {
@@ -24,7 +26,7 @@ function createPool(state: {
 }): WebThreadQueryable {
   return {
     async query(sql: string, params?: unknown[]) {
-      if (state.failRead && (sql.includes('hide_previews') || sql.includes('SELECT id, endpoint'))) {
+      if (state.failRead && (sql.includes('hide_previews') || sql.includes('ps.endpoint'))) {
         throw new Error('db down');
       }
       if (state.failDelete && sql.includes('DELETE FROM push_subscriptions')) {
@@ -33,11 +35,18 @@ function createPool(state: {
       if (sql.includes('SELECT conversation_id FROM web_thread')) {
         return { rows: [{ conversation_id: 'conv-1' }] };
       }
+      // Both reads must join the owning session and skip an expired one.
+      const live = () => {
+        if (!sql.includes('JOIN sessions') || !sql.includes('expires_at > NOW()')) {
+          throw new Error(`subscription read does not skip expired sessions: ${sql}`);
+        }
+        return state.subs.filter((row) => !row.expired);
+      };
       if (sql.includes('SELECT EXISTS')) {
-        return { rows: [{ live: state.subs.length > 0 }] };
+        return { rows: [{ live: live().length > 0 }] };
       }
       if (sql.includes('SELECT hide_previews')) return { rows: [{ hide_previews: state.hide }] };
-      if (sql.includes('SELECT id, endpoint')) return { rows: state.subs.map((row) => ({ ...row })) };
+      if (sql.includes('ps.endpoint')) return { rows: live().map((row) => ({ ...row })) };
       if (sql.includes('DELETE FROM push_subscriptions')) {
         const ids = params?.[0] as string[];
         state.subs = state.subs.filter((row) => !ids.includes(row.id));
@@ -322,11 +331,86 @@ describe('WebPushService', () => {
     expect(state.notices).toEqual([]);
   });
 
+  it('neither counts nor sends to a subscription whose session has expired', async () => {
+    const state = { hide: false, subs: [{ ...sub('stale'), expired: true }] as SubRow[], notices: [] as string[] };
+    const sender: PushSender = { send: vi.fn().mockResolvedValue(undefined) };
+    const push = service({ pool: createPool(state), sender });
+    await expect(push.reachableNow()).resolves.toBe(false);
+    await expect(push.deliver('hello')).resolves.toEqual({
+      outcome: 'unavailable',
+      detail: 'No phone is subscribed to notifications.',
+    });
+    expect(sender.send).not.toHaveBeenCalled();
+
+    state.subs.push(sub('live'));
+    await expect(push.reachableNow()).resolves.toBe(true);
+    await expect(push.deliver('hello')).resolves.toEqual({ outcome: 'delivered' });
+    expect((sender.send as ReturnType<typeof vi.fn>).mock.calls.map((call) => (call[0] as { id: string }).id)).toEqual(['live']);
+  });
+
   it('reads reachability from the table, not a remembered flag', async () => {
     const state = { hide: false, subs: [sub()], notices: [] };
     const push = service({ pool: createPool(state), sender: { send: vi.fn() } });
     await expect(push.reachableNow()).resolves.toBe(true);
     state.subs = [];
     await expect(push.reachableNow()).resolves.toBe(false);
+  });
+
+  describe('push phase wall time', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+    it('shrinks each attempt to the time left, so slow 5xx answers still fall back inside twelve seconds', async () => {
+      const state = { hide: false, subs: [sub()], notices: [] as string[] };
+      const timeouts: number[] = [];
+      // Each attempt answers 503 only when its timeout is nearly spent.
+      const sender: PushSender = {
+        send: vi.fn((_row, _body, options: { timeoutMs: number }) => {
+          timeouts.push(options.timeoutMs);
+          return new Promise<void>((_resolve, reject) => {
+            setTimeout(() => reject(fail(503)), Math.max(0, options.timeoutMs - 50));
+          });
+        }),
+      };
+      const push = service({ pool: createPool(state), sender, sleep: realSleep });
+      const started = Date.now();
+      let finishedAt = 0;
+      const pending = push.deliver('hello').then((result) => {
+        finishedAt = Date.now();
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await pending;
+      expect(result).toMatchObject({ outcome: 'fallback' });
+      // Without the shrink this took 10s + ~1s + 10s + ~2s + 10s.
+      expect(finishedAt - started).toBeLessThanOrEqual(12_000);
+      expect(timeouts[0]).toBe(10_000);
+      // The retry got only what was left of the phase, not another ten seconds.
+      expect(timeouts.length).toBeGreaterThanOrEqual(2);
+      for (const timeout of timeouts.slice(1)) expect(timeout).toBeLessThan(10_000);
+    });
+
+    it('gives up on an attempt that never answers at its deadline', async () => {
+      const state = { hide: false, subs: [sub()], notices: [] as string[] };
+      const sender: PushSender = { send: vi.fn(() => new Promise<void>(() => undefined)) };
+      const push = service({ pool: createPool(state), sender, sleep: realSleep });
+      const started = Date.now();
+      let finishedAt = 0;
+      const pending = push.deliver('hello').then((result) => {
+        finishedAt = Date.now();
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(pending).resolves.toMatchObject({ outcome: 'fallback' });
+      // A local failure is not retried, so the phase ends at the first deadline.
+      expect(finishedAt - started).toBe(10_000);
+      expect(sender.send).toHaveBeenCalledTimes(1);
+    });
   });
 });

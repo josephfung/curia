@@ -20,8 +20,13 @@ export interface PushSubscriptionRow {
   deviceName: string | null;
 }
 
+export interface PushSendOptions {
+  /** The most this attempt may take. The push phase shrinks it to the time it has left. */
+  timeoutMs: number;
+}
+
 export interface PushSender {
-  send(sub: PushSubscriptionRow, body: string): Promise<void>;
+  send(sub: PushSubscriptionRow, body: string, options: PushSendOptions): Promise<void>;
 }
 
 export type WebDelivery =
@@ -60,9 +65,17 @@ export interface PushServiceDeps {
  * configuration, and deleting the row would blame a working phone.
  */
 const DEAD_AFTER = 5;
-/** Two retries, about 1s then 2s, so the whole push phase stays under 12s. */
+/** Two retries, about 1s then 2s. */
 const RETRY_BACKOFF_MS = [1_000, 2_000];
+/**
+ * Wall time for the whole push phase, attempts included, so web-send can still
+ * fall back inside its 30s tool timeout. An attempt gets the smaller of
+ * PUSH_ATTEMPT_TIMEOUT_MS and what is left; a round with less than
+ * MIN_ATTEMPT_MS left is not started.
+ */
 const PUSH_PHASE_MS = 12_000;
+const PUSH_ATTEMPT_TIMEOUT_MS = 10_000;
+const MIN_ATTEMPT_MS = 1_000;
 const RETRY_AFTER_CAP_MS = 5_000;
 
 const NO_SUBSCRIPTION = 'No phone is subscribed to notifications.';
@@ -98,8 +111,14 @@ export class WebPushService {
     if (!this.deps.configured) return false;
     if (this.anyoneWatching()) return true;
     try {
+      // An expired session's subscription is not a phone that can still read the
+      // thread: its row lingers until the prune sweep deletes the session.
       const result = await this.deps.pool.query(
-        `SELECT EXISTS (SELECT 1 FROM push_subscriptions) AS live`,
+        `SELECT EXISTS (
+           SELECT 1 FROM push_subscriptions ps
+           JOIN sessions s ON s.id = ps.session_id
+           WHERE s.expires_at > NOW()
+         ) AS live`,
       );
       return result.rows[0]?.['live'] === true;
     } catch (err) {
@@ -189,7 +208,10 @@ export class WebPushService {
         if (wait <= 0) break;
         await this.sleep(wait);
       }
-      const rows = await Promise.all(pending.map((sub) => this.attempt(sub, body)));
+      const remaining = PUSH_PHASE_MS - (Date.now() - started);
+      if (remaining < MIN_ATTEMPT_MS) break;
+      const timeoutMs = Math.min(PUSH_ATTEMPT_TIMEOUT_MS, remaining);
+      const rows = await Promise.all(pending.map((sub) => this.attempt(sub, body, timeoutMs)));
       for (const row of rows) latest.set(row.id, row);
       pending = subs.filter((sub) => latest.get(sub.id)?.kind === 'retry');
     }
@@ -252,7 +274,11 @@ export class WebPushService {
     return { outcome: 'fallback', detail: PUSH_REJECTED };
   }
 
-  /** Retry-After when the service sent one, otherwise the round's backoff, inside the phase. */
+  /**
+   * Retry-After when the service sent one, otherwise the round's backoff. The wait
+   * leaves at least MIN_ATTEMPT_MS of the phase for the attempt; 0 or less means
+   * there is no time for another round.
+   */
   private retryWait(
     pending: readonly PushSubscriptionRow[],
     latest: ReadonlyMap<string, Attempt>,
@@ -265,13 +291,32 @@ export class WebPushService {
       if (row?.kind === 'retry' && row.retryAfterMs !== undefined) hinted = Math.max(hinted, row.retryAfterMs);
     }
     const base = hinted > 0 ? Math.min(hinted, RETRY_AFTER_CAP_MS) : jitter(backoffMs);
-    const remaining = PUSH_PHASE_MS - (Date.now() - started);
+    const remaining = PUSH_PHASE_MS - (Date.now() - started) - MIN_ATTEMPT_MS;
     return Math.min(base, remaining);
   }
 
-  private async attempt(sub: PushSubscriptionRow, body: string): Promise<Attempt> {
+  /**
+   * One send, bounded here as well as by the sender: web-push's timeout is a socket
+   * idle timeout, so a response that trickles in can outlast it. A send that is
+   * still running at the deadline counts as a local failure and is not retried.
+   */
+  private async attempt(sub: PushSubscriptionRow, body: string, timeoutMs: number): Promise<Attempt> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    });
     try {
-      await this.deps.sender.send(sub, body);
+      const outcome = await Promise.race([
+        this.deps.sender.send(sub, body, { timeoutMs }).then(() => 'sent' as const),
+        deadline,
+      ]);
+      if (outcome === 'timeout') {
+        this.deps.logger.warn(
+          { endpointHost: endpointHost(sub.endpoint), timeoutMs },
+          'web push: the push service did not answer in time',
+        );
+        return { id: sub.id, kind: 'failed', status: 0 };
+      }
       return { id: sub.id, kind: 'ok' };
     } catch (err) {
       const status = statusOf(err);
@@ -282,6 +327,8 @@ export class WebPushService {
         return { id: sub.id, kind: 'retry', status, retryAfterMs: retryAfterOf(err) };
       }
       return { id: sub.id, kind: 'failed', status };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -331,9 +378,10 @@ export class WebPushService {
 
   private async listSubscriptions(): Promise<PushSubscriptionRow[]> {
     const result = await this.deps.pool.query(
-      `SELECT id, endpoint, p256dh, auth_secret,
-              (SELECT name FROM sessions WHERE sessions.id = push_subscriptions.session_id) AS device_name
-       FROM push_subscriptions`,
+      `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth_secret, s.name AS device_name
+       FROM push_subscriptions ps
+       JOIN sessions s ON s.id = ps.session_id
+       WHERE s.expires_at > NOW()`,
     );
     return result.rows.map((row) => ({
       id: String(row['id']),

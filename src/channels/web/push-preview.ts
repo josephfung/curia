@@ -34,9 +34,10 @@ export function pushPreview(text: string, hidePreviews: boolean): string {
 export type PushStatusClass = 'ok' | 'gone' | 'setup' | 'retry' | 'failed';
 
 /**
- * How one push response is treated. 404/410 are dead. 429 is retried only when
- * the service sends Retry-After. Other 4xx are setup. Status 0 and anything
- * else are a local failure: one attempt, then stop. They are not retried forever.
+ * How one push response is treated. 404/410 are dead. 429 and 5xx are retried
+ * inside the push phase, after Retry-After when the service sends one and the
+ * round's backoff otherwise. Other 4xx are setup. Status 0 and anything else are
+ * a local failure: one attempt, then stop. They are not retried forever.
  */
 export function classifyPushStatus(status: number): PushStatusClass {
   if (status >= 200 && status < 300) return 'ok';

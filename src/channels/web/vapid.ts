@@ -7,12 +7,11 @@
 import { generateVAPIDKeys, sendNotification, setVapidDetails, WebPushError } from 'web-push';
 import type { Logger } from '../../logger.js';
 import type { SecretsService } from '../../secrets/secrets-service.js';
-import type { PushSender, PushSubscriptionRow } from './push-service.js';
+import type { PushSender, PushSendOptions, PushSubscriptionRow } from './push-service.js';
 import { vapidSubject } from './push-service.js';
 import { retryAfterMs } from './push-preview.js';
 
 const SECRET_NAME = 'web_push_vapid';
-const PUSH_TIMEOUT_MS = 10_000;
 const PUSH_TTL_SECONDS = 86_400;
 
 /** One in-process generation at a time, so two boots do not each mint a key. */
@@ -56,12 +55,13 @@ export async function loadVapidSetup(
     disabledReason: null,
     publicKey,
     sender: {
-      async send(sub: PushSubscriptionRow, body: string): Promise<void> {
+      // The timeout comes from the push phase, which shrinks it to the time it has left.
+      async send(sub: PushSubscriptionRow, body: string, options: PushSendOptions): Promise<void> {
         try {
           await sendNotification({
             endpoint: sub.endpoint,
             keys: { p256dh: sub.p256dh, auth: sub.authSecret },
-          }, body, { TTL: PUSH_TTL_SECONDS, urgency: 'high', timeout: PUSH_TIMEOUT_MS });
+          }, body, { TTL: PUSH_TTL_SECONDS, urgency: 'high', timeout: options.timeoutMs });
         } catch (err) {
           const statusCode = err instanceof WebPushError ? err.statusCode : statusCodeOf(err);
           const error = new Error(err instanceof Error ? err.message : 'web push failed');

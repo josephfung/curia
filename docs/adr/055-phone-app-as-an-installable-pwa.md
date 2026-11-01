@@ -148,7 +148,8 @@ agents keep choosing the channel. Code decides only whether the app is reachable
        service's reason.
      - A 429 or 5xx is retried twice, about one second then two, for every failing
        subscription at once. Retry-After is used when the service sends it, capped at
-       five seconds, and the whole push phase stays under about twelve seconds. If the
+       five seconds, and the whole push phase, attempts included, stays under about
+       twelve seconds: each attempt gets at most ten seconds or the time left. If the
        push is still not accepted, the message goes out on the next channel. Nothing
        promises a later retry.
      - No subscription is a structured failure. The message is not sent on another channel,

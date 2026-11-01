@@ -87,7 +87,7 @@ describe('VAPID setup', () => {
     );
     await expect(setup.sender.send({
       id: 's', endpoint: 'https://fcm.googleapis.com/fcm/send/abc', p256dh: 'p', authSecret: 'a', deviceName: null,
-    }, '{}')).rejects.toMatchObject({ statusCode: 0 });
+    }, '{}', { timeoutMs: 10_000 })).rejects.toMatchObject({ statusCode: 0 });
   });
 
   it('turns push off when web-push rejects the stored key pair', async () => {
@@ -105,7 +105,7 @@ describe('VAPID setup', () => {
     expect(log.info).not.toHaveBeenCalled();
   });
 
-  it('sends with a ten-second timeout, a one-day TTL, and high urgency, and keeps the body', async () => {
+  it('sends with the push phase\'s timeout, a one-day TTL, and high urgency, and keeps the body', async () => {
     const { WebPushError } = await import('web-push');
     sendNotification.mockRejectedValueOnce(new WebPushError(
       'rejected',
@@ -121,11 +121,11 @@ describe('VAPID setup', () => {
       p256dh: 'p',
       authSecret: 'a',
       deviceName: null,
-    }, '{}')).rejects.toMatchObject({ statusCode: 403, body: 'BadJwtToken', retryAfterMs: 2000 });
+    }, '{}', { timeoutMs: 4_000 })).rejects.toMatchObject({ statusCode: 403, body: 'BadJwtToken', retryAfterMs: 2000 });
     expect(sendNotification).toHaveBeenCalledWith(
       expect.objectContaining({ endpoint: 'https://fcm.googleapis.com/fcm/send/abc' }),
       '{}',
-      { TTL: 86400, urgency: 'high', timeout: 10_000 },
+      { TTL: 86400, urgency: 'high', timeout: 4_000 },
     );
   });
 });
