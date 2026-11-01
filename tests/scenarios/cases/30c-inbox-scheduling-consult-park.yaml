@@ -25,9 +25,15 @@ seed:
 inbound:
   from: scheduler
   content: >
-    Check the principal's inbox for unread messages. Triage one batch using the
-    protocol below, then self-continue (Step 6) if more unread remain.
-    If there are no unread messages, exit immediately without any output.
+    First call task-list with status 'open,in_progress' and tag 'inbox-drain'.
+    A returned task with next_wake_at or wake_state set is live; one with
+    neither is stalled. If any is live, a drain cycle owns the inbox:
+    task-complete each stalled one ("stalled duplicate"), then exit without
+    output. Otherwise the first stalled task is THE drain task for this run;
+    task-complete any other stalled ones. Then check the principal's inbox for
+    unread messages. Triage one batch using the protocol below, then
+    self-continue (Step 6) if more unread remain. If there are no unread
+    messages, follow Step 3 and exit without output.
 tool_stubs:
   ceo-inbox-list:
     - match: {}

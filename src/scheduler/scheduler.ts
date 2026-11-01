@@ -1010,16 +1010,40 @@ export class Scheduler {
         ['running', job.id, nextRunAt, job.cronExpr, job.timezone],
       );
     } else {
+      // A task wake never claims once its task is done or cancelled (#2378). Completing a
+      // task cancels its pending/running/suspended/paused wakes but leaves a 'failed' one,
+      // which keeps a past next_run_at and would wake the agent onto a finished task. The
+      // check sits in the claim itself so a completion racing this poll can't slip past it.
+      // A delegation-retry wake is exempt: publishFire closes its task at fire time, before
+      // the run succeeds, so a failed retry must still re-fire. The type test is NULL-safe so
+      // a typeless payload stays claimable instead of matching nothing on every poll.
       claimResult = await this.pool.query(
-        `UPDATE scheduled_jobs
+        `UPDATE scheduled_jobs sj
             SET status = $1,
                 run_started_at = now(),
                 last_run_summary = NULL
-          WHERE id = $2
-            AND status IN ('pending', 'failed')
+          WHERE sj.id = $2
+            AND sj.status IN ('pending', 'failed')
+            AND NOT (
+              COALESCE(sj.task_payload->>'type', '') = 'task-wake'
+              AND jsonb_typeof(sj.task_payload->'delegationRetry') IS DISTINCT FROM 'object'
+              AND EXISTS (
+                SELECT 1 FROM tasks t
+                 WHERE t.id = sj.task_id AND t.status IN ('done', 'cancelled')
+              )
+            )
           RETURNING run_started_at::text AS run_started_at`,
         ['running', job.id],
       );
+      if (
+        claimResult.rowCount === 0
+        && job.agentTaskId
+        && isTaskWakePayload(job.taskPayload)
+        && !readDelegationRetryWake(job.taskPayload)
+      ) {
+        const retired = await this.retireFinishedTaskWake(job.id);
+        if (retired) return 'skipped';
+      }
     }
     if (claimResult.rowCount === 0) {
       // 0 rows now has three distinct causes, all benign: another poller/instance
@@ -1381,6 +1405,35 @@ export class Scheduler {
         'Unowned-agent fail matched 0 rows — job was not pending',
       );
     }
+  }
+
+  /**
+   * Cancel a task wake whose claim was refused because its task is done or cancelled
+   * (#2378). Mirrors the claim's guard, delegation-retry exemption included. Without this the row stays due and is re-selected on every poll. Returns
+   * true when it retired the row; false means the 0-row claim had another cause
+   * (another poller won, or the task is open), which the caller logs as before.
+   */
+  private async retireFinishedTaskWake(jobId: string): Promise<boolean> {
+    const result = await this.pool.query<{ task_id: string; task_status: string }>(
+      `UPDATE scheduled_jobs sj
+          SET status = 'cancelled', deferred_wake_at = NULL
+         FROM tasks t
+        WHERE sj.id = $1
+          AND t.id = sj.task_id
+          AND sj.status IN ('pending', 'failed')
+          AND COALESCE(sj.task_payload->>'type', '') = 'task-wake'
+          AND jsonb_typeof(sj.task_payload->'delegationRetry') IS DISTINCT FROM 'object'
+          AND t.status IN ('done', 'cancelled')
+        RETURNING t.id AS task_id, t.status AS task_status`,
+      [jobId],
+    );
+    const row = result.rows[0];
+    if (!row) return false;
+    this.logger.info(
+      { jobId, taskId: row.task_id, taskStatus: row.task_status },
+      'scheduler: task wake not fired — its task is already finished; wake cancelled',
+    );
+    return true;
   }
 
   private async publishFire(job: JobRow, firedEvent: ScheduleFiredEvent, taskEvent: AgentTaskEvent): Promise<void> {

@@ -239,6 +239,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Inbox triage cron** — skips while a drain cycle is running, so it no longer completes the drain mid-batch. (#2378)
+- **Scheduler task wakes** — a wake for a done or cancelled task is cancelled instead of firing. (#2378)
 - **`voice.session.ended`** — keeps `turnStats` when the transport and Signal hangup paths race. (#2379)
 - **Voice filler** — "One moment." plays once per turn, not once per tool round. (#2379)
 - **Principal inbox paging** — follow-up pages keep their folder/unread filters, ending drain re-triage of handled mail. (#2377)

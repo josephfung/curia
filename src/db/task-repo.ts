@@ -182,9 +182,17 @@ export interface ListAllTasksResult {
   truncated: boolean;
 }
 
+/** See TaskListRow.wakeState. */
+export type TaskWakeState = 'pending' | 'running' | 'retrying' | 'suspended' | 'paused';
+
 // Extended row returned by list — includes the next pending wake-up time if any.
 export interface TaskListRow extends TaskRow {
   nextWakeAt: string | null;
+  /** State of the task wake the scheduler still owns, or null when none does (#2378).
+   *  'retrying' is a failed wake the poll will re-claim; 'suspended' and 'paused' are held
+   *  for a person. A running wake that has not deferred a next wake has a null nextWakeAt,
+   *  so without this a mid-run task reads as stalled. */
+  wakeState: TaskWakeState | null;
 }
 
 // Terminal statuses: no transitions out of these.
@@ -490,7 +498,22 @@ export class TaskRepo {
              )
            ORDER BY COALESCE(sj.deferred_wake_at, sj.run_at) ASC
            LIMIT 1
-        ) AS next_wake_at
+        ) AS next_wake_at,
+        (
+          SELECT CASE WHEN sj.status = 'failed' THEN 'retrying' ELSE sj.status END
+            FROM scheduled_jobs sj
+           WHERE sj.task_id = t.id
+             AND COALESCE(sj.task_payload->>'type', '') = 'task-wake'
+             AND (
+               sj.status IN ('pending', 'running', 'suspended', 'paused')
+               -- completeJobRun leaves a failed one-shot due; the poll re-claims it.
+               OR (sj.status = 'failed' AND sj.next_run_at IS NOT NULL)
+             )
+           ORDER BY CASE sj.status
+                      WHEN 'running' THEN 0 WHEN 'failed' THEN 1 WHEN 'pending' THEN 2
+                      WHEN 'suspended' THEN 3 ELSE 4 END
+           LIMIT 1
+        ) AS wake_state
       FROM tasks t
       ${whereClause}
       ORDER BY t.priority DESC, t.due_at ASC NULLS LAST, t.id ASC
@@ -498,9 +521,10 @@ export class TaskRepo {
     `;
 
     const { rows } = await this.pool.query(sql, queryParams);
-    return (rows as Array<DbTaskRow & { next_wake_at: string | null }>).map(r => ({
+    return (rows as Array<DbTaskRow & { next_wake_at: string | null; wake_state: TaskWakeState | null }>).map(r => ({
       ...mapTaskRow(r),
       nextWakeAt: r.next_wake_at,
+      wakeState: r.wake_state ?? null,
     }));
   }
 

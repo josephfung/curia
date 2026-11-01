@@ -43,6 +43,7 @@ function makeListRow(overrides: Partial<TaskListRow> = {}): TaskListRow {
     tags: ['board-prep'],
     originator: null,
     nextWakeAt: null,
+    wakeState: null,
     ...overrides,
   };
 }
@@ -164,6 +165,22 @@ describe('TaskListHandler', () => {
 
     const data = (result as { success: true; data: { tasks: Array<{ next_wake_at: string | null }> } }).data;
     expect(data.tasks[0]!.next_wake_at).not.toBeNull();
+  });
+
+  it('reports wake_state so a task the scheduler still owns is not read as stalled', async () => {
+    const taskRepo = makeTaskRepo({
+      listTasks: vi.fn().mockResolvedValue([
+        makeListRow({ wakeState: 'retrying' }),
+        makeListRow({ id: '00000000-0000-0000-0000-000000000002' }),
+      ]),
+    });
+    const ctx = makeCtx({ input: {}, taskRepo });
+
+    const result = await new TaskListHandler().execute(ctx);
+
+    const data = (result as { success: true; data: { tasks: Array<{ wake_state: string | null }> } }).data;
+    expect(data.tasks[0]!.wake_state).toBe('retrying');
+    expect(data.tasks[1]!.wake_state).toBeNull();
   });
 
   it('returns displayTimezone in the result', async () => {

@@ -493,6 +493,7 @@ export class TaskState {
       age: 'today',
       last_progress_note: typeof input['progress_note'] === 'string' ? input['progress_note'] : null,
       next_wake_at: typeof input['wake_at'] === 'string' ? input['wake_at'] : null,
+      wake_state: null,
       source_agent_id: null,
       blocked_by_task_id: typeof input['blocked_by_task_id'] === 'string' ? input['blocked_by_task_id'] : null,
       parent_task_id: typeof input['parent_task_id'] === 'string' ? input['parent_task_id'] : null,

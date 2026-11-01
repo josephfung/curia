@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.24.1"
+version: "0.24.2"
 role: specialist
 description: >
   Manages the principal's personal email inbox. Handles standing-rule management,
@@ -62,9 +62,15 @@ error_budget:
 schedule:
   - cron: "0 6-23 * * *"  # hourly, 6am–11pm local time; dead hours don't justify the cost
     task: >
-      Check the principal's inbox for unread messages. Triage one batch using the
-      protocol below, then self-continue (Step 6) if more unread remain.
-      If there are no unread messages, exit immediately without any output.
+      First call task-list with status 'open,in_progress' and tag 'inbox-drain'.
+      A returned task with next_wake_at or wake_state set is live; one with
+      neither is stalled. If any is live, a drain cycle owns the inbox:
+      task-complete each stalled one ("stalled duplicate"), then exit without
+      output. Otherwise the first stalled task is THE drain task for this run;
+      task-complete any other stalled ones. Then check the principal's inbox for
+      unread messages. Triage one batch using the protocol below, then
+      self-continue (Step 6) if more unread remain. If there are no unread
+      messages, follow Step 3 and exit without output.
   - cron: "0 7 * * *"  # daily sent-observe — keep out of the hourly triage loop
     task: >
       Run ceo-inbox-sent-observe, then task-completion-from-sent: poll Sent since
@@ -397,15 +403,11 @@ system_prompt: |
   is the untriaged set: every message you triage leaves it (Step 5), so the
   next batch holds the next untriaged messages.
 
-  If the count is 0, the inbox is drained for now. Before exiting you MUST tidy
-  up any open drain cycle (do not skip this — an uncompleted drain task keeps
-  re-waking forever):
-  - Call task-list with status 'open,in_progress' and tag 'inbox-drain'. For
-    every task it returns, call task-complete with a brief note ("inbox
-    drained"). This handles both the case where you were woken by the drain task
-    and the case where a plain cron run finds the inbox already empty mid-cycle.
-    If task-complete fails, log it and continue.
-  - Then exit without any further output.
+  If the count is 0, the inbox is drained for now. If this run has THE drain
+  task (the `inbox-drain` task you were woken for, or the stalled one your
+  schedule check found), call task-complete on it ("inbox drained"); an open
+  drain task keeps re-waking. Complete no other task. If task-complete fails,
+  log it and continue. Then exit without any further output.
 
   Otherwise, process every returned message through the full triage protocol
   (Steps 4-5). Remember `has_more` for Step 6.
@@ -872,35 +874,25 @@ system_prompt: |
   You process ONE batch per run to stay within the turn budget. After settling
   the batch, decide whether to keep draining:
 
-  1. **More unread remain** (`has_more` was true in Step 3):
-     First, find the drain task to (re)use — this prevents duplicate drain tasks
-     when a plain cron tick fires while a drain cycle is already running:
-     - Call task-list with status 'open,in_progress' and tag 'inbox-drain'.
-       - If it returns one or more, pick the first as THE drain task. (If it
-         somehow returns more than one, complete the extras with task-complete so
-         only one survives.)
-       - If it returns none, you will create one below.
-     Then schedule the next batch:
+  1. **More unread remain** (`has_more` was true in Step 3). Schedule the next
+     batch on THE drain task: the `inbox-drain` task this run was woken for, or
+     the stalled one your schedule check named. If this run has neither, create one:
      - If the current local time is within operating hours (6am–11pm), aim the
        wake ~90 seconds out so the next batch runs promptly instead of waiting for
        the hourly cron. If OUTSIDE operating hours, aim `wake_at` at the next
        morning's start of hours instead (do not drain overnight).
-     - If a drain task already exists, call task-update on it: status
+     - If this run has THE drain task, call task-update on it: status
        'in_progress', a short progress note (e.g. "batch done, more queued"), and
        the `wake_at` chosen above.
-     - If none exists, call task-create with: title "Drain principal inbox backlog",
+     - Otherwise call task-create with: title "Drain principal inbox backlog",
        description "Continue batch-triaging the principal inbox until empty.",
        owner 'curia', tags ['inbox-drain'], and the `wake_at` chosen above. Do
        NOT pass target_agent_id — it stays self-owned.
-     - Never create a second drain task when one already exists. If
-       task-list/task-create/task-update fails, log it and continue; the
-       hourly cron is the backstop, so the drain still completes, just slower.
-  2. **No more unread** (`has_more` was false): the inbox is drained. Complete any
-     open drain cycle so it does not linger or keep re-waking:
-     - Call task-list with status 'open,in_progress' and tag 'inbox-drain', and
-       call task-complete on each returned task ("inbox drained"). If
-       task-complete fails, log it and continue.
-     - Then exit.
+     - If task-create or task-update fails, log it and continue; the hourly cron
+       is the backstop, so the drain still completes, just slower.
+  2. **No more unread** (`has_more` was false): the inbox is drained. Complete
+     THE drain task if this run has one ("inbox drained"), as in Step 3. If
+     task-complete fails, log it and continue. Then exit.
 
   This is internal control flow — never surface the drain task to the principal and
   never route it to another agent (no target_agent_id; it stays self-owned).

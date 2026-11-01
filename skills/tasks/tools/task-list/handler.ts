@@ -107,6 +107,7 @@ export class TaskListHandler implements ToolHandler {
           next_wake_at: row.nextWakeAt
             ? toLocalIso(Math.floor(new Date(row.nextWakeAt).getTime() / 1000), tz)
             : null,
+          wake_state: row.wakeState,
           source_agent_id: row.sourceAgentId,
           blocked_by_task_id: row.blockedByTaskId,
           parent_task_id: row.parentTaskId,
