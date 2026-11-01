@@ -84,7 +84,14 @@ describe('HTTP API integration', () => {
     dispatcher.register();
 
     app.register(chatRoutes, {
-      pool: { query: vi.fn() } as unknown as Pool,
+      pool: {
+        query: vi.fn(async (sql: string) => {
+          if (sql.includes('web_thread')) {
+            return { rows: [{ conversation_id: 'test-conv-1' }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }),
+      } as unknown as Pool,
       logger,
       webAppBootstrapSecret: WEB_SECRET,
       sessions: new Map() as SessionStore,

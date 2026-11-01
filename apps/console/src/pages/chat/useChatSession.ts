@@ -1,16 +1,22 @@
 // apps/console/src/pages/chat/useChatSession.ts
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { apiFetch } from '../../api.js';
-import { makeMessage, parseSseEvent, pickRecoveredReply } from './chat-utils.js';
-import type { Message, HistoryMessage } from './types.js';
+import { makeMessage, mergeLiveTail, nextReconnectDelayMs, parseSseEvent, pickRecoveredReply } from './chat-utils.js';
+import type { Message, HistoryMessage, SseEvent } from './types.js';
 
-// localStorage key for persisting the conversationId across page reloads.
-const CONV_ID_KEY = 'curia:chat:conversationId';
 // Onboarding kickoff — set by the setup wizard page after form submission.
 const ONBOARDING_KICKOFF_KEY = 'curia:onboarding:welcome-banner-pending';
+const LEGACY_CONVERSATION_KEY = 'curia:chat:conversationId';
 const KICKOFF_TEXT = 'Just finished setup — say hi!';
+const CANT_REACH_TEXT = "Can't reach Curia, retrying";
+/** Reconnect when no SSE bytes, including the data ping, have arrived. */
+const STREAM_SILENCE_MS = 60_000;
 
 const HISTORY_PAGE_SIZE = 25;
+// Catch-up pages back until a page row is already on screen. After this many
+// pages without one, the newest pages replace the thread.
+const CATCH_UP_MAX_PAGES = 4;
 
 // Ack-and-stream (#985): the reply arrives over SSE, not the POST. If no terminal
 // event arrives within this window (rare: a suppressed-duplicate turn or an agent
@@ -21,15 +27,14 @@ const REPLY_WATCHDOG_MS = 5 * 60_000;
 // How long to wait for the SSE connection to open before POSTing anyway. If the
 // stream is degraded the POST still publishes and the watchdog recovers the reply.
 const SSE_OPEN_TIMEOUT_MS = 3_000;
-// Shown when recovery ran, the /history fetch succeeded, but no reply has landed
-// yet. Phrased conditionally ("if it arrives") because we genuinely can't tell a
-// slow turn from a dropped one (e.g. an email-skill suppressed-duplicate turn that
-// produces no chat reply at all) — so we don't promise a reply that may never come.
+// Shown only by the five-minute watchdog, after a history fetch that succeeded
+// and still had no reply. Phrased "if it arrives" because a slow turn and a
+// turn that will never reply look the same from here. A hide or a dropped
+// socket must not use this copy: the reconnect catch-up settles that turn.
 const STILL_WORKING_TEXT =
   'This is taking longer than usual. The reply will appear here if it arrives — you can also resend.';
-// Shown when recovery itself failed (the /history fetch errored or returned non-ok,
-// e.g. an expired session or a server error). We have no basis to claim progress,
-// so we tell the user the status is unknown rather than implying a reply is coming.
+// Shown when the watchdog's history fetch itself failed. The status is unknown,
+// so the copy does not promise that a reply is on the way.
 const RECOVERY_FAILED_TEXT =
   'Could not confirm your message status — the connection may have dropped. You can resend.';
 
@@ -38,6 +43,7 @@ interface ChatSession {
   sending: boolean;
   hasMore: boolean;
   loadingHistory: boolean;
+  connectionError: string | null;
   send: (text: string) => Promise<void>;
   loadMore: () => Promise<void>;
 }
@@ -47,9 +53,34 @@ interface HistoryResponse {
   hasMore: boolean;
 }
 
+class SessionEnded extends Error {}
+
+/**
+ * The reply to the in-flight send, or null when the page's last user row is
+ * still the previous turn. Matching on text alone would settle "q2" with the
+ * reply to "q1" when the new row has not been saved yet.
+ */
+function replyForInflight(
+  items: HistoryMessage[],
+  inflight: string | null,
+  knownIds: Set<string>,
+): { text: string; html: string | null } | null {
+  if (!inflight) return null;
+  let lastUser: HistoryMessage | undefined;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (items[i]!.role === 'user') {
+      lastUser = items[i];
+      break;
+    }
+  }
+  if (!lastUser || lastUser.content !== inflight || knownIds.has(lastUser.id)) return null;
+  return pickRecoveredReply(items);
+}
+
 function historyToMessages(items: HistoryMessage[]): Message[] {
   return items.map((item) => ({
     id: item.id,
+    serverId: item.id,
     kind: (item.role === 'assistant' ? 'agent' : 'user') as Message['kind'],
     text: item.content,
     html: item.html ?? undefined,
@@ -58,114 +89,278 @@ function historyToMessages(items: HistoryMessage[]): Message[] {
 }
 
 export function useChatSession(): ChatSession {
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [sending, setSending] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  // isSending and isLoadingMore are refs so their guards are immune to stale closures.
-  // Using refs rather than state prevents the IntersectionObserver from tearing
-  // down and re-mounting on every loadMore cycle (which could cause a double-fetch
-  // during the brief window when state hasn't propagated to the observer's closure).
+  // isSending and isLoadingMore are refs so their guards are immune to stale
+  // closures. State would re-render the composer and re-mount the thread on
+  // every loadMore cycle, which could cause a double-fetch.
   const isSending = useRef(false);
   const isLoadingMore = useRef(false);
-  // Holds the active EventSource so cleanup can close it on unmount.
   const sourceRef = useRef<EventSource | null>(null);
-  // Holds the in-flight reply watchdog timer so cleanup can clear it on unmount
-  // (otherwise a turn that unmounts mid-flight leaves a up-to-5-minute timer that
-  // later fires a post-unmount /history fetch + setState). See send() below.
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // One conversationId per chat thread — persisted in localStorage.
-  // localStorage.getItem can throw SecurityError in restricted browsing contexts
-  // (e.g. Safari private mode with strict settings), so we guard the read.
-  const conversationId = useRef<string | null>(
-    (() => {
-      if (typeof window === 'undefined') return null;
-      try { return localStorage.getItem(CONV_ID_KEY); } catch { return null; }
-    })(),
-  );
-  // One-shot kickoff: read and clear the onboarding flag synchronously so a
-  // React strict-mode double-mount cannot fire a second auto-send.
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttempt = useRef(0);
+  // True while we closed the socket ourselves (tab hidden, unmount). The error
+  // that follows must not schedule another reconnect.
+  const closedByUs = useRef(false);
+  const mountedRef = useRef(true);
+  // Server-owned thread. localStorage is not the source of truth: an installed
+  // iOS app does not share it with the Safari tab that paired (#2341).
+  const conversationId = useRef<string | null>(null);
+  const conversationPromise = useRef<Promise<string> | null>(null);
+  const oldestTimestamp = useRef<string | null>(null);
+  const lastActivity = useRef(0);
+  const settleTurnRef = useRef<(() => void) | null>(null);
+  // Latest rendered thread, so send() can tell a catch-up page's last user row
+  // from the message it just added.
+  const messagesRef = useRef<Message[]>([]);
+  // Synced after commit, not during render, so catchUp() and send() never read a
+  // snapshot React later discards. Their own writes stay imperative.
+  useLayoutEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  // The user row of the turn in flight, and the ids (client and server) already
+  // on screen when it started. Catch-up settles only when history's last user
+  // row is that text and was not already on screen.
+  const inflightText = useRef<string | null>(null);
+  const inflightId = useRef<string | null>(null);
+  const inflightKnownIds = useRef<Set<string>>(new Set());
+  // Initial history has its own retry. closeStream() clears the SSE timer, and
+  // hiding the tab must not cancel the thread open.
+  const threadRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const threadReady = useRef(false);
+  // One identical SSE reply is dropped after catch-up already rendered it.
+  // A later repeat is a real message and is kept.
+  const suppressNextReply = useRef<string | null>(null);
+
   const pendingKickoff = useRef(
     (() => {
       if (typeof window === 'undefined') return false;
-      let flag: string | null;
       try {
-        // Guard getItem separately — throws SecurityError in restricted contexts (e.g. Safari private mode).
-        flag = localStorage.getItem(ONBOARDING_KICKOFF_KEY);
-      } catch { return false; }
-      if (flag === null) return false;
-      // Clear unconditionally so the flag is truly one-shot, even when we skip
-      // the kickoff below because a conversation already exists.
-      try {
-        localStorage.removeItem(ONBOARDING_KICKOFF_KEY);
-      } catch (err) {
-        // removeItem failed after reading the flag. Log it but still fire the kickoff —
-        // the worst case is a double-send on the next mount (harmless; conversationId
-        // will exist by then and the guard below will prevent it).
-        console.error('[useChatSession] failed to clear onboarding kickoff flag:', err);
+        // getItem throws SecurityError in Safari private mode. The key stays
+        // until the kickoff is actually sent, so a cancelled open can retry.
+        return localStorage.getItem(ONBOARDING_KICKOFF_KEY) !== null;
+      } catch {
+        return false;
       }
-      if (conversationId.current) return false;
-      return true;
     })(),
   );
-  // ISO timestamp of the oldest loaded message — used as the pagination cursor.
-  const oldestTimestamp = useRef<string | null>(null);
 
-  // Close any in-flight SSE connection and clear the reply watchdog when the
-  // component unmounts, so neither survives to fire after teardown.
-  useEffect(() => () => {
-    sourceRef.current?.close();
-    if (watchdogRef.current) clearTimeout(watchdogRef.current);
+  const appendEvent = useCallback((parsed: SseEvent) => {
+    if (parsed.kind === 'user') {
+      setMessages((prev) => {
+        if (parsed.clientMessageId && prev.some((m) => m.id === parsed.clientMessageId)) return prev;
+        return [...prev, makeMessage('user', parsed.text, {
+          id: parsed.clientMessageId ?? undefined,
+          timestamp: new Date(),
+        })];
+      });
+      return;
+    }
+    if (parsed.kind === 'reply') {
+      // Outside the updater: React may run an updater twice, and the first
+      // run would consume the suppression before the second appends.
+      if (suppressNextReply.current === parsed.text) {
+        suppressNextReply.current = null;
+        return;
+      }
+      setMessages((prev) => [...prev, makeMessage('agent', parsed.text, {
+        html: parsed.html ?? undefined,
+        timestamp: new Date(),
+      })]);
+      return;
+    }
+    if (parsed.kind === 'status') {
+      setMessages((prev) => [...prev, makeMessage('status', parsed.text)]);
+      return;
+    }
+    setMessages((prev) => [...prev, makeMessage('error', parsed.text)]);
   }, []);
 
-  // On mount, if we have a stored conversationId, load the most recent history page.
+  const onEventRef = useRef<(event: SseEvent) => void>(appendEvent);
   useEffect(() => {
-    const convId = conversationId.current;
-    if (!convId) return;
+    onEventRef.current = appendEvent;
+  }, [appendEvent]);
 
-    // Using an inner async function inside useEffect so we can await cleanly
-    // while still returning a synchronous cleanup function from the effect.
-    const load = async () => {
-      setLoadingHistory(true);
-      try {
+  const closeStream = useCallback(() => {
+    closedByUs.current = true;
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
+    sourceRef.current?.close();
+    sourceRef.current = null;
+  }, []);
+
+  const catchUp = useCallback(async (convId: string) => {
+    try {
+      // Newest page first. Page back while no row is on screen yet: a long
+      // live session has no server ids in the newest page, and a long gap
+      // has nothing in common with it.
+      let rows: HistoryMessage[] = [];
+      let olderExists = false;
+      for (let pageNo = 0; pageNo < CATCH_UP_MAX_PAGES; pageNo += 1) {
+        const before = rows[0]?.timestamp;
+        const cursor = before ? `&before=${encodeURIComponent(before)}` : '';
         const res = await apiFetch(
-          `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
+          `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}${cursor}`,
         );
+        if (res.status === 401) {
+          await navigate({ to: '/login' });
+          return;
+        }
         if (!res.ok) {
-          console.error('[useChatSession] initial history fetch returned non-ok status:', res.status);
+          // A partial walk would read as a gap and replace the thread.
+          console.error('[useChatSession] catch-up history returned non-ok status:', res.status);
           return;
         }
         const data = (await res.json()) as HistoryResponse;
-        if (data.messages.length === 0) return;
-        const loaded = historyToMessages(data.messages);
-        // Functional update guards against a race where the user sends a message
-        // before history arrives: only replace state if no messages have been added yet.
-        setMessages((prev) => (prev.length === 0 ? loaded : [...loaded, ...prev]));
-        setHasMore(data.hasMore);
-        // Record the timestamp of the oldest loaded message for subsequent loadMore calls.
-        const first = data.messages[0];
-        if (first) oldestTimestamp.current = first.timestamp;
-      } catch (err: unknown) {
-        // History fetch is best-effort — a failure doesn't prevent new messages.
-        console.error('[useChatSession] initial history fetch failed:', err);
-      } finally {
-        setLoadingHistory(false);
+        rows = [...data.messages, ...rows];
+        olderExists = data.hasMore;
+        if (!data.hasMore || data.messages.length === 0) break;
+        const screen = messagesRef.current;
+        if (screen.length === 0) break;
+        const onScreen = new Set(screen.map((message) => message.serverId ?? message.id));
+        if (rows.some((item) => onScreen.has(item.id))) break;
       }
+      const loaded = historyToMessages(rows);
+      const options = { complete: !olderExists, pendingId: inflightId.current };
+      const merged = mergeLiveTail(loaded, messagesRef.current, options);
+      messagesRef.current = merged.messages;
+      // An updater, so an SSE row appended since the last render is kept.
+      setMessages((prev) => mergeLiveTail(loaded, prev, options).messages);
+      if (merged.replaced) {
+        oldestTimestamp.current = rows[0]?.timestamp ?? null;
+        setHasMore(olderExists);
+      }
+      // A live row known when the turn started may only now carry its server
+      // id. That id is the previous turn, not the one in flight.
+      const known = new Set(inflightKnownIds.current);
+      for (const message of merged.messages) {
+        if (message.serverId && inflightKnownIds.current.has(message.id)) known.add(message.serverId);
+      }
+      const recovered = replyForInflight(rows, inflightText.current, known);
+      if (recovered && isSending.current) {
+        suppressNextReply.current = recovered.text;
+        settleTurnRef.current?.();
+      }
+    } catch (err) {
+      console.error('[useChatSession] catch-up history failed:', err);
+    }
+  }, [navigate]);
+
+  const openStream = useCallback((convId: string) => {
+    if (!mountedRef.current) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    const existing = sourceRef.current;
+    if (existing && existing.readyState !== EventSource.CLOSED) return;
+    closedByUs.current = false;
+    const source = new EventSource(
+      `/api/chat/stream?conversationId=${encodeURIComponent(convId)}`,
+      { withCredentials: true },
+    );
+    sourceRef.current = source;
+    const touch = () => { lastActivity.current = Date.now(); };
+    source.onopen = () => {
+      touch();
+      reconnectAttempt.current = 0;
+      // Including the first open: a message can land between the history
+      // response and this socket.
+      void catchUp(convId);
     };
+    source.onmessage = (event: MessageEvent<string>) => {
+      touch();
+      const parsed = parseSseEvent(event.data);
+      if (parsed) onEventRef.current(parsed);
+    };
+    source.onerror = () => {
+      if (closedByUs.current) return;
+      console.error('[useChatSession] SSE stream error (readyState=%d)', source.readyState);
+      source.close();
+      if (sourceRef.current === source) sourceRef.current = null;
+      if (reconnectTimer.current || !mountedRef.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const attempt = reconnectAttempt.current;
+      reconnectAttempt.current += 1;
+      const delay = nextReconnectDelayMs(attempt);
+      reconnectTimer.current = setTimeout(() => {
+        reconnectTimer.current = null;
+        void (async () => {
+          if (attempt >= 1) {
+            try {
+              const probe = await apiFetch('/api/chat/conversation');
+              if (probe.status === 401) {
+                await navigate({ to: '/login' });
+                return;
+              }
+            } catch (err) {
+              console.error('[useChatSession] session probe failed:', err);
+            }
+          }
+          if (!mountedRef.current) return;
+          openStream(convId);
+        })();
+      }, delay);
+    };
+  }, [catchUp, navigate]);
 
-    void load();
-  // Run once on mount; conversationId.current is a ref, not a reactive dep.
-  }, []);
+  const ensureConversationId = useCallback(async (): Promise<string> => {
+    if (conversationId.current) return conversationId.current;
+    if (!conversationPromise.current) {
+      conversationPromise.current = (async () => {
+        const res = await apiFetch('/api/chat/conversation');
+        if (res.status === 401) {
+          await navigate({ to: '/login' });
+          throw new SessionEnded();
+        }
+        if (!res.ok) throw new Error(`conversation fetch returned ${res.status}`);
+        const data = await res.json() as { conversationId?: unknown };
+        if (typeof data.conversationId !== 'string' || data.conversationId.length === 0) {
+          throw new Error('conversation fetch returned no id');
+        }
+        conversationId.current = data.conversationId;
+        return data.conversationId;
+      })().catch((err: unknown) => {
+        conversationPromise.current = null;
+        throw err;
+      });
+    }
+    return conversationPromise.current;
+  }, [navigate]);
 
-  // Auto-send the onboarding kickoff message once on first mount. The one-shot guarantee comes
-  // from the pendingKickoff ref below, not from the empty dep array. `send` reads only refs and
-  // uses functional setState, so it holds no render-varying value and exhaustive-deps does not
-  // flag its omission — no disable directive needed here.
-  useEffect(() => {
-    if (!pendingKickoff.current) return;
-    void send(KICKOFF_TEXT);
-  }, []);
+  const loadInitialHistory = useCallback(async (convId: string): Promise<boolean> => {
+    setLoadingHistory(true);
+    try {
+      const res = await apiFetch(
+        `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
+      );
+      if (res.status === 401) {
+        await navigate({ to: '/login' });
+        throw new SessionEnded();
+      }
+      if (!res.ok) {
+        throw new Error(`initial history fetch returned ${res.status}`);
+      }
+      const data = (await res.json()) as HistoryResponse;
+      if (data.messages.length === 0) return false;
+      const loaded = historyToMessages(data.messages);
+      // The stream opens after this load, so the only rows already on screen
+      // are this tab's own: the page replaces them and keeps a send in flight.
+      const pendingId = inflightId.current;
+      setMessages((prev) => mergeLiveTail(loaded, prev, { pendingId }).messages);
+      setHasMore(data.hasMore);
+      const first = data.messages[0];
+      if (first) oldestTimestamp.current = first.timestamp;
+      return true;
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, [navigate]);
 
   const loadMore = useCallback(async () => {
     const convId = conversationId.current;
@@ -181,8 +376,8 @@ export function useChatSession(): ChatSession {
         `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}${cursor}`,
       );
       if (!res.ok) {
-        // Treat non-ok as terminal to prevent the IntersectionObserver from
-        // re-triggering loadMore in an infinite retry loop while hasMore is still true.
+        // A failed page must stop the loader. Leaving hasMore true re-triggers
+        // loadMore in an infinite retry loop.
         console.error('[useChatSession] loadMore returned non-ok status:', res.status);
         setHasMore(false);
         return;
@@ -198,7 +393,7 @@ export function useChatSession(): ChatSession {
       const first = data.messages[0];
       if (first) oldestTimestamp.current = first.timestamp;
     } catch (err) {
-      // Treat network errors as terminal (same infinite-retry guard as non-ok above).
+      // Network errors are terminal too (same infinite-retry guard as non-ok).
       console.error('[useChatSession] loadMore failed:', err);
       setHasMore(false);
     } finally {
@@ -210,59 +405,60 @@ export function useChatSession(): ChatSession {
   async function send(text: string): Promise<void> {
     if (isSending.current || text.trim().length === 0) return;
 
-    if (!conversationId.current) {
-      const newId = crypto.randomUUID();
-      conversationId.current = newId;
-      // Guarded for restricted browsing contexts (e.g. Safari private mode).
-      try { localStorage.setItem(CONV_ID_KEY, newId); } catch { /* best-effort */ }
+    let convId: string;
+    try {
+      convId = await ensureConversationId();
+    } catch (err) {
+      console.error('[useChatSession] failed to resolve the shared thread:', err);
+      setMessages((prev) => [...prev, makeMessage('error', 'Could not open the conversation. Try again.')]);
+      return;
     }
-    const convId = conversationId.current;
+    // Another send() may have taken the turn while the thread id was loading.
+    if (isSending.current) return;
 
-    // Close any stream left open by a prior turn's soft-recovery path, and clear
-    // any pending watchdog, before starting a new one — never leak either.
-    sourceRef.current?.close();
-    sourceRef.current = null;
-    if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
-
-    // Optimistic append so the user sees their message immediately.
-    setMessages((prev) => [
-      ...prev,
-      makeMessage('user', text, { timestamp: new Date() }),
-    ]);
+    const clientMessageId = crypto.randomUUID();
+    // A suppression left over from the previous turn would swallow this one
+    // when the reply text happens to match.
+    suppressNextReply.current = null;
+    inflightText.current = text;
+    inflightId.current = clientMessageId;
+    const known = new Set<string>();
+    for (const message of messagesRef.current) {
+      known.add(message.id);
+      if (message.serverId) known.add(message.serverId);
+    }
+    inflightKnownIds.current = known;
+    const sent = makeMessage('user', text, { id: clientMessageId, timestamp: new Date() });
+    messagesRef.current = [...messagesRef.current, sent];
+    setMessages((prev) => [...prev, sent]);
     isSending.current = true;
     setSending(true);
 
-    let source: EventSource | undefined;
     let settled = false;
-    // Guards runRecovery so it runs at most once per turn — both the watchdog
-    // timeout and a fatal stream close (onerror) can trigger it, and we never
-    // want two recovery passes (which could post two notices).
     let recoveryStarted = false;
 
-    // Unlock the composer (and stop the watchdog) without touching the stream —
-    // used by the soft-recovery path so a late reply can still render. The
-    // watchdog lives in a ref so the unmount cleanup can also clear it.
     const unlock = () => {
       if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
       isSending.current = false;
       setSending(false);
     };
-    // Fully finish the turn: unlock and close the stream. Idempotent.
-    const finalize = () => {
+    // The turn is done. The stream stays open for the next message and for
+    // anything another device sends.
+    const settle = () => {
       if (settled) return;
       settled = true;
+      inflightText.current = null;
+      inflightId.current = null;
+      settleTurnRef.current = null;
+      onEventRef.current = appendEvent;
       unlock();
-      source?.close();
-      sourceRef.current = null;
     };
+    settleTurnRef.current = settle;
 
-    // Recovery: fetch one history page and render a reply the SSE stream may have
-    // missed. Triggered by the watchdog timeout OR a fatal stream close. Three
-    // outcomes, each with honest feedback:
-    //   1. reply found      → render it + finalize.
-    //   2. fetch failed      → "couldn't confirm status, resend" (status unknown).
-    //   3. fetch ok, no reply → soft "taking longer" notice, leave the stream open.
-    // Runs at most once per turn (recoveryStarted guard).
+    // One history fetch for a turn the five-minute watchdog still hasn't seen.
+    // Three outcomes: a reply (render it and settle), a failed fetch (status
+    // unknown), or a successful fetch with no reply yet (soft notice, composer
+    // unlocks, the stream stays open).
     const runRecovery = async () => {
       if (recoveryStarted || settled) return;
       recoveryStarted = true;
@@ -272,20 +468,24 @@ export function useChatSession(): ChatSession {
         const res = await apiFetch(
           `/api/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
         );
-        // A terminal SSE event may have settled the turn during the await — bail
-        // before mutating state so we don't append a duplicate or stale notice.
+        // A terminal event may have settled the turn during the await.
         if (settled) return;
         if (res.ok) {
           fetchOk = true;
           const data = (await res.json()) as HistoryResponse;
+          // Same re-check after the body parse.
           if (settled) return;
           const recovered = pickRecoveredReply(data.messages);
           if (recovered) {
-            setMessages((prev) => [
-              ...prev,
-              makeMessage('agent', recovered.text, { html: recovered.html ?? undefined, timestamp: new Date() }),
-            ]);
-            finalize();
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last?.kind === 'agent' && last.text === recovered.text) return prev;
+              return [...prev, makeMessage('agent', recovered.text, {
+                html: recovered.html ?? undefined,
+                timestamp: new Date(),
+              })];
+            });
+            settle();
             return;
           }
         } else {
@@ -295,84 +495,43 @@ export function useChatSession(): ChatSession {
         console.error('[useChatSession] recovery history fetch failed:', err);
       }
 
-      // Re-check after the try/catch: the turn may have settled while awaiting.
+      // The turn may have settled while the fetch was in flight.
       if (settled) return;
       if (!fetchOk) {
-        // Recovery itself failed — we can't claim progress. Tell the user the
-        // status is unknown and finalize (close the dead stream; nothing more is
-        // coming through it).
         setMessages((prev) => [...prev, makeMessage('error', RECOVERY_FAILED_TEXT)]);
-        finalize();
+        settle();
         return;
       }
-
-      // Fetch succeeded but no reply yet — soft notice, unlock, keep the stream
-      // open so a late reply still renders. This open stream is closed by one of:
-      // a late SSE reply (onmessage → finalize), the next send() (closes the prior
-      // stream up top), or unmount cleanup. That closure contract is non-local.
       setMessages((prev) => [...prev, makeMessage('status', STILL_WORKING_TEXT)]);
       unlock();
     };
 
+    onEventRef.current = (parsed) => {
+      appendEvent(parsed);
+      if (parsed.kind === 'reply' || parsed.kind === 'rejected') settle();
+    };
+
     try {
-      // Open the SSE stream and wait for it to connect BEFORE the POST, so a fast
-      // reply broadcast can't race past an unregistered stream. withCredentials
-      // sends the session cookie, matching apiFetch behavior.
-      source = new EventSource(
-        `/api/chat/stream?conversationId=${encodeURIComponent(convId)}`,
-        { withCredentials: true },
-      );
-      sourceRef.current = source;
-
-      source.onmessage = (event: MessageEvent<string>) => {
-        const parsed = parseSseEvent(event.data);
-        if (!parsed) return;
-        if (parsed.kind === 'status') {
-          setMessages((prev) => [...prev, makeMessage('status', parsed.text)]);
-          return;
-        }
-        if (parsed.kind === 'reply') {
-          // Terminal: the agent's final reply for this turn.
-          setMessages((prev) => [
-            ...prev,
-            makeMessage('agent', parsed.text, { html: parsed.html ?? undefined, timestamp: new Date() }),
-          ]);
-          finalize();
-          return;
-        }
-        // parsed.kind === 'rejected' — terminal error.
-        setMessages((prev) => [...prev, makeMessage('error', parsed.text)]);
-        finalize();
-      };
-
-      source.onerror = (event) => {
-        // EventSource auto-reconnects on transient errors (readyState CONNECTING) —
-        // leave those alone so a reconnect can still deliver the terminal event.
-        // But on a FATAL close (readyState CLOSED, e.g. an expired session 401 or a
-        // dropped server) the browser will NOT reconnect: the terminal event can
-        // never arrive over this stream. Don't make the user wait out the full
-        // watchdog — recover immediately so a missed reply (or an honest "status
-        // unknown" notice) surfaces in seconds rather than minutes.
-        console.error('[useChatSession] SSE stream error (readyState=%d):', source?.readyState, event);
-        if (source?.readyState === EventSource.CLOSED && !settled) {
-          if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
-          void runRecovery();
-        }
-      };
-
-      // Wait for the stream to open, but don't block forever — if it doesn't open
-      // within SSE_OPEN_TIMEOUT_MS, POST anyway and let the watchdog recover.
-      await new Promise<void>((resolve) => {
-        if (!source) { resolve(); return; }
-        if (source.readyState === EventSource.OPEN) { resolve(); return; }
-        const to = setTimeout(resolve, SSE_OPEN_TIMEOUT_MS);
-        source.onopen = () => { clearTimeout(to); resolve(); };
-      });
+      // Open the stream and wait before the POST so a fast reply can't race past it.
+      openStream(convId);
+      const source = sourceRef.current;
+      if (source && source.readyState !== EventSource.OPEN) {
+        await new Promise<void>((resolve) => {
+          const to = setTimeout(resolve, SSE_OPEN_TIMEOUT_MS);
+          const previous = source.onopen;
+          source.onopen = (event) => {
+            clearTimeout(to);
+            reconnectAttempt.current = 0;
+            if (typeof previous === 'function') previous.call(source, event);
+            resolve();
+          };
+        });
+      }
 
       const res = await apiFetch('/api/chat/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, conversationId: convId }),
+        body: JSON.stringify({ message: text, clientMessageId }),
       });
 
       if (!res.ok) {
@@ -381,30 +540,133 @@ export function useChatSession(): ChatSession {
           const errData = await res.json() as { error?: string };
           if (errData.error) errMsg = errData.error;
         } catch (bodyErr) {
-          // Non-JSON error body — log for debugging, fall back to HTTP status.
+          // Non-JSON error body. The status code is the message the user sees.
           console.error('[useChatSession] failed to parse error response body:', bodyErr);
         }
         setMessages((prev) => [...prev, makeMessage('error', errMsg)]);
-        finalize();
+        settle();
         return;
       }
 
-      // 202 ack received. The reply arrives over SSE; arm the watchdog in case it
-      // never does (suppressed-duplicate turn or agent crash). Guard on !settled:
-      // a fast reply can fire between the onopen gate and the POST resolving, in
-      // which case the turn is already finalized and arming the watchdog would
-      // later append a duplicate of the already-rendered reply via /history.
+      // A fast reply can settle between the onopen gate and this line. Arming
+      // the watchdog then would fetch /history and append that reply again.
       if (!settled) {
         watchdogRef.current = setTimeout(() => { void runRecovery(); }, REPLY_WATCHDOG_MS);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Network error';
       setMessages((prev) => [...prev, makeMessage('error', msg)]);
-      finalize();
+      settle();
     }
-    // NOTE: no finally that clears sending/closes the stream — the turn is
-    // finished by the SSE terminal event, the watchdog, or an error path above.
   }
 
-  return { messages, sending, hasMore, loadingHistory, send, loadMore };
+  useEffect(() => {
+    mountedRef.current = true;
+    let cancelled = false;
+    try {
+      localStorage.removeItem(LEGACY_CONVERSATION_KEY);
+    } catch (err) {
+      console.error('[useChatSession] failed to clear the legacy conversation id:', err);
+    }
+    // True while an open is waiting on history. resume() must not start a
+    // second one: both would see an empty thread and post the kickoff.
+    let opening = false;
+
+    const openThread = (attempt = 0) => {
+      if (threadRetryTimer.current) {
+        clearTimeout(threadRetryTimer.current);
+        threadRetryTimer.current = null;
+      }
+      opening = true;
+      void (async () => {
+        try {
+          const id = await ensureConversationId();
+          if (cancelled) return;
+          const hadHistory = await loadInitialHistory(id);
+          if (cancelled) return;
+          threadReady.current = true;
+          setConnectionError(null);
+          if (document.visibilityState === 'visible') openStream(id);
+          // Read here, not at effect start. A cancelled run leaves the flag
+          // for the next one. A wizard re-run must not post "say hi" into a
+          // thread that already has messages.
+          if (pendingKickoff.current && !hadHistory) {
+            pendingKickoff.current = false;
+            try {
+              localStorage.removeItem(ONBOARDING_KICKOFF_KEY);
+            } catch (err) {
+              console.error('[useChatSession] failed to clear onboarding kickoff flag:', err);
+            }
+            void send(KICKOFF_TEXT);
+          }
+        } catch (err) {
+          if (err instanceof SessionEnded) return;
+          console.error('[useChatSession] failed to open the shared thread:', err);
+          if (cancelled) return;
+          setConnectionError(CANT_REACH_TEXT);
+          const delay = nextReconnectDelayMs(attempt);
+          threadRetryTimer.current = setTimeout(() => {
+            threadRetryTimer.current = null;
+            if (!cancelled) openThread(attempt + 1);
+          }, delay);
+        } finally {
+          opening = false;
+        }
+      })();
+    };
+    openThread();
+
+    const resume = () => {
+      if (!threadReady.current || !conversationId.current) {
+        if (!opening) openThread();
+        return;
+      }
+      const id = conversationId.current;
+      // onopen catches up. Drop a half-open OPEN socket first: openStream
+      // leaves one that is not CLOSED in place.
+      const source = sourceRef.current;
+      if (source) {
+        source.close();
+        if (sourceRef.current === source) sourceRef.current = null;
+      }
+      openStream(id);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        closeStream();
+        return;
+      }
+      resume();
+    };
+    const onOnline = () => {
+      resume();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('online', onOnline);
+    const silence = setInterval(() => {
+      const source = sourceRef.current;
+      const id = conversationId.current;
+      if (!source || source.readyState !== EventSource.OPEN || !id) return;
+      if (Date.now() - lastActivity.current < STREAM_SILENCE_MS) return;
+      source.close();
+      if (sourceRef.current === source) sourceRef.current = null;
+      openStream(id);
+    }, 15_000);
+
+    return () => {
+      cancelled = true;
+      mountedRef.current = false;
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('online', onOnline);
+      clearInterval(silence);
+      if (threadRetryTimer.current) clearTimeout(threadRetryTimer.current);
+      closeStream();
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
+    };
+  // send reads refs and functional setState. Listing it would re-subscribe the
+  // stream on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return { messages, sending, hasMore, loadingHistory, connectionError, send, loadMore };
 }

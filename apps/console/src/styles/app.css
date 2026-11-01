@@ -1930,6 +1930,14 @@ table.records-table tbody tr.active td { background: transparent; }
 }
 
 /* ── Chat layout ─────────────────────────────────────────────────────── */
+.chat-connection {
+  margin: 0;
+  padding: 8px 16px;
+  background: var(--surface-sunken, #f3f1ec);
+  color: var(--text-muted, #5c584f);
+  font-size: 14px;
+}
+
 .chat-page {
   display: flex;
   flex-direction: column;

@@ -207,6 +207,29 @@ describe('EventRouter Ant Farm SSE', () => {
     expect(antfarmWrites.some((w) => w.includes('task.appear'))).toBe(true);
   });
 
+  it('delivers a chat echo only to the chat stream, not Ant Farm', () => {
+    const { router } = makeRouter();
+    const messageWrites: string[] = [];
+    const antfarmWrites: string[] = [];
+    router.addSseClient({
+      res: { write: (chunk: string) => { messageWrites.push(chunk); return true; } } as unknown as ServerResponse,
+      conversationId: 'shared-1',
+    });
+    router.addAntfarmClient({
+      res: { write: (chunk: string) => { antfarmWrites.push(chunk); return true; } } as unknown as ServerResponse,
+    });
+
+    router.broadcastChatEvent('shared-1', {
+      type: 'user_message',
+      conversationId: 'shared-1',
+      content: 'from the phone',
+      clientMessageId: 'client-1',
+    });
+
+    expect(messageWrites.join('')).toContain('from the phone');
+    expect(antfarmWrites).toHaveLength(0);
+  });
+
   it('drops a slow antfarm client when its pending buffer is full', () => {
     const { router } = makeRouter();
     let writeCount = 0;

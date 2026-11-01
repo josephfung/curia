@@ -58,6 +58,13 @@ export function parseSseEvent(data: string): SseEvent | null {
       const reason = typeof p['reason'] === 'string' ? p['reason'] : 'unknown';
       return { kind: 'rejected', text: rejectionText(reason) };
     }
+    case 'ping':
+      return null;
+    case 'user.message': {
+      const text = typeof p['content'] === 'string' ? p['content'] : '';
+      const clientMessageId = typeof p['client_message_id'] === 'string' ? p['client_message_id'] : null;
+      return { kind: 'user', text, clientMessageId };
+    }
     default:
       return null;
   }
@@ -96,13 +103,187 @@ export function pickRecoveredReply(
   return null;
 }
 
-/** Returns a new Message with a stable random ID. */
+/** Returns a new Message with a stable random ID, or `opts.id` when the caller has one. */
 export function makeMessage(
   kind: Message['kind'],
   text: string,
-  opts?: { html?: string; timestamp?: Date },
+  opts?: { id?: string; html?: string; timestamp?: Date },
 ): Message {
-  return { id: crypto.randomUUID(), kind, text, ...opts };
+  const { id, ...rest } = opts ?? {};
+  return { id: id ?? crypto.randomUUID(), kind, text, ...rest };
+}
+
+/**
+ * Delay before the next SSE reconnect. Attempt 0 waits 1s, then doubles, and
+ * stops growing at 30s.
+ */
+export function nextReconnectDelayMs(attempt: number): number {
+  const step = Math.min(Math.max(attempt, 0), 5);
+  return Math.min(30_000, 1000 * 2 ** step);
+}
+
+export interface MergeOptions {
+  /** The page starts at the beginning of the thread (the server said hasMore false). */
+  complete?: boolean;
+  /** Client id of the user row this tab is still sending. A replaced thread keeps it. */
+  pendingId?: string | null;
+}
+
+export interface MergeResult {
+  messages: Message[];
+  /**
+   * No row on screen was in the page and the page does not reach the start
+   * of the thread, so the page replaced the thread. The caller resets its
+   * older-history cursor to the page.
+   */
+  replaced: boolean;
+}
+
+/** The server id a row is known by: its paired history id, or a history row's own id. */
+function serverKey(message: Message): string {
+  return message.serverId ?? message.id;
+}
+
+/** A page row as it goes on screen: it always carries its server id. */
+function fromPage(row: Message): Message {
+  return row.serverId ? row : { ...row, serverId: row.id };
+}
+
+/** A live row that may still be paired with its saved copy by kind and text. */
+function pairable(message: Message): boolean {
+  return !message.serverId && (message.kind === 'user' || message.kind === 'agent');
+}
+
+/**
+ * Fold a history page (oldest first) into the thread already on screen.
+ *
+ * Server ids anchor the merge. A page row whose id is on screen, either as a
+ * history row or as a live row paired earlier, is an anchor. Between two
+ * anchors, and after the last one, page rows are matched by kind and text
+ * against live rows that have no server id yet. The live copy wins and takes
+ * the history id as `serverId`, so the next catch-up anchors on it. An
+ * unmatched page row is inserted before the next live row it precedes, so a
+ * phone turn stays ahead of the message this tab sent after it. Rows older
+ * than every anchor are only kept when something on screen precedes them;
+ * otherwise `loadMore` fetches them.
+ *
+ * Text matching never runs across a gap. When no page row is on screen and
+ * the page does not reach the start of the thread, the page replaced the
+ * thread (`replaced`): the user row in flight and the status rows after it
+ * are kept, and nothing older is guessed at.
+ */
+export function mergeLiveTail(
+  page: Message[],
+  live: Message[],
+  options: MergeOptions = {},
+): MergeResult {
+  if (page.length === 0) return { messages: live, replaced: false };
+  if (live.length === 0) return { messages: page.map(fromPage), replaced: false };
+
+  const liveIndex = new Map<string, number>();
+  live.forEach((message, index) => { liveIndex.set(serverKey(message), index); });
+  const onScreen = new Set<string>();
+  // [page index, live index], increasing in both.
+  const anchors: Array<[number, number]> = [];
+  page.forEach((row, j) => {
+    const i = liveIndex.get(row.id);
+    if (i === undefined) return;
+    onScreen.add(row.id);
+    const previous = anchors[anchors.length - 1];
+    if (previous && i <= previous[1]) return;
+    anchors.push([j, i]);
+  });
+
+  const fresh = (rows: Message[]) => rows.filter((row) => !onScreen.has(row.id));
+
+  if (anchors.length === 0) {
+    if (options.complete) return { messages: foldSegment(page, live, 'append'), replaced: false };
+    return { messages: replaceWithPage(page, live, options.pendingId ?? null), replaced: true };
+  }
+
+  const out: Message[] = [];
+  const [firstPage, firstLive] = anchors[0]!;
+  // Live rows up to the last server row before the first anchor stay as they
+  // are: they are older than the page.
+  let head = -1;
+  for (let i = firstLive - 1; i >= 0; i -= 1) {
+    if (live[i]!.serverId) { head = i; break; }
+  }
+  out.push(...live.slice(0, head + 1));
+  // With no server row above the first anchor, an unmatched page row before
+  // it is older than the screen's oldest history row. loadMore fetches it.
+  const headMode = head === -1 && !options.complete ? 'drop' : 'append';
+  out.push(...foldSegment(fresh(page.slice(0, firstPage)), live.slice(head + 1, firstLive), headMode));
+
+  anchors.forEach(([j, i], k) => {
+    const anchor = live[i]!;
+    out.push(anchor.serverId ? anchor : { ...anchor, serverId: page[j]!.id });
+    const next = anchors[k + 1];
+    const pageSegment = fresh(page.slice(j + 1, next ? next[0] : page.length));
+    const liveSegment = live.slice(i + 1, next ? next[1] : live.length);
+    out.push(...foldSegment(pageSegment, liveSegment, 'append'));
+  });
+  return { messages: out, replaced: false };
+}
+
+/**
+ * Keep `liveSegment` in order. A pairable live row that matches a page row by
+ * kind and text consumes it and takes its id as `serverId`. Page rows that
+ * sit before that match are inserted first, so they keep the server's order.
+ * What is still unmatched at the end is appended. In 'drop' mode, unmatched
+ * rows before the first match are older than the screen and are left out.
+ */
+function foldSegment(
+  pageSegment: Message[],
+  liveSegment: Message[],
+  leftovers: 'append' | 'drop',
+): Message[] {
+  const out: Message[] = [];
+  let cursor = 0;
+  let keep = leftovers === 'append';
+  for (const row of liveSegment) {
+    let matched = -1;
+    if (pairable(row)) {
+      for (let j = cursor; j < pageSegment.length; j += 1) {
+        const candidate = pageSegment[j]!;
+        if (candidate.kind === row.kind && candidate.text === row.text) {
+          matched = j;
+          break;
+        }
+      }
+    }
+    if (matched < 0) {
+      out.push(row);
+      continue;
+    }
+    if (keep) out.push(...pageSegment.slice(cursor, matched).map(fromPage));
+    out.push({ ...row, serverId: pageSegment[matched]!.id });
+    cursor = matched + 1;
+    keep = true;
+  }
+  if (keep) out.push(...pageSegment.slice(cursor).map(fromPage));
+  return out;
+}
+
+/** The page, then the user row in flight (unless the page already has it) and its status rows. */
+function replaceWithPage(page: Message[], live: Message[], pendingId: string | null): Message[] {
+  const out = page.map(fromPage);
+  const pendingIndex = pendingId ? live.findIndex((message) => message.id === pendingId) : -1;
+  if (pendingIndex < 0) return out;
+  const pending = live[pendingIndex]!;
+  let lastUser = -1;
+  for (let j = out.length - 1; j >= 0; j -= 1) {
+    if (out[j]!.kind === 'user') { lastUser = j; break; }
+  }
+  if (lastUser >= 0 && out[lastUser]!.text === pending.text) {
+    out[lastUser] = { ...pending, serverId: out[lastUser]!.id };
+  } else {
+    out.push(pending);
+  }
+  for (const message of live.slice(pendingIndex + 1)) {
+    if (message.kind === 'status' || message.kind === 'error') out.push(message);
+  }
+  return out;
 }
 
 /**
