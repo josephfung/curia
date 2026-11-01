@@ -4,7 +4,7 @@
 // reports unavailable) so the card can show an error instead of a false zero.
 
 import type { Pool } from 'pg';
-import { visibleToolNames } from '../activity/describers.js';
+import { hiddenToolNames, minutesForCall, timeSavedDetail, timeSavedHelp, UNDESCRIBED_CALL_MINUTES, visibleToolNames } from '../activity/describers.js';
 import { OPEN_TASK_STATUSES } from '../agents/prompts/backlog-line.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import type { DisclosureDecisionRecorder } from '../autonomy/disclosure-decisions.js';
@@ -17,7 +17,6 @@ import {
   AGGREGATE_CACHE_MS,
   BULLPEN_IN_FLIGHT_MS,
   HISTOGRAM_DAYS,
-  MINUTES_PER_SUCCESSFUL_ACTION,
   STATS_WINDOW_DAYS,
   addCalendarDays,
   approvalNeedsDraft,
@@ -70,9 +69,13 @@ export interface WaitingResponse {
 
 export interface StatsResponse {
   timezone: string;
-  /** Echo of {@link MINUTES_PER_SUCCESSFUL_ACTION} so the console does not keep a second copy. */
-  minutesPerAction: number;
-  successfulActions: { current: number; previous: number };
+  /**
+   * Estimated principal-minutes in the current and previous 7 local days.
+   * Visible calls use their describer weight. Calls with no describer add
+   * `UNDESCRIBED_CALL_MINUTES` each (ADR-058). Hidden describers add zero.
+   * `help` is the tile footnote. `detail` is the longer note.
+   */
+  minutesSaved: { current: number; previous: number; help: string; detail: string };
   done: { current: number; previous: number };
   contacts: { total: number; newThisWeek: number };
   hiccups: { current: number; byDay: number[] };
@@ -103,8 +106,14 @@ export interface BriefingDeps {
 const DELEGATION_TAIL_MS = 6 * 60 * 60 * 1000;
 const MAX_DELEGATION_DEPTH = 10;
 
+interface BriefingWindow {
+  model: HistogramModel;
+  /** Principal-minutes per histogram day, same index and clock as `model.days`. */
+  minutesByDay: number[];
+}
+
 export class BriefingService {
-  private modelCache: { key: string; expires: number; pending: Promise<HistogramModel> } | null = null;
+  private modelCache: { key: string; expires: number; pending: Promise<BriefingWindow> } | null = null;
 
   constructor(private readonly deps: BriefingDeps) {}
 
@@ -172,22 +181,24 @@ export class BriefingService {
 
   async stats(now: Date = new Date()): Promise<StatsResponse> {
     const timezone = await this.timeZone();
-    const model = await this.cachedModel(now, timezone);
+    const today = localDayKey(now, timezone);
+    const currentStart = localMidnight(addCalendarDays(today, -(STATS_WINDOW_DAYS - 1)), timezone);
+    const [{ model, minutesByDay }, contacts] = await Promise.all([
+      this.cachedModel(now, timezone),
+      this.contactCounts(currentStart),
+    ]);
     const last7 = model.days.slice(-STATS_WINDOW_DAYS);
     const prev7 = model.days.slice(0, HISTOGRAM_DAYS - STATS_WINDOW_DAYS);
     const sinceYesterday = model.days.slice(-2);
-    const currentStart = localMidnight(model.days[HISTOGRAM_DAYS - STATS_WINDOW_DAYS]!.key, timezone);
-    const previousStart = localMidnight(model.days[0]!.key, timezone);
-
-    const [actions, contacts] = await Promise.all([
-      this.actionCounts(previousStart, currentStart, now),
-      this.contactCounts(currentStart),
-    ]);
 
     return {
       timezone,
-      minutesPerAction: MINUTES_PER_SUCCESSFUL_ACTION,
-      successfulActions: actions,
+      minutesSaved: {
+        current: sumWindow(minutesByDay.slice(-STATS_WINDOW_DAYS)),
+        previous: sumWindow(minutesByDay.slice(0, HISTOGRAM_DAYS - STATS_WINDOW_DAYS)),
+        help: timeSavedHelp(),
+        detail: timeSavedDetail(),
+      },
       done: {
         current: outcomeTotal(last7, DONE_OUTCOMES),
         previous: outcomeTotal(prev7, DONE_OUTCOMES),
@@ -203,7 +214,7 @@ export class BriefingService {
 
   async histogram(now: Date = new Date()): Promise<HistogramModel & { timezone: string }> {
     const timezone = await this.timeZone();
-    const model = await this.cachedModel(now, timezone);
+    const { model } = await this.cachedModel(now, timezone);
     return { timezone, ...model };
   }
 
@@ -278,7 +289,7 @@ export class BriefingService {
    * and only failure, error and denied are hard failures. A job the feed drops
    * entirely (no visible call and no error reply) still counts as success.
    */
-  private cachedModel(now: Date, timezone: string): Promise<HistogramModel> {
+  private cachedModel(now: Date, timezone: string): Promise<BriefingWindow> {
     const today = localDayKey(now, timezone);
     const from = localMidnight(addCalendarDays(today, -(HISTOGRAM_DAYS - 1)), timezone);
     const key = `${timezone}|${from.toISOString()}|${today}`;
@@ -292,48 +303,35 @@ export class BriefingService {
     return pending;
   }
 
-  private async loadModel(from: Date, to: Date, timezone: string): Promise<HistogramModel> {
-    const result = await this.deps.pool.query<{ day: string; actor: string; outcome: string; n: number }>(
+  private async loadModel(from: Date, to: Date, timezone: string): Promise<BriefingWindow> {
+    const result = await this.deps.pool.query<{ histogram: unknown; saved_calls: unknown; undescribed_by_day: unknown }>(
       HISTOGRAM_SQL,
-      [from, to, new Date(to.getTime() + DELEGATION_TAIL_MS), timezone, MAX_DELEGATION_DEPTH, visibleToolNames()],
-    );
-    const counts: HistogramCount[] = [];
-    for (const row of result.rows) {
-      if (row.outcome !== 'success' && row.outcome !== 'partial' && row.outcome !== 'failed') continue;
-      const n = Number(row.n);
-      if (!Number.isFinite(n) || typeof row.day !== 'string') continue;
-      counts.push({
-        day: row.day,
-        actor: typeof row.actor === 'string' ? row.actor : 'agent',
-        outcome: row.outcome,
-        n,
-      });
-    }
-    return shapeHistogramFromCounts(counts, to, timezone);
-  }
-
-  private async actionCounts(
-    previousStart: Date,
-    currentStart: Date,
-    now: Date,
-  ): Promise<{ current: number; previous: number }> {
-    const result = await this.deps.pool.query<{ current: number; previous: number }>(
-      `SELECT
-         count(*) FILTER (WHERE timestamp >= $2 AND timestamp < $3)::int AS current,
-         count(*) FILTER (WHERE timestamp >= $1 AND timestamp < $2)::int AS previous
-       FROM audit_log
-       WHERE event_type = ANY($4::text[])
-         AND timestamp >= $1 AND timestamp < $3
-         AND (
-           outcome = 'success'
-           OR (outcome IS NULL AND payload->'result'->>'success' = 'true')
-         )`,
-      [previousStart, currentStart, now, ['tool.result', 'skill.result']],
+      [from, to, new Date(to.getTime() + DELEGATION_TAIL_MS), timezone, MAX_DELEGATION_DEPTH, visibleToolNames(), hiddenToolNames()],
     );
     const row = result.rows[0];
+    const model = shapeHistogramFromCounts(parseHistogramRows(row?.histogram), to, timezone);
+    // Each visible call adds its describer minutes. Undescribed calls are a
+    // count per day times the flat default (ADR-058), including a repeat of
+    // the same tool. Recent Activity lists the visible ones, and a retry is
+    // not distinguishable from a second real action without a per-tool target
+    // (#2349). Hidden describers are omitted here; they are worth zero.
+    const perDay = new Map<string, number>();
+    for (const saved of parseSavedCalls(row?.saved_calls)) {
+      const minutes = minutesForCall({
+        toolName: saved.tool,
+        input: saved.input,
+        data: saved.data,
+        ok: true,
+      });
+      if (minutes <= 0) continue;
+      perDay.set(saved.day, (perDay.get(saved.day) ?? 0) + minutes);
+    }
+    for (const bucket of parseUndescribedByDay(row?.undescribed_by_day)) {
+      perDay.set(bucket.day, (perDay.get(bucket.day) ?? 0) + bucket.n * UNDESCRIBED_CALL_MINUTES);
+    }
     return {
-      current: Number(row?.current ?? 0),
-      previous: Number(row?.previous ?? 0),
+      model,
+      minutesByDay: model.days.map((day) => perDay.get(day.key) ?? 0),
     };
   }
 
@@ -391,16 +389,31 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
 }
 
 /**
- * One row per local day, actor and outcome for root jobs in [$1, $2).
- * Delegated tasks fold into their root, up to $5 levels, and may finish as late as $3.
- * A call counts only when the feed would classify it. The tool name is read the
- * same way as readAuditToolName (invoke first, then the result; target_id only
- * when target_type is skill). $6 is the visible set: described and not hidden.
- * Anything else, including a tool with no describer, is left out. An unnamed
- * call is left out too, because NULL never matches. Success is outcome 'success',
- * or any other outcome except failure, error and denied when the payload says
- * success. Those three are failures even if the payload says otherwise. A failed root reply
- * with no successful visible call is a failure; mixed with successes it is partial.
+ * One row: `histogram` (day × actor × outcome counts), `saved_calls` (each
+ * successful visible call, with the input and data its weight can depend on),
+ * and `undescribed_by_day` (a count per day of successful calls the describers
+ * do not name).
+ *
+ * Root jobs in [$1, $2). Delegated tasks fold into their root, up to $5 levels,
+ * and may finish as late as $3. The day is the root task's timestamp in $4, for
+ * both the bars and the minutes, so a job that starts at 23:59 stays on that day.
+ * The tool name is read the same way as readAuditToolName (invoke first, then
+ * the result; target_id only when target_type is skill). $6 is the visible set:
+ * described and not hidden. The histogram uses only that set, so an undescribed
+ * call cannot become a hiccup. $7 is the hidden set. Minutes keep every
+ * successful named call outside it: visible calls one by one, undescribed
+ * calls as a count per day. Hidden and unnamed calls are left out.
+ * Success is outcome 'success', or any other outcome except failure, error and
+ * denied when the payload says success. Those three are failures even if the
+ * payload says otherwise. A failed root reply with no successful visible call
+ * is a failure; mixed with successes it is partial.
+ *
+ * Minutes are not a column here. A visible call carries its input and result data,
+ * minus the fields describers never read (message bodies, and a document's body),
+ * so `minutesForCall` can run the same `done()` the feed uses. A flat weight
+ * cannot see a dry run, an unplaced hold, or a scratch note. An undescribed call
+ * contributes only to its day's count: the default depends on the name being
+ * absent, not on the payload.
  */
 const HISTOGRAM_SQL = `
 WITH RECURSIVE chain AS (
@@ -434,21 +447,11 @@ roots AS (
   FROM chain
   WHERE depth = 0
 ),
-results AS (
+calls AS (
   SELECT
     c.root_id,
-    CASE
-      WHEN r.outcome = 'success' THEN 'ok'
-      WHEN r.outcome IN ('failure', 'error', 'denied') THEN 'bad'
-      WHEN r.payload->'result'->>'success' = 'true' THEN 'ok'
-      ELSE 'bad'
-    END AS kind
-  FROM audit_log r
-  JOIN audit_log i ON r.parent_event_id = i.id::text
-  JOIN chain c ON i.parent_event_id = c.id::text
-  WHERE r.event_type = ANY(ARRAY['tool.result', 'skill.result']::text[])
-    AND i.event_type = ANY(ARRAY['tool.invoke', 'skill.invoke']::text[])
-    AND COALESCE(
+    c.root_ts,
+    COALESCE(
       CASE
         WHEN i.target_type = 'skill'
           AND i.target_id IS NOT NULL
@@ -467,7 +470,33 @@ results AS (
       END,
       r.payload->>'toolName',
       r.payload->>'skillName'
-    ) = ANY($6::text[])
+    ) AS tool_name,
+    CASE
+      WHEN r.outcome = 'success' THEN 'ok'
+      WHEN r.outcome IN ('failure', 'error', 'denied') THEN 'bad'
+      WHEN r.payload->'result'->>'success' = 'true' THEN 'ok'
+      ELSE 'bad'
+    END AS kind,
+    CASE
+      WHEN jsonb_typeof(i.payload->'input') = 'object'
+      THEN (i.payload->'input') - ARRAY['body', 'content', 'message', 'prompt', 'html', 'text']
+      ELSE '{}'::jsonb
+    END AS input,
+    CASE
+      WHEN jsonb_typeof(r.payload->'result'->'data') = 'object'
+      THEN ((r.payload->'result'->'data') - ARRAY['body', 'content', 'message', 'html', 'text']) #- '{document,body}'::text[]
+      ELSE NULL
+    END AS data
+  FROM audit_log r
+  JOIN audit_log i ON r.parent_event_id = i.id::text
+  JOIN chain c ON i.parent_event_id = c.id::text
+  WHERE r.event_type = ANY(ARRAY['tool.result', 'skill.result']::text[])
+    AND i.event_type = ANY(ARRAY['tool.invoke', 'skill.invoke']::text[])
+),
+results AS (
+  SELECT root_id, kind
+  FROM calls
+  WHERE tool_name = ANY($6::text[])
 ),
 responses AS (
   SELECT c.root_id, bool_or(COALESCE(a.payload->>'isError', '') = 'true') AS failed
@@ -497,9 +526,124 @@ classified AS (
   LEFT JOIN responses resp ON resp.root_id = roots.root_id
 )
 SELECT
-  to_char(root_ts AT TIME ZONE $4, 'YYYY-MM-DD') AS day,
-  actor,
-  outcome,
-  count(*)::int AS n
-FROM classified
-GROUP BY 1, 2, 3`;
+  (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'day', day,
+      'actor', actor,
+      'outcome', outcome,
+      'n', n
+    )), '[]'::jsonb)
+    FROM (
+      SELECT
+        to_char(root_ts AT TIME ZONE $4, 'YYYY-MM-DD') AS day,
+        actor,
+        outcome,
+        count(*)::int AS n
+      FROM classified
+      GROUP BY 1, 2, 3
+    ) bars
+  ) AS histogram,
+  (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'day', to_char(root_ts AT TIME ZONE $4, 'YYYY-MM-DD'),
+      'tool', tool_name,
+      'input', input,
+      'data', data
+    )), '[]'::jsonb)
+    FROM calls
+    WHERE kind = 'ok'
+      AND tool_name = ANY($6::text[])
+  ) AS saved_calls,
+  (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'day', day,
+      'n', n
+    )), '[]'::jsonb)
+    FROM (
+      SELECT
+        to_char(root_ts AT TIME ZONE $4, 'YYYY-MM-DD') AS day,
+        count(*)::int AS n
+      FROM calls
+      WHERE kind = 'ok'
+        AND tool_name IS NOT NULL
+        AND tool_name <> ''
+        AND tool_name <> '[EXTRACTION_FAILED]'
+        AND NOT (tool_name = ANY($6::text[]))
+        AND NOT (tool_name = ANY($7::text[]))
+      GROUP BY 1
+    ) undescribed
+  ) AS undescribed_by_day`;
+
+function sumWindow(values: readonly number[]): number {
+  let n = 0;
+  for (const value of values) n += value;
+  return n;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function parseHistogramRows(value: unknown): HistogramCount[] {
+  if (!Array.isArray(value)) return [];
+  const counts: HistogramCount[] = [];
+  for (const entry of value) {
+    const row = asRecord(entry);
+    if (!row) continue;
+    const outcome = row.outcome;
+    if (outcome !== 'success' && outcome !== 'partial' && outcome !== 'failed') continue;
+    const n = typeof row.n === 'number' ? row.n : Number.NaN;
+    if (!Number.isFinite(n) || typeof row.day !== 'string') continue;
+    counts.push({
+      day: row.day,
+      actor: typeof row.actor === 'string' ? row.actor : 'agent',
+      outcome,
+      n,
+    });
+  }
+  return counts;
+}
+
+interface SavedCall {
+  day: string;
+  tool: string;
+  input: Record<string, unknown>;
+  data: Record<string, unknown> | null;
+}
+
+interface UndescribedDay {
+  day: string;
+  n: number;
+}
+
+function parseUndescribedByDay(value: unknown): UndescribedDay[] {
+  if (!Array.isArray(value)) return [];
+  const days: UndescribedDay[] = [];
+  for (const entry of value) {
+    const row = asRecord(entry);
+    if (!row || typeof row.day !== 'string') continue;
+    const n = typeof row.n === 'number' ? row.n : Number.NaN;
+    if (!Number.isFinite(n) || n <= 0) continue;
+    days.push({ day: row.day, n });
+  }
+  return days;
+}
+
+function parseSavedCalls(value: unknown): SavedCall[] {
+  if (!Array.isArray(value)) return [];
+  const calls: SavedCall[] = [];
+  for (const entry of value) {
+    const row = asRecord(entry);
+    if (!row) continue;
+    if (typeof row.day !== 'string' || typeof row.tool !== 'string' || row.tool.length === 0) continue;
+    calls.push({
+      day: row.day,
+      tool: row.tool,
+      input: asRecord(row.input) ?? {},
+      data: asRecord(row.data),
+    });
+  }
+  return calls;
+}

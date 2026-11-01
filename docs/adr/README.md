@@ -79,6 +79,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [055](055-phone-app-as-an-installable-pwa.md) | Phone app as an installable PWA — HTTPS-only with a stated fallback; QR-paired per-device sessions with 90-day sliding expiry; one server-owned web thread; web push as a principal-only `web` channel that agents choose, with code enforcing availability and dead-subscription fallback (#2341) | Accepted |
 | [056](056-pinned-context.md) | Agents declare the documents and settings they work from (`pinned_context`) — `/shared/` documents and single config keys injected fresh every turn; declaring a `/shared/` path is the permission to write it; `/shared/` is durable by prefix (#2338) | Accepted |
 | [057](057-two-http-chat-surfaces.md) | Retire bearer `/api/messages` and `/api/messages/stream`; console chat on `/api/chat` is the only message ingress. The HTTP adapter, `API_TOKEN`, and catalog entry stay (#999) | Accepted |
+| [058](058-time-saved-human-time-default.md) | Time saved estimates a person's time; named tools keep their anchors, and every undescribed call shares one default derived from a 60-day census (#2349) | Accepted |
 
 ## Adding new ADRs
 

@@ -379,9 +379,25 @@ export function caughtUpDetail(clearedToday: number, curiaHandling: number): str
   return `${clearedToday} cleared today · ${handling}`;
 }
 
-export function formatTimeSaved(actions: number, minutesPerAction: number): string {
-  const hours = (actions * minutesPerAction) / 60;
-  return `≈${(Math.round(hours * 10) / 10).toFixed(1)}h`;
+function oneDecimal(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function roundedMinutes(minutes: number): number {
+  return Math.round(minutes * 10) / 10;
+}
+
+/**
+ * Principal-minutes. An empty week is `0m`. Otherwise under an hour the tenths
+ * stay visible (`≈5m`, `≈0.5m`); from an hour up, hours, with the same rule
+ * for a trailing zero (`≈1h`, `≈3.6h`).
+ */
+export function formatTimeSaved(minutes: number): string {
+  const rounded = roundedMinutes(minutes);
+  if (rounded === 0) return '0m';
+  if (rounded < 60) return `≈${oneDecimal(rounded)}m`;
+  return `≈${oneDecimal(rounded / 60)}h`;
 }
 
 export interface SignedDelta {
@@ -398,17 +414,27 @@ export function formatCountDelta(current: number, previous: number): SignedDelta
   return { direction: 'down', text: `▼ ${Math.abs(pct)}%` };
 }
 
-export function formatHoursDelta(currentHours: number, previousHours: number): SignedDelta {
-  const diff = currentHours - previousHours;
-  const rounded = Math.round(Math.abs(diff) * 10) / 10;
-  if (rounded === 0) return { direction: 'flat', text: '0h vs last wk' };
+/**
+ * Week-over-week change for the time-saved tile. The unit follows the tile,
+ * which is chosen from `current` alone: 45 minutes beside a 65-minute last
+ * week stays in minutes. Once the tile is in hours, a change under 3 minutes
+ * rounds to 0h and shows as flat. That matches the tenths the tile itself shows.
+ */
+export function formatTimeSavedDelta(currentMinutes: number, previousMinutes: number): SignedDelta {
+  const diff = currentMinutes - previousMinutes;
+  const absMinutes = roundedMinutes(Math.abs(diff));
+  const tileHours = roundedMinutes(currentMinutes) >= 60;
+  if (!tileHours) {
+    if (absMinutes === 0) return { direction: 'flat', text: '0m vs last wk' };
+    const direction = diff > 0 ? 'up' : 'down';
+    const arrow = diff > 0 ? '▲' : '▼';
+    return { direction, text: `${arrow} ${oneDecimal(absMinutes)}m vs last wk` };
+  }
+  const hours = roundedMinutes(absMinutes / 60);
+  if (hours === 0) return { direction: 'flat', text: '0h vs last wk' };
   const direction = diff > 0 ? 'up' : 'down';
   const arrow = diff > 0 ? '▲' : '▼';
-  return { direction, text: `${arrow} ${rounded.toFixed(1)}h vs last wk` };
-}
-
-export function hoursFromActions(actions: number, minutesPerAction: number): number {
-  return (actions * minutesPerAction) / 60;
+  return { direction, text: `${arrow} ${oneDecimal(hours)}h vs last wk` };
 }
 
 function localDayKey(date: Date, timeZone: string): string {
@@ -566,8 +592,8 @@ export interface WaitingData {
 
 export interface StatsData {
   timezone: string;
-  minutesPerAction: number;
-  successfulActions: { current: number; previous: number };
+  /** Principal-minutes in the current and previous 7 days, plus the tile's explanation. */
+  minutesSaved: { current: number; previous: number; help: string; detail: string };
   done: { current: number; previous: number };
   contacts: { total: number; newThisWeek: number };
   hiccups: { current: number; byDay: number[] };
@@ -597,6 +623,13 @@ export interface BullpenData {
   available: boolean;
   count: number;
   agents: string[];
+}
+
+function requireText(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${label} returned an unexpected response`);
+  }
+  return value;
 }
 
 function requireNumber(value: unknown, label: string): number {
@@ -630,7 +663,7 @@ export async function fetchWaiting(signal?: AbortSignal): Promise<WaitingData> {
 
 export async function fetchStats(signal?: AbortSignal): Promise<StatsData> {
   const data = await fetchJson<Record<string, unknown>>('/api/dashboard/stats', signal);
-  const actions = requireRecord(data['successfulActions'], '/api/dashboard/stats actions');
+  const minutesSaved = requireRecord(data['minutesSaved'], '/api/dashboard/stats minutes');
   const done = requireRecord(data['done'], '/api/dashboard/stats done');
   const contacts = requireRecord(data['contacts'], '/api/dashboard/stats contacts');
   const hiccups = requireRecord(data['hiccups'], '/api/dashboard/stats hiccups');
@@ -644,10 +677,11 @@ export async function fetchStats(signal?: AbortSignal): Promise<StatsData> {
   }
   return {
     timezone,
-    minutesPerAction: requireNumber(data['minutesPerAction'], '/api/dashboard/stats'),
-    successfulActions: {
-      current: requireNumber(actions['current'], '/api/dashboard/stats actions'),
-      previous: requireNumber(actions['previous'], '/api/dashboard/stats actions'),
+    minutesSaved: {
+      current: requireNumber(minutesSaved['current'], '/api/dashboard/stats minutes'),
+      previous: requireNumber(minutesSaved['previous'], '/api/dashboard/stats minutes'),
+      help: requireText(minutesSaved['help'], '/api/dashboard/stats minutes'),
+      detail: requireText(minutesSaved['detail'], '/api/dashboard/stats minutes'),
     },
     done: {
       current: requireNumber(done['current'], '/api/dashboard/stats done'),

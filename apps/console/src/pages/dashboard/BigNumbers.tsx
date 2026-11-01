@@ -1,13 +1,12 @@
 // Four value tiles. One stats request feeds all of them. A failure renders an
 // em dash and an error — never a zero that would look like a quiet week.
 
-import { useEffect } from 'react';
+import { useEffect, useId, useState } from 'react';
 import {
   fetchStats,
   formatCountDelta,
-  formatHoursDelta,
   formatTimeSaved,
-  hoursFromActions,
+  formatTimeSavedDelta,
 } from './dashboard-utils.js';
 import { useAsyncData } from './useAsyncData.js';
 
@@ -34,6 +33,8 @@ function Sparkline({ values }: { values: number[] }) {
 
 export function BigNumbers({ onHandled, onTimezone }: BigNumbersProps) {
   const { data, error, loading, retry } = useAsyncData(fetchStats);
+  const [weightsOpen, setWeightsOpen] = useState(false);
+  const weightsId = useId();
 
   useEffect(() => {
     if (error || !data) {
@@ -44,9 +45,7 @@ export function BigNumbers({ onHandled, onTimezone }: BigNumbersProps) {
     onTimezone(data.timezone);
   }, [data, error, onHandled, onTimezone]);
 
-  const hours = data ? hoursFromActions(data.successfulActions.current, data.minutesPerAction) : 0;
-  const prevHours = data ? hoursFromActions(data.successfulActions.previous, data.minutesPerAction) : 0;
-  const hoursDelta = data ? formatHoursDelta(hours, prevHours) : null;
+  const savedDelta = data ? formatTimeSavedDelta(data.minutesSaved.current, data.minutesSaved.previous) : null;
   const doneDelta = data ? formatCountDelta(data.done.current, data.done.previous) : null;
 
   return (
@@ -54,9 +53,25 @@ export function BigNumbers({ onHandled, onTimezone }: BigNumbersProps) {
       <div className="dash-nums">
         <article className="dash-card dash-num">
           <div className="dash-card-title">Time saved · 7d</div>
-          <div className="dash-num-value">{data ? formatTimeSaved(data.successfulActions.current, data.minutesPerAction) : (loading && !error ? '…' : '—')}</div>
-          {hoursDelta && <div className={`dash-delta ${hoursDelta.direction}`}>{hoursDelta.text}</div>}
-          {data && <div className="dash-num-foot">rough estimate · ~{data.minutesPerAction} min per action</div>}
+          <div className="dash-num-value" title={data?.minutesSaved.detail}>{data ? formatTimeSaved(data.minutesSaved.current) : (loading && !error ? '…' : '—')}</div>
+          {savedDelta && <div className={`dash-delta ${savedDelta.direction}`}>{savedDelta.text}</div>}
+          {data && (
+            <>
+              <button
+                type="button"
+                className="dash-num-foot dash-num-weights"
+                title={data.minutesSaved.detail}
+                aria-expanded={weightsOpen}
+                aria-controls={weightsId}
+                onClick={() => setWeightsOpen((open) => !open)}
+              >
+                {data.minutesSaved.help}
+              </button>
+              <p id={weightsId} className="dash-num-weights-note" hidden={!weightsOpen}>
+                {data.minutesSaved.detail}
+              </p>
+            </>
+          )}
         </article>
         <article className="dash-card dash-num">
           <div className="dash-card-title">Done for you · 7d</div>

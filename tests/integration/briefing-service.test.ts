@@ -6,8 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
+import { timeSavedDetail, timeSavedHelp, UNDESCRIBED_CALL_MINUTES } from '../../src/activity/describers.js';
 import { BriefingService } from '../../src/dashboard/briefing-service.js';
-import { HISTOGRAM_DAYS, addCalendarDays, localDayKey, localMidnight } from '../../src/dashboard/briefing.js';
+import { HISTOGRAM_DAYS, STATS_WINDOW_DAYS, addCalendarDays, localDayKey, localMidnight } from '../../src/dashboard/briefing.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
@@ -285,6 +286,158 @@ describeIf('briefing service against Postgres', () => {
 
       const bullpen = await service.bullpen(now);
       expect(bullpen).toEqual({ available: true, count: 1, agents: ['coordinator'] });
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
+
+  it('sums weighted visible actions, the undescribed default, and zero for hidden plumbing', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      const now = await emptyFortnight(client);
+      const bus = { publish: async () => {} } as unknown as EventBus;
+      const service = new BriefingService({
+        pool: client as unknown as pg.Pool,
+        actionLogRepo: new ActionLogRepo(client as unknown as pg.Pool, logger),
+        taskRepo: new TaskRepo(client as unknown as pg.Pool, bus, logger),
+        contactService: { findContactBySystemRole: async () => null },
+        officeTimezone: 'UTC',
+        logger,
+      });
+
+      // One turn: lookups, plumbing, a file read, then the actions that count.
+      const currentAt = new Date(now.getTime() - 60 * 60_000);
+      const root = await seedAudit(client, {
+        timestamp: currentAt,
+        eventType: 'agent.task',
+        payload: { agentId: 'coordinator' },
+      });
+      let step = 0;
+      const succeed = async (
+        parent: string,
+        tool: string,
+        at: Date,
+        opts: {
+          eventType?: string;
+          targetId?: string;
+          outcome?: string | null;
+          skillName?: boolean;
+          input?: Record<string, unknown>;
+        } = {},
+      ) => {
+        step += 1;
+        const atInvoke = new Date(at.getTime() + step * 1000);
+        const invokeType = opts.eventType === 'skill.result' ? 'skill.invoke' : 'tool.invoke';
+        const resultType = opts.eventType ?? 'tool.result';
+        const named = opts.skillName ? { skillName: tool } : { toolName: tool };
+        const invoke = await seedAudit(client, {
+          timestamp: atInvoke,
+          eventType: invokeType,
+          parentEventId: parent,
+          payload: {
+            ...(opts.targetId ? {} : named),
+            ...(opts.input ? { input: opts.input } : {}),
+          },
+          targetType: opts.targetId ? 'skill' : undefined,
+          targetId: opts.targetId,
+        });
+        const outcome = opts.outcome === undefined ? 'success' : opts.outcome;
+        await seedAudit(client, {
+          timestamp: new Date(atInvoke.getTime() + 1),
+          eventType: resultType,
+          parentEventId: invoke,
+          // Null outcome still counts when the payload says the call worked.
+          ...(outcome === null ? {} : { outcome }),
+          // A target_id-only call must not also carry the name in the payload.
+          payload: opts.targetId ? { result: { success: true } } : { ...named, result: { success: true } },
+        });
+      };
+
+      for (const tool of ['contact-lookup', 'entity-context', 'ceo-inbox-search', 'extract-facts', 'web-search', 'file-parse']) {
+        await succeed(root, tool, currentAt);
+      }
+      // Shipped zero-effort tools are hidden. They must not add the default.
+      for (const tool of ['ceo-inbox-list', 'task-list', 'contact-register', 'bullpen-post', 'ceo-inbox-shadow-draft']) {
+        await succeed(root, tool, currentAt);
+      }
+      await succeed(root, 'ceo-inbox-draft-reply', currentAt);
+      await succeed(root, 'email-archive', currentAt);
+      await succeed(root, 'calendar-create-event', currentAt);
+      // Name lives only on the invoke's structured column.
+      await succeed(root, 'email-archive', currentAt, { targetId: 'email-archive' });
+      // Pre-rename rows, and a null outcome whose payload says success.
+      await succeed(root, 'email-label', currentAt, { eventType: 'skill.result', skillName: true, outcome: null });
+      // Any outcome other than failure, error, or denied still counts when the payload says success.
+      await succeed(root, 'email-archive', currentAt, { outcome: 'skipped' });
+      // The feed hides a dry run, so it adds nothing.
+      await succeed(root, 'contact-merge', currentAt, {
+        input: { dry_run: true, primary_contact_id: 'a', secondary_contact_id: 'b' },
+      });
+      // An invoke whose parent is not an agent.task never reaches Recent Activity.
+      const noise = await seedAudit(client, {
+        timestamp: new Date(currentAt.getTime() + 40_000),
+        eventType: 'agent.response',
+        payload: { text: 'not a task' },
+      });
+      await succeed(noise, 'calendar-create-event', currentAt);
+
+      const failedInvoke = await seedAudit(client, {
+        timestamp: new Date(currentAt.getTime() + 30_000),
+        eventType: 'tool.invoke',
+        parentEventId: root,
+        payload: { toolName: 'email-send' },
+      });
+      await seedAudit(client, {
+        timestamp: new Date(currentAt.getTime() + 31_000),
+        eventType: 'tool.result',
+        parentEventId: failedInvoke,
+        outcome: 'failure',
+        payload: { toolName: 'email-send', result: { success: false } },
+      });
+      // A result whose parent is the task, not an invoke, is not a call.
+      await seedAudit(client, {
+        timestamp: new Date(currentAt.getTime() + 32_000),
+        eventType: 'tool.result',
+        parentEventId: root,
+        outcome: 'success',
+        payload: { toolName: 'calendar-create-event', result: { success: true } },
+      });
+
+      const previousAt = new Date(now.getTime() - 10 * 86_400_000);
+      const previousRoot = await seedAudit(client, {
+        timestamp: previousAt,
+        eventType: 'agent.task',
+        payload: { agentId: 'calendar' },
+      });
+      await succeed(previousRoot, 'calendar-create-event', previousAt);
+
+      // Starts 10 minutes before the current window; its result lands 10 minutes after.
+      // Both tiles use the root timestamp, so the meeting stays in the previous window.
+      const todayKey = localDayKey(now, 'UTC');
+      const windowStart = localMidnight(addCalendarDays(todayKey, -(STATS_WINDOW_DAYS - 1)), 'UTC');
+      const boundaryRoot = await seedAudit(client, {
+        timestamp: new Date(windowStart.getTime() - 10 * 60_000),
+        eventType: 'agent.task',
+        payload: { agentId: 'calendar' },
+      });
+      await succeed(boundaryRoot, 'calendar-create-event', new Date(windowStart.getTime() + 10 * 60_000));
+
+      const stats = await service.stats(now);
+      // 5 draft + 0.5 archive + 10 meeting + 0.5 archive-by-target-id + 0.5 label
+      // + 0.5 skipped-but-successful archive. Three unlisted lookups add the
+      // default each, as one day's count. extract-facts, web-search, file-parse,
+      // and the five hidden zero-effort tools add 0. Dry-run and the non-task
+      // invoke add 0.
+      const unlistedLookups = 3 * UNDESCRIBED_CALL_MINUTES;
+      expect(stats.minutesSaved.current).toBeCloseTo(17 + unlistedLookups);
+      expect(stats.done.current).toBe(1);
+      // The earlier meeting plus the one that started just before this window.
+      expect(stats.minutesSaved.previous).toBeCloseTo(20);
+      expect(stats.done.previous).toBe(2);
+      expect(stats.minutesSaved.help).toBe(timeSavedHelp());
+      expect(stats.minutesSaved.detail).toBe(timeSavedDetail());
     } finally {
       await client.query('ROLLBACK');
       client.release();

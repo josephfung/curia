@@ -18,6 +18,8 @@
 // They never read a `body`, `message`, `content` or `prompt` field, because
 // console access is one shared secret and the operator may not be the principal.
 
+import { isScratchDocumentPath } from '../agents/document-workspace.js';
+
 export type Prominence = 'line' | 'count' | 'hidden';
 
 /** One tool call, as the projection hands it to a describer. */
@@ -59,8 +61,7 @@ export interface ToolDescription {
   research?: ResearchKind;
 }
 
-interface Describer {
-  prominence: Prominence;
+interface DescriberShared {
   tally?: Tally;
   research?: ResearchKind;
   /** Name references this call needs resolved before `done`/`attempt` run. */
@@ -70,6 +71,18 @@ interface Describer {
   /** Infinitive for the failure line, rendered as "couldn't <attempt>". */
   attempt?(call: ToolCall, ctx: DescribeContext): string;
 }
+
+/**
+ * A hidden describer has no minutes: the feed and the tile both skip it.
+ * A line or count must declare minutes. A number is the flat guess; a function
+ * is for a call whose worth depends on what it did (a new document versus an edit).
+ */
+type Describer =
+  | (DescriberShared & { prominence: 'hidden' })
+  | (DescriberShared & {
+      prominence: 'line' | 'count';
+      minutes: number | ((call: ToolCall) => number);
+    });
 
 // -- helpers --
 
@@ -184,9 +197,10 @@ const EMAIL_COUNT_TALLY = (verb: string): Tally => ({ verb, one: 'an email', man
 // The subject in `done` never reaches a feed headline: count-prominence calls
 // render through their tally ("archived 3 emails"). It is for the activity-log
 // skill's per-action `summary`, which reports each call on its own.
-function emailCount(verb: string, attempt: string): Describer {
+function emailCount(verb: string, attempt: string, minutes: number): Describer {
   return {
     prominence: 'count',
+    minutes,
     tally: EMAIL_COUNT_TALLY(verb),
     done: (call) => {
       const subject = str(call.data?.subject);
@@ -211,15 +225,41 @@ function sendTo(call: ToolCall): string | null {
   return bareRef(call.input.to) ?? emailRefs(call.data?.to)[0] ?? null;
 }
 
+/** A new document the principal would have written. An edit is a few lines. */
+const DOC_CREATED_MINUTES = 15;
+const DOC_EDIT_MINUTES = 3;
+
+function isScratchWrite(call: ToolCall): boolean {
+  const fromDoc = str(rec(call.data?.document)?.path);
+  const fromInput = str(call.input.path);
+  return (fromDoc !== null && isScratchDocumentPath(fromDoc))
+    || (fromInput !== null && isScratchDocumentPath(fromInput));
+}
+
+function docWriteMinutes(call: ToolCall): number {
+  if (isScratchWrite(call) || call.data?.conflict === true) return 0;
+  return call.data?.action === 'created' ? DOC_CREATED_MINUTES : DOC_EDIT_MINUTES;
+}
+
 const REPLY_DRAFT_TALLY: Tally = { verb: 'drafted', one: 'a reply', many: 'replies' };
 const EMAIL_DRAFT_TALLY: Tally = { verb: 'drafted', one: 'an email', many: 'emails' };
 
 // -- the registry --
+//
+// `minutes` guesses how long the principal would have spent doing the thing
+// once. Anchors from #2349: archiving an email 0.5, drafting a reply 5,
+// scheduling a meeting 10. Twin tools that are the same action share a number.
+// email-send is the whole job (write and send), so it matches a draft.
+// dispatcher-relay only delivers a reply that was already approved.
+// A new document is worth more than an edit. Scratch notes are hidden.
+// A hidden describer is an explicit zero. A call with no describer, a read
+// included, takes UNDESCRIBED_CALL_MINUTES (ADR-058).
 
 const DESCRIBERS: Record<string, Describer> = {
   // ── Mail drafts and sends ────────────────────────────────────────────────
   'ceo-inbox-draft-reply': {
     prominence: 'line',
+    minutes: 5,
     tally: REPLY_DRAFT_TALLY,
     refs: (call) => emailRefs(call.data?.to),
     done: (call, ctx) => `drafted a reply to ${people(emailRefs(call.data?.to), ctx)}`,
@@ -227,6 +267,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'ceo-inbox-draft-compose': {
     prominence: 'line',
+    minutes: 5,
     tally: EMAIL_DRAFT_TALLY,
     refs: draftRecipients,
     done: (call, ctx) => `drafted an email to ${people(draftRecipients(call), ctx)}`,
@@ -234,6 +275,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'ceo-inbox-draft-edit': {
     prominence: 'line',
+    minutes: 2,
     tally: { verb: 'updated', one: 'a draft', many: 'drafts' },
     refs: (call) => emailRefs(call.data?.to),
     done: (call, ctx) => {
@@ -244,6 +286,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'email-draft-save': {
     prominence: 'line',
+    minutes: 5,
     tally: EMAIL_DRAFT_TALLY,
     refs: contactRef('to'),
     done: (call, ctx) => {
@@ -254,6 +297,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'email-send': {
     prominence: 'line',
+    minutes: 5,
     tally: { verb: 'sent', one: 'an email', many: 'emails' },
     refs: (call) => { const r = sendTo(call); return r ? [r] : []; },
     done: (call, ctx) => {
@@ -266,6 +310,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'email-reply': {
     prominence: 'line',
+    minutes: 5,
     tally: { verb: 'sent', one: 'a reply', many: 'replies' },
     refs: (call) => emailRefs(call.data?.to),
     done: (call, ctx) => {
@@ -277,6 +322,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'dispatcher-relay': {
     prominence: 'line',
+    minutes: 1,
     tally: { verb: 'sent', one: 'a reply', many: 'replies' },
     refs: (call) => emailRefs(call.input.to),
     done: (call, ctx) => {
@@ -287,6 +333,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'signal-send': {
     prominence: 'line',
+    minutes: 2,
     tally: { verb: 'sent', one: 'a Signal message', many: 'Signal messages' },
     refs: contactRef('recipient'),
     done: (call, ctx) => (str(call.input.group_id) && !str(call.input.recipient)
@@ -296,6 +343,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'sms-send': {
     prominence: 'line',
+    minutes: 2,
     tally: { verb: 'sent', one: 'a text', many: 'texts' },
     refs: contactRef('recipient'),
     done: (call, ctx) => `texted ${who(bareRef(call.input.recipient), ctx)}`,
@@ -303,6 +351,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'slack-send': {
     prominence: 'line',
+    minutes: 2,
     tally: { verb: 'sent', one: 'a Slack message', many: 'Slack messages' },
     refs: contactRef('recipient'),
     done: (call, ctx) => `messaged ${who(bareRef(call.input.recipient), ctx)} on Slack`,
@@ -310,34 +359,38 @@ const DESCRIBERS: Record<string, Describer> = {
   },
 
   // ── Mailbox housekeeping (folded into counts) ────────────────────────────
-  'ceo-inbox-archive': emailCount('archived', 'archive an email'),
-  'email-archive': emailCount('archived', 'archive an email'),
-  'ceo-inbox-label': emailCount('labelled', 'label an email'),
-  'email-label': emailCount('labelled', 'label an email'),
+  'ceo-inbox-archive': emailCount('archived', 'archive an email', 0.5),
+  'email-archive': emailCount('archived', 'archive an email', 0.5),
+  'ceo-inbox-label': emailCount('labelled', 'label an email', 0.5),
+  'email-label': emailCount('labelled', 'label an email', 0.5),
   'ceo-inbox-mark-read': {
     prominence: 'count',
+    minutes: 0.5,
     tally: { verb: 'marked', one: 'an email read', many: 'emails read' },
     done: () => 'marked an email read',
     attempt: () => 'mark an email read',
   },
   'email-mark-read': {
     prominence: 'count',
+    minutes: 0.5,
     tally: { verb: 'marked', one: 'an email read', many: 'emails read' },
     done: () => 'marked an email read',
     attempt: () => 'mark an email read',
   },
-  'ceo-inbox-mark-starred': emailCount('starred', 'star an email'),
-  'ceo-inbox-update-folders': emailCount('filed', 'file an email'),
+  'ceo-inbox-mark-starred': emailCount('starred', 'star an email', 0.5),
+  'ceo-inbox-update-folders': emailCount('filed', 'file an email', 1),
 
   // ── Calendar ─────────────────────────────────────────────────────────────
   'calendar-create-event': {
     prominence: 'line',
+    minutes: 10,
     tally: { verb: 'scheduled', one: 'an event', many: 'events' },
     done: (call, ctx) => `scheduled ${quote(eventTitle(call) ?? 'an event')}${onDay(call, ctx)}`,
     attempt: (call) => `schedule ${quote(eventTitle(call) ?? 'an event')}`,
   },
   'calendar-update-event': {
     prominence: 'line',
+    minutes: 5,
     tally: { verb: 'updated', one: 'an event', many: 'events' },
     done: (call, ctx) => {
       const title = quote(eventTitle(call) ?? 'an event');
@@ -351,12 +404,14 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'calendar-delete-event': {
     prominence: 'line',
+    minutes: 1,
     tally: { verb: 'deleted', one: 'an event', many: 'events' },
     done: () => 'deleted a calendar event',
     attempt: () => 'delete a calendar event',
   },
   'calendar-create-hold': {
     prominence: 'line',
+    minutes: 3,
     tally: { verb: 'held', one: 'a time slot', many: 'time slots' },
     done: (call, ctx) => {
       if (call.data?.held !== true) return null;
@@ -368,6 +423,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'calendar-respond-to-invite': {
     prominence: 'line',
+    minutes: 2,
     tally: { verb: 'answered', one: 'an invite', many: 'invites' },
     done: (call) => {
       const response = str(call.data?.response) ?? str(call.input.response);
@@ -381,6 +437,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'calendar-register': {
     prominence: 'line',
+    minutes: 5,
     done: (call) => `linked the ${quote(str(call.input.label) ?? 'new')} calendar`,
     attempt: () => 'link a calendar',
   },
@@ -388,12 +445,14 @@ const DESCRIBERS: Record<string, Describer> = {
   // ── Contacts and permissions ─────────────────────────────────────────────
   'contact-create': {
     prominence: 'line',
+    minutes: 2,
     tally: { verb: 'added', one: 'a contact', many: 'contacts' },
     done: (call) => `added ${truncate(str(call.data?.display_name) ?? str(call.input.name) ?? 'a contact', 40)} to contacts`,
     attempt: (call) => `add ${truncate(str(call.input.name) ?? 'a contact', 40)} to contacts`,
   },
   'contact-update': {
     prominence: 'count',
+    minutes: 2,
     tally: { verb: 'updated', one: 'a contact', many: 'contacts' },
     refs: contactRef('contact_id'),
     done: (call, ctx) => `updated ${who(bareRef(call.input.contact_id), ctx)}'s details`,
@@ -401,11 +460,13 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'contact-rename': {
     prominence: 'line',
+    minutes: 1,
     done: (call) => `renamed a contact to ${truncate(str(call.input.display_name) ?? 'a new name', 40)}`,
     attempt: () => 'rename a contact',
   },
   'contact-merge': {
     prominence: 'line',
+    minutes: 5,
     refs: contactRef('primary_contact_id'),
     done: (call, ctx) => (call.input.dry_run === true
       ? null
@@ -414,18 +475,21 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'contact-set-role': {
     prominence: 'line',
+    minutes: 1,
     refs: contactRef('contact_id'),
     done: (call, ctx) => `set ${who(bareRef(call.input.contact_id), ctx)}'s role to ${truncate(str(call.input.role) ?? 'a new role', 30)}`,
     attempt: () => "change a contact's role",
   },
   'contact-set-tier': {
     prominence: 'line',
+    minutes: 1,
     refs: contactRef('contact_id'),
     done: (call, ctx) => `marked ${who(bareRef(call.input.contact_id), ctx)} as ${str(call.input.tier) ?? 'a new tier'}`,
     attempt: () => "change a contact's tier",
   },
   'contact-grant-permission': {
     prominence: 'line',
+    minutes: 2,
     refs: contactRef('contact_id'),
     done: (call, ctx) => {
       const name = who(bareRef(call.input.contact_id), ctx);
@@ -436,12 +500,14 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'contact-revoke-permission': {
     prominence: 'line',
+    minutes: 2,
     refs: contactRef('contact_id'),
     done: (call, ctx) => `removed ${quote(str(call.input.permission) ?? 'a permission')} from ${who(bareRef(call.input.contact_id), ctx)}`,
     attempt: () => 'remove a permission',
   },
   'approve-grant-recommendation': {
     prominence: 'line',
+    minutes: 2,
     refs: (call) => { const r = bareRef(call.data?.contact_id); return r ? [r] : []; },
     done: (call, ctx) => {
       const permission = str(call.data?.permission);
@@ -452,11 +518,13 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'decline-grant-recommendation': {
     prominence: 'line',
+    minutes: 1,
     done: () => 'declined a permission recommendation',
     attempt: () => 'decline a permission recommendation',
   },
   'set-autonomy': {
     prominence: 'line',
+    minutes: 2,
     done: (call) => (typeof call.input.score === 'number' ? `set autonomy to ${call.input.score}` : 'changed the autonomy score'),
     attempt: () => 'change the autonomy score',
   },
@@ -464,11 +532,13 @@ const DESCRIBERS: Record<string, Describer> = {
   // ── Voice and learning ───────────────────────────────────────────────────
   'executive-profile-update': {
     prominence: 'line',
+    minutes: 5,
     done: () => 'updated the writing-voice profile',
     attempt: () => 'update the writing-voice profile',
   },
   'voice-learn': {
     prominence: 'line',
+    minutes: 2,
     done: (call) => (call.data?.proposed === true || (typeof call.data?.proposed === 'number' && call.data.proposed > 0)
       ? 'proposed a writing-voice update'
       : null),
@@ -476,6 +546,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'resolve-learning-digest': {
     prominence: 'line',
+    minutes: 2,
     done: (call) => {
       switch (call.input.action) {
         case 'approve_voice': return 'approved a writing-voice update';
@@ -491,8 +562,11 @@ const DESCRIBERS: Record<string, Describer> = {
   // ── Documents, tasks, jobs ───────────────────────────────────────────────
   'doc-write': {
     prominence: 'line',
+    minutes: docWriteMinutes,
     tally: { verb: 'wrote', one: 'a document', many: 'documents' },
     done: (call) => {
+      // A version mismatch is success: true with conflict: true, and nothing was written.
+      if (isScratchWrite(call) || call.data?.conflict === true) return null;
       const doc = rec(call.data?.document);
       const title = str(rec(doc?.frontmatter)?.title) ?? str(doc?.path) ?? str(call.input.path) ?? 'a document';
       const verb = call.data?.action === 'created' ? 'wrote' : 'updated';
@@ -502,12 +576,14 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'task-create': {
     prominence: 'line',
+    minutes: 2,
     tally: { verb: 'added', one: 'a task', many: 'tasks' },
     done: (call) => `added the task ${quote(str(call.data?.title) ?? str(call.input.title) ?? 'untitled')}`,
     attempt: () => 'add a task',
   },
   'task-complete': {
     prominence: 'line',
+    minutes: 1,
     tally: { verb: 'completed', one: 'a task', many: 'tasks' },
     done: (call) => {
       const title = str(call.data?.title);
@@ -517,6 +593,7 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'task-update': {
     prominence: 'count',
+    minutes: 1,
     tally: { verb: 'updated', one: 'a task', many: 'tasks' },
     done: (call) => {
       const title = str(call.data?.title);
@@ -526,16 +603,19 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'scheduler-create': {
     prominence: 'line',
+    minutes: 5,
     done: () => 'set up a scheduled job',
     attempt: () => 'set up a scheduled job',
   },
   'scheduler-cancel': {
     prominence: 'line',
+    minutes: 1,
     done: () => 'cancelled a scheduled job',
     attempt: () => 'cancel a scheduled job',
   },
   'scheduler-update': {
     prominence: 'line',
+    minutes: 2,
     done: (call) => {
       if (call.input.action === 'pause') return 'paused a scheduled job';
       if (call.input.action === 'resume') return 'resumed a scheduled job';
@@ -545,12 +625,14 @@ const DESCRIBERS: Record<string, Describer> = {
   },
   'image-generate': {
     prominence: 'line',
+    minutes: 5,
     tally: { verb: 'generated', one: 'an image', many: 'images' },
     done: () => 'generated an image',
     attempt: () => 'generate an image',
   },
   'file-parse': {
     prominence: 'count',
+    minutes: 0,
     tally: { verb: 'read', one: 'a file', many: 'files' },
     done: (call) => { const f = str(call.input.filename); return f ? `read ${quote(f)}` : 'read a file'; },
     attempt: () => 'read a file',
@@ -573,6 +655,15 @@ const DESCRIBERS: Record<string, Describer> = {
   'extract-facts': HIDDEN,
   'extract-relationships': HIDDEN,
   'activity-log': HIDDEN,
+  // Shipped tools whose success is not the principal's time. Hidden is an
+  // explicit zero, so these calls are outside the undescribed backstop.
+  // `bullpen` is the bundle name, not a tool. `approval-expiry-sweep` is a
+  // system interval, not a tool (#2013). Neither gets an entry.
+  'ceo-inbox-list': HIDDEN,
+  'task-list': HIDDEN,
+  'contact-register': HIDDEN,
+  'bullpen-post': HIDDEN,
+  'ceo-inbox-shadow-draft': HIDDEN,
 };
 
 // Own keys only: DESCRIBERS is a plain object, so a tool named "constructor" or
@@ -612,6 +703,61 @@ export function visibleToolNames(): readonly string[] {
   return Object.entries(DESCRIBERS)
     .filter(([, describer]) => describer.prominence !== 'hidden')
     .map(([name]) => name);
+}
+
+/** Names resolve to nothing. Hide/show decisions in `done()` do not depend on them. */
+const MINUTES_CTX: DescribeContext = { name: () => null, timezone: 'UTC' };
+
+/**
+ * Human-time backstop for a successful call the describers do not name (ADR-058).
+ * The census estimated 2,390 minutes of human effort. After the five shipped
+ * zero-effort tools above were marked hidden, 24,393 calls remained undescribed:
+ * 2,390 / 24,393 = 0.098 minutes.
+ */
+export const UNDESCRIBED_CALL_MINUTES = 0.098;
+
+/**
+ * Principal-minutes for one successful call.
+ * A named tool uses its describer. A hidden describer, a failed call, a blank
+ * name, or a `done()` that returns null (a dry-run merge, an unplaced hold,
+ * scratch notes) is zero. Any other name is the undescribed-call default.
+ */
+export function minutesForCall(call: ToolCall): number {
+  if (!call.ok) return 0;
+  if (!hasDescriber(call.toolName)) {
+    return call.toolName.trim().length > 0 ? UNDESCRIBED_CALL_MINUTES : 0;
+  }
+  const shown = describeToolCall(call, MINUTES_CTX);
+  if (!shown || shown.prominence === 'hidden') return 0;
+  const describer = lookup(call.toolName);
+  if (!describer || describer.prominence === 'hidden') return 0;
+  const raw = typeof describer.minutes === 'function' ? describer.minutes(call) : describer.minutes;
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
+function flatMinutes(toolName: string): number {
+  const describer = lookup(toolName);
+  if (!describer || describer.prominence === 'hidden' || typeof describer.minutes !== 'number') {
+    throw new Error(`time-saved help: ${toolName} has no flat minute weight`);
+  }
+  return describer.minutes;
+}
+
+/** Always-visible footnote. One short line; the weights live on hover. */
+export function timeSavedHelp(): string {
+  return 'Rough estimate of equivalent human effort.';
+}
+
+/**
+ * Hover note for the number and the footnote. Weights come from the describers
+ * so the sentence cannot drift.
+ */
+export function timeSavedDetail(): string {
+  const meeting = flatMinutes('calendar-create-event');
+  const reply = flatMinutes('ceo-inbox-draft-reply');
+  const filing = flatMinutes('email-archive');
+  const filingText = filing === 0.5 ? '½' : String(filing);
+  return `A meeting ≈${meeting} min, a reply ≈${reply}, filing ≈${filingText}. A new document ≈${DOC_CREATED_MINUTES} min, an edit ≈${DOC_EDIT_MINUTES}. Known lookups don't count. Other tool work counts a few seconds each. Each action counts, including a repeat.`;
 }
 
 /** Research kind of a web tool, or undefined. */

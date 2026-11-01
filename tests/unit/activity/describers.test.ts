@@ -7,6 +7,10 @@ import {
   hasDescriber,
   hiddenToolNames,
   isVisibleTool,
+  minutesForCall,
+  UNDESCRIBED_CALL_MINUTES,
+  timeSavedDetail,
+  timeSavedHelp,
   visibleToolNames,
   researchKind,
   type DescribeContext,
@@ -23,6 +27,25 @@ function ctx(names: Record<string, string> = {}, timezone = 'America/Toronto'): 
 
 function call(toolName: string, input: Record<string, unknown>, data: Record<string, unknown> | null, ok = true): ToolCall {
   return { toolName, input, data, ok };
+}
+
+/** Same keys the minutes query drops: message bodies, and a document's body. */
+function stripHeavy(record: Record<string, unknown>, isInput: boolean): Record<string, unknown> {
+  const keys = isInput
+    ? ['body', 'content', 'message', 'prompt', 'html', 'text']
+    : ['body', 'content', 'message', 'html', 'text'];
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (keys.includes(key)) continue;
+    if (key === 'document' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      const doc: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+      delete doc.body;
+      out[key] = doc;
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
 }
 
 describe('describer coverage', () => {
@@ -124,6 +147,146 @@ describe('describeToolCall', () => {
   it('hides a dry-run merge and a hold that was not placed', () => {
     expect(describeToolCall(call('contact-merge', { primary_contact_id: 'a', secondary_contact_id: 'b', dry_run: true }, {}), ctx())?.prominence).toBe('hidden');
     expect(describeToolCall(call('calendar-create-hold', { start: '2026-10-31T10:00:00Z' }, { held: false }), ctx())?.prominence).toBe('hidden');
+  });
+});
+
+describe('minutesForCall', () => {
+  it('marks shipped zero-effort tools hidden, so they add nothing', () => {
+    for (const name of ['ceo-inbox-list', 'task-list', 'contact-register', 'bullpen-post', 'ceo-inbox-shadow-draft']) {
+      expect(hasDescriber(name), name).toBe(true);
+      expect(isVisibleTool(name), name).toBe(false);
+      expect(hiddenToolNames(), name).toContain(name);
+      expect(describeToolCall(call(name, {}, {}), ctx())?.prominence, name).toBe('hidden');
+      expect(minutesForCall(call(name, {}, {})), name).toBe(0);
+    }
+    expect(hasDescriber('bullpen')).toBe(false);
+    expect(hasDescriber('approval-expiry-sweep')).toBe(false);
+    expect(minutesForCall(call('bullpen', {}, {}))).toBe(UNDESCRIBED_CALL_MINUTES);
+    expect(minutesForCall(call('approval-expiry-sweep', {}, {}))).toBe(UNDESCRIBED_CALL_MINUTES);
+  });
+
+  it('adds the default for an unlisted tool and zero for hidden plumbing', () => {
+    const unlisted = ['contact-lookup', 'entity-context', 'ceo-inbox-search'];
+    const hidden = ['extract-facts', 'web-search', 'memory-store'];
+    const minutes = [...unlisted, ...hidden, 'ceo-inbox-draft-reply']
+      .reduce((sum, name) => sum + minutesForCall(call(name, {}, {})), 0);
+    expect(minutes).toBeCloseTo(5 + unlisted.length * UNDESCRIBED_CALL_MINUTES);
+    for (const name of hidden) expect(minutesForCall(call(name, {}, {})), name).toBe(0);
+    expect(minutesForCall(call('contact-lookup', {}, {}, false))).toBe(0);
+    expect(minutesForCall(call('   ', {}, {}))).toBe(0);
+  });
+
+  it('weights an archive, a draft, a send, and a meeting apart', () => {
+    expect(minutesForCall(call('email-archive', {}, {}))).toBe(0.5);
+    expect(minutesForCall(call('ceo-inbox-archive', {}, {}))).toBe(0.5);
+    expect(minutesForCall(call('ceo-inbox-draft-reply', {}, {}))).toBe(5);
+    expect(minutesForCall(call('email-send', { to: 'c-1' }, {}))).toBe(5);
+    expect(minutesForCall(call('email-reply', {}, {}))).toBe(5);
+    expect(minutesForCall(call('calendar-create-event', {}, {}))).toBe(10);
+    expect(minutesForCall(call('file-parse', {}, {}))).toBe(0);
+    expect(minutesForCall(call('constructor', {}, {}))).toBe(UNDESCRIBED_CALL_MINUTES);
+    expect(minutesForCall(call('calendar-create-event', {}, {}, false))).toBe(0);
+  });
+
+  it('adds nothing the feed would hide', () => {
+    expect(minutesForCall(call('contact-merge', { dry_run: true, primary_contact_id: 'a' }, {}))).toBe(0);
+    expect(minutesForCall(call('contact-merge', { primary_contact_id: 'a' }, {}))).toBe(5);
+    expect(minutesForCall(call('calendar-create-hold', { start: '2026-10-31T10:00:00Z' }, { held: false }))).toBe(0);
+    expect(minutesForCall(call('calendar-create-hold', { start: '2026-10-31T10:00:00Z' }, { held: true }))).toBe(3);
+    expect(minutesForCall(call('voice-learn', {}, { proposed: false }))).toBe(0);
+    expect(minutesForCall(call('voice-learn', {}, { proposed: true }))).toBe(2);
+    for (const name of hiddenToolNames()) {
+      expect(minutesForCall(call(name, {}, {})), name).toBe(0);
+    }
+  });
+
+  it('weights a new document above an edit and ignores scratch notes', () => {
+    const project = '/projects/q/brief.md';
+    const scratch = '/scratch/conv-1/plan.md';
+    const created = call('doc-write', { path: project }, { action: 'created', document: { path: project } });
+    const edited = call('doc-write', { path: project }, { action: 'appended', document: { path: project } });
+    const note = call('doc-write', { path: scratch }, { action: 'appended', document: { path: scratch } });
+    expect(minutesForCall(created)).toBe(15);
+    expect(minutesForCall(edited)).toBe(3);
+    expect(minutesForCall(note)).toBe(0);
+    expect(minutesForCall(note) + minutesForCall(note) + minutesForCall(note)).toBe(0);
+    expect(describeToolCall(note, ctx())?.prominence).toBe('hidden');
+    expect(describeToolCall(created, ctx())?.text).toContain('wrote');
+    expect(describeToolCall(edited, ctx())?.text).toContain('updated');
+    const conflict = call('doc-write', { path: project }, { conflict: true, path: project, version: 4 });
+    expect(describeToolCall(conflict, ctx())?.prominence).toBe('hidden');
+    expect(minutesForCall(conflict)).toBe(0);
+  });
+
+  it('keeps every describer line when message and document bodies are removed', () => {
+    const heavyInput = {
+      to: 'c-1',
+      recipient: 'c-1',
+      contact_id: 'c-1',
+      primary_contact_id: 'c-1',
+      path: '/projects/q/brief.md',
+      title: 'Board',
+      subject: 'Hi',
+      start: '2026-10-31T15:00:00Z',
+      action: 'approve_voice',
+      filename: 'brief.pdf',
+      label: 'Work',
+      display_name: 'Ada',
+      role: 'advisor',
+      tier: 'inner',
+      permission: 'calendar',
+      response: 'accept',
+      score: 70,
+      body: 'SECRET BODY',
+      content: 'SECRET CONTENT',
+      message: 'SECRET MESSAGE',
+      prompt: 'SECRET PROMPT',
+      html: '<p>SECRET</p>',
+      text: 'SECRET TEXT',
+    };
+    const heavyData = {
+      subject: 'Hi',
+      to: [{ email: 'a@b.co' }],
+      action: 'created',
+      held: true,
+      proposed: true,
+      title: 'Board',
+      response: 'accept',
+      document: { path: '/projects/q/brief.md', frontmatter: { title: 'Board brief' }, body: 'SECRET DOC' },
+      body: 'SECRET BODY',
+      content: 'SECRET CONTENT',
+      message: 'SECRET MESSAGE',
+      html: '<p>SECRET</p>',
+      text: 'SECRET TEXT',
+    };
+    const leanInput = stripHeavy(heavyInput, true);
+    const leanData = stripHeavy(heavyData, false);
+    for (const name of visibleToolNames()) {
+      const full = call(name, heavyInput, heavyData);
+      const lean = call(name, leanInput, leanData);
+      expect(describeToolCall(full, ctx()), name).toEqual(describeToolCall(lean, ctx()));
+      expect(minutesForCall(full), name).toBe(minutesForCall(lean));
+    }
+  });
+
+  it('shares an estimate across the same action on two tools', () => {
+    const pairs = [
+      ['ceo-inbox-archive', 'email-archive'],
+      ['ceo-inbox-label', 'email-label'],
+      ['ceo-inbox-mark-read', 'email-mark-read'],
+      ['ceo-inbox-draft-compose', 'email-draft-save'],
+    ] as const;
+    for (const [left, right] of pairs) {
+      expect(minutesForCall(call(left, {}, {})), `${left} vs ${right}`).toBe(minutesForCall(call(right, {}, {})));
+    }
+  });
+
+  it('states the tile definition from the same weights', () => {
+    expect(timeSavedHelp()).toBe('Rough estimate of equivalent human effort.');
+    expect(timeSavedDetail()).toBe(
+      'A meeting ≈10 min, a reply ≈5, filing ≈½. A new document ≈15 min, an edit ≈3. Known lookups don\'t count. Other tool work counts a few seconds each. Each action counts, including a repeat.',
+    );
+    expect(timeSavedDetail().includes('Rough estimate')).toBe(false);
   });
 });
 

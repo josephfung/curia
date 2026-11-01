@@ -584,6 +584,7 @@ a.dash-activity-headline:hover { text-decoration: underline; }
 }
 
 /* Principal home (#2340) */
+.dash-nums-wrap { container-type: inline-size; }
 .dash-nums {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -597,7 +598,16 @@ a.dash-activity-headline:hover { text-decoration: underline; }
 .dash-delta.up { color: var(--app-green); }
 .dash-delta.down { color: var(--app-destructive); }
 .dash-delta.flat { color: var(--app-fg-muted); }
-.dash-num-foot { color: var(--app-fg-subtle); font-size: 11px; }
+.dash-num-foot { color: var(--app-fg-subtle); font-size: 11px; line-height: 1.35; }
+.dash-num-weights {
+  display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none;
+  font: inherit; font-size: 11px; line-height: 1.35; text-align: left; cursor: pointer;
+  color: var(--app-fg-muted);
+}
+.dash-num-weights:focus-visible { outline: 2px solid var(--app-teal); outline-offset: 2px; }
+.dash-num-weights-note {
+  margin: 4px 0 0; color: var(--app-fg-muted); font-size: 11px; line-height: 1.35;
+}
 .dash-spark { width: 100%; height: 18px; display: block; }
 
 .dash-split {
@@ -796,6 +806,15 @@ a.dash-activity-headline:hover { text-decoration: underline; }
   .dash-split { grid-template-columns: minmax(0, 1fr); }
   .dash-activity-card { height: auto; min-height: 0; }
   .dash-activity-scroll { max-height: 420px; }
+}
+
+/* The footnote is one sentence. Drop a column when a card would be too
+   narrow for it, including beside the sidebar. */
+@container (max-width: 1080px) {
+  .dash-nums { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (max-width: 560px) {
+  .dash-nums { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ── 10. Settings shell ──────────────────────────────────────────────── */

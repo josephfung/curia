@@ -109,6 +109,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Scenario gateway checks** — cases assert delivered, held, not-held, reviewed, outreach and decision outcomes. (#2312)
 - **Scenario `inbound.then`** — a case sends the principal a second message after the first turn replies. (#2312)
 - **ADR-054** — authority-aware PII disclosure: the judge rules per item; code decides who authorized. (#2312)
+- **ADR-058** — human-time anchors for named tools, one derived default for the rest. (#2349)
 
 ### Changed
 
@@ -116,6 +117,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Calendar date check** — briefs that state correct dates skip date-resolve; wrong weekdays or dates are still refused. (#2379)
 - **Voice phrasing** — calls no longer name specialists, the coordinator or the off-ramp. (#2379)
 - **Voice barge-in** — logged at info with detection time and queued audio; console calls drop queued audio. (#2379)
+- **Time saved** — human-time estimate on Done-for-you's clock; undescribed calls add a few seconds. (#2349)
+- **Time saved footnote** — one line on a narrow screen, and readable against the card. (#2349)
+- **Recent Activity** — scratch notes and conflicted `doc-write` calls no longer appear. (#2349)
 - **agent.task / llm.call / llm.error / LLMStreamEvent** — **public API:** `turnDeadlineAt`, `reasoningWatchdog`, `request_started`, `reasoning_delta` and `output_started` added. (#2371)
 - **LLM calls** — agent and infra calls on Anthropic and OpenRouter now stream internally. (#2371)
 - **Console API paths** — tasks, contacts, chat and grants move to `/api/*`; old tabs work for one release. (#872)

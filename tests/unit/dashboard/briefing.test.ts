@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MINUTES_PER_SUCCESSFUL_ACTION,
   addCalendarDays,
   countJobs,
   dayKeysEnding,
@@ -166,8 +165,3 @@ describe('mailboxDraftRef', () => {
   });
 });
 
-describe('time saved constant', () => {
-  it('lives in one named place', () => {
-    expect(MINUTES_PER_SUCCESSFUL_ACTION).toBe(1);
-  });
-});
