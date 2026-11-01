@@ -247,12 +247,19 @@ export class WebPushService {
       }
       if (result.kind === 'setup') {
         setupDetail = result.detail;
-        this.deps.logger.error({ endpoint: sub.endpoint, detail: result.detail }, 'web push: setup rejected');
+        this.deps.logger.error(
+          { endpointHost: endpointHost(sub.endpoint), device: sub.deviceName, detail: result.detail },
+          'web push: setup rejected',
+        );
         continue;
       }
       rejected = true;
       this.deps.logger.error(
-        { endpoint: sub.endpoint, status: result.kind === 'failed' || result.kind === 'retry' ? result.status : 0 },
+        {
+          endpointHost: endpointHost(sub.endpoint),
+          device: sub.deviceName,
+          status: result.kind === 'failed' || result.kind === 'retry' ? result.status : 0,
+        },
         'web push: the push service did not accept the message',
       );
       if (await this.noteFailure(sub.id)) {

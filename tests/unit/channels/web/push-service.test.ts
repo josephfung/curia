@@ -206,6 +206,21 @@ describe('WebPushService', () => {
     expect(state.notices[0]).toMatch(/setup:Push setup was rejected \(403\): status 403 BadJwtToken/);
   });
 
+  it('logs only the push host, never the full endpoint, when a push is rejected', async () => {
+    const state = { hide: false, subs: [sub('setup'), sub('down')], notices: [] };
+    const sender: PushSender = {
+      send: vi.fn(async (row: { id: string }) => {
+        throw row.id === 'setup' ? fail(403, { body: 'BadJwtToken' }) : fail(400);
+      }),
+    };
+    const error = vi.mocked(logger.error);
+    error.mockClear();
+    await service({ pool: createPool(state), sender }).deliver('hello');
+    const logged = JSON.stringify(error.mock.calls);
+    expect(logged).toContain('"endpointHost":"push.example"');
+    expect(logged).not.toContain('https://push.example/');
+  });
+
   it('retries a 5xx twice before falling back, and a third success does not fall back', async () => {
     const state = { hide: false, subs: [sub()], notices: [] };
     let calls = 0;
