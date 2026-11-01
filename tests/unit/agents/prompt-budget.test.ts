@@ -108,10 +108,8 @@ interface AgentBudget {
 // 82,671 over 74 local tools. The budget rises by exactly that delta.
 // web-send pinned, and deliver-approval names the phone app (#2341): +613 bytes,
 // 83,284 over 75 local tools. The budget rises by exactly that delta.
-// web-send declares context_bridge, which its fallback already registered (+187 bytes,
-// 83,471): a short pointer to signal-send's description, which the coordinator also pins.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 83_471, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 83_284, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   // Standing rules moved to a pinned document (#2339): the config-store JSON-array steps came

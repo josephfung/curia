@@ -41,10 +41,9 @@ function fallbackOrder(gateway: OutboundGateway): readonly FallbackChannel[] {
 
 export class WebSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { recipient, message, context_bridge: contextBridgeRaw } = ctx.input as {
+    const { recipient, message } = ctx.input as {
       recipient?: unknown;
       message?: unknown;
-      context_bridge?: unknown;
     };
     if (typeof message !== 'string' || message.trim().length === 0) {
       return { success: false, error: 'Missing required input: message (string)' };
@@ -114,7 +113,7 @@ export class WebSendHandler implements ToolHandler {
           };
         }
         if (sent.success) {
-          await registerFallback(ctx, channel, message, contextBridgeRaw, resolved, sent);
+          await registerFallback(ctx, channel, message, resolved, sent);
           return {
             success: true,
             data: {
@@ -138,18 +137,20 @@ async function registerFallback(
   ctx: ToolContext,
   channel: FallbackChannel,
   message: string,
-  contextBridgeRaw: unknown,
   resolved: { identifier: string; contactId?: string },
   sent: OutboundSendResult,
 ): Promise<void> {
   if (sent.deferredToDigest) return;
-  await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
+  // No context_bridge input: the fallback gets the minimal entry with the channel's
+  // default TTL, and a task-wake turn still binds the principal's reply to its task
+  // (boundTask). No task_outreach row either: recordSendOutreach leaves out the
+  // principal's own addresses, and this send only ever reaches the principal.
+  await registerOutboundContext(ctx.outboundContext, undefined, {
     channelId: channel,
     content: sent.sentContent ?? message,
     agentId: ctx.agentId ?? 'coordinator',
     log: ctx.log,
     boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
     recipientContactIds: resolved.contactId ? [resolved.contactId] : [],
-    outreach: { turn: ctx, via: channel, addresses: [resolved.identifier] },
   });
 }

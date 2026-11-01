@@ -174,7 +174,7 @@ describe('web-send', () => {
     expect(note).toContain('Standing preferences were not applied. Skipped sms, slack, email because they are not configured.');
   });
 
-  it('registers the given context bridge for a delivered fallback, and declares the input', async () => {
+  it('registers a delivered fallback with the channel default TTL, and takes no context_bridge', async () => {
     const register = vi.fn(async (_entry: unknown) => undefined);
     const send = vi.fn(async (request: { channel: string }) => {
       if (request.channel === 'web') {
@@ -183,7 +183,8 @@ describe('web-send', () => {
       return { success: true, sentContent: 'The board moved to Thursday.' };
     });
     const base = ctx(send);
-    const outboundContext = { register, explicitExpiryHours: 6, defaultExpiryHoursFor: () => 6 };
+    const outboundContext = { register, explicitExpiryHours: 6, defaultExpiryHoursFor: () => 24 };
+    // A bridge the model passes anyway is not read: the manifest does not offer one.
     const bridge = JSON.stringify({ agent_id: 'coordinator', expected_reply: 'yes or no', expires_in_hours: 48 });
     const result = await handler.execute({
       ...base,
@@ -192,8 +193,15 @@ describe('web-send', () => {
     } as unknown as ToolContext);
     expect(result.success).toBe(true);
     expect(register).toHaveBeenCalledOnce();
-    expect(JSON.stringify(register.mock.calls[0]![0])).toContain('yes or no');
-    expect(manifest.inputs).toHaveProperty('context_bridge');
+    expect(register.mock.calls[0]![0]).toEqual({
+      channelId: 'signal',
+      agentId: 'coordinator',
+      content: 'The board moved to Thursday.',
+      expiresInHours: 24,
+      ttlSource: 'channel-default',
+      recipientContactIds: ['c1'],
+    });
+    expect(manifest.inputs).not.toHaveProperty('context_bridge');
   });
 
   it('declares each output once', () => {
