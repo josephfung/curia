@@ -95,6 +95,12 @@ async function cacheFirstAsset(request) {
   if (hit) return hit;
   const fresh = await fetch(request);
   const type = fresh.headers.get('content-type') ?? '';
-  if (fresh.ok && !type.includes('text/html')) await cache.put(request, fresh.clone());
+  if (fresh.ok && !type.includes('text/html')) {
+    try {
+      await cache.put(request, fresh.clone());
+    } catch {
+      // Quota exceeded, or an uncacheable 206. Serve the fetched response uncached.
+    }
+  }
   return fresh;
 }

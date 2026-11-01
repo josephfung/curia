@@ -17,7 +17,10 @@ interface FetchEvent {
   waitUntil: (value: Promise<unknown>) => void;
 }
 
-function loadWorker(fetchImpl: (input: unknown) => Promise<Response>) {
+function loadWorker(
+  fetchImpl: (input: unknown) => Promise<Response>,
+  options?: { failPut?: boolean },
+) {
   const listeners = new Map<string, (event: FetchEvent) => void>();
   const stores = new Map<string, Map<string, Response>>();
   function pathOf(request: Request | string): string {
@@ -37,6 +40,7 @@ function loadWorker(fetchImpl: (input: unknown) => Promise<Response>) {
           return bucket.get(pathOf(request));
         },
         async put(request: Request | string, response: Response) {
+          if (options?.failPut) throw new Error('quota');
           bucket.set(pathOf(request), response);
         },
         async addAll(urls: string[]) {
@@ -150,6 +154,19 @@ describe('console service worker', () => {
     await dispatch(scriptWorker.listeners, script);
     await dispatch(scriptWorker.listeners, script);
     expect(scriptFetches).toBe(1);
+  });
+
+  it('returns the fetched asset when the cache write fails', async () => {
+    const { listeners } = loadWorker(async () => {
+      return new Response('var x = 1;', { status: 200, headers: { 'content-type': 'text/javascript' } });
+    }, { failPut: true });
+    const response = await dispatch(listeners, {
+      method: 'GET',
+      url: `${ORIGIN}/assets/app.js`,
+      mode: 'same-origin',
+    });
+    expect(response?.status).toBe(200);
+    expect(await response?.text()).toBe('var x = 1;');
   });
 
   it('drops caches from older builds on activate', async () => {

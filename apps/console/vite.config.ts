@@ -1,9 +1,9 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react-oxc';
 import { createRequire } from 'node:module';
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { bundleBuildId } from './vite-build-id.js';
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json') as { version: string };
 
@@ -14,12 +14,6 @@ function stampServiceWorkerSource(source: string, buildId: string): string {
     throw new Error('service worker is missing __BUILD_ID__');
   }
   return source.replaceAll('__BUILD_ID__', buildId);
-}
-
-/** Stable across identical builds. Chunk names already include their content hashes. */
-function bundleBuildId(bundle: Record<string, unknown>, workerSource: string): string {
-  const names = Object.keys(bundle).sort().join('\n');
-  return createHash('sha256').update(names).update('\0').update(workerSource).digest('hex').slice(0, 16);
 }
 
 function stampServiceWorker(): Plugin {
