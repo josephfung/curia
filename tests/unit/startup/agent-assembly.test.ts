@@ -348,8 +348,10 @@ describe('resolveSystemPromptSources', () => {
         return Reflect.get(target, prop, receiver);
       },
     });
+    // A send skill is what makes the builder read principalReach. Without one the
+    // key stays unread and the list looks longer than the proxy observed.
     for (const config of [coordinatorYaml(), specialistYaml({ name: 'ceo-inbox' })]) {
-      resolveSystemPromptSources(config, 'body', tracked);
+      resolveSystemPromptSources(config, 'body', tracked, ['email-send']);
     }
     expect([...read].sort()).toEqual([...SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS].sort());
   });
