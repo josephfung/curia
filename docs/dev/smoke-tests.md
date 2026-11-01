@@ -217,7 +217,7 @@ A stub is still the answer for one call. For the tools below, the harness also r
 | Write | Later read |
 |---|---|
 | `calendar-create-event`, `calendar-update-event`, `calendar-delete-event` | `calendar-list-events` includes the event, with edits applied and deletes removed |
-| `scheduler-create`, `scheduler-update`, `scheduler-cancel` | `scheduler-list` includes the job (id, cron, timezone, task, next run). An edit merges the fields it set and moves `nextRunAt`. A cancel marks the job `cancelled` |
+| `scheduler-create`, `scheduler-update`, `scheduler-cancel` | `scheduler-list` includes the job (id, cron, timezone, task, next run). An edit merges the fields it set and moves `nextRunAt`. A cancel marks the job `cancelled`. `scheduler-get` of a job the case created or listed answers from the same writes, with the full task when a create or `task_payload` edit supplied it; a stub whose match names `job_id` answers instead, with the case's writes replayed onto it |
 | `task-create`, `task-update`, `task-complete` | `task-list` includes the task, with edits applied and a completion marked `done` |
 | `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`, `ceo-inbox-draft-edit` | `ceo-inbox-read` of that `draft_id` returns the draft, including later edits, and does not run the real tool |
 

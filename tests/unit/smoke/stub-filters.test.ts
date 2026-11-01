@@ -2,7 +2,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { describe, expect, it } from 'vitest';
 import { toLocalIso } from '../../../src/time/timestamp.js';
-import { CaseToolState } from '../../shared/tool-state.js';
+import { CaseToolState, recordedJobRead } from '../../shared/tool-state.js';
 import { fillInputPlaceholders, matchesMailQuery, shapeStubResult } from '../../smoke/stub-filters.js';
 
 /** The next fire `scheduler-list` would show: cron in the job's zone, local ISO. */
@@ -274,6 +274,57 @@ describe('SchedulerState', () => {
   it('keeps nothing without a state', () => {
     shapeStubResult('scheduler-create', created, { task: 'Scan', cron_expr: '0 9 * * 1-5' });
     expect(shapeStubResult('scheduler-list', empty, {})).toEqual(empty);
+  });
+
+  describe('scheduler-get (#2399)', () => {
+    const longTask = `Scan investor mail each weekday. ${'Flag anything urgent. '.repeat(10)}End with the PERIWINKLE note.`;
+    type Got = { job: { id: string; task: string | null; taskPayload: Record<string, unknown>; cronExpr: string; status: string } };
+
+    it('reads a job the case created in full, and follows a later edit', () => {
+      const state = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5', timezone: 'America/Toronto' }, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got;
+      expect(got.job).toEqual(expect.objectContaining({ id: JOB_ID, task: longTask, taskPayload: { task: longTask }, cronExpr: '0 9 * * 1-5' }));
+
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', cron_expr: '0 10 * * 1-5', task_payload: { task: `${longTask} Also check the deck.` } }, state);
+      const edited = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got;
+      expect(edited.job.task).toBe(`${longTask} Also check the deck.`);
+      expect(edited.job.cronExpr).toBe('0 10 * * 1-5');
+    });
+
+    it('reads a listed job, with no task when the list only had a cut preview', () => {
+      const state = new CaseToolState();
+      const withPreview = { ...listed, jobs: [{ ...listed.jobs[0]!, taskPreview: 'Scan investor mail…' }] };
+      shapeStubResult('scheduler-list', withPreview, {}, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got;
+      expect(got.job).toEqual(expect.objectContaining({ id: JOB_ID, task: null, taskPayload: {} }));
+
+      shapeStubResult('scheduler-cancel', { cancelled: true, jobId: JOB_ID }, { job_id: JOB_ID }, state);
+      expect((recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got).job.status).toBe('cancelled');
+    });
+
+    it('leaves unknown ids, and stubs that name job_id, to the stub', () => {
+      const state = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5' }, state);
+      expect(recordedJobRead('scheduler-get', { job_id: 'aaaaaaaa-0000-4000-8000-000000000009' }, state, {})).toBeUndefined();
+      expect(recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, { job_id: JOB_ID })).toBeUndefined();
+      expect(recordedJobRead('scheduler-list', { job_id: JOB_ID }, state, {})).toBeUndefined();
+    });
+
+    it('replays an edit onto a stubbed scheduler-get', () => {
+      const state = new CaseToolState();
+      const stubbed = {
+        job: { ...listed.jobs[0]!, task: longTask, taskPayload: { task: longTask } },
+        truncatedFields: [],
+        displayTimezone: 'America/Toronto',
+      };
+      expect(shapeStubResult('scheduler-get', stubbed, { job_id: JOB_ID }, state)).toEqual(stubbed);
+
+      const reworded = `${longTask} Also check the deck.`;
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', task_payload: { task: reworded } }, state);
+      const after = shapeStubResult('scheduler-get', stubbed, { job_id: JOB_ID }, state) as Got;
+      expect(after.job).toEqual(expect.objectContaining({ task: reworded, taskPayload: { task: reworded }, cronExpr: '0 9 * * 1-5' }));
+    });
   });
 });
 

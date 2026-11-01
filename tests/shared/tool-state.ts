@@ -201,14 +201,19 @@ function freshId(preferred: string | undefined, taken: ReadonlySet<string>, pref
 }
 
 /**
- * Scheduler writes one case has made, replayed onto later scheduler-list results.
- * A cancel sets status to `cancelled` (the real tool soft-deletes; an unfiltered list
- * still returns the row). The first create keeps the id the stub returned, so a later
- * turn can list that same id; a repeated id is minted a new one.
+ * Scheduler writes one case has made, replayed onto later scheduler-list and
+ * scheduler-get results. A cancel sets status to `cancelled` (the real tool
+ * soft-deletes; an unfiltered list still returns the row). The first create keeps the
+ * id the stub returned, so a later turn can list that same id; a repeated id is minted
+ * a new one.
  */
 export class SchedulerState {
   private created: Json[] = [];
   private updates = new Map<string, Json>();
+  /** Each job's full task payload, from its create or its latest task_payload edit. */
+  private payloads = new Map<string, Json>();
+  /** Rows a scheduler-list in this case returned, so scheduler-get can read them (#2399). */
+  private listed = new Map<string, Json>();
 
   private dirty(): boolean {
     return this.created.length > 0 || this.updates.size > 0;
@@ -225,6 +230,7 @@ export class SchedulerState {
     const taken = new Set(this.created.map(job => String(job['id'])));
     const id = freshId(str(data['jobId']), taken, 'job-created', this.created.length + 1);
     const task = typeof input['task'] === 'string' ? input['task'] : undefined;
+    if (task !== undefined) this.payloads.set(id, { task });
     const cronExpr = str(input['cron_expr']) ?? null;
     const runAt = str(input['run_at']) ?? null;
     const timezone = str(input['timezone']) ?? null;
@@ -266,7 +272,10 @@ export class SchedulerState {
       const runAt = str(input['run_at']);
       if (runAt) changes['runAt'] = runAt;
       const payload = input['task_payload'];
-      if (isRecord(payload) && typeof payload['task'] === 'string') changes['taskPreview'] = taskPreview(payload['task']);
+      if (isRecord(payload)) {
+        this.payloads.set(id, payload);
+        if (typeof payload['task'] === 'string') changes['taskPreview'] = taskPreview(payload['task']);
+      }
     }
     if (Object.keys(changes).length === 0) return data;
     this.updates.set(id, { ...(this.updates.get(id) ?? {}), ...changes });
@@ -317,6 +326,70 @@ export class SchedulerState {
     const truncated = jobs.length > limit;
     const page = jobs.slice(0, limit);
     return { ...data, jobs: page, count: page.length, truncated, limit };
+  }
+
+  /** Remember the rows a scheduler-list returned, for a later scheduler-get. */
+  rememberListed(data: Json): void {
+    if (!Array.isArray(data['jobs'])) return;
+    for (const job of data['jobs']) {
+      if (isRecord(job) && typeof job['id'] === 'string' && job['id'] !== '') this.listed.set(job['id'], job);
+    }
+  }
+
+  /**
+   * scheduler-get of a job this case created or listed, as the real tool would answer
+   * after the case's writes. Undefined for any other id, so the stub answers it.
+   *
+   * The task comes from the create or the latest task_payload edit. A listed row
+   * carries only a preview; when that preview is cut (ends in an ellipsis) the full
+   * text is unknown, so `task` is null and `taskPayload` empty. A case that needs the
+   * full text of a seeded job stubs scheduler-get with a `job_id` match.
+   */
+  read(input: Json): Json | undefined {
+    const id = str(input['job_id']);
+    if (!id) return undefined;
+    const listedRow = this.listed.get(id);
+    const createdRow = [...this.created].reverse().find(job => job['id'] === id);
+    if (!listedRow && !createdRow) return undefined;
+    // A listed row already holds the create and every write up to that list.
+    const base: Json = listedRow ?? { ...createdRow };
+    const row = this.refreshNextRun({ ...base, ...(this.updates.get(id) ?? {}) }, pinnedNextRuns([base]));
+    const job = isRecord(row) ? row : base;
+
+    let taskPayload = this.payloads.get(id);
+    if (!taskPayload) {
+      const preview = job['taskPreview'];
+      taskPayload = typeof preview === 'string' && !preview.endsWith('…') ? { task: preview } : {};
+    }
+    const tz = typeof job['timezone'] === 'string' && job['timezone'] !== '' ? job['timezone'] : 'UTC';
+    return {
+      job: {
+        lastRunSummary: null,
+        lastRunContext: null,
+        progress: null,
+        ...job,
+        task: typeof taskPayload['task'] === 'string' ? taskPayload['task'] : null,
+        taskPayload,
+      },
+      truncatedFields: [],
+      displayTimezone: tz,
+    };
+  }
+
+  /** A stubbed scheduler-get result as it stands after this case's writes. */
+  replayOntoGet(data: Json, input: Json): Json {
+    const job = data['job'];
+    const id = str(input['job_id']);
+    if (!isRecord(job) || !id || job['id'] !== id) return data;
+    const update = this.updates.get(id);
+    const payload = this.payloads.get(id);
+    if (!update && !payload) return data;
+    let next: Json = { ...job, ...(update ?? {}) };
+    if (payload) {
+      next = { ...next, taskPayload: payload, task: typeof payload['task'] === 'string' ? payload['task'] : null };
+    }
+    const refreshed = this.refreshNextRun(next, pinnedNextRuns([job]));
+    return { ...data, job: isRecord(refreshed) ? refreshed : next };
   }
 
   /**
@@ -592,9 +665,28 @@ export function applyCaseWrites(toolName: string, data: Json, input: Json, state
   if (SCHEDULER_WRITES.has(toolName)) shaped = state.scheduler.recordWrite(toolName, shaped, input);
   if (DRAFT_WRITES.has(toolName)) shaped = state.drafts.recordWrite(toolName, shaped, input);
   if (TASK_WRITES.has(toolName)) shaped = state.tasks.recordWrite(toolName, shaped, input);
-  if (toolName === 'scheduler-list') shaped = state.scheduler.replayOnto(shaped, input);
+  if (toolName === 'scheduler-list') {
+    shaped = state.scheduler.replayOnto(shaped, input);
+    state.scheduler.rememberListed(shaped);
+  }
+  if (toolName === 'scheduler-get') shaped = state.scheduler.replayOntoGet(shaped, input);
   if (toolName === 'task-list') shaped = state.tasks.replayOnto(shaped, input);
   return shaped;
+}
+
+/**
+ * A `scheduler-get` of a job this case created or listed, or undefined (#2399).
+ * A stub whose match names job_id is scripting that read, so it wins.
+ */
+export function recordedJobRead(
+  toolName: string,
+  input: Json,
+  state: CaseToolState,
+  stubMatch: Record<string, unknown> | undefined,
+): Json | undefined {
+  if (toolName !== 'scheduler-get') return undefined;
+  if (stubMatch !== undefined && Object.hasOwn(stubMatch, 'job_id')) return undefined;
+  return state.scheduler.read(input);
 }
 
 /**

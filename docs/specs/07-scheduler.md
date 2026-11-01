@@ -310,7 +310,8 @@ Users can manage jobs directly:
 Four skills available to agents:
 
 - **`scheduler-create`** — create a cron or one-shot job, optionally with a linked persistent task (`intent_anchor`)
-- **`scheduler-list`** — list jobs with optional status/agent_id filters
+- **`scheduler-list`** — list jobs with optional status/agent_id filters. Bounded and trimmed (#1487): `taskPreview` is the task's first 160 characters
+- **`scheduler-get`** — read one job in full: the whole `taskPayload` (and `task` when it is a string), the linked task's fields, and the last run's summary, context and outcome, with local-timezone timestamps. Run-record fields and `progress` are capped as a backstop and named in `truncatedFields`; the task text is never cut. An unknown id is `success: false` pointing at `scheduler-list`. Read it before a `scheduler-update` edit that replaces `task_payload` (#2399)
 - **`scheduler-cancel`** — cancel a job by ID
 - **`scheduler-report`** — write prior-run context at the end of a run. Input: `{ summary, context?, job_id? }`. On a scheduled run, `job_id` is optional and derived from `conversationId` (`scheduler:<uuid>:<runId>`); an explicit `job_id` that disagrees with the run is ignored (derived wins) so a hallucinated UUID cannot cost the report. Outside a scheduled run, pass `job_id` explicitly. Action risk: `none`. The scheduler writes `last_run_outcome` itself; this skill writes `last_run_summary` and `last_run_context`. It does **not** close a linked task — that is `task-complete` / `task-update` (#1951). After the agent finishes, `completeJobRun` may merge `failedSkills` into the same column (#1830). Bare job UUIDs are not injected into the system prompt or the fired task content — they were an attractive nuisance for bullpen `thread_id` (#1828).
 

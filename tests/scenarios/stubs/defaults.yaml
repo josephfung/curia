@@ -38,6 +38,11 @@ doc-list:
 scheduler-list:
   - match: {}
     return: { jobs: [], count: 0, truncated: false, limit: 50, displayTimezone: America/Toronto }
+# A job the case created or listed answers from the case's own writes (#2399); any
+# other id is not found, as in production. A case seeds full task text with a job_id match.
+scheduler-get:
+  - match: {}
+    error: 'No scheduled job with that id. The id may be wrong: call scheduler-list for valid job ids.'
 task-list:
   - match: {}
     return: { tasks: [], count: 0, displayTimezone: America/Toronto }

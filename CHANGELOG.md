@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`scheduler-get`** — reads one scheduled job in full, so routines can be quoted verbatim and edited safely. (#2399)
 - **Voice audio telemetry** — per-turn last-word gap, per-chunk TTS timing and starvation, per-call event-loop delay. (#2379)
 - **Recurring calendar events** — create, edit and delete a series or one occurrence; standing meetings become one event. (#2385)
 - **`operator.session`** — **public API:** audit event for login, logout, revoke, and signing out other devices. (#2341)

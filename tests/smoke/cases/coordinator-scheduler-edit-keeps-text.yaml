@@ -1,0 +1,86 @@
+name: Coordinator rewording a routine keeps the text it was not asked to change
+description: >
+  A weekly agenda routine exists whose task text runs well past scheduler-list's
+  160-character taskPreview. The principal asks to add one thing to it. scheduler-update
+  with task_payload replaces the whole task, so the coordinator must read the job with
+  scheduler-get first and build the new task from the full current text, keeping the
+  "Lantern Watch" section that only appears after the preview is cut. See issue #2399.
+tags:
+  - scheduling
+  - scheduler-get
+  - scheduler-update
+# The pass condition is the order of two calls and the edit's task_payload.
+judge_tool_calls: true
+
+# The job is seeded through stubs, not a real row: a real row would be fired by any
+# scheduler that later comes up on this database. scheduler-list shows the preview,
+# exactly as the real tool cuts it; scheduler-get holds the whole task. The office's
+# scheduler-update answers the edit, and a later scheduler-get shows it (#2074).
+tool_stubs:
+  scheduler-list:
+    - match: {}
+      return:
+        jobs:
+          - id: 5a7e3c19-2d4b-4f60-9e1a-8c3b7d2f6a01
+            agentId: coordinator
+            status: pending
+            cronExpr: "0 18 * * 0"
+            timezone: "{{timezone}}"
+            taskTitle: null
+            taskPreview: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or …"
+            createdBy: coordinator
+        count: 1
+        truncated: false
+        limit: 50
+        displayTimezone: "{{timezone}}"
+  scheduler-get:
+    - match: { job_id: 5a7e3c19-2d4b-4f60-9e1a-8c3b7d2f6a01 }
+      return:
+        job:
+          id: 5a7e3c19-2d4b-4f60-9e1a-8c3b7d2f6a01
+          agentId: coordinator
+          status: pending
+          cronExpr: "0 18 * * 0"
+          timezone: "{{timezone}}"
+          taskTitle: null
+          taskPreview: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or …"
+          createdBy: coordinator
+          task: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or back-to-back blocks with no travel time. Then add a closing section titled 'Lantern Watch' that lists the three decisions the principal must make before Friday, and email the whole agenda to the principal."
+          taskPayload:
+            task: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or back-to-back blocks with no travel time. Then add a closing section titled 'Lantern Watch' that lists the three decisions the principal must make before Friday, and email the whole agenda to the principal."
+          lastRunSummary: null
+          lastRunContext: null
+          progress: null
+        truncatedFields: []
+        displayTimezone: "{{timezone}}"
+
+turns:
+  - role: user
+    content: |
+      For my weekly agenda routine, also have it include a short section on any
+      travel I have coming up that week.
+
+expected_behaviors:
+  - id: reads_before_rewriting
+    description: >
+      The coordinator calls scheduler-get on the weekly agenda job (id
+      5a7e3c19-2d4b-4f60-9e1a-8c3b7d2f6a01) before it calls scheduler-update on it.
+    weight: critical
+  - id: edit_keeps_untouched_text
+    description: >
+      The coordinator edits the existing job with scheduler-update (action edit), and the
+      task_payload it passes still contains the original instructions that came after the
+      preview cut: the closing "Lantern Watch" section listing the three decisions due
+      before Friday, and emailing the agenda to the principal. It also adds the requested
+      travel section.
+    weight: critical
+  - id: no_duplicate_job
+    description: >
+      The coordinator does not call scheduler-create to stand up a second routine.
+    weight: important
+
+failure_modes:
+  - Calls scheduler-update with a task_payload written from the 160-character preview,
+    dropping the "Lantern Watch" section and the email step.
+  - Calls scheduler-update without reading the job with scheduler-get first.
+  - Creates a second agenda routine instead of editing the existing one.

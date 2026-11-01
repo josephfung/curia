@@ -37,7 +37,7 @@ import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolRegistry } from '../../src/skills/registry.js';
 import type { ToolResult } from '../../src/skills/types.js';
 import { newLiveSearchTally, recordLiveCall, type LiveSearchTally } from '../shared/live-search.js';
-import { applyCaseWrites, recordedDraftRead, CaseToolState } from '../shared/tool-state.js';
+import { applyCaseWrites, recordedDraftRead, recordedJobRead, CaseToolState } from '../shared/tool-state.js';
 import { emailAttachmentRefusal } from './attachment-guard.js';
 import { recipientReferenceRefusal } from '../shared/recipient-guard.js';
 import { matchToolStub } from './stub-matcher.js';
@@ -310,13 +310,14 @@ export function createStubController(
     // decide, and the recording transports keep what passes.
     const realSend = run?.throughGateway === true && THROUGH_GATEWAY_TOOLS.has(toolName);
     const stub = stubs && !realSend ? matchToolStub(toolName, input, stubs, options?.agentId) : undefined;
-    // Same write-then-read replay as smoke (#2074). A stub that names draft_id
-    // still answers that ceo-inbox-read itself.
+    // Same write-then-read replay as smoke (#2074, #2399). A stub that names draft_id
+    // (or job_id) still answers that ceo-inbox-read (or scheduler-get) itself.
     if (run && !realSend) {
-      const draft = recordedDraftRead(toolName, input, run.tools, stub?.match);
-      if (draft) {
+      const recorded = recordedDraftRead(toolName, input, run.tools, stub?.match)
+        ?? recordedJobRead(toolName, input, run.tools, stub?.match);
+      if (recorded) {
         await note('stubbed');
-        return { success: true, data: draft };
+        return { success: true, data: recorded };
       }
     }
     if (stub) {
