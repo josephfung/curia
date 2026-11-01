@@ -54,15 +54,17 @@
 // the values it returns stay inside createTestModeStack: the ExecutionLayer never sees
 // the vault, and the returned `config` carries no vault value.
 //
-// Known differences from production (only the last two change the system prompt):
+// Known differences from production (only the last three change the system prompt):
 //   - The tools above fail closed instead of running.
 //   - MCP tools come from a snapshot and return canned results; a configured server
 //     without a snapshot is absent (listed in `warnings`).
 //   - No Dispatcher: the caller wires its own (the smoke harness does).
 //   - Offline mode without SECRET_ENCRYPTION_KEY: no Signal or SMS number, and email
 //     self-addresses come from email_accounts without the vault grant check.
-//   - Your Contact Details shows the Signal and SMS numbers whenever they resolve;
-//     production also drops a number whose channel is disabled in the registry.
+//   - Your Contact Details shows the Signal and SMS numbers whenever they resolve, and
+//     Reaching the principal names a channel whenever its credentials resolve;
+//     production also drops a channel that is disabled in the registry.
+//   - Reaching the principal never names the phone app: there is no push service.
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as path from 'node:path';
@@ -110,7 +112,7 @@ export type TierReasoningOverride = Partial<Record<Tier, ReasoningSetting>>;
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import type { LLMProvider } from '../agents/llm/provider.js';
 import { buildBaseSystemPrompt, formatTaskTailBlocks } from '../agents/system-prompt.js';
-import { reachChannelsFor, type ReachChannel } from '../agents/principal-reach.js';
+import { configuredReachChannels, reachChannelsFor, type ReachChannel } from '../agents/principal-reach.js';
 import { AutonomyService, type AutonomyConfig } from '../autonomy/autonomy-service.js';
 import type { AutonomyGating } from '../autonomy/band-policy.js';
 import { resolveBypassLadder } from '../autonomy/effective-standing.js';
@@ -494,6 +496,12 @@ export interface TestModeStack {
   /** The principal's verified, active identities as read at boot (production's snapshot). */
   principalIdentities: readonly ChannelIdentity[];
   /**
+   * The deployment-wide channels that reach the principal, as production computes them
+   * (configuredReachChannels), without the phone app: this stack has no push service.
+   * Each agent's block narrows these to its send tools.
+   */
+  principalReachChannels(): ReachChannel[];
+  /**
    * What production's Dispatcher scores senders with (#2227): channel trust policies
    * (config/channel-trust.yaml), `security.trust_score` weights, and the confidence pipeline.
    * A caller that builds its own Dispatcher passes these so the coordinator sees the same
@@ -624,6 +632,23 @@ export function agentLayerAutonomy(service: AutonomyService, followsFixtureGatin
       return tierGated;
     },
   });
+}
+
+/**
+ * Which outbound clients src/index.ts would build from these credentials (its
+ * construction conditions). `email` is only the Nylas key: production also needs a
+ * resolved mailbox, which the caller adds. The channel registry gate is not applied
+ * (see the header).
+ */
+export function reachClientsFrom(
+  c: Pick<Config, 'signalSocketPath' | 'signalPhoneNumber' | 'smsApiKey' | 'smsFromNumber' | 'smsWebhookPublicKey' | 'slackBotToken' | 'slackAppToken' | 'nylasApiKey'>,
+): { signal: boolean; sms: boolean; slack: boolean; email: boolean } {
+  return {
+    signal: !!(c.signalSocketPath && c.signalPhoneNumber),
+    sms: !!(c.smsApiKey && c.smsFromNumber && c.smsWebhookPublicKey),
+    slack: !!(c.slackBotToken && c.slackAppToken),
+    email: !!c.nylasApiKey,
+  };
 }
 
 /** A provider that refuses to talk to anyone. Used for llm: 'offline'. */
@@ -1061,6 +1086,9 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
   let embeddingApiKey = config.embeddingApiKey;
   let signalPhoneNumber = config.signalPhoneNumber;
   let smsFromNumber = config.smsFromNumber;
+  // Which outbound clients production would build from these credentials, for the reach
+  // block. Booleans only: no client is built and the credentials are not kept.
+  let reachClients = reachClientsFrom(config);
   const llmMode = options.llm ?? 'live';
   const warnings: string[] = [];
   const configDir = options.configDir ?? path.join(REPO_ROOT, 'config');
@@ -1130,6 +1158,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       embeddingApiKey = resolved.embeddingApiKey;
       signalPhoneNumber = resolved.signalPhoneNumber;
       smsFromNumber = resolved.smsFromNumber;
+      reachClients = reachClientsFrom(resolved);
       if (resolved.nylasApiKey) {
         try {
           calendarConfigured = (await resolvePrincipalCalendarGrant(vault)) !== undefined;
@@ -1264,6 +1293,12 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       : (await emailAccountsRepo.list()).filter(a => a.enabled)
     ).map(a => ({ name: a.name, selfEmail: a.selfEmail }));
     const selfEmails = emailAccounts.map(a => a.selfEmail);
+    // Read per call: a multi-turn case can change the principal's identities.
+    const principalReachChannels = (): ReachChannel[] => configuredReachChannels({
+      clients: { ...reachClients, email: reachClients.email && selfEmails.length > 0 },
+      principalIdentities,
+      principalPrimaryEmail: principalPrimaryEmail.current,
+    });
 
     // What agents get: reads only (see header). The real services stay on the
     // returned stack so tests can seed state through them.
@@ -1504,14 +1539,12 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       conversationEntities,
       // No taskRepo or workingDocsRepo — see header.
       turnLanes,
-      // Same reach block production injects. This stack has no push service, so
-      // the phone is omitted. Standing preferences are not parsed.
+      // Production's reach rule (configuredReachChannels): a client production would
+      // build and a verified principal identity on the channel. This stack has no push
+      // service, so the phone is omitted, and it does not apply the channel registry
+      // gate (see the header). Standing preferences are not parsed.
       principalReach: (tools) => {
-        const configured = new Set<ReachChannel>();
-        if (signalPhoneNumber) configured.add('signal');
-        if (smsFromNumber) configured.add('sms');
-        if (selfEmails.length > 0) configured.add('email');
-        const channels = reachChannelsFor(tools, configured);
+        const channels = reachChannelsFor(tools, new Set(principalReachChannels()));
         return channels.length === 0 ? null : { channels };
       },
     });
@@ -1566,6 +1599,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       agentContactId,
       principalContactId: principalContact?.id,
       principalIdentities,
+      principalReachChannels,
       trustScoring: {
         channelPolicies: authConfig.channelPolicies,
         // As src/index.ts reads security.trust_score.

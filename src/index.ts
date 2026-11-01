@@ -26,7 +26,7 @@ import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { WebPushService } from './channels/web/push-service.js';
 import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
-import { reachChannelsFor, type ReachChannel } from './agents/principal-reach.js';
+import { configuredReachChannels, reachChannelsFor } from './agents/principal-reach.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
 import { resolveSystemSnapshot } from './channels/http/routes/system.js';
 import { createPool } from './db/connection.js';
@@ -2856,15 +2856,18 @@ async function main(): Promise<void> {
     taskRepo,
     turnLanes,
     principalReach: async (tools) => {
-      const identified = new Set(principalIdentities.map((identity) => identity.channel));
-      if (principalPrimaryEmail.current) identified.add('email');
-      const configured = new Set<ReachChannel>();
-      if (registryGatedOutbound.signalClient && registryGatedOutbound.signalPhoneNumber && identified.has('signal')) configured.add('signal');
-      if (registryGatedOutbound.smsClient && identified.has('sms')) configured.add('sms');
-      if (registryGatedOutbound.slackClient && identified.has('slack')) configured.add('slack');
-      if (registryGatedOutbound.nylasClients && registryGatedOutbound.nylasClients.size > 0 && identified.has('email')) configured.add('email');
-      if (await webPush.reachableNow()) configured.add('web');
-      const channels = reachChannelsFor(tools, configured);
+      const configured = configuredReachChannels({
+        clients: {
+          signal: !!(registryGatedOutbound.signalClient && registryGatedOutbound.signalPhoneNumber),
+          sms: !!registryGatedOutbound.smsClient,
+          slack: !!registryGatedOutbound.slackClient,
+          email: (registryGatedOutbound.nylasClients?.size ?? 0) > 0,
+        },
+        principalIdentities,
+        principalPrimaryEmail: principalPrimaryEmail.current,
+        webReachable: await webPush.reachableNow(),
+      });
+      const channels = reachChannelsFor(tools, new Set(configured));
       if (channels.length === 0) return null;
       return { channels };
     },
