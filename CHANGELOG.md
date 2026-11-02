@@ -123,6 +123,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Chat composer** — Send is icon-only on phones and lines up exactly with the message box. (#2341)
 - **Node 26** — runtime, image and `engines` move to the new Active LTS; corepack now installed hash-pinned. (#2402)
 - **`operator.session`** — **public API:** new `invite` and `cancel_invite` actions, and an `invitation` flag on pair. (#2412)
 - **CI bundle import check** — CI builds the backend and fails on imports Node rejects at startup. (#2410)

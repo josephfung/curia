@@ -2255,20 +2255,29 @@ table.records-table tbody tr.active td { background: transparent; }
   padding-top: 8px;
 }
 
-/* Override the global textarea defaults for the composer. */
+/* Override the global textarea defaults for the composer.
+   One line is a fixed 42px whatever the font size: 24px line + 2 × 8px
+   padding + 2 × 1px border. Send is the same 42px, so the two line up top
+   and bottom. A longer message grows the box upward; Send stays on the
+   bottom row. */
 .chat-composer textarea {
   flex: 1;
   min-width: 0; /* prevent flex min-content from clipping Send (#1571) */
   width: auto;
   resize: none;
+  height: 42px;
   min-height: 42px;
   max-height: 160px;
+  padding: 8px 12px;
+  line-height: 24px;
   font-family: inherit;
   font-size: 13px;
 }
 
 .chat-composer .btn {
   flex-shrink: 0;
+  height: 42px;
+  justify-content: center;
 }
 
 @media (max-width: 768px) {
@@ -2281,6 +2290,21 @@ table.records-table tbody tr.active td { background: transparent; }
 
   .chat-messages {
     scrollbar-gutter: auto;
+  }
+
+  /* Send is just the paper plane on a phone: a 42px square. */
+  .chat-composer .btn {
+    width: 42px;
+    padding: 0;
+  }
+
+  .chat-composer .btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .chat-send-label {
+    display: none;
   }
 }
 
