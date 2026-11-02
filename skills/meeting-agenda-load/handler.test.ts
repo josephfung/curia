@@ -63,6 +63,9 @@ async function parkedRepo(overrides: { status?: string; expiresAt?: string; sche
     async read(path: string): Promise<WorkingDocRow | null> {
       return docs.get(path) ?? null;
     },
+    async listByPrefix(prefix: string): Promise<WorkingDocRow[]> {
+      return [...docs.values()].filter((row) => row.path.startsWith(prefix));
+    },
     async update(path: string, params: { frontmatter?: Record<string, unknown>; expectedVersion: number }): Promise<
       { ok: true; document: WorkingDocRow } | { ok: false; conflict: true; document: WorkingDocRow }
     > {
@@ -182,6 +185,52 @@ describe('meeting-agenda-load', () => {
     ));
     expect(expiredResult.success).toBe(false);
     if (!expiredResult.success) expect(expiredResult.error).toBe('That agenda has expired.');
+  });
+
+  // #2428: the call already held the agenda and kept guessing ids. Asking again
+  // for an agenda this call holds is a success, not a dead end.
+  it('returns the agenda when this call already holds it', async () => {
+    const { repo, agendaId, store } = await parkedRepo();
+    expect((await store.lock(agendaId, 'session-1', NOW)).ok).toBe(true);
+    const result = await new MeetingAgendaLoadHandler().execute(ctx({ agenda_id: agendaId }, repo, 'session-1'));
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { agenda: { agendaId: string } }).agenda.agendaId).toBe(agendaId);
+
+    const other = await new MeetingAgendaLoadHandler().execute(ctx({ agenda_id: agendaId }, repo, 'session-2'));
+    expect(other.success).toBe(false);
+  });
+
+  it('names the open and queued agendas when the id is unknown', async () => {
+    const { repo, agendaId: openId, store } = await parkedRepo();
+    expect((await store.lock(openId, 'session-1', NOW)).ok).toBe(true);
+    const queued = await store.park({
+      title: 'Friday sync',
+      topics: ['Hiring'],
+      context: 'Weekly.',
+      source: 'routine',
+      sensitivity: 'internal',
+      expiresAt: new Date(NOW.getTime() + 24 * 60 * 60 * 1000),
+      role: null,
+      scheduledFor: null,
+    }, NOW);
+    const result = await new MeetingAgendaLoadHandler().execute(ctx(
+      { agenda_id: 'weekly-kickoff-2026-11-02' },
+      repo,
+      'session-1',
+    ));
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain('I cannot find that agenda.');
+    expect(result.error).toContain('Already open on this call: "Q3 review"');
+    expect(result.error).toContain(`Queued: "Friday sync" (id ${queued.agendaId})`);
+  });
+
+  it('says so when nothing is open or queued', async () => {
+    const { repo } = await parkedRepo({ status: 'done' });
+    const result = await new MeetingAgendaLoadHandler().execute(ctx({ agenda_id: 'nope' }, repo, 'session-1'));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('No agenda is open or queued for this call.');
   });
 
   // #2347: the model speaks the tool's own words. The registered name stays.

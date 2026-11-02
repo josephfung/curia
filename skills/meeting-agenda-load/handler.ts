@@ -7,7 +7,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { AgendaStore, agendaSnapshot, type AgendaLockResult } from '../../src/meetings/agenda-store.js';
-import type { AgendaSnapshot } from '../../src/meetings/types.js';
+import type { AgendaDoc, AgendaSnapshot } from '../../src/meetings/types.js';
 import { formatDisplayTimezone, toLocalIso } from '../../src/time/timestamp.js';
 
 function displayIso(iso: string | null, timezone: string | undefined): string | null {
@@ -45,6 +45,21 @@ function spokenLockError(reason: Extract<AgendaLockResult, { ok: false }>['reaso
   }
 }
 
+// The first dry run guessed ids twice and gave up (#2428). A not-found answer
+// names what this call can actually use, so the next call is a real id.
+async function availableAgendas(store: AgendaStore, sessionId: string, now: Date): Promise<string> {
+  const [held, queued] = await Promise.all([store.listHeldBy(sessionId), store.listPending(now)]);
+  if (held.length === 0 && queued.length === 0) return 'No agenda is open or queued for this call.';
+  const parts: string[] = [];
+  if (held.length > 0) {
+    parts.push(`Already open on this call: ${held.map((doc) => `"${doc.title}"`).join(', ')}. It is in front of you; go over it.`);
+  }
+  if (queued.length > 0) {
+    parts.push(`Queued: ${queued.map((doc) => `"${doc.title}" (id ${doc.agendaId})`).join(', ')}.`);
+  }
+  return parts.join(' ');
+}
+
 export class MeetingAgendaLoadHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const sessionId = ctx.taskMetadata?.voiceSessionId;
@@ -58,14 +73,30 @@ export class MeetingAgendaLoadHandler implements ToolHandler {
     if (!agendaId) return { success: false, error: 'agenda_id is required' };
     try {
       const store = new AgendaStore(ctx.workingDocs, ctx.log);
-      const locked = await store.lock(agendaId, sessionId, new Date());
-      if (!locked.ok) return { success: false, error: spokenLockError(locked.reason) };
+      const now = new Date();
+      // Asking again for an agenda this call already holds is not an error (#2428).
+      const current = await store.get(agendaId);
+      const held = current?.status === 'in_call' && current.inCallSession === sessionId ? current : null;
+      let agenda: AgendaDoc;
+      if (held) {
+        agenda = held;
+      } else {
+        const locked = await store.lock(agendaId, sessionId, now);
+        if (!locked.ok) {
+          const error = spokenLockError(locked.reason);
+          return {
+            success: false,
+            error: locked.reason === 'not_found' ? `${error} ${await availableAgendas(store, sessionId, now)}` : error,
+          };
+        }
+        agenda = locked.agenda;
+      }
       const tz = ctx.timezone;
       return {
         success: true,
         data: {
-          agenda: snapshotForCaller(agendaSnapshot(locked.agenda), tz),
-          displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null,
+          agenda: snapshotForCaller(agendaSnapshot(agenda), tz),
+          displayTimezone: tz ? formatDisplayTimezone(tz, now) : null,
         },
       };
     } catch (err) {

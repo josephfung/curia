@@ -56,9 +56,41 @@ function coverageFromFence(fenceBody: string, agendas: AgendaSnapshot[]): Agenda
   if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { coverage?: unknown }).coverage)) {
     return null;
   }
+  return normaliseCoverage((parsed as { coverage: unknown[] }).coverage, agendas);
+}
+
+// A reply cut off by the token cap stops inside the block (#2428). Keep each
+// complete {"topic","coverage"} pair under the agendaId before it; a block with
+// none of them is as good as missing.
+const SALVAGE = /"agendaId"\s*:\s*"([^"\\]*)"|\{\s*"topic"\s*:\s*("(?:[^"\\]|\\.)*")\s*,\s*"coverage"\s*:\s*"([a-z_]+)"\s*\}/g;
+
+function salvageCoverage(fenceBody: string, agendas: AgendaSnapshot[]): AgendaCoverage[] | null {
+  const items: Array<{ agendaId: string; topics: Array<{ topic: string; coverage: string }> }> = [];
+  let found = 0;
+  for (const match of fenceBody.matchAll(SALVAGE)) {
+    if (match[1] !== undefined) {
+      items.push({ agendaId: match[1], topics: [] });
+      continue;
+    }
+    const current = items[items.length - 1];
+    if (!current || match[2] === undefined || match[3] === undefined) continue;
+    let topic: unknown;
+    try {
+      topic = JSON.parse(match[2]);
+    } catch {
+      continue;
+    }
+    if (typeof topic !== 'string') continue;
+    current.topics.push({ topic, coverage: match[3] });
+    found += 1;
+  }
+  return found === 0 ? null : normaliseCoverage(items, agendas);
+}
+
+function normaliseCoverage(items: unknown[], agendas: AgendaSnapshot[]): AgendaCoverage[] {
   const known = new Map(agendas.map((agenda) => [agenda.agendaId, new Set(agenda.topics)]));
   const reported = new Map<string, Map<string, TopicCoverage>>();
-  for (const item of (parsed as { coverage: unknown[] }).coverage) {
+  for (const item of items) {
     if (!item || typeof item !== 'object') continue;
     const agendaId = (item as { agendaId?: unknown }).agendaId;
     if (typeof agendaId !== 'string' || !known.has(agendaId)) continue;
@@ -90,16 +122,29 @@ export function parseMinutesOutput(
 ): { markdown: string; coverage: AgendaCoverage[] | null } {
   const trimmed = raw.trimEnd();
   const match = /```json\s*([\s\S]*?)```\s*$/.exec(trimmed);
-  if (!match) return { markdown: raw.trim(), coverage: null };
-  const markdown = trimmed.slice(0, match.index).trim();
-  return { markdown, coverage: coverageFromFence(match[1] ?? '', agendas) };
+  if (match) {
+    const markdown = trimmed.slice(0, match.index).trim();
+    return { markdown, coverage: coverageFromFence(match[1] ?? '', agendas) };
+  }
+  // An unclosed trailing fence is a reply cut off mid-block: keep it out of the minutes.
+  const open = trimmed.lastIndexOf('```json');
+  if (open === -1 || trimmed.indexOf('```', open + 7) !== -1) return { markdown: raw.trim(), coverage: null };
+  const fenceBody = trimmed.slice(open + 7);
+  return {
+    markdown: trimmed.slice(0, open).trim(),
+    coverage: coverageFromFence(fenceBody, agendas) ?? salvageCoverage(fenceBody, agendas),
+  };
 }
+
+// The standard-tier model reasons even when asked not to; at 8,000 it spent the
+// budget thinking and the reply stopped inside the coverage block (#2428).
+const MINUTES_MAX_TOKENS = 16000;
 
 export async function writeMinutes(
   llm: InfraLlm,
   input: { agendas: AgendaSnapshot[]; transcriptBody: string },
 ): Promise<{ ok: true; markdown: string; coverage: AgendaCoverage[] | null } | { ok: false; error: string }> {
-  const result = await llm.extract(buildMinutesPrompt(input), { tier: 'standard', maxTokens: 8000 });
+  const result = await llm.extract(buildMinutesPrompt(input), { tier: 'standard', maxTokens: MINUTES_MAX_TOKENS });
   if (!result.ok) return { ok: false, error: result.error };
   const parsed = parseMinutesOutput(result.text, input.agendas);
   if (parsed.markdown.trim() === '') return { ok: false, error: 'empty minutes' };

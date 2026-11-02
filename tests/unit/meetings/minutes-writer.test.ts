@@ -59,6 +59,34 @@ describe('minutes writer', () => {
     }]);
   });
 
+  // #2428: the standard-tier model reasoned through the 8,000-token cap and the
+  // reply stopped inside the coverage block. Every topic went back as not_reached
+  // and the half fence was saved into the minutes.
+  it('a cut-off coverage block keeps its complete topics and stays out of the minutes', () => {
+    const raw = [
+      '## Board',
+      'Runway discussed.',
+      '',
+      '```json',
+      `{"coverage":[{"agendaId":"${agenda.agendaId}","topics":[{"topic":"runway","coverage":"partial"},{"topic":"hir`,
+    ].join('\n');
+    expect(parseMinutesOutput(raw, [agenda])).toEqual({
+      markdown: '## Board\nRunway discussed.',
+      coverage: [{
+        agendaId: agenda.agendaId,
+        topics: [
+          { topic: 'runway', coverage: 'partial' },
+          { topic: 'hiring', coverage: 'not_reached' },
+        ],
+      }],
+    });
+  });
+
+  it('a cut-off block with no complete topic gives null coverage', () => {
+    const raw = '## Board\nRunway discussed.\n\n```json\n{"coverage":[{"agendaId":"11111111';
+    expect(parseMinutesOutput(raw, [agenda])).toEqual({ markdown: '## Board\nRunway discussed.', coverage: null });
+  });
+
   it('missing coverage block returns the full text and null coverage', () => {
     const parsed = parseMinutesOutput('## Board\nTalked.', [agenda]);
     expect(parsed.coverage).toBeNull();
@@ -113,7 +141,7 @@ describe('minutes writer', () => {
     expect(prompt).toContain(encodeUntrustedJson([agenda]));
     expect(prompt).toContain(encodeUntrustedJson(transcript));
     expect(prompt).not.toContain('<script>');
-    expect(calls[0]?.[1]).toEqual({ tier: 'standard', maxTokens: 8000 });
+    expect(calls[0]?.[1]).toEqual({ tier: 'standard', maxTokens: 16000 });
   });
 
   it('buildMinutesPrompt names the coverage fence', () => {

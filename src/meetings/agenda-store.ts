@@ -229,6 +229,18 @@ export class AgendaStore {
     return pending;
   }
 
+  /** Agendas this call holds. A wrong id on the load tool is answered with these and `listPending` (#2428). */
+  async listHeldBy(sessionId: string): Promise<AgendaDoc[]> {
+    const rows = await this.repo.listByPrefix(AGENDA_PREFIX);
+    const held: AgendaDoc[] = [];
+    for (const row of rows) {
+      if (!row.path.startsWith(AGENDA_PREFIX)) continue;
+      const doc = parseAgendaDoc(row);
+      if (doc && doc.status === 'in_call' && doc.inCallSession === sessionId) held.push(doc);
+    }
+    return held;
+  }
+
   /** Archive expired pending agendas. An `in_call` agenda is never culled. */
   async cullExpired(now: Date): Promise<number> {
     const rows = await this.repo.listByPrefix(AGENDA_PREFIX);

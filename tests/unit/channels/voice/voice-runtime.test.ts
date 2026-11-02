@@ -3073,6 +3073,33 @@ describe('VoiceRuntime agendas (#2322)', () => {
     expect(appendAgendaLoad).toHaveBeenCalledOnce();
   });
 
+  // #2428: the tool now succeeds for an agenda the call already holds.
+  it('asking again for an agenda already open records no second load', async () => {
+    const llm = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [{ id: 'c1', name: 'meeting-agenda-load', input: { agenda_id: agenda.agendaId } }], usage, provenance }],
+      replyScript('Here it is.'),
+    ]);
+    const { store, appendAgendaLoad } = storeWithAppend();
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(1, 1),
+      store,
+      invokeTool: async () => ({ content: JSON.stringify({ agenda }) }),
+    });
+    await runtime.startSession({
+      sessionId: 's-reopen',
+      conversationId: 'voice:s-reopen',
+      roomName: 'voice-s-reopen',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+      agendas: { loaded: [agenda], index: [] },
+    });
+    stt.emit({ text: 'pull up the agenda', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-reopen');
+    expect(appendAgendaLoad).not.toHaveBeenCalled();
+  });
+
   it('a failed meeting-agenda-load leaves prompt and store untouched', async () => {
     const llm = new FakeStreamProvider([
       [{ type: 'tool_use', toolCalls: [{ id: 'c1', name: 'meeting-agenda-load', input: { agenda_id: agenda.agendaId } }], usage, provenance }],

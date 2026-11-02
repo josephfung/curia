@@ -1736,9 +1736,10 @@ export class VoiceRuntime {
     if (result.is_error) return;
     const snapshot = parseAgendaLoadResult(result.content);
     if (!snapshot) return;
-    if (!session.loadedAgendas.some((agenda) => agenda.agendaId === snapshot.agendaId)) {
-      session.loadedAgendas.push(snapshot);
-    }
+    // Asking again for an agenda the call already holds succeeds (#2428); its
+    // load is already recorded, so don't append a second one.
+    if (session.loadedAgendas.some((agenda) => agenda.agendaId === snapshot.agendaId)) return;
+    session.loadedAgendas.push(snapshot);
     session.agendaIndex = session.agendaIndex.filter((entry) => entry.agendaId !== snapshot.agendaId);
     const load: SessionAgendaLoad = {
       agendaId: snapshot.agendaId,
