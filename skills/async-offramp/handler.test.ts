@@ -1,9 +1,10 @@
 // handler.test.ts — async-offramp skill (#1614 / ADR-038 gate #3).
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import pino from 'pino';
-import { AsyncOfframpHandler, resetAsyncOfframpDedupForTests } from './handler.js';
+import { AsyncOfframpHandler, NOW_MODE_WAIT_MS, resetAsyncOfframpDedupForTests } from './handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import { EventBus } from '../../src/bus/bus.js';
+import { createAgentResponse } from '../../src/bus/events.js';
 import type { AgentTaskEvent, BusEvent } from '../../src/bus/events.js';
 
 function makeBus(opts: { failPublish?: boolean } = {}) {
@@ -304,5 +305,116 @@ describe('AsyncOfframpHandler', () => {
     await handler.execute(makeCtx(bus, { brief: 'Heavyweight A', follow_up_channel: 'email' }));
     await handler.execute(makeCtx(bus, { brief: 'Heavyweight B', follow_up_channel: 'email' }));
     expect(published).toHaveLength(2);
+  });
+});
+
+// #2428: the call had only "after the call". A request the coordinator could
+// finish in under a minute (create a job, sign in with a vault key) left the
+// caller arguing with a voice brain that has none of those tools.
+describe('AsyncOfframpHandler mode now (#2428)', () => {
+  type Subscriber = (event: BusEvent) => Promise<void> | void;
+
+  function liveBus(reply?: (task: AgentTaskEvent) => BusEvent | null) {
+    const published: BusEvent[] = [];
+    const subscribers: Subscriber[] = [];
+    const bus = {
+      subscribe(type: string, _layer: string, fn: Subscriber) {
+        if (type === 'agent.response') subscribers.push(fn);
+      },
+      async publishDetached(_layer: string, event: BusEvent) {
+        published.push(event);
+        const response = event.type === 'agent.task' && reply ? reply(event as AgentTaskEvent) : null;
+        if (response) queueMicrotask(() => { for (const fn of subscribers) void fn(response); });
+      },
+    } as unknown as EventBus;
+    const respond = async (event: BusEvent) => { for (const fn of subscribers) await fn(event); };
+    return { bus, published, respond };
+  }
+
+  function response(task: AgentTaskEvent, payload: { content: string; sends?: string[]; isError?: boolean }): BusEvent {
+    return createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: task.payload.conversationId,
+      parentEventId: task.id,
+      ...payload,
+    });
+  }
+
+  beforeEach(() => {
+    resetAsyncOfframpDedupForTests();
+  });
+
+  it('returns the coordinator reply on the call, with the sends that succeeded', async () => {
+    const { bus, published } = liveBus((task) => response(task, { content: 'Job created; sign-in worked.', sends: [] }));
+    const result = await handler.execute(makeCtx(bus, { brief: 'Set up a daily 1 PM feed check', mode: 'now' }));
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toMatchObject({ completed: true, result: 'Job created; sign-in worked.', sent: [] });
+    const task = published[0] as AgentTaskEvent;
+    expect(task.payload.content).toContain('still on the call');
+    expect(task.payload.content).toContain('Do not message the principal about this yourself');
+  });
+
+  it('reports a coordinator failure honestly', async () => {
+    const { bus } = liveBus((task) => response(task, { content: 'Something went wrong.', isError: true }));
+    const result = await handler.execute(makeCtx(bus, { brief: 'Do the thing', mode: 'now' }));
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toMatchObject({ completed: false, failed: true });
+  });
+
+  it('stops waiting at the limit, says it is still working, and forwards the late result', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bus, published, respond } = liveBus();
+      const pending = handler.execute(makeCtx(bus, { brief: 'Long job', mode: 'now', follow_up_channel: 'signal' }));
+      await vi.advanceTimersByTimeAsync(NOW_MODE_WAIT_MS + 1);
+      const result = await pending;
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data).toMatchObject({ completed: false, still_working: true, follow_up_channel: 'signal' });
+
+      const task = published[0] as AgentTaskEvent;
+      await respond(response(task, { content: 'Here is the late result.', sends: [] }));
+      const forward = published[1] as AgentTaskEvent;
+      expect(forward.type).toBe('agent.task');
+      expect(forward.payload.content).toContain('Here is the late result.');
+      expect(forward.payload.content).toContain('signal-send');
+      expect(forward.payload.content).toContain('"principal"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends the wait when the caller speaks, and still forwards the result', async () => {
+    const controller = new AbortController();
+    const { bus, published, respond } = liveBus();
+    const pending = handler.execute(makeCtx(bus, { brief: 'Long job', mode: 'now' }, { inputSignal: controller.signal }));
+    await Promise.resolve();
+    controller.abort();
+    const result = await pending;
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toMatchObject({ completed: false, still_working: true });
+    await respond(response(published[0] as AgentTaskEvent, { content: 'Done later.', sends: ['email-send'] }));
+    expect((published[1] as AgentTaskEvent).payload.content).toContain('Done later.');
+  });
+
+  it('does not forward a result that was spoken on the call', async () => {
+    const { bus, published, respond } = liveBus((task) => response(task, { content: 'Quick answer.' }));
+    await handler.execute(makeCtx(bus, { brief: 'Quick one', mode: 'now' }));
+    await respond(response(published[0] as AgentTaskEvent, { content: 'Quick answer.' }));
+    expect(published).toHaveLength(1);
+  });
+
+  it('keeps after_call as the default and rejects an unknown mode', async () => {
+    const { bus, published } = liveBus();
+    const result = await handler.execute(makeCtx(bus, { brief: 'Research this' }));
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ accepted: true, mode: 'after_call' });
+    expect((published[0] as AgentTaskEvent).payload.content).toContain('reach the principal');
+
+    const bad = await handler.execute(makeCtx(bus, { brief: 'x', mode: 'later' }));
+    expect(bad.success).toBe(false);
   });
 });

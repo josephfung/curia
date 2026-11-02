@@ -456,7 +456,35 @@ describe('VoiceRuntime', () => {
     // The explicit hangup reason wins over the transport close, as it did before.
     expect(endReasons).toEqual(['remote_hangup']);
     expect(record?.endReason).toBe('remote_hangup');
-    expect(endedTurnStats(events)).toEqual({ utterances: 1, turns: 1, bargeInCancels: 0, joinedUtterances: 0 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 1, turns: 1, bargeInCancels: 0, joinedUtterances: 0, unbackedCompletionClaims: 0 });
+  });
+
+  // #2428: "Done, boss" two seconds after "please send it", with no tool call.
+  it('counts a "done" reply only in a turn that called no tool', async () => {
+    const llm = new FakeStreamProvider([
+      replyScript('Done, boss. I will let you know if she replies.'),
+      [{ type: 'tool_use', toolCalls: [{ id: 'c1', name: 'async-offramp', input: { brief: 'x', mode: 'now' } }], usage, provenance }],
+      replyScript("Done. I've sent it."),
+    ]);
+    const { runtime, events, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(1, 1),
+      invokeTool: async () => ({ content: '{"completed":true,"sent":["signal-send"]}' }),
+    });
+    await runtime.startSession({
+      sessionId: 's-claim',
+      conversationId: 'voice:s-claim',
+      roomName: 'voice-s-claim',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'please send it', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-claim');
+    stt.emit({ text: 'send her a message', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-claim');
+    await runtime.endSession('s-claim', 'remote_hangup');
+    expect(endedTurnStats(events)).toMatchObject({ turns: 2, unbackedCompletionClaims: 1 });
   });
 
   it('joins an endSession fired from inside teardown instead of racing it (#2379)', async () => {
@@ -1740,7 +1768,7 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
     // Interrupting a reply that was playing is a real barge-in: the next
     // utterance is its own turn, not joined to the interrupted one (#2240).
     await runtime.endSession('barge-ref', 'test');
-    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 2, bargeInCancels: 1, joinedUtterances: 0 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 2, bargeInCancels: 1, joinedUtterances: 0, unbackedCompletionClaims: 0 });
   });
 
   it('joins a turn cancelled before any audio to the next utterance, with no failure marker (#2240)', async () => {
@@ -1793,7 +1821,7 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
 
     await runtime.endSession('prelude-abort', 'test');
     // The cancelled half is counted once, as joined; only the joined turn is a turn.
-    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 1, bargeInCancels: 1, joinedUtterances: 1 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 1, bargeInCancels: 1, joinedUtterances: 1, unbackedCompletionClaims: 0 });
   });
 
   it('pairs a mid-reply stream error with the heard fragment, not the failure marker', async () => {
@@ -2662,7 +2690,7 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
     expect(llm.seenMessages).toHaveLength(1);
     expect(inboundContents(events)).toEqual(['I want you to research tutoring programs for Evan near his school']);
     await runtime.endSession('hold-multi', 'test');
-    expect(endedTurnStats(events)).toEqual({ utterances: 3, turns: 1, bargeInCancels: 0, joinedUtterances: 2 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 3, turns: 1, bargeInCancels: 0, joinedUtterances: 2, unbackedCompletionClaims: 0 });
   });
 
   it('extends the pending utterance when speech arrives inside the hold window', async () => {
@@ -2733,7 +2761,7 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
     ]);
     await runtime.endSession('coalesce', 'test');
     // The stalled turn had played its filler, so it is a real barge-in, not joined.
-    expect(endedTurnStats(events)).toEqual({ utterances: 4, turns: 2, bargeInCancels: 1, joinedUtterances: 2 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 4, turns: 2, bargeInCancels: 1, joinedUtterances: 2, unbackedCompletionClaims: 0 });
   });
 
   it('still runs the held utterance when an interim restarts the hold and no final follows', async () => {
@@ -2785,7 +2813,7 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
     // The late end-of-speech carries no new words and must not count again.
     stt.emit({ text: '', isFinal: true, speechFinal: true });
     await runtime.endSession('hold-open-words', 'test');
-    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 1, bargeInCancels: 0, joinedUtterances: 1 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 1, bargeInCancels: 0, joinedUtterances: 1, unbackedCompletionClaims: 0 });
   });
 
   /** Working memory whose history reads take `ms`, so a user turn sits in its preamble. */
@@ -2840,7 +2868,7 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
       content: 'find tutoring near his school after three pm',
     });
     await runtime.endSession('chain', 'test');
-    expect(endedTurnStats(events)).toEqual({ utterances: 3, turns: 1, bargeInCancels: 2, joinedUtterances: 2 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 3, turns: 1, bargeInCancels: 2, joinedUtterances: 2, unbackedCompletionClaims: 0 });
   });
 
   it('pairs a carried-over utterance with the failure marker when the caller hangs up', async () => {
@@ -2862,7 +2890,7 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
       { role: 'user', content: 'move my three o clock' },
       { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT },
     ]);
-    expect(endedTurnStats(events)).toEqual({ utterances: 1, turns: 1, bargeInCancels: 1, joinedUtterances: 0 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 1, turns: 1, bargeInCancels: 1, joinedUtterances: 0, unbackedCompletionClaims: 0 });
   });
 
   it('pairs the carried-over part when the join would exceed maxUtteranceBytes', async () => {
@@ -2891,7 +2919,7 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
       { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT },
     ]);
     await runtime.endSession('carry-oversize', 'test');
-    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 2, bargeInCancels: 1, joinedUtterances: 0 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 2, bargeInCancels: 1, joinedUtterances: 0, unbackedCompletionClaims: 0 });
   });
 
   it('never joins a turn that invoked a tool, even when no audio played', async () => {
@@ -2924,7 +2952,7 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
       { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT },
     ]);
     await runtime.endSession('tool-silent', 'test');
-    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 2, bargeInCancels: 1, joinedUtterances: 0 });
+    expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 2, bargeInCancels: 1, joinedUtterances: 0, unbackedCompletionClaims: 0 });
   });
 
   it('drops a pending hold when the session ends', async () => {
@@ -3071,6 +3099,34 @@ describe('VoiceRuntime agendas (#2322)', () => {
     expect(last).toContain('Board wants a status.');
     expect(last).not.toContain('Ask the caller if you are unsure');
     expect(appendAgendaLoad).toHaveBeenCalledOnce();
+  });
+
+  // #2428: a hand-off that waits on the call must stop when the turn is cancelled.
+  it('passes the turn\'s abort signal to tool calls', async () => {
+    const llm = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [{ id: 'c1', name: 'async-offramp', input: { brief: 'x', mode: 'now' } }], usage, provenance }],
+      replyScript('Okay.'),
+    ]);
+    let seen: unknown;
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(1, 1),
+      invokeTool: async (_call, ctx) => {
+        seen = (ctx as { signal?: unknown } | undefined)?.signal;
+        return { content: '{"completed":true}' };
+      },
+    });
+    await runtime.startSession({
+      sessionId: 's-signal',
+      conversationId: 'voice:s-signal',
+      roomName: 'voice-s-signal',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'set that up', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-signal');
+    expect(seen).toBeInstanceOf(AbortSignal);
   });
 
   // #2428: the tool now succeeds for an agenda the call already holds.
@@ -3615,7 +3671,9 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     });
     expect(prompt).toContain('reading the principal\'s inbox');
     expect(prompt).toContain('A recap of this call is meeting-notes-start.');
-    expect(prompt).toContain('such as links or research results, goes to async-offramp, not a specialist');
+    // #2428: a message to anyone, and work needing the vault, scheduling or browsing.
+    expect(prompt).toContain('or a message to anyone goes to async-offramp');
+    expect(prompt).toContain('mode now while the caller waits');
   });
 });
 

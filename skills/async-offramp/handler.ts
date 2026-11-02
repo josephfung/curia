@@ -21,10 +21,17 @@
 //
 // Idempotent: a process-local map keyed by (conversation + brief + channel)
 // returns the prior task_event_id on retry instead of spawning duplicates.
+//
+// Two modes (#2428). after_call (the default) is the original fire-and-forget
+// hand-off. now waits a bounded time for the coordinator's reply and returns it
+// for the call to speak. A reply that misses the wait (the limit, or the caller
+// talking) is forwarded to the principal by a second coordinator task, so the
+// work is never silently dropped.
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createAgentTask } from '../../src/bus/events.js';
+import type { AgentResponseEvent, BusEvent } from '../../src/bus/events.js';
 
 const FOLLOW_UP_CHANNELS = new Set(['signal', 'email']);
 const DEFAULT_FOLLOW_UP = 'email';
@@ -36,6 +43,12 @@ const DEFAULT_FOLLOW_UP = 'email';
  * or refusing a handoff the principal already agreed to.
  */
 const FALLBACK_PRINCIPAL_SENDER_ID = 'ceo-web-user';
+const MODES = new Set(['now', 'after_call']);
+type Mode = 'now' | 'after_call';
+/** How long a now hand-off holds the call before it turns into a follow-up. */
+export const NOW_MODE_WAIT_MS = 60_000;
+/** A reply later than this is not forwarded; the listener stops (the bus has no unsubscribe). */
+const LATE_FORWARD_WINDOW_MS = 30 * 60_000;
 /** Cap the in-process dedup map so a long-lived process cannot grow without bound. */
 const MAX_DEDUP_ENTRIES = 5_000;
 
@@ -65,6 +78,12 @@ function resolveFollowUpChannel(raw: unknown): string | { error: string } {
   return normalized;
 }
 
+function resolveMode(raw: unknown): Mode | { error: string } {
+  if (raw === undefined || raw === null || raw === '') return 'after_call';
+  if (typeof raw === 'string' && MODES.has(raw.trim().toLowerCase())) return raw.trim().toLowerCase() as Mode;
+  return { error: "mode must be 'now' or 'after_call'" };
+}
+
 function buildIdempotencyKey(
   conversationId: string | undefined,
   brief: string,
@@ -90,15 +109,34 @@ function rememberDedup(key: string, entry: DedupEntry): void {
   }
 }
 
+function channelSkill(followUpChannel: string): string {
+  return followUpChannel === 'signal' ? 'signal-send' : 'email-send';
+}
+
 /** Build the coordinator task content — clear provenance + follow-up instruction. */
-function buildTaskContent(brief: string, followUpChannel: string, sourceConversationId: string | undefined): string {
-  const channelSkill = followUpChannel === 'signal' ? 'signal-send' : 'email-send';
+function buildTaskContent(
+  brief: string,
+  followUpChannel: string,
+  sourceConversationId: string | undefined,
+  mode: Mode,
+): string {
   const source = sourceConversationId ?? '(unknown voice conversation)';
+  const opening = mode === 'now'
+    ? [
+      'Voice hand-off — the principal is still on the call and waiting while you do the',
+      'following. Do the work now with your full tools, then reply in two or three plain',
+      'sentences saying what you did and what happened; your reply is read to the principal',
+      'on the call. Do not message the principal about this yourself: if the reply misses',
+      'the call, the platform forwards it.',
+    ]
+    : [
+      'Voice async off-ramp — the principal asked you during a live voice call to handle',
+      'the following asynchronously. Complete the work, then reach the principal on',
+      `${followUpChannel} with ${channelSkill(followUpChannel)}, passing "principal" as the recipient.`,
+      'Do not try to reply on the voice channel.',
+    ];
   return [
-    'Voice async off-ramp — the principal asked you during a live voice call to handle',
-    'the following asynchronously. Complete the work, then reach the principal on',
-    `${followUpChannel} with ${channelSkill}, passing "principal" as the recipient.`,
-    'Do not try to reply on the voice channel.',
+    ...opening,
     '',
     '## Brief',
     brief.trim(),
@@ -107,6 +145,26 @@ function buildTaskContent(brief: string, followUpChannel: string, sourceConversa
     `## Source voice conversation: ${source}`,
   ].join('\n');
 }
+
+/** A now reply that missed the call goes to the principal through a fresh coordinator task. */
+function buildForwardContent(brief: string, followUpChannel: string, reply: string): string {
+  return [
+    'Voice hand-off follow-up — the principal asked for the work below during a live call,',
+    'and your result came back after the call had moved on. Send the result to the principal',
+    `on ${followUpChannel} with ${channelSkill(followUpChannel)}, passing "principal" as the recipient.`,
+    'Keep it short. Do not redo the work.',
+    '',
+    '## Brief',
+    brief,
+    '',
+    '## Result',
+    reply,
+  ].join('\n');
+}
+
+type NowOutcome =
+  | { kind: 'reply'; event: AgentResponseEvent }
+  | { kind: 'missed' };
 
 /** Exported for tests — clears the process-local dedup map between cases. */
 export function resetAsyncOfframpDedupForTests(): void {
@@ -146,6 +204,12 @@ export class AsyncOfframpHandler implements ToolHandler {
     }
     const followUpChannel = channelResult;
 
+    const modeResult = resolveMode(input.mode);
+    if (typeof modeResult === 'object') {
+      return { success: false, error: modeResult.error };
+    }
+    const mode = modeResult;
+
     const explicitKey =
       typeof input.idempotency_key === 'string' && input.idempotency_key.trim()
         ? input.idempotency_key.trim()
@@ -153,7 +217,7 @@ export class AsyncOfframpHandler implements ToolHandler {
     const idempotencyKey = buildIdempotencyKey(
       ctx.conversationId,
       brief,
-      followUpChannel,
+      mode === 'now' ? `${followUpChannel}|now` : followUpChannel,
       explicitKey,
     );
 
@@ -196,9 +260,10 @@ export class AsyncOfframpHandler implements ToolHandler {
       conversationId,
       channelId: 'internal',
       senderId,
-      content: buildTaskContent(brief, followUpChannel, ctx.conversationId),
+      content: buildTaskContent(brief, followUpChannel, ctx.conversationId, mode),
       metadata: {
         voiceOfframp: true,
+        offrampMode: mode,
         followUpChannel,
         sourceVoiceConversationId: ctx.conversationId,
         sourceVoiceSessionId: ctx.taskMetadata?.['voiceSessionId'],
@@ -217,6 +282,11 @@ export class AsyncOfframpHandler implements ToolHandler {
       followUpChannel,
     });
 
+    // A now hand-off listens before publishing so a fast reply is not missed.
+    const nowWait = mode === 'now'
+      ? this.awaitReply(ctx, taskEvent.id, brief, followUpChannel, senderId, originator)
+      : null;
+
     try {
       // Publish as 'dispatch' — only dispatch/system may publish agent.task
       // (permissions.ts). Infrastructure skills are trusted to impersonate.
@@ -227,6 +297,7 @@ export class AsyncOfframpHandler implements ToolHandler {
       // below clears the dedup claim.
       await ctx.bus.publishDetached('dispatch', taskEvent);
     } catch (err) {
+      nowWait?.cancel();
       enqueuedByKey.delete(idempotencyKey);
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error(
@@ -243,6 +314,7 @@ export class AsyncOfframpHandler implements ToolHandler {
       {
         taskEventId: taskEvent.id,
         followUpChannel,
+        mode,
         idempotencyKey,
         sourceConversationId: ctx.conversationId,
         briefPreview: brief.slice(0, 80),
@@ -250,15 +322,145 @@ export class AsyncOfframpHandler implements ToolHandler {
       'voice off-ramped work to async coordinator',
     );
 
+    if (nowWait) {
+      const outcome = await nowWait.outcome;
+      if (outcome.kind === 'reply') {
+        const { payload } = outcome.event;
+        if (payload.isError) {
+          return {
+            success: true,
+            data: {
+              accepted: true,
+              mode,
+              completed: false,
+              failed: true,
+              task_event_id: taskEvent.id,
+              note: 'The work failed. Tell the caller plainly that it did not get done and offer to try again.',
+            },
+          };
+        }
+        return {
+          success: true,
+          data: {
+            accepted: true,
+            mode,
+            completed: true,
+            result: payload.content,
+            sent: payload.sends ?? [],
+            task_event_id: taskEvent.id,
+            note: 'Tell the caller the result in your own words. Only messages listed in sent went out.',
+          },
+        };
+      }
+      return {
+        success: true,
+        data: {
+          accepted: true,
+          mode,
+          completed: false,
+          still_working: true,
+          follow_up_channel: followUpChannel,
+          task_event_id: taskEvent.id,
+          note: `Still working. Tell the caller you will send the result by ${followUpChannel} when it is done.`,
+        },
+      };
+    }
+
     return {
       success: true,
       data: {
         accepted: true,
+        mode,
         task_event_id: taskEvent.id,
         follow_up_channel: followUpChannel,
         deduplicated: false,
         note: 'Handed to async coordinator path; principal will be reached when done.',
       },
     };
+  }
+
+  /**
+   * Wait for the coordinator's reply to a now hand-off. Resolves with the reply,
+   * or `missed` at the limit or when the caller speaks. A reply that arrives
+   * after `missed` is forwarded to the principal (#2428).
+   */
+  private awaitReply(
+    ctx: ToolContext,
+    taskEventId: string,
+    brief: string,
+    followUpChannel: string,
+    senderId: string,
+    originator: Record<string, unknown> | undefined,
+  ): { outcome: Promise<NowOutcome>; cancel: () => void } {
+    const bus = ctx.bus!;
+    let phase: 'waiting' | 'late' | 'closed' = 'waiting';
+    let waitTimer: NodeJS.Timeout | undefined;
+    let lateTimer: NodeJS.Timeout | undefined;
+    // The task never published: nothing will reply, so stop without logging a miss.
+    const cancel = (): void => {
+      phase = 'closed';
+      clearTimeout(waitTimer);
+      clearTimeout(lateTimer);
+    };
+    const outcome = new Promise<NowOutcome>((resolve) => {
+      const miss = (why: string): void => {
+        if (phase !== 'waiting') return;
+        phase = 'late';
+        clearTimeout(waitTimer);
+        ctx.log.info({ taskEventId, why }, 'voice hand-off: reply missed the call; it will be forwarded');
+        lateTimer = setTimeout(() => {
+          if (phase !== 'late') return;
+          phase = 'closed';
+          ctx.log.warn({ taskEventId }, 'voice hand-off: no reply within the forward window; nothing forwarded');
+        }, LATE_FORWARD_WINDOW_MS);
+        lateTimer.unref?.();
+        resolve({ kind: 'missed' });
+      };
+      waitTimer = setTimeout(() => miss('limit'), NOW_MODE_WAIT_MS);
+      const signal = ctx.inputSignal;
+      if (signal) {
+        if (signal.aborted) miss('caller spoke');
+        else signal.addEventListener('abort', () => miss('caller spoke'), { once: true });
+      }
+
+      // The bus has no unsubscribe; the phase guard makes this a no-op once closed.
+      bus.subscribe('agent.response', 'system', async (event: BusEvent) => {
+        const response = event as AgentResponseEvent;
+        if (response.parentEventId !== taskEventId || phase === 'closed') return;
+        if (phase === 'waiting') {
+          phase = 'closed';
+          clearTimeout(waitTimer);
+          resolve({ kind: 'reply', event: response });
+          return;
+        }
+        phase = 'closed';
+        clearTimeout(lateTimer);
+        const forward = createAgentTask({
+          agentId: 'coordinator',
+          conversationId: `voice-offramp-forward:${taskEventId.slice(0, 32)}`,
+          channelId: 'internal',
+          senderId,
+          content: buildForwardContent(
+            brief,
+            followUpChannel,
+            response.payload.isError ? 'The work failed before it finished. Say so plainly.' : response.payload.content,
+          ),
+          metadata: {
+            voiceOfframp: true,
+            offrampForwardOf: taskEventId,
+            followUpChannel,
+            ...(originator ? { originator } : {}),
+          },
+          parentEventId: response.id,
+        });
+        try {
+          await bus.publishDetached('dispatch', forward);
+          ctx.log.info({ taskEventId, forwardTaskId: forward.id }, 'voice hand-off: late reply forwarded to the principal');
+        } catch (err) {
+          ctx.log.error({ err, taskEventId }, 'voice hand-off: late reply could not be forwarded; the principal was not told');
+        }
+      });
+    });
+    return { outcome, cancel };
   }
 }
