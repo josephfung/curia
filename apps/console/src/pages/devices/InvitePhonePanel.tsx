@@ -35,7 +35,9 @@ export function InvitePhonePanel({ onPaired }: { onPaired?: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const onPairedRef = useRef(onPaired);
-  onPairedRef.current = onPaired;
+  useEffect(() => {
+    onPairedRef.current = onPaired;
+  }, [onPaired]);
   const lastState = useRef<InvitationStatus['state'] | null>(null);
 
   const load = useCallback(async () => {
