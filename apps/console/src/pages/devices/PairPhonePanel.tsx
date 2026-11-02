@@ -57,7 +57,9 @@ export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
   const [busy, setBusy] = useState(false);
   const seen = useRef({ token: false, short: false });
   const onPairedRef = useRef(onPaired);
-  onPairedRef.current = onPaired;
+  useEffect(() => {
+    onPairedRef.current = onPaired;
+  }, [onPaired]);
 
   useEffect(() => {
     if (!minted) return;
