@@ -10,9 +10,10 @@
 // written by agents with no write-time cap (see MAX_PRIOR_CONTEXT_CHARS in
 // src/scheduler/scheduler.ts). They are capped here as a backstop, and each cut
 // field is named in `truncatedFields`, so oversized run context cannot push the
-// task text out. The task text itself is never cut by this handler. If a payload
-// is so large that the execution layer's aggregate cap clips the whole result,
-// that cut carries the layer's own truncation marker, so it is never silent.
+// task text out. The task text itself is never cut by this handler. It is returned
+// once, inside taskPayload, so a long task does not count twice against the
+// execution layer's aggregate cap (200,000 characters by default). A payload past
+// that cap is clipped by the layer, whose truncation marker says so: never silent.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { JobRow } from '../../../../src/scheduler/scheduler-service.js';
@@ -30,9 +31,8 @@ export const DETAIL_TRUNCATED_MARKER = '…[truncated]';
 type CappedField = 'lastRunSummary' | 'lastRunContext' | 'progress';
 
 interface JobDetail extends JobSummary {
-  /** The job's task text, whole, when the payload's `task` is a string. */
-  task: string | null;
-  /** The full task payload, as stored. scheduler-update edits replace it whole. */
+  /** The full task payload, as stored; the task text is its `task`. scheduler-update
+   *  edits replace it whole. */
   taskPayload: Record<string, unknown>;
   lastRunSummary: string | null;
   /** An object, or a string ending in DETAIL_TRUNCATED_MARKER when it was cut. */
@@ -67,10 +67,8 @@ function toJobDetail(job: JobRow, tz: string | undefined, cut: CappedField[]): J
     cut.push('lastRunSummary');
     lastRunSummary = capText(lastRunSummary, MAX_DETAIL_SUMMARY_CHARS);
   }
-  const task = job.taskPayload?.['task'];
   return {
     ...toJobSummary(job, tz),
-    task: typeof task === 'string' ? task : null,
     taskPayload: job.taskPayload,
     lastRunSummary,
     lastRunContext: capJson(job.lastRunContext, 'lastRunContext', cut),

@@ -274,7 +274,8 @@ export class SchedulerState {
       const payload = input['task_payload'];
       if (isRecord(payload)) {
         this.payloads.set(id, payload);
-        if (typeof payload['task'] === 'string') changes['taskPreview'] = taskPreview(payload['task']);
+        // A payload with no string task has no preview, as in scheduler-list.
+        changes['taskPreview'] = typeof payload['task'] === 'string' ? taskPreview(payload['task']) : null;
       }
     }
     if (Object.keys(changes).length === 0) return data;
@@ -340,10 +341,11 @@ export class SchedulerState {
    * scheduler-get of a job this case created or listed, as the real tool would answer
    * after the case's writes. Undefined for any other id, so the stub answers it.
    *
-   * The task comes from the create or the latest task_payload edit. A listed row
-   * carries only a preview; when that preview is cut (ends in an ellipsis) the full
-   * text is unknown, so `task` is null and `taskPayload` empty. A case that needs the
-   * full text of a seeded job stubs scheduler-get with a `job_id` match.
+   * The payload comes from the create or the latest task_payload edit. A listed row
+   * carries only a preview, which is trimmed, flattened and maybe cut, so it is never
+   * passed off as the task: with no recorded payload, `taskPayload` is null (unknown).
+   * A case that needs the full text of a seeded job stubs scheduler-get with a
+   * `job_id` match.
    */
   read(input: Json): Json | undefined {
     const id = str(input['job_id']);
@@ -356,11 +358,7 @@ export class SchedulerState {
     const row = this.refreshNextRun({ ...base, ...(this.updates.get(id) ?? {}) }, pinnedNextRuns([base]));
     const job = isRecord(row) ? row : base;
 
-    let taskPayload = this.payloads.get(id);
-    if (!taskPayload) {
-      const preview = job['taskPreview'];
-      taskPayload = typeof preview === 'string' && !preview.endsWith('…') ? { task: preview } : {};
-    }
+    const taskPayload = this.payloads.get(id) ?? null;
     const tz = typeof job['timezone'] === 'string' && job['timezone'] !== '' ? job['timezone'] : 'UTC';
     return {
       job: {
@@ -368,7 +366,6 @@ export class SchedulerState {
         lastRunContext: null,
         progress: null,
         ...job,
-        task: typeof taskPayload['task'] === 'string' ? taskPayload['task'] : null,
         taskPayload,
       },
       truncatedFields: [],
@@ -385,9 +382,7 @@ export class SchedulerState {
     const payload = this.payloads.get(id);
     if (!update && !payload) return data;
     let next: Json = { ...job, ...(update ?? {}) };
-    if (payload) {
-      next = { ...next, taskPayload: payload, task: typeof payload['task'] === 'string' ? payload['task'] : null };
-    }
+    if (payload) next = { ...next, taskPayload: payload };
     const refreshed = this.refreshNextRun(next, pinnedNextRuns([job]));
     return { ...data, job: isRecord(refreshed) ? refreshed : next };
   }

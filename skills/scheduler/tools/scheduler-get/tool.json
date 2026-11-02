@@ -1,14 +1,14 @@
 {
   "name": "scheduler-get",
-  "description": "Read one scheduled job in full by ID: the whole task text and payload, schedule, linked task, and the last run's summary, context and outcome. Use it to quote a routine's instructions, to review a job or a bad run, and before a scheduler-update that passes task_payload. Fields listed in truncatedFields were cut to fit; the task text never is.",
-  "version": "0.1.0",
+  "description": "Read one scheduled job in full by ID: its whole taskPayload (task text in .task), schedule, linked task, and last run's summary, context and outcome. Use it to quote a routine's instructions, review a job or a bad run, and before a scheduler-update that passes task_payload. Fields in truncatedFields were cut to fit; the task text never is.",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "job_id": "string"
   },
   "outputs": {
-    "job": "object (scheduler-list summary plus task, taskPayload, lastRunSummary, lastRunContext, progress)",
+    "job": "object (scheduler-list summary plus taskPayload, lastRunSummary, lastRunContext, progress)",
     "truncatedFields": "string[]",
     "displayTimezone": "string"
   },

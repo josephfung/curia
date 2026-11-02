@@ -45,7 +45,6 @@ tool_stubs:
           taskTitle: null
           taskPreview: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or …"
           createdBy: coordinator
-          task: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or back-to-back blocks with no travel time. Then add a closing section titled 'Lantern Watch' that lists the three decisions the principal must make before Friday, and email the whole agenda to the principal."
           taskPayload:
             task: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or back-to-back blocks with no travel time. Then add a closing section titled 'Lantern Watch' that lists the three decisions the principal must make before Friday, and email the whole agenda to the principal."
           lastRunSummary: null

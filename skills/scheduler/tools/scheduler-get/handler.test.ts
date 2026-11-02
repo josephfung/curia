@@ -99,9 +99,10 @@ describe('SchedulerGetHandler', () => {
     expect(LONG_TASK.length).toBeGreaterThan(160);
     const data = await getData(makeJob());
 
-    expect(data.job['task']).toBe(LONG_TASK);
     expect(data.job.taskPayload).toEqual({ task: LONG_TASK, channel: 'email' });
-    expect(String(data.job['task'])).toContain('PERIWINKLE CLAUSE');
+    expect(String(data.job.taskPayload['task'])).toContain('PERIWINKLE CLAUSE');
+    // One copy of the task: a long one must not count twice against the layer's cap.
+    expect(data.job).not.toHaveProperty('task');
     // The list summary is still there, preview and all.
     expect(data.job['taskPreview']).toMatch(/…$/);
     expect(data.job['taskTitle']).toBe('Weekly agenda');
@@ -117,9 +118,8 @@ describe('SchedulerGetHandler', () => {
     expect(data.job).not.toHaveProperty('taskErrorBudget');
   });
 
-  it('leaves task null when the payload has no string task', async () => {
+  it('returns a payload with no string task as stored', async () => {
     const data = await getData(makeJob({ taskPayload: { steps: ['a', 'b'] } }));
-    expect(data.job['task']).toBeNull();
     expect(data.job.taskPayload).toEqual({ steps: ['a', 'b'] });
   });
 
@@ -168,7 +168,6 @@ describe('SchedulerGetHandler', () => {
     expect(data.job['lastRunSummary']).toHaveLength(MAX_DETAIL_SUMMARY_CHARS);
 
     // The task is never cut.
-    expect(data.job['task']).toBe(hugeTask);
     expect(data.job.taskPayload['task']).toBe(hugeTask);
     expect(data.truncatedFields).not.toContain('task');
   });

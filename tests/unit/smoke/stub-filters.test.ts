@@ -278,26 +278,27 @@ describe('SchedulerState', () => {
 
   describe('scheduler-get (#2399)', () => {
     const longTask = `Scan investor mail each weekday. ${'Flag anything urgent. '.repeat(10)}End with the PERIWINKLE note.`;
-    type Got = { job: { id: string; task: string | null; taskPayload: Record<string, unknown>; cronExpr: string; status: string } };
+    type Got = { job: { id: string; taskPayload: Record<string, unknown> | null; cronExpr: string; status: string } };
 
     it('reads a job the case created in full, and follows a later edit', () => {
       const state = new CaseToolState();
       shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5', timezone: 'America/Toronto' }, state);
       const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got;
-      expect(got.job).toEqual(expect.objectContaining({ id: JOB_ID, task: longTask, taskPayload: { task: longTask }, cronExpr: '0 9 * * 1-5' }));
+      expect(got.job).toEqual(expect.objectContaining({ id: JOB_ID, taskPayload: { task: longTask }, cronExpr: '0 9 * * 1-5' }));
 
       shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', cron_expr: '0 10 * * 1-5', task_payload: { task: `${longTask} Also check the deck.` } }, state);
       const edited = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got;
-      expect(edited.job.task).toBe(`${longTask} Also check the deck.`);
+      expect(edited.job.taskPayload).toEqual({ task: `${longTask} Also check the deck.` });
       expect(edited.job.cronExpr).toBe('0 10 * * 1-5');
     });
 
-    it('reads a listed job, with no task when the list only had a cut preview', () => {
+    it('reads a listed job without passing its preview off as the task', () => {
       const state = new CaseToolState();
-      const withPreview = { ...listed, jobs: [{ ...listed.jobs[0]!, taskPreview: 'Scan investor mail…' }] };
+      // Even an uncut preview is trimmed and flattened, so it is not the stored task.
+      const withPreview = { ...listed, jobs: [{ ...listed.jobs[0]!, taskPreview: 'Scan investor mail' }] };
       shapeStubResult('scheduler-list', withPreview, {}, state);
       const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got;
-      expect(got.job).toEqual(expect.objectContaining({ id: JOB_ID, task: null, taskPayload: {} }));
+      expect(got.job).toEqual(expect.objectContaining({ id: JOB_ID, taskPayload: null }));
 
       shapeStubResult('scheduler-cancel', { cancelled: true, jobId: JOB_ID }, { job_id: JOB_ID }, state);
       expect((recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got).job.status).toBe('cancelled');
@@ -314,7 +315,7 @@ describe('SchedulerState', () => {
     it('replays an edit onto a stubbed scheduler-get', () => {
       const state = new CaseToolState();
       const stubbed = {
-        job: { ...listed.jobs[0]!, task: longTask, taskPayload: { task: longTask } },
+        job: { ...listed.jobs[0]!, taskPayload: { task: longTask } },
         truncatedFields: [],
         displayTimezone: 'America/Toronto',
       };
@@ -323,7 +324,15 @@ describe('SchedulerState', () => {
       const reworded = `${longTask} Also check the deck.`;
       shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', task_payload: { task: reworded } }, state);
       const after = shapeStubResult('scheduler-get', stubbed, { job_id: JOB_ID }, state) as Got;
-      expect(after.job).toEqual(expect.objectContaining({ task: reworded, taskPayload: { task: reworded }, cronExpr: '0 9 * * 1-5' }));
+      expect(after.job).toEqual(expect.objectContaining({ taskPayload: { task: reworded }, cronExpr: '0 9 * * 1-5' }));
+    });
+
+    it('clears the listed preview when an edit leaves no string task', () => {
+      const state = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5' }, state);
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', task_payload: { steps: ['scan', 'flag'] } }, state);
+      const jobs = (shapeStubResult('scheduler-list', empty, {}, state) as { jobs: Array<{ taskPreview: string | null }> }).jobs;
+      expect(jobs[0]!.taskPreview).toBeNull();
     });
   });
 });
