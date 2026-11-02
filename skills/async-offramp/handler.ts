@@ -232,14 +232,22 @@ export class AsyncOfframpHandler implements ToolHandler {
         },
         'voice off-ramped to async (deduplicated — prior enqueue reused)',
       );
+      // A now entry stays only while its result is pending (on the call or forwarded).
       return {
         success: true,
         data: {
           accepted: true,
+          mode,
           task_event_id: prior.taskEventId,
           follow_up_channel: prior.followUpChannel,
           deduplicated: true,
-          note: 'Already handed to async coordinator path; principal will be reached when done.',
+          ...(mode === 'now'
+            ? {
+              completed: false,
+              still_working: true,
+              note: `Still working on that. Tell the caller the result will come by ${prior.followUpChannel}.`,
+            }
+            : { note: 'Already handed to async coordinator path; principal will be reached when done.' }),
         },
       };
     }
@@ -284,7 +292,7 @@ export class AsyncOfframpHandler implements ToolHandler {
 
     // A now hand-off listens before publishing so a fast reply is not missed.
     const nowWait = mode === 'now'
-      ? this.awaitReply(ctx, taskEvent.id, brief, followUpChannel, senderId, originator)
+      ? this.awaitReply(ctx, taskEvent.id, brief, followUpChannel, senderId, originator, idempotencyKey)
       : null;
 
     try {
@@ -391,6 +399,7 @@ export class AsyncOfframpHandler implements ToolHandler {
     followUpChannel: string,
     senderId: string,
     originator: Record<string, unknown> | undefined,
+    idempotencyKey: string,
   ): { outcome: Promise<NowOutcome>; cancel: () => void } {
     const bus = ctx.bus!;
     let phase: 'waiting' | 'late' | 'closed' = 'waiting';
@@ -411,6 +420,7 @@ export class AsyncOfframpHandler implements ToolHandler {
         lateTimer = setTimeout(() => {
           if (phase !== 'late') return;
           phase = 'closed';
+          enqueuedByKey.delete(idempotencyKey);
           ctx.log.warn({ taskEventId }, 'voice hand-off: no reply within the forward window; nothing forwarded');
         }, LATE_FORWARD_WINDOW_MS);
         lateTimer.unref?.();
@@ -423,19 +433,13 @@ export class AsyncOfframpHandler implements ToolHandler {
         else signal.addEventListener('abort', () => miss('caller spoke'), { once: true });
       }
 
-      // The bus has no unsubscribe; the phase guard makes this a no-op once closed.
-      bus.subscribe('agent.response', 'system', async (event: BusEvent) => {
-        const response = event as AgentResponseEvent;
-        if (response.parentEventId !== taskEventId || phase === 'closed') return;
-        if (phase === 'waiting') {
-          phase = 'closed';
-          clearTimeout(waitTimer);
-          resolve({ kind: 'reply', event: response });
-          return;
-        }
-        phase = 'closed';
-        clearTimeout(lateTimer);
-        const forward = createAgentTask({
+      // Send a result the caller did not hear to the principal, once.
+      let forwarded = false;
+      const forward = async (response: AgentResponseEvent): Promise<void> => {
+        if (forwarded) return;
+        forwarded = true;
+        enqueuedByKey.delete(idempotencyKey);
+        const task = createAgentTask({
           agentId: 'coordinator',
           conversationId: `voice-offramp-forward:${taskEventId.slice(0, 32)}`,
           channelId: 'internal',
@@ -454,11 +458,34 @@ export class AsyncOfframpHandler implements ToolHandler {
           parentEventId: response.id,
         });
         try {
-          await bus.publishDetached('dispatch', forward);
-          ctx.log.info({ taskEventId, forwardTaskId: forward.id }, 'voice hand-off: late reply forwarded to the principal');
+          await bus.publishDetached('dispatch', task);
+          ctx.log.info({ taskEventId, forwardTaskId: task.id }, 'voice hand-off: result forwarded to the principal');
         } catch (err) {
-          ctx.log.error({ err, taskEventId }, 'voice hand-off: late reply could not be forwarded; the principal was not told');
+          ctx.log.error({ err, taskEventId }, 'voice hand-off: result could not be forwarded; the principal was not told');
         }
+      };
+
+      // The bus has no unsubscribe; the phase guard makes this a no-op once closed.
+      bus.subscribe('agent.response', 'system', async (event: BusEvent) => {
+        const response = event as AgentResponseEvent;
+        if (response.parentEventId !== taskEventId || phase === 'closed') return;
+        if (phase === 'waiting') {
+          phase = 'closed';
+          clearTimeout(waitTimer);
+          // Settled on the call: a repeat of this brief is a new request (a retry after a failure).
+          enqueuedByKey.delete(idempotencyKey);
+          // The turn can still be cancelled before the result is spoken (barge-in,
+          // hang-up). A turn that finishes normally is never aborted afterwards, so
+          // an abort from here on means the caller did not hear it all.
+          if (signal && !response.payload.isError) {
+            signal.addEventListener('abort', () => { void forward(response); }, { once: true });
+          }
+          resolve({ kind: 'reply', event: response });
+          return;
+        }
+        phase = 'closed';
+        clearTimeout(lateTimer);
+        await forward(response);
       });
     });
     return { outcome, cancel };

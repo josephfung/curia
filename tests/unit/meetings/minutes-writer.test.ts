@@ -82,6 +82,15 @@ describe('minutes writer', () => {
     });
   });
 
+  // Review of #2428: an agenda the cut-off block never reached is unknown, not unreached.
+  it('a cut-off block reports only the agendas it reached', () => {
+    const second: AgendaSnapshot = { ...agenda, agendaId: '22222222-2222-2222-2222-222222222222', title: 'Ops' };
+    const raw = '## Board\nDone.\n\n```json\n'
+      + `{"coverage":[{"agendaId":"${agenda.agendaId}","topics":[{"topic":"runway","coverage":"covered"},{"topic":"hiring","coverage":"covered"}]},{"agen`;
+    const parsed = parseMinutesOutput(raw, [agenda, second]);
+    expect(parsed.coverage?.map((entry) => entry.agendaId)).toEqual([agenda.agendaId]);
+  });
+
   it('a cut-off block with no complete topic gives null coverage', () => {
     const raw = '## Board\nRunway discussed.\n\n```json\n{"coverage":[{"agendaId":"11111111';
     expect(parseMinutesOutput(raw, [agenda])).toEqual({ markdown: '## Board\nRunway discussed.', coverage: null });

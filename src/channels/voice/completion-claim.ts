@@ -5,14 +5,27 @@
 // sent. The runtime warns when a turn with no tool call makes one of these
 // claims. A prod signal, not a filter, like spoken-jargon.ts.
 //
-// Narrow on purpose: openers and first-person past tense that report an action,
-// not every "done" or "sent" in ordinary speech.
+// Narrow on purpose: openers and first-person past tense that report an action.
+// Questions, and states the model can read off the calendar ("that's booked for
+// Thursday"), are not claims.
 
-const COMPLETION_CLAIM =
-  /(?:^|[.!?]\s+)(?:done|all set|all done|sent)\b|\b(?:i've|i have|i just)\s+(?:sent|booked|scheduled|set up|created|added|queued|messaged|emailed|texted|cancelled|canceled|moved)\b|(?:^|[.!?,]\s+)(?:it's|that's|it is|that is)\s+(?:sent|booked|done|scheduled|set up)\b/i;
+const CLAIM_OPENER = /^(?:done|all set|all done|sent)\b/i;
+const CLAIM_FIRST_PERSON =
+  /\b(?:i've|i have|i just)\s+(?:sent|booked|scheduled|set up|created|added|queued|messaged|emailed|texted|cancelled|canceled|moved)\b/i;
+const CLAIM_RESULT = /^(?:it's|that's|it is|that is)\s+(?:sent|done)\b/i;
 
 /** The first completion claim in `text`, lowercased, or null. */
 export function findCompletionClaim(text: string): string | null {
-  const match = COMPLETION_CLAIM.exec(text.trim());
-  return match ? match[0].replace(/^[.!?,\s]+/, '').toLowerCase() : null;
+  const sentences = text.trim().match(/[^.!?]+[.!?]*/g) ?? [];
+  for (const raw of sentences) {
+    const sentence = raw.trim();
+    if (sentence.endsWith('?')) continue;
+    // A clause after a comma can open a claim too: "Okay, that's sent."
+    const clauses = sentence.split(/,\s*/);
+    for (const clause of clauses) {
+      const match = CLAIM_OPENER.exec(clause) ?? CLAIM_RESULT.exec(clause) ?? CLAIM_FIRST_PERSON.exec(clause);
+      if (match) return match[0].toLowerCase();
+    }
+  }
+  return null;
 }

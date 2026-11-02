@@ -407,6 +407,41 @@ describe('AsyncOfframpHandler mode now (#2428)', () => {
     expect(published).toHaveLength(1);
   });
 
+  // Review of #2428: a failed now hand-off said "offer to try again", but the retry hit dedup.
+  it('lets the caller retry a now hand-off that failed', async () => {
+    const { bus, published } = liveBus((task) => response(task, { content: 'Broke.', isError: true }));
+    await handler.execute(makeCtx(bus, { brief: 'Do the thing', mode: 'now' }));
+    const retry = await handler.execute(makeCtx(bus, { brief: 'Do the thing', mode: 'now' }));
+    expect(retry.success).toBe(true);
+    if (retry.success) expect(retry.data).not.toMatchObject({ deduplicated: true });
+    expect(published.filter((event) => event.type === 'agent.task')).toHaveLength(2);
+  });
+
+  it('answers a repeat of a now hand-off still running without promising a new task', async () => {
+    const controller = new AbortController();
+    const { bus, published } = liveBus();
+    const first = handler.execute(makeCtx(bus, { brief: 'Long job', mode: 'now' }, { inputSignal: controller.signal }));
+    await Promise.resolve();
+    controller.abort();
+    await first;
+    const again = await handler.execute(makeCtx(bus, { brief: 'Long job', mode: 'now' }));
+    expect(again.success).toBe(true);
+    if (again.success) expect(again.data).toMatchObject({ deduplicated: true, still_working: true });
+    expect(published).toHaveLength(1);
+  });
+
+  // Review of #2428: the reply came back, then the caller hung up before hearing it.
+  it('forwards a result whose turn was cancelled before it was spoken', async () => {
+    const controller = new AbortController();
+    const { bus, published } = liveBus((task) => response(task, { content: 'All finished.' }));
+    const result = await handler.execute(makeCtx(bus, { brief: 'Quick one', mode: 'now' }, { inputSignal: controller.signal }));
+    expect(result.success && (result.data as { completed?: boolean }).completed).toBe(true);
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const forward = published[1] as AgentTaskEvent;
+    expect(forward.payload.content).toContain('All finished.');
+  });
+
   it('keeps after_call as the default and rejects an unknown mode', async () => {
     const { bus, published } = liveBus();
     const result = await handler.execute(makeCtx(bus, { brief: 'Research this' }));

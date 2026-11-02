@@ -84,7 +84,11 @@ function salvageCoverage(fenceBody: string, agendas: AgendaSnapshot[]): AgendaCo
     current.topics.push({ topic, coverage: match[3] });
     found += 1;
   }
-  return found === 0 ? null : normaliseCoverage(items, agendas);
+  if (found === 0) return null;
+  // An agenda the block never reached is unknown, not unreached: leave it out,
+  // so the pipeline treats it as it would with no coverage at all.
+  const reached = new Set(items.map((item) => item.agendaId));
+  return normaliseCoverage(items, agendas).filter((entry) => reached.has(entry.agendaId));
 }
 
 function normaliseCoverage(items: unknown[], agendas: AgendaSnapshot[]): AgendaCoverage[] {
