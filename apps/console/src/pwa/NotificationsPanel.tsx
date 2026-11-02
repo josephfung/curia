@@ -68,8 +68,9 @@ export function NotificationsPanel({ onChange }: { onChange?: () => void } = {})
     try {
       await enablePush(config.publicKey);
       setSubscribed(true);
-      await load();
+      // The subscription exists now, whatever the refresh below does.
       onChange?.();
+      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not turn on notifications.');
     } finally {

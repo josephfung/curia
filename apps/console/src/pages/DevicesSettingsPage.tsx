@@ -272,9 +272,11 @@ function DevicesSection() {
               Sign out all other devices
             </button>
           </div>
-          <HidePreviewsSetting />
         </>
       )}
+
+      {/* Outside the list block: a failed device list must not hide this setting. */}
+      <HidePreviewsSetting />
 
       <section className="devices-section" aria-labelledby="add-a-phone">
         <h3 className="settings-section-title" id="add-a-phone">Add a phone</h3>
