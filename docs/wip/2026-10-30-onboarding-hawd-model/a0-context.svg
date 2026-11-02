@@ -29,7 +29,7 @@
     <text x="735" y="52" text-anchor="middle">Triage switch</text><text x="735" y="68" text-anchor="middle" class="t-sm">policy · doesn't exist yet</text>
 
     <rect class="shape" x="830" y="30" width="150" height="54" rx="2"/><rect class="shape" x="822" y="40" width="8" height="16"/>
-    <text x="905" y="52" text-anchor="middle">Autonomy score</text><text x="905" y="68" text-anchor="middle" class="t-sm">policy · starts at 75</text>
+    <text x="905" y="52" text-anchor="middle">Autonomy score</text><text x="905" y="68" text-anchor="middle" class="t-sm">policy · principal picks band</text>
   </g>
   <path class="arrow" d="M225,84 L225,150 L470,150 L470,236"/>
   <path class="arrow" d="M395,84 L395,130 L510,130 L510,236"/>
@@ -45,7 +45,7 @@
 
   <!-- Inputs -->
   <rect class="shape" x="20" y="262" width="190" height="40" rx="20"/>
-  <text x="115" y="280" text-anchor="middle">Curia with a desk</text><text x="115" y="294" text-anchor="middle" class="t-sm">from operator setup</text>
+  <text x="115" y="280" text-anchor="middle">Curia, set up</text><text x="115" y="294" text-anchor="middle" class="t-sm">from the operator&apos;s Setup</text>
   <path class="arrow" d="M210,282 L438,282"/>
   <polygon class="shape" points="40,330 230,330 210,376 20,376"/>
   <text x="125" y="349" text-anchor="middle">Principal's mail &amp;</text><text x="125" y="364" text-anchor="middle">calendar history</text>
@@ -54,13 +54,13 @@
   <!-- Outputs -->
   <path class="arrow" d="M690,262 L888,262"/>
   <rect class="shape" x="890" y="244" width="210" height="36" rx="18"/>
-  <text x="995" y="267" text-anchor="middle">Confirmed priorities</text>
+  <text x="995" y="267" text-anchor="middle">Confirmed priorities &amp; voice</text>
   <path class="arrow" d="M690,314 L888,314"/>
   <rect class="shape" x="890" y="296" width="210" height="36" rx="18"/>
   <text x="995" y="319" text-anchor="middle">Confirmed standing rules</text>
   <path class="arrow" d="M690,352 L860,352 L860,366 L888,366"/>
   <rect class="shape" x="890" y="348" width="210" height="36" rx="18"/>
-  <text x="995" y="371" text-anchor="middle">Agreed routines &amp; cadence</text>
+  <text x="995" y="371" text-anchor="middle">Routines &amp; weekly session</text>
   <!-- governance-producing loop -->
   <path class="arrow" d="M690,376 L800,376 L800,410"/>
   <text x="808" y="404" class="t-sm" style="fill:#2563eb">principal's approvals</text>
@@ -69,7 +69,7 @@
 
   <!-- Mechanisms -->
   <path class="arrow" d="M140,560 L140,470 L470,470 L470,390"/>
-  <circle class="shape" cx="140" cy="590" r="30"/><text x="140" y="586" text-anchor="middle" class="t-sm">Curia</text><text x="140" y="599" text-anchor="middle" class="t-sm">voice</text>
+  <circle class="shape" cx="140" cy="590" r="30"/><text x="140" y="586" text-anchor="middle" class="t-sm">Curia</text><text x="140" y="599" text-anchor="middle" class="t-sm">voice · chat</text>
   <path class="arrow" d="M290,560 L290,490 L510,490 L510,390"/>
   <circle class="shape" cx="290" cy="590" r="30"/><text x="290" y="586" text-anchor="middle" class="t-sm">Inference</text><text x="290" y="599" text-anchor="middle" class="t-sm">job</text>
   <path class="arrow" d="M440,560 L440,510 L545,510 L545,390"/>

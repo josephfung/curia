@@ -16,7 +16,7 @@
 
   <!-- A1 -->
   <rect class="shape" x="30" y="40" width="190" height="80" rx="3"/>
-  <text x="125" y="72" text-anchor="middle" class="t-b">Set expectations</text><text x="125" y="90" text-anchor="middle" class="t-b">&amp; agree cadence</text>
+  <text x="125" y="72" text-anchor="middle" class="t-b">Invite &amp; hold the</text><text x="125" y="90" text-anchor="middle" class="t-b">first conversation</text>
   <text x="212" y="114" text-anchor="end" class="t-node">A1</text>
   <!-- A2 hexagon -->
   <polygon class="shape" points="270,190 290,150 440,150 460,190 440,230 290,230" style="stroke-width:2"/>
@@ -24,11 +24,11 @@
   <text x="440" y="224" text-anchor="end" class="t-node">A2</text>
   <!-- A3 -->
   <rect class="shape" x="500" y="260" width="190" height="80" rx="3"/>
-  <text x="595" y="292" text-anchor="middle" class="t-b">Infer priorities</text><text x="595" y="310" text-anchor="middle" class="t-b">&amp; rules</text>
+  <text x="595" y="292" text-anchor="middle" class="t-b">Infer rules, priorities</text><text x="595" y="310" text-anchor="middle" class="t-b">&amp; writing voice</text>
   <text x="682" y="334" text-anchor="end" class="t-node">A3</text>
   <!-- A4 hexagon -->
   <polygon class="shape" points="730,410 750,370 900,370 920,410 900,450 750,450" style="stroke-width:2"/>
-  <text x="825" y="406" text-anchor="middle" class="t-b">Confirm priorities</text><text x="825" y="423" text-anchor="middle" class="t-b">&amp; rules</text>
+  <text x="825" y="406" text-anchor="middle" class="t-b">Review &amp; confirm</text><text x="825" y="423" text-anchor="middle" class="t-b">the drafts</text>
   <text x="900" y="444" text-anchor="end" class="t-node">A4</text>
   <!-- A5 -->
   <rect class="shape" x="910" y="470" width="190" height="80" rx="3"/>
@@ -36,12 +36,12 @@
   <text x="1092" y="544" text-anchor="end" class="t-node">A5</text>
 
   <!-- flows -->
-  <path class="a2" d="M220,80 L365,80 L365,148"/><text x="230" y="72" class="t-sm">mailbox guide</text>
+  <path class="a2" d="M220,80 L365,80 L365,148"/><text x="230" y="72" class="t-sm">sign-in link</text>
   <path class="a2" d="M460,190 L595,190 L595,258"/><text x="470" y="182" class="t-sm">connected grant</text>
-  <path class="a2" d="M690,300 L825,300 L825,368"/><text x="700" y="292" class="t-sm">drafts + evidence</text>
+  <path class="a2" d="M690,300 L825,300 L825,368"/><text x="700" y="292" class="t-sm">drafts as Google Docs</text>
   <path class="a2" d="M920,410 L1005,410 L1005,468"/><text x="925" y="402" class="t-sm">confirmed docs</text>
-  <path class="a2" d="M125,120 L125,510 L908,510"/><text x="135" y="502" class="t-sm">cadence, drafts choice, triage switch on</text>
+  <path class="a2" d="M125,120 L125,510 L908,510"/><text x="135" y="502" class="t-sm">style, autonomy, preferences, review format, triage switch on</text>
   <!-- loop back -->
   <path class="loop" d="M1100,500 L1110,500 L1110,20 L125,20 L125,38"/>
-  <text x="620" y="14" class="t-sm" style="fill:#2563eb">next session (booked one at a time) and approvals that raise the autonomy score</text>
+  <text x="530" y="14" class="t-sm" style="fill:#2563eb">next session (one at a time, tapering to weekly) and approvals that raise the autonomy score</text>
 </svg>
