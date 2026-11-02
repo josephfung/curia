@@ -3,14 +3,8 @@ import { apiFetch } from '../../api';
 import { PAIRING_LIMIT_MESSAGE } from '../../../../../src/phone/phone-docs.js';
 import { PhoneNotice } from '../../pwa/PhoneNotice';
 import { PairingQr } from './PairingQr';
-import { readPairingOrigin, writePairingOrigin } from './pair-origin-memory';
 import { shouldStopPairingPoll } from './pairing-poll';
-
-interface OriginChoice {
-  origin: string | null;
-  warning: string | null;
-  askForOrigin: boolean;
-}
+import { usePairOrigin } from './usePairOrigin';
 
 interface MintedCode {
   id: string;
@@ -26,14 +20,6 @@ interface PairingStatus {
   expired: boolean;
   tokenDeviceName: string | null;
   shortDeviceName: string | null;
-}
-
-function isOriginChoice(value: unknown): value is OriginChoice {
-  if (typeof value !== 'object' || value === null) return false;
-  const row = value as Record<string, unknown>;
-  return (row['origin'] === null || typeof row['origin'] === 'string')
-    && (row['warning'] === null || typeof row['warning'] === 'string')
-    && typeof row['askForOrigin'] === 'boolean';
 }
 
 function isMintedCode(value: unknown): value is MintedCode {
@@ -64,9 +50,7 @@ function errorMessage(body: unknown, fallback: string): string {
 }
 
 export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
-  const [choice, setChoice] = useState<OriginChoice | null>(null);
-  const [needsOrigin, setNeedsOrigin] = useState(false);
-  const [originDraft, setOriginDraft] = useState('');
+  const { choice, needsOrigin, originDraft, setOriginDraft, originError, checkDraft, commitDraft } = usePairOrigin();
   const [minted, setMinted] = useState<MintedCode | null>(null);
   const [status, setStatus] = useState<PairingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,27 +58,6 @@ export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
   const seen = useRef({ token: false, short: false });
   const onPairedRef = useRef(onPaired);
   onPairedRef.current = onPaired;
-
-  useEffect(() => {
-    const desktopOrigin = window.location.origin;
-    void apiFetch(`/api/pairing/origin?desktopOrigin=${encodeURIComponent(desktopOrigin)}`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error('Could not check this address.');
-        const body: unknown = await res.json();
-        if (!isOriginChoice(body)) throw new Error('Could not check this address.');
-        setChoice(body);
-        const ask = body.askForOrigin || !body.origin;
-        setNeedsOrigin(ask);
-        if (body.origin && !body.askForOrigin) setOriginDraft(body.origin);
-        else {
-          const saved = readPairingOrigin(window.localStorage);
-          if (saved) setOriginDraft(saved);
-        }
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Could not check this address.');
-      });
-  }, []);
 
   useEffect(() => {
     if (!minted) return;
@@ -148,28 +111,10 @@ export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
     };
   }, [minted]);
 
-  async function checkDraft() {
-    const draft = originDraft.trim();
-    if (!draft) return;
-    writePairingOrigin(window.localStorage, draft);
-    try {
-      const res = await apiFetch(`/api/pairing/origin?requested=${encodeURIComponent(draft)}`);
-      if (!res.ok) return;
-      const body: unknown = await res.json();
-      if (!isOriginChoice(body)) return;
-      setChoice((current) => current
-        ? { ...current, origin: body.origin, warning: body.warning }
-        : body);
-    } catch (err) {
-      console.error('[pair] origin check failed:', err);
-    }
-  }
-
   async function mint() {
     setBusy(true);
     setError(null);
-    const draft = originDraft.trim();
-    writePairingOrigin(window.localStorage, draft);
+    const draft = commitDraft();
     try {
       const res = await apiFetch('/api/pairing/codes', {
         method: 'POST',
@@ -206,7 +151,7 @@ export function PairPhonePanel({ onPaired }: { onPaired?: () => void }) {
         Scan the code with the phone, or type the short code. The phone stays signed in for 90 days after its last use. The sign-in lives in the cookie, so add Curia to the home screen from the same browser that opened the link.
       </p>
       {warning && <PhoneNotice text={warning} />}
-      {error && <p className="autonomy-error" role="alert">{error}</p>}
+      {(error ?? originError) && <p className="autonomy-error" role="alert">{error ?? originError}</p>}
       {minted ? (
         <div className="pair-code">
           {showQr && <PairingQr value={minted.pairUrl} />}

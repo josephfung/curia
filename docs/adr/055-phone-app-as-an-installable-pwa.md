@@ -168,6 +168,40 @@ agents keep choosing the channel. Code decides only whether the app is reachable
      disconnects, as happens when the app is swiped closed.
    A real Curia call worked over cellular in mobile Safari.
 
+## Amendment (2026-11-02) — invitation links (#2412)
+
+Pairing (decision 2) assumes the operator is holding the phone: the QR code lasts ten minutes
+and is scanned from the desktop. Onboarding needs the operator to bring in the principal, who
+is somewhere else and opens the link later. So the operator can also mint an **invitation
+link** for the principal, from Settings → Devices, and send it through their own channel.
+Curia doesn't send it.
+
+- **Same link, same redemption.** The link is `https://<phone-origin>/pair#c=<token>`, like
+  the QR, so the token stays in the fragment and out of proxy and server logs. The phone's
+  `/pair` page and `POST /api/pairing/redeem` are unchanged: a token that matches no pairing
+  code is tried as an invitation, under the same rate limit and with the same rejection
+  message. Redeeming creates a `paired_device` session, as QR pairing does, and the
+  `operator.session` pair event sets `invitation`.
+- **48 hours, once.** The link has to survive being sent and waiting to be opened, so it lasts
+  48 hours rather than ten minutes. It is one credential with no short code, so there is
+  nothing to cap at two minutes after it's used. Phase 0 found the Safari cookie carries into
+  the iOS home-screen app, so the link alone is enough. If it doesn't carry over, or the link
+  was opened in an app's built-in browser, the operator makes a new link.
+- **One current link.** Minting a new link supersedes the old one, which stops redeeming. The
+  operator can also stop the link without making another. A partial unique index keeps at
+  most one current link when two mints race. The console shows the current link as waiting,
+  redeemed (with the device name) or expired. The link itself is shown only when it's minted,
+  because only its hash is stored.
+- **Minted only from a signed-in console session.** The access-key header alone gets a 401,
+  so the `operator.session` `invite` audit event always names a session. If that audit can't
+  be recorded, the link is stopped and the mint fails. Stopping a link is audited as
+  `cancel_invite`.
+- **Every device is told.** When an invitation is redeemed, every other signed-in device shows
+  a dismissible "A phone signed in with your invitation link" notice (`push_notices`, kind
+  `paired`). The new phone doesn't show it about itself.
+- **Bound to the principal.** Every console session is the principal's, so the invitation needs
+  no principal column. A deployment with several principals would need one.
+
 ## Consequences
 
 - **Operators can be reached without a phone number.** An operator on an HTTPS deployment can

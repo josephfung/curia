@@ -996,6 +996,18 @@ a.dash-activity-headline:hover { text-decoration: underline; }
   color: var(--app-fg);
 }
 .pair-paired { margin: 0; font-weight: 600; }
+.pair-panel > .pair-paired, .pair-panel > .device-meta { margin-top: 12px; }
+.invite-link {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--app-input-bd);
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: var(--app-fg);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+}
+.invite-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .pair-steps {
   margin: 0;
   padding-left: 1.2em;

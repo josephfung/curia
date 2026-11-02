@@ -97,4 +97,27 @@ describe('push routes', () => {
     expect(response.json()).toMatchObject({ configured: true, subscribed: true, hidePreviews: false });
     await app.close();
   });
+
+  it('leaves a paired notice out for the phone it describes, and passes the kind through', async () => {
+    let noticeParams: unknown[] | undefined;
+    const app = await appWith(async (sql, params) => {
+      if (sql.includes('FROM sessions')) return { rows: [{ id: SESSION_ID, kind: 'browser', name: null }] };
+      if (sql.includes('hide_previews')) return { rows: [{ hide_previews: false }] };
+      if (sql.includes('FROM push_notices')) {
+        noticeParams = params;
+        expect(sql).toContain('subject_session_id IS DISTINCT FROM $1');
+        return { rows: [{ id: 'n-1', kind: 'paired', detail: 'A phone signed in.', created_at: new Date(0) }] };
+      }
+      return { rows: [] };
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/push/config',
+      cookies: { curia_session: TOKEN },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(noticeParams).toEqual([SESSION_ID]);
+    expect(response.json()).toMatchObject({ notices: [{ id: 'n-1', kind: 'paired' }] });
+    await app.close();
+  });
 });

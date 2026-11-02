@@ -3,7 +3,7 @@ import { apiFetch } from '../api';
 
 interface PushNotice {
   id: string;
-  kind: 'dead' | 'setup';
+  kind: 'dead' | 'setup' | 'paired';
   detail: string;
 }
 
@@ -11,11 +11,14 @@ function isNotice(value: unknown): value is PushNotice {
   if (typeof value !== 'object' || value === null) return false;
   const row = value as Record<string, unknown>;
   return typeof row['id'] === 'string'
-    && (row['kind'] === 'dead' || row['kind'] === 'setup')
+    && (row['kind'] === 'dead' || row['kind'] === 'setup' || row['kind'] === 'paired')
     && typeof row['detail'] === 'string';
 }
 
-/** Console-wide notice when a phone stops receiving pushes or setup is rejected. */
+/**
+ * Console-wide notice when a phone stops receiving pushes, setup is rejected,
+ * or a phone signed in with an invitation link.
+ */
 export function PushNoticesBanner() {
   const [notices, setNotices] = useState<PushNotice[]>([]);
 
