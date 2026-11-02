@@ -2,14 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api';
 import { currentInstallEnvironment, installCapabilityWarning } from './capabilities';
 import { enablePush, syncPushSubscription } from './push-client';
+import { isNotice, type PushNotice } from './push-notice';
 import { isStandaloneDisplay } from './standalone';
-
-interface PushNotice {
-  id: string;
-  kind: 'dead' | 'setup';
-  detail: string;
-  createdAt: string;
-}
 
 interface PushConfig {
   publicKey: string | null;
@@ -17,15 +11,6 @@ interface PushConfig {
   subscribed: boolean;
   hidePreviews: boolean;
   notices: PushNotice[];
-}
-
-function isNotice(value: unknown): value is PushNotice {
-  if (typeof value !== 'object' || value === null) return false;
-  const row = value as Record<string, unknown>;
-  return typeof row['id'] === 'string'
-    && (row['kind'] === 'dead' || row['kind'] === 'setup')
-    && typeof row['detail'] === 'string'
-    && typeof row['createdAt'] === 'string';
 }
 
 function isConfig(value: unknown): value is PushConfig {
