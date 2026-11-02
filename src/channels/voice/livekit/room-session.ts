@@ -56,6 +56,14 @@ export interface LiveKitRoomSessionConfig {
 const DEFAULT_INBOUND_SAMPLE_RATE = 16000;
 const DEFAULT_PUBLISH_SAMPLE_RATE = 24000;
 
+/** Set by the console before a Mute-button press. An OS mute leaves it unset. */
+const USER_MUTE_ATTRIBUTE = 'curia.mute';
+const USER_MUTE_VALUE = 'user';
+
+function isUserMute(participant: { attributes?: Record<string, string> }): boolean {
+  return participant.attributes?.[USER_MUTE_ATTRIBUTE] === USER_MUTE_VALUE;
+}
+
 export class LiveKitRoomSession implements AudioTransport {
   readonly inboundSampleRate: number;
   readonly publishSampleRate: number;
@@ -68,6 +76,7 @@ export class LiveKitRoomSession implements AudioTransport {
   private readonly readers = new Set<ReadableStreamDefaultReader<AudioFrame>>();
   private readonly remoteCallbacks: Array<(frame: PcmFrame) => void> = [];
   private readonly closeCallbacks: Array<(reason: AudioTransportCloseReason) => void> = [];
+  private readonly callerMutedCallbacks: Array<(muted: boolean) => void> = [];
   private connected = false;
   private disconnecting = false;
   private closeEmitted = false;
@@ -130,6 +139,24 @@ export class LiveKitRoomSession implements AudioTransport {
         }
       });
 
+      // iOS mutes the mic when the installed app is backgrounded. The room stays
+      // connected. VoiceRuntime stops speaking and starts the pause grace period.
+      // A Mute-button press sets curia.mute=user first and is not a pause.
+      room.on(rtc.RoomEvent.TrackMuted, (publication, participant) => {
+        if (!this.isCallerAudio(rtc, publication, participant)) return;
+        if (isUserMute(participant)) return;
+        this.emitCallerMuted(true);
+      });
+      room.on(rtc.RoomEvent.TrackUnmuted, (publication, participant) => {
+        if (!this.isCallerAudio(rtc, publication, participant)) return;
+        this.emitCallerMuted(false);
+      });
+      room.on(rtc.RoomEvent.ParticipantAttributesChanged, (_changed, participant) => {
+        if (participant.identity !== callerIdentity) return;
+        // The attribute can arrive just after TrackMuted. A user mute is not a pause.
+        if (isUserMute(participant)) this.emitCallerMuted(false);
+      });
+
       room.on(rtc.RoomEvent.Disconnected, () => {
         this.emitClose('room_disconnected');
       });
@@ -148,6 +175,8 @@ export class LiveKitRoomSession implements AudioTransport {
         track,
         new rtc.TrackPublishOptions({ source: rtc.TrackSource.SOURCE_MICROPHONE }),
       );
+
+      this.seedCallerMute(rtc, room);
 
       this.connected = true;
       this.log.info(
@@ -216,6 +245,43 @@ export class LiveKitRoomSession implements AudioTransport {
 
   onClose(cb: (reason: AudioTransportCloseReason) => void): void {
     this.closeCallbacks.push(cb);
+  }
+
+  onCallerMuted(cb: (muted: boolean) => void): void {
+    this.callerMutedCallbacks.push(cb);
+  }
+
+  private isCallerAudio(
+    rtc: RtcModule,
+    publication: { kind?: unknown },
+    participant: { identity?: string },
+  ): boolean {
+    return participant.identity === this.config.callerIdentity
+      && publication.kind === rtc.TrackKind.KIND_AUDIO;
+  }
+
+  /** A caller who joined already muted (and not via the Mute button) starts paused. */
+  private seedCallerMute(rtc: RtcModule, room: LkRoom): void {
+    const remotes = room.remoteParticipants;
+    if (!remotes) return;
+    const caller = remotes.get(this.config.callerIdentity);
+    if (!caller || isUserMute(caller)) return;
+    for (const publication of caller.trackPublications.values()) {
+      if (publication.kind === rtc.TrackKind.KIND_AUDIO && publication.muted === true) {
+        this.emitCallerMuted(true);
+        return;
+      }
+    }
+  }
+
+  private emitCallerMuted(muted: boolean): void {
+    for (const cb of this.callerMutedCallbacks) {
+      try {
+        cb(muted);
+      } catch (err) {
+        this.log.warn({ err, muted }, 'audio transport onCallerMuted callback threw');
+      }
+    }
   }
 
   async publishAudio(frame: PcmFrame): Promise<void> {

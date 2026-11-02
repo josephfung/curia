@@ -8,6 +8,7 @@ function props(overrides: Partial<UseVoiceCallResult> = {}): UseVoiceCallResult 
     voiceAvailable: true,
     callState: 'idle',
     muted: false,
+    backgroundPaused: false,
     error: null,
     sessionId: null,
     heardAssistant: false,
@@ -50,6 +51,15 @@ describe('VoiceCallBar (#1571)', () => {
     // and by the aria-label, so it passes even when the two labels are swapped.
     expect(html).toContain('>Mute</button>');
     expect(html).toContain('aria-label="Mute microphone"');
+    expect(html).toContain('Hang up');
+  });
+
+  it('says the call is paused when the phone backgrounds the app', () => {
+    const html = renderToStaticMarkup(
+      <VoiceCallBar {...props({ callState: 'connected', heardAssistant: true, backgroundPaused: true })} />,
+    );
+    expect(html).toContain('Paused while Curia is in the background');
+    expect(html).toContain('voice-call-hangup');
     expect(html).toContain('Hang up');
   });
 

@@ -520,6 +520,27 @@ function setupDetail(status: number, err: unknown): string {
   return `Push setup was rejected (${status}): ${clean}`;
 }
 
+/**
+ * A live session still has a push subscription. Any session kind counts: a
+ * phone that signed in with the access key and then subscribed is done too.
+ * The caller passes false when push itself is off, so a leftover row does
+ * not mark the setup task done.
+ */
+export async function hasLivePushSubscription(
+  pool: WebThreadQueryable,
+  pushConfigured: boolean,
+): Promise<boolean> {
+  if (!pushConfigured) return false;
+  const result = await pool.query(
+    `SELECT 1
+     FROM push_subscriptions
+     JOIN sessions ON sessions.id = push_subscriptions.session_id
+     WHERE sessions.expires_at > NOW()
+     LIMIT 1`,
+  );
+  return result.rows.length > 0;
+}
+
 /** True when this origin can be a VAPID subject Apple will accept. */
 export function vapidSubject(
   appOrigin: string | undefined,

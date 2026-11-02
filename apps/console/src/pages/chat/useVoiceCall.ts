@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
 import type { RemoteTrack } from 'livekit-client';
 import { apiFetch } from '../../api.js';
+import { bindMicPause, isMicPaused, USER_MUTE_ATTRIBUTE, USER_MUTE_VALUE } from './mic-pause.js';
 
 export type VoiceCallState = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -30,6 +31,8 @@ export interface UseVoiceCallResult {
    * the agent publishes a silent audio track at connect time.
    */
   heardAssistant: boolean;
+  /** The mic was muted by the phone, not by the Mute button. */
+  backgroundPaused: boolean;
   startCall: () => Promise<void>;
   toggleMute: () => Promise<void>;
   hangUp: () => Promise<void>;
@@ -70,6 +73,10 @@ export function useVoiceCall(): UseVoiceCallResult {
   const [voiceAvailable, setVoiceAvailable] = useState(false);
   const [callState, setCallState] = useState<VoiceCallState>('idle');
   const [muted, setMuted] = useState(false);
+  const [backgroundPaused, setBackgroundPaused] = useState(false);
+  const userMuteRef = useRef(false);
+  const backgroundPausedRef = useRef(false);
+  const unbindMicRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [heardAssistant, setHeardAssistant] = useState(false);
@@ -114,6 +121,10 @@ export function useVoiceCall(): UseVoiceCallResult {
   }, []);
 
   const resetLocalCall = useCallback((room?: Room | null) => {
+    unbindMicRef.current?.();
+    unbindMicRef.current = null;
+    userMuteRef.current = false;
+    backgroundPausedRef.current = false;
     const activeRoom = room ?? roomRef.current;
     if (roomRef.current === activeRoom) roomRef.current = null;
     if (activeRoom) {
@@ -125,6 +136,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     if (mountedRef.current) {
       setSessionId(null);
       setMuted(false);
+      setBackgroundPaused(false);
       setHeardAssistant(false);
     }
   }, [detachAllAudio]);
@@ -215,10 +227,35 @@ export function useVoiceCall(): UseVoiceCallResult {
           if (mountedRef.current) setHeardAssistant(true);
         }
       });
+      const watchMic = () => {
+        unbindMicRef.current?.();
+        const publication = callRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
+        const track = publication?.track;
+        if (!track) return;
+        unbindMicRef.current = bindMicPause(() => {
+          const current = callRoom.localParticipant.getTrackPublication(Track.Source.Microphone)?.track ?? track;
+          return current;
+        }, {
+          isUserMute: () => userMuteRef.current,
+          onPaused: () => {
+            backgroundPausedRef.current = true;
+            if (mountedRef.current) setBackgroundPaused(true);
+          },
+          onResumed: () => {
+            backgroundPausedRef.current = false;
+            if (mountedRef.current) setBackgroundPaused(false);
+          },
+        });
+      };
+      callRoom.on(RoomEvent.LocalTrackPublished, watchMic);
       callRoom.on(RoomEvent.Disconnected, () => {
         if (roomRef.current !== callRoom) return;
+        const paused = backgroundPausedRef.current;
         resetLocalCall(callRoom);
-        if (mountedRef.current) setCallState('idle');
+        if (mountedRef.current) {
+          setCallState('idle');
+          if (paused) setError('Call ended while Curia was in the background');
+        }
       });
 
       roomRef.current = callRoom;
@@ -231,6 +268,7 @@ export function useVoiceCall(): UseVoiceCallResult {
       }
 
       await callRoom.localParticipant.setMicrophoneEnabled(true);
+      watchMic();
       if (mountedRef.current) {
         setMuted(false);
         setCallState('connected');
@@ -261,14 +299,42 @@ export function useVoiceCall(): UseVoiceCallResult {
     if (!room || callState !== 'connected') return;
 
     const nextMuted = !muted;
+    userMuteRef.current = nextMuted;
     try {
-      await room.localParticipant.setMicrophoneEnabled(!nextMuted);
+      if (nextMuted) {
+        await room.localParticipant.setAttributes({ [USER_MUTE_ATTRIBUTE]: USER_MUTE_VALUE });
+        await room.localParticipant.setMicrophoneEnabled(false);
+      } else {
+        // Clear the mark before the mic returns. A failed unmute must not
+        // leave the server treating the next OS mute as a button press.
+        await room.localParticipant.setAttributes({ [USER_MUTE_ATTRIBUTE]: '' });
+        await room.localParticipant.setMicrophoneEnabled(true);
+      }
+      // The pause filter reads userMuteRef only when a mute event fires, so
+      // reconcile here: a user mute replaces a background pause, and clearing it
+      // brings the pause back if the OS still holds the mic.
+      const mic = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+      const paused = !nextMuted && mic !== undefined && isMicPaused(mic);
+      backgroundPausedRef.current = paused;
       if (mountedRef.current) {
+        setBackgroundPaused(paused);
         setMuted(nextMuted);
         setError(null);
       }
     } catch (err) {
-      if (mountedRef.current) setError(voiceErrorMessage(err));
+      const micOn = room.localParticipant.isMicrophoneEnabled;
+      userMuteRef.current = !micOn;
+      try {
+        await room.localParticipant.setAttributes({
+          [USER_MUTE_ATTRIBUTE]: micOn ? '' : USER_MUTE_VALUE,
+        });
+      } catch (attrErr) {
+        console.error('[useVoiceCall] failed to resync mute attribute:', attrErr);
+      }
+      if (mountedRef.current) {
+        setMuted(!micOn);
+        setError(voiceErrorMessage(err));
+      }
     }
   }, [callState, muted]);
 
@@ -305,6 +371,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     voiceAvailable,
     callState,
     muted,
+    backgroundPaused,
     error,
     sessionId,
     heardAssistant,

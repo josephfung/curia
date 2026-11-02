@@ -43,6 +43,12 @@ const DEEPGRAM_PRERECORDED_URL = 'https://api.deepgram.com/v1/listen';
 // (VoiceRuntime.startSession / session teardown) forever.
 const CONNECT_TIMEOUT_MS = 10_000;
 const CLOSE_TIMEOUT_MS = 5_000;
+// Deepgram closes a stream that gets no audio for about ten seconds. A caller
+// whose phone mutes the mic (the app was backgrounded) sends none, so a pause
+// would end the call as stt_error long before its grace period. A KeepAlive
+// every few seconds holds the stream open. It only counts after real audio:
+// Deepgram's first-audio timeout is not reset by KeepAlive.
+export const KEEPALIVE_INTERVAL_MS = 4_000;
 const DEFAULT_PRERECORDED_CONTENT_TYPE = 'application/octet-stream';
 /**
  * Silence (ms) before Deepgram flags `speech_final` (#2240). `endpointing=true`
@@ -196,12 +202,33 @@ class DeepgramSttSession implements SttSession {
   private connectionErrorReported = false;
   /** Seconds of audio sent on this stream; Deepgram's word offsets count from its start. */
   private audioSentSeconds = 0;
+  private lastAudioAt: number | null = null;
+  private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly socket: ProviderWebSocket,
     private readonly logger: Logger,
     private readonly onConnectionError?: (err: Error) => void,
-  ) {}
+  ) {
+    this.keepAliveTimer = setInterval(() => this.keepAlive(), KEEPALIVE_INTERVAL_MS);
+    this.keepAliveTimer.unref?.();
+  }
+
+  private keepAlive(): void {
+    if (this.lastAudioAt === null || this.socket.readyState !== WEBSOCKET_OPEN) return;
+    if (Date.now() - this.lastAudioAt < KEEPALIVE_INTERVAL_MS) return;
+    try {
+      this.socket.send(JSON.stringify({ type: 'KeepAlive' }));
+    } catch (err) {
+      this.logger.warn({ err }, 'Deepgram STT KeepAlive send failed');
+    }
+  }
+
+  private stopKeepAlive(): void {
+    if (this.keepAliveTimer === null) return;
+    clearInterval(this.keepAliveTimer);
+    this.keepAliveTimer = null;
+  }
 
   private reportConnectionError(err: Error): void {
     if (this.ended || this.cancelled || this.connectionErrorReported) return;
@@ -218,9 +245,11 @@ class DeepgramSttSession implements SttSession {
     bytes.set(new Uint8Array(frame.pcm.buffer, frame.pcm.byteOffset, frame.pcm.byteLength));
     this.socket.send(bytes);
     this.audioSentSeconds += frame.pcm.length / frame.channels / frame.sampleRate;
+    this.lastAudioAt = Date.now();
   }
 
   async end(): Promise<void> {
+    this.stopKeepAlive();
     if (this.closed) return;
     this.ended = true;
 
@@ -241,6 +270,7 @@ class DeepgramSttSession implements SttSession {
   }
 
   cancel(): void {
+    this.stopKeepAlive();
     if (this.closed) return;
     this.cancelled = true;
     if (this.socket.readyState === WEBSOCKET_OPEN || this.socket.readyState === WEBSOCKET_CLOSING) {
@@ -280,6 +310,7 @@ class DeepgramSttSession implements SttSession {
   }
 
   handleClose(event: ProviderWebSocketCloseEvent): void {
+    this.stopKeepAlive();
     this.closed = true;
     for (const resolve of this.closeWaiters.splice(0)) {
       resolve();

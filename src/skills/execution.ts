@@ -287,6 +287,7 @@ export class ExecutionLayer {
   private skillRegistry?: SkillRegistry;
   private logger: Logger;
   private bus?: EventBus;
+  private phoneAppReady?: () => Promise<boolean>;
   private agentRegistry?: AgentRegistry;
   private contactService?: ContactService;
   private outboundGateway?: OutboundGateway;
@@ -399,6 +400,8 @@ export class ExecutionLayer {
     workingDocsRepo?: import('../db/working-docs-repo.js').WorkingDocsRepo;
     /** Backs the 'voiceSessions' capability (#2347). */
     voiceSessions?: Pick<import('../channels/voice/session-store.js').VoiceSessionStore, 'markNotesRequested'>;
+    /** setup-status: a paired phone has a live push subscription (#2341). */
+    phoneAppReady?: () => Promise<boolean>;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     tempFileStore?: TempFileStore;
     infraLlmService?: InfraLlmService;
@@ -435,6 +438,7 @@ export class ExecutionLayer {
     this.skillRegistry = options?.skillRegistry;
     this.logger = logger;
     this.bus = options?.bus;
+    this.phoneAppReady = options?.phoneAppReady;
     this.agentRegistry = options?.agentRegistry;
     this.contactService = options?.contactService;
     this.outboundGateway = options?.outboundGateway;
@@ -517,6 +521,7 @@ export class ExecutionLayer {
       taskRepo: this.taskRepo,
       workingDocs: this.workingDocsRepo,
       voiceSessions: this.voiceSessions,
+      phoneAppReady: this.phoneAppReady,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).
       // Listed here so the missing-cap guard knows it's configured when this.tempFileStore is set.

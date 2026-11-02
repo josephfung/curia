@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { randomUUID } from 'node:crypto';
-import { WebPushService, type PushSender } from '../../src/channels/web/push-service.js';
+import { WebPushService, hasLivePushSubscription, type PushSender } from '../../src/channels/web/push-service.js';
 import { createLogger } from '../../src/logger.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -13,6 +13,7 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 describeIf('web push subscriptions (integration)', () => {
   let pool: pg.Pool;
   const sessionId = randomUUID();
+  const doomedSessionId = randomUUID();
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
@@ -24,22 +25,59 @@ describeIf('web push subscriptions (integration)', () => {
 
   afterAll(async () => {
     try {
-      await pool.query(`DELETE FROM sessions WHERE id = $1`, [sessionId]);
+      await pool.query(`DELETE FROM sessions WHERE id = ANY($1::uuid[])`, [[sessionId, doomedSessionId]]);
     } finally {
       await pool.end();
     }
   });
 
+  it('counts a live session when push is configured, and not an expired one', async () => {
+    // One client in a transaction that is rolled back: the other subscriptions in
+    // a shared database are hidden, so each answer comes from this test's rows.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM push_subscriptions');
+      const expiredSessionId = randomUUID();
+      await client.query(
+        `INSERT INTO sessions (id, token_hash, expires_at) VALUES ($1, $2, NOW() - interval '1 hour')`,
+        [expiredSessionId, `test-${expiredSessionId}`],
+      );
+      await client.query(
+        `INSERT INTO push_subscriptions (session_id, endpoint, p256dh, auth_secret)
+         VALUES ($1, $2, 'p256', 'auth')`,
+        [expiredSessionId, `https://updates.push.services.mozilla.com/wpush/v2/${expiredSessionId}`],
+      );
+      expect(await hasLivePushSubscription(client, true)).toBe(false);
+
+      await client.query(
+        `INSERT INTO push_subscriptions (session_id, endpoint, p256dh, auth_secret)
+         VALUES ($1, $2, 'p256', 'auth')`,
+        [sessionId, `https://updates.push.services.mozilla.com/wpush/v2/${sessionId}`],
+      );
+      expect(await hasLivePushSubscription(client, true)).toBe(true);
+      expect(await hasLivePushSubscription(client, false)).toBe(false);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
+
   it('deletes the subscription when the session is deleted', async () => {
+    // Own session, so deleting it cannot reach a row another case relies on.
+    await pool.query(
+      `INSERT INTO sessions (id, token_hash, expires_at) VALUES ($1, $2, NOW() + interval '1 hour')`,
+      [doomedSessionId, `test-${doomedSessionId}`],
+    );
     await pool.query(
       `INSERT INTO push_subscriptions (session_id, endpoint, p256dh, auth_secret)
        VALUES ($1, $2, 'p256', 'auth')`,
-      [sessionId, `https://fcm.googleapis.com/fcm/send/${sessionId}`],
+      [doomedSessionId, `https://fcm.googleapis.com/fcm/send/${doomedSessionId}`],
     );
-    const before = await pool.query(`SELECT id FROM push_subscriptions WHERE session_id = $1`, [sessionId]);
+    const before = await pool.query(`SELECT id FROM push_subscriptions WHERE session_id = $1`, [doomedSessionId]);
     expect(before.rows).toHaveLength(1);
-    await pool.query(`DELETE FROM sessions WHERE id = $1`, [sessionId]);
-    const after = await pool.query(`SELECT id FROM push_subscriptions WHERE session_id = $1`, [sessionId]);
+    await pool.query(`DELETE FROM sessions WHERE id = $1`, [doomedSessionId]);
+    const after = await pool.query(`SELECT id FROM push_subscriptions WHERE session_id = $1`, [doomedSessionId]);
     expect(after.rows).toHaveLength(0);
   });
 

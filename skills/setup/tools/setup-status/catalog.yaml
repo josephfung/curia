@@ -118,6 +118,18 @@ tasks:
     credential_how_to: "Run a self-hosted LiveKit server (see docs/dev/voice-setup.md), create Deepgram and Cartesia API keys, and pick a Cartesia voice id from play.cartesia.ai, then enter the browser LiveKit signaling URL (wss://…) plus API key/secret, Deepgram and Cartesia keys, and the Cartesia voice ID in Settings → Channels → Voice. Server-side room admin uses channels.voice.livekit_management_url in YAML (compose default http://livekit:7880) — not the public signaling URL. Enable the channel and restart."
     docs_url: /channels/voice-setup
 
+  - id: phone_app
+    label: "Phone app"
+    value_prop: "Install Curia on your phone, pair it, and hear from it when the chat is closed."
+    tier: medium
+    handoff: console
+    handoff_path: /settings/devices
+    optional: true
+    completion_check:
+      type: paired_push_subscription
+    credential_how_to: "Needs Curia on an https:// address with a hostname. On a computer, open Settings → Devices and show a pairing code. On the phone, open the link or type the code, add Curia to your home screen, then turn on notifications. On http://, a bare IP, or a LAN name, the phone gets the plain mobile site and this task cannot finish."
+    docs_url: /channels/phone-app
+
   - id: web_research
     label: "Web research (Tavily)"
     value_prop: "Live web search for research tasks and news monitoring."
