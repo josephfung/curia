@@ -14,13 +14,11 @@ function makeCtx(
 ): ToolContext {
   return {
     input,
+    // Curia's own addresses come from its email accounts, not a vault key (#2409).
+    selfEmails: opts.selfEmail ? [opts.selfEmail] : [],
     secret(name: string) {
-      if (name === 'nylas_api_key') return 'test-key';
+      if (name === 'channel.email.nylas_api_key') return 'test-key';
       if (name === 'ceo_nylas_grant_id') return 'test-grant';
-      if (name === 'nylas_self_email') {
-        if (opts.selfEmail) return opts.selfEmail;
-        throw new Error('not set');
-      }
       throw new Error(`unknown secret: ${name}`);
     },
     log: {

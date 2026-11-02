@@ -32,7 +32,9 @@ async function errorMessage(res: Response): Promise<string> {
 // All mutations clear the local grant value on success so credentials don't linger
 // in component state any longer than necessary.
 
-export function EmailAccountsSection() {
+// onChanged lets the drawer re-read channel status: the email Enable gate needs at least
+// one enabled account with a grant (#2409), so adding or toggling one can flip it.
+export function EmailAccountsSection({ onChanged }: { onChanged?: () => void } = {}) {
   const [accounts, setAccounts] = useState<EmailAccount[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,12 +83,13 @@ export function EmailAccountsSection() {
       setSelfEmail('');
       setGrantId('');
       await load();
+      onChanged?.();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to add account');
     } finally {
       setBusy(false);
     }
-  }, [name, selfEmail, grantId, load]);
+  }, [name, selfEmail, grantId, load, onChanged]);
 
   // PATCH /api/registry/email-accounts/:name — toggle enabled/disabled.
   const toggle = useCallback(async (acct: EmailAccount) => {
@@ -100,12 +103,13 @@ export function EmailAccountsSection() {
       });
       if (!res.ok) throw new Error(await errorMessage(res));
       await load();
+      onChanged?.();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to update account');
     } finally {
       setBusy(false);
     }
-  }, [load]);
+  }, [load, onChanged]);
 
   // DELETE /api/registry/email-accounts/:name — remove an account entry.
   const remove = useCallback(async (acct: EmailAccount) => {
@@ -117,12 +121,13 @@ export function EmailAccountsSection() {
       });
       if (!res.ok) throw new Error(await errorMessage(res));
       await load();
+      onChanged?.();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to remove account');
     } finally {
       setBusy(false);
     }
-  }, [load]);
+  }, [load, onChanged]);
 
   return (
     <div className="form-field">

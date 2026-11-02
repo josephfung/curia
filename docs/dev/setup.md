@@ -225,30 +225,28 @@ Sign up at [app.nylas.com](https://app.nylas.com). The free tier is sufficient f
 
 In the Nylas dashboard, create a new application. Choose "Email" as the product. Once created, copy your **API key**. This is your `NYLAS_API_KEY`.
 
-**3. Connect an email account**
+**3. Connect Curia's mailbox**
 
-In your application, go to **Grants** and add a new grant. This connects an email account (Gmail, Outlook, etc.) to your Nylas application via OAuth. Use the email address you want Curia to read and send from.
+In your application, go to **Grants** and add a new grant. This connects an email account (Gmail, Outlook, etc.) to your Nylas application via OAuth. Use the address you want Curia to read and send from.
 
-After completing the OAuth flow, the grant appears in your dashboard. Copy the **Grant ID**. This is your `NYLAS_GRANT_ID`.
+After completing the OAuth flow, the grant appears in your dashboard. Copy the **Grant ID**.
 
 > **Note:** For development, using a dedicated email account (rather than your primary inbox) is strongly recommended. Curia will read and process all incoming messages.
 
-**4. Set the email address**
+**4. Configure the channel in the console**
 
-`NYLAS_SELF_EMAIL` is the address of the connected account (the address Curia reads and sends from).
+Open **Settings -> Channels -> Email** and:
 
-Seed all three into the vault (see [Adding secrets after setup](#adding-secrets-after-setup)):
+1. **Install** the channel.
+2. Save the **Nylas API key**. (Or seed it instead: `SEED_VAULT_ONLY=nylas_api_key NYLAS_API_KEY=nyk_v0_... pnpm run seed-vault`.)
+3. Under **Email accounts**, add Curia's mailbox: a short name (e.g. `curia`), its address, and the grant ID. The grant is stored in the vault at `channel.email.<name>.nylas_grant_id`.
+4. **Enable** the channel. Enable stays disabled until the API key resolves and at least one enabled account has a grant.
 
-```bash
-NYLAS_API_KEY=nyk_v0_... \
-NYLAS_GRANT_ID=<grant-id-from-dashboard> \
-NYLAS_SELF_EMAIL=curia@yourdomain.com \
-pnpm run seed-vault
-```
+Restart Curia (`pnpm local`). The email channel boots one adapter per enabled account; it does not read `NYLAS_GRANT_ID` or `NYLAS_SELF_EMAIL`. See [configuration.md](configuration.md#email-accounts) for multiple accounts.
 
-Restart Curia (`pnpm local`), then **install and enable the email channel** in the console (**Settings -> Channels -> Email**). Credentials in the vault alone do not activate the channel. The registry requires an explicit install then enable, the same as skills and agents. See [configuration.md](configuration.md#skill-agent-and-channel-registry).
+**5. Connect the principal's own mailbox (optional)**
 
-> **Multiple email accounts:** Additional accounts are managed from the console after first boot. Go to **Settings -> Channels -> Email -> Email accounts**. Each account stores its Nylas grant in the vault at `channel.email.<name>.nylas_grant_id`. See [configuration.md](configuration.md#email-accounts) for details.
+Calendar and the `ceo-inbox` tools work in the principal's own mailbox, through a second Nylas grant. Connect that mailbox in Nylas the same way, then in **Settings -> Channels -> Email -> Principal's mailbox** save its grant ID and the principal's address (vault keys `ceo_nylas_grant_id` and `ceo_self_email`). Restart Curia. Without the grant, calendar and the inbox tools stay off.
 
 ### Embeddings
 
@@ -297,7 +295,9 @@ Powers the `web-search` skill, which lets agents research topics and look up cur
 
 `web-search` is **excluded from the default core set** and is **gated by `install.requires_secrets: [tavily_api_key]`**. It cannot be installed or enabled until the Tavily key exists in the vault. This makes it the reference flow for provisioning a skill secret through the console.
 
-**Provision via the console (recommended):**
+**Provision through the setup assistant:** ask Curia to set up web research. It sends a one-time link that stores the key as `tavily_api_key`. Restart Curia afterwards; web-search enrolls on the next boot.
+
+**Provision via the console:**
 
 1. Sign up at [tavily.com](https://tavily.com) and copy your API key (`tvly-...`).
 2. In the console, open **Settings -> Skills -> web-search -> Required secrets**. `tavily_api_key` shows as **missing** and **Install & enable** is disabled.
@@ -316,21 +316,20 @@ TAVILY_API_KEY=tvly-... pnpm run seed-vault
 
 ### Signal
 
-Signal messaging runs via [signal-cli](https://github.com/AsamK/signal-cli). The socket path is wired up automatically by Docker Compose. The only thing you need to set is your phone number.
+Signal messaging runs via [signal-cli](https://github.com/AsamK/signal-cli) in JSON-RPC daemon mode, over a Unix socket. The shipped `docker-compose.yml` does not include signal-cli, so you run it yourself and share its socket with Curia.
 
-**1. Bootstrap signal-cli**
+**1. Run signal-cli**
 
-Signal requires registering a phone number with signal-cli and seeding the `signal-data` Docker volume with the resulting credentials. Refer to your deployment documentation for the bootstrap procedure.
+Register a phone number with signal-cli (`signal-cli register` + `verify`), then run it as a daemon listening on a Unix socket (`signal-cli daemon --socket <path>`). If Curia runs in Docker, mount the socket's directory into the `curia` container. Refer to your deployment documentation for the details.
 
-**2. Seed the phone number**
+**2. Configure the channel in the console**
 
-```bash
-SIGNAL_PHONE_NUMBER=+12223334444 pnpm run seed-vault
-```
+Open **Settings -> Channels -> Signal**, install the channel, and save:
 
-That's the E.164 number you registered via `signal-cli register` + `verify`. `SIGNAL_SOCKET_PATH` is managed by the deployment layer; do not set it in `.env`.
+- **signal-cli socket path**: the socket's path as Curia sees it (inside the container, for a Docker install).
+- **Phone number (E.164)**: the number you registered, e.g. `+12223334444`.
 
-Restart Curia, then **install and enable the Signal channel** in the console (**Settings -> Channels -> Signal**). The phone number in the vault and a populated `signal-data` volume are prerequisites, but the channel still requires an explicit install then enable before it starts.
+Both are required. Enable the channel and restart Curia.
 
 ---
 
@@ -398,7 +397,9 @@ Make sure the Docker container is running (`docker compose ps`). If the containe
 
 **Email channel not activating**
 
-All three Nylas vars (`NYLAS_API_KEY`, `NYLAS_GRANT_ID`, `NYLAS_SELF_EMAIL`) must be set. If any are missing, the channel disables itself at startup. Two possible log messages:
+The channel needs the Nylas API key and at least one enabled email account with a grant (Tier 2, step 4). Check the boot log for:
 
-- `NYLAS_API_KEY/NYLAS_GRANT_ID not set: email channel disabled` (the API key or grant ID is missing)
-- `NYLAS_SELF_EMAIL not set: email adapter disabled` (the first two vars are set but `NYLAS_SELF_EMAIL` is missing)
+- `NYLAS_API_KEY not set — email channel disabled`: save the API key under **Settings -> Channels -> Email**.
+- `No email accounts resolved — email channel disabled. Add an account via the console (Settings → Channels → Email).`: add an account under **Email accounts**.
+- `Email account has no nylas_grant_id in the vault — skipping (re-add the grant in the console)`: remove the account and add it again with its grant ID.
+- `channel enabled but required credentials missing; not starting`: one of the above is missing although the channel is enabled.

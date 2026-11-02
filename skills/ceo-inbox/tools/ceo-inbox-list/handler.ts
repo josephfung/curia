@@ -1,4 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
 import { CeoNylasClient, NYLAS_MAX_LIST_LIMIT, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 
 const MAX_LIMIT = 50;
@@ -29,19 +30,16 @@ function isSystemFolder(folder: string): boolean {
 
 export class CeoInboxListHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const apiKey = ctx.secret('nylas_api_key');
+    const apiKey = ceoNylasApiKey(ctx);
     const grantId = ctx.secret('ceo_nylas_grant_id');
     const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
-    // Curia's own email — messages from this address are filtered out so the
-    // agent doesn't triage, archive, or draft replies to its own outbound emails.
-    // Resolved inside try/catch: a missing NYLAS_SELF_EMAIL should degrade
-    // gracefully (skip filter + warn) rather than crash the whole skill.
-    let curiaEmail: string | undefined;
-    try {
-      curiaEmail = ctx.secret('nylas_self_email').toLowerCase();
-    } catch {
-      ctx.log.warn({}, 'ceo-inbox-list: NYLAS_SELF_EMAIL not set — skipping Curia email filter');
+    // Curia's own addresses (its email accounts) — messages from them are filtered out so
+    // the agent doesn't triage, archive, or draft replies to its own outbound emails. No
+    // accounts configured degrades gracefully (skip filter + warn).
+    const curiaEmails = new Set((ctx.selfEmails ?? []).map((e) => e.toLowerCase()));
+    if (curiaEmails.size === 0) {
+      ctx.log.warn({}, 'ceo-inbox-list: no email accounts configured — skipping Curia email filter');
     }
 
     const input =
@@ -130,11 +128,9 @@ export class CeoInboxListHandler implements ToolHandler {
 
         const fresh = raw.filter((msg) => !isStale(msg));
         droppedStale += raw.length - fresh.length;
-        const pageFiltered = curiaEmail
-          ? fresh.filter(
-              (msg) => !msg.from.some((p) => p.email.toLowerCase() === curiaEmail),
-            )
-          : fresh;
+        const pageFiltered = fresh.filter(
+          (msg) => !msg.from.some((p) => curiaEmails.has(p.email.toLowerCase())),
+        );
         droppedSelf += fresh.length - pageFiltered.length;
         collected.push(...pageFiltered);
 

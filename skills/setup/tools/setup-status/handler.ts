@@ -13,7 +13,8 @@ type CompletionCheck =
   | { type: 'always_available' }
   | { type: 'principal_profile' }
   | { type: 'vault_secrets_all'; keys: string[] }
-  | { type: 'paired_push_subscription' };
+  | { type: 'paired_push_subscription' }
+  | { type: 'email_channel_ready' };
 
 interface CatalogTask {
   id: string;
@@ -172,6 +173,17 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
+      // Same gate as the console's email Enable button (#2409): an API key plus at least one
+      // enabled email account with a grant, and the channel enabled.
+      let emailReady = false;
+      if (ctx.emailChannelReady) {
+        try {
+          emailReady = await ctx.emailChannelReady();
+        } catch (err) {
+          ctx.log.warn({ err }, 'setup-status: email channel check failed — reporting pending');
+        }
+      }
+
       const annotated: CatalogTaskWithStatus[] = tasks.map(task => {
         let done = false;
         // Cast to include undefined: catalog.yaml is loaded without per-entry validation,
@@ -197,6 +209,9 @@ export class SetupStatusHandler implements ToolHandler {
               break;
             case 'paired_push_subscription':
               done = phoneReady;
+              break;
+            case 'email_channel_ready':
+              done = emailReady;
               break;
           }
         } else {

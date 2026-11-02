@@ -169,7 +169,7 @@ function buildCtx(overrides: {
     agentId: 'ceo-inbox',
     taskEventId: 'task-evt-1',
     secret(key: string): string {
-      if (key === 'nylas_api_key') return 'key';
+      if (key === 'channel.email.nylas_api_key') return 'key';
       if (key === 'ceo_nylas_grant_id') return 'grant';
       // Mirror the real ctx.secret(): an unrecognized key is a wiring bug, not an empty
       // string. Throwing here surfaces any stray secret request instead of masking it.

@@ -4,6 +4,7 @@
 // (t2125 pattern). Capture/match failures on individual messages log and continue.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
 import {
   CeoNylasClient,
   htmlToPlainText,
@@ -302,7 +303,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     let apiKey: string;
     let grantId: string;
     try {
-      apiKey = ctx.secret('nylas_api_key');
+      apiKey = ceoNylasApiKey(ctx);
       grantId = ctx.secret('ceo_nylas_grant_id');
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-sent-observe: required secret not available');

@@ -175,7 +175,8 @@ import { loadEncryptionKey } from './secrets/crypto.js';
 import { SecretsService } from './secrets/secrets-service.js';
 import { SecretCaptureService } from './secrets/secret-capture-service.js';
 import { SecretCaptureResumeSubscriber } from './secrets/secret-capture-resume-subscriber.js';
-import { channelCredentialKeys } from './channels/http/routes/vault.js';
+import { channelCredentialKeys, principalMailboxKeys } from './channels/http/routes/vault.js';
+import { migrateLegacyTavilyKey } from './secrets/migrate-legacy-tavily-key.js';
 import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
 import { applyChannelVaultSecrets } from './channels/apply-channel-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
@@ -1244,6 +1245,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Before reconciliation, so a Tavily key saved under the old checklist name enrolls
+  // web-search on this boot (#2409). Non-fatal: a vault hiccup leaves web-search off, not Curia.
+  try {
+    await migrateLegacyTavilyKey(secretsService, logger);
+  } catch (err) {
+    logger.warn({ err }, 'Tavily key migration failed; web-search stays off until tavily_api_key is set');
+  }
+
   try {
     await reconcileRegistries({
       toolRepo: toolRegistryRepo,
@@ -1748,27 +1757,25 @@ async function main(): Promise<void> {
   const channelRegistryRepo = new ChannelRegistryRepo(pool);
 
   // Config-satisfied keys per channel (the messy, config-shape-aware part lives here,
-  // keeping the resolver pure). Email is satisfied via config when ≥1 account resolved.
+  // keeping the resolver pure). Email's API key may come from the bootstrap vault key
+  // (nylas_api_key) rather than channel.email.nylas_api_key; config carries either.
   const channelConfigKeys = (descriptor: ChannelDescriptor): Set<string> => {
-    if (descriptor.name === 'email' && resolvedEmailAccounts.length > 0) {
-      // Email's runtime creds come from config/default.yaml accounts. Only mark a key
-      // as config-resolved when it is actually present, so registry state reflects what
-      // the adapter can really boot with (the API key in particular is global config,
-      // not per-account, so a resolved account does not by itself imply a key exists).
-      const keys = new Set<string>();
-      keys.add('nylas_grant_id');
-      keys.add('nylas_self_email');
-      if (config.nylasApiKey) keys.add('nylas_api_key');
-      return keys;
-    }
+    if (descriptor.name === 'email' && config.nylasApiKey) return new Set(['nylas_api_key']);
     return new Set<string>();
   };
 
-  const channelCredentialStatusFn = (descriptor: ChannelDescriptor) =>
-    channelCredentialStatus(
+  const channelCredentialStatusFn = async (descriptor: ChannelDescriptor) => {
+    const status = await channelCredentialStatus(
       { secrets: secretsService, configResolvedKeys: channelConfigKeys(descriptor), logger },
       descriptor,
     );
+    if (descriptor.name !== 'email' || !status.requiredResolvable) return status;
+    // Email also needs a mailbox: at least one enabled email account whose grant resolves,
+    // which is exactly what the adapter boots from (#2409). Read live rather than from the
+    // boot snapshot, so an account added in the console satisfies Enable without a restart.
+    const accounts = await resolveEmailAccounts(emailAccountsRepo, secretsService, logger);
+    return { ...status, requiredResolvable: accounts.length > 0 };
+  };
 
   try {
     await reconcileChannelRegistry({
@@ -2650,7 +2657,16 @@ async function main(): Promise<void> {
   // the subscriber and sweep below. Wiring the lookup while those are off would let a
   // pending row block that agent in that conversation with nothing left to resolve it.
   const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  // setup-status's email task (#2409): done once the channel is enabled and its Enable gate
+  // passes — the same check the console's Enable button uses, so the two always agree.
+  const emailChannelDescriptor = CHANNEL_CATALOG.find(d => d.name === 'email');
+  const emailChannelReady = async (): Promise<boolean> => {
+    if (!emailChannelDescriptor) return false;
+    const row = await channelRegistryRepo.getRow('email');
+    if (!row?.enabled) return false;
+    return (await channelCredentialStatusFn(emailChannelDescriptor)).requiredResolvable;
+  };
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelReady, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>
@@ -2784,7 +2800,7 @@ async function main(): Promise<void> {
   // route's CHANNEL_CREDENTIAL_KEYS so there's a single source of truth for writable names.
   const secretCaptureService = new SecretCaptureService(pool, secretsService, {
     getAllowedSystemNames: () =>
-      new Set([...registryService.declaredSecretNames(), ...channelCredentialKeys()]),
+      new Set([...registryService.declaredSecretNames(), ...channelCredentialKeys(), ...principalMailboxKeys()]),
     logger,
   });
   // Injected after construction because the ExecutionLayer is created before registryService

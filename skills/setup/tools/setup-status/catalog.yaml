@@ -49,12 +49,8 @@ tasks:
     handoff: console
     handoff_path: /settings/channels
     completion_check:
-      type: vault_secrets_all
-      keys:
-        - channel.email.nylas_api_key
-        - channel.email.nylas_grant_id
-        - channel.email.nylas_self_email
-    credential_how_to: "Get your Nylas API key and grant ID at app.nylas.com (free tier works). Enter the API key, grant ID, and your mailbox email address in Settings → Channels → Email."
+      type: email_channel_ready
+    credential_how_to: "Get your Nylas API key at app.nylas.com (free tier works) and connect Curia's mailbox there to get its grant ID. In Settings → Channels → Email, install the channel, save the API key, add the mailbox under Email accounts (name, address, grant ID), then enable the channel and restart."
     docs_url: /channels/email-setup
 
   - id: signal
@@ -68,7 +64,7 @@ tasks:
       keys:
         - channel.signal.socket_path
         - channel.signal.phone_number
-    credential_how_to: "Set up signal-cli (included in docker-compose.yml), then enter the socket path and your phone number in Settings → Channels → Signal. After enabling, open Contacts → your principal and add your Signal number as a channel identity so outbound principal detection works."
+    credential_how_to: "Run signal-cli as a JSON-RPC daemon on a Unix socket Curia can reach (the shipped docker-compose.yml does not include it) and register Curia's Signal number with it, then enter the socket path and that number in Settings → Channels → Signal. After enabling, open Contacts → your principal and add your Signal number as a channel identity so outbound principal detection works."
     docs_url: /channels/signal-setup
 
   - id: slack
@@ -138,6 +134,6 @@ tasks:
     completion_check:
       type: vault_secrets_all
       keys:
-        - user.tavily_api_key
-    credential_how_to: "Get a free API key at tavily.com. I'll send you a secure link to enter it."
+        - tavily_api_key
+    credential_how_to: "Get a free API key at tavily.com. I'll send you a secure link to enter it. Web search turns on after the next restart."
     docs_url: /integrations/tavily

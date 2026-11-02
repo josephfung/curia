@@ -21,7 +21,9 @@ describe('CHANNEL_CATALOG', () => {
   it('marks email, signal, slack, sms, and voice as toggleable with required credential fields', () => {
     const email = getChannelDescriptor('email')!;
     expect(email.isToggleable).toBe(true);
-    expect(email.requiredSecretKeys).toEqual(['nylas_api_key', 'nylas_grant_id', 'nylas_self_email']);
+    // Only the API key: each mailbox's grant and address live on its email account (#2409).
+    expect(email.requiredSecretKeys).toEqual(['nylas_api_key']);
+    expect(email.credentialFields.map(f => f.key)).toEqual(['nylas_api_key']);
 
     const signal = getChannelDescriptor('signal')!;
     expect(signal.isToggleable).toBe(true);

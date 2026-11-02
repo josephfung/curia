@@ -31,7 +31,7 @@ function buildCtx(overrides: Partial<{
     timezone: 'America/Toronto',
     secret(key: string): string {
       switch (key) {
-        case 'nylas_api_key': return 'test-api-key';
+        case 'channel.email.nylas_api_key': return 'test-api-key';
         case 'ceo_nylas_grant_id': return 'test-grant-id';
         case 'ceo_self_email': return 'ceo@example.com';
         default: return '';
@@ -370,7 +370,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       },
       secret(key: string): string {
         switch (key) {
-          case 'nylas_api_key': return 'test-api-key';
+          case 'channel.email.nylas_api_key': return 'test-api-key';
           case 'ceo_nylas_grant_id': return 'test-grant-id';
           case 'ceo_self_email': return '';   // deliberately empty
           default: return '';

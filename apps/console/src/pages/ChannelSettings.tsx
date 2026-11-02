@@ -5,6 +5,7 @@ import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 import { EmailAccountsSection } from '../components/EmailAccountsSection.js';
+import { PrincipalMailboxSection } from '../components/PrincipalMailboxSection.js';
 
 // ── Types (mirror src/channels/credential-resolver.ts CredentialFieldStatus and
 //    src/registry/channel-registry-types.ts ChannelRegistryEntry) ──────────────
@@ -251,8 +252,12 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
           )}
 
           {/* Email accounts sub-section — only for the email channel.
-              Lets the operator manage Nylas-backed mailboxes the agent uses. */}
-          {entry.name === 'email' && <EmailAccountsSection />}
+              Lets the operator manage Nylas-backed mailboxes the agent uses. Enable needs
+              at least one of them, so a change re-reads the channel status (#2409). */}
+          {entry.name === 'email' && <EmailAccountsSection onChanged={onChanged} />}
+
+          {/* The principal's own mailbox (#2409) — separate from Curia's accounts. */}
+          {entry.name === 'email' && <PrincipalMailboxSection />}
 
           <div className="form-field">
             <label>Installed</label>
@@ -295,7 +300,13 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
               type="button"
               className="btn btn-primary btn-sm"
               disabled={busy || !entry.requiredResolvable}
-              title={entry.requiredResolvable ? undefined : 'Configure the required credentials first'}
+              title={
+                entry.requiredResolvable
+                  ? undefined
+                  : entry.name === 'email'
+                    ? 'Save the API key and add an email account with a grant first'
+                    : 'Configure the required credentials first'
+              }
               onClick={() => void act('POST', '/enable')}
             >
               Enable

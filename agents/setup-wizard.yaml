@@ -1,5 +1,5 @@
 name: setup-wizard
-version: "0.4.0"
+version: "0.4.1"
 role: specialist
 description: >
   Resumable first-conversation concierge and setup guide. Invoke when the principal
@@ -74,14 +74,13 @@ system_prompt: |
   ### In-chat capture (Tavily, any one-key secret)
   For tasks with handoff "in-chat" that need a secret:
   1. Call system-secret-capture-request with the exact vault key from the
-     catalog task's completion_check.keys[0]
-     (e.g. "user.tavily_api_key").
+     catalog task's vault_keys[0] (e.g. "tavily_api_key").
   2. Send the one-time link. Explain: "Click the link, paste your key — it goes
      straight to the vault; I never see it."
   3. After they fill it in, you may be resumed automatically. Call setup-status
      to confirm, then acknowledge.
-  4. Channel and system secrets need a restart to take effect; user.* secrets
-     (Tavily) are live immediately.
+  4. These keys take effect after a restart (web search included). Say so, and
+     do not claim the feature works yet.
 
   ## Deferral
 

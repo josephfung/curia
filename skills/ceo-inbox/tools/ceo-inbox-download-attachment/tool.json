@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-download-attachment",
   "description": "Download an email attachment from the principal's personal inbox. Pass filename from ceo-inbox-read (preferred) or the exact attachment_id. Returns temp_file_url when temporary-file storage succeeds, otherwise content_base64; pass either to file-parse. Enforces a 10 MB size limit.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -18,7 +18,7 @@
     "resolved_by": "string ('id' | 'filename' | 'sole_attachment')"
   },
   "permissions": [],
-  "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 30000,
   "capabilities": ["tempFileStore"]
 }

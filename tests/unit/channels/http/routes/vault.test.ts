@@ -165,4 +165,24 @@ describe('vault routes', () => {
     expect(res.statusCode).toBe(400);
     expect(secrets.sets).toEqual([]);
   });
+
+  // --- principal mailbox keys (#2409) ---
+
+  it.each(['ceo_nylas_grant_id', 'ceo_self_email'])('accepts the principal-mailbox key %s', async name => {
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    const res = await put(app, name, { value: 'v' });
+    expect(res.statusCode).toBe(200);
+    expect(secrets.sets).toEqual([{ name, value: 'v' }]);
+  });
+
+  it('no longer accepts the flat email grant and address no adapter reads', async () => {
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    for (const name of ['channel.email.nylas_grant_id', 'channel.email.nylas_self_email']) {
+      const res = await put(app, name, { value: 'v' });
+      expect(res.statusCode, name).toBe(400);
+    }
+    expect(secrets.sets).toEqual([]);
+  });
 });

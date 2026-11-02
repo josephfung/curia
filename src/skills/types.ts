@@ -59,7 +59,7 @@ export interface ToolManifest {
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
-   *  voiceSessions, phoneAppReady.
+   *  voiceSessions, phoneAppReady, emailChannelReady.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -174,6 +174,12 @@ export interface ToolContext {
    * Absent means the check cannot run and the setup task stays pending.
    */
   phoneAppReady?: () => Promise<boolean>;
+  /**
+   * True when the email channel's Enable gate passes: a Nylas API key resolves and at
+   * least one enabled email account has a grant (#2409). Injected for skills that declare
+   * optional capability `emailChannelReady`. Absent means the setup task stays pending.
+   */
+  emailChannelReady?: () => Promise<boolean>;
   /** Contact confidence scoring pipeline — available to skills declaring 'confidencePipeline'
    *  in capabilities. Skills that modify trust-related data (trust level, identity pairings)
    *  should declare this capability and fire scoring signals through it. */
