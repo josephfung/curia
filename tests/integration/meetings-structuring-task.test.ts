@@ -79,7 +79,7 @@ describeIf('MinutesReadySubscriber (integration, #2322)', () => {
     expect(notes[0]?.note).toContain(`https://office.example/documents?path=${encodeURIComponent(payload.minutesRef)}`);
     expect(notes[0]?.note).toContain('Recap: send one. At least one agenda topic was covered.');
     expect(task.originator?.systemRole).toBe('system');
-    expect(readActiveSkillNames(task.progress)).toEqual(['meeting-minutes-structuring']);
+    expect(readActiveSkillNames(task.progress)).toEqual(['meetings']);
     expect(wakes).toHaveLength(1);
     expect(wakes[0]).toMatchObject({
       taskId: task.id,

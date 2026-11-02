@@ -122,6 +122,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **CI bundle import check** — CI builds the backend and fails on imports Node rejects at startup. (#2410)
+- **Meetings skill** — minutes follow-up guidance moves into the `meetings` bundle; usable outside the post-call task. (#2400)
 - **Voice turn hold** — 350 ms instead of 600, so replies start sooner; `channels.voice.turn_hold_ms` overrides. (#2379)
 - **Calendar date check** — briefs that state correct dates skip date-resolve; wrong weekdays or dates are still refused. (#2379)
 - **Voice phrasing** — calls no longer name specialists, the coordinator or the off-ramp. (#2379)
