@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useMobileMenu } from '../context/MobileMenu';
 import { apiFetch } from '../api.js';
 import { endConsoleSession } from '../auth/log-out.js';
+import { UserMenu, type Theme } from './UserMenu';
 import {
   CuriaWordmark,
   IconHome,
@@ -22,7 +23,6 @@ import {
   IconBrain,
 } from './Icons';
 
-type Theme = 'light' | 'system' | 'dark';
 
 interface SidebarProps {
   activeView: string;
@@ -43,32 +43,9 @@ const ROUTES: Record<string, string> = {
   channels:   '/channels',
   'mcp-skills': '/mcp-skills',
   system:     '/system',
+  devices:    '/system/devices',
   settings:   '/settings',
 };
-
-function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) => void }) {
-  const options: Array<{ v: Theme; label: string }> = [
-    { v: 'light', label: 'Light' },
-    { v: 'system', label: 'Auto' },
-    { v: 'dark', label: 'Dark' },
-  ];
-  return (
-    <div className="theme-toggle" role="group" aria-label="Theme">
-      {options.map((opt) => (
-        <button
-          key={opt.v}
-          type="button"
-          className={`theme-toggle-btn${theme === opt.v ? ' active' : ''}`}
-          aria-pressed={theme === opt.v}
-          onClick={() => onChange(opt.v)}
-          title={`${opt.label} theme`}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function getInitials(name: string | null): string {
   if (!name) return '···';
@@ -286,18 +263,16 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
       </div>
 
       <div className="sidebar-footer">
-        <ThemeToggle theme={theme} onChange={onThemeChange} />
-        <button type="button" className="sidebar-user">
-          <span className="sidebar-user-avatar">{getInitials(principalName)}</span>
-          <span className="sidebar-user-meta">
-            <span className="sidebar-user-name">{principalName ?? 'Setting up…'}</span>
-            <span className="sidebar-user-org">{version ? `v${version}` : ''}</span>
-          </span>
-        </button>
-        {logoutError && <p className="autonomy-error" role="alert">{logoutError}</p>}
-        <button type="button" className="sidebar-logout" onClick={logOut}>
-          Log out
-        </button>
+        <UserMenu
+          initials={getInitials(principalName)}
+          name={principalName ?? 'Setting up…'}
+          version={version}
+          theme={theme}
+          onThemeChange={onThemeChange}
+          onDevices={() => go('devices')}
+          onLogOut={logOut}
+          logoutError={logoutError}
+        />
       </div>
     </nav>
   );

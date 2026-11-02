@@ -1,5 +1,5 @@
 // Pure, framework-free helpers for the System page restart poll loop (#1765).
-// Kept separate from SystemSettingsPage.tsx so they can be unit-tested in the
+// Kept separate from AboutSettingsPage.tsx so they can be unit-tested in the
 // node test environment (component .tsx files are not picked up as a first-class
 // target the way these helpers are).
 

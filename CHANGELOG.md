@@ -123,6 +123,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Console navigation** — Settings → System now holds About, Devices and Retention; Personality keeps behaviour settings. (#2341)
+- **User menu** — name and version open a menu with theme, Devices & notifications, and Log out. (#2341)
+- **Device notifications** — the toggle names this phone or browser; the device list marks notified devices. (#2341)
 - **Chat composer** — Send is icon-only on phones and lines up exactly with the message box. (#2341)
 - **Node 26** — runtime, image and `engines` move to the new Active LTS; corepack now installed hash-pinned. (#2402)
 - **`operator.session`** — **public API:** new `invite` and `cancel_invite` actions, and an `invitation` flag on pair. (#2412)

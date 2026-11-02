@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MobileMenuContext } from '../context/MobileMenu.js';
-import { Sidebar } from '../components/Sidebar.js';
-import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
-import { useTheme } from '../hooks/useTheme.js';
+import { SettingsLayout } from './SettingsPage.js';
 import { errorMessage, timeAgo } from '../components/settings/ConfigHistory.js';
 import {
   RESTART_POLL_INTERVAL_MS,
@@ -177,9 +174,9 @@ function SystemSection() {
   return (
     <>
       <div className="settings-page-header">
-        <h2 className="settings-page-title">System</h2>
+        <h2 className="settings-page-title">About</h2>
         <p className="settings-page-sub">
-          Environment and configuration for this Curia instance.
+          This Curia instance: what's running, its models, and restarting it.
         </p>
       </div>
 
@@ -321,36 +318,12 @@ function SystemSection() {
   );
 }
 
-export function SystemPage() {
-  const [theme, setTheme] = useTheme();
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => {
-    document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
-  }, [mobileOpen]);
-
+export function AboutPage() {
   return (
-    <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
-      <div className="app-root">
-        <Sidebar activeView="system" theme={theme} onThemeChange={setTheme} />
-        {mobileOpen && (
-          <div
-            className="sidebar-backdrop"
-            onClick={() => setMobileOpen(false)}
-            aria-hidden="true"
-          />
-        )}
-        <main className="main">
-          <Topbar crumb="Settings" title="System" />
-          <div className="settings-shell">
-            <div className="settings-content">
-              <SystemSection />
-            </div>
-          </div>
-        </main>
-      </div>
-    </MobileMenuContext.Provider>
+    <SettingsLayout group="system" activeSection="about">
+      <SystemSection />
+    </SettingsLayout>
   );
 }
 
-export default SystemPage;
+export default AboutPage;

@@ -342,7 +342,7 @@ This ensures Docker stop and process managers don't lose in-flight work.
 
 ### System Page & Operator Restart
 
-The console's **System** page (`/system`, promoted out of Settings in #1765) is the read-only
+The console's **Settings → System → About** page (`/system/about`; #1765 made System its own page, and #2341 gave it a sub-nav with About, Devices and Retention) is the read-only
 environment snapshot plus the one operator write the console offers.
 
 - **`GET /api/system`** returns a non-secret boot snapshot: app version, Node runtime version,
