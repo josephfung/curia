@@ -16,6 +16,7 @@
     "prelocal": "pnpm migrate",
     "local": "eval $(grep '^[A-Z]' .env | sed 's/^/export /') && tsx --env-file=.env src/index.ts",
     "build": "tsup src/index.ts --format esm --dts",
+    "check:dist-imports": "node scripts/check-dist-imports.mjs",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:shell": "bash tests/setup/test-setup-functions.sh && bash tests/docker/test-pnpm-retry.sh && bash tests/docker/test-buildx-retry.sh && bash tests/docker/test-sign-image.sh && bash tests/ci/test-filter-suppressed-sarif.sh",
