@@ -62,8 +62,8 @@ importers:
         specifier: ^2.20.1
         version: 2.20.1(playwright@1.64.1)
       '@livekit/rtc-node':
-        specifier: ^1.1.0
-        version: 1.1.0
+        specifier: ^1.2.1
+        version: 1.2.1
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.1
         version: 1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7)
@@ -271,8 +271,8 @@ importers:
   apps/console:
     dependencies:
       cronstrue:
-        specifier: ^3.32.0
-        version: 3.32.0
+        specifier: ^3.38.0
+        version: 3.38.0
       livekit-client:
         specifier: ^2.23.0
         version: 2.23.0(@types/dom-mediacapture-record@1.0.22)
@@ -1548,44 +1548,44 @@ packages:
   '@livekit/protocol@1.52.1':
     resolution: {integrity: sha512-X8DxKlNbzk6Lh+v630+mjdFHSotdAFwIyzxSRSUql2DbTxCnlpa7JsvFGc6Na3mXiex2OFh0iiQtWwOBP0rIYA==}
 
-  '@livekit/rtc-ffi-bindings-darwin-arm64@0.12.73':
-    resolution: {integrity: sha512-gIGftVyO1Jl266AZPRzoL6dxck969dmIiaut3+D1aCZRkDb/gLz98BEGRfOSU3X0LS4QBkmiaYWsjN9ot/zmwg==}
+  '@livekit/rtc-ffi-bindings-darwin-arm64@0.13.1':
+    resolution: {integrity: sha512-SIbQpLHmY5oq0hiUM9UTmlkPVLAm8TbTjnQlMWMqQLLFgmtIx+ayN2kLII5w0KIC68iK4yOjTUAeFMAJFYY5hg==}
     engines: {node: '>= 18'}
     cpu: [arm64]
     os: [darwin]
 
-  '@livekit/rtc-ffi-bindings-darwin-x64@0.12.73':
-    resolution: {integrity: sha512-esPwYCbUnDD/KxBo0YU8awTFglRG7SvOT/sfiP19KChS5SH8TgXc7JwfSvnjRx1PndUqHFzQAbQDcYaeL9PFTg==}
+  '@livekit/rtc-ffi-bindings-darwin-x64@0.13.1':
+    resolution: {integrity: sha512-+gkitypx0mvtbUxlgnokr1wujFMuVW44q6Bev6AozkfCqpSBnO2bFqwJQo4sGY3UNl9Rq6TElcKPQ813LJu1UA==}
     engines: {node: '>= 18'}
     cpu: [x64]
     os: [darwin]
 
-  '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.12.73':
-    resolution: {integrity: sha512-2YBatXjuaumnaNVqRC63flX5XZTvHcQWRsABw6e2yp+Hlxl3ocjVVyk5PrAsRzCdeyxbHLduqV9ctqGbpTA27Q==}
+  '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.13.1':
+    resolution: {integrity: sha512-rnWm3ekPXfHvO18CeRahQw4SF+YPiY3eUVHSbDqHPTTO3ohIfOT09qpC1otbaPm5gQYaQPuM0wUpLXDOPhgG0Q==}
     engines: {node: '>= 18'}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.12.73':
-    resolution: {integrity: sha512-BrP3IyNkcjldeO+SbnF0hX2mipst8aHiBIiGJcQCd8HEjsaabfkYk4Y5uoNsTVMrUSyrNrJte2itAhuxP9FCSA==}
+  '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.13.1':
+    resolution: {integrity: sha512-jp3CQdwb8gjh/sIL4ur6bVQiQARBnJkZp8sbifbXqWqpYX9lXMvEX5KomPCfsQrHfcuNwYHV4OjrXPXvc5+SEw==}
     engines: {node: '>= 18'}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.12.73':
-    resolution: {integrity: sha512-2RnKXMTnNfvjJ3kbuhE1jqFNAQNmqSrxy3GlEnByY61tbtY14QPFn8X/0lh+Mjst8pZdfxkXvtbRyPt5KYHvMA==}
+  '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.13.1':
+    resolution: {integrity: sha512-GbEfjBixFbxVx4iWr5J65cIVEdRirzcBdWr17eY2R18qTsr4VVr6mzmorUCq/jwysqE+Sl+d1QWR7oBDQPxbjw==}
     engines: {node: '>= 18'}
     cpu: [x64]
     os: [win32]
 
-  '@livekit/rtc-ffi-bindings@0.12.73':
-    resolution: {integrity: sha512-ZxkCQlsfTG7Eqi6KBXulEWJBUxeRVRYqCc795CsmKsGfqmBX5gE5CnTiynN8fFdzSGwApaVogeGSB6JszCf/Xw==}
+  '@livekit/rtc-ffi-bindings@0.13.1':
+    resolution: {integrity: sha512-bcE1N/lr6SNvOKP4eOxBQNuplJMX21Tbe0nyMhV9Cj/wpXCXCjw3eScwyg1R0M32hKvWpoiJDv+EVVmg13Wq1Q==}
     engines: {node: '>= 18'}
 
-  '@livekit/rtc-node@1.1.0':
-    resolution: {integrity: sha512-KFNvPz7qQSJBTttDukanhMJ+bCNxj6O3A3fXl6GJvOEamJJk7GqKCWgAdLW3JLjuT1pPQDyQPJJnYdR25N+MXA==}
+  '@livekit/rtc-node@1.2.1':
+    resolution: {integrity: sha512-Hb1JwzADVfEojEGXMz/WylXjeQQWzHDOKUfOq7clrOsMecqif249CBcWJTwhikSlyI56NzhCOnVlK1/Q3grX1A==}
     engines: {node: '>= 18'}
 
   '@livekit/typed-emitter@3.0.0':
@@ -3061,8 +3061,8 @@ packages:
     resolution: {integrity: sha512-JfAYMY0LZaWQTuict8PhtF/ksSnq8xefSDmQUnnoqvkPYkU/y3UP0DTWzJKFBz0P1IXsDG8q0vY3zHkoFZOhvw==}
     engines: {node: '>=18'}
 
-  cronstrue@3.32.0:
-    resolution: {integrity: sha512-OHTec7+5nosN4UsitwgBDQ0bofGZF3H4pLqgqa93NR3nExNlhtVHcO2JY3jRognrFH8Bl9oAooT0hyCjSyOU+Q==}
+  cronstrue@3.38.0:
+    resolution: {integrity: sha512-i10xR7fS4AH9LKwmt3gYdt/5lSsB2qFGSNfC8aeyYybxo48DCMz+nUrSVI4kUj8yo+SgTbMJqp/BWEem9avlcA==}
     hasBin: true
 
   cross-spawn@7.0.6:
@@ -7487,36 +7487,36 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 1.10.1
 
-  '@livekit/rtc-ffi-bindings-darwin-arm64@0.12.73':
+  '@livekit/rtc-ffi-bindings-darwin-arm64@0.13.1':
     optional: true
 
-  '@livekit/rtc-ffi-bindings-darwin-x64@0.12.73':
+  '@livekit/rtc-ffi-bindings-darwin-x64@0.13.1':
     optional: true
 
-  '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.12.73':
+  '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.13.1':
     optional: true
 
-  '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.12.73':
+  '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.13.1':
     optional: true
 
-  '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.12.73':
+  '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.13.1':
     optional: true
 
-  '@livekit/rtc-ffi-bindings@0.12.73':
+  '@livekit/rtc-ffi-bindings@0.13.1':
     dependencies:
       '@bufbuild/protobuf': 1.10.1
     optionalDependencies:
-      '@livekit/rtc-ffi-bindings-darwin-arm64': 0.12.73
-      '@livekit/rtc-ffi-bindings-darwin-x64': 0.12.73
-      '@livekit/rtc-ffi-bindings-linux-arm64-gnu': 0.12.73
-      '@livekit/rtc-ffi-bindings-linux-x64-gnu': 0.12.73
-      '@livekit/rtc-ffi-bindings-win32-x64-msvc': 0.12.73
+      '@livekit/rtc-ffi-bindings-darwin-arm64': 0.13.1
+      '@livekit/rtc-ffi-bindings-darwin-x64': 0.13.1
+      '@livekit/rtc-ffi-bindings-linux-arm64-gnu': 0.13.1
+      '@livekit/rtc-ffi-bindings-linux-x64-gnu': 0.13.1
+      '@livekit/rtc-ffi-bindings-win32-x64-msvc': 0.13.1
 
-  '@livekit/rtc-node@1.1.0':
+  '@livekit/rtc-node@1.2.1':
     dependencies:
       '@datastructures-js/deque': 1.0.8
       '@livekit/mutex': 1.1.1
-      '@livekit/rtc-ffi-bindings': 0.12.73
+      '@livekit/rtc-ffi-bindings': 0.13.1
       '@livekit/typed-emitter': 3.0.0
       pino: 9.14.0
       pino-pretty: 13.2.0
@@ -8953,7 +8953,7 @@ snapshots:
     dependencies:
       luxon: 3.7.2
 
-  cronstrue@3.32.0: {}
+  cronstrue@3.38.0: {}
 
   cross-spawn@7.0.6:
     dependencies:
