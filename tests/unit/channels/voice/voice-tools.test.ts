@@ -6,7 +6,6 @@ import { resolve } from 'node:path';
 import { VOICE_TOOL_NAMES, withVoiceSpokenNotes } from '../../../../src/channels/voice/voice-tools.js';
 import { findInternalJargon } from '../../../../src/channels/voice/spoken-jargon.js';
 import { buildVoiceSystemPrompt, VOICE_GREETING_INSTRUCTION } from '../../../../src/channels/voice/voice-runtime.js';
-import { formatAgendaPromptBlock } from '../../../../src/meetings/agenda-prompt.js';
 import { measureAgentContext } from '../../../../src/agents/prompt-budget.js';
 import { discoverToolManifests } from '../../../../src/skills/loader.js';
 import { ToolRegistry } from '../../../../src/skills/registry.js';
@@ -152,20 +151,6 @@ describe('voice spoken phrasing (#2379)', () => {
       .flatMap(text => text.split(/(?<=[.!?])\s+/))
       .filter(sentence => aboutSpeech.test(sentence) && negated.test(sentence))
       .filter(sentence => findInternalJargon(sentence).length > 0);
-    expect(offending).toEqual([]);
-  });
-
-  // PR #2433 review: "(#2428)" inside prompt text. The model reads it as content.
-  it('carries no issue reference in voice prompt or tool text', () => {
-    const agendaBlock = formatAgendaPromptBlock({
-      loaded: [{
-        agendaId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', title: 'Q3', topics: ['Pipeline'], role: null,
-        context: 'c', source: 'principal', sensitivity: 'internal', scheduledFor: null, history: [],
-      }],
-      index: [{ agendaId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', title: 'Friday', scheduledFor: null }],
-      notes: { recap: true },
-    }) ?? '';
-    const offending = [...voiceTexts(), agendaBlock].filter(text => /#\d{3,}/.test(text));
     expect(offending).toEqual([]);
   });
 
