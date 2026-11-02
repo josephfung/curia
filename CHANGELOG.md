@@ -264,6 +264,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Attachment downloads** — filenames shown with `[REDACTED]` now resolve; filename misses point the retry at `attachment_id`. (#2430)
 - **Startup with web push** — the built app no longer crashes loading `web-push`, a CommonJS package. (#2341)
 - **Timezone label tests** — no longer fail when Toronto switches between daylight and standard time.
 - **Inbox triage cron** — skips while a drain cycle is running, so it no longer completes the drain mid-batch. (#2378)

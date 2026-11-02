@@ -300,6 +300,141 @@ describe('resolveAttachment', () => {
     });
   });
 
+  describe('secret-redacted filenames (#2430)', () => {
+    // Mimecast DMARC reports end in a 32+ hex report ID. sanitizeOutput's long-hex
+    // rule shows the model this name with the ID replaced by [REDACTED].
+    const MIMECAST_REAL =
+      'mimecast.org!example.com!1793232000!1793318399!0123456789abcdef0123456789abcdef.xml.gz';
+    const MIMECAST_SHOWN = 'mimecast.org!example.com!1793232000!1793318399![REDACTED].xml.gz';
+
+    it('resolves the filename the model was shown back to the real attachment', () => {
+      const log = makeLog();
+      const report = att('att-mime', MIMECAST_REAL, 682, 'application/gzip');
+      const other = att('att-other', 'notes.txt', 10, 'text/plain');
+      const result = resolveAttachment({
+        attachments: [report, other],
+        filename: MIMECAST_SHOWN,
+        messageId: 'msg-1',
+        log,
+        logContext: 'test',
+      });
+
+      expect(result).toEqual({ ok: true, attachment: report, resolvedBy: 'filename' });
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(vi.mocked(log.info).mock.calls[0]![0]).toMatchObject({
+        resolvedAttachmentId: 'att-mime',
+        matchedRedactedFilename: true,
+      });
+    });
+
+    it('refuses to pick when the redacted name matches more than one attachment', () => {
+      const log = makeLog();
+      const a = att('att-a', MIMECAST_REAL, 682, 'application/gzip');
+      const b = att(
+        'att-b',
+        MIMECAST_REAL.replace('0123456789abcdef0123456789abcdef', 'fedcba9876543210fedcba9876543210'),
+        683,
+        'application/gzip',
+      );
+      const result = resolveAttachment({
+        attachments: [a, b],
+        filename: MIMECAST_SHOWN,
+        messageId: 'msg-1',
+        log,
+        logContext: 'test',
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/matches 2 attachments/i);
+        expect(result.error).toMatch(/copy the id exactly/i);
+      }
+    });
+
+    it('prefers an attachment literally named with the marker over a redacted look-alike', () => {
+      const log = makeLog();
+      const literal = att('att-literal', MIMECAST_SHOWN, 10, 'application/gzip');
+      const real = att('att-real', MIMECAST_REAL, 682, 'application/gzip');
+      const result = resolveAttachment({
+        attachments: [real, literal],
+        filename: MIMECAST_SHOWN,
+        messageId: 'msg-1',
+        log,
+        logContext: 'test',
+      });
+
+      expect(result).toEqual({ ok: true, attachment: literal, resolvedBy: 'filename' });
+    });
+
+    it('does not treat a redacted name as matching an attachment with different visible parts', () => {
+      const log = makeLog();
+      const report = att('att-mime', MIMECAST_REAL, 682, 'application/gzip');
+      const other = att('att-other', 'notes.txt', 10, 'text/plain');
+      const result = resolveAttachment({
+        attachments: [report, other],
+        filename: 'mimecast.org!example.com![PHONE]![PHONE]![REDACTED].xml.gz',
+        messageId: 'msg-1',
+        log,
+        logContext: 'test',
+      });
+
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe('retry hint on a miss', () => {
+    const a = att('att-a', 'report.pdf', 100, 'application/pdf');
+    const b = att('att-b', 'photo.jpg', 200, 'image/jpeg');
+
+    it('steers a filename miss to attachment_id, not another filename', () => {
+      const result = resolveAttachment({
+        attachments: [a, b],
+        filename: 'reprot.pdf',
+        messageId: 'msg-1',
+        log: makeLog(),
+        logContext: 'test',
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/retry with attachment_id copied exactly/i);
+        expect(result.error).not.toMatch(/filename \(preferred\)/i);
+      }
+    });
+
+    it('steers to attachment_id when both the id and the filename missed', () => {
+      const result = resolveAttachment({
+        attachments: [a, b],
+        attachmentId: 'garble',
+        filename: 'reprot.pdf',
+        messageId: 'msg-1',
+        log: makeLog(),
+        logContext: 'test',
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/retry with attachment_id copied exactly/i);
+        expect(result.error).not.toMatch(/filename \(preferred\)/i);
+      }
+    });
+
+    it('keeps recommending filename after an id-only miss', () => {
+      const result = resolveAttachment({
+        attachments: [a, b],
+        attachmentId: 'garble',
+        messageId: 'msg-1',
+        log: makeLog(),
+        logContext: 'test',
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/pass filename \(preferred\)/i);
+      }
+    });
+  });
+
   it('returns a dedicated error when the message has no attachments', () => {
     const log = makeLog();
     const result = resolveAttachment({

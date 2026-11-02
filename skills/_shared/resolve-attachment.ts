@@ -9,6 +9,7 @@
  */
 
 import type { Logger } from '../../src/logger.js';
+import { createSecretPatterns } from '../../src/security/secret-patterns.js';
 
 /** Minimal attachment shape both Nylas clients expose to download handlers. */
 export interface ResolvableAttachment {
@@ -75,19 +76,50 @@ export function formatAttachmentListing(attachments: readonly ResolvableAttachme
   return `Attachments on this message:\n${lines.join('\n')}`;
 }
 
+const REDACTION_MARKER = '[REDACTED]';
+
 /**
- * Match filename in two passes: exact (preserves whitespace the model copied from
- * a listing), then trimmed equality. Exact wins so `"a.pdf"` does not collide with
- * `"a.pdf "` when both exist on the message.
+ * Apply the same secret redaction sanitizeOutput applies to skill output, so a
+ * filename can be compared with the redacted form the model was shown (#2430).
+ * Mimecast DMARC reports end in a 32+ hex report ID that the long-hex rule scrubs.
+ */
+function redactLikeSkillOutput(filename: string): string {
+  let text = filename;
+  for (const pattern of createSecretPatterns()) {
+    text = text.replace(pattern, REDACTION_MARKER);
+  }
+  return text;
+}
+
+interface FilenameMatch {
+  matches: ResolvableAttachment[];
+  /** True when only the redaction-aware pass matched. */
+  viaRedaction: boolean;
+}
+
+/**
+ * Match filename in three passes: exact (preserves whitespace the model copied from
+ * a listing), then trimmed equality, then — only when the requested name carries a
+ * redaction marker — equality against each attachment's redacted name. Earlier
+ * passes win so `"a.pdf"` does not collide with `"a.pdf "` when both exist, and a
+ * real name never loses to a redacted look-alike.
  */
 function matchAttachmentsByFilename(
   attachments: readonly ResolvableAttachment[],
   filenameRaw: string,
   filenameKey: string,
-): ResolvableAttachment[] {
+): FilenameMatch {
   const exact = attachments.filter((a) => a.filename === filenameRaw);
-  if (exact.length > 0) return exact;
-  return attachments.filter((a) => a.filename.trim() === filenameKey);
+  if (exact.length > 0) return { matches: exact, viaRedaction: false };
+  const trimmed = attachments.filter((a) => a.filename.trim() === filenameKey);
+  if (trimmed.length > 0 || !filenameKey.includes(REDACTION_MARKER)) {
+    return { matches: trimmed, viaRedaction: false };
+  }
+  const redacted = attachments.filter((a) => {
+    const shown = redactLikeSkillOutput(a.filename);
+    return shown === filenameRaw || shown.trim() === filenameKey;
+  });
+  return { matches: redacted, viaRedaction: redacted.length > 0 };
 }
 
 function filenameConflictsWithResolved(
@@ -95,7 +127,7 @@ function filenameConflictsWithResolved(
   filenameRaw: string,
   filenameKey: string,
 ): boolean {
-  return matchAttachmentsByFilename([attachment], filenameRaw, filenameKey).length === 0;
+  return matchAttachmentsByFilename([attachment], filenameRaw, filenameKey).matches.length === 0;
 }
 
 /**
@@ -138,7 +170,11 @@ export function resolveAttachment(options: ResolveAttachmentOptions): ResolveAtt
   }
 
   if (filenameKey) {
-    const byName = matchAttachmentsByFilename(attachments, filenameRaw, filenameKey);
+    const { matches: byName, viaRedaction } = matchAttachmentsByFilename(
+      attachments,
+      filenameRaw,
+      filenameKey,
+    );
     if (byName.length === 1) {
       const attachment = byName[0]!;
       const payload = {
@@ -147,6 +183,7 @@ export function resolveAttachment(options: ResolveAttachmentOptions): ResolveAtt
         resolvedAttachmentId: attachment.id,
         filename: attachment.filename,
         resolvedBy: 'filename' as const,
+        ...(viaRedaction ? { matchedRedactedFilename: true } : {}),
       };
       if (attachmentId) {
         // Mistranscription recovery — the signal the issue asked for.
@@ -210,11 +247,15 @@ export function resolveAttachment(options: ResolveAttachmentOptions): ResolveAtt
     );
   }
 
+  // After a filename miss, steer the retry to the ID: the listed name can differ
+  // from the real one (e.g. secret redaction, #2430), so another filename guess
+  // is likely to miss again. An ID-only miss keeps filename as the preferred key.
+  const retryHint = filenameKey
+    ? `The filename did not match — retry with attachment_id copied exactly from the list below, not another filename. `
+    : `Pass filename (preferred) or copy the exact attachment_id from the list below. `;
+
   return {
     ok: false,
-    error:
-      `${requested} not found on message ${messageId}. ` +
-      `Pass filename (preferred) or copy the exact attachment_id from the list below. ` +
-      formatAttachmentListing(attachments),
+    error: `${requested} not found on message ${messageId}. ` + retryHint + formatAttachmentListing(attachments),
   };
 }
