@@ -185,7 +185,7 @@ export async function recordPairedNotice(
   deviceName: string | null,
 ): Promise<void> {
   const device = deviceName ? `: ${deviceName}` : '';
-  const detail = `A phone signed in with your invitation link${device}. If you didn't expect that, sign it out under Settings → Devices.`;
+  const detail = `A phone signed in with your invitation link${device}. If you didn't expect that, sign it out under Settings → System → Devices.`;
   await pool.query(
     `INSERT INTO push_notices (kind, detail, subject_session_id) VALUES ('paired', $1, $2)`,
     [detail.slice(0, 300), sessionId],

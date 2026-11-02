@@ -24,9 +24,11 @@ export function ChatComposer({ disabled, onSend }: ChatComposerProps) {
 
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setValue(e.target.value);
-    // Auto-grow: reset then expand to scrollHeight so the textarea fits its content.
+    // Auto-grow: reset then expand to fit the content. scrollHeight leaves out
+    // the border, and the box is border-box, so add the border back.
     e.target.style.height = 'auto';
-    e.target.style.height = `${e.target.scrollHeight}px`;
+    const border = e.target.offsetHeight - e.target.clientHeight;
+    e.target.style.height = `${e.target.scrollHeight + border}px`;
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -66,7 +68,7 @@ export function ChatComposer({ disabled, onSend }: ChatComposerProps) {
         aria-label="Send message"
       >
         <IconSend size={14} aria-hidden="true" />
-        Send
+        <span className="chat-send-label">Send</span>
       </button>
     </form>
   );

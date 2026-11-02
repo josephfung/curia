@@ -75,9 +75,9 @@ function MemorySection() {
   return (
     <>
       <div className="settings-page-header">
-        <h2 className="settings-page-title">Memory</h2>
+        <h2 className="settings-page-title">Retention</h2>
         <p className="settings-page-sub">
-          How long conversation turns and knowledge-graph facts are kept before decay or archival.
+          How long Curia keeps what it stores. For now: conversation turns, and knowledge-graph facts before decay or archival.
         </p>
       </div>
 
@@ -167,12 +167,12 @@ function MemorySection() {
   );
 }
 
-export function MemoryPage() {
+export function RetentionPage() {
   return (
-    <SettingsLayout activeSection="memory">
+    <SettingsLayout group="system" activeSection="retention">
       <MemorySection />
     </SettingsLayout>
   );
 }
 
-export default MemoryPage;
+export default RetentionPage;

@@ -185,18 +185,45 @@ body {
   font-size: 10px; color: var(--app-fg-muted);
   letter-spacing: 0.04em;
 }
-.sidebar-logout {
-  align-self: flex-start;
-  margin: 0 8px 4px;
-  padding: 0;
-  border: none;
-  background: none;
+/* User menu (sidebar footer): the user block opens a panel above itself. */
+.user-menu { position: relative; }
+.sidebar-user.open { background: var(--app-muted); }
+.sidebar-user-selector { margin-left: auto; color: var(--app-fg-muted); flex: none; }
+.user-menu-panel {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px;
+  background: var(--app-card);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-2, 0 8px 24px rgba(0, 0, 0, 0.12));
+}
+.user-menu-label {
+  padding: 2px 6px 4px;
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--app-fg-muted);
-  font-family: inherit;
-  font-size: 12px;
+}
+.theme-toggle.user-menu-theme { margin: 0 4px 4px; align-self: stretch; }
+.user-menu-theme .theme-toggle-btn { flex: 1; justify-content: center; }
+.user-menu-divider { height: 1px; margin: 4px 0; background: var(--app-border); }
+.user-menu-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 8px 6px;
+  border: none; border-radius: 6px;
+  background: none;
+  color: var(--app-fg);
+  font-family: inherit; font-size: 13px; text-align: left;
   cursor: pointer;
 }
-.sidebar-logout:hover { color: var(--app-fg); }
+.user-menu-item:hover, .user-menu-item:focus-visible { background: var(--app-muted); outline: none; }
+.user-menu-item svg { color: var(--app-fg-muted); flex: none; }
+.user-menu-theme .theme-toggle-btn:focus-visible { outline: 2px solid var(--app-teal); outline-offset: 1px; }
+.user-menu-error { margin: 4px 6px 0; font-size: 12px; color: var(--app-destructive); }
 
 .theme-toggle {
   display: inline-flex;
@@ -923,6 +950,22 @@ a.dash-activity-headline:hover { text-decoration: underline; }
   background: var(--app-teal-soft);
   color: var(--app-teal);
 }
+.device-badges { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.device-badge-on { background: var(--app-muted); color: var(--app-fg); }
+.devices-section { max-width: 720px; margin: 28px 0 12px; }
+.notify-status { display: flex; align-items: center; gap: 10px; margin: 0; }
+.notify-status .device-badge-on { background: var(--app-teal-soft); color: var(--app-teal); }
+.hide-previews { max-width: 720px; margin-top: 14px; }
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--app-fg-muted);
+  font: inherit; font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link-button:hover { color: var(--app-fg); }
 .device-meta { margin: 6px 0 0; font-size: 13px; color: var(--app-fg-muted); }
 .device-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .device-rename { display: flex; gap: 8px; margin-top: 12px; }
@@ -2255,20 +2298,29 @@ table.records-table tbody tr.active td { background: transparent; }
   padding-top: 8px;
 }
 
-/* Override the global textarea defaults for the composer. */
+/* Override the global textarea defaults for the composer.
+   One line is a fixed 42px whatever the font size: 24px line + 2 × 8px
+   padding + 2 × 1px border. Send is the same 42px, so the two line up top
+   and bottom. A longer message grows the box upward; Send stays on the
+   bottom row. */
 .chat-composer textarea {
   flex: 1;
   min-width: 0; /* prevent flex min-content from clipping Send (#1571) */
   width: auto;
   resize: none;
+  height: 42px;
   min-height: 42px;
   max-height: 160px;
+  padding: 8px 12px;
+  line-height: 24px;
   font-family: inherit;
   font-size: 13px;
 }
 
 .chat-composer .btn {
   flex-shrink: 0;
+  height: 42px;
+  justify-content: center;
 }
 
 @media (max-width: 768px) {
@@ -2281,6 +2333,21 @@ table.records-table tbody tr.active td { background: transparent; }
 
   .chat-messages {
     scrollbar-gutter: auto;
+  }
+
+  /* Send is just the paper plane on a phone: a 42px square. */
+  .chat-composer .btn {
+    width: 42px;
+    padding: 0;
+  }
+
+  .chat-composer .btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .chat-send-label {
+    display: none;
   }
 }
 
@@ -3715,4 +3782,18 @@ table.records-table tbody tr.active td { background: transparent; }
   :root:not([data-theme="light"]) .kg-merge-chip,
   :root:not([data-theme="light"]) .kg-merge-ready { color: var(--app-fg); }
   :root:not([data-theme="light"]) .kg-merge-card-eyebrow { filter: brightness(1.35); }
+}
+
+/* iOS zooms the page in when a text field under 16px gets focus, and the
+   installed app then looks cropped until the user pinches back out. On touch
+   screens every text field is 16px. !important because a few class-scoped
+   fields (the top-bar search, KG search, composer) are more specific than
+   any one rule could be. Pinch-zoom is untouched: the viewport tag still
+   allows it. Desktop sizing is unchanged. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
 }

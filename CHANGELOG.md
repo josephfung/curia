@@ -123,6 +123,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Console navigation** — Settings → System now holds About, Devices and Retention; Personality keeps behaviour settings. (#2341)
+- **User menu** — name and version open a menu with theme, Devices & notifications, and Log out. (#2341)
+- **Device notifications** — the toggle names this phone or browser; the device list marks notified devices. (#2341)
+- **Chat composer** — Send is icon-only on phones and lines up exactly with the message box. (#2341)
 - **Node 26** — runtime, image and `engines` move to the new Active LTS; corepack now installed hash-pinned. (#2402)
 - **`operator.session`** — **public API:** new `invite` and `cancel_invite` actions, and an `invitation` flag on pair. (#2412)
 - **CI bundle import check** — CI builds the backend and fails on imports Node rejects at startup. (#2410)
@@ -265,6 +269,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Phone app icon** — white mark on near-black, so it stays legible in iOS dark mode. (#2341)
+- **Offline page** — says whether the device is offline or can't reach Curia; reconnects automatically. (#2341)
+- **Phone app typing** — text fields are 16px on touch screens, so iOS no longer zooms in. (#2341)
 - **Attachment downloads** — filenames shown with `[REDACTED]` now resolve; filename misses point the retry at `attachment_id`. (#2430)
 - **Startup with web push** — the built app no longer crashes loading `web-push`, a CommonJS package. (#2341)
 - **Timezone label tests** — no longer fail when Toronto switches between daylight and standard time.

@@ -3,6 +3,7 @@ import { apiFetch } from '../api';
 import { currentInstallEnvironment, installCapabilityWarning } from './capabilities';
 import { enablePush, syncPushSubscription } from './push-client';
 import { isNotice, type PushNotice } from './push-notice';
+import { notificationCopy } from './notification-copy';
 import { isStandaloneDisplay } from './standalone';
 
 interface PushConfig {
@@ -24,12 +25,21 @@ function isConfig(value: unknown): value is PushConfig {
     && row['notices'].every(isNotice);
 }
 
-export function NotificationsPanel() {
+/**
+ * Notifications for the device this is open on. Turning them on subscribes
+ * this browser or installed app, never another device, so the copy names it.
+ * Hiding previews applies to every device and lives with the device list.
+ */
+export function NotificationsPanel({ onChange }: { onChange?: () => void } = {}) {
   const [config, setConfig] = useState<PushConfig | null>(null);
   const [subscribed, setSubscribed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const capability = installCapabilityWarning(currentInstallEnvironment());
+  const copy = notificationCopy({
+    standalone: isStandaloneDisplay(),
+    touch: typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches === true,
+  });
 
   const load = useCallback(async () => {
     await syncPushSubscription().catch(() => false);
@@ -58,6 +68,8 @@ export function NotificationsPanel() {
     try {
       await enablePush(config.publicKey);
       setSubscribed(true);
+      // The subscription exists now, whatever the refresh below does.
+      onChange?.();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not turn on notifications.');
@@ -78,6 +90,7 @@ export function NotificationsPanel() {
       const res = await apiFetch('/api/push/subscriptions', { method: 'DELETE' });
       if (!res.ok) throw new Error('Could not turn off notifications.');
       setSubscribed(false);
+      onChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not turn off notifications.');
     } finally {
@@ -85,29 +98,12 @@ export function NotificationsPanel() {
     }
   }
 
-  async function setHidePreviews(hidePreviews: boolean) {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await apiFetch('/api/push/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hidePreviews }),
-      });
-      if (!res.ok) throw new Error('Could not save the notification setting.');
-      setConfig((current) => current ? { ...current, hidePreviews } : current);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save the notification setting.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <section className="pair-panel" aria-label="Notifications">
-      <h3 className="settings-section-title">Notifications</h3>
+    <section className="pair-panel" aria-label="Notifications on this device">
+      <h3 className="settings-section-title">Notifications on this device</h3>
       <p className="device-meta">
-        The phone app alerts you when nobody has the chat open. Turning this on asks the browser for permission.
+        {copy.intro}
+        {copy.phoneHint && <> {copy.phoneHint}</>}
       </p>
       {capability && <p className="pair-warning" role="status">{capability}</p>}
       {config && !config.configured && (
@@ -117,30 +113,17 @@ export function NotificationsPanel() {
       {config?.configured && !capability && (
         <div className="device-actions">
           {subscribed ? (
-            <>
-              <p className="device-meta">
-                {isStandaloneDisplay()
-                  ? 'Notifications are on for this phone.'
-                  : 'Notifications are on for this browser.'}
-              </p>
-              <button type="button" className="btn" disabled={busy} onClick={() => void turnOff()}>
-                Turn off notifications
+            <p className="notify-status" role="status">
+              <span className="device-badge device-badge-on">{copy.onStatus}</span>
+              <button type="button" className="link-button" disabled={busy} onClick={() => void turnOff()}>
+                Turn off
               </button>
-            </>
+            </p>
           ) : (
             <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void turnOn()}>
-              {busy ? 'Turning on…' : 'Turn on notifications'}
+              {busy ? 'Turning on…' : copy.turnOn}
             </button>
           )}
-          <label className="push-toggle">
-            <input
-              type="checkbox"
-              checked={config.hidePreviews}
-              disabled={busy}
-              onChange={(event) => void setHidePreviews(event.target.checked)}
-            />
-            Hide message previews
-          </label>
         </div>
       )}
     </section>

@@ -235,7 +235,9 @@ describe('console service worker', () => {
   it('points a failed navigation at a page with no inline style or script', () => {
     expect(workerSource).toContain("cache.match('/offline.html')");
     expect(offline).toContain("Can't reach your Curia");
-    expect(offline).toContain('id="offline-host"');
+    expect(offline).toContain('id="offline-reason"');
+    // The wording fits any device: no "the phone" on a desktop (#2341).
+    expect(offline).not.toContain('The phone');
     expect(offline).toContain('href="/offline.css"');
     expect(offline).toContain('src="/offline.js"');
     expect(offline).not.toMatch(/<style[\s>]/i);
@@ -244,7 +246,50 @@ describe('console service worker', () => {
     expect(scripts.length).toBeGreaterThan(0);
     for (const tag of scripts) expect(tag).toMatch(/\ssrc=/);
     expect(offlineJs).toContain('location.host');
+    expect(offlineJs).toContain('navigator.onLine');
+    expect(offlineJs).toContain("addEventListener('online'");
     expect(offlineJs).toContain("addEventListener('click'");
+  });
+});
+
+/** Run offline.js against a fake page; returns what a test needs to drive it. */
+function runOfflineScript(onLine: boolean) {
+  const reason = { textContent: '' };
+  const retry = { listeners: {} as Record<string, () => void>, addEventListener(type: string, fn: () => void) { this.listeners[type] = fn; } };
+  const windowListeners: Record<string, () => void> = {};
+  let reloads = 0;
+  const navigator = { onLine };
+  vm.runInNewContext(offlineJs, {
+    document: { getElementById: (id: string) => (id === 'offline-reason' ? reason : id === 'offline-retry' ? retry : null) },
+    window: { addEventListener: (type: string, fn: () => void) => { windowListeners[type] = fn; } },
+    navigator,
+    location: { host: 'curia.example.com', reload: () => { reloads += 1; } },
+  });
+  return { reason, retry, windowListeners, navigator, reloads: () => reloads };
+}
+
+describe('offline page script', () => {
+  it('says the device is online but cannot reach this Curia, naming the host', () => {
+    const page = runOfflineScript(true);
+    expect(page.reason.textContent).toContain("can't reach your Curia at curia.example.com");
+    expect(page.reason.textContent).not.toContain('phone');
+  });
+
+  it('says the device is offline, and switches when the browser goes offline later', () => {
+    expect(runOfflineScript(false).reason.textContent).toBe("This device is offline. Curia will reconnect when you're back online.");
+    const page = runOfflineScript(true);
+    page.navigator.onLine = false;
+    page.windowListeners['offline']!();
+    expect(page.reason.textContent).toContain('This device is offline');
+  });
+
+  it('reloads by itself when the connection returns, and on Try again', () => {
+    const page = runOfflineScript(false);
+    expect(page.reloads()).toBe(0);
+    page.windowListeners['online']!();
+    expect(page.reloads()).toBe(1);
+    page.retry.listeners['click']!();
+    expect(page.reloads()).toBe(2);
   });
 });
 
