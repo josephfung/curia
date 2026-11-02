@@ -1,13 +1,13 @@
 {
   "name": "async-offramp",
-  "description": "Hand work you cannot do on this call to your full self, which has the vault and saved sign-ins, scheduling, browsing, documents, and your own Signal and email. Voice-only. Use it on the first ask when a request needs one. Do not judge whether it is possible, and never tell the caller you lack a login, access or a tool. mode now: the caller wants it done while you talk (set something up, check a site, message someone). The result comes back within about a minute, or it is still working and reaches the principal by follow_up_channel. mode after_call (default): longer work such as research or drafting, or anything to email the principal after the call. A message to anyone but the principal goes here with mode now: the principal's inbox specialist only saves drafts in their mailbox. Say something was sent or done only when the result shows it. A recap of this call is meeting-notes-start, not this tool. Tell the caller as a person would, for example \"Let me take care of that now.\" or \"I'll work on that after we hang up and email it to you.\" This tool and whoever picks the work up stay unspoken.",
-  "version": "0.2.0",
+  "description": "Hand work you cannot do on this call to your full self, which has the vault and saved sign-ins, scheduling, browsing, documents, and your own Signal and email. Voice-only. Use it on the first ask when a request needs one. Do not judge whether it is possible, and never tell the caller you lack a login, access or a tool. mode now: the caller wants it done while you talk (set something up, check a site, message someone). The result comes back within about a minute, or it is still working and reaches the principal afterwards. mode after_call (default): longer work such as research or drafting, or anything to email the principal after the call. A message to anyone but the principal goes here with mode now: the principal's inbox specialist only saves drafts in their mailbox. Say something was sent or done only when the result shows it. A recap of this call is meeting-notes-start, not this tool. Tell the caller as a person would, for example \"Let me take care of that now.\" or \"I'll work on that after we hang up and email it to you.\" This tool and whoever picks the work up stay unspoken.",
+  "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
     "brief": "string (required — crisp, self-contained description of the work)",
     "mode": "string? (now | after_call; default after_call)",
-    "follow_up_channel": "string? (signal | email — reach the principal when done or when a now result runs long; default email)",
+    "follow_up_channel": "string? (signal | sms | web | slack | email — only when the caller names one; otherwise their usual channel)",
     "idempotency_key": "string? (optional stable key; duplicates return the prior enqueue without spawning another task)"
   },
   "outputs": {
@@ -15,7 +15,7 @@
     "completed": "boolean? (now: the result came back on the call)",
     "result": "string? (now: what was done; tell it in your own words)",
     "sent": "string[]? (now: send skills that succeeded; empty means nothing went out)",
-    "still_working": "boolean? (now: the result goes by follow_up_channel instead)",
+    "still_working": "boolean? (now: the result reaches the principal afterwards instead)",
     "failed": "boolean? (now: the work failed; say so plainly)",
     "task_event_id": "string?",
     "follow_up_channel": "string?",

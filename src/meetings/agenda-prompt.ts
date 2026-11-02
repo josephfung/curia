@@ -62,9 +62,13 @@ const SPOKEN_AGENDA_WORDS =
 
 // With an agenda open, the call drifted and never ran it (#2428). Only rendered
 // when an agenda is open, so a free-form call carries none of it (ADR-046).
+// The agenda's free-text role is how Curia behaves on the call (agenda-minutes
+// design: "observer", "chair", ...). Code does not interpret it yet, so the
+// guidance defers to it rather than overriding an observer or note-taker role.
 const RUNNING_THE_AGENDA = [
   '### Running the agenda',
-  'You are running this call against the open agenda. Early on, tell the caller you have the agenda and how many topics '
+  'Unless the agenda\'s role says otherwise, such as an observer or note-taker, run this call against the open agenda. '
+    + 'Early on, tell the caller you have the agenda and how many topics '
     + 'it has, and offer to take them in order. Take one topic at a time: give its gist in a sentence or two, get what '
     + 'the caller needs to say or decide, then move to the next. When the conversation drifts, handle what the caller '
     + 'raised, then steer back to the next open topic. Before the call wraps up, name any topics not yet covered and ask '

@@ -258,7 +258,7 @@ export const VOICE_TOOL_RESULT_POLICY =
   'and offer to try again. Never present a failed or incomplete lookup as a definitive ' +
   'answer. Only report an empty result ("nothing on your calendar tomorrow") when the ' +
   'check succeeded and genuinely returned no items. Say something was sent, booked or ' +
-  'done only when a tool result in this turn shows it; a saved draft is not a send (#2428).';
+  'done only when a tool result in this turn shows it; a saved draft is not a send.';
 
 /**
  * Delegation guidance for spoken turns. The slim Phase 1 prompt never told the
@@ -284,7 +284,7 @@ export const VOICE_DELEGATION_GUIDANCE =
   'principal\'s inbox all belong to the specialists listed below. A recap of this ' +
   'call is meeting-notes-start. Anything that needs the vault or a saved sign-in, a ' +
   'scheduled task, browsing, documents, or a message to anyone goes to async-offramp: ' +
-  'mode now while the caller waits, after_call for longer work (#2428). When a request ' +
+  'mode now while the caller waits, after_call for longer work. When a request ' +
   'falls in a specialist\'s domain, delegate rather than answering from memory or ' +
   'guessing. Resolve pronouns before delegating: "my calendar" spoken by the ' +
   'principal means the principal\'s calendar. Fold the specialist\'s result into ' +

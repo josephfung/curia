@@ -101,21 +101,23 @@ describe('AsyncOfframpHandler', () => {
     expect(task.parentEventId).toBe('voice-session-abc');
   });
 
-  it('defaults follow_up_channel to email and uses signal-send when signal', async () => {
+  // PR #2433 review: Signal and email were hard-coded. With no channel named, the
+  // coordinator reaches the principal by its own configured order and preferences.
+  it('uses the principal\'s usual channel unless one is named, and accepts any reach channel', async () => {
     const { bus, published } = makeBus();
-    const result = await handler.execute(
-      makeCtx(bus, { brief: 'Triage my inbox for vendor invoices' }),
-    );
+    const result = await handler.execute(makeCtx(bus, { brief: 'Triage my inbox for vendor invoices' }));
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect((result.data as Record<string, unknown>)['follow_up_channel']).toBe('email');
-    }
-    expect((published[0] as AgentTaskEvent).payload.content).toContain('email-send');
+    if (result.success) expect((result.data as Record<string, unknown>)['follow_up_channel']).toBeNull();
+    const content = (published[0] as AgentTaskEvent).payload.content;
+    expect(content).toContain('Reaching the principal');
+    expect(content).not.toContain('email-send');
 
-    resetAsyncOfframpDedupForTests();
-    const { bus: bus2, published: pub2 } = makeBus();
-    await handler.execute(makeCtx(bus2, { brief: 'Same work via Signal', follow_up_channel: 'signal' }));
-    expect((pub2[0] as AgentTaskEvent).payload.content).toContain('signal-send');
+    for (const [channel, tool] of [['signal', 'signal-send'], ['sms', 'sms-send'], ['slack', 'slack-send'], ['web', 'web-send']]) {
+      resetAsyncOfframpDedupForTests();
+      const { bus: named, published: sent } = makeBus();
+      await handler.execute(makeCtx(named, { brief: `Same work via ${channel}`, follow_up_channel: channel }));
+      expect((sent[0] as AgentTaskEvent).payload.content).toContain(tool);
+    }
   });
 
   it('is idempotent — duplicate call does not spawn a second task', async () => {

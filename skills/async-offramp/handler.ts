@@ -32,9 +32,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createAgentTask } from '../../src/bus/events.js';
 import type { AgentResponseEvent, BusEvent } from '../../src/bus/events.js';
+import { principalSendTool, REACH_CHANNELS, type ReachChannel } from '../../src/agents/principal-reach.js';
 
-const FOLLOW_UP_CHANNELS = new Set(['signal', 'email']);
-const DEFAULT_FOLLOW_UP = 'email';
+/**
+ * A follow-up goes on the channel the caller named, or else the principal's usual
+ * one: the coordinator's "Reaching the principal" block orders the configured
+ * channels and honours standing preferences. Hard-coding Signal or email here
+ * would ignore both.
+ */
+type FollowUpChannel = ReachChannel | null;
 /**
  * Last-resort sender when originator and caller are both missing.
  * Same synthetic principal id the voice runtime / web chat use
@@ -54,7 +60,7 @@ const MAX_DEDUP_ENTRIES = 5_000;
 
 interface DedupEntry {
   taskEventId: string;
-  followUpChannel: string;
+  followUpChannel: FollowUpChannel;
 }
 
 /** Module-scoped so duplicate tool calls in the same process hit the same map.
@@ -66,16 +72,14 @@ function normalizeBrief(brief: string): string {
   return brief.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
-function resolveFollowUpChannel(raw: unknown): string | { error: string } {
-  if (raw === undefined || raw === null || raw === '') return DEFAULT_FOLLOW_UP;
-  if (typeof raw !== 'string') {
-    return { error: "follow_up_channel must be 'signal' or 'email'" };
-  }
+const CHANNEL_ERROR = `follow_up_channel must be one of ${REACH_CHANNELS.join(', ')}, or left out for the principal's usual channel`;
+
+function resolveFollowUpChannel(raw: unknown): FollowUpChannel | { error: string } {
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw !== 'string') return { error: CHANNEL_ERROR };
   const normalized = raw.trim().toLowerCase();
-  if (!FOLLOW_UP_CHANNELS.has(normalized)) {
-    return { error: "follow_up_channel must be 'signal' or 'email'" };
-  }
-  return normalized;
+  const channel = REACH_CHANNELS.find((candidate) => candidate === normalized);
+  return channel ?? { error: CHANNEL_ERROR };
 }
 
 function resolveMode(raw: unknown): Mode | { error: string } {
@@ -109,14 +113,22 @@ function rememberDedup(key: string, entry: DedupEntry): void {
   }
 }
 
-function channelSkill(followUpChannel: string): string {
-  return followUpChannel === 'signal' ? 'signal-send' : 'email-send';
+/** How the coordinator should reach the principal with the result. */
+function reachInstruction(followUpChannel: FollowUpChannel): string {
+  return followUpChannel
+    ? `on ${followUpChannel} with ${principalSendTool(followUpChannel)}, passing "principal" as the recipient.`
+    : 'the way your "Reaching the principal" section says, passing "principal" as the recipient.';
+}
+
+/** How the call tells the caller the result will arrive. */
+function spokenChannel(followUpChannel: FollowUpChannel): string {
+  return followUpChannel ? `by ${followUpChannel}` : 'afterwards';
 }
 
 /** Build the coordinator task content — clear provenance + follow-up instruction. */
 function buildTaskContent(
   brief: string,
-  followUpChannel: string,
+  followUpChannel: FollowUpChannel,
   sourceConversationId: string | undefined,
   mode: Mode,
 ): string {
@@ -131,8 +143,8 @@ function buildTaskContent(
     ]
     : [
       'Voice async off-ramp — the principal asked you during a live voice call to handle',
-      'the following asynchronously. Complete the work, then reach the principal on',
-      `${followUpChannel} with ${channelSkill(followUpChannel)}, passing "principal" as the recipient.`,
+      'the following asynchronously. Complete the work, then reach the principal',
+      reachInstruction(followUpChannel),
       'Do not try to reply on the voice channel.',
     ];
   return [
@@ -141,17 +153,17 @@ function buildTaskContent(
     '## Brief',
     brief.trim(),
     '',
-    `## Follow-up channel: ${followUpChannel}`,
+    `## Follow-up channel: ${followUpChannel ?? "the principal's usual channel"}`,
     `## Source voice conversation: ${source}`,
   ].join('\n');
 }
 
 /** A now reply that missed the call goes to the principal through a fresh coordinator task. */
-function buildForwardContent(brief: string, followUpChannel: string, reply: string): string {
+function buildForwardContent(brief: string, followUpChannel: FollowUpChannel, reply: string): string {
   return [
     'Voice hand-off follow-up — the principal asked for the work below during a live call,',
     'and your result came back after the call had moved on. Send the result to the principal',
-    `on ${followUpChannel} with ${channelSkill(followUpChannel)}, passing "principal" as the recipient.`,
+    reachInstruction(followUpChannel),
     'Keep it short. Do not redo the work.',
     '',
     '## Brief',
@@ -199,7 +211,7 @@ export class AsyncOfframpHandler implements ToolHandler {
     const brief = briefRaw.trim();
 
     const channelResult = resolveFollowUpChannel(input.follow_up_channel);
-    if (typeof channelResult === 'object') {
+    if (channelResult !== null && typeof channelResult === 'object') {
       return { success: false, error: channelResult.error };
     }
     const followUpChannel = channelResult;
@@ -217,7 +229,7 @@ export class AsyncOfframpHandler implements ToolHandler {
     const idempotencyKey = buildIdempotencyKey(
       ctx.conversationId,
       brief,
-      mode === 'now' ? `${followUpChannel}|now` : followUpChannel,
+      `${followUpChannel ?? 'usual'}${mode === 'now' ? '|now' : ''}`,
       explicitKey,
     );
 
@@ -245,7 +257,7 @@ export class AsyncOfframpHandler implements ToolHandler {
             ? {
               completed: false,
               still_working: true,
-              note: `Still working on that. Tell the caller the result will come by ${prior.followUpChannel}.`,
+              note: `Still working on that. Tell the caller the result will come ${spokenChannel(prior.followUpChannel)}.`,
             }
             : { note: 'Already handed to async coordinator path; principal will be reached when done.' }),
         },
@@ -369,7 +381,7 @@ export class AsyncOfframpHandler implements ToolHandler {
           still_working: true,
           follow_up_channel: followUpChannel,
           task_event_id: taskEvent.id,
-          note: `Still working. Tell the caller you will send the result by ${followUpChannel} when it is done.`,
+          note: `Still working. Tell the caller you will send the result ${spokenChannel(followUpChannel)} when it is done.`,
         },
       };
     }
@@ -396,7 +408,7 @@ export class AsyncOfframpHandler implements ToolHandler {
     ctx: ToolContext,
     taskEventId: string,
     brief: string,
-    followUpChannel: string,
+    followUpChannel: FollowUpChannel,
     senderId: string,
     originator: Record<string, unknown> | undefined,
     idempotencyKey: string,

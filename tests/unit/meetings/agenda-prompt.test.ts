@@ -62,6 +62,8 @@ describe('formatAgendaPromptBlock', () => {
     expect(open).toContain('one topic at a time');
     expect(open).toContain('steer back');
     expect(open).toContain('Before the call wraps up');
+    // PR #2433 review: an observer or note-taker role is not told to run the meeting.
+    expect(open).toContain("Unless the agenda's role says otherwise, such as an observer or note-taker");
     const queuedOnly = formatAgendaPromptBlock({
       loaded: [],
       index: [{ agendaId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', title: 'Friday sync', scheduledFor: null }],

@@ -20,6 +20,11 @@ const SEND_TOOLS: Record<ReachChannel, readonly string[]> = {
   email: ['email-send', 'email-reply'],
 };
 
+/** The send skill that reaches the principal on `channel`. */
+export function principalSendTool(channel: ReachChannel): string {
+  return SEND_TOOLS[channel][0]!;
+}
+
 const LABEL: Record<ReachChannel, string> = {
   signal: 'Signal',
   sms: 'SMS',
