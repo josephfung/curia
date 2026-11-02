@@ -310,7 +310,7 @@ principal, the console warns before starting it. The fixture is the onboarding p
 improving it improves onboarding for every principal who starts after.
 
 **Sessions are booked one at a time.** At the end of each session the principal and Curia agree
-the next one, and the post-session structuring pass (`meeting-minutes-structuring`) books only
+the next one, and the post-session follow-up (the minutes guidance in the `meetings` bundle) books only
 that one. Interests, timing and availability shift as onboarding goes on.
 
 **Sessions live on the principal's calendar.** Once the principal's calendar is connected

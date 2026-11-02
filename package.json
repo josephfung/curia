@@ -85,7 +85,7 @@
     "nylas": "^8.4.0",
     "openai": "^7.39.0",
     "openredaction": "^1.1.5",
-    "patchright": "1.64.1",
+    "patchright": "1.64.2",
     "pdf-parse": "^2.4.5",
     "pg": "^8.23.1",
     "pgvector": "^0.3.0",

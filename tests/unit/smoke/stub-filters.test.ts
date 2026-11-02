@@ -2,7 +2,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { describe, expect, it } from 'vitest';
 import { toLocalIso } from '../../../src/time/timestamp.js';
-import { CaseToolState } from '../../shared/tool-state.js';
+import { CaseToolState, recordedJobRead } from '../../shared/tool-state.js';
 import { fillInputPlaceholders, matchesMailQuery, shapeStubResult } from '../../smoke/stub-filters.js';
 
 /** The next fire `scheduler-list` would show: cron in the job's zone, local ISO. */
@@ -274,6 +274,139 @@ describe('SchedulerState', () => {
   it('keeps nothing without a state', () => {
     shapeStubResult('scheduler-create', created, { task: 'Scan', cron_expr: '0 9 * * 1-5' });
     expect(shapeStubResult('scheduler-list', empty, {})).toEqual(empty);
+  });
+
+  describe('scheduler-get (#2399)', () => {
+    const longTask = `Scan investor mail each weekday. ${'Flag anything urgent. '.repeat(10)}End with the PERIWINKLE note.`;
+    type Got = { job: { id: string; taskPayload: Record<string, unknown> | null; cronExpr: string; status: string } };
+
+    it('reads a job the case created in full, and follows a later edit', () => {
+      const state = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5', timezone: 'America/Toronto' }, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got;
+      expect(got.job).toEqual(expect.objectContaining({ id: JOB_ID, taskPayload: { task: longTask }, cronExpr: '0 9 * * 1-5' }));
+
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', cron_expr: '0 10 * * 1-5', task_payload: { task: `${longTask} Also check the deck.` } }, state);
+      const edited = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got;
+      expect(edited.job.taskPayload).toEqual({ task: `${longTask} Also check the deck.` });
+      expect(edited.job.cronExpr).toBe('0 10 * * 1-5');
+    });
+
+    it('reads a listed job without passing its preview off as the task', () => {
+      const state = new CaseToolState();
+      // Even an uncut preview is trimmed and flattened, so it is not the stored task.
+      const withPreview = { ...listed, jobs: [{ ...listed.jobs[0]!, taskPreview: 'Scan investor mail' }] };
+      shapeStubResult('scheduler-list', withPreview, {}, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got;
+      expect(got.job).toEqual(expect.objectContaining({ id: JOB_ID, taskPayload: null }));
+
+      shapeStubResult('scheduler-cancel', { cancelled: true, jobId: JOB_ID }, { job_id: JOB_ID }, state);
+      expect((recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got).job.status).toBe('cancelled');
+    });
+
+    it('leaves unknown ids, and stubs that name job_id, to the stub', () => {
+      const state = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5' }, state);
+      expect(recordedJobRead('scheduler-get', { job_id: 'aaaaaaaa-0000-4000-8000-000000000009' }, state, {})).toBeUndefined();
+      expect(recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, { job_id: JOB_ID })).toBeUndefined();
+      expect(recordedJobRead('scheduler-list', { job_id: JOB_ID }, state, {})).toBeUndefined();
+    });
+
+    it('replays an edit onto a stubbed scheduler-get', () => {
+      const state = new CaseToolState();
+      const stubbed = {
+        job: { ...listed.jobs[0]!, taskPayload: { task: longTask } },
+        truncatedFields: [],
+        displayTimezone: 'America/Toronto',
+      };
+      expect(shapeStubResult('scheduler-get', stubbed, { job_id: JOB_ID }, state)).toEqual(stubbed);
+
+      const reworded = `${longTask} Also check the deck.`;
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', task_payload: { task: reworded } }, state);
+      const after = shapeStubResult('scheduler-get', stubbed, { job_id: JOB_ID }, state) as Got;
+      expect(after.job).toEqual(expect.objectContaining({ taskPayload: { task: reworded }, cronExpr: '0 9 * * 1-5' }));
+    });
+
+    it("shows a replayed job's times in the caller's zone, not its cron zone", () => {
+      const state = new CaseToolState();
+      // A Los Angeles-cron job, read by a Toronto principal. The two zones share DST rules,
+      // so they are always three hours apart.
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5', timezone: 'America/Los_Angeles' }, state);
+      const alone = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got & { displayTimezone: string };
+      // No listing has named the caller's zone yet: the label matches the job's own zone.
+      expect(alone.displayTimezone).toBe('America/Los_Angeles');
+
+      shapeStubResult('scheduler-list', empty, {}, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got & { displayTimezone: string; job: { nextRunAt: string } };
+      expect(got.displayTimezone).toBe('America/Toronto');
+      // 9am Pacific is noon Eastern; same instant, now in the labelled zone.
+      expect(got.job.nextRunAt).toMatch(/T12:00:00\.000-0[45]:00$/);
+      expect(new Date(got.job.nextRunAt).getTime()).toBe(new Date((alone.job as unknown as { nextRunAt: string }).nextRunAt).getTime());
+    });
+
+    it('shows a one-shot run_at in the caller zone too, on both read paths', () => {
+      const state = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, run_at: '2026-12-01T15:00:00Z', timezone: 'America/Los_Angeles' }, state);
+      shapeStubResult('scheduler-list', empty, {}, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as { job: { runAt: string; nextRunAt: string } };
+      // 15:00 UTC on December 1 is 10:00 EST: both fields, one zone.
+      expect(got.job.runAt).toBe('2026-12-01T10:00:00.000-05:00');
+      expect(got.job.nextRunAt).toBe('2026-12-01T10:00:00.000-05:00');
+
+      const stubbed = { job: { ...listed.jobs[0]!, cronExpr: null, runAt: '2026-12-01T10:00:00.000-05:00', nextRunAt: '2026-12-01T10:00:00.000-05:00', taskPayload: { task: longTask } }, truncatedFields: [], displayTimezone: 'America/Toronto' };
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', run_at: '2026-12-02T15:00:00Z' }, state);
+      const after = shapeStubResult('scheduler-get', stubbed, { job_id: JOB_ID }, state) as { job: { runAt: string; nextRunAt: string } };
+      expect(after.job.runAt).toBe('2026-12-02T10:00:00.000-05:00');
+      expect(after.job.nextRunAt).toBe('2026-12-02T10:00:00.000-05:00');
+    });
+
+    it("reads an offset-less run_at in Curia's zone, as the execution layer does", () => {
+      const state = new CaseToolState('America/Toronto');
+      shapeStubResult('scheduler-create', created, { task: longTask, run_at: '2026-12-01T10:00:00' }, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as { job: { runAt: string; nextRunAt: string }; displayTimezone: string };
+      // 10:00 Toronto whatever the host zone, never 10:00 UTC.
+      expect(got.job.runAt).toBe('2026-12-01T10:00:00.000-05:00');
+      expect(got.job.nextRunAt).toBe('2026-12-01T10:00:00.000-05:00');
+      expect(got.displayTimezone).toBe('America/Toronto');
+
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', run_at: '2026-12-02T09:30:00' }, state);
+      const edited = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as { job: { runAt: string } };
+      expect(edited.job.runAt).toBe('2026-12-02T09:30:00.000-05:00');
+    });
+
+    it("converts a stubbed read's times with Curia's zone when its label is not an IANA zone", () => {
+      const state = new CaseToolState('America/Toronto');
+      const stubbed = {
+        job: { ...listed.jobs[0]!, cronExpr: null, runAt: '2026-12-01T10:00:00.000-05:00', nextRunAt: '2026-12-01T10:00:00.000-05:00', taskPayload: { task: longTask } },
+        truncatedFields: [],
+        displayTimezone: 'EST (UTC-05:00)',
+      };
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', run_at: '2026-12-02T15:00:00Z' }, state);
+      const after = shapeStubResult('scheduler-get', stubbed, { job_id: JOB_ID }, state) as { job: { runAt: string; nextRunAt: string }; displayTimezone: string };
+      expect(after.job.runAt).toBe('2026-12-02T10:00:00.000-05:00');
+      expect(after.job.nextRunAt).toBe('2026-12-02T10:00:00.000-05:00');
+      // The label is kept as the stub wrote it.
+      expect(after.displayTimezone).toBe('EST (UTC-05:00)');
+    });
+
+    it('gives a job created with an intent_anchor a linked task titled with the anchor', () => {
+      const state = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5', intent_anchor: 'Weekday investor inbox check' }, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as { job: { agentTaskId: string | null; taskTitle: string | null; intentAnchor: string | null } };
+      expect(got.job).toEqual(expect.objectContaining({ agentTaskId: 'task-linked-1', taskTitle: 'Weekday investor inbox check', intentAnchor: 'Weekday investor inbox check' }));
+
+      const plain = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5' }, plain);
+      expect((recordedJobRead('scheduler-get', { job_id: JOB_ID }, plain, {}) as typeof got).job).toEqual(expect.objectContaining({ agentTaskId: null, taskTitle: null }));
+    });
+
+    it('clears the listed preview when an edit leaves no string task', () => {
+      const state = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5' }, state);
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', task_payload: { steps: ['scan', 'flag'] } }, state);
+      const jobs = (shapeStubResult('scheduler-list', empty, {}, state) as { jobs: Array<{ taskPreview: string | null }> }).jobs;
+      expect(jobs[0]!.taskPreview).toBeNull();
+    });
   });
 });
 

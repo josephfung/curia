@@ -29,10 +29,15 @@ export async function pushRoutes(app: FastifyInstance, options: PushRouteOptions
     if (!requireAuth(request, reply)) return;
     try {
       const settings = await pool.query(`SELECT hide_previews FROM push_settings WHERE id = 1`);
-      const notices = await pool.query(
-        `SELECT id, kind, detail, created_at FROM push_notices WHERE dismissed_at IS NULL ORDER BY created_at DESC LIMIT 5`,
-      );
       const sessionId = await currentSessionId(request, pool);
+      // A 'paired' notice is about one phone. That phone doesn't need telling.
+      const notices = await pool.query(
+        `SELECT id, kind, detail, created_at FROM push_notices
+         WHERE dismissed_at IS NULL
+           AND (subject_session_id IS NULL OR subject_session_id IS DISTINCT FROM $1::uuid)
+         ORDER BY created_at DESC LIMIT 5`,
+        [sessionId],
+      );
       const subscribed = sessionId
         ? (await pool.query(`SELECT 1 FROM push_subscriptions WHERE session_id = $1 LIMIT 1`, [sessionId])).rows.length > 0
         : false;
@@ -43,7 +48,7 @@ export async function pushRoutes(app: FastifyInstance, options: PushRouteOptions
         hidePreviews: settings.rows[0]?.['hide_previews'] === true,
         notices: notices.rows.map((row) => ({
           id: String(row['id']),
-          kind: row['kind'] === 'setup' ? 'setup' : 'dead',
+          kind: noticeKind(row['kind']),
           detail: String(row['detail']),
           createdAt: row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']),
         })),
@@ -122,6 +127,10 @@ export async function pushRoutes(app: FastifyInstance, options: PushRouteOptions
       return reply.status(503).send({ error: 'Could not dismiss the notice.' });
     }
   });
+}
+
+function noticeKind(value: unknown): 'dead' | 'setup' | 'paired' {
+  return value === 'setup' || value === 'paired' ? value : 'dead';
 }
 
 async function currentSessionId(request: FastifyRequest, pool: SessionQueryable): Promise<string | null> {

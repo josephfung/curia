@@ -1,5 +1,5 @@
 import { CronExpressionParser } from 'cron-parser';
-import { toLocalIso } from '../../src/time/timestamp.js';
+import { normalizeTimestamp, toLocalIso } from '../../src/time/timestamp.js';
 
 // tests/shared/tool-state.ts — per-case memory of stubbed writes (#2074).
 //
@@ -106,6 +106,25 @@ function scheduledNextRun(cronExpr: string | null, runAt: string | null, timezon
 
 const TASK_PREVIEW_CHARS = 160;
 
+/** An instant re-expressed in `zone`, as the real tools show the caller's local time. A
+ *  value that is not an instant, or a zone that is not IANA, is returned as it was. */
+function inZone(value: unknown, zone: string | undefined): unknown {
+  if (!zone || typeof value !== 'string') return value;
+  const instant = new Date(value);
+  return formatNextRun(instant, zone) ?? value;
+}
+
+/** scheduler-get's instants, all shown in the caller's zone as the real tool does. */
+const JOB_TIMESTAMPS = ['runAt', 'nextRunAt', 'lastRunAt', 'createdAt'] as const;
+
+function timesInZone(job: Json, zone: string | undefined): Json {
+  const out: Json = { ...job };
+  for (const key of JOB_TIMESTAMPS) {
+    if (key in out) out[key] = inZone(out[key], zone);
+  }
+  return out;
+}
+
 /** Same preview scheduler-list builds: collapsed whitespace, cut at 160 characters. */
 function taskPreview(task: string): string {
   const flat = task.trim().replace(/\s+/g, ' ');
@@ -201,14 +220,30 @@ function freshId(preferred: string | undefined, taken: ReadonlySet<string>, pref
 }
 
 /**
- * Scheduler writes one case has made, replayed onto later scheduler-list results.
- * A cancel sets status to `cancelled` (the real tool soft-deletes; an unfiltered list
- * still returns the row). The first create keeps the id the stub returned, so a later
- * turn can list that same id; a repeated id is minted a new one.
+ * Scheduler writes one case has made, replayed onto later scheduler-list and
+ * scheduler-get results. A cancel sets status to `cancelled` (the real tool
+ * soft-deletes; an unfiltered list still returns the row). The first create keeps the
+ * id the stub returned, so a later turn can list that same id; a repeated id is minted
+ * a new one.
  */
 export class SchedulerState {
+  /**
+   * @param zone Curia's configured timezone (the stack's `config.timezone`). Production
+   *   reads an offset-less `run_at` in this zone (ExecutionLayer.invoke normalizes it
+   *   before a handler runs, and a stub answers before that) and shows times to the
+   *   caller in it. Unit tests may leave it unset.
+   */
+  constructor(private readonly zone?: string) {}
+
   private created: Json[] = [];
   private updates = new Map<string, Json>();
+  /** Each job's full task payload, from its create or its latest task_payload edit. */
+  private payloads = new Map<string, Json>();
+  /** Rows a scheduler-list in this case returned, so scheduler-get can read them (#2399). */
+  private listed = new Map<string, Json>();
+  /** The caller's zone, from the last listing's displayTimezone. The real tools show
+   *  times in the caller's zone, not each job's cron zone. */
+  private displayZone: string | undefined;
 
   private dirty(): boolean {
     return this.created.length > 0 || this.updates.size > 0;
@@ -225,9 +260,12 @@ export class SchedulerState {
     const taken = new Set(this.created.map(job => String(job['id'])));
     const id = freshId(str(data['jobId']), taken, 'job-created', this.created.length + 1);
     const task = typeof input['task'] === 'string' ? input['task'] : undefined;
+    if (task !== undefined) this.payloads.set(id, { task });
     const cronExpr = str(input['cron_expr']) ?? null;
-    const runAt = str(input['run_at']) ?? null;
+    const runAt = this.normalizeRunAt(str(input['run_at'])) ?? null;
     const timezone = str(input['timezone']) ?? null;
+    // A non-blank intent_anchor gets a linked task in production, titled with the anchor.
+    const intentAnchor = str(input['intent_anchor']) ?? null;
     // A job with no zone is interpreted in UTC for the next-run math. The real
     // service uses its configured zone; the stub does not have that.
     this.created.push({
@@ -242,11 +280,11 @@ export class SchedulerState {
       consecutiveFailures: 0,
       lastError: null,
       timezone,
-      taskTitle: null,
+      taskTitle: intentAnchor,
       taskPreview: task !== undefined ? taskPreview(task) : null,
-      intentAnchor: str(input['intent_anchor']) ?? null,
+      intentAnchor,
       taskTags: null,
-      agentTaskId: null,
+      agentTaskId: intentAnchor ? `task-linked-${this.created.length + 1}` : null,
       createdBy: str(input['agent_id']) ?? 'coordinator',
       createdAt: null,
     });
@@ -263,10 +301,14 @@ export class SchedulerState {
     else if (action === 'edit') {
       const cron = str(input['cron_expr']);
       if (cron) changes['cronExpr'] = cron;
-      const runAt = str(input['run_at']);
+      const runAt = this.normalizeRunAt(str(input['run_at']));
       if (runAt) changes['runAt'] = runAt;
       const payload = input['task_payload'];
-      if (isRecord(payload) && typeof payload['task'] === 'string') changes['taskPreview'] = taskPreview(payload['task']);
+      if (isRecord(payload)) {
+        this.payloads.set(id, payload);
+        // A payload with no string task has no preview, as in scheduler-list.
+        changes['taskPreview'] = typeof payload['task'] === 'string' ? taskPreview(payload['task']) : null;
+      }
     }
     if (Object.keys(changes).length === 0) return data;
     this.updates.set(id, { ...(this.updates.get(id) ?? {}), ...changes });
@@ -317,6 +359,90 @@ export class SchedulerState {
     const truncated = jobs.length > limit;
     const page = jobs.slice(0, limit);
     return { ...data, jobs: page, count: page.length, truncated, limit };
+  }
+
+  /** Remember the rows a scheduler-list returned, for a later scheduler-get. */
+  /** A `run_at` as production stores it: an offset-less time is read in Curia's zone. */
+  private normalizeRunAt(raw: string | undefined): string | undefined {
+    if (!raw || !this.zone) return raw;
+    try {
+      return normalizeTimestamp(raw, this.zone);
+    } catch {
+      return raw; // Unparseable: production would refuse it; the replay keeps it as written.
+    }
+  }
+
+  /** The caller's IANA zone: Curia's configured zone, else the last listing's label. */
+  private callerZone(): string | undefined {
+    return this.zone ?? this.displayZone;
+  }
+
+  rememberListed(data: Json): void {
+    const zone = str(data['displayTimezone']);
+    if (zone && formatNextRun(new Date(), zone) !== null) this.displayZone = zone;
+    if (!Array.isArray(data['jobs'])) return;
+    for (const job of data['jobs']) {
+      if (isRecord(job) && typeof job['id'] === 'string' && job['id'] !== '') this.listed.set(job['id'], job);
+    }
+  }
+
+  /**
+   * scheduler-get of a job this case created or listed, as the real tool would answer
+   * after the case's writes. Undefined for any other id, so the stub answers it.
+   *
+   * The payload comes from the create or the latest task_payload edit. A listed row
+   * carries only a preview, which is trimmed, flattened and maybe cut, so it is never
+   * passed off as the task: with no recorded payload, `taskPayload` is null (unknown).
+   * A case that needs the full text of a seeded job stubs scheduler-get with a
+   * `job_id` match.
+   */
+  read(input: Json): Json | undefined {
+    const id = str(input['job_id']);
+    if (!id) return undefined;
+    const listedRow = this.listed.get(id);
+    const createdRow = [...this.created].reverse().find(job => job['id'] === id);
+    if (!listedRow && !createdRow) return undefined;
+    // A listed row already holds the create and every write up to that list.
+    const base: Json = listedRow ?? { ...createdRow };
+    const row = this.refreshNextRun({ ...base, ...(this.updates.get(id) ?? {}) }, pinnedNextRuns([base]));
+    const job = isRecord(row) ? row : base;
+
+    const taskPayload = this.payloads.get(id) ?? null;
+    // The caller's zone when a listing named it; otherwise the job's own, so the label
+    // at least matches the times it labels.
+    const jobZone = typeof job['timezone'] === 'string' && job['timezone'] !== '' ? job['timezone'] : 'UTC';
+    const zone = this.callerZone() ?? jobZone;
+    return {
+      job: timesInZone({
+        lastRunSummary: null,
+        lastRunContext: null,
+        progress: null,
+        ...job,
+        taskPayload,
+      }, zone),
+      truncatedFields: [],
+      displayTimezone: zone,
+    };
+  }
+
+  /** A stubbed scheduler-get result as it stands after this case's writes. */
+  replayOntoGet(data: Json, input: Json): Json {
+    const job = data['job'];
+    const id = str(input['job_id']);
+    if (!isRecord(job) || !id || job['id'] !== id) return data;
+    const update = this.updates.get(id);
+    const payload = this.payloads.get(id);
+    if (!update && !payload) return data;
+    let next: Json = { ...job, ...(update ?? {}) };
+    if (payload) next = { ...next, taskPayload: payload };
+    const refreshed = this.refreshNextRun(next, pinnedNextRuns([job]));
+    const out = isRecord(refreshed) ? refreshed : next;
+    // A refreshed next run comes out in the job's zone, and an edit's run_at as given;
+    // show them in the caller's zone. The stub's displayTimezone is only a label, and
+    // may be production's "EST (UTC-05:00)" rather than an IANA zone.
+    const label = str(data['displayTimezone']);
+    const labelZone = label && formatNextRun(new Date(), label) !== null ? label : undefined;
+    return { ...data, job: timesInZone(out, this.zone ?? labelZone ?? this.displayZone) };
   }
 
   /**
@@ -570,8 +696,13 @@ export class TaskState {
 
 /** Per-case write memory for every tool family whose reads should reflect its writes. */
 export class CaseToolState {
+  /** @param timezone Curia's configured timezone; see SchedulerState. */
+  constructor(timezone?: string) {
+    this.scheduler = new SchedulerState(timezone);
+  }
+
   readonly calendar = new CalendarState();
-  readonly scheduler = new SchedulerState();
+  readonly scheduler: SchedulerState;
   readonly drafts = new DraftState();
   readonly tasks = new TaskState();
 }
@@ -592,9 +723,28 @@ export function applyCaseWrites(toolName: string, data: Json, input: Json, state
   if (SCHEDULER_WRITES.has(toolName)) shaped = state.scheduler.recordWrite(toolName, shaped, input);
   if (DRAFT_WRITES.has(toolName)) shaped = state.drafts.recordWrite(toolName, shaped, input);
   if (TASK_WRITES.has(toolName)) shaped = state.tasks.recordWrite(toolName, shaped, input);
-  if (toolName === 'scheduler-list') shaped = state.scheduler.replayOnto(shaped, input);
+  if (toolName === 'scheduler-list') {
+    shaped = state.scheduler.replayOnto(shaped, input);
+    state.scheduler.rememberListed(shaped);
+  }
+  if (toolName === 'scheduler-get') shaped = state.scheduler.replayOntoGet(shaped, input);
   if (toolName === 'task-list') shaped = state.tasks.replayOnto(shaped, input);
   return shaped;
+}
+
+/**
+ * A `scheduler-get` of a job this case created or listed, or undefined (#2399).
+ * A stub whose match names job_id is scripting that read, so it wins.
+ */
+export function recordedJobRead(
+  toolName: string,
+  input: Json,
+  state: CaseToolState,
+  stubMatch: Record<string, unknown> | undefined,
+): Json | undefined {
+  if (toolName !== 'scheduler-get') return undefined;
+  if (stubMatch !== undefined && Object.hasOwn(stubMatch, 'job_id')) return undefined;
+  return state.scheduler.read(input);
 }
 
 /**

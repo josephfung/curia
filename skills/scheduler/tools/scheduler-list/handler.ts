@@ -6,8 +6,9 @@
 // The listing is deliberately BOUNDED and TRIMMED (#1487): it returns at most
 // `limit` jobs (most recent first) and omits the heavy per-job JSONB fields
 // (taskPayload, progress, lastRunContext, lastRunSummary, taskErrorBudget,
-// originator). A list view exists to identify and manage jobs — full detail for a
-// single job comes from getJob / scheduler-report. Without these bounds, a large
+// originator). A list view exists to identify and manage jobs. Full detail for a
+// single job, including the whole task text that taskPreview cuts at 160 characters,
+// comes from scheduler-get (#2399). Without these bounds, a large
 // jobs table serialized into one tool_result overflows the model context window,
 // and the follow-up LLM call fails with a non-retryable 400 (VALIDATION_ERROR),
 // which surfaces to the user as the generic "unable to process" message.
@@ -29,8 +30,9 @@ const MAX_LIST_LIMIT = 200;
  *  Timestamp fields (runAt, nextRunAt, lastRunAt, createdAt) are converted to the
  *  user's display timezone via toLocalIso — never returned as raw UTC Z-suffix
  *  strings, which LLMs cannot reliably convert. `timezone` remains the job's own
- *  IANA zone (the wall-clock basis for its cron), which is metadata, not an instant. */
-interface JobSummary {
+ *  IANA zone (the wall-clock basis for its cron), which is metadata, not an instant.
+ *  scheduler-get builds its single-job detail on this. */
+export interface JobSummary {
   id: string;
   agentId: string;
   status: string;
@@ -55,7 +57,7 @@ interface JobSummary {
 
 /** Convert a DB ISO-string instant to the user's local-timezone ISO for display.
  *  Returns null for null/invalid inputs (toLocalIso guards non-finite seconds). */
-function toLocalDisplay(iso: string | null, tz: string | undefined): string | null {
+export function toLocalDisplay(iso: string | null, tz: string | undefined): string | null {
   if (!iso) return null;
   return toLocalIso(Math.floor(new Date(iso).getTime() / 1000), tz);
 }
@@ -67,7 +69,7 @@ function taskPreview(job: JobRow): string | null {
   return flat.length > TASK_PREVIEW_CHARS ? `${flat.slice(0, TASK_PREVIEW_CHARS)}…` : flat;
 }
 
-function toJobSummary(job: JobRow, tz: string | undefined): JobSummary {
+export function toJobSummary(job: JobRow, tz: string | undefined): JobSummary {
   return {
     id: job.id,
     agentId: job.agentId,

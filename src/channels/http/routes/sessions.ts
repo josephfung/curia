@@ -236,7 +236,7 @@ export async function sessionRoutes(
 
 type SessionAudit = Omit<OperatorSessionEvent['payload'], 'stage'>;
 
-function actorFromRequest(
+export function actorFromRequest(
   request: FastifyRequest,
   sessions: SessionStore,
 ): { initiatedBy: 'session' | 'bootstrap_secret'; actorSessionId?: string } {

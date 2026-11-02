@@ -184,7 +184,7 @@ Current built-in skills/tools include (see `skills/` for the full list):
 | **Calendar** | `calendar` — expands to all `calendar-*` tools (per-tool `action_risk` preserved) |
 | **Contacts** | `contact-lookup`, `contact-create`, `contact-list`, … |
 | **Web** | `web-fetch`, `web-search`, `web-browser` |
-| **Scheduling** | `scheduler-create`, `scheduler-list`, `scheduler-cancel` |
+| **Scheduling** | `scheduler-create`, `scheduler-list`, `scheduler-get`, `scheduler-cancel` |
 | **Delegation** | `delegate` |
 | **Autonomy** | `get-autonomy`, `set-autonomy` |
 | **Context** | `entity-context` |

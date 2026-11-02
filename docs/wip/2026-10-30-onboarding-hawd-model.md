@@ -61,7 +61,7 @@ confirmed, a weekly session agreed) marks the end of *capture*. Reliance builds 
   history.
 - **Controls:**
   - **Onboarding plan.** Seeded from a fixture in the repo when the operator starts onboarding; the principal may edit it.
-  - **Minutes structuring.** The existing `meeting-minutes-structuring` skill.
+  - **Minutes structuring.** The minutes follow-up guidance in the existing `meetings` bundle.
   - **Inference heuristics.** Not written yet (#2362).
   - **Triage switch.** Doesn't exist yet (#2360).
   - **Autonomy score.** Set from the band the principal picks in the first conversation (65, 75

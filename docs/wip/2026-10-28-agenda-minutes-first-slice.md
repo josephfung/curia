@@ -1,5 +1,7 @@
 # Agenda-Driven Calls, Transcript, Minutes and Structuring: Implementation Plan
 
+> **Note (#2400):** the `meeting-minutes-structuring` playbook this plan creates has since moved into the `meetings` bundle.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A principal voice call can be driven by parked agendas, which the shim can load at the start of the call or mid-call. When the call ends, it deterministically produces a transcript, minutes and exactly one coordinator structuring task that reports back to the principal.

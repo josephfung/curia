@@ -4,6 +4,7 @@ import { apiFetch } from '../api';
 import { endConsoleSession } from '../auth/log-out.js';
 import { timeAgo } from '../components/settings/ConfigHistory';
 import { NotificationsPanel } from '../pwa/NotificationsPanel';
+import { InvitePhonePanel } from './devices/InvitePhonePanel';
 import { PairPhonePanel } from './devices/PairPhonePanel';
 import { SettingsLayout } from './SettingsPage';
 
@@ -178,6 +179,7 @@ function DevicesSection() {
       </div>
 
       <PairPhonePanel onPaired={() => { void load().catch(() => undefined); }} />
+      <InvitePhonePanel onPaired={() => { void load().catch(() => undefined); }} />
       <NotificationsPanel />
 
       {loadError && <p className="autonomy-error" role="alert">{loadError}</p>}

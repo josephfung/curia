@@ -37,7 +37,7 @@ import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolRegistry } from '../../src/skills/registry.js';
 import type { ToolResult } from '../../src/skills/types.js';
 import { newLiveSearchTally, recordLiveCall, type LiveSearchTally } from '../shared/live-search.js';
-import { applyCaseWrites, recordedDraftRead, CaseToolState } from '../shared/tool-state.js';
+import { applyCaseWrites, recordedDraftRead, recordedJobRead, CaseToolState } from '../shared/tool-state.js';
 import { emailAttachmentRefusal } from './attachment-guard.js';
 import { recipientReferenceRefusal } from '../shared/recipient-guard.js';
 import { matchToolStub } from './stub-matcher.js';
@@ -171,7 +171,7 @@ export interface StubController {
    * another run's stubs. `realDelegation` runs `delegate` for real (#2027); `throughGateway`
    * runs the THROUGH_GATEWAY_TOOLS for real (#2312).
    */
-  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string, options?: { realDelegation?: boolean; throughGateway?: boolean }): void;
+  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string, options?: { realDelegation?: boolean; throughGateway?: boolean; timezone?: string }): void;
   /** Close the conversation's run (and its specialists' conversations) and return its calls in order. */
   endRun(conversationId: string): StubbedCall[];
   /**
@@ -310,13 +310,14 @@ export function createStubController(
     // decide, and the recording transports keep what passes.
     const realSend = run?.throughGateway === true && THROUGH_GATEWAY_TOOLS.has(toolName);
     const stub = stubs && !realSend ? matchToolStub(toolName, input, stubs, options?.agentId) : undefined;
-    // Same write-then-read replay as smoke (#2074). A stub that names draft_id
-    // still answers that ceo-inbox-read itself.
+    // Same write-then-read replay as smoke (#2074, #2399). A stub that names draft_id
+    // (or job_id) still answers that ceo-inbox-read (or scheduler-get) itself.
     if (run && !realSend) {
-      const draft = recordedDraftRead(toolName, input, run.tools, stub?.match);
-      if (draft) {
+      const recorded = recordedDraftRead(toolName, input, run.tools, stub?.match)
+        ?? recordedJobRead(toolName, input, run.tools, stub?.match);
+      if (recorded) {
         await note('stubbed');
-        return { success: true, data: draft };
+        return { success: true, data: recorded };
       }
     }
     if (stub) {
@@ -404,7 +405,7 @@ export function createStubController(
         root: conversationId,
         stubs: next,
         calls: [],
-        tools: new CaseToolState(),
+        tools: new CaseToolState(options.timezone),
         realDelegation: options.realDelegation === true,
         throughGateway: options.throughGateway === true,
         specialists: new Set(),
