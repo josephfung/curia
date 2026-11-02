@@ -991,7 +991,7 @@ export async function createScenarioHarness(
 
       scope.rootConversation = runConversationId;
       scope.throughGateway = scenario.throughGateway === true;
-      controller.beginRun(stubTable, runConversationId, { realDelegation, throughGateway: scenario.throughGateway === true });
+      controller.beginRun(stubTable, runConversationId, { realDelegation, throughGateway: scenario.throughGateway === true, timezone: clock.timezone });
       // Armed before the inbound is published. A fast first tool call must
       // already be held, or the follow-up lands after the model has moved on.
       if (inbound.followup?.after === 'first_tool_call') {

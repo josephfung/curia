@@ -62,13 +62,14 @@ export interface SmokeCaseState extends CaseAttempt {
   fallbacks: string[];
 }
 
-export function newSmokeCase(label: string): SmokeCaseState {
+/** @param timezone Curia's configured timezone, for the case's stubbed scheduler writes. */
+export function newSmokeCase(label: string, timezone?: string): SmokeCaseState {
   return {
     ...newAttempt(label),
     stubs: {},
     answers: new Map(),
     calls: [],
-    tools: new CaseToolState(),
+    tools: new CaseToolState(timezone),
     threads: new Set(),
     fallbacks: [],
   };

@@ -171,7 +171,7 @@ export interface StubController {
    * another run's stubs. `realDelegation` runs `delegate` for real (#2027); `throughGateway`
    * runs the THROUGH_GATEWAY_TOOLS for real (#2312).
    */
-  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string, options?: { realDelegation?: boolean; throughGateway?: boolean }): void;
+  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string, options?: { realDelegation?: boolean; throughGateway?: boolean; timezone?: string }): void;
   /** Close the conversation's run (and its specialists' conversations) and return its calls in order. */
   endRun(conversationId: string): StubbedCall[];
   /**
@@ -405,7 +405,7 @@ export function createStubController(
         root: conversationId,
         stubs: next,
         calls: [],
-        tools: new CaseToolState(),
+        tools: new CaseToolState(options.timezone),
         realDelegation: options.realDelegation === true,
         throughGateway: options.throughGateway === true,
         specialists: new Set(),

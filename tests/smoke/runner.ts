@@ -96,7 +96,7 @@ async function runAttempt(
   tc: TestCase,
   options: RunOptions,
 ): Promise<{ execution: CaseExecution; providerReason?: string }> {
-  const state = newSmokeCase(tc.name);
+  const state = newSmokeCase(tc.name, harness.stack.config.timezone);
   return harness.runInCase(state, async () => {
     const responses: CapturedResponse[] = [];
     let error: string | undefined;

@@ -360,6 +360,46 @@ describe('SchedulerState', () => {
       expect(after.job.nextRunAt).toBe('2026-12-02T10:00:00.000-05:00');
     });
 
+    it("reads an offset-less run_at in Curia's zone, as the execution layer does", () => {
+      const state = new CaseToolState('America/Toronto');
+      shapeStubResult('scheduler-create', created, { task: longTask, run_at: '2026-12-01T10:00:00' }, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as { job: { runAt: string; nextRunAt: string }; displayTimezone: string };
+      // 10:00 Toronto whatever the host zone, never 10:00 UTC.
+      expect(got.job.runAt).toBe('2026-12-01T10:00:00.000-05:00');
+      expect(got.job.nextRunAt).toBe('2026-12-01T10:00:00.000-05:00');
+      expect(got.displayTimezone).toBe('America/Toronto');
+
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', run_at: '2026-12-02T09:30:00' }, state);
+      const edited = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as { job: { runAt: string } };
+      expect(edited.job.runAt).toBe('2026-12-02T09:30:00.000-05:00');
+    });
+
+    it("converts a stubbed read's times with Curia's zone when its label is not an IANA zone", () => {
+      const state = new CaseToolState('America/Toronto');
+      const stubbed = {
+        job: { ...listed.jobs[0]!, cronExpr: null, runAt: '2026-12-01T10:00:00.000-05:00', nextRunAt: '2026-12-01T10:00:00.000-05:00', taskPayload: { task: longTask } },
+        truncatedFields: [],
+        displayTimezone: 'EST (UTC-05:00)',
+      };
+      shapeStubResult('scheduler-update', created, { job_id: JOB_ID, action: 'edit', run_at: '2026-12-02T15:00:00Z' }, state);
+      const after = shapeStubResult('scheduler-get', stubbed, { job_id: JOB_ID }, state) as { job: { runAt: string; nextRunAt: string }; displayTimezone: string };
+      expect(after.job.runAt).toBe('2026-12-02T10:00:00.000-05:00');
+      expect(after.job.nextRunAt).toBe('2026-12-02T10:00:00.000-05:00');
+      // The label is kept as the stub wrote it.
+      expect(after.displayTimezone).toBe('EST (UTC-05:00)');
+    });
+
+    it('gives a job created with an intent_anchor a linked task titled with the anchor', () => {
+      const state = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5', intent_anchor: 'Weekday investor inbox check' }, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as { job: { agentTaskId: string | null; taskTitle: string | null; intentAnchor: string | null } };
+      expect(got.job).toEqual(expect.objectContaining({ agentTaskId: 'task-linked-1', taskTitle: 'Weekday investor inbox check', intentAnchor: 'Weekday investor inbox check' }));
+
+      const plain = new CaseToolState();
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5' }, plain);
+      expect((recordedJobRead('scheduler-get', { job_id: JOB_ID }, plain, {}) as typeof got).job).toEqual(expect.objectContaining({ agentTaskId: null, taskTitle: null }));
+    });
+
     it('clears the listed preview when an edit leaves no string task', () => {
       const state = new CaseToolState();
       shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5' }, state);

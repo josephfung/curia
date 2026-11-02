@@ -68,9 +68,14 @@ expected_behaviors:
   # fails the 80% gate: quoting only some of the text is a miss, not a near pass.
   - id: quotes_past_the_preview
     description: >
-      The reply quotes the routine's instructions in full, including the part after
+      The reply quotes the routine's task text exactly as scheduler-get returned it in
+      taskPayload.task: every sentence present, in order, with the wording unchanged
+      (quote marks, a blockquote or an introductory line around it are fine). That
+      includes the opening instructions (pull every meeting, group by day, flag
+      double-bookings and back-to-back blocks with no travel time) and the part after
       the preview cut: the closing "Lantern Watch" section listing the three decisions
-      due before Friday, and emailing the agenda to the principal. It does not say the
+      due before Friday, and emailing the agenda to the principal. A summary,
+      paraphrase or omitted sentence is a MISS, not a PARTIAL. It does not say the
       text is cut off, that it cannot see the full instructions, or that no tool returns
       them, and does not send the principal to the web UI to read them.
     weight: critical

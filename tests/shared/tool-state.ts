@@ -1,5 +1,5 @@
 import { CronExpressionParser } from 'cron-parser';
-import { toLocalIso } from '../../src/time/timestamp.js';
+import { normalizeTimestamp, toLocalIso } from '../../src/time/timestamp.js';
 
 // tests/shared/tool-state.ts — per-case memory of stubbed writes (#2074).
 //
@@ -227,6 +227,14 @@ function freshId(preferred: string | undefined, taken: ReadonlySet<string>, pref
  * a new one.
  */
 export class SchedulerState {
+  /**
+   * @param zone Curia's configured timezone (the stack's `config.timezone`). Production
+   *   reads an offset-less `run_at` in this zone (ExecutionLayer.invoke normalizes it
+   *   before a handler runs, and a stub answers before that) and shows times to the
+   *   caller in it. Unit tests may leave it unset.
+   */
+  constructor(private readonly zone?: string) {}
+
   private created: Json[] = [];
   private updates = new Map<string, Json>();
   /** Each job's full task payload, from its create or its latest task_payload edit. */
@@ -254,8 +262,10 @@ export class SchedulerState {
     const task = typeof input['task'] === 'string' ? input['task'] : undefined;
     if (task !== undefined) this.payloads.set(id, { task });
     const cronExpr = str(input['cron_expr']) ?? null;
-    const runAt = str(input['run_at']) ?? null;
+    const runAt = this.normalizeRunAt(str(input['run_at'])) ?? null;
     const timezone = str(input['timezone']) ?? null;
+    // A non-blank intent_anchor gets a linked task in production, titled with the anchor.
+    const intentAnchor = str(input['intent_anchor']) ?? null;
     // A job with no zone is interpreted in UTC for the next-run math. The real
     // service uses its configured zone; the stub does not have that.
     this.created.push({
@@ -270,11 +280,11 @@ export class SchedulerState {
       consecutiveFailures: 0,
       lastError: null,
       timezone,
-      taskTitle: null,
+      taskTitle: intentAnchor,
       taskPreview: task !== undefined ? taskPreview(task) : null,
-      intentAnchor: str(input['intent_anchor']) ?? null,
+      intentAnchor,
       taskTags: null,
-      agentTaskId: null,
+      agentTaskId: intentAnchor ? `task-linked-${this.created.length + 1}` : null,
       createdBy: str(input['agent_id']) ?? 'coordinator',
       createdAt: null,
     });
@@ -291,7 +301,7 @@ export class SchedulerState {
     else if (action === 'edit') {
       const cron = str(input['cron_expr']);
       if (cron) changes['cronExpr'] = cron;
-      const runAt = str(input['run_at']);
+      const runAt = this.normalizeRunAt(str(input['run_at']));
       if (runAt) changes['runAt'] = runAt;
       const payload = input['task_payload'];
       if (isRecord(payload)) {
@@ -352,6 +362,21 @@ export class SchedulerState {
   }
 
   /** Remember the rows a scheduler-list returned, for a later scheduler-get. */
+  /** A `run_at` as production stores it: an offset-less time is read in Curia's zone. */
+  private normalizeRunAt(raw: string | undefined): string | undefined {
+    if (!raw || !this.zone) return raw;
+    try {
+      return normalizeTimestamp(raw, this.zone);
+    } catch {
+      return raw; // Unparseable: production would refuse it; the replay keeps it as written.
+    }
+  }
+
+  /** The caller's IANA zone: Curia's configured zone, else the last listing's label. */
+  private callerZone(): string | undefined {
+    return this.zone ?? this.displayZone;
+  }
+
   rememberListed(data: Json): void {
     const zone = str(data['displayTimezone']);
     if (zone && formatNextRun(new Date(), zone) !== null) this.displayZone = zone;
@@ -386,7 +411,7 @@ export class SchedulerState {
     // The caller's zone when a listing named it; otherwise the job's own, so the label
     // at least matches the times it labels.
     const jobZone = typeof job['timezone'] === 'string' && job['timezone'] !== '' ? job['timezone'] : 'UTC';
-    const zone = this.displayZone ?? jobZone;
+    const zone = this.callerZone() ?? jobZone;
     return {
       job: timesInZone({
         lastRunSummary: null,
@@ -413,8 +438,11 @@ export class SchedulerState {
     const refreshed = this.refreshNextRun(next, pinnedNextRuns([job]));
     const out = isRecord(refreshed) ? refreshed : next;
     // A refreshed next run comes out in the job's zone, and an edit's run_at as given;
-    // show them in the stub's display zone.
-    return { ...data, job: timesInZone(out, str(data['displayTimezone'])) };
+    // show them in the caller's zone. The stub's displayTimezone is only a label, and
+    // may be production's "EST (UTC-05:00)" rather than an IANA zone.
+    const label = str(data['displayTimezone']);
+    const labelZone = label && formatNextRun(new Date(), label) !== null ? label : undefined;
+    return { ...data, job: timesInZone(out, this.zone ?? labelZone ?? this.displayZone) };
   }
 
   /**
@@ -668,8 +696,13 @@ export class TaskState {
 
 /** Per-case write memory for every tool family whose reads should reflect its writes. */
 export class CaseToolState {
+  /** @param timezone Curia's configured timezone; see SchedulerState. */
+  constructor(timezone?: string) {
+    this.scheduler = new SchedulerState(timezone);
+  }
+
   readonly calendar = new CalendarState();
-  readonly scheduler = new SchedulerState();
+  readonly scheduler: SchedulerState;
   readonly drafts = new DraftState();
   readonly tasks = new TaskState();
 }
