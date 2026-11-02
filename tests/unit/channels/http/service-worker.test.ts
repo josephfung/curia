@@ -235,7 +235,9 @@ describe('console service worker', () => {
   it('points a failed navigation at a page with no inline style or script', () => {
     expect(workerSource).toContain("cache.match('/offline.html')");
     expect(offline).toContain("Can't reach your Curia");
-    expect(offline).toContain('id="offline-host"');
+    expect(offline).toContain('id="offline-reason"');
+    // The wording fits any device: no "the phone" on a desktop (#2341).
+    expect(offline).not.toContain('The phone');
     expect(offline).toContain('href="/offline.css"');
     expect(offline).toContain('src="/offline.js"');
     expect(offline).not.toMatch(/<style[\s>]/i);
@@ -244,6 +246,8 @@ describe('console service worker', () => {
     expect(scripts.length).toBeGreaterThan(0);
     for (const tag of scripts) expect(tag).toMatch(/\ssrc=/);
     expect(offlineJs).toContain('location.host');
+    expect(offlineJs).toContain('navigator.onLine');
+    expect(offlineJs).toContain("addEventListener('online'");
     expect(offlineJs).toContain("addEventListener('click'");
   });
 });
