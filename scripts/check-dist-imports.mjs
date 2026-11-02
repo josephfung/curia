@@ -26,17 +26,22 @@ try {
   process.exit(2);
 }
 
-// Static imports only: `import X from "p"`, `import { a, b as c } from "p"`,
-// `import X, { a } from "p"`. Namespace imports and side-effect imports cannot
+// Static forms that bind names from a package, each checked under Node:
+//   import X from "p"            import { a, b as c } from "p"
+//   import X, { a } from "p"     import X, * as ns from "p"   (needs a default)
+//   export { a, b as c } from "p"   (a re-export also links at startup)
+// Namespace-only imports, `export * from "p"` and side-effect imports cannot
 // fail this way. Dynamic import() is resolved at runtime and is not checked.
-const IMPORT_RE = /^import\s+([\w$]+)?\s*,?\s*(?:\{([^}]*)\})?\s*from\s*["']([^"']+)["'];?/gm;
+const IMPORT_RE = /^import\s+([\w$]+)?\s*,?\s*(?:\{([^}]*)\}|\*\s+as\s+[\w$]+)?\s*from\s*["']([^"']+)["'];?/gm;
+const REEXPORT_RE = /^export\s*\{([^}]*)\}\s*from\s*["']([^"']+)["'];?/gm;
 
 /** @type {Map<string, { needsDefault: boolean, names: Set<string> }>} */
 const wanted = new Map();
-for (const match of source.matchAll(IMPORT_RE)) {
-  const [, defaultName, namedList, specifier] = match;
-  if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.startsWith('node:')) continue;
-  if (!defaultName && !namedList) continue;
+
+/** Record what `specifier` must provide: a default, and the names before any `as`. */
+function want(specifier, defaultName, namedList) {
+  if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.startsWith('node:')) return;
+  if (!defaultName && !namedList) return;
   const entry = wanted.get(specifier) ?? { needsDefault: false, names: new Set() };
   if (defaultName) entry.needsDefault = true;
   for (const part of (namedList ?? '').split(',')) {
@@ -45,6 +50,13 @@ for (const match of source.matchAll(IMPORT_RE)) {
     if (name === 'default') entry.needsDefault = true;
   }
   wanted.set(specifier, entry);
+}
+
+for (const [, defaultName, namedList, specifier] of source.matchAll(IMPORT_RE)) {
+  want(specifier, defaultName, namedList);
+}
+for (const [, namedList, specifier] of source.matchAll(REEXPORT_RE)) {
+  want(specifier, undefined, namedList);
 }
 
 const problems = [];

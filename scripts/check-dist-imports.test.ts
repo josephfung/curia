@@ -43,6 +43,26 @@ describe('check-dist-imports', () => {
     expect(status).toBe(0);
   });
 
+  it('checks a re-export from a package, and a default import beside a namespace', () => {
+    const bad = check([
+      'export { generateVAPIDKeys } from "web-push";',
+      'import missing, * as missingAll from "curia-no-such-package";',
+      '',
+    ].join('\n'));
+    expect(bad.status).toBe(1);
+    expect(bad.output).toContain('web-push: no named export "generateVAPIDKeys"');
+    // The default-plus-namespace form is parsed, so its package is loaded and checked.
+    expect(bad.output).toContain('curia-no-such-package: could not be loaded');
+
+    const good = check([
+      'export { WebPushError } from "web-push";',
+      'export * from "tldts";',
+      'import webpush, * as webpushAll from "web-push";',
+      '',
+    ].join('\n'));
+    expect(good.status).toBe(0);
+  });
+
   it('fails when a package cannot be loaded at all', () => {
     const { status, output } = check('import { thing } from "curia-no-such-package";\n');
     expect(status).toBe(1);
