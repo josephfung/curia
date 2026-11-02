@@ -123,6 +123,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Node 26** — runtime, image and `engines` move to the new Active LTS; corepack now installed hash-pinned. (#2402)
 - **`operator.session`** — **public API:** new `invite` and `cancel_invite` actions, and an `invitation` flag on pair. (#2412)
 - **CI bundle import check** — CI builds the backend and fails on imports Node rejects at startup. (#2410)
 - **Meetings skill** — minutes follow-up guidance moves into the `meetings` bundle; usable outside the post-call task. (#2400)

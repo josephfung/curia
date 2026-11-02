@@ -5,13 +5,34 @@
 # in a trailing comment) so Dependabot's docker ecosystem can read the semantic
 # version and apply the "don't chase Current majors" ignore rule in
 # .github/dependabot.yml — a bare `node@sha256:…` pin would otherwise track `latest`.
-# Node 24 "Krypton" is the Active LTS (node 22 is Maintenance, node 26 is Current).
-FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS build
+# Node 26 is the Active LTS (since 2026-10-28; node 24 is Maintenance). The node:26
+# images are Debian 13 (trixie), so the system python3 below is 3.13 (bookworm: 3.11).
+#
+# Corepack is no longer bundled with Node (removed in Node 25), so it is installed
+# from the npm registry tarball, hash-pinned with ADD --checksum. Not `npm install -g`:
+# Scorecard's Pinned-Dependencies check flags any `npm install` in a Dockerfile, and
+# the runtime stage deletes npm anyway. The tarball has no dependencies. Dependabot
+# does not track it; bump both values together (sha256 of the .tgz, after checking it
+# against `npm view corepack@<ver> dist.integrity`).
+ARG COREPACK_VERSION=0.36.0
+ARG COREPACK_SHA256=9128cfe26aee0c99f4fc68c15c6b8b12309a68be0de2c012cdfea2a463cb722f
+
+FROM node:26-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS build
 
 WORKDIR /app
 
-# Enable pnpm via corepack (bundled with Node 24)
-RUN corepack enable
+# Install corepack (see the ARGs above) and enable pnpm through it. Same layout the
+# Node 24 image shipped: the package under /usr/local/lib/node_modules, shims in
+# /usr/local/bin, so downstream images (curia-deploy's Dockerfile.curia) see no change.
+ARG COREPACK_VERSION
+ARG COREPACK_SHA256
+ADD --checksum=sha256:${COREPACK_SHA256} https://registry.npmjs.org/corepack/-/corepack-${COREPACK_VERSION}.tgz /tmp/corepack.tgz
+RUN set -e; \
+    mkdir -p /usr/local/lib/node_modules/corepack; \
+    tar -xzf /tmp/corepack.tgz -C /usr/local/lib/node_modules/corepack --strip-components=1 --no-same-owner; \
+    rm /tmp/corepack.tgz; \
+    ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
+    corepack enable
 
 # Install dependencies first (layer caching — deps change less often than src).
 # Copy all workspace manifests so pnpm installs the full workspace in one shot.
@@ -47,9 +68,9 @@ RUN pnpm --filter @curia/antfarm run build
 RUN mkdir -p /app/apps/antfarm/assets-licensed
 
 # Production stage: minimal runtime image.
-# Same node:24-slim digest pin as the build stage above (see that comment for the
+# Same node:26-slim digest pin as the build stage above (see that comment for the
 # Scorecard / Dependabot rationale). Both stages must stay on the same digest.
-FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+FROM node:26-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39
 
 # curl is needed for the HEALTHCHECK command
 # Copy uv/uvx binaries from the official signed image (Astral's recommended
@@ -57,15 +78,15 @@ FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd
 # uv installs workspace-mcp at build time (below); the server then runs without it.
 COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 
-# apt-get upgrade pulls the latest Debian 12 security patches for packages baked
-# into the node:24-slim base layer (e.g. libgnutls30, libgcrypt20). Without it the
+# apt-get upgrade pulls the latest Debian 13 security patches for packages baked
+# into the node:26-slim base layer (e.g. libgnutls30, libgcrypt20). Without it the
 # image ships whatever versions were frozen when the base image was built, which
 # Trivy flags as known CVEs even though Debian has already published fixes.
 # Run upgrade before installing curl so curl is installed from the patched lists.
 # pulseaudio-utils provides parec/pacat, which SignalAudioTransport spawns to
 # move call PCM through the Pulse socket shared from the signal-cli container
 # (#1672). Client tools only — no PulseAudio daemon runs in this image.
-# python3 runs workspace-mcp, installed below (#2010). node:24-slim ships no Python,
+# python3 runs workspace-mcp, installed below (#2010). node:26-slim ships no Python,
 # so without it uv downloads its own CPython; the Debian one gets security fixes from
 # the `upgrade` on every rebuild. curia-deploy's image also installs into this Python.
 # Acquire::Retries covers a transient Debian mirror hiccup, the apt-side equivalent of
@@ -86,7 +107,16 @@ RUN groupadd --system --gid 1001 curia \
 
 WORKDIR /app
 
-RUN corepack enable
+# Same corepack install as the build stage (see the ARGs at the top of the file).
+ARG COREPACK_VERSION
+ARG COREPACK_SHA256
+ADD --checksum=sha256:${COREPACK_SHA256} https://registry.npmjs.org/corepack/-/corepack-${COREPACK_VERSION}.tgz /tmp/corepack.tgz
+RUN set -e; \
+    mkdir -p /usr/local/lib/node_modules/corepack; \
+    tar -xzf /tmp/corepack.tgz -C /usr/local/lib/node_modules/corepack --strip-components=1 --no-same-owner; \
+    rm /tmp/corepack.tgz; \
+    ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
+    corepack enable
 
 # Remove the base image's global npm/npx. They are unused at runtime (installs
 # go through corepack→pnpm; CMD invokes tsx) and their bundled deps keep
@@ -94,12 +124,12 @@ RUN corepack enable
 #   - CVE-2026-14257 / GHSA-mh99-v99m-4gvg: brace-expansion < 5.0.8 (unbounded
 #     expansion length OOM DoS) — code-scanning alert #233
 #   - GHSA-r292-9mhp-454m: tar < 7.5.21 — code-scanning alert #235
-# node:24-slim ships npm@11.16.0 (brace-expansion@5.0.6, tar@7.5.15). The prior
+# node:24-slim shipped npm@11.16.0 (brace-expansion@5.0.6, tar@7.5.15). The prior
 # bump to npm@11.18.0 cleared an earlier brace-expansion/tar batch but still
 # left 5.0.7 / 7.5.19. npm@12.0.1 (latest) bundles the same 5.0.7 / 7.5.19 —
 # verified 2026-07-27 — so the "bump npm to clear bundled CVEs" pattern is
 # exhausted. Stripping npm removes the recurring scan surface entirely;
-# corepack is bundled with Node and does not depend on the global npm package.
+# corepack is installed on its own (above) and does not depend on the global npm package.
 # Fail closed: assert the global npm/npx are present before removal and
 # unreachable afterward. `rm -rf` alone exits 0 even when its targets are
 # already gone, so a future Node base image that relocates npm would leave the
@@ -196,12 +226,13 @@ RUN pnpm-retry pnpm add -w --save-prod --prod tsx
 # Remove build-only artifacts that are unreachable at runtime (CMD invokes
 # ./node_modules/.bin/tsx directly; no install ever runs inside the container):
 #   - /root/.cache/node/corepack and /root/.cache/corepack — corepack's cached pnpm
-#     tarballs. Node 24's bundled corepack pre-caches pnpm@11.0.8 during `corepack
+#     tarballs. Node 24's bundled corepack pre-cached pnpm@11.0.8 during `corepack
 #     enable` even though this project pins pnpm@11.7.0, and 11.0.8 bundles tar@7.5.13
-#     (CVE-2026-53655, PAX size override / parser interpretation differential). Both
-#     paths are removed: Node 24's corepack writes the first (confirmed by the original
-#     Trivy alert path), the second is the older corepack layout, kept so this stays
-#     correct across base-image bumps.
+#     (CVE-2026-53655, PAX size override / parser interpretation differential). Nothing
+#     reads the cache at runtime, so it goes whatever version it holds. Both paths are
+#     removed: current corepack writes the first (confirmed by the original Trivy alert
+#     path), the second is the older corepack layout, kept so this stays correct across
+#     corepack bumps.
 #
 # -- Three things are deliberately KEPT. Do not "clean them up". (#1758) --
 #

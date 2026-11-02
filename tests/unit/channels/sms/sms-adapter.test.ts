@@ -7,7 +7,7 @@ import type { ContactService } from '../../../../src/contacts/contact-service.js
 import { SmsWebhookBridge } from '../../../../src/channels/sms/webhook-bridge.js';
 import { createLogger } from '../../../../src/logger.js';
 import pino from 'pino';
-import { generateKeyPairSync, sign } from 'node:crypto';
+import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import type { OutboundMessageEvent } from '../../../../src/bus/events.js';
 
 function makeSilentLogger() {
@@ -23,7 +23,7 @@ function telnyxKeyPair() {
   };
 }
 
-function signBody(rawBody: Buffer, privateKey: ReturnType<typeof generateKeyPairSync>['privateKey']) {
+function signBody(rawBody: Buffer, privateKey: KeyObject) {
   const timestamp = String(Math.floor(Date.now() / 1000));
   const signed = Buffer.concat([
     Buffer.from(timestamp, 'utf8'),

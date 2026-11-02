@@ -110,25 +110,25 @@ PNPM_EOF
 
 echo "=== check_prerequisites ==="
 _node_out=$(mktemp)
-if run_check_prerequisites_with_node "22.19.0" "$_node_out"; then
-    echo "  ✗ rejects Node 22"
+if run_check_prerequisites_with_node "24.21.0" "$_node_out"; then
+    echo "  ✗ rejects Node 24"
     FAIL=$((FAIL + 1))
 else
-    assert_true "rejects Node 22 with >= 24 message" "$_node_out" ">= 24 is required"
+    assert_true "rejects Node 24 with >= 26 message" "$_node_out" ">= 26 is required"
 fi
 
-if run_check_prerequisites_with_node "23.11.0" "$_node_out"; then
-    echo "  ✗ rejects Node 23"
+if run_check_prerequisites_with_node "25.9.0" "$_node_out"; then
+    echo "  ✗ rejects Node 25"
     FAIL=$((FAIL + 1))
 else
-    assert_true "rejects Node 23 with >= 24 message" "$_node_out" ">= 24 is required"
+    assert_true "rejects Node 25 with >= 26 message" "$_node_out" ">= 26 is required"
 fi
 
-if run_check_prerequisites_with_node "24.0.0" "$_node_out"; then
-    echo "  ✓ accepts Node 24"
+if run_check_prerequisites_with_node "26.0.0" "$_node_out"; then
+    echo "  ✓ accepts Node 26"
     PASS=$((PASS + 1))
 else
-    echo "  ✗ accepts Node 24"
+    echo "  ✗ accepts Node 26"
     FAIL=$((FAIL + 1))
 fi
 rm -f "$_node_out"

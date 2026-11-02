@@ -3,7 +3,7 @@
 This guide covers two ways to run Curia:
 
 - **Operator install (image):** for self-hosted deployments. Docker only; no Node, pnpm, or openssl required on the host. Start here if you just want to run Curia, not develop it.
-- **Developer install (source):** for contributing to Curia or hacking on the code. Requires Node 24, pnpm, and openssl.
+- **Developer install (source):** for contributing to Curia or hacking on the code. Requires Node 26, pnpm, and openssl.
 
 ---
 
@@ -96,7 +96,7 @@ pnpm run setup
 `pnpm run setup` runs `scripts/setup.sh`, which handles every Tier 1 step
 for you:
 
-1. Checks prerequisites (`docker`, `docker compose`, Node 24+, `pnpm`, `openssl`).
+1. Checks prerequisites (`docker`, `docker compose`, Node 26+, `pnpm`, `openssl`).
 2. Generates `DB_PASSWORD`, `API_TOKEN`, and `WEB_APP_BOOTSTRAP_SECRET`
    with `openssl rand -hex 32`.
 3. Prompts for your **Anthropic API key** (validated against `sk-ant-...`,
