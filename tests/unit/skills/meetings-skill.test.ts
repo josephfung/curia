@@ -67,6 +67,11 @@ describe('meetings bundle', () => {
     const { instructions } = loadRegistries().skills.get('meetings')!.manifest;
     const formal = instructions.slice(instructions.indexOf('- **Formal.**'));
     const formalLine = formal.slice(0, formal.indexOf('\n'));
+    // indexOf is -1 for a missing phrase, which would pass an order check.
+    expect(formalLine).toContain('key notes and decisions');
+    expect(formalLine).toContain('action items');
+    expect(formalLine).toContain('minutes link');
+    expect(formalLine.indexOf('key notes and decisions')).toBeLessThan(formalLine.indexOf('action items'));
     expect(formalLine.indexOf('action items')).toBeLessThan(formalLine.indexOf('minutes link'));
     expect(formalLine).toContain('[Full minutes](link)');
     expect(instructions).toContain('Never show a bare URL');

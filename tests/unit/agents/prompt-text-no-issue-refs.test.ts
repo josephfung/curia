@@ -18,9 +18,11 @@
 // Log messages may cite issues; they are read by operators, not the model.
 
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import * as yaml from 'js-yaml';
+import ts from 'typescript';
 
 const ROOT = join(import.meta.dirname, '../../..');
 const ISSUE_REF = /#\d{3,}\b/;
@@ -59,14 +61,38 @@ function promptModules(): string[] {
     .filter((file) => !file.endsWith('/prompt-budget.ts'));
 }
 
-/** String literals in source, skipping comment lines and log calls. */
+const LOG_CALL = /\b(?:log|logger|skillLogger)\.(?:debug|info|warn|error)$/;
+
+/** True when `node` is an argument to a log call: operator text, not model text. */
+function inLogCall(node: ts.Node, source: ts.SourceFile): boolean {
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isCallExpression(current) && LOG_CALL.test(current.expression.getText(source))) return true;
+  }
+  return false;
+}
+
+/**
+ * Every string and template literal in the source, parsed rather than matched
+ * line by line, so a multi-line template and an apostrophe inside double quotes
+ * are read correctly (PR #2433 review). Log-call arguments are skipped.
+ */
 function literalHits(file: string, hits: string[]): void {
-  readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
-    const code = line.trim();
-    if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
-    if (/\b(?:log|logger|skillLogger)\.(?:debug|info|warn|error)\(/.test(code)) return;
-    if (/(['"`])[^'"`]*#\d{3,}\b[^'"`]*\1/.test(code)) hits.push(`${relative(ROOT, file)}:${index + 1}: ${code.slice(0, 80)}`);
-  });
+  const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+  const visit = (node: ts.Node): void => {
+    const isLiteral = ts.isStringLiteral(node)
+      || ts.isNoSubstitutionTemplateLiteral(node)
+      || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node);
+    if (isLiteral && !inLogCall(node, source)) {
+      const text = (node as ts.LiteralLikeNode).text;
+      const match = text.match(/.{0,40}#\d{3,}\b/);
+      if (match) {
+        const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+        hits.push(`${relative(ROOT, file)}:${line + 1}: …${match[0]}`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
 }
 
 describe('model-facing text carries no issue references', () => {
@@ -90,6 +116,20 @@ describe('model-facing text carries no issue references', () => {
       stringHits(yaml.load(readFileSync(join(ROOT, 'agents', name), 'utf8')), `agents/${name}`, hits);
     }
     expect(hits).toEqual([]);
+  });
+
+  it('finds a reference inside a multi-line template literal', () => {
+    const file = join(tmpdir(), `prompt-text-probe-${process.pid}.ts`);
+    writeFileSync(file, "export const P = `Start\nDiscuss #2428 here\n`;\nconst q = \"don't (#1234)\";\nlog.info('skip (#5555)');\n");
+    const hits: string[] = [];
+    try {
+      literalHits(file, hits);
+    } finally {
+      rmSync(file);
+    }
+    expect(hits).toHaveLength(2);
+    expect(hits.join()).toContain('#2428');
+    expect(hits.join()).toContain('#1234');
   });
 
   it('prompt modules and the voice prompt', async () => {

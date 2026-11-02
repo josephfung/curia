@@ -16,6 +16,7 @@ function ctx(
   repo: WorkingDocsRepo | undefined,
   voiceSessionId?: string,
   timezone?: string,
+  callerRole: string = 'principal',
 ): ToolContext {
   return {
     input,
@@ -23,7 +24,9 @@ function ctx(
     agentId: 'coordinator',
     timezone,
     workingDocs: repo,
-    taskMetadata: voiceSessionId ? { voiceSessionId } : undefined,
+    taskMetadata: voiceSessionId
+      ? { voiceSessionId, originator: { systemRole: callerRole, contactId: 'c-1', channel: 'voice' } }
+      : undefined,
   } as unknown as ToolContext;
 }
 
@@ -231,6 +234,24 @@ describe('meeting-agenda-load', () => {
     const result = await new MeetingAgendaLoadHandler().execute(ctx({ agenda_id: 'nope' }, repo, 'session-1'));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('No agenda is open or queued for this call.');
+  });
+
+  // PR #2433 review: a call proves a session exists, not that the caller is the
+  // principal. A non-principal caller must not list or open agendas.
+  it('refuses a caller who is not the principal, without naming any agenda', async () => {
+    const { repo, agendaId } = await parkedRepo();
+    const open = await new MeetingAgendaLoadHandler().execute(
+      ctx({ agenda_id: agendaId }, repo, 'session-1', undefined, 'known'),
+    );
+    expect(open.success).toBe(false);
+    const probe = await new MeetingAgendaLoadHandler().execute(
+      ctx({ agenda_id: 'guess' }, repo, 'session-1', undefined, 'known'),
+    );
+    expect(probe.success).toBe(false);
+    if (!probe.success) {
+      expect(probe.error).not.toContain(agendaId);
+      expect(probe.error).not.toContain('Q3 review');
+    }
   });
 
   // #2347: the model speaks the tool's own words. The registered name stays.

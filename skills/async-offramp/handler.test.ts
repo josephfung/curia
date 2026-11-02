@@ -1,7 +1,7 @@
 // handler.test.ts — async-offramp skill (#1614 / ADR-038 gate #3).
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import pino from 'pino';
-import { AsyncOfframpHandler, NOW_MODE_WAIT_MS, resetAsyncOfframpDedupForTests } from './handler.js';
+import { AsyncOfframpHandler, NOW_MODE_WAIT_MS, pendingReplyCountForTests, resetAsyncOfframpDedupForTests } from './handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import { EventBus } from '../../src/bus/bus.js';
 import { createAgentResponse } from '../../src/bus/events.js';
@@ -330,7 +330,7 @@ describe('AsyncOfframpHandler mode now (#2428)', () => {
       },
     } as unknown as EventBus;
     const respond = async (event: BusEvent) => { for (const fn of subscribers) await fn(event); };
-    return { bus, published, respond };
+    return { bus, published, respond, subscriberCount: () => subscribers.length };
   }
 
   function response(task: AgentTaskEvent, payload: { content: string; sends?: string[]; isError?: boolean }): BusEvent {
@@ -442,6 +442,16 @@ describe('AsyncOfframpHandler mode now (#2428)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const forward = published[1] as AgentTaskEvent;
     expect(forward.payload.content).toContain('All finished.');
+  });
+
+  // PR #2433 review: a subscriber per hand-off stayed for the life of the process.
+  it('subscribes once per bus and holds nothing after hand-offs settle', async () => {
+    const { bus, subscriberCount } = liveBus((task) => response(task, { content: 'ok' }));
+    for (const brief of ['one', 'two', 'three']) {
+      await handler.execute(makeCtx(bus, { brief, mode: 'now' }));
+    }
+    expect(subscriberCount()).toBe(1);
+    expect(pendingReplyCountForTests()).toBe(0);
   });
 
   it('keeps after_call as the default and rejects an unknown mode', async () => {

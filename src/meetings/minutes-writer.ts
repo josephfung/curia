@@ -60,9 +60,10 @@ function coverageFromFence(fenceBody: string, agendas: AgendaSnapshot[]): Agenda
 }
 
 // A reply cut off by the token cap stops inside the block (#2428). Keep each
-// complete {"topic","coverage"} pair under the agendaId before it; a block with
-// none of them is as good as missing.
-const SALVAGE = /"agendaId"\s*:\s*"([^"\\]*)"|\{\s*"topic"\s*:\s*("(?:[^"\\]|\\.)*")\s*,\s*"coverage"\s*:\s*"([a-z_]+)"\s*\}/g;
+// complete topic object, whatever its key order, under the agendaId before it;
+// a block with none of them is as good as missing. A topic object is flat, so
+// `{...}` with no nested braces is a complete one; the agenda object is not.
+const SALVAGE = /"agendaId"\s*:\s*"([^"\\]*)"|(\{[^{}]*\})/g;
 
 function salvageCoverage(fenceBody: string, agendas: AgendaSnapshot[]): AgendaCoverage[] | null {
   const items: Array<{ agendaId: string; topics: Array<{ topic: string; coverage: string }> }> = [];
@@ -73,15 +74,16 @@ function salvageCoverage(fenceBody: string, agendas: AgendaSnapshot[]): AgendaCo
       continue;
     }
     const current = items[items.length - 1];
-    if (!current || match[2] === undefined || match[3] === undefined) continue;
-    let topic: unknown;
+    if (!current || match[2] === undefined) continue;
+    let parsed: unknown;
     try {
-      topic = JSON.parse(match[2]);
+      parsed = JSON.parse(match[2]);
     } catch {
       continue;
     }
-    if (typeof topic !== 'string') continue;
-    current.topics.push({ topic, coverage: match[3] });
+    const { topic, coverage } = (parsed ?? {}) as { topic?: unknown; coverage?: unknown };
+    if (typeof topic !== 'string' || typeof coverage !== 'string') continue;
+    current.topics.push({ topic, coverage });
     found += 1;
   }
   if (found === 0) return null;
@@ -125,17 +127,22 @@ export function parseMinutesOutput(
   agendas: AgendaSnapshot[],
 ): { markdown: string; coverage: AgendaCoverage[] | null } {
   const trimmed = raw.trimEnd();
-  const match = /```json\s*([\s\S]*?)```\s*$/.exec(trimmed);
+  // The coverage fence opens on its own line. An inline ```json in the minutes
+  // (a transcript can quote one) is prose, not the block (PR #2433 review).
+  const match = /(?:^|\n)```json[ \t]*\n([\s\S]*?)```\s*$/.exec(trimmed);
   if (match) {
     const markdown = trimmed.slice(0, match.index).trim();
     return { markdown, coverage: coverageFromFence(match[1] ?? '', agendas) };
   }
   // An unclosed trailing fence is a reply cut off mid-block: keep it out of the minutes.
-  const open = trimmed.lastIndexOf('```json');
-  if (open === -1 || trimmed.indexOf('```', open + 7) !== -1) return { markdown: raw.trim(), coverage: null };
-  const fenceBody = trimmed.slice(open + 7);
+  const opens = [...trimmed.matchAll(/(?:^|\n)```json[ \t]*(?:\n|$)/g)];
+  const open = opens[opens.length - 1];
+  if (!open || trimmed.indexOf('```', open.index + open[0].length) !== -1) {
+    return { markdown: raw.trim(), coverage: null };
+  }
+  const fenceBody = trimmed.slice(open.index + open[0].length);
   return {
-    markdown: trimmed.slice(0, open).trim(),
+    markdown: trimmed.slice(0, open.index).trim(),
     coverage: coverageFromFence(fenceBody, agendas) ?? salvageCoverage(fenceBody, agendas),
   };
 }

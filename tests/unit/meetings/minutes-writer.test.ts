@@ -91,6 +91,25 @@ describe('minutes writer', () => {
     expect(parsed.coverage?.map((entry) => entry.agendaId)).toEqual([agenda.agendaId]);
   });
 
+  // PR #2433 review: valid JSON with coverage before topic was skipped.
+  it('a cut-off block keeps complete topics in either field order', () => {
+    const raw = '## Board\nDone.\n\n```json\n'
+      + `{"coverage":[{"agendaId":"${agenda.agendaId}","topics":[{"coverage":"covered","topic":"runway"},{"topic":"hir`;
+    expect(parseMinutesOutput(raw, [agenda]).coverage?.[0]?.topics).toEqual([
+      { topic: 'runway', coverage: 'covered' },
+      { topic: 'hiring', coverage: 'not_reached' },
+    ]);
+  });
+
+  // PR #2433 review: an inline ```json mention mid-minutes must not be read as the
+  // coverage fence and cut the rest of the minutes away.
+  it('only a fence on its own line opens the coverage block', () => {
+    const raw = '## Board\nWe discussed the ```json export format.\n\n## Next\nShip it.';
+    expect(parseMinutesOutput(raw, [agenda])).toEqual({ markdown: raw, coverage: null });
+    const closed = '## Board\nInline ```json {"coverage":[]} ``` note';
+    expect(parseMinutesOutput(closed, [agenda])).toEqual({ markdown: closed, coverage: null });
+  });
+
   it('a cut-off block with no complete topic gives null coverage', () => {
     const raw = '## Board\nRunway discussed.\n\n```json\n{"coverage":[{"agendaId":"11111111';
     expect(parseMinutesOutput(raw, [agenda])).toEqual({ markdown: '## Board\nRunway discussed.', coverage: null });

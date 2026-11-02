@@ -9,6 +9,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/type
 import { AgendaStore, agendaSnapshot, type AgendaLockResult } from '../../src/meetings/agenda-store.js';
 import type { AgendaDoc, AgendaSnapshot } from '../../src/meetings/types.js';
 import { formatDisplayTimezone, toLocalIso } from '../../src/time/timestamp.js';
+import { isPrincipalOriginated } from '../../src/contacts/principal.js';
 
 function displayIso(iso: string | null, timezone: string | undefined): string | null {
   if (iso === null || !timezone) return iso;
@@ -65,6 +66,12 @@ export class MeetingAgendaLoadHandler implements ToolHandler {
     const sessionId = ctx.taskMetadata?.voiceSessionId;
     if (typeof sessionId !== 'string' || sessionId.trim() === '') {
       return { success: false, error: 'meeting-agenda-load is only available on a live voice call' };
+    }
+    // A session id proves a call exists, not who is on it. Agendas are the
+    // principal's: the call bridge only prepares them for principal callers, and
+    // neither opening nor listing them is open to anyone else (PR #2433 review).
+    if (!isPrincipalOriginated(ctx.taskMetadata)) {
+      return { success: false, error: 'There is no agenda for this call.' };
     }
     if (!ctx.workingDocs) {
       return { success: false, error: 'meeting-agenda-load requires the workingDocs capability' };

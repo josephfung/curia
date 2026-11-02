@@ -178,9 +178,33 @@ type NowOutcome =
   | { kind: 'reply'; event: AgentResponseEvent }
   | { kind: 'missed' };
 
+/**
+ * Pending now hand-offs, by the coordinator task's event id. One agent.response
+ * subscriber per bus routes replies here: the bus has no unsubscribe, so a
+ * subscriber per hand-off would stay for the life of the process (PR #2433 review).
+ */
+const pendingReplies = new Map<string, (response: AgentResponseEvent) => Promise<void>>();
+const busesWithReplyRouter = new WeakSet<object>();
+
+function ensureReplyRouter(bus: NonNullable<ToolContext['bus']>): void {
+  if (busesWithReplyRouter.has(bus)) return;
+  busesWithReplyRouter.add(bus);
+  bus.subscribe('agent.response', 'system', async (event: BusEvent) => {
+    const response = event as AgentResponseEvent;
+    const listener = response.parentEventId ? pendingReplies.get(response.parentEventId) : undefined;
+    if (listener) await listener(response);
+  });
+}
+
 /** Exported for tests — clears the process-local dedup map between cases. */
 export function resetAsyncOfframpDedupForTests(): void {
   enqueuedByKey.clear();
+  pendingReplies.clear();
+}
+
+/** Exported for tests — hand-offs still waiting for a reply. */
+export function pendingReplyCountForTests(): number {
+  return pendingReplies.size;
 }
 
 export class AsyncOfframpHandler implements ToolHandler {
@@ -420,6 +444,7 @@ export class AsyncOfframpHandler implements ToolHandler {
     // The task never published: nothing will reply, so stop without logging a miss.
     const cancel = (): void => {
       phase = 'closed';
+      pendingReplies.delete(taskEventId);
       clearTimeout(waitTimer);
       clearTimeout(lateTimer);
     };
@@ -432,6 +457,7 @@ export class AsyncOfframpHandler implements ToolHandler {
         lateTimer = setTimeout(() => {
           if (phase !== 'late') return;
           phase = 'closed';
+          pendingReplies.delete(taskEventId);
           enqueuedByKey.delete(idempotencyKey);
           ctx.log.warn({ taskEventId }, 'voice hand-off: no reply within the forward window; nothing forwarded');
         }, LATE_FORWARD_WINDOW_MS);
@@ -477,10 +503,10 @@ export class AsyncOfframpHandler implements ToolHandler {
         }
       };
 
-      // The bus has no unsubscribe; the phase guard makes this a no-op once closed.
-      bus.subscribe('agent.response', 'system', async (event: BusEvent) => {
-        const response = event as AgentResponseEvent;
-        if (response.parentEventId !== taskEventId || phase === 'closed') return;
+      ensureReplyRouter(bus);
+      pendingReplies.set(taskEventId, async (response: AgentResponseEvent) => {
+        if (phase === 'closed') return;
+        pendingReplies.delete(taskEventId);
         if (phase === 'waiting') {
           phase = 'closed';
           clearTimeout(waitTimer);
