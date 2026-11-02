@@ -309,6 +309,12 @@ task-complete:
 scheduler-list:
   - match: {}
     return: { jobs: [], count: 0, truncated: false, limit: 50, displayTimezone: "{{timezone}}" }
+# A job the case created or listed answers from the case's own writes (#2399). Any
+# other id is the real handler's not-found; a case seeds a job's full text by stubbing
+# scheduler-get with a job_id match.
+scheduler-get:
+  - match: {}
+    error: 'No scheduled job with that id. The id may be wrong: call scheduler-list for valid job ids.'
 scheduler-create:
   - match: {}
     return: { jobId: 0f0f0f0f-0000-4000-8000-000000000001 }

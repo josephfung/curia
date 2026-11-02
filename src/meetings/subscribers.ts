@@ -18,7 +18,7 @@ import {
   documentConsoleUrl,
   hasMinutesTaskNote,
   isTerminalMinutesTask,
-  MINUTES_STRUCTURING_SKILL,
+  MINUTES_FOLLOW_UP_SKILL,
   minutesTaskNeedsRepair,
   minutesTaskNote,
   withMinutesTaskLock,
@@ -104,10 +104,10 @@ export class MinutesReadySubscriber {
           tags: [tag],
           originator,
         });
-        if (!readActiveSkillNames(task.progress).includes(MINUTES_STRUCTURING_SKILL)) {
+        if (!readActiveSkillNames(task.progress).includes(MINUTES_FOLLOW_UP_SKILL)) {
           const written = await this.opts.taskRepo.setActiveSkillsBlock(
             task.id,
-            replaceActiveSkillsBlock([MINUTES_STRUCTURING_SKILL]),
+            replaceActiveSkillsBlock([MINUTES_FOLLOW_UP_SKILL]),
           );
           if ('ok' in written && written.ok === false) {
             throw new Error('message' in written ? written.message : written.code);

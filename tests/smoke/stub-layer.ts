@@ -20,7 +20,7 @@ import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolResult } from '../../src/skills/types.js';
 import { newAttempt, type CaseAttempt, type CaseContext } from '../shared/case-scope.js';
 import { matchToolStub } from '../scenarios/stub-matcher.js';
-import { recordedDraftRead, CaseToolState } from '../shared/tool-state.js';
+import { recordedDraftRead, recordedJobRead, CaseToolState } from '../shared/tool-state.js';
 import { LIVE_SEARCH_TOOL, newLiveSearchTally, recordLiveCall, type LiveSearchTally } from '../shared/live-search.js';
 import { shapeStubResult } from './stub-filters.js';
 import { recipientReferenceRefusal } from '../shared/recipient-guard.js';
@@ -62,13 +62,14 @@ export interface SmokeCaseState extends CaseAttempt {
   fallbacks: string[];
 }
 
-export function newSmokeCase(label: string): SmokeCaseState {
+/** @param timezone Curia's configured timezone, for the case's stubbed scheduler writes. */
+export function newSmokeCase(label: string, timezone?: string): SmokeCaseState {
   return {
     ...newAttempt(label),
     stubs: {},
     answers: new Map(),
     calls: [],
-    tools: new CaseToolState(),
+    tools: new CaseToolState(timezone),
     threads: new Set(),
     fallbacks: [],
   };
@@ -179,11 +180,13 @@ export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStu
     const stub = matchToolStub(toolName, input, state.stubs, options?.agentId);
     // A draft this case already wrote answers ceo-inbox-read, ahead of the office
     // catch-all error. A stub that names draft_id is scripting that read, so it wins.
-    const draft = recordedDraftRead(toolName, input, state.tools, stub?.match);
-    if (draft) {
+    // Likewise a job this case created or listed answers scheduler-get (#2399).
+    const recorded = recordedDraftRead(toolName, input, state.tools, stub?.match)
+      ?? recordedJobRead(toolName, input, state.tools, stub?.match);
+    if (recorded) {
       record.disposition = 'stubbed';
       record.success = true;
-      return { success: true, data: draft };
+      return { success: true, data: recorded };
     }
     if (stub) {
       record.disposition = 'stubbed';

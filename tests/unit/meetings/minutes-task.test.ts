@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
-import { withMinutesTaskLock } from '../../../src/meetings/minutes-task.js';
+import { replaceActiveSkillsBlock } from '../../../src/db/active-skills-progress.js';
+import { minutesTaskNeedsRepair, withMinutesTaskLock } from '../../../src/meetings/minutes-task.js';
 
 function lockingPool(unlock: () => Promise<void>): {
   pool: Pool;
@@ -39,5 +40,17 @@ describe('withMinutesTaskLock', () => {
       throw new Error('task write failed');
     })).rejects.toThrow('task write failed');
     expect((release.mock.calls[0]?.[0] as Error).message).toBe('unlock failed');
+  });
+});
+
+describe('minutesTaskNeedsRepair', () => {
+  it('repairs a task whose stored block still names the removed playbook (#2400)', () => {
+    const progress = { activeSkills: replaceActiveSkillsBlock(['meeting-minutes-structuring']) };
+    expect(minutesTaskNeedsRepair({ status: 'pending', progress }, true)).toBe(true);
+  });
+
+  it('leaves a task with the meetings bundle and a wake alone', () => {
+    const progress = { activeSkills: replaceActiveSkillsBlock(['meetings']) };
+    expect(minutesTaskNeedsRepair({ status: 'pending', progress }, true)).toBe(false);
   });
 });

@@ -752,7 +752,8 @@ interface SystemRestartPayload {
 // is published before the row is deleted. `completed` follows a successful
 // delete. `failed` means the delete threw and the session is still alive.
 export interface OperatorSessionPayload {
-  action: 'login' | 'logout' | 'revoke' | 'sign_out_others' | 'pair';
+  /** invite and cancel_invite mint and stop a phone app invitation link (#2412). */
+  action: 'login' | 'logout' | 'revoke' | 'sign_out_others' | 'pair' | 'invite' | 'cancel_invite';
   /** `completed` for login. Destructive actions use all three stages. */
   stage: 'requested' | 'completed' | 'failed';
   /** A console session, or the bootstrap-secret header with no cookie. */
@@ -770,6 +771,8 @@ export interface OperatorSessionPayload {
   revokedSessionIds?: string[];
   /** The other credential on this pairing code was already redeemed. */
   secondCredential?: boolean;
+  /** The phone paired from an invitation link rather than a QR code (#2412). */
+  invitation?: boolean;
 }
 
 // DocumentConsoleActionPayload — the principal changed or bulk-read the OKF working-

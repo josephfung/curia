@@ -74,7 +74,7 @@ export interface PairingCodeStatus {
   shortDeviceName: string | null;
 }
 
-function cleanOrigin(raw: string | null | undefined): string | null {
+export function cleanOrigin(raw: string | null | undefined): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   if (trimmed.length === 0 || trimmed.length > 200) return null;

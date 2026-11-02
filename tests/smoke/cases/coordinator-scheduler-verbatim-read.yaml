@@ -1,0 +1,86 @@
+name: Coordinator reads a routine's full instructions verbatim
+description: >
+  A weekly agenda routine exists whose task text runs well past scheduler-list's
+  160-character taskPreview. The principal asks to see the instructions verbatim.
+  The coordinator must read the job with scheduler-get and quote the whole text,
+  including the closing "Lantern Watch" section that only appears after the preview
+  is cut, instead of quoting the preview or saying the full text is out of reach.
+  See issue #2399, observed in prod.
+tags:
+  - scheduling
+  - scheduler-get
+# Whether the coordinator read the job in full is a tool call (scheduler-get).
+judge_tool_calls: true
+
+# The job is seeded through stubs, not a real row: a real row would be fired by any
+# scheduler that later comes up on this database. scheduler-list shows the preview,
+# exactly as the real tool cuts it; scheduler-get holds the whole task.
+tool_stubs:
+  scheduler-list:
+    - match: {}
+      return:
+        jobs:
+          - id: 5a7e3c19-2d4b-4f60-9e1a-8c3b7d2f6a01
+            agentId: coordinator
+            status: pending
+            cronExpr: "0 18 * * 0"
+            timezone: "{{timezone}}"
+            taskTitle: null
+            taskPreview: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or …"
+            createdBy: coordinator
+        count: 1
+        truncated: false
+        limit: 50
+        displayTimezone: "{{timezone}}"
+  scheduler-get:
+    - match: { job_id: 5a7e3c19-2d4b-4f60-9e1a-8c3b7d2f6a01 }
+      return:
+        job:
+          id: 5a7e3c19-2d4b-4f60-9e1a-8c3b7d2f6a01
+          agentId: coordinator
+          status: pending
+          cronExpr: "0 18 * * 0"
+          timezone: "{{timezone}}"
+          taskTitle: null
+          taskPreview: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or …"
+          createdBy: coordinator
+          taskPayload:
+            task: "Every Sunday at 6pm, build the principal's agenda for the coming week. Pull every meeting from the calendar, group them by day, and flag any double-bookings or back-to-back blocks with no travel time. Then add a closing section titled 'Lantern Watch' that lists the three decisions the principal must make before Friday, and email the whole agenda to the principal."
+          lastRunSummary: null
+          lastRunContext: null
+          progress: null
+        truncatedFields: []
+        displayTimezone: "{{timezone}}"
+
+turns:
+  - role: user
+    content: |
+      Show me the instructions for my weekly agenda routine, word for word.
+
+expected_behaviors:
+  - id: reads_the_full_job
+    description: >
+      The coordinator calls scheduler-get on the weekly agenda job (id
+      5a7e3c19-2d4b-4f60-9e1a-8c3b7d2f6a01) to read its full instructions,
+      rather than answering from scheduler-list's preview alone.
+    weight: critical
+  # Two critical behaviors and nothing else, so a PARTIAL on either scores 75% and
+  # fails the 80% gate: quoting only some of the text is a miss, not a near pass.
+  - id: quotes_past_the_preview
+    description: >
+      The reply quotes the routine's task text exactly as scheduler-get returned it in
+      taskPayload.task: every sentence present, in order, with the wording unchanged
+      (quote marks, a blockquote or an introductory line around it are fine). That
+      includes the opening instructions (pull every meeting, group by day, flag
+      double-bookings and back-to-back blocks with no travel time) and the part after
+      the preview cut: the closing "Lantern Watch" section listing the three decisions
+      due before Friday, and emailing the agenda to the principal. A summary,
+      paraphrase or omitted sentence is a MISS, not a PARTIAL. It does not say the
+      text is cut off, that it cannot see the full instructions, or that no tool returns
+      them, and does not send the principal to the web UI to read them.
+    weight: critical
+
+failure_modes:
+  - Quotes only the 160-character preview, ending mid-sentence at "double-bookings or".
+  - Says there is no way to see the job's complete instruction text.
+  - Tells the principal to open the web UI to read the routine.
