@@ -35,9 +35,9 @@ updates:
       # UNBLOCK-WHEN: `npm view nylas dist-tags.latest` resolves to a real >=9.x (not the stray 17.13.1).
       - dependency-name: "nylas"
         update-types: ["version-update:semver-major"]
-      # @types/node major tracks the Node.js release line. Runtime is Node 24
-      # (engines + node:24-slim); block major bumps until Node itself is bumped.
-      # UNBLOCK-WHEN: package.json `engines.node` is bumped past 24 (moves in lockstep with the `node` docker ignore below).
+      # @types/node major tracks the Node.js release line. Runtime is Node 26
+      # (engines + node:26-slim); block major bumps until Node itself is bumped.
+      # UNBLOCK-WHEN: package.json `engines.node` is bumped past 26 (moves in lockstep with the `node` docker ignore below).
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
       # TypeScript 7.x is the native (Go) compiler rewrite with breaking internal
@@ -65,7 +65,7 @@ updates:
         patterns:
           - "*"
 
-  # Docker base images — the root Dockerfile (node:24-slim, digest-pinned).
+  # Docker base images — the root Dockerfile (node:26-slim, digest-pinned).
   # Without this ecosystem the base image was never tracked and silently drifted
   # (prod ended up on node 26 Current via curia-deploy#87). Dependabot keeps the
   # @sha256 digest fresh within the pinned tag.
@@ -79,11 +79,12 @@ updates:
       default-days: 7
     open-pull-requests-limit: 5
     ignore:
-      # node 24 is the Active LTS. Do NOT auto-bump the major: the next even
-      # release (26) is Current/unstable until it reaches LTS (~Oct 2026), and
-      # Node.js says production should run only Active/Maintenance LTS. Digest +
-      # minor/patch updates still flow; bump the major by hand when 26 goes LTS.
-      # UNBLOCK-WHEN: Node 26 reaches Active LTS (~2026-10) per https://nodejs.org/en/about/previous-releases.
+      # node 26 is the Active LTS (since 2026-10-28). Do NOT auto-bump the major:
+      # odd releases (27) never reach LTS and the next even one (28) is
+      # Current/unstable until it does (~Oct 2027); Node.js says production should
+      # run only Active/Maintenance LTS. Digest + minor/patch updates still flow;
+      # bump the major by hand when 28 goes LTS.
+      # UNBLOCK-WHEN: Node 28 reaches Active LTS (~2027-10) per https://nodejs.org/en/about/previous-releases.
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
 

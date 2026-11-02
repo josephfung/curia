@@ -47,7 +47,7 @@
 # flagship case for retrying, not evidence against it. Equal statuses carry no signal;
 # only *differing* ones do, and only in the narrow sense noted above.
 #
-# POSIX sh (not bash): this runs in `node:24-slim` Docker layers via /bin/sh.
+# POSIX sh (not bash): this runs in `node:26-slim` Docker layers via /bin/sh.
 #
 # Usage:  docker/pnpm-retry.sh pnpm install --frozen-lockfile
 # Env:    PNPM_RETRY_ATTEMPTS (default 3)   total attempts, not extra retries

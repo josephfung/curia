@@ -81,7 +81,7 @@ same change.
   grouped into a single PR to reduce noise.
 - **GitHub Actions** — action versions (`checkout`, `setup-node`, etc.) are kept
   fresh and grouped.
-- **Docker** — the root `Dockerfile` base image (`node:24-slim`) and
+- **Docker** — the root `Dockerfile` base image (`node:26-slim`) and
   `docker/postgres.Dockerfile` (`pgvector/pgvector:pg16`) are digest-pinned and
   kept current within their pinned major.
 
@@ -92,7 +92,7 @@ Key policies encoded there:
   **Security updates from Dependabot alerts bypass the cooldown** — CVE patches
   are never delayed.
 - **Major-version pins** where a major bump requires a deliberate migration rather
-  than an automatic update: `node` (stays on Active LTS 24), `pgvector/pgvector`
+  than an automatic update: `node` (stays on Active LTS 26), `pgvector/pgvector`
   (pg16 → pg17 needs a DB upgrade), `@types/node` (tracks the Node runtime line),
   and `nylas` (an anomalous higher-numbered publish that is not the maintained
   `latest` line).
