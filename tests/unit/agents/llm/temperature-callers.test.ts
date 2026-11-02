@@ -1,11 +1,11 @@
-// temperature-callers.test.ts — the three temperature:0 callers must reach the
-// provider request body (#2038). Provider unit tests cover the builder knobs;
-// these wire each caller through AnthropicProvider so a regression that drops
-// options.temperature (or stops forwarding it) fails here.
+// temperature-callers.test.ts — the three temperature:0 callers must hand
+// temperature 0 to the provider (#2038); providers that accept it (OpenRouter,
+// Bedrock) send it. These wire each caller through AnthropicProvider so a
+// regression that drops options.temperature fails here.
 //
-// On claude-haiku-5-5, which 400s on any non-default sampling parameter, the
-// same callers must send no temperature, and the judges' own llm.call rows
-// must record temperature: null (#2077).
+// The Anthropic API (version 2026-10-21, SDK 1.x) 400s on any sampling
+// parameter, so on every Claude model the same callers send no temperature,
+// and the judges' own llm.call rows record temperature: null (#2077, #2439).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AnthropicProvider } from '../../../../src/agents/llm/anthropic.js';
@@ -50,7 +50,15 @@ function llmCallTemperatures(bus: EventBus): unknown[] {
 
 const SAMPLING_KEYS = ['temperature', 'top_p', 'top_k'] as const;
 
-describe('temperature:0 callers reach the provider request (#2038)', () => {
+/** A provider whose chat() options are recorded; the request body still omits temperature. */
+function spiedProvider(logger: ReturnType<typeof createSilentLogger>, registry: ModelRegistry) {
+  const provider = new AnthropicProvider('test-key', logger, registry);
+  const chat = vi.spyOn(provider, 'chat');
+  const passedTemperature = () => chat.mock.calls[0]![0].options?.temperature;
+  return { provider, passedTemperature };
+}
+
+describe('temperature:0 callers pass temperature 0 to the provider (#2038)', () => {
   const logger = createSilentLogger();
   const registry = new ModelRegistry(logger);
 
@@ -58,13 +66,14 @@ describe('temperature:0 callers reach the provider request (#2038)', () => {
     mockCreate.mockReset();
   });
 
-  it('outbound judge builds a request with temperature 0', async () => {
+  it('outbound judge passes temperature 0', async () => {
     mockCreate.mockResolvedValue(makeTextResponse('{"leak": false, "reason": ""}'));
-    const provider = new AnthropicProvider('test-key', logger, registry);
+    const { provider, passedTemperature } = spiedProvider(logger, registry);
+    const bus = fakeBus();
     const judge = new OutboundLlmJudge(
       provider,
       { enabled: true, model: 'claude-haiku-4-5', timeoutMs: 5000, failMode: 'split' },
-      fakeBus(),
+      bus,
       logger,
       registry,
     );
@@ -80,12 +89,15 @@ describe('temperature:0 callers reach the provider request (#2038)', () => {
       channelId: 'email',
     });
 
-    expect(mockCreate.mock.calls[0]![0].temperature).toBe(0);
+    expect(passedTemperature()).toBe(0);
+    expect(mockCreate.mock.calls[0]![0]).not.toHaveProperty('temperature');
+    // Haiku 4.5 took a temperature before #2439; its audit row now matches the request.
+    expect(llmCallTemperatures(bus)).toEqual([null]);
   });
 
-  it('escalation judge builds a request with temperature 0', async () => {
+  it('escalation judge passes temperature 0', async () => {
     mockCreate.mockResolvedValue(makeTextResponse('{"class": "public", "reason": "fine"}'));
-    const provider = new AnthropicProvider('test-key', logger, registry);
+    const { provider, passedTemperature } = spiedProvider(logger, registry);
     const judge = new EscalationJudge(
       provider,
       { enabled: true, model: 'claude-haiku-4-5', timeoutMs: 5000 },
@@ -100,14 +112,15 @@ describe('temperature:0 callers reach the provider request (#2038)', () => {
       conversationId: 'c1',
     });
 
-    expect(mockCreate.mock.calls[0]![0].temperature).toBe(0);
+    expect(passedTemperature()).toBe(0);
+    expect(mockCreate.mock.calls[0]![0]).not.toHaveProperty('temperature');
   });
 
-  it('drift detector builds a request with temperature 0', async () => {
+  it('drift detector passes temperature 0', async () => {
     mockCreate.mockResolvedValue(
       makeTextResponse('{"drifted":false,"reason":"Aligned.","confidence":"high"}'),
     );
-    const provider = new AnthropicProvider('test-key', logger, registry);
+    const { provider, passedTemperature } = spiedProvider(logger, registry);
     const detector = new DriftDetector(
       provider,
       {
@@ -125,7 +138,8 @@ describe('temperature:0 callers reach the provider request (#2038)', () => {
       lastRunSummary: null,
     });
 
-    expect(mockCreate.mock.calls[0]![0].temperature).toBe(0);
+    expect(passedTemperature()).toBe(0);
+    expect(mockCreate.mock.calls[0]![0]).not.toHaveProperty('temperature');
   });
 });
 

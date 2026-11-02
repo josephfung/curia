@@ -319,6 +319,8 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 });
 
+// API version 2026-10-21 (SDK 1.x) returns a 400 for any sampling parameter on
+// every model, so none is ever sent (#2439).
 describe('AnthropicProvider — temperature', () => {
   beforeEach(() => {
     mockCreate.mockReset();
@@ -326,16 +328,25 @@ describe('AnthropicProvider — temperature', () => {
     mockCreate.mockResolvedValue(makeTextResponse());
   });
 
-  it('sends temperature on chat when options.temperature is a finite number', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
-    await provider.chat({
-      model: 'claude-sonnet-4-6',
-      messages: [{ role: 'user', content: 'Hello' }],
-      options: { temperature: 0 },
-    });
+  it.each(['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5', 'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'])(
+    'omits a finite temperature on chat for %s, which is flagged rejectsSamplingParams',
+    async (model) => {
+      const registry = new ModelRegistry(createSilentLogger());
+      const provider = new AnthropicProvider('test-key', createSilentLogger(), registry);
+      await provider.chat({ model, messages: [{ role: 'user', content: 'Hello' }], options: { temperature: 0 } });
 
-    const params = mockCreate.mock.calls[0]![0];
-    expect(params.temperature).toBe(0);
+      const params = mockCreate.mock.calls[0]![0];
+      for (const key of ['temperature', 'top_p', 'top_k']) expect(params).not.toHaveProperty(key);
+      // sentTemperature() reads this flag, so llm.call rows record null to match.
+      expect(registry.rejectsSamplingParams(model)).toBe(true);
+    },
+  );
+
+  it('omits a temperature for a Claude model the registry does not know', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({ model: 'claude-future-9', messages: [{ role: 'user', content: 'Hello' }], options: { temperature: 0.5 } });
+
+    expect(mockCreate.mock.calls[0]![0]).not.toHaveProperty('temperature');
   });
 
   it('omits temperature on chat when options.temperature is unset', async () => {
@@ -367,7 +378,7 @@ describe('AnthropicProvider — temperature', () => {
     );
   });
 
-  it('sends temperature on the streaming path when set', async () => {
+  it('omits a finite temperature on the streaming path', async () => {
     mockStream.mockReturnValue(makeStream([
       { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } },
     ], makeTextResponse()));
@@ -379,7 +390,7 @@ describe('AnthropicProvider — temperature', () => {
     }));
 
     const params = mockStream.mock.calls[0]![0];
-    expect(params.temperature).toBe(0);
+    expect(params).not.toHaveProperty('temperature');
   });
 
   it('omits temperature on the streaming path when unset', async () => {
@@ -469,7 +480,7 @@ describe('AnthropicProvider — claude-haiku-5-5 request shape', () => {
     expect(mockCreate.mock.calls[0]![0].thinking).toEqual({ type: 'disabled' });
   });
 
-  it('leaves claude-haiku-4-5 requests unchanged: temperature sent, no thinking key', async () => {
+  it('leaves claude-haiku-4-5 requests without a thinking key', async () => {
     const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
       model: 'claude-haiku-4-5',
@@ -478,7 +489,7 @@ describe('AnthropicProvider — claude-haiku-5-5 request shape', () => {
     });
 
     const params = mockCreate.mock.calls[0]![0];
-    expect(params.temperature).toBe(0);
+    expect(params).not.toHaveProperty('temperature');
     expect(params).not.toHaveProperty('thinking');
   });
 });
@@ -1158,17 +1169,23 @@ describe('AnthropicProvider — reasoning effort (ADR-048 §2)', () => {
     expect(result.type === 'text' && result.provenance.reasoningEffort).toBe('none');
   });
 
-  it('lets an explicit temperature win over thinking on a model that takes both', async () => {
-    const result = await provider().chat({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'high' }, temperature: 0 } });
-    expect(sent().temperature).toBe(0);
-    expect(sent()).not.toHaveProperty('thinking');
-    expect(result.type === 'text' && 'reasoningEffort' in result.provenance).toBe(false);
-  });
-
-  it('thinks on Haiku 5.5 even when the caller passes a temperature, which is never sent', async () => {
-    await provider().chat({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'medium' }, temperature: 0 } });
+  // A temperature is never sent (#2439), so it no longer competes with thinking.
+  it.each(['claude-sonnet-4-6', 'claude-haiku-5-5'])('thinks on %s when the caller also passes a temperature, which is not sent', async (model) => {
+    const logger = createSilentLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const result = await new AnthropicProvider('test-key', logger, new ModelRegistry(createSilentLogger()))
+      .chat({ model, messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: { effort: 'high' }, temperature: 0 } });
     expect(sent()).not.toHaveProperty('temperature');
     expect(sent().thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+    expect(sent().output_config).toEqual({ effort: 'high' });
+    expect(result.type === 'text' && result.provenance.reasoningEffort).toBe('high');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('keeps NO_REASONING thinking off when the caller also passes a temperature', async () => {
+    await provider().chat({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'Hi' }], options: { reasoning: NO_REASONING, temperature: 0 } });
+    expect(sent()).not.toHaveProperty('temperature');
+    expect(sent().thinking).toEqual({ type: 'disabled' });
   });
 
   it('sends nothing for a model with no reasoning entry (Haiku 4.5)', async () => {

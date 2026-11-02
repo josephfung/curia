@@ -188,6 +188,16 @@ describe('ModelRegistry', () => {
       expect(meta!.pricing.outputPerMToken).toBeGreaterThan(0);
       expect(meta!.capabilities).toContain('vision');
     });
+
+    // API version 2026-10-21 rejects sampling parameters on every model, so
+    // AnthropicProvider never sends them; the flag keeps llm.call rows honest (#2439).
+    it('flags every anthropic entry as rejecting sampling parameters', () => {
+      const anthropicEntries = Object.entries(registry.getAllModels()).filter(([, meta]) => meta.provider === 'anthropic');
+      expect(anthropicEntries.length).toBeGreaterThan(0);
+      for (const [key, meta] of anthropicEntries) {
+        expect(meta.rejectsSamplingParams, key).toBe(true);
+      }
+    });
   });
 
   // AWS Bedrock inference-profile ids (ADR-041). The bedrock-runtime endpoint rejects a
@@ -262,8 +272,7 @@ describe('ModelRegistry', () => {
       expect(registry.thinksByDefault('claude-haiku-5-5')).toBe(true);
     });
 
-    it('leaves claude-haiku-4-5 and unknown models unflagged', () => {
-      expect(registry.rejectsSamplingParams('claude-haiku-4-5')).toBe(false);
+    it('leaves claude-haiku-4-5 not thinking by default, and unknown models unflagged', () => {
       expect(registry.thinksByDefault('claude-haiku-4-5')).toBe(false);
       expect(registry.rejectsSamplingParams('no-such-model')).toBe(false);
       expect(registry.thinksByDefault('no-such-model')).toBe(false);

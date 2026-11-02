@@ -58,7 +58,9 @@ export interface ModelMetadata {
    * The provider returns a 400 for any non-default `temperature`, `top_p` or
    * `top_k`. Providers omit all three for such a model, and `llm.call`
    * publishers record `temperature: null` via `sentTemperature()` so the audit
-   * row matches the request (#2077, #2038).
+   * row matches the request (#2077, #2038). Every `anthropic` entry sets it:
+   * API version 2026-10-21 rejects them on every model, even at the default,
+   * so AnthropicProvider never sends them (#2439).
    */
   rejectsSamplingParams?: boolean;
   /**
@@ -203,6 +205,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheReadPerMToken: 1.50,
     },
     capabilities: ['vision', 'reasoning', 'coding', 'large_context', 'streaming', 'tools'],
+    rejectsSamplingParams: true,
     reasoning: ANTHROPIC_ADAPTIVE,
   },
   'claude-sonnet-4-6': {
@@ -215,6 +218,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheReadPerMToken: 0.30,
     },
     capabilities: ['vision', 'reasoning', 'coding', 'streaming', 'tools'],
+    rejectsSamplingParams: true,
     reasoning: ANTHROPIC_ADAPTIVE,
   },
   // No `reasoning` entry: Haiku 4.5 takes only a thinking budget, which Curia
@@ -229,6 +233,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheReadPerMToken: 0.08,
     },
     capabilities: ['vision', 'coding', 'streaming', 'tools'],
+    rejectsSamplingParams: true,
   },
   // Released 2026-10-07; replaces claude-haiku-4-5 as the default fast tier and
   // judge model (#2077). The 4.5 entry above stays for audit log provenance.
