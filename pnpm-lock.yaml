@@ -98,8 +98,8 @@ importers:
         specifier: ^5.12.6
         version: 5.12.7
       googleapis:
-        specifier: ^184.0.0
-        version: 184.0.0
+        specifier: ^188.0.0
+        version: 188.0.0
       js-yaml:
         specifier: ^5.5.0
         version: 5.5.0
@@ -3696,10 +3696,6 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
-  gaxios@7.3.1:
-    resolution: {integrity: sha512-kB3rzJV7d9juLZh8/56QTXCwQfxyhdOMdyYk1HdQKFtF8TJTDTZQJtixWIwXdE9Jji91mC41DUNpjleo4L4eAQ==}
-    engines: {node: '>=18'}
-
   gaxios@8.3.2:
     resolution: {integrity: sha512-7VsaTExxjbDv2ZK1YuC4jbgfN33NI/6/7zdYWUHB6mcg51v4tCBZe+xzjqPzOpVzI+C5k1Kk9OQ80WVrXAHOqw==}
     engines: {node: '>=22'}
@@ -3752,32 +3748,20 @@ packages:
     resolution: {integrity: sha512-DpLKbNU4WylpxJykQujfCcwYWiV/Jhm50Goo0wrVILAv5jOr9d+H+UR3PhSCD2rCCEIg0uc+G+muBTwD54JhDQ==}
     engines: {node: '>= 0.4'}
 
-  google-auth-library@11.3.0:
-    resolution: {integrity: sha512-gZCyszARHj47WNcKrAcQtimDwtTZpydRZ3HSeb66hObfQU9uaG50ejsZ8LzGISIVAjpsZEouGVs65Q/XRau0Qg==}
-    engines: {node: '>=22'}
-
   google-auth-library@11.3.2:
     resolution: {integrity: sha512-rbm+5boOZzFvDFg2tvCGkgHtG+RrmDqCDi6voK+ILpoCDqGxxc5pcMH6WZzCQXGNqQqZcYJl5WNvb159rkriuA==}
-    engines: {node: '>=22'}
-
-  google-logging-utils@2.1.0:
-    resolution: {integrity: sha512-1R6uiq6XhXW2ZrcGtZpGgVDsYGzSmveVOn8Pp37qe1fbThHZ34e3t3eXj5mVu6PFSVx9fvB1KNVnYgVtq/BRcA==}
     engines: {node: '>=22'}
 
   google-logging-utils@2.1.1:
     resolution: {integrity: sha512-jYZOPMaRGS3Hldyudft6bdibW9ZWUKBkMdB2TeSETkV1c2T9TR4zxEWZETHv9xJ8KHr2hgkNLaSa8kcEcwlpeQ==}
     engines: {node: '>=22'}
 
-  googleapis-common@9.3.0:
-    resolution: {integrity: sha512-jgSY53R77I1zIGJ0uRx29KFQYj7pMGKWSecaOQiOeCdHu/8wHSiEWpt0G7RW2fttc+jd9pukoXbmq2VryvLxCg==}
-    engines: {node: '>=22'}
-
   googleapis-common@9.3.1:
     resolution: {integrity: sha512-wtv/e7JYgmtpIPcSez2EFD/Wx49DPsRX2rj15D7hTwc7tDsP82dcwoX/I4+zE38mu6S9PcghizzzADLf+ZMunA==}
     engines: {node: '>=22'}
 
-  googleapis@184.0.0:
-    resolution: {integrity: sha512-idQwo/hxlV32JyCZpApc/w8dz9pQLQhk/x370VfReimW4TzMqvcVE6DP13Vn1SnW7BEJcnJ7TLaWbWv91mhz2w==}
+  googleapis@188.0.0:
+    resolution: {integrity: sha512-dLGvMAlYOiemwYnhFoy1bDd+dnB6o8mGxnXhLCirAjAww8F/Qs59XY3EHm7p7RGENtDRTqyM7oV7DQ22V4BaOA==}
     engines: {node: '>=22.0.0'}
 
   gopd@1.2.0:
@@ -5121,10 +5105,6 @@ packages:
     resolution: {integrity: sha512-1ca71Zgiu6ORjHqFBDpnSMTR2ReToX4l1Au1VFLyVeBTFavzQnv5JxMFr3ukHVKpSrSA2MCk0lNJSykjUfz7Zg==}
     engines: {node: '>=10.13.0'}
     hasBin: true
-
-  qs@6.17.0:
-    resolution: {integrity: sha512-5LK5BZ2XDHMvcUJaf0CQ5HL3aVgKbpklvByC7qLSxYkfE8COEEbJg5xCHWCTqzqi0Gs4Jn5Mv5v3R38W6edscA==}
-    engines: {node: '>=0.6'}
 
   qs@6.17.1:
     resolution: {integrity: sha512-jd3COkaKVgGUW+ZHyEHCG9bH7RoaaiWuMgzsIBjUMVjLAaWGWpoUAVwljVvBHxRu/2qEHnadLGZrkutYUBPQJA==}
@@ -9492,14 +9472,6 @@ snapshots:
 
   function-bind@1.1.2: {}
 
-  gaxios@7.3.1:
-    dependencies:
-      extend: 3.0.2
-      https-proxy-agent: 7.0.6
-      node-fetch: 3.3.2
-    transitivePeerDependencies:
-      - supports-color
-
   gaxios@8.3.2:
     dependencies:
       extend: 3.0.2
@@ -9582,17 +9554,6 @@ snapshots:
       gopd: 1.2.0
     optional: true
 
-  google-auth-library@11.3.0:
-    dependencies:
-      base64-js: 1.5.1
-      ecdsa-sig-formatter: 1.0.11
-      gaxios: 7.3.1
-      gcp-metadata: 9.2.3
-      google-logging-utils: 2.1.0
-      jws: 4.0.1
-    transitivePeerDependencies:
-      - supports-color
-
   google-auth-library@11.3.2:
     dependencies:
       base64-js: 1.5.1
@@ -9603,22 +9564,8 @@ snapshots:
       jws: 4.0.1
     transitivePeerDependencies:
       - supports-color
-    optional: true
-
-  google-logging-utils@2.1.0: {}
 
   google-logging-utils@2.1.1: {}
-
-  googleapis-common@9.3.0:
-    dependencies:
-      extend: 3.0.2
-      gaxios: 7.3.1
-      google-auth-library: 11.3.0
-      google-logging-utils: 2.1.0
-      qs: 6.17.0
-      url-template: 2.0.8
-    transitivePeerDependencies:
-      - supports-color
 
   googleapis-common@9.3.1:
     dependencies:
@@ -9630,12 +9577,11 @@ snapshots:
       url-template: 2.0.8
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
-  googleapis@184.0.0:
+  googleapis@188.0.0:
     dependencies:
-      google-auth-library: 11.3.0
-      googleapis-common: 9.3.0
+      google-auth-library: 11.3.2
+      googleapis-common: 9.3.1
     transitivePeerDependencies:
       - supports-color
 
@@ -11126,11 +11072,6 @@ snapshots:
       dijkstrajs: 1.0.3
       pngjs: 5.0.0
       yargs: 15.4.1
-
-  qs@6.17.0:
-    dependencies:
-      es-define-property: 1.0.1
-      side-channel: 1.1.1
 
   qs@6.17.1:
     dependencies:
