@@ -80,11 +80,11 @@ updates:
     open-pull-requests-limit: 5
     ignore:
       # node 26 is the Active LTS (since 2026-10-28). Do NOT auto-bump the major:
-      # odd releases (27) never reach LTS and the next even one (28) is
-      # Current/unstable until it does (~Oct 2027); Node.js says production should
-      # run only Active/Maintenance LTS. Digest + minor/patch updates still flow;
-      # bump the major by hand when 28 goes LTS.
-      # UNBLOCK-WHEN: Node 28 reaches Active LTS (~2027-10) per https://nodejs.org/en/about/previous-releases.
+      # from 27 on Node.js ships one major a year and every one becomes LTS, but
+      # 27 is Current/unstable until then (LTS scheduled 2027-10-20), and Node.js
+      # says production should run only Active/Maintenance LTS. Digest +
+      # minor/patch updates still flow; bump the major by hand when 27 goes LTS.
+      # UNBLOCK-WHEN: Node 27 reaches Active LTS (~2027-10) per https://nodejs.org/en/about/previous-releases.
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
 
