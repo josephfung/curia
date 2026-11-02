@@ -173,7 +173,7 @@ case "$out" in
 esac
 
 # 10. Re-run the load-bearing cases under the shells the Dockerfile ACTUALLY uses.
-#    The wrapper's shebang is `#!/usr/bin/env sh`, and in node:24-slim /bin/sh is dash,
+#    The wrapper's shebang is `#!/usr/bin/env sh`, and in node:26-slim /bin/sh is dash,
 #    not bash. Testing only under bash hid a real bug: `[ 1 -ge abc ]` returns 2 in dash,
 #    which an `if` reads as false, so a non-numeric attempts value looped forever instead
 #    of giving up — an unbounded hang burning the CI job limit. These cases pin the

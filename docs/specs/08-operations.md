@@ -208,7 +208,7 @@ API token, session cookies) must not cross the wire in cleartext on a public hos
 ### Runtime
 
 - Config merges `default.yaml` + `production.yaml` + env vars from `.env`, selected by `NODE_ENV`.
-- **Node 24 (Active LTS).** Both the Dockerfile build and runtime stages use `node:24-slim` (digest-pinned). The global `npm install` step was removed — bundled npm is unused (corepack/pnpm handle the build, tsx runs the app), so there is nothing to install globally.
+- **Node 26 (Active LTS).** Both the Dockerfile build and runtime stages use `node:26-slim` (digest-pinned). Node no longer bundles corepack, so each stage installs it from a hash-pinned registry tarball. The runtime stage deletes the bundled npm — corepack/pnpm handle installs and tsx runs the app.
 - **Non-root execution** — the image runs as a dedicated `curia` user, not root. The Dockerfile creates the user in the build stage and pre-creates any directories the process needs at runtime (e.g., `/tmp/.google_workspace_mcp`).
 - MCP servers run as separate containers where needed.
 - HTTPS is terminated by the Caddy TLS overlay (see *Self-Host* above).

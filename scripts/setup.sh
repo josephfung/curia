@@ -29,7 +29,7 @@ PRESERVED_ENCRYPTION_KEY=""
 # seed the vault (#911). Empty on the resume path (vault already seeded on first run).
 SEED_ANTHROPIC_KEY=""
 
-# Verifies docker, docker compose, node >= 24, and pnpm are available.
+# Verifies docker, docker compose, node >= 26, and pnpm are available.
 # Exits 1 with an install link on the first missing tool.
 # (openssl check removed — secret generation now uses /dev/urandom via gen_secret_b64/hex)
 check_prerequisites() {
@@ -46,14 +46,14 @@ check_prerequisites() {
     fi
 
     if ! command -v node &>/dev/null; then
-        error "node not found (requires >= 24)."
+        error "node not found (requires >= 26)."
         hint "Install at: https://nodejs.org/"
         exit 1
     fi
     local node_major
     node_major=$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1)
-    if [[ -z "$node_major" ]] || [[ "$node_major" -lt 24 ]]; then
-        error "Node $(node --version) found, but >= 24 is required."
+    if [[ -z "$node_major" ]] || [[ "$node_major" -lt 26 ]]; then
+        error "Node $(node --version) found, but >= 26 is required."
         hint "Update at: https://nodejs.org/"
         exit 1
     fi

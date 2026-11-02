@@ -10,10 +10,12 @@ update script has already run `pnpm install`). They capture non-obvious setup/ru
 caveats; standard commands live in `package.json` scripts and `scripts/setup.sh`.
 
 ### Toolchain
-- **Node 24** is the target (`.nvmrc` = 24, `engines.node` >= 24). The VM's default
-  system `node` (at `/exec-daemon`) is v22; Node 24 is installed via nvm and prepended
-  to `PATH` in `~/.bashrc`, so `node`/`pnpm` already resolve to v24 + pnpm 11.7.0
-  (corepack). Confirm with `node --version` if something looks off.
+- **Node 26** is the target (`.nvmrc` = 26, `engines.node` >= 26). The VM's default
+  system `node` (at `/exec-daemon`) is v22; the target Node is installed via nvm and
+  prepended to `PATH` in `~/.bashrc`. Node 25+ no longer bundles corepack, so if `pnpm`
+  is missing after a Node upgrade, run `npm install -g corepack && corepack enable`
+  (pnpm 11.7.0 comes from `packageManager`). Confirm with `node --version` if something
+  looks off.
 - Package manager is **pnpm** (workspace with `apps/console`). Use `pnpm`, never npm/yarn.
 
 ### Postgres (required for running the app and integration tests)
