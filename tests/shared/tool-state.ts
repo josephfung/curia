@@ -114,6 +114,17 @@ function inZone(value: unknown, zone: string | undefined): unknown {
   return formatNextRun(instant, zone) ?? value;
 }
 
+/** scheduler-get's instants, all shown in the caller's zone as the real tool does. */
+const JOB_TIMESTAMPS = ['runAt', 'nextRunAt', 'lastRunAt', 'createdAt'] as const;
+
+function timesInZone(job: Json, zone: string | undefined): Json {
+  const out: Json = { ...job };
+  for (const key of JOB_TIMESTAMPS) {
+    if (key in out) out[key] = inZone(out[key], zone);
+  }
+  return out;
+}
+
 /** Same preview scheduler-list builds: collapsed whitespace, cut at 160 characters. */
 function taskPreview(task: string): string {
   const flat = task.trim().replace(/\s+/g, ' ');
@@ -377,14 +388,13 @@ export class SchedulerState {
     const jobZone = typeof job['timezone'] === 'string' && job['timezone'] !== '' ? job['timezone'] : 'UTC';
     const zone = this.displayZone ?? jobZone;
     return {
-      job: {
+      job: timesInZone({
         lastRunSummary: null,
         lastRunContext: null,
         progress: null,
         ...job,
-        nextRunAt: inZone(job['nextRunAt'] ?? null, zone),
         taskPayload,
-      },
+      }, zone),
       truncatedFields: [],
       displayTimezone: zone,
     };
@@ -402,9 +412,9 @@ export class SchedulerState {
     if (payload) next = { ...next, taskPayload: payload };
     const refreshed = this.refreshNextRun(next, pinnedNextRuns([job]));
     const out = isRecord(refreshed) ? refreshed : next;
-    // A refreshed next run comes out in the job's zone; show it in the stub's display zone.
-    const zone = str(data['displayTimezone']);
-    return { ...data, job: { ...out, nextRunAt: inZone(out['nextRunAt'] ?? null, zone) } };
+    // A refreshed next run comes out in the job's zone, and an edit's run_at as given;
+    // show them in the stub's display zone.
+    return { ...data, job: timesInZone(out, str(data['displayTimezone'])) };
   }
 
   /**
