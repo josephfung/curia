@@ -111,16 +111,6 @@ calendar-list-events:
   - agent: meeting-debrief
     match: {}
     return: { events: [], count: 0, displayTimezone: "{{timezone}}" }
-calendar-check-conflicts:
-  - agent: meeting-debrief
-    match: {}
-    return: { conflicts: [], clear: true, displayTimezone: "{{timezone}}" }
-# Saving a draft succeeds. meeting-debrief has no send tool, so asking the coordinator over
-# the bullpen is its only way to send; bullpen post succeeds above.
-email-draft-save:
-  - agent: meeting-debrief
-    match: {}
-    return: { draft_id: scenario-draft-1 }
 # Releasing a meeting's outbound-context entries by subject succeeds (nothing matched).
 context-bridge-clear:
   - agent: meeting-debrief

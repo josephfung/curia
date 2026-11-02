@@ -61,6 +61,7 @@ import {
   delegateFailureNextStep,
 } from '../../src/agents/prompts/delegate-result-guidance.js';
 import { shapeSpecialistAnswer } from '../../src/agents/specialist-answer.js';
+import type { TaskHandoff } from '../../src/agents/task-handoffs.js';
 import { buildInboundEmailIdentifierBlock, preambleAccountLabel, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
 import { CEO_INBOX_AGENT, trackInboxCodes } from '../../src/verification/track-codes.js';
 import {
@@ -79,6 +80,8 @@ const INTERRUPTED_WAIT_MESSAGE =
 interface SpecialistReply {
   content: string;
   sends?: string[];
+  /** Tasks it created for the coordinator (`agent.response.handoffs`, #2431). */
+  handoffs?: TaskHandoff[];
 }
 
 /** Rejected when a queued follow-up ends the wait (#2018). Not a specialist failure:
@@ -851,7 +854,11 @@ export class DelegateHandler implements ToolHandler {
                   }) });
                   return;
                 }
-                resolve({ content: responseEvent.payload.content, sends: responseEvent.payload.sends });
+                resolve({
+                  content: responseEvent.payload.content,
+                  sends: responseEvent.payload.sends,
+                  handoffs: responseEvent.payload.handoffs,
+                });
               }
             }
           } catch (err) {
@@ -880,7 +887,7 @@ export class DelegateHandler implements ToolHandler {
       // catch. Both leave the specialist running. A specialist that reports
       // reason 'timeout' does not, and retaining the claim would block the
       // conversation until the sweep re-delivered the answer.
-      const [{ content: response, sends }] = await Promise.all([
+      const [{ content: response, sends, handoffs }] = await Promise.all([
         responsePromise,
         ctx.bus.publish('dispatch', taskEvent),
       ]);
@@ -1010,7 +1017,7 @@ export class DelegateHandler implements ToolHandler {
       // the markup in `response` does not (#1818).
       const resolvedContactIds = parseResolvedContactIds(response);
       // What it actually sent, and any composed email, as facts beside the prose (#2055).
-      const answer = shapeSpecialistAnswer(response, sends, task);
+      const answer = shapeSpecialistAnswer(response, sends, task, handoffs);
       if (answer.next_step !== undefined) {
         ctx.log.info(
           { targetAgent: agent, sent: answer.sent, draftEmails: answer.draft_emails?.length ?? 0 },

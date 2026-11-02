@@ -21,7 +21,7 @@ import {
   type LateResponseFacts,
   type RecordedDisposition,
 } from '../../../src/agents/late-delegation.js';
-import { DRAFT_EMAIL_NEXT_STEP, NOTHING_SENT_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
+import { DRAFT_EMAIL_NEXT_STEP, HANDOFF_NEXT_STEP, NOTHING_SENT_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
 
 /** renderLateNote only covers the recorded dispositions; a delivered result has its own note. */
 function recorded(
@@ -319,6 +319,17 @@ describe('buildLateResultBrief (#1799)', () => {
     expect(brief).toContain('Sent in that task: nothing.');
     expect(brief).toContain(NOTHING_SENT_NEXT_STEP);
     expect(brief).not.toContain('Hold two slots and send Jamie'); // #1064: the brief is never restated
+  });
+
+  it('lists late hand-offs and tells the coordinator to do them (#2431)', () => {
+    const brief = buildLateResultBrief({
+      ...base,
+      content: 'Recorded the follow-up.',
+      sends: [],
+      handoffs: [{ task_id: 'task-7', title: 'Book dinner Wednesday' }],
+    });
+    expect(brief).toContain('- Book dinner Wednesday (task_id task-7)');
+    expect(brief).toContain(HANDOFF_NEXT_STEP);
   });
 
   it('lifts a late draft out of the result and marks it unsent (#2055)', () => {

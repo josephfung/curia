@@ -19,7 +19,7 @@ function makeCtx(input: Record<string, unknown>, gateway?: Partial<{
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
-    outboundGateway: (gateway && { resolveRecipientReference, ...gateway }) as never,
+    outboundGateway: (gateway && { resolveRecipientReference, isPrincipalMailbox: () => false, ...gateway }) as never,
     taskMetadata,
     timezone: opts?.timezone,
   } as ToolContext;

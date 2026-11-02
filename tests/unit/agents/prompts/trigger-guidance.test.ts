@@ -19,6 +19,7 @@ import {
   DELEGATE_FAILURE_NEXT_STEP_LINES,
   DRAFT_EMAIL_NEXT_STEP_LINES,
   NOTHING_SENT_NEXT_STEP_LINES,
+  HANDOFF_NEXT_STEP_LINES,
   PAUSED_NEXT_STEP_LINES,
 } from '../../../../src/agents/prompts/delegate-result-guidance.js';
 import {
@@ -216,6 +217,7 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     ['delegate paused next_step', PAUSED_NEXT_STEP_LINES.join('\n')],
     ['delegate draft-email next_step', DRAFT_EMAIL_NEXT_STEP_LINES.join('\n')],
     ['delegate nothing-sent next_step', NOTHING_SENT_NEXT_STEP_LINES.join('\n')],
+    ['delegate hand-off next_step (#2431)', HANDOFF_NEXT_STEP_LINES.join('\n')],
     ['delegate calendar-failure next_step', DELEGATE_FAILURE_NEXT_STEP_LINES['calendar']!.join('\n')],
     ['delegate contacts-failure next_step', DELEGATE_FAILURE_NEXT_STEP_LINES['contacts']!.join('\n')],
     ['backlog line instruction', BACKLOG_INSTRUCTION_LINES.join('\n')],

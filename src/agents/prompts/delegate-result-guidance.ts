@@ -47,6 +47,14 @@ export const NOTHING_SENT_NEXT_STEP_LINES: readonly string[] = [
   'has not gone out.',
 ];
 
+/** The specialist handed follow-ups to the coordinator (`handed_off_tasks`, #2431). */
+export const HANDOFF_NEXT_STEP_LINES: readonly string[] = [
+  'The specialist recorded the tasks in handed_off_tasks for you to do and did none of them,',
+  'whatever its text says. Do each one now, as the principal asked, with your own tools and',
+  'specialists, then complete its task with task-complete. Tell the principal what you did',
+  'and where it went, from your own results.',
+];
+
 /**
  * A delegation to a specialist that failed and may be retried: a retryable failure, or a
  * failed tool result. Keyed by agent id; only specialists whose failure has a known wrong
@@ -84,3 +92,4 @@ export const CLARIFICATION_NEXT_STEP = CLARIFICATION_NEXT_STEP_LINES.join(' ');
 export const PAUSED_NEXT_STEP = PAUSED_NEXT_STEP_LINES.join(' ');
 export const DRAFT_EMAIL_NEXT_STEP = DRAFT_EMAIL_NEXT_STEP_LINES.join(' ');
 export const NOTHING_SENT_NEXT_STEP = NOTHING_SENT_NEXT_STEP_LINES.join(' ');
+export const HANDOFF_NEXT_STEP = HANDOFF_NEXT_STEP_LINES.join(' ');

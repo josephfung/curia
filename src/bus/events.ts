@@ -175,6 +175,13 @@ interface AgentResponsePayload {
    */
   sends?: string[];
   /**
+   * Tasks this run created for the coordinator to do (`task-create` with
+   * `target_agent_id: "coordinator"`, by a specialist), in call order (see
+   * src/agents/task-handoffs.ts). Set alongside `sends`, and only when non-empty. The
+   * delegate skill reports them as `handed_off_tasks` so the coordinator works them now (#2431).
+   */
+  handoffs?: Array<{ task_id: string; title: string; description?: string }>;
+  /**
    * The channel of the agent.task this answers. Set on responses that carry reply text:
    * the end of the tool-use loop and the delegation-failure reply, not the structured
    * clarification pause. The dispatcher reads it to tell a scheduler turn, whose reply

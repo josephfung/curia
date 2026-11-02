@@ -1776,6 +1776,78 @@ describe('AgentRuntime tool-use loop', () => {
     expect(payload.sends).toEqual(['calendar-create-event']);
   });
 
+  it('reports coordinator-owned tasks a specialist created as handoffs (#2431)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [
+              { id: 'call-own', name: 'task-create', input: { title: 'Debrief bookkeeping' } },
+              { id: 'call-hand', name: 'task-create', input: { title: 'Book dinner', target_agent_id: 'coordinator' } },
+              { id: 'call-fail', name: 'task-create', input: { title: 'Broken', target_agent_id: 'coordinator' } },
+            ],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Recorded the follow-up for the coordinator.',
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockImplementation(async (_name: string, input: Record<string, unknown>) => {
+        if (input['title'] === 'Broken') return { success: false, error: 'parent task not found' };
+        return { success: true, data: { task_id: `id-${String(input['title'])}`, title: input['title'] } };
+      }),
+    } as unknown as ExecutionLayer;
+
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'meeting-debrief',
+      systemPrompt: 'You are the meeting debrief specialist.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{
+        name: 'task-create',
+        description: 'task-create',
+        input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+      }],
+      errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'meeting-debrief',
+      conversationId: 'conv-handoffs',
+      channelId: 'internal',
+      senderId: 'coordinator',
+      content: 'The principal replied to the debrief prompt',
+      parentEventId: 'parent-handoffs',
+    }));
+
+    expect(responses).toHaveLength(1);
+    expect(responses[0]!.payload.handoffs).toEqual([{ task_id: 'id-Book dinner', title: 'Book dinner' }]);
+  });
+
   it('caps failedSkills to distinct names and counts overflow (#1830)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);

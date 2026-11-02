@@ -4,6 +4,7 @@ import { DelegateHandler } from '../../../skills/delegate/handler.js';
 import {
   CLARIFICATION_NEXT_STEP,
   DRAFT_EMAIL_NEXT_STEP,
+  HANDOFF_NEXT_STEP,
   NOTHING_SENT_NEXT_STEP,
   PAUSED_NEXT_STEP,
   delegateFailureNextStep,
@@ -1029,6 +1030,51 @@ describe('DelegateHandler', () => {
     it('omits sent when the runtime did not report it', async () => {
       const data = await delegateToCalendar('Send Jamie the times', 'Email sent to Jamie.', undefined);
       expect(data).not.toHaveProperty('sent');
+      expect(data['next_step']).toBeUndefined();
+    });
+  });
+
+  // #2431: meeting-debrief records follow-ups as coordinator-owned tasks; the coordinator does them.
+  describe('tasks the specialist handed off (#2431)', () => {
+    async function delegateToDebrief(
+      content: string,
+      handoffs: Array<{ task_id: string; title: string }> | undefined,
+    ): Promise<Record<string, unknown>> {
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+      agentRegistry.register('meeting-debrief', { role: 'specialist', description: 'Debrief' });
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.task', 'agent', async (event) => {
+        if (event.type === 'agent.task' && event.payload.agentId === 'meeting-debrief') {
+          const { createAgentResponse } = await import('../../../src/bus/events.js');
+          await bus.publish('agent', createAgentResponse({
+            agentId: 'meeting-debrief',
+            conversationId: event.payload.conversationId,
+            content,
+            sends: [],
+            ...(handoffs !== undefined && { handoffs }),
+            parentEventId: event.id,
+          }));
+        }
+      });
+      const result = await handler.execute(makeCtx(
+        { agent: 'meeting-debrief', task: 'The principal replied to the debrief prompt', conversation_id: 'conv-handoff' },
+        { bus, agentRegistry },
+      ));
+      expect(result.success).toBe(true);
+      return (result as { success: true; data: Record<string, unknown> }).data;
+    }
+
+    it('lists the hand-offs and tells the coordinator to do them', async () => {
+      const handoffs = [{ task_id: 'task-1', title: 'Draft an email to Sam proposing two coffee dates' }];
+      const data = await delegateToDebrief('Recorded one follow-up for the coordinator.', handoffs);
+      expect(data['handed_off_tasks']).toEqual(handoffs);
+      expect(data['next_step']).toBe(HANDOFF_NEXT_STEP);
+    });
+
+    it('adds no hand-off fields when there were none', async () => {
+      const data = await delegateToDebrief('Debrief closed, nothing to follow up.', undefined);
+      expect(data).not.toHaveProperty('handed_off_tasks');
       expect(data['next_step']).toBeUndefined();
     });
   });

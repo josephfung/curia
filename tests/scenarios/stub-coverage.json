@@ -263,17 +263,23 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
+    "debrief hand-off draft lands in the principal's mailbox": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-02T19:18:28.006Z"
+    },
     "debrief preference is stored in memory": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
-    "debrief reply drafts follow-ups and closes the debrief": {
+    "debrief reply hands follow-ups to the coordinator and closes the debrief": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T16:53:34.402Z"
+      "recordedAt": "2026-11-02T19:20:45.074Z"
     },
     "debrief wake at expiry cancels without nagging": {
       "unstubbed": 0,

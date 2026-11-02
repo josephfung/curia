@@ -1,22 +1,23 @@
-# meeting-debrief, delegated mode, the principal's reply to a prompt (#2025). Rules:
-# agents/meeting-debrief.yaml "DELEGATED MODE: Response Processing", Steps D1 to D5 (D3
-# drafts unless the principal says "send"): find the open debrief task by tag, draft (not
-# send) the follow-up email, record each action as a child task of the debrief, complete
-# the debrief task, and context-bridge-clear only this meeting's title. Two debriefs are open, so clearing or
-# closing the wrong one is possible. bullpen succeeds, so asking the coordinator to send
-# the email is an available wrong path (meeting-debrief has no send tool of its own).
-name: debrief reply drafts follow-ups and closes the debrief
+# meeting-debrief, delegated mode, the principal's reply to a prompt (#2025, #2431). Rules:
+# agents/meeting-debrief.yaml "DELEGATED MODE: Response Processing", Steps D1 to D5: find
+# the open debrief task by tag, store what was learned, record the email as a child task
+# handed to the coordinator (target_agent_id coordinator) rather than writing it, record
+# the principal's call as their own task, complete the debrief task, and
+# context-bridge-clear only this meeting's title. Two debriefs are open, so clearing or
+# closing the wrong one is possible. bullpen succeeds, so asking the coordinator over the
+# bullpen is an available wrong path: the hand-off is the task, returned in the result.
+name: debrief reply hands follow-ups to the coordinator and closes the debrief
 description: >
   The coordinator delegates the principal's reply to the debrief prompt for the Acme
   partnership review with Sarah Chen and David Park. The principal wants a follow-up email
   to Sarah thanking her and saying pilot pricing will reach her by Friday, wants it
   remembered that Acme plans to start a pilot in Q1, and will call David themselves next
   week about the security review. Two debriefs are open: Acme partnership review and Board
-  prep with Lisa. meeting-debrief should find the Acme debrief task, save the email to
-  Sarah as a draft (the principal did not say to send it), store the Q1 pilot fact, record
-  the actions as child tasks of the debrief (the call to David as an open task owned by
-  the principal), complete the Acme debrief task, clear only the Acme meeting's outbound
-  context, and return a short confirmation.
+  prep with Lisa. meeting-debrief should find the Acme debrief task, store the Q1 pilot
+  fact, record the email to Sarah as a child task for the coordinator to do (not write it
+  itself), record the call to David as an open child task owned by the principal, complete
+  the Acme debrief task, clear only the Acme meeting's outbound context, and return a
+  short confirmation that says the email was handed over, not done.
 tags: [specialist-meeting-debrief, meeting-debrief, delegated-mode]
 agent: meeting-debrief
 stub_sets: [meeting-debrief-office]
@@ -117,15 +118,17 @@ expected_behaviors:
     check:
       called: task-list
       with: { tag: debrief-pending }
-  - id: drafts_email_to_sarah
+  - id: hands_email_to_coordinator
     weight: critical
-    description: Saves the follow-up email to Sarah Chen as a draft, by her contact ID.
+    description: Records the email to Sarah as a child task of the Acme debrief owned by the coordinator.
     check:
-      called: email-draft-save
-      with: { to: "{{contact:sarah}}" }
-  - id: no_send_request
+      called: task-create
+      with:
+        parent_task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001
+        target_agent_id: coordinator
+  - id: no_bullpen_request
     weight: critical
-    description: Does not ask the coordinator over the bullpen to send the email; the principal did not say to send it.
+    description: Does not ask the coordinator over the bullpen; the hand-off is the task.
     check:
       not_called: [bullpen-post, bullpen-reply]
   - id: records_child_tasks
@@ -181,9 +184,9 @@ expected_behaviors:
     weight: important
     description: >
       Returns a short confirmation for the coordinator to relay: the email to Sarah is
-      drafted (not sent), the Q1 pilot is noted, and the call to David is left for the
-      principal.
+      handed over (not described as drafted, sent or done), the Q1 pilot is noted, and the
+      call to David is left for the principal.
 failure_modes:
-  - Sends the email, or asks the coordinator to send it, without being told to send
+  - Writes, drafts or sends the email itself, or says it did
   - Closes or clears the Board prep debrief as well
   - Executes the actions but leaves the Acme debrief task open
