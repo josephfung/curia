@@ -1,4 +1,4 @@
--- 114_pairing_invitations.sql
+-- 115_pairing_invitations.sql
 --
 -- Phone app invitation links (#2412, ADR-055 amendment of 2026-11-02). The operator mints one for
 -- the principal and sends it through their own channel. It lasts 48 hours and
