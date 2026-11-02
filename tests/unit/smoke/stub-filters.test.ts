@@ -327,6 +327,23 @@ describe('SchedulerState', () => {
       expect(after.job).toEqual(expect.objectContaining({ taskPayload: { task: reworded }, cronExpr: '0 9 * * 1-5' }));
     });
 
+    it("shows a replayed job's times in the caller's zone, not its cron zone", () => {
+      const state = new CaseToolState();
+      // A Los Angeles-cron job, read by a Toronto principal. The two zones share DST rules,
+      // so they are always three hours apart.
+      shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5', timezone: 'America/Los_Angeles' }, state);
+      const alone = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got & { displayTimezone: string };
+      // No listing has named the caller's zone yet: the label matches the job's own zone.
+      expect(alone.displayTimezone).toBe('America/Los_Angeles');
+
+      shapeStubResult('scheduler-list', empty, {}, state);
+      const got = recordedJobRead('scheduler-get', { job_id: JOB_ID }, state, {}) as Got & { displayTimezone: string; job: { nextRunAt: string } };
+      expect(got.displayTimezone).toBe('America/Toronto');
+      // 9am Pacific is noon Eastern; same instant, now in the labelled zone.
+      expect(got.job.nextRunAt).toMatch(/T12:00:00\.000-0[45]:00$/);
+      expect(new Date(got.job.nextRunAt).getTime()).toBe(new Date((alone.job as unknown as { nextRunAt: string }).nextRunAt).getTime());
+    });
+
     it('clears the listed preview when an edit leaves no string task', () => {
       const state = new CaseToolState();
       shapeStubResult('scheduler-create', created, { task: longTask, cron_expr: '0 9 * * 1-5' }, state);

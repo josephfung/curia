@@ -65,21 +65,24 @@ expected_behaviors:
       The coordinator calls scheduler-get on the weekly agenda job (id
       5a7e3c19-2d4b-4f60-9e1a-8c3b7d2f6a01) before it calls scheduler-update on it.
     weight: critical
+  # Two critical behaviors and nothing else, so a PARTIAL on either scores 75% and
+  # fails the 80% gate: an edit that keeps only some of the old task is a miss.
   - id: edit_keeps_untouched_text
     description: >
-      The coordinator edits the existing job with scheduler-update (action edit), and the
-      task_payload it passes still contains the original instructions that came after the
-      preview cut: the closing "Lantern Watch" section listing the three decisions due
-      before Friday, and emailing the agenda to the principal. It also adds the requested
-      travel section.
+      The coordinator edits the existing job with scheduler-update (action edit) and does
+      not call scheduler-create to stand up a second routine. The task_payload it passes
+      keeps every part of the original instructions: running Sunday at 6pm for the coming
+      week, pulling every meeting from the calendar, grouping them by day, flagging
+      double-bookings and back-to-back blocks with no travel time, the closing "Lantern
+      Watch" section listing the three decisions due before Friday, and emailing the whole
+      agenda to the principal. It also adds the requested section on upcoming travel.
+      Rewording is fine; dropping any of these parts is not.
     weight: critical
-  - id: no_duplicate_job
-    description: >
-      The coordinator does not call scheduler-create to stand up a second routine.
-    weight: important
 
 failure_modes:
   - Calls scheduler-update with a task_payload written from the 160-character preview,
     dropping the "Lantern Watch" section and the email step.
+  - Keeps the after-cut text but drops or rewrites away an earlier instruction, such as
+    flagging double-bookings or grouping meetings by day.
   - Calls scheduler-update without reading the job with scheduler-get first.
   - Creates a second agenda routine instead of editing the existing one.

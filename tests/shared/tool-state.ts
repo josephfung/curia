@@ -106,6 +106,14 @@ function scheduledNextRun(cronExpr: string | null, runAt: string | null, timezon
 
 const TASK_PREVIEW_CHARS = 160;
 
+/** An instant re-expressed in `zone`, as the real tools show the caller's local time. A
+ *  value that is not an instant, or a zone that is not IANA, is returned as it was. */
+function inZone(value: unknown, zone: string | undefined): unknown {
+  if (!zone || typeof value !== 'string') return value;
+  const instant = new Date(value);
+  return formatNextRun(instant, zone) ?? value;
+}
+
 /** Same preview scheduler-list builds: collapsed whitespace, cut at 160 characters. */
 function taskPreview(task: string): string {
   const flat = task.trim().replace(/\s+/g, ' ');
@@ -214,6 +222,9 @@ export class SchedulerState {
   private payloads = new Map<string, Json>();
   /** Rows a scheduler-list in this case returned, so scheduler-get can read them (#2399). */
   private listed = new Map<string, Json>();
+  /** The caller's zone, from the last listing's displayTimezone. The real tools show
+   *  times in the caller's zone, not each job's cron zone. */
+  private displayZone: string | undefined;
 
   private dirty(): boolean {
     return this.created.length > 0 || this.updates.size > 0;
@@ -331,6 +342,8 @@ export class SchedulerState {
 
   /** Remember the rows a scheduler-list returned, for a later scheduler-get. */
   rememberListed(data: Json): void {
+    const zone = str(data['displayTimezone']);
+    if (zone && formatNextRun(new Date(), zone) !== null) this.displayZone = zone;
     if (!Array.isArray(data['jobs'])) return;
     for (const job of data['jobs']) {
       if (isRecord(job) && typeof job['id'] === 'string' && job['id'] !== '') this.listed.set(job['id'], job);
@@ -359,17 +372,21 @@ export class SchedulerState {
     const job = isRecord(row) ? row : base;
 
     const taskPayload = this.payloads.get(id) ?? null;
-    const tz = typeof job['timezone'] === 'string' && job['timezone'] !== '' ? job['timezone'] : 'UTC';
+    // The caller's zone when a listing named it; otherwise the job's own, so the label
+    // at least matches the times it labels.
+    const jobZone = typeof job['timezone'] === 'string' && job['timezone'] !== '' ? job['timezone'] : 'UTC';
+    const zone = this.displayZone ?? jobZone;
     return {
       job: {
         lastRunSummary: null,
         lastRunContext: null,
         progress: null,
         ...job,
+        nextRunAt: inZone(job['nextRunAt'] ?? null, zone),
         taskPayload,
       },
       truncatedFields: [],
-      displayTimezone: tz,
+      displayTimezone: zone,
     };
   }
 
@@ -384,7 +401,10 @@ export class SchedulerState {
     let next: Json = { ...job, ...(update ?? {}) };
     if (payload) next = { ...next, taskPayload: payload };
     const refreshed = this.refreshNextRun(next, pinnedNextRuns([job]));
-    return { ...data, job: isRecord(refreshed) ? refreshed : next };
+    const out = isRecord(refreshed) ? refreshed : next;
+    // A refreshed next run comes out in the job's zone; show it in the stub's display zone.
+    const zone = str(data['displayTimezone']);
+    return { ...data, job: { ...out, nextRunAt: inZone(out['nextRunAt'] ?? null, zone) } };
   }
 
   /**
