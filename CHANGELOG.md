@@ -239,6 +239,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`hono` override floor** — raised to 4.13.16 to exclude five advisories. (#2427)
 - **`basic-ftp` override floor** — raised to 6.2.4 to exclude two medium advisories. (#2388)
 - **Console chat links** — a `/chat?q=` link no longer sends a message as the principal. (#2351)
 - **Band review** — a steered reply carrying unsupported personal details is rewritten, not held showing them. (#2333)
