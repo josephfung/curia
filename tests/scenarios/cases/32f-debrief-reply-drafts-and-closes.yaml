@@ -5,7 +5,7 @@
 # the principal's call as their own task, complete the debrief task, and
 # context-bridge-clear only this meeting's title. Two debriefs are open, so clearing or
 # closing the wrong one is possible. bullpen succeeds, so asking the coordinator over the
-# bullpen is an available wrong path: the hand-off is the task, returned in the result.
+# bullpen is an available wrong path: the hand-off is the task, which wakes the coordinator.
 name: debrief reply hands follow-ups to the coordinator and closes the debrief
 description: >
   The coordinator delegates the principal's reply to the debrief prompt for the Acme
@@ -17,7 +17,7 @@ description: >
   fact, record the email to Sarah as a child task for the coordinator to do (not write it
   itself), record the call to David as an open child task owned by the principal, complete
   the Acme debrief task, clear only the Acme meeting's outbound context, and return a
-  short confirmation that says the email was handed over, not done.
+  short confirmation that says the email is on its way, not that it is done.
 tags: [specialist-meeting-debrief, meeting-debrief, delegated-mode]
 agent: meeting-debrief
 stub_sets: [meeting-debrief-office]
@@ -126,6 +126,13 @@ expected_behaviors:
       with:
         parent_task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32f000000001
         target_agent_id: coordinator
+  - id: follow_up_wakes_now
+    weight: critical
+    description: The coordinator's follow-up task has a wake_at, so the coordinator wakes on it.
+    check:
+      called: task-create
+      with: { target_agent_id: coordinator }
+      contains: { wake_at: ":" }
   - id: no_bullpen_request
     weight: critical
     description: Does not ask the coordinator over the bullpen; the hand-off is the task.
@@ -184,7 +191,7 @@ expected_behaviors:
     weight: important
     description: >
       Returns a short confirmation for the coordinator to relay: the email to Sarah is
-      handed over (not described as drafted, sent or done), the Q1 pilot is noted, and the
+      on its way (not described as already drafted, sent or done), the Q1 pilot is noted, and the
       call to David is left for the principal.
 failure_modes:
   - Writes, drafts or sends the email itself, or says it did

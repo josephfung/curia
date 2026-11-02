@@ -16,7 +16,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Phone app invitation link** — operators send the principal a single-use, 48-hour link that installs and pairs the app. (#2412)
-- **`agent.response.handoffs`** — **public API:** tasks a specialist handed the coordinator; delegate results list them. (#2431)
 - **`scheduler-get`** — reads one scheduled job in full, so routines can be quoted verbatim and edited safely. (#2399)
 - **Voice audio telemetry** — per-turn last-word gap, per-chunk TTS timing and starvation, per-call event-loop delay. (#2379)
 - **Recurring calendar events** — create, edit and delete a series or one occurrence; standing meetings become one event. (#2385)
@@ -126,7 +125,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Node 26** — runtime, image and `engines` move to the new Active LTS; corepack now installed hash-pinned. (#2402)
 - **`operator.session`** — **public API:** new `invite` and `cancel_invite` actions, and an `invitation` flag on pair. (#2412)
-- **meeting-debrief** — records follow-ups as coordinator tasks; the coordinator does them with its full toolset. (#2431)
+- **meeting-debrief** — follow-ups become coordinator tasks that wake at once; the coordinator does them. (#2431)
 - **CI bundle import check** — CI builds the backend and fails on imports Node rejects at startup. (#2410)
 - **Meetings skill** — minutes follow-up guidance moves into the `meetings` bundle; usable outside the post-call task. (#2400)
 - **Voice turn hold** — 350 ms instead of 600, so replies start sooner; `channels.voice.turn_hold_ms` overrides. (#2379)

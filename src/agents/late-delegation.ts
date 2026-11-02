@@ -47,7 +47,6 @@ import {
 } from './task-escalation.js';
 import { LATE_SPECIALIST_RESULT_MARKER } from '../memory/synthetic-user-turn.js';
 import { sendsFromPayload, shapeSpecialistAnswer } from './specialist-answer.js';
-import { handoffsFromPayload, type TaskHandoff } from './task-handoffs.js';
 import type { VerificationRuntime } from '../verification/index.js';
 import { CEO_INBOX_AGENT, trackInboxCodes } from '../verification/track-codes.js';
 
@@ -438,8 +437,6 @@ export interface LateResultBriefParams {
   schedulerJobId?: string;
   /** The specialist's successful sends (`agent.response.sends`), when the payload carries them. */
   sends?: string[];
-  /** Tasks it handed to the coordinator (`agent.response.handoffs`, #2431). */
-  handoffs?: TaskHandoff[];
   /** The original brief. Only decides whether a nothing-sent note applies; never rendered (#1064). */
   delegateTask?: string;
 }
@@ -461,17 +458,13 @@ export interface LateResultBriefParams {
 export function buildLateResultBrief(params: LateResultBriefParams): string {
   const { targetAgent, content, deliveredAtDisplay, maxResultChars, schedulerJobId } = params;
   // Same facts the delegate result carries, so a late "email sent" is not taken at its word (#2055).
-  const answer = shapeSpecialistAnswer(content, params.sends, params.delegateTask ?? '', params.handoffs);
+  const answer = shapeSpecialistAnswer(content, params.sends, params.delegateTask ?? '');
   const sentLines: string[] = [];
   for (const draft of answer.draft_emails ?? []) {
     sentLines.push('', 'Draft email it composed (not sent):', ...(draft.subject !== undefined ? [`Subject: ${draft.subject}`] : []), draft.body);
   }
   if (answer.sent !== undefined) {
     sentLines.push('', answer.sent.length > 0 ? `Sent in that task: ${answer.sent.join(', ')}.` : 'Sent in that task: nothing.');
-  }
-  if (answer.handed_off_tasks !== undefined) {
-    sentLines.push('', 'handed_off_tasks:', ...answer.handed_off_tasks.map((t) =>
-      `- ${t.title} (task_id ${t.task_id})${t.description !== undefined ? `: ${t.description}` : ''}`));
   }
   if (answer.next_step !== undefined) sentLines.push(answer.next_step);
 
@@ -603,7 +596,6 @@ export async function handleLateResponse(
 
   const content = typeof responsePayload['content'] === 'string' ? responsePayload['content'] : '';
   const sends = sendsFromPayload(responsePayload);
-  const handoffs = handoffsFromPayload(responsePayload);
   const deliveredAtDisplay = formatDeliveredAt(opts.respondedAt, opts.timezone, logger);
 
   // A sign-in code the inbox specialist read out of an email after the delegate wait gave up
@@ -646,7 +638,6 @@ export async function handleLateResponse(
         maxResultChars: opts.maxResultChars,
         ...(handle.schedulerJobId !== null && { schedulerJobId: handle.schedulerJobId }),
         ...(sends !== undefined && { sends }),
-        ...(handoffs !== undefined && { handoffs }),
         delegateTask: handle.delegateTask,
       }),
       closeReviewTask: true,

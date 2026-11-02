@@ -8,9 +8,8 @@
 // the delegate skill's result and by the late-result brief, so both paths say the same.
 
 import { isHumanReplySkill } from '../dispatch/origin-turn-reply.js';
-import { DRAFT_EMAIL_NEXT_STEP, HANDOFF_NEXT_STEP, NOTHING_SENT_NEXT_STEP } from './prompts/delegate-result-guidance.js';
+import { DRAFT_EMAIL_NEXT_STEP, NOTHING_SENT_NEXT_STEP } from './prompts/delegate-result-guidance.js';
 import { extractSchedulingEmails, type SchedulingEmailDraft } from './scheduling-email.js';
-import type { TaskHandoff } from './task-handoffs.js';
 
 /** Words that mean a send was asked for or claimed. Only gates the nothing-sent note, which is
  *  true whenever no email or message went out, so a loose match costs a sentence, never a
@@ -23,40 +22,27 @@ export interface SpecialistAnswer {
   /** Successful sends in the specialist's task; absent when the runtime did not report them. */
   sent?: string[];
   draft_emails?: SchedulingEmailDraft[];
-  /** Tasks the specialist created for the coordinator to do (#2431); absent when none. */
-  handed_off_tasks?: TaskHandoff[];
   next_step?: string;
 }
 
 /**
  * Shape a specialist's ordinary answer. `sends` is `agent.response.sends`; `task` is the brief
- * the specialist was given ('' when unknown); `handoffs` is `agent.response.handoffs`.
+ * the specialist was given ('' when unknown).
  *
  * The nothing-sent note keys on email and message sends only. A calendar invite or update can
  * go out alongside a false "email sent" line, and calendar can never truthfully claim an email.
  */
-export function shapeSpecialistAnswer(
-  content: string,
-  sends: string[] | undefined,
-  task: string,
-  handoffs?: TaskHandoff[],
-): SpecialistAnswer {
+export function shapeSpecialistAnswer(content: string, sends: string[] | undefined, task: string): SpecialistAnswer {
   const { drafts, text } = extractSchedulingEmails(content);
-  const sendStep = drafts.length > 0
+  const nextStep = drafts.length > 0
     ? DRAFT_EMAIL_NEXT_STEP
     : sends !== undefined && !sends.some(isHumanReplySkill) && (SEND_WORDING.test(text) || SEND_WORDING.test(task))
       ? NOTHING_SENT_NEXT_STEP
       : undefined;
-  const handedOff = handoffs !== undefined && handoffs.length > 0 ? handoffs : undefined;
-  // The hand-off step comes first: the follow-ups are the work still to do.
-  const nextStep = [handedOff !== undefined ? HANDOFF_NEXT_STEP : undefined, sendStep]
-    .filter((s): s is string => s !== undefined)
-    .join(' ') || undefined;
   return {
     response: text,
     ...(sends !== undefined && { sent: sends }),
     ...(drafts.length > 0 && { draft_emails: drafts }),
-    ...(handedOff !== undefined && { handed_off_tasks: handedOff }),
     ...(nextStep !== undefined && { next_step: nextStep }),
   };
 }

@@ -153,8 +153,7 @@ describe('coordinator scenario cases', () => {
     for (const r of withSent) {
       // The stub has no brief, so this mirrors the handler on the response alone. A stub whose
       // note would come only from the brief's wording is not caught here.
-      const handoffs = r['handed_off_tasks'] as Array<{ task_id: string; title: string; description?: string }> | undefined;
-      const shaped = shapeSpecialistAnswer(String(r['response']), r['sent'] as string[], '', handoffs);
+      const shaped = shapeSpecialistAnswer(String(r['response']), r['sent'] as string[], '');
       expect(r['next_step'], String(r['response']).slice(0, 60)).toBe(shaped.next_step);
     }
   });

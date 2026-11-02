@@ -134,7 +134,6 @@ import {
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
 import { escalationRequester } from './task-escalation.js';
 import { isMessageSend } from './message-sends.js';
-import { taskHandoffFromCall, type TaskHandoff } from './task-handoffs.js';
 import {
   DEFAULT_DEFERRED_WAKE_MS,
   enqueueUndispatchedDelegation,
@@ -913,8 +912,6 @@ export class AgentRuntime {
     const skillsCalled: string[] = [];
     // Successful calls that sent a message or calendar notification (#2055).
     const sends: string[] = [];
-    // Tasks a specialist created for the coordinator to do (#2431).
-    const handoffs: TaskHandoff[] = [];
     // Skills that returned success:false — surfaced to the scheduler as
     // last_run_context.failedSkills without flipping job health (#1830).
     // Cap to distinct skill names so a flailing DB/API loop cannot bloat the
@@ -1936,7 +1933,6 @@ export class AgentRuntime {
                 content: clarificationContent,
                 skillsCalled,
                 sends,
-                ...(handoffs.length > 0 && { handoffs }),
                 ...failedSkillsPayload(),
                 parentEventId: taskEvent.id,
               });
@@ -1999,7 +1995,6 @@ export class AgentRuntime {
                 content: escalationContent,
                 skillsCalled,
                 sends,
-                ...(handoffs.length > 0 && { handoffs }),
                 // Ordinary reply text, so a scheduler turn's copy is audited when dropped (#2091).
                 channelId: turnChannelId,
                 ...(composed.principalNote !== undefined && { principalNote: composed.principalNote }),
@@ -2380,8 +2375,6 @@ export class AgentRuntime {
             // Success: reset consecutive error counter
             budget.consecutiveErrors = 0;
             if (isMessageSend(toolCall.name, skillInput)) sends.push(toolCall.name);
-            const handoff = taskHandoffFromCall(agentId, toolCall.name, skillInput, result.data);
-            if (handoff) handoffs.push(handoff);
 
             // Delegate soft-failures (`success: true, data.failed`) still carry
             // IDENTITY_MISMATCH from @calendar — hard-fail the coordinating turn
@@ -3027,7 +3020,6 @@ export class AgentRuntime {
       ...(prepared.suppressDelivery && { suppressDelivery: true }),
       skillsCalled,
       ...(!isResponseError && { sends }),
-      ...(!isResponseError && handoffs.length > 0 && { handoffs }),
       channelId: turnChannelId,
       ...(principalNote !== undefined && { principalNote }),
       ...failedSkillsPayload(),
