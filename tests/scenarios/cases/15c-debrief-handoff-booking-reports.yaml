@@ -50,6 +50,10 @@ tool_stubs:
         status: done
         completed_at: "{{at:now}}"
         displayTimezone: "{{timezone}}"
+  # A wake turn sometimes records its outcome before ending.
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
 expected_behaviors:
   - id: books_via_calendar
     weight: critical

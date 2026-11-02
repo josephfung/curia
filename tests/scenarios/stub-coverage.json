@@ -263,6 +263,18 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
+    "debrief follow-up booking wake reports once": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-02T21:25:37.374Z"
+    },
+    "debrief follow-up draft wake stays quiet": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-02T21:22:58.366Z"
+    },
     "debrief preference is stored in memory": {
       "unstubbed": 0,
       "runs": 5,
@@ -273,7 +285,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-11-02T19:20:45.074Z"
+      "recordedAt": "2026-11-02T21:21:01.179Z"
     },
     "debrief wake at expiry cancels without nagging": {
       "unstubbed": 0,
