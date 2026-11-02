@@ -61,4 +61,20 @@ describe('CeoInboxLabelHandler', () => {
     // list folders, read message, write folders: nothing more than before.
     expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
+
+  // Nylas answers 400 "unsupported Google label: SENT" if a write lists a system label (#2426).
+  it('does not send SENT or DRAFT back when labelling a message the principal sent', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(jsonResponse([{ id: 'Label_3', name: 'BOARD' }]))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'SENT', 'DRAFT'] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'SENT', 'Label_3'] }));
+
+    const result = await new CeoInboxLabelHandler().execute(
+      buildCtx({ message_id: '19a2b3c4d5e6f708', labels: ['BOARD'] }),
+    );
+
+    expect(result.success).toBe(true);
+    const putBody = JSON.parse(String((fetchSpy.mock.calls[2]![1] as RequestInit).body));
+    expect(putBody).toEqual({ folders: ['INBOX', 'Label_3'] });
+  });
 });

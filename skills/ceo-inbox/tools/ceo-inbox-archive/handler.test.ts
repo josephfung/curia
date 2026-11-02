@@ -62,6 +62,18 @@ describe('CeoInboxArchiveHandler', () => {
     expect(putBody).toEqual({ folders: ['Label_3'] });
   });
 
+  it('does not send SENT back when archiving a message the principal sent (#2426)', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'SENT', 'Label_3'] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['SENT', 'Label_3'] }));
+
+    const result = await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: '19a2b3c4d5e6f708' }));
+
+    expect(result.success).toBe(true);
+    const putBody = JSON.parse(String((fetchSpy.mock.calls[1]![1] as RequestInit).body));
+    expect(putBody).toEqual({ folders: ['Label_3'] });
+  });
+
   // The spot-check pool (#2159) reads these so a triage sample is gradable; the message is
   // already fetched, so they cost no extra call.
   it('returns the subject and sender of the message it archived', async () => {

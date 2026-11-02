@@ -120,7 +120,7 @@ describe('CeoInboxUpdateFoldersHandler', () => {
   // ── Normal path (system folders, id === name) ─────────────────────────────
 
   it('returns the folders from the Nylas response when non-empty', async () => {
-    mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'SENT'] });
+    mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'Label_39'] });
 
     const result = await handler.execute(
       makeCtx({ message_id: 'msg-1', add_folders: ['IMPORTANT'] }),
@@ -129,8 +129,20 @@ describe('CeoInboxUpdateFoldersHandler', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const data = result.data as { folders: string[] };
-      expect(data.folders).toEqual(['INBOX', 'SENT', 'IMPORTANT']);
+      expect(data.folders).toEqual(['INBOX', 'Label_39', 'IMPORTANT']);
     }
+  });
+
+  // Nylas answers 400 "unsupported Google label: SENT" if a write lists a system label (#2426).
+  it('does not write SENT or DRAFT back for a message the principal sent', async () => {
+    const { calls } = mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'SENT', 'DRAFT'] });
+
+    const result = await handler.execute(
+      makeCtx({ message_id: 'msg-1', add_folders: ['IMPORTANT'] }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls.putFolders).toEqual(['INBOX', 'IMPORTANT']);
   });
 
   it('removes the specified folder from the current set', async () => {

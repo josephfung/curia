@@ -6,6 +6,7 @@
 import { budgetExpired, remainingMs } from '../../src/util/call-budget.js';
 import type { CallBudget } from '../../src/util/call-budget.js';
 import { markMessageRequestError } from '../../src/channels/email/nylas-message-id.js';
+import { withoutReadOnlySystemLabels } from '../../src/channels/email/system-labels.js';
 
 const NYLAS_BASE = 'https://api.us.nylas.com/v3/grants';
 
@@ -499,7 +500,7 @@ export class CeoNylasClient {
     folders: string[],
   ): Promise<{ id: string; folders: string[] }> {
     const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
-    const payload = { folders };
+    const payload = { folders: withoutReadOnlySystemLabels(folders) };
     const data = await this.request<NylasApiMessage>('PUT', url, 'updateMessageFolders', payload).catch(
       (err: unknown) => {
         throw markMessageRequestError(err);
