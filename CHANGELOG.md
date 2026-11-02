@@ -269,6 +269,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Phone app icon** — white mark on near-black, so it stays legible in iOS dark mode. (#2341)
 - **Offline page** — says whether the device is offline or can't reach Curia; reconnects automatically. (#2341)
 - **Phone app typing** — text fields are 16px on touch screens, so iOS no longer zooms in. (#2341)
 - **Attachment downloads** — filenames shown with `[REDACTED]` now resolve; filename misses point the retry at `attachment_id`. (#2430)
