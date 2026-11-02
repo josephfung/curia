@@ -50,6 +50,7 @@ import {
   readCurrentInvitation,
   recordPairedNotice,
   releaseInvitation,
+  stopInvitation,
 } from '../pairing-invitations.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
 import { actorFromRequest } from './sessions.js';
@@ -190,8 +191,9 @@ export async function pairingRoutes(
       }));
     } catch (err) {
       logger.error({ err, pairingInvitationId: minted.id }, 'Failed to record invitation audit — link stopped');
+      // Only this request's link: a mint that raced in after it was audited.
       try {
-        await cancelInvitation(pool);
+        await stopInvitation(pool, minted.id);
       } catch (cancelErr) {
         logger.error({ err: cancelErr, pairingInvitationId: minted.id }, 'failed to stop an unaudited invitation link');
       }

@@ -87,7 +87,12 @@ export function InvitePhonePanel({ onPaired }: { onPaired?: () => void }) {
       if (!res.ok) throw new Error(errorMessage(body, 'Could not create an invitation link.'));
       if (!isMintedInvitation(body)) throw new Error('Could not create an invitation link.');
       setMinted(body);
-      await load();
+      // The link is shown only once, so a failed refresh must not hide it.
+      setCurrent({ id: body.id, state: 'waiting', expiresAt: body.expiresAt, redeemedAt: null, deviceName: null });
+      lastState.current = 'waiting';
+      await load().catch((err: unknown) => {
+        console.error('[invite] status refresh failed:', err);
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create an invitation link.');
     } finally {

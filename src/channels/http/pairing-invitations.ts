@@ -104,6 +104,17 @@ export async function mintInvitation(
   throw new Error('pairing invitation mint failed');
 }
 
+const STOP_BY_ID_SQL = `UPDATE pairing_invitations
+     SET superseded_at = NOW()
+     WHERE id = $1 AND superseded_at IS NULL
+     RETURNING id`;
+
+/** Stop one invitation by id. A newer current invitation is left alone. */
+export async function stopInvitation(pool: PairingQueryable, id: string): Promise<boolean> {
+  const result = await pool.query(STOP_BY_ID_SQL, [id]);
+  return result.rows.length > 0;
+}
+
 /** Stop the current invitation without minting another. True when one was live. */
 export async function cancelInvitation(pool: PairingQueryable): Promise<boolean> {
   const result = await pool.query(SUPERSEDE_SQL);

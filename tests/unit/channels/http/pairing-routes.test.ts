@@ -352,7 +352,7 @@ describe('pairing routes', () => {
   });
 
   it('POST /api/pairing/invitation — stops the link when the audit cannot be recorded', async () => {
-    const query = vi.fn(async (sql: string) => {
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
       if (sql.startsWith('INSERT INTO pairing_invitations')) return { rows: [{ id: 'inv-2' }], rowCount: 1 };
       return { rows: [], rowCount: 0 };
     });
@@ -374,7 +374,9 @@ describe('pairing routes', () => {
     expect(JSON.stringify(response.json())).not.toContain('#c=');
     const sql = query.mock.calls.map((call) => String(call[0]));
     const insert = sql.findIndex((text) => text.startsWith('INSERT INTO pairing_invitations'));
-    expect(sql.slice(insert + 1).some((text) => text.includes('SET superseded_at = NOW()'))).toBe(true);
+    const cleanup = query.mock.calls.slice(insert + 1).find((call) => String(call[0]).includes('SET superseded_at = NOW()'));
+    expect(String(cleanup?.[0])).toContain('WHERE id = $1');
+    expect(cleanup?.[1]).toEqual(['inv-2']);
     await app.close();
   });
 

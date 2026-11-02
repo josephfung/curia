@@ -10,7 +10,9 @@ import {
   readCurrentInvitation,
   recordPairedNotice,
   releaseInvitation,
+  stopInvitation,
 } from '../../src/channels/http/pairing-invitations.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -22,9 +24,13 @@ function tokenFrom(pairUrl: string): string {
 
 describeIf('pairing invitations (integration)', () => {
   let pool: pg.Pool;
+  let verified = false;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    // These tests delete every invitation, so refuse anything but curia_test.
+    await requireCuriaTestDatabase(pool);
+    verified = true;
     await pool.query('SELECT superseded_at FROM pairing_invitations LIMIT 0');
   });
 
@@ -35,7 +41,7 @@ describeIf('pairing invitations (integration)', () => {
 
   afterAll(async () => {
     try {
-      await pool.query('DELETE FROM pairing_invitations');
+      if (verified) await pool.query('DELETE FROM pairing_invitations');
     } finally {
       await pool.end();
     }
@@ -99,6 +105,15 @@ describeIf('pairing invitations (integration)', () => {
       const redeemed = await consumeInvitation(pool, tokenFrom(row.pairUrl), 'iPhone');
       expect(redeemed !== null).toBe(row.id === current.rows[0]!.id);
     }
+  });
+
+  it('stopping one link by id leaves a newer current link alone', async () => {
+    const first = await mintInvitation(pool, 'https://curia.example.com');
+    const second = await mintInvitation(pool, 'https://curia.example.com');
+    // A failed mint's cleanup runs after another mint has superseded it.
+    await expect(stopInvitation(pool, first.id)).resolves.toBe(false);
+    await expect(readCurrentInvitation(pool)).resolves.toMatchObject({ id: second.id, state: 'waiting' });
+    await expect(consumeInvitation(pool, tokenFrom(second.pairUrl), 'iPhone')).resolves.toMatchObject({ id: second.id });
   });
 
   it('a stopped link no longer redeems, and a released one works again', async () => {

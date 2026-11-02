@@ -1,19 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api';
-
-interface PushNotice {
-  id: string;
-  kind: 'dead' | 'setup' | 'paired';
-  detail: string;
-}
-
-function isNotice(value: unknown): value is PushNotice {
-  if (typeof value !== 'object' || value === null) return false;
-  const row = value as Record<string, unknown>;
-  return typeof row['id'] === 'string'
-    && (row['kind'] === 'dead' || row['kind'] === 'setup' || row['kind'] === 'paired')
-    && typeof row['detail'] === 'string';
-}
+import { isNotice, type PushNotice } from './push-notice';
 
 /**
  * Console-wide notice when a phone stops receiving pushes, setup is rejected,
