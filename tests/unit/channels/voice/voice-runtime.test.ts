@@ -3923,8 +3923,8 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
   async function speakingSession(overrides: Partial<Parameters<typeof makeRuntime>[0]> = {}) {
     const spy = spyLogger();
     const llm = new FakeStreamProvider([replyScript('This is a fairly long spoken answer.'), replyScript('Okay.')], 3);
-    const tts = new SlowTtsProvider(50, 5);
-    const rig = makeRuntime({ llm, tts, logger: spy.logger, ...overrides });
+    const tts = (overrides.tts ?? new SlowTtsProvider(50, 5)) as SlowTtsProvider;
+    const rig = makeRuntime({ llm, logger: spy.logger, ...overrides, tts });
     await rig.runtime.startSession({
       sessionId: 'onset',
       conversationId: 'voice:onset',
@@ -3952,7 +3952,7 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     expect(tts.cancelled.size).toBeGreaterThan(0);
     expect(transport.clearQueuedAudioCount).toBe(1);
     const [line] = bargeIns(info);
-    expect(line).toMatchObject({ trigger: 'speech_start', turnActive: true, flushed: true });
+    expect(line).toMatchObject({ trigger: 'speech_start', turnActive: true, flushed: true, 'voice.barge_in_caller_dbfs': -12.2 });
     expect(line!['voice.barge_in_detect_ms']).toEqual(expect.any(Number));
     await runtime.endSession('onset', 'test');
   });
@@ -3969,7 +3969,8 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
   });
 
   it('ignores an onset when the caller\'s audio stays at echo level (echo guard)', async () => {
-    const { runtime, stt, transport, tts, info } = await speakingSession();
+    // Long frames keep Curia audible past the onset window, so the ignored onset is logged.
+    const { runtime, stt, transport, tts, info } = await speakingSession({ tts: new LongFrameTtsProvider(50, 5) });
 
     stt.emitSpeechStarted({ startedAgoMs: 0 });
     emitInbound(transport, ECHO, 40);
@@ -3978,6 +3979,13 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     expect(tts.cancelled.size).toBe(0);
     expect(transport.clearQueuedAudioCount).toBe(0);
     expect(bargeIns(info)).toEqual([]);
+    // The ignored onset logs the caller's level, for tuning the threshold.
+    await vi.waitFor(() => {
+      const ignored = info.mock.calls.filter(([, msg]) => msg === 'voice speech onset below barge-in level; Curia kept talking');
+      expect(ignored.map(([fields]) => fields)).toEqual([
+        expect.objectContaining({ 'voice.speech_start_caller_dbfs': -56.3, minDbfs: -35 }),
+      ]);
+    }, { timeout: 2_000 });
     await runtime.awaitIdle('onset');
     await runtime.endSession('onset', 'test');
   });

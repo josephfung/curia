@@ -674,6 +674,8 @@ interface BargeInTrigger {
   trigger: 'transcript' | 'speech_start';
   /** Speech onset → this barge-in, ms, when known. */
   detectMs: number | undefined;
+  /** Loudest caller frame since the onset, dBFS (speech_start only); null for silence. */
+  callerDbfs?: number | null;
 }
 
 /** RMS level of a frame in dBFS; -Infinity for digital silence. */
@@ -1026,7 +1028,19 @@ export class VoiceRuntime {
     if (session.ending) return;
     if (session.speechOnset) clearTimeout(session.speechOnset.timer);
     const timer = setTimeout(() => {
-      if (session.speechOnset?.timer === timer) session.speechOnset = null;
+      if (session.speechOnset?.timer !== timer) return;
+      session.speechOnset = null;
+      // Curia was talking and the onset never reached the level: echo, noise, or
+      // a quiet caller. The level is what tunes the threshold (#2401).
+      if (session.ending || !this.audioQueued(session)) return;
+      this.log.info(
+        {
+          sessionId: session.sessionId,
+          'voice.speech_start_caller_dbfs': this.roundDbfs(this.onsetLevel(session, onsetAt).maxDbfs),
+          minDbfs: this.config.bargeInSpeechStartMinDbfs ?? DEFAULT_SPEECH_START_MIN_DBFS,
+        },
+        'voice speech onset below barge-in level; Curia kept talking',
+      );
     }, SPEECH_START_WINDOW_MS);
     session.speechOnset = { at: onsetAt, timer };
     this.checkSpeechOnset(session);
@@ -1039,16 +1053,34 @@ export class VoiceRuntime {
     // and a cancel there carries the utterance until the caller speaks again, so
     // a cough would leave the turn unspoken. The transcript gate covers it.
     if (!this.audioQueued(session)) return;
-    const minDbfs = this.config.bargeInSpeechStartMinDbfs ?? DEFAULT_SPEECH_START_MIN_DBFS;
-    let voicedMs = 0;
-    for (const level of session.inboundLevels) {
-      // A frame arriving after the onset carries audio from up to its own length before.
-      if (level.at + level.ms >= onset.at && level.dbfs >= minDbfs) voicedMs += level.ms;
-    }
+    const { voicedMs, maxDbfs } = this.onsetLevel(session, onset.at);
     if (voicedMs < SPEECH_START_VOICED_MS) return;
     clearTimeout(onset.timer);
     session.speechOnset = null;
-    this.bargeIn(session, { trigger: 'speech_start', detectMs: Math.max(0, Date.now() - onset.at) });
+    this.bargeIn(session, {
+      trigger: 'speech_start',
+      detectMs: Math.max(0, Date.now() - onset.at),
+      callerDbfs: this.roundDbfs(maxDbfs),
+    });
+  }
+
+  /** Caller audio since `onsetAt`: ms at or above the threshold, and the loudest frame. */
+  private onsetLevel(session: ActiveSession, onsetAt: number): { voicedMs: number; maxDbfs: number } {
+    const minDbfs = this.config.bargeInSpeechStartMinDbfs ?? DEFAULT_SPEECH_START_MIN_DBFS;
+    let voicedMs = 0;
+    let maxDbfs = -Infinity;
+    for (const level of session.inboundLevels) {
+      // A frame arriving after the onset carries audio from up to its own length before.
+      if (level.at + level.ms < onsetAt) continue;
+      if (level.dbfs >= minDbfs) voicedMs += level.ms;
+      maxDbfs = Math.max(maxDbfs, level.dbfs);
+    }
+    return { voicedMs, maxDbfs };
+  }
+
+  /** One decimal for logs; null for no audio or digital silence (JSON has no -Infinity). */
+  private roundDbfs(dbfs: number): number | null {
+    return Number.isFinite(dbfs) ? Math.round(dbfs * 10) / 10 : null;
   }
 
   /** A qualifying transcript followed a speech-onset barge-in: it was the caller. */
@@ -1119,6 +1151,7 @@ export class VoiceRuntime {
         trigger: cause.trigger,
         turnActive,
         'voice.barge_in_detect_ms': cause.detectMs,
+        'voice.barge_in_caller_dbfs': cause.callerDbfs,
         'voice.barge_in_stop_ms': stopMs,
         'voice.barge_in_accepted_ahead_ms': Math.round(aheadMs),
         'voice.barge_in_transport_queued_ms': transportQueuedMs === undefined ? undefined : Math.round(transportQueuedMs),

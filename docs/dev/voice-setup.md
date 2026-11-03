@@ -206,6 +206,10 @@ Voice emits structured pino fields for latency debugging:
   dropped; Signal does it by restarting `pacat` (#2401). A `speech_start` barge-in
   with no words after it logs `voice barge-in on speech onset was not followed by
   speech` at `warn`: count those to tune `channels.voice.barge_in_speech_start_min_dbfs`.
+- `voice.barge_in_caller_dbfs` — on a `speech_start` barge-in, the loudest caller frame
+  since the onset. An onset that never reached the level while Curia was talking logs
+  `voice speech onset below barge-in level; Curia kept talking` with
+  `voice.speech_start_caller_dbfs`, which is how loud the echo or noise was.
 
 Use these fields to compare models, regions, and provider accounts before
 changing `channels.voice.model`.
