@@ -61,4 +61,48 @@ describe('CeoInboxLabelHandler', () => {
     // list folders, read message, write folders: nothing more than before.
     expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
+
+  // Nylas answers 400 "unsupported Google label: SENT" if a write lists a system label (#2426).
+  it('does not send SENT or DRAFT back when labelling a message the principal sent', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(jsonResponse([{ id: 'Label_3', name: 'BOARD' }]))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'SENT', 'DRAFT'] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'SENT', 'Label_3'] }));
+
+    const result = await new CeoInboxLabelHandler().execute(
+      buildCtx({ message_id: '19a2b3c4d5e6f708', labels: ['BOARD'] }),
+    );
+
+    expect(result.success).toBe(true);
+    const putBody = JSON.parse(String((fetchSpy.mock.calls[2]![1] as RequestInit).body));
+    expect(putBody).toEqual({ folders: ['INBOX', 'Label_3'] });
+  });
+
+  it('reports a requested SENT label as skipped, not applied', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(jsonResponse([{ id: 'Label_3', name: 'BOARD' }, { id: 'SENT', name: 'SENT' }]))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX'] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'Label_3'] }));
+
+    const result = await new CeoInboxLabelHandler().execute(
+      buildCtx({ message_id: '19a2b3c4d5e6f708', labels: ['BOARD', 'SENT'] }),
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { applied: string[]; read_only_skipped: string[] };
+      expect(data.applied).toEqual(['BOARD']);
+      expect(data.read_only_skipped).toEqual(['SENT']);
+    }
+  });
+
+  it('refuses a request for only SENT or DRAFT without calling Nylas', async () => {
+    const result = await new CeoInboxLabelHandler().execute(
+      buildCtx({ message_id: '19a2b3c4d5e6f708', labels: ['SENT', 'draft'] }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.errorType).toBe('VALIDATION_ERROR');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

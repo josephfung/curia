@@ -89,6 +89,17 @@ describe('NylasClient.archiveMessage', () => {
     });
   });
 
+  it('does not write SENT or DRAFT back when archiving a sent message (#2426)', async () => {
+    mockMessages.find.mockResolvedValue({ data: mockMsg({ folders: ['INBOX', 'SENT', 'DRAFT', 'Label_3'] }) });
+    mockMessages.update.mockResolvedValue({ data: mockMsg({ folders: ['SENT', 'Label_3'] }) });
+
+    await client.archiveMessage('msg-1');
+
+    expect(mockMessages.update).toHaveBeenCalledWith(
+      expect.objectContaining({ requestBody: { folders: ['Label_3'] } }),
+    );
+  });
+
   it('preserves case of non-INBOX folder labels', async () => {
     mockMessages.find.mockResolvedValue({ data: mockMsg({ folders: ['INBOX', 'Label_123', 'STARRED'] }) });
     mockMessages.update.mockResolvedValue({ data: mockMsg({ folders: ['Label_123', 'STARRED'] }) });
@@ -132,5 +143,28 @@ describe('NylasClient.archiveMessage', () => {
 
     await expect(client.archiveMessage('msg-1')).resolves.toBeUndefined();
     expect(mockMessages.update).not.toHaveBeenCalled();
+  });
+});
+
+// Second write boundary (the Nylas SDK client the outbound gateway uses): Nylas rejects a write
+// that lists a Gmail read-only system label with HTTP 400 "unsupported Google label: SENT" (#2426).
+describe('NylasClient.updateMessageFolders', () => {
+  let client: NylasClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new NylasClient('test-api-key', 'test-grant-id', logger);
+  });
+
+  it('submits the folders without SENT or DRAFT', async () => {
+    mockMessages.update.mockResolvedValue({ data: mockMsg({ folders: ['INBOX', 'SENT', 'Label_3'] }) });
+
+    await client.updateMessageFolders('msg-1', ['INBOX', 'SENT', 'DRAFT', 'Label_3']);
+
+    expect(mockMessages.update).toHaveBeenCalledWith({
+      identifier: 'test-grant-id',
+      messageId: 'msg-1',
+      requestBody: { folders: ['INBOX', 'Label_3'] },
+    });
   });
 });

@@ -30,6 +30,7 @@ import type { Logger } from '../../logger.js';
 import { budgetExpired, remainingMs } from '../../util/call-budget.js';
 import type { CallBudget } from '../../util/call-budget.js';
 import { markMessageRequestError, nylasStatus } from './nylas-message-id.js';
+import { withoutReadOnlySystemLabels } from './system-labels.js';
 
 /** Per-request SDK options. `timeout` caps one request (see budgetOverrides). */
 interface RequestOverrides {
@@ -610,7 +611,7 @@ export class NylasClient {
       await this.nylas.messages.update({
         identifier: this.grantId,
         messageId,
-        requestBody: { folders: currentFolders },
+        requestBody: { folders: withoutReadOnlySystemLabels(currentFolders) },
         ...this.budgetOverrides(budget, 'archiveMessage'),
       });
       this.log.info({ messageId, updatedFolders: currentFolders }, 'message archived successfully');
@@ -721,7 +722,7 @@ export class NylasClient {
       const response = await this.nylas.messages.update({
         identifier: this.grantId,
         messageId,
-        requestBody: { folders },
+        requestBody: { folders: withoutReadOnlySystemLabels(folders) },
         ...this.budgetOverrides(budget, 'updateMessageFolders'),
       });
       this.log.info({ messageId, folders }, 'message folders updated');

@@ -2,6 +2,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
 import type { NylasFolder } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
+import { isReadOnlySystemLabel } from '../../../../src/channels/email/system-labels.js';
 
 export class CeoInboxUpdateFoldersHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -72,11 +73,20 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
       // is suspicious (typo / normalization drift), not a clean no-op — record it in
       // `removed_unresolved` so the caller never reads a bare success as "label
       // cleared" when nothing matched.
+      // SENT and DRAFT are dropped from every write (#2426): adding one does nothing and
+      // Gmail keeps one we try to remove. Report those tokens instead of folding them into
+      // a folder list that would claim the change happened.
+      const readOnlySkipped: string[] = [];
+      const isReadOnly = (token: string, id: string | null): boolean =>
+        isReadOnlySystemLabel(token) || (id !== null && isReadOnlySystemLabel(id));
+
       const removeIds = new Set<string>();
       const removeUnresolved: string[] = [];
       for (const token of removeFolders) {
         const id = resolveExistingId(token);
-        if (id) {
+        if (isReadOnly(token, id)) {
+          readOnlySkipped.push(token);
+        } else if (id) {
           removeIds.add(id.toUpperCase());
         } else {
           ctx.log.warn(
@@ -93,6 +103,10 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
       const addIds: string[] = [];
       for (const token of addFolders) {
         let id = resolveExistingId(token);
+        if (isReadOnly(token, id)) {
+          readOnlySkipped.push(token);
+          continue;
+        }
         if (!id) {
           ctx.log.info({ token }, 'ceo-inbox-update-folders: creating new label');
           const folder = await client.createFolder(token);
@@ -123,6 +137,9 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
 
       const result = await client.updateMessageFolders(messageId, updatedFolders);
 
+      // The computed fallback still lists SENT/DRAFT even though the client dropped them from
+      // the request (#2426). That is the state Gmail should end up in, since it keeps those
+      // labels itself, but it is our expectation, not something Nylas confirmed.
       // Nylas sometimes omits the folders field from the PUT response (implementation-defined).
       // Fall back to the folder list we computed locally to avoid returning [] to the agent.
       // @TODO: A 200 with empty folders could also be a silent no-op write, which is
@@ -144,6 +161,7 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
           folders: finalFolders,
           created,
           removed_unresolved: removeUnresolved,
+          read_only_skipped: readOnlySkipped,
         },
       };
     } catch (err) {
