@@ -145,6 +145,26 @@ describe('CeoInboxUpdateFoldersHandler', () => {
     expect(calls.putFolders).toEqual(['INBOX', 'IMPORTANT']);
   });
 
+  // The write drops SENT/DRAFT, so a requested add or remove of one never happens. The
+  // result must say so rather than list SENT among the folders as if it had been added.
+  it('reports SENT and DRAFT requests as skipped instead of applying them', async () => {
+    const { calls } = mockNylas({ folders: FOLDERS, messageFolders: ['INBOX'], putEmptyFolders: true });
+
+    const result = await handler.execute(
+      makeCtx({ message_id: 'msg-1', add_folders: ['SENT', 'IMPORTANT'], remove_folders: ['draft'] }),
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { folders: string[]; read_only_skipped: string[]; removed_unresolved: string[] };
+      expect(data.read_only_skipped).toEqual(['draft', 'SENT']);
+      expect(data.folders).toEqual(['INBOX', 'IMPORTANT']);
+      expect(data.removed_unresolved).toEqual([]);
+    }
+    expect(calls.putFolders).toEqual(['INBOX', 'IMPORTANT']);
+    expect(calls.createdNames).toEqual([]);
+  });
+
   it('removes the specified folder from the current set', async () => {
     mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'SPAM'] });
 

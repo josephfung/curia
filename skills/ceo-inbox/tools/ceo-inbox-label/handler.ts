@@ -2,6 +2,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { CeoNylasClient, describeMessage } from '../../../_shared/ceo-nylas-client.js';
 import type { NylasFolder } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
+import { isReadOnlySystemLabel } from '../../../../src/channels/email/system-labels.js';
 
 export class CeoInboxLabelHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -36,8 +37,20 @@ export class CeoInboxLabelHandler implements ToolHandler {
       return { success: false, error: 'labels array is required and must contain at least one label' };
     }
 
+    // SENT and DRAFT are dropped from every write (#2426), so they are never applied.
+    // Report them apart from `applied` rather than claim a label the message may lack.
+    const readOnlySkipped = labels.filter(isReadOnlySystemLabel);
+    const writableLabels = labels.filter((l) => !isReadOnlySystemLabel(l));
+    if (writableLabels.length === 0) {
+      return {
+        success: false,
+        error: 'SENT and DRAFT are Gmail system labels and cannot be applied; nothing was changed',
+        errorType: 'VALIDATION_ERROR',
+      };
+    }
+
     ctx.log.info(
-      { messageId, labels },
+      { messageId, labels: writableLabels, readOnlySkipped },
       'ceo-inbox-label: applying labels',
     );
 
@@ -52,7 +65,7 @@ export class CeoInboxLabelHandler implements ToolHandler {
       const created: string[] = [];
       const resolvedIds: string[] = [];
 
-      for (const label of labels) {
+      for (const label of writableLabels) {
         const key = label.toUpperCase();
         let folder = foldersByName.get(key);
 
@@ -94,7 +107,7 @@ export class CeoInboxLabelHandler implements ToolHandler {
       const finalFolders = result.folders.length > 0 ? result.folders : mergedFolders;
 
       ctx.log.info(
-        { messageId, applied: labels, created, folders: finalFolders },
+        { messageId, applied: writableLabels, readOnlySkipped, created, folders: finalFolders },
         'ceo-inbox-label: labels applied successfully',
       );
 
@@ -102,7 +115,8 @@ export class CeoInboxLabelHandler implements ToolHandler {
         success: true,
         data: {
           message_id: messageId,
-          applied: labels,
+          applied: writableLabels,
+          read_only_skipped: readOnlySkipped,
           created,
           folders: finalFolders,
           // From the read in step 3, so no extra call. The spot-check pool shows the
