@@ -1,7 +1,7 @@
 {
   "name": "async-offramp",
   "description": "Hand work you cannot do on this call to your full self, which has the vault and saved sign-ins, scheduling, browsing, documents, and your own Signal and email. Voice-only. Use it on the first ask when a request needs one. Do not judge whether it is possible, and never tell the caller you lack a login, access or a tool. mode now: the caller wants it done while you talk (set something up, check a site, message someone). The result comes back within about a minute, or it is still working and reaches the principal afterwards. mode after_call (default): longer work such as research or drafting, or anything to email the principal after the call. A message to anyone but the principal goes here with mode now: the principal's inbox specialist only saves drafts in their mailbox. Say something was sent or done only when the result shows it. A recap of this call is meeting-notes-start, not this tool. Tell the caller as a person would, for example \"Let me take care of that now.\" or \"I'll work on that after we hang up and email it to you.\" This tool and whoever picks the work up stay unspoken.",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

@@ -642,6 +642,35 @@ describe('AsyncOfframpHandler mode now (#2428)', () => {
     expect(published.filter((event) => event.type === 'agent.task')).toHaveLength(2);
   });
 
+  // CodeRabbit round 5 on PR #2433: a forward that never publishes must not
+  // free a finished result, or a repeat redoes its send.
+  it('keeps a finished result when every forward attempt fails', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const { bus, published, respond } = liveBus();
+      const target = bus as unknown as { publishDetached: (l: string, e: BusEvent) => Promise<void> };
+      const realPublish = target.publishDetached;
+      target.publishDetached = async (layer, event) => {
+        if (published.length >= 1) throw new Error('write-ahead down');
+        await realPublish(layer, event);
+      };
+      const first = handler.execute(makeCtx(bus, { brief: 'Text her', mode: 'now' }, { inputSignal: controller.signal }));
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      await first;
+      const delivered = respond(response(published[0] as AgentTaskEvent, { content: 'Message sent.', sends: ['signal-send'] }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      await delivered;
+      target.publishDetached = realPublish;
+      const repeat = await handler.execute(makeCtx(bus, { brief: 'Text her', mode: 'now' }));
+      expect(repeat.success && repeat.data).toMatchObject({ deduplicated: true, completed: true, sent: ['signal-send'] });
+      expect(published).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps after_call as the default and rejects an unknown mode', async () => {
     const { bus, published } = liveBus();
     const result = await handler.execute(makeCtx(bus, { brief: 'Research this' }));

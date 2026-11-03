@@ -579,6 +579,15 @@ export class AsyncOfframpHandler implements ToolHandler {
       const forward = async (response: AgentResponseEvent): Promise<void> => {
         if (forwarded) return;
         forwarded = true;
+        // A finished result stays on the entry so a repeat is answered, not
+        // redone. A failure or a question frees it: the next brief is new work.
+        const settleOrRelease = (): void => {
+          if (classifyReply(response).kind === 'final' && !response.payload.isError) {
+            settleDedup(idempotencyKey, taskEventId, response);
+          } else {
+            releaseDedup(idempotencyKey, taskEventId);
+          }
+        };
         const task = createAgentTask({
           agentId: 'coordinator',
           conversationId: `voice-offramp-forward:${taskEventId.slice(0, 32)}`,
@@ -596,19 +605,15 @@ export class AsyncOfframpHandler implements ToolHandler {
         for (let attempt = 0; ; attempt += 1) {
           try {
             await bus.publishDetached('dispatch', task);
-            // A finished result stays on the entry so a repeat is answered, not
-            // redone. A failure or a question frees it: the next brief is new work.
-            if (classifyReply(response).kind === 'final' && !response.payload.isError) {
-              settleDedup(idempotencyKey, taskEventId, response);
-            } else {
-              releaseDedup(idempotencyKey, taskEventId);
-            }
+            settleOrRelease();
             ctx.log.info({ taskEventId, forwardTaskId: task.id }, 'voice hand-off: result forwarded to the principal');
             return;
           } catch (err) {
             const delay = FORWARD_RETRY_DELAYS_MS[attempt];
             if (delay === undefined) {
-              releaseDedup(idempotencyKey, taskEventId);
+              // The result was not delivered, but the work behind it happened:
+              // a finished result stays settled so a repeat cannot redo its send.
+              settleOrRelease();
               ctx.log.error({ err, taskEventId, attempts: attempt + 1 }, 'voice hand-off: result could not be forwarded; the principal was not told');
               return;
             }
