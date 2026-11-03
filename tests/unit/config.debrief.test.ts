@@ -57,13 +57,21 @@ debrief:
     expect(config.debrief?.channel).toBeUndefined();
   });
 
+  it.each(['signal', 'sms', 'web', 'slack', 'email'])('accepts %s as a channel', (channel) => {
+    writeLocalYaml(`
+debrief:
+  channel: ${channel}
+`);
+    expect(loadYamlConfig(tempDir).debrief?.channel).toBe(channel);
+  });
+
   it('rejects invalid channel value', () => {
     writeLocalYaml(`
 debrief:
-  channel: slack
+  channel: carrier-pigeon
 `);
     expect(() => loadYamlConfig(tempDir)).toThrow(
-      /debrief\.channel must be 'signal' or 'email'/,
+      /debrief\.channel must be one of signal, sms, web, slack, email/,
     );
   });
 

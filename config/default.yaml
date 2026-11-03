@@ -253,7 +253,7 @@ verification:
 # Controls the proactive debrief prompt sent after external meetings end.
 # The agent itself is defined in agents/meeting-debrief.yaml.
 debrief:
-  channel: signal                # channel for debrief prompts (signal | email)
+  # channel: signal             # pin the debrief prompt channel (signal | sms | web | slack | email); unset = the principal's usual channel
   reminderDelayMinutes: 120      # minutes before a reminder is sent for unanswered debriefs
   contextBridgeTtlHours: 48      # TTL for context bridge entries linking replies to the debrief agent
 

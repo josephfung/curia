@@ -20,7 +20,7 @@ function recapLines(window: string): string[] {
     '4. Compose a concise recap. Lead with autonomous actions (RSVPs sent, emails drafted or',
     '   sent, calendar changes) from activity-log\'s `target`, `outcome` and `detail` fields,',
     '   noting `autonomy: approved` vs `autonomous` where present. Follow with pending approvals.',
-    '5. Deliver it to the principal on Signal or email. Skip sending when activity-log and',
+    '5. Deliver it to the principal by their usual channel. Skip sending when activity-log and',
     '   list-pending-actions both return empty.',
   ];
 }
