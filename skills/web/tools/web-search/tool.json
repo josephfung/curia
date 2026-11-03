@@ -1,6 +1,6 @@
 {
   "name": "web-search",
-  "description": "Search the web using Tavily (no key needed; a key raises limits). Returns structured results: title, URL, snippet, and (for advanced depth) extracted page content. For simple lookups, one search is enough. For research tasks, call multiple times with different queries — each covering a different angle — before forming a conclusion.",
+  "description": "Search the web using Tavily. Returns structured results with title, URL, snippet, and (for advanced depth) extracted page content. For simple lookups, one search is enough. For research tasks, call multiple times with different queries — each covering a different angle — before forming a conclusion.",
   "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
