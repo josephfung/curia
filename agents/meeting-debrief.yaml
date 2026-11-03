@@ -244,6 +244,7 @@ system_prompt: |
 
   ```
   Please send this debrief prompt to the principal.
+  Not by the web app: the reply has to come back through the context_bridge below.
 
   Use context_bridge with these parameters:
   {

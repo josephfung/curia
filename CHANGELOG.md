@@ -134,7 +134,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **meeting-debrief** — follow-ups become coordinator tasks that wake at once; the coordinator does them. (#2431)
 - **Voice sends** — a message to anyone goes through the hand-off, never a draft in the principal's inbox. (#2428)
 - **`async-offramp` follow-up** — uses the principal's usual channel unless the caller names one. (#2428)
-- **Principal follow-up channel** — the debrief recap, the clarification hand-off and `debrief.channel` no longer assume Signal or email: with no channel named, the principal's usual one; `debrief.channel` takes any reach channel and has no default. A test fails on a narrower hand-copied channel list in a manifest, shared prompt or agent. (#2440)
+- **Principal follow-up channel** — debrief and clarification hand-offs use the principal's usual channel instead of assuming Signal. (#2440)
 - **`voice.session.ended` turn stats** — adds `unbackedCompletionClaims`: replies claiming done without a tool call. (#2428)
 - **CI bundle import check** — CI builds the backend and fails on imports Node rejects at startup. (#2410)
 - **Meetings skill** — minutes follow-up guidance moves into the `meetings` bundle; usable outside the post-call task. (#2400)

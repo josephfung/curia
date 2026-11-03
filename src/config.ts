@@ -8,7 +8,7 @@ import { AUTONOMY_GATINGS, type AutonomyGating } from './autonomy/band-policy.js
 import type { VerificationConfig } from './verification/types.js';
 import { registrableDomain } from './verification/domain.js';
 import type { TierConfig } from './agents/llm/model-router.js';
-import { FALLBACK_CHANNELS, REACH_CHANNELS, type ReachChannel } from './agents/principal-reach.js';
+import { FALLBACK_CHANNELS, type FallbackChannel } from './agents/principal-reach.js';
 
 // ---------------------------------------------------------------------------
 // Multi-account email config types
@@ -966,8 +966,8 @@ export interface YamlConfig {
 
   /** Meeting debrief agent configuration (spec §17-meeting-debrief.md). */
   debrief?: {
-    /** Channel for debrief prompts, when the deployment pins one. Any reach channel. Default: unset, the principal's usual channel (the coordinator's Reaching the principal order). */
-    channel?: ReachChannel;
+    /** Channel for debrief prompts, when the deployment pins one. Any channel that carries a context bridge (not web, whose send registers no outbound context). Default: unset, the principal's usual channel (the coordinator's Reaching the principal order). */
+    channel?: FallbackChannel;
     /** Minutes before a reminder is sent for unanswered debriefs. Default: 120. */
     reminderDelayMinutes?: number;
     /** TTL in hours for context bridge entries linking replies to the debrief agent. Default: 48. */
@@ -1767,8 +1767,9 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     if (typeof debrief !== 'object' || debrief === null || Array.isArray(debrief)) {
       throw new Error('debrief must be a YAML mapping');
     }
-    if (debrief.channel !== undefined && !(REACH_CHANNELS as readonly unknown[]).includes(debrief.channel)) {
-      throw new Error(`debrief.channel must be one of ${REACH_CHANNELS.join(', ')}, got: "${String(debrief.channel)}"`);
+    // Not web: the debrief reply routes back through context_bridge, which web-send can't carry.
+    if (debrief.channel !== undefined && !(FALLBACK_CHANNELS as readonly unknown[]).includes(debrief.channel)) {
+      throw new Error(`debrief.channel must be one of ${FALLBACK_CHANNELS.join(', ')}, got: "${String(debrief.channel)}"`);
     }
     if (debrief.reminderDelayMinutes !== undefined && (!Number.isInteger(debrief.reminderDelayMinutes) || debrief.reminderDelayMinutes < 1)) {
       throw new Error(`debrief.reminderDelayMinutes must be a positive integer, got: ${debrief.reminderDelayMinutes}`);
