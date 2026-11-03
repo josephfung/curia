@@ -10,4 +10,4 @@
 # must fall AFTER the pinned release's PyPI upload time or the pin cannot resolve.
 # See docs/dev/google-drive.md ("Bumping workspace-mcp").
 WORKSPACE_MCP_VERSION=2.0.1
-WORKSPACE_MCP_EXCLUDE_NEWER=2026-10-22T00:00:00Z
+WORKSPACE_MCP_EXCLUDE_NEWER=2026-10-29T00:00:00Z

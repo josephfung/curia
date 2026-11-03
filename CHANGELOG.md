@@ -262,6 +262,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Band review** — a steered reply carrying unsupported personal details is rewritten, not held showing them. (#2333)
 - **Blocked contacts on CC** — email sends and drafts refuse a blocked contact anywhere on To or CC. (#2273)
 - **Principal-addressed email** — autonomy and identity gates still run when anyone besides the principal receives it. (#2273)
+- **workspace-mcp dependencies** — cutoff moved to 2026-10-29 for pyasn1 0.6.5 and pypdf 6.21.4, clearing eleven HIGH advisories. (curia-deploy#366)
 - **workspace-mcp dependencies** — cutoff moved to 2026-10-22 for pypdf 6.21.2, clearing three HIGH advisories (CVE-2026-115572, CVE-2026-115580, CVE-2026-115585). (curia-deploy#335)
 - **workspace-mcp dependencies** — cutoff moved to 2026-10-21, picking up certifi 2026.10.19 and pypdf 6.21.1 in the image; clears a CRITICAL, four MEDIUM and a LOW advisory (GHSA-6q48-6c7w-9gw2, CVE-2026-113792–113795, CVE-2026-113786). (curia-deploy#324)
 - **fastify** — bumped to 5.12.6, clearing a LOW advisory (CVE-2026-107832).
