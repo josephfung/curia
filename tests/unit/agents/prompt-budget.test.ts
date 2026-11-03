@@ -112,8 +112,11 @@ interface AgentBudget {
 // text, which scheduler-list cuts at 160 characters; scheduler-list and scheduler-update point at it:
 // 84,003 over 76 local tools (main's tree measured 83,267, under its 83,284). The budget is set
 // to that measurement.
+// web-send takes context_bridge again (#2440): a phone-app delivery registered no outbound
+// context, so a clarification or debrief answered in the app could not route back: +155 bytes,
+// 84,158 over 76 local tools. The budget rises by exactly that delta.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 84_003, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 84_158, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   // Standing rules moved to a pinned document (#2339): the config-store JSON-array steps came
