@@ -389,8 +389,7 @@ export class BriefingService {
   }
 
   private async loadModel(from: Date, to: Date, timezone: string): Promise<BriefingWindow> {
-    const result = await this.deps.pool.query<{ histogram: unknown; saved_calls: unknown; undescribed_by_day: unknown; hiccup_roots: unknown }>(
-      HISTOGRAM_SQL,
+    const result = await this.queryModel(
       [from, to, new Date(to.getTime() + DELEGATION_TAIL_MS), timezone, MAX_DELEGATION_DEPTH, visibleToolNames(), hiddenToolNames()],
     );
     const row = result.rows[0];
@@ -419,6 +418,32 @@ export class BriefingService {
       minutesByDay: model.days.map((day) => perDay.get(day.key) ?? 0),
       hiccupRoots: parseHiccupRoots(row?.hiccup_roots),
     };
+  }
+
+  /**
+   * HISTOGRAM_SQL on its own connection with JIT off. The planner overestimates
+   * the job count, so JIT compiled the query on every read: on prod that was
+   * 0.86 s of a 1.7 s read, against 0.55 s for the whole read without it (#2350).
+   * A connection that fails part way may still have JIT off, so it is destroyed
+   * instead of returned to the pool.
+   */
+  private async queryModel(params: unknown[]) {
+    const client = await this.deps.pool.connect();
+    let failure: Error | undefined;
+    try {
+      await client.query('SET jit = off');
+      const result = await client.query<{ histogram: unknown; saved_calls: unknown; undescribed_by_day: unknown; hiccup_roots: unknown }>(
+        HISTOGRAM_SQL,
+        params,
+      );
+      await client.query('RESET jit');
+      return result;
+    } catch (err) {
+      failure = err instanceof Error ? err : new Error(String(err));
+      throw err;
+    } finally {
+      client.release(failure);
+    }
   }
 
   private async openTaskCounts(now: Date): Promise<{ total: number; overdue: number }> {
@@ -507,6 +532,13 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
  * cannot see a dry run, an unplaced hold, or a scratch note. An undescribed call
  * contributes only to its day's count: the default depends on the name being
  * absent, not on the payload.
+ *
+ * Read cost (#2350, measured on prod with ~1.5M audit_log rows): `calls` reaches
+ * each task's invokes and each invoke's result through idx_audit_log_parent_event_id.
+ * The OFFSET 0 keeps the planner from flattening those lookups into a join, which
+ * it costed as a seq scan of every invoke in the table. Input and data are built
+ * in `saved`, only for the calls that need them, because reading them unpacks
+ * each payload in full.
  */
 const HISTOGRAM_SQL = `
 WITH RECURSIVE chain AS (
@@ -544,6 +576,8 @@ calls AS (
   SELECT
     c.root_id,
     c.root_ts,
+    i.id AS invoke_id,
+    r.id AS result_id,
     COALESCE(
       CASE
         WHEN i.target_type = 'skill'
@@ -569,7 +603,27 @@ calls AS (
       WHEN r.outcome IN ('failure', 'error', 'denied') THEN 'bad'
       WHEN r.payload->'result'->>'success' = 'true' THEN 'ok'
       ELSE 'bad'
-    END AS kind,
+    END AS kind
+  FROM chain c
+  CROSS JOIN LATERAL (
+    SELECT inv.id, inv.target_type, inv.target_id, inv.payload
+    FROM audit_log inv
+    WHERE inv.parent_event_id = c.id::text
+      AND inv.event_type = ANY(ARRAY['tool.invoke', 'skill.invoke']::text[])
+    OFFSET 0
+  ) i
+  CROSS JOIN LATERAL (
+    SELECT res.id, res.target_type, res.target_id, res.outcome, res.payload
+    FROM audit_log res
+    WHERE res.parent_event_id = i.id::text
+      AND res.event_type = ANY(ARRAY['tool.result', 'skill.result']::text[])
+    OFFSET 0
+  ) r
+),
+saved AS (
+  SELECT
+    calls.root_ts,
+    calls.tool_name,
     CASE
       WHEN jsonb_typeof(i.payload->'input') = 'object'
       THEN (i.payload->'input') - ARRAY['body', 'content', 'message', 'prompt', 'html', 'text']
@@ -580,11 +634,11 @@ calls AS (
       THEN ((r.payload->'result'->'data') - ARRAY['body', 'content', 'message', 'html', 'text']) #- '{document,body}'::text[]
       ELSE NULL
     END AS data
-  FROM audit_log r
-  JOIN audit_log i ON r.parent_event_id = i.id::text
-  JOIN chain c ON i.parent_event_id = c.id::text
-  WHERE r.event_type = ANY(ARRAY['tool.result', 'skill.result']::text[])
-    AND i.event_type = ANY(ARRAY['tool.invoke', 'skill.invoke']::text[])
+  FROM calls
+  JOIN audit_log i ON i.id = calls.invoke_id
+  JOIN audit_log r ON r.id = calls.result_id
+  WHERE calls.kind = 'ok'
+    AND calls.tool_name = ANY($6::text[])
 ),
 results AS (
   SELECT root_id, kind
@@ -644,9 +698,7 @@ SELECT
       'input', input,
       'data', data
     )), '[]'::jsonb)
-    FROM calls
-    WHERE kind = 'ok'
-      AND tool_name = ANY($6::text[])
+    FROM saved
   ) AS saved_calls,
   (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(

@@ -11,7 +11,7 @@ const NOW = new Date('2026-11-03T15:00:00.000Z');
 
 function service(query: ReturnType<typeof vi.fn>): BriefingService {
   const deps: BriefingDeps = {
-    pool: { query } as unknown as BriefingDeps['pool'],
+    pool: { query, connect: async () => ({ query, release: vi.fn() }) } as unknown as BriefingDeps['pool'],
     actionLogRepo: {
       findAllPending: vi.fn(),
       findById: vi.fn(),
@@ -66,6 +66,33 @@ describe('BriefingService model cache', () => {
     expect(modelReads()).toBe(1);
     expect(stats.openTasks).toEqual({ total: 3, overdue: 1 });
     expect(stats).not.toHaveProperty('contacts');
+  });
+
+  it('reads the model with JIT off, and resets it before the connection goes back', async () => {
+    const { query } = pool();
+    await service(query).stats(NOW);
+    const sqls = query.mock.calls.map(([sql]) => String(sql));
+    const read = sqls.findIndex((sql) => sql.includes('WITH RECURSIVE chain'));
+    expect(sqls[read - 1]).toBe('SET jit = off');
+    expect(sqls[read + 1]).toBe('RESET jit');
+  });
+
+  it('destroys the connection when the model read fails', async () => {
+    const release = vi.fn();
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('WITH RECURSIVE chain')) throw new Error('canceled');
+      return { rows: [{ total: 0, overdue: 0 }] };
+    });
+    const s = new BriefingService({
+      pool: { query, connect: async () => ({ query, release }) } as unknown as BriefingDeps['pool'],
+      actionLogRepo: { findAllPending: vi.fn(), findById: vi.fn(), resolveRow: vi.fn(), rejectStaleApproval: vi.fn(), insert: vi.fn() },
+      taskRepo: { listTasks: vi.fn(), updateTask: vi.fn() },
+      contactService: { findContactBySystemRole: vi.fn().mockResolvedValue({ id: 'p', timezone: 'UTC' }) },
+      officeTimezone: 'UTC',
+      logger: createSilentLogger(),
+    });
+    await expect(s.stats(NOW)).rejects.toThrow('canceled');
+    expect(release).toHaveBeenCalledWith(expect.any(Error));
   });
 
   it('serves a stale model at once and refreshes it behind the response', async () => {

@@ -46,7 +46,7 @@ describeIf('briefing service against Postgres', () => {
       const yesterday = addCalendarDays(today, -1);
       const bus = { publish: async () => {} } as unknown as EventBus;
       const service = new BriefingService({
-        pool: client as unknown as pg.Pool,
+        pool: asPool(client),
         actionLogRepo: new ActionLogRepo(client as unknown as pg.Pool, logger),
         taskRepo: new TaskRepo(client as unknown as pg.Pool, bus, logger),
         contactService: { findContactBySystemRole: async () => null },
@@ -322,7 +322,7 @@ describeIf('briefing service against Postgres', () => {
       const now = await emptyFortnight(client);
       const bus = { publish: async () => {} } as unknown as EventBus;
       const service = new BriefingService({
-        pool: client as unknown as pg.Pool,
+        pool: asPool(client),
         actionLogRepo: new ActionLogRepo(client as unknown as pg.Pool, logger),
         taskRepo: new TaskRepo(client as unknown as pg.Pool, bus, logger),
         contactService: { findContactBySystemRole: async () => null },
@@ -481,6 +481,16 @@ async function emptyFortnight(client: pg.PoolClient): Promise<Date> {
     if (found.rowCount === 0) return day;
   }
   throw new Error('no unused audit_log fortnight for the briefing test');
+}
+
+/**
+ * The test's client, shaped as the pool the service reads from, so every read
+ * sees the seeded rows in the open transaction. connect() hands back the same
+ * client; release() leaves it to the test.
+ */
+function asPool(client: pg.PoolClient): pg.Pool {
+  const query = client.query.bind(client);
+  return { query, connect: async () => ({ query, release: () => {} }) } as unknown as pg.Pool;
 }
 
 async function seedAudit(

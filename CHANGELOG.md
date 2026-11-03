@@ -285,7 +285,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Console home tiles** — numbers come from a background-refreshed cache and shimmer while loading. (#2350)
+- **Console home tiles** — stats query 6× faster; tiles read a background-refreshed cache and shimmer while loading. (#2350)
 - **Console secret rows** — a configured key can be replaced in place. (#2445)
 - **Phone app icon** — white mark on near-black, so it stays legible in iOS dark mode. (#2341)
 - **Offline page** — says whether the device is offline or can't reach Curia; reconnects automatically. (#2341)
