@@ -84,6 +84,9 @@ export class CeoInboxLabelHandler implements ToolHandler {
 
       // Step 5: Write back the merged folder set
       const result = await client.updateMessageFolders(messageId, mergedFolders);
+      // The computed fallback still lists SENT/DRAFT even though the client dropped them from
+      // the request (#2426). That is the state Gmail should end up in, since it keeps those
+      // labels itself, but it is our expectation, not something Nylas confirmed.
       // Fall back to the merged set we computed if Nylas omits folders from the response
       if (result.folders.length === 0) {
         ctx.log.warn({ messageId }, 'ceo-inbox-label: Nylas returned empty folders on write — using computed merge result');

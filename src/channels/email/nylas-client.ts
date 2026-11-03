@@ -611,7 +611,7 @@ export class NylasClient {
       await this.nylas.messages.update({
         identifier: this.grantId,
         messageId,
-        requestBody: { folders: currentFolders },
+        requestBody: { folders: withoutReadOnlySystemLabels(currentFolders) },
         ...this.budgetOverrides(budget, 'archiveMessage'),
       });
       this.log.info({ messageId, updatedFolders: currentFolders }, 'message archived successfully');

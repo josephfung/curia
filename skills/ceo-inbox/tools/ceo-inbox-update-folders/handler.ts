@@ -123,6 +123,9 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
 
       const result = await client.updateMessageFolders(messageId, updatedFolders);
 
+      // The computed fallback still lists SENT/DRAFT even though the client dropped them from
+      // the request (#2426). That is the state Gmail should end up in, since it keeps those
+      // labels itself, but it is our expectation, not something Nylas confirmed.
       // Nylas sometimes omits the folders field from the PUT response (implementation-defined).
       // Fall back to the folder list we computed locally to avoid returning [] to the agent.
       // @TODO: A 200 with empty folders could also be a silent no-op write, which is
