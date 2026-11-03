@@ -347,11 +347,12 @@ describe('HealthService tavily canary (#2242)', () => {
     return results.find((r) => r.name === 'tavily');
   }
 
-  it('is skipped when no key resolves', async () => {
+  it('reports keyless mode, without probing, when no key resolves (#2445)', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     const result = await tavilyResult(makeDeps({ resolveTavilyApiKey: vi.fn().mockResolvedValue(null) }));
     expect(result?.status).toBe('skipped');
+    expect(result?.detail).toMatch(/keyless/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

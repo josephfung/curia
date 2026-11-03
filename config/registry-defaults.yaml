@@ -14,7 +14,8 @@
 # repeated here. Credential-dependent members are kept off by a gate the tool itself
 # declares, not by omission: reconciliation skips a gated member (no row) and the first
 # boot after its integration is configured enrolls it. Two gates exist:
-#   - install.requires_secrets (vault keys): web-search (tavily_api_key).
+#   - install.requires_secrets (vault keys): no shipped tool uses it today. (web-search
+#     searches keyless without its Tavily key, so it is not gated — #2445.)
 #   - an integration capability boot didn't build: the calendar-* tools declare
 #     nylasCalendarClient, which exists only with a Nylas key + ceo_nylas_grant_id.
 # MCP-projected skills (google-workspace, etc.) are NOT listed — they appear in

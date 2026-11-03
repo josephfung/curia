@@ -86,7 +86,7 @@ describeIf('vault routes', () => {
   it('rejects setting a secret no skill declares', async () => {
     const res = await app.inject({ method: 'PUT', url: '/api/vault/secrets/vault_rt_undeclared', headers: hdr, payload: { value: 'x' } });
     expect(res.statusCode).toBe(400);
-    expect((res.json() as { error: string }).error).toMatch(/not a required secret/);
+    expect((res.json() as { error: string }).error).toMatch(/not a secret declared/);
     // Nothing was written.
     expect(await new SecretsService(pool, KEY, logger).get('vault_rt_undeclared')).toBeNull();
   });

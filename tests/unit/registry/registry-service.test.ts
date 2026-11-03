@@ -222,6 +222,18 @@ describe('RegistryService secrets gate', () => {
     await expect(svc.install('tool', 'web-search', 'web-app'))
       .rejects.toThrow(/vault is unavailable/);
   });
+
+  // #2445: optional secrets never gate, but they are writable through the vault routes.
+  it('does not gate on optional secrets, and declares them alongside required ones', async () => {
+    const svc = new RegistryService(skillRepo, new FakeRepo(), [], [], new FakeSecrets([]));
+    svc.setDiscovery('tool', [
+      { name: 'opt', metadata: { name: 'opt', description: 'd', version: '1.0.0', optionalSecrets: [{ name: 'opt_key', purpose: 'p' }] } },
+      discWithSecrets('req', ['req_key']),
+    ]);
+    const entry = await svc.installAndEnable('tool', 'opt', 'web-app');
+    expect(entry.state).toBe('enabled');
+    expect(svc.declaredSecretNames().sort()).toEqual(['opt_key', 'req_key']);
+  });
 });
 
 describe('RegistryService.list — skill bundle metadata', () => {
