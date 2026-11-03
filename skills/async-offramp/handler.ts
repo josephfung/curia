@@ -606,7 +606,7 @@ export class AsyncOfframpHandler implements ToolHandler {
           try {
             await bus.publishDetached('dispatch', task);
             settleOrRelease();
-            ctx.log.info({ taskEventId, forwardTaskId: task.id }, 'voice hand-off: result forwarded to the principal');
+            ctx.log.info({ taskEventId, forwardTaskId: task.id }, 'voice hand-off: forward task queued for the coordinator to send');
             return;
           } catch (err) {
             const delay = FORWARD_RETRY_DELAYS_MS[attempt];
