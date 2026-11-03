@@ -54,14 +54,23 @@ const MODES = new Set(['now', 'after_call']);
 type Mode = 'now' | 'after_call';
 /** How long a now hand-off holds the call before it turns into a follow-up. */
 export const NOW_MODE_WAIT_MS = 60_000;
-/** A reply later than this is not forwarded; the listener stops (the bus has no unsubscribe). */
-const LATE_FORWARD_WINDOW_MS = 30 * 60_000;
+/**
+ * A leak guard, not a deadline. A coordinator turn has no wall-clock limit (up
+ * to 20 rounds of 10-minute model calls and 15-minute delegate waits, about
+ * 8 hours at worst), and a late reply must still reach the principal.
+ */
+const LATE_FORWARD_WINDOW_MS = 24 * 60 * 60_000;
 /** Cap the in-process dedup map so a long-lived process cannot grow without bound. */
 const MAX_DEDUP_ENTRIES = 5_000;
 
 interface DedupEntry {
   taskEventId: string;
   followUpChannel: FollowUpChannel;
+  /**
+   * A now hand-off that finished: a repeat of the brief gets this back instead
+   * of a new task, so finished work and its sends are not redone.
+   */
+  settled?: { result: string; sent: string[] };
 }
 
 /** Module-scoped so duplicate tool calls in the same process hit the same map.
@@ -98,9 +107,10 @@ function buildIdempotencyKey(
 ): string {
   // Always scope to conversation — an LLM-supplied key like "deck" must not
   // collide across sessions (CodeRabbit #1617). A now hand-off waits for its
-  // result, so it never reuses an after_call entry, even under the same key.
+  // result, so it never reuses an after_call entry; the mode leads the key so
+  // no key text can collide across modes.
   if (explicitKey) {
-    return `explicit:${conversationId ?? 'unknown'}|${explicitKey}${mode === 'now' ? '|now' : ''}`;
+    return `explicit:${mode}:${conversationId ?? 'unknown'}|${explicitKey}`;
   }
   const material = `${conversationId ?? 'unknown'}|${normalizeBrief(brief)}|${followUpChannel}`;
   return createHash('sha256').update(material).digest('hex');
@@ -232,6 +242,13 @@ function forwardText(response: AgentResponseEvent): string {
   return response.payload.content;
 }
 
+/** Mark this hand-off's entry finished, if it still owns it, so a repeat returns the result. */
+function settleDedup(key: string, taskEventId: string, response: AgentResponseEvent): void {
+  const entry = enqueuedByKey.get(key);
+  if (entry?.taskEventId !== taskEventId) return;
+  entry.settled = { result: response.payload.content, sent: response.payload.sends ?? [] };
+}
+
 /** Release a dedup entry only if it still belongs to this hand-off (eviction can replace it). */
 function releaseDedup(key: string, taskEventId: string): void {
   if (enqueuedByKey.get(key)?.taskEventId === taskEventId) enqueuedByKey.delete(key);
@@ -337,7 +354,14 @@ export class AsyncOfframpHandler implements ToolHandler {
           task_event_id: prior.taskEventId,
           follow_up_channel: prior.followUpChannel,
           deduplicated: true,
-          ...(mode === 'now'
+          ...(mode === 'now' && prior.settled
+            ? {
+              completed: true,
+              result: prior.settled.result,
+              sent: prior.settled.sent,
+              note: 'This was already done. Tell the caller what happened; do not do it again.',
+            }
+            : mode === 'now'
             ? {
               completed: false,
               still_working: true,
@@ -572,9 +596,13 @@ export class AsyncOfframpHandler implements ToolHandler {
         for (let attempt = 0; ; attempt += 1) {
           try {
             await bus.publishDetached('dispatch', task);
-            // Released only once the forward settles: until then a repeat of the
-            // brief is still this hand-off, not new work.
-            releaseDedup(idempotencyKey, taskEventId);
+            // A finished result stays on the entry so a repeat is answered, not
+            // redone. A failure or a question frees it: the next brief is new work.
+            if (classifyReply(response).kind === 'final' && !response.payload.isError) {
+              settleDedup(idempotencyKey, taskEventId, response);
+            } else {
+              releaseDedup(idempotencyKey, taskEventId);
+            }
             ctx.log.info({ taskEventId, forwardTaskId: task.id }, 'voice hand-off: result forwarded to the principal');
             return;
           } catch (err) {
@@ -600,12 +628,14 @@ export class AsyncOfframpHandler implements ToolHandler {
         if (phase === 'waiting') {
           phase = 'closed';
           clearTimeout(waitTimer);
-          // Settled on the call: a repeat of this brief is a new request (a retry after a failure).
-          releaseDedup(idempotencyKey, taskEventId);
+          // Finished on the call: a repeat is answered with this result. A failure
+          // or a question frees the entry, so a retry or a fuller brief runs.
+          if (reply.kind === 'final' && !response.payload.isError) settleDedup(idempotencyKey, taskEventId, response);
+          else releaseDedup(idempotencyKey, taskEventId);
           // The turn can still be cancelled before the result is spoken (barge-in,
           // hang-up). A turn that finishes normally is never aborted afterwards, so
           // an abort from here on means the caller did not hear it all.
-          if (signal && !response.payload.isError) {
+          if (signal) {
             signal.addEventListener('abort', () => { void forward(response); }, { once: true });
           }
           resolve(reply.kind === 'question'

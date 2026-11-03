@@ -589,6 +589,59 @@ describe('AsyncOfframpHandler mode now (#2428)', () => {
     expect(published.filter((event) => event.type === 'agent.task')).toHaveLength(2);
   });
 
+  // CodeRabbit round 4 on PR #2433.
+  it('answers a repeat of a finished hand-off with its result instead of redoing it', async () => {
+    const { bus, published } = liveBus((task) => response(task, { content: 'Message sent.', sends: ['signal-send'] }));
+    await handler.execute(makeCtx(bus, { brief: 'Text her', mode: 'now' }));
+    const repeat = await handler.execute(makeCtx(bus, { brief: 'Text her', mode: 'now' }));
+    expect(repeat.success && repeat.data).toMatchObject({ deduplicated: true, completed: true, result: 'Message sent.', sent: ['signal-send'] });
+    expect(published.filter((event) => event.type === 'agent.task')).toHaveLength(1);
+  });
+
+  it('answers a repeat with the result after a cut-off reply was forwarded', async () => {
+    const controller = new AbortController();
+    const { bus, published } = liveBus((task) => response(task, { content: 'Sent it.', sends: ['email-send'] }));
+    await handler.execute(makeCtx(bus, { brief: 'Email him', mode: 'now' }, { inputSignal: controller.signal }));
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(published).toHaveLength(2);
+    const repeat = await handler.execute(makeCtx(bus, { brief: 'Email him', mode: 'now' }));
+    expect(repeat.success && repeat.data).toMatchObject({ deduplicated: true, completed: true, sent: ['email-send'] });
+    expect(published).toHaveLength(2);
+  });
+
+  it('forwards a failed result whose turn was cancelled before it was heard', async () => {
+    const controller = new AbortController();
+    const { bus, published } = liveBus((task) => response(task, { content: 'Sent, then failed.', isError: true }));
+    await handler.execute(makeCtx(bus, { brief: 'Two steps', mode: 'now' }, { inputSignal: controller.signal }));
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((published[1] as AgentTaskEvent).payload.content).toContain('Sent, then failed.');
+  });
+
+  it('still forwards a reply that arrives hours after the call moved on', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bus, published, respond } = liveBus();
+      const pending = handler.execute(makeCtx(bus, { brief: 'Very long job', mode: 'now' }));
+      await vi.advanceTimersByTimeAsync(NOW_MODE_WAIT_MS + 1);
+      await pending;
+      await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
+      await respond(response(published[0] as AgentTaskEvent, { content: 'Finally done.' }));
+      expect((published[1] as AgentTaskEvent).payload.content).toContain('Finally done.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cannot collide an explicit key across modes', async () => {
+    const { bus, published } = liveBus((task) => response(task, { content: 'ok' }));
+    await handler.execute(makeCtx(bus, { brief: 'A', idempotency_key: 'x', mode: 'now' }));
+    const other = await handler.execute(makeCtx(bus, { brief: 'B', idempotency_key: 'x|now' }));
+    expect(other.success && other.data).toMatchObject({ deduplicated: false });
+    expect(published.filter((event) => event.type === 'agent.task')).toHaveLength(2);
+  });
+
   it('keeps after_call as the default and rejects an unknown mode', async () => {
     const { bus, published } = liveBus();
     const result = await handler.execute(makeCtx(bus, { brief: 'Research this' }));
