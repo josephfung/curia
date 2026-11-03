@@ -21,6 +21,18 @@ describe('migrateLegacyTavilyKey', () => {
     expect(Object.fromEntries(vault.store)).toEqual({ tavily_api_key: 'tvly-abc' });
   });
 
+  // #2449 review: deleting tavily_api_key (to revoke it, or to go back to keyless search,
+  // #2445) must survive the next boot. The move leaves no user.* copy to restore from.
+  it('does not restore tavily_api_key on the next boot after the operator deletes it', async () => {
+    const vault = fakeVault({ 'user.tavily_api_key': 'tvly-abc' });
+    await expect(migrateLegacyTavilyKey(vault, logger)).resolves.toBe('moved');
+
+    vault.store.delete('tavily_api_key'); // the operator removes the key
+    await expect(migrateLegacyTavilyKey(vault, logger)).resolves.toBe('nothing_to_move');
+    expect(vault.store.get('tavily_api_key')).toBeUndefined();
+    expect(vault.set).toHaveBeenCalledTimes(1);
+  });
+
   it('leaves both keys alone when tavily_api_key is already set', async () => {
     const vault = fakeVault({ 'user.tavily_api_key': 'tvly-old', tavily_api_key: 'tvly-new' });
     await expect(migrateLegacyTavilyKey(vault, logger)).resolves.toBe('kept_existing');

@@ -77,11 +77,13 @@ const manifest = JSON.parse(readFileSync(join(import.meta.dirname, 'tool.json'),
 const DECLARED = new Set(manifest.secrets);
 
 const catalog = yaml.load(readFileSync(join(import.meta.dirname, 'catalog.yaml'), 'utf-8')) as {
-  tasks: Array<{ id: string; completion_check: { type: string; keys?: string[] } }>;
+  tasks: Array<{ id: string; completion_check: { type: string; keys?: string[] }; optional_upgrade?: { keys: string[] } }>;
 };
-const CATALOG_VAULT_KEYS = catalog.tasks.flatMap(t =>
-  t.completion_check.type === 'vault_secrets_all' ? (t.completion_check.keys ?? []) : [],
-);
+// Every key the handler reads: completion checks plus optional upgrades (#2445).
+const CATALOG_VAULT_KEYS = catalog.tasks.flatMap(t => [
+  ...(t.completion_check.type === 'vault_secrets_all' ? (t.completion_check.keys ?? []) : []),
+  ...(t.optional_upgrade?.keys ?? []),
+]);
 
 function makeCtx(overrides: Partial<{
   secrets: Record<string, string>;
@@ -153,12 +155,12 @@ describe('setup-status', () => {
       expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus']));
     });
 
-    it('checks the Tavily key web-search reads', () => {
+    it('offers the Tavily key web-search reads as the upgrade', () => {
       const webSearch = JSON.parse(
         readFileSync(join(import.meta.dirname, '../../../web/tools/web-search/tool.json'), 'utf-8'),
       ) as { secrets: string[] };
       const webResearch = catalog.tasks.find(t => t.id === 'web_research');
-      expect(webResearch?.completion_check.keys).toEqual(webSearch.secrets);
+      expect(webResearch?.optional_upgrade?.keys).toEqual(webSearch.secrets);
     });
   });
 
@@ -323,9 +325,8 @@ describe('setup-status', () => {
         data: { tasks: Array<{ id: string; vault_keys?: string[] }> };
       }).data;
       // vault_secrets_all task — keys must be present for agent to call system-secret-capture-request
-      const webResearch = data.tasks.find(t => t.id === 'web_research');
-      expect(webResearch?.vault_keys).toEqual(['tavily_api_key']);
-      // non-vault tasks — vault_keys must be absent
+      // web research works keyless now (#2445); email checks the channel, not keys (#2409)
+      expect(data.tasks.find(t => t.id === 'web_research')?.vault_keys).toBeUndefined();
       expect(data.tasks.find(t => t.id === 'email')?.vault_keys).toBeUndefined();
       const persona = data.tasks.find(t => t.id === 'persona');
       expect(persona?.vault_keys).toBeUndefined();
@@ -376,11 +377,39 @@ describe('setup-status', () => {
     });
   });
 
+  describe('web research (keyless, #2445)', () => {
+    type UpgradeTask = {
+      id: string;
+      status: string;
+      vault_keys?: string[];
+      optional_upgrade?: { vault_keys: string[]; configured: boolean; value_prop: string; credential_how_to: string };
+    };
+    async function webResearch(ctx: ToolContext): Promise<UpgradeTask | undefined> {
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      return (result as { success: true; data: { tasks: UpgradeTask[] } }).data.tasks.find(t => t.id === 'web_research');
+    }
+
+    it('is done with no Tavily key, and offers the key as an unconfigured optional upgrade', async () => {
+      const task = await webResearch(makeCtx());
+      expect(task?.status).toBe('done');
+      expect(task?.vault_keys).toBeUndefined();
+      expect(task?.optional_upgrade?.vault_keys).toEqual(['tavily_api_key']);
+      expect(task?.optional_upgrade?.configured).toBe(false);
+      expect(task?.optional_upgrade?.credential_how_to).toMatch(/tavily\.com/);
+    });
+
+    it('marks the upgrade configured once tavily_api_key is set', async () => {
+      const task = await webResearch(makeCtx({ secrets: { tavily_api_key: 'tvly-abc' } }));
+      expect(task?.status).toBe('done');
+      expect(task?.optional_upgrade?.configured).toBe(true);
+    });
+  });
+
   describe('status across simulated restart', () => {
     it('re-derives status correctly without any stored progress', async () => {
       // Simulate restart: no storeData progress object, but vault keys present
       const ctx = makeCtx({
-        secrets: { tavily_api_key: 'tvly-abc' },
         emailChannelStatus: async (): Promise<EmailChannelStatus> => 'running',
         behavioralPreferences: ['prefers bullet points'],
         activeJobs: [{ intentAnchor: 'weekly_debrief', status: 'pending' }],
@@ -408,11 +437,12 @@ describe('setup-status manifest covers the catalog', () => {
     const dir = import.meta.dirname;
     const manifest = JSON.parse(await readFile(join(dir, 'tool.json'), 'utf8')) as { secrets: string[] };
     const catalog = yaml.load(await readFile(join(dir, 'catalog.yaml'), 'utf8')) as {
-      tasks: Array<{ completion_check?: { type: string; keys?: string[] } }>;
+      tasks: Array<{ completion_check?: { type: string; keys?: string[] }; optional_upgrade?: { keys: string[] } }>;
     };
-    const read = catalog.tasks.flatMap((task) =>
-      task.completion_check?.type === 'vault_secrets_all' ? (task.completion_check.keys ?? []) : [],
-    );
+    const read = catalog.tasks.flatMap((task) => [
+      ...(task.completion_check?.type === 'vault_secrets_all' ? (task.completion_check.keys ?? []) : []),
+      ...(task.optional_upgrade?.keys ?? []),
+    ]);
     expect(read.length).toBeGreaterThan(0);
     const missing = read.filter((key) => !manifest.secrets.includes(key));
     expect(missing).toEqual([]);
