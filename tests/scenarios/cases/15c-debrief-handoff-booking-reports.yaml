@@ -1,0 +1,97 @@
+# Case 15c (#2431): the counterpart of 15b. A debrief follow-up whose outcome the principal
+# does not know yet (the booked time) is reported once. Its progress note says "Tell the
+# principal the outcome", which is the task asking, so SCHEDULER_DELIVERY
+# (src/agents/prompts/turn-guidance.ts) has the coordinator send one message to `principal`.
+name: debrief follow-up booking wake reports once
+description: >
+  The coordinator wakes on a task meeting-debrief handed it: put a 30-minute call with Sam
+  Patel on the calendar next week and invite him. Calendar books Thursday at 10:00 and
+  invites Sam. The coordinator completes the task and sends the principal one message with
+  the booked time.
+tags: [task-wake, meeting-debrief, calendar]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Patel
+      tier: known
+      channel: email
+      identifier: sam@patel.example.test
+inbound:
+  from: task-wake
+  task:
+    id: 7b3c4d5e-6f70-4812-9a3b-15c000000001
+    title: Book a 30-minute call with Sam Patel next week and invite him
+    intent: Book a 30-minute call with Sam Patel next week and invite him.
+    tags: [debrief-followup]
+    notes:
+      - at: "{{at:now-1m}}"
+        note: >
+          From the Coffee with Sam Patel debrief. Principal's words: "Set up a 30-minute
+          call with Sam next week about the pilot." Sam Patel's contact ID: {{contact:sam}}.
+          Tell the principal the outcome.
+tool_stubs:
+  delegate:
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        response: >
+          Booked "Pilot call with Sam Patel" on Thursday at 10:00 AM for 30 minutes on the
+          principal's calendar and invited Sam Patel (sam@patel.example.test).
+    - match: {}
+      return:
+        agent: other
+        response: Nothing on file for this request.
+  task-complete:
+    - match: {}
+      return:
+        task_id: 7b3c4d5e-6f70-4812-9a3b-15c000000001
+        title: Book a 30-minute call with Sam Patel next week and invite him
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  # A wake turn sometimes records its outcome before ending.
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: books_via_calendar
+    weight: critical
+    description: Has the calendar specialist book the call.
+    check:
+      called: delegate
+      with: { agent: calendar }
+  - id: tells_principal_once
+    weight: critical
+    description: Sends exactly one message, to the principal by the `principal` alias.
+    check:
+      any_of:
+        - called: email-send
+          with: { to: principal }
+          success: true
+          min: 1
+          max: 1
+        - called: [signal-send, sms-send, slack-send]
+          with: { recipient: principal }
+          success: true
+          min: 1
+          max: 1
+  - id: no_other_sends
+    weight: critical
+    description: Sends one message in all, on any channel.
+    check:
+      called: [signal-send, email-send, sms-send, slack-send]
+      success: true
+      max: 1
+  - id: completes_task
+    weight: important
+    description: Completes the task.
+    check:
+      called: task-complete
+      with: { task_id: 7b3c4d5e-6f70-4812-9a3b-15c000000001 }
+  - id: conveys_time
+    weight: important
+    description: The message to the principal says the call with Sam is booked for Thursday at 10:00 AM.
+failure_modes:
+  - Books the call and sends nothing
+  - Sends the update on two channels

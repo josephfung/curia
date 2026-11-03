@@ -91,6 +91,8 @@ describe('EmailDraftSaveHandler — baseline', () => {
     expect(result.success).toBe(true);
     expect((result as { data: Record<string, unknown> }).data).toEqual({
       draft_id: 'draft-abc',
+      mailbox: 'curia',
+      account: 'ceo',
       to_identity: 'work',
       contact_id: ALICE_ID,
     });
@@ -202,7 +204,7 @@ describe('EmailDraftSaveHandler — recipient reference (#2041)', () => {
     const result = await new EmailDraftSaveHandler().execute(makeCtx({ input: { ...BASE_INPUT, to: 'principal' } }));
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data).toEqual({ draft_id: 'draft-abc', to_identity: 'primary' });
+      expect(result.data).toEqual({ draft_id: 'draft-abc', mailbox: 'curia', account: 'ceo', to_identity: 'primary' });
     }
   });
 });
@@ -249,6 +251,23 @@ describe('EmailDraftSaveHandler — principal mailbox', () => {
     const gateway = makeMockGateway({ createEmailDraft: create, isPrincipalMailbox: principalMailbox() });
     const result = await new EmailDraftSaveHandler().execute(makeCtx({ agentId: 'meeting-debrief', outboundGateway: gateway }));
     expect(result.success).toBe(true);
+  });
+});
+
+// #2431: an agent told the principal "check your drafts" for a draft in Curia's mailbox.
+describe('EmailDraftSaveHandler — mailbox in the result', () => {
+  it("names Curia's mailbox and the primary account when account is omitted", async () => {
+    const { account: _omitted, ...input } = BASE_INPUT;
+    const result = await new EmailDraftSaveHandler().execute(makeCtx({ agentId: 'meeting-debrief', input }));
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ mailbox: 'curia', account: 'primary' });
+  });
+
+  it("names the principal's mailbox when the account is bound to the principal's address", async () => {
+    const gateway = makeMockGateway({ isPrincipalMailbox: vi.fn((account?: string) => account === 'ceo') });
+    const result = await new EmailDraftSaveHandler().execute(makeCtx({ agentId: 'meeting-debrief', outboundGateway: gateway }));
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ mailbox: 'principal', account: 'ceo' });
   });
 });
 

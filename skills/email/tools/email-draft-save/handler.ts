@@ -3,8 +3,9 @@
 // Saves a draft email without sending it. Routes via OutboundGateway.createEmailDraft(),
 // which runs the blocked-contact check and converts markdown to HTML.
 //
-// Use this for the NEEDS DRAFT triage category: coordinator writes the draft,
-// the principal reviews and sends it from their email client.
+// The draft lands in one of Curia's own mailboxes (the gateway's email accounts), which
+// the principal does not see. The result says which mailbox, so an agent cannot report
+// the draft as being in the principal's drafts (#2431).
 //
 // The coordinator drafts only in Curia's own mailboxes. The principal's mailbox belongs
 // to the ceo-inbox specialist, which keeps its own draft tools, so a coordinator call
@@ -158,6 +159,10 @@ export class EmailDraftSaveHandler implements ToolHandler {
       success: true,
       data: {
         draft_id: result.draftId,
+        // Where the draft is (#2431). "curia" unless an operator bound the principal's own
+        // address as an email account and this draft went there.
+        mailbox: ctx.outboundGateway.isPrincipalMailbox(accountId) ? 'principal' : 'curia',
+        account: accountId ?? 'primary',
         to_identity: resolved.identityName,
         // Only a UUID the agent passed is echoed; the principal's ID stays out (spec 09).
         ...(resolved.kind === 'contact' ? { contact_id: resolved.contactId } : {}),

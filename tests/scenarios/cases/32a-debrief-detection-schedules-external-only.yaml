@@ -3,8 +3,8 @@
 # seen, all-day and solo events; judge external meetings YES and internal routine ones NO;
 # a YES gets task-create (tag debrief-pending, the event id in the intent anchor) plus the
 # seen: guard; a NO gets the guard only and no task; scheduler-report exactly once; no
-# bullpen post, no prompt. bullpen and email-draft-save succeed, so prompting now is an
-# available wrong path.
+# bullpen post, no prompt. bullpen succeeds, so prompting now is an available wrong path.
+# meeting-debrief has no email tool since #2431.
 name: debrief detection schedules external meetings only
 description: >
   meeting-debrief's 7am/12pm/4pm detection job fires. The rest of today holds five events:
@@ -216,9 +216,9 @@ expected_behaviors:
       max: 1
   - id: silent_run
     weight: critical
-    description: Posts nothing to the bullpen and drafts nothing; a detection run prompts no one.
+    description: Posts nothing to the bullpen; a detection run prompts no one.
     check:
-      not_called: [bullpen-post, bullpen-reply, email-draft-save]
+      not_called: [bullpen-post, bullpen-reply]
   - id: report_counts
     weight: nice-to-have
     description: >

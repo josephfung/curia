@@ -25,7 +25,7 @@ For each thing the minutes record:
 
 - The principal **directed** a change. Do it, even when the call was short. Autonomy gates still apply. Creating or updating a task, and updating a calendar invite that the change requires, are in bounds.
 - A **suggestion** nobody asked you to act on, including your own. Do not do it. If you send a recap, mention it in the first person: "something I haven't acted on yet".
-- Something that goes to a **third party**. Save a draft with `email-draft-save`, or ask in the report. Never send it in a follow-up.
+- Something that goes to a **third party**. Draft it in the principal's mailbox, or ask in the report. Never send it in a follow-up.
 
 Create tasks with owner `ceo`, `curia`, or `external`, taken from who the minutes say owns the work.
 

@@ -54,7 +54,9 @@ describe('meetings bundle', () => {
       instructions.indexOf('### Minutes from elsewhere, or a redo'),
     );
     expect(general).toContain('**directed** a change');
-    expect(general).toContain('email-draft-save');
+    // A third-party draft goes in the principal's mailbox, never Curia's own (#2431).
+    expect(general).toContain("Draft it in the principal's mailbox");
+    expect(general).not.toContain('email-draft-save');
     expect(general).not.toContain('progress note');
     expect(general).not.toContain('this task');
     // Pasted minutes have no link; a required link would invite a made-up one.
