@@ -101,6 +101,9 @@ export class SignalAudioTransport implements AudioTransport {
   // per-call child.on('exit') listener) so they can be flushed centrally on
   // pacat death without leaking one exit listener per backpressured write.
   private pacatDrainWaiters: Array<() => void> = [];
+  // pacat children killed by clearQueuedAudio(). Their exit is expected and
+  // must neither fire close nor mark the current pacat gone.
+  private readonly retiredPacats = new WeakSet<AudioChildProcess>();
 
   constructor(opts: SignalAudioTransportOpts) {
     this.opts = opts;
@@ -109,7 +112,7 @@ export class SignalAudioTransport implements AudioTransport {
   }
 
   async connect(): Promise<void> {
-    const { pulseServer, inputDeviceName, outputDeviceName } = this.opts;
+    const { pulseServer, outputDeviceName } = this.opts;
     // Pass both --server= (what these CLI tools document) and PULSE_SERVER
     // (what the PulseAudio client library actually reads) so behavior is
     // identical regardless of which one a given build of parec/pacat honors.
@@ -124,26 +127,8 @@ export class SignalAudioTransport implements AudioTransport {
       '--raw',
     ], { env });
 
-    this.pacat = this.spawnFn('pacat', [
-      '--server=' + pulseServer,
-      '--device=sink_for_' + inputDeviceName,
-      '--rate=48000',
-      '--channels=1',
-      '--format=s16le',
-      '--raw',
-    ], { env });
-
     this.wireChild(this.parec, 'parec');
-    this.wireChild(this.pacat, 'pacat');
-
-    // Persistent stdin 'error' listener: when pacat dies mid-call, an
-    // in-flight or late write surfaces EPIPE on the stream. Without a
-    // listener, that 'error' would be an unhandled event and crash the
-    // process. It also marks pacat gone so pending backpressure waits settle.
-    this.pacat.stdin?.on('error', (err: Error) => {
-      this.log.debug({ err }, 'pacat stdin error (expected when pacat exits mid-call)');
-      this.markPacatGone();
-    });
+    this.startPacat();
 
     this.parec.stdout?.on('data', (chunk: Buffer) => this.handleInboundChunk(chunk));
 
@@ -153,16 +138,82 @@ export class SignalAudioTransport implements AudioTransport {
     // handlers wired above, which fire close callbacks with 'transport_error'.
   }
 
+  /** Spawn the playback child and make it the one publishAudio writes to. */
+  private startPacat(): void {
+    const { pulseServer, inputDeviceName } = this.opts;
+    const env: NodeJS.ProcessEnv = { ...process.env, PULSE_SERVER: pulseServer };
+    const pacat = this.spawnFn('pacat', [
+      '--server=' + pulseServer,
+      '--device=sink_for_' + inputDeviceName,
+      '--rate=48000',
+      '--channels=1',
+      '--format=s16le',
+      '--raw',
+    ], { env });
+    this.pacat = pacat;
+    this.wireChild(pacat, 'pacat');
+
+    // Persistent stdin 'error' listener: when pacat dies mid-call, an
+    // in-flight or late write surfaces EPIPE on the stream. Without a
+    // listener, that 'error' would be an unhandled event and crash the
+    // process. It also marks pacat gone so pending backpressure waits settle.
+    // A pacat retired by clearQueuedAudio() errors here too; only the
+    // current one counts.
+    pacat.stdin?.on('error', (err: Error) => {
+      this.log.debug({ err }, 'pacat stdin error (expected when pacat exits mid-call)');
+      if (pacat === this.pacat) this.markPacatGone();
+    });
+  }
+
+  /**
+   * Drop the audio queued for playout (#2401). PulseAudio holds up to ~2 s for
+   * pacat's stream, out of our reach, plus the 64 KB pipe. Killing pacat removes
+   * its stream and that buffer with it; a fresh pacat takes the next frame. The
+   * sink stays, so the call's outbound leg plays silence in between. The old
+   * child's exit is not a transport error.
+   */
+  clearQueuedAudio(): void {
+    const old = this.pacat;
+    if (!old || this.pacatGone || this.closing) return;
+    this.retiredPacats.add(old);
+    // Writes parked on the old pipe's backpressure would wait on a 'drain'
+    // that never comes. Settle them; their frames are the ones being dropped.
+    this.settleDrainWaiters();
+    // Unwritten bytes in Node's stream buffer are queued audio too.
+    (old.stdin as (NodeJS.WritableStream & { destroy?: () => void }) | null)?.destroy?.();
+    // SIGKILL, not SIGTERM: a pacat that drains before exiting would play the
+    // queue out. Its stream closes either way, so nothing waits on its exit.
+    old.kill('SIGKILL');
+    try {
+      this.startPacat();
+    } catch (err) {
+      // spawn() reports most failures as an 'error' event, handled as a
+      // transport error in wireChild. A synchronous throw means the same:
+      // there is no outbound leg left.
+      this.log.error({ err }, 'failed to restart pacat after clearing queued audio');
+      this.markPacatGone();
+      this.handleUnexpectedExit();
+    }
+  }
+
   /** Attach exit/error/stderr handling common to both children. */
   private wireChild(child: AudioChildProcess, name: 'parec' | 'pacat'): void {
     child.on('error', err => {
       this.deadChildren.add(child);
+      if (this.retiredPacats.has(child)) {
+        this.log.debug({ err, child: name }, 'retired pacat errored after a queue flush');
+        return;
+      }
       this.log.error({ err, child: name }, 'signal audio child process error');
       if (name === 'pacat') this.markPacatGone();
       this.handleUnexpectedExit();
     });
     child.on('exit', (code, signal) => {
       this.deadChildren.add(child);
+      if (this.retiredPacats.has(child)) {
+        this.log.debug({ code, signal, child: name }, 'retired pacat exited after a queue flush');
+        return;
+      }
       // A non-zero code / non-null signal while we're NOT in the middle of a
       // local disconnect() is an abnormal exit — parec/pacat died on their
       // own mid-call. That's worth a warn at prod log levels (default info),
@@ -217,6 +268,10 @@ export class SignalAudioTransport implements AudioTransport {
    */
   private markPacatGone(): void {
     this.pacatGone = true;
+    this.settleDrainWaiters();
+  }
+
+  private settleDrainWaiters(): void {
     // Swap-then-flush so waiters removing themselves (via their own settle
     // cleanup) can't mutate the array we're iterating.
     const waiters = this.pacatDrainWaiters;

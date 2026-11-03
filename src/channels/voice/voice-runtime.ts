@@ -56,7 +56,7 @@ import {
   hasUnsafeVoicePromptCharacter,
   VOICE_GREETING_USER_MESSAGE,
 } from './greeting.js';
-import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from '../../speech/index.js';
+import type { PcmFrame, SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from '../../speech/index.js';
 import { TtsHttpError } from '../../speech/index.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
 import { findInternalJargon } from './spoken-jargon.js';
@@ -98,6 +98,22 @@ const DEFAULT_HISTORY_READ_TIMEOUT_MS = 1_000;
 const BARGE_IN_MIN_CHARS = 3;
 /** Ignore low-confidence interims when the provider reports confidence. */
 const BARGE_IN_MIN_CONFIDENCE = 0.4;
+/**
+ * Barge-in on the STT's speech-onset event (#2401). Waiting for an interim that
+ * passes the gate above cost ~1.2 s on calls. The onset event comes before any
+ * words, so it is guarded by the caller's own level instead: at least
+ * SPEECH_START_VOICED_MS of inbound audio at or above the threshold since onset.
+ * The far end's echo canceller leaves Curia's voice well below speech level.
+ * Overridable with channels.voice.barge_in_speech_start_min_dbfs.
+ */
+const DEFAULT_SPEECH_START_MIN_DBFS = -35;
+const SPEECH_START_VOICED_MS = 100;
+/** An onset that never reaches the level is dropped after this long. */
+const SPEECH_START_WINDOW_MS = 1_000;
+/** Inbound frame levels kept for the onset check; covers the event's arrival lag. */
+const INBOUND_LEVEL_HISTORY_MS = 1_500;
+/** A speech-onset barge-in with no qualifying transcript this long after is logged as unconfirmed. */
+const SPEECH_START_CONFIRM_MS = 2_000;
 /**
  * Wait after the STT end-of-speech signal before starting a turn (#2240). Speech
  * inside the window keeps the utterance open, so a principal who pauses
@@ -425,6 +441,13 @@ export interface VoiceRuntimeConfig {
    */
   maxUtteranceBytes?: number;
   /**
+   * Barge in on the STT's speech-onset event, before any words (#2401). Default
+   * true. False leaves only the interim-transcript gate.
+   */
+  bargeInOnSpeechStart?: boolean;
+  /** Inbound level (dBFS) the onset path requires. Default DEFAULT_SPEECH_START_MIN_DBFS. */
+  bargeInSpeechStartMinDbfs?: number;
+  /**
    * Hold (ms) between the STT end-of-speech signal and starting the turn; speech
    * inside it extends the utterance (#2240). Default DEFAULT_TURN_HOLD_MS. 0
    * starts the turn on the signal itself.
@@ -631,6 +654,35 @@ interface ActiveSession {
   pauseHeld: boolean;
   /** Fires when a background mute outlasts the grace period. */
   pauseTimer: ReturnType<typeof setTimeout> | null;
+  /** Recent inbound frame levels, oldest first, for the speech-onset check (#2401). */
+  inboundLevels: InboundLevel[];
+  /** A speech onset waiting for enough voiced inbound audio to barge in. */
+  speechOnset: { at: number; timer: ReturnType<typeof setTimeout> } | null;
+  /** Fires if a speech-onset barge-in is not followed by a qualifying transcript. */
+  bargeInConfirmTimer: ReturnType<typeof setTimeout> | null;
+}
+
+interface InboundLevel {
+  /** Wall-clock arrival of the frame. */
+  at: number;
+  ms: number;
+  dbfs: number;
+}
+
+/** What set off a barge-in, for its log line. */
+interface BargeInTrigger {
+  trigger: 'transcript' | 'speech_start';
+  /** Speech onset → this barge-in, ms, when known. */
+  detectMs: number | undefined;
+}
+
+/** RMS level of a frame in dBFS; -Infinity for digital silence. */
+function frameDbfs(pcm: Int16Array): number {
+  if (pcm.length === 0) return -Infinity;
+  let sumSquares = 0;
+  for (const sample of pcm) sumSquares += sample * sample;
+  const rms = Math.sqrt(sumSquares / pcm.length);
+  return rms === 0 ? -Infinity : 20 * Math.log10(rms / 32768);
 }
 
 /** A session whose end is in progress: one caller tears it down and persists it. */
@@ -779,6 +831,9 @@ export class VoiceRuntime {
         callerMuted: pendingMute,
         pauseHeld: false,
         pauseTimer: null,
+        inboundLevels: [],
+        speechOnset: null,
+        bargeInConfirmTimer: null,
       };
       session = active;
       active.loopDelay.enable();
@@ -788,6 +843,7 @@ export class VoiceRuntime {
       // Pipe principal audio → STT.
       transport.onRemoteAudio(frame => {
         active.stt.sendAudio(frame);
+        this.recordInboundLevel(active, frame);
       });
 
       // Principal left / room dropped without DELETE — end the Curia session so
@@ -803,6 +859,11 @@ export class VoiceRuntime {
       stt.onTranscript(event => {
         this.handleTranscript(active, event);
       });
+      if (this.config.bargeInOnSpeechStart !== false) {
+        stt.onSpeechStarted?.(event => {
+          this.handleSpeechStarted(active, Date.now() - event.startedAgoMs);
+        });
+      }
 
       // Inbound console calls: Curia opens the conversation (#1596). Enqueued on
       // the turn chain so a barged-in greeting fully unwinds before the first
@@ -844,9 +905,12 @@ export class VoiceRuntime {
     const isSpeech = text.length >= BARGE_IN_MIN_CHARS
       && (event.confidence === undefined || event.confidence >= BARGE_IN_MIN_CONFIDENCE);
 
-    // Barge-in: speech while the assistant talks cancels it.
-    if (isSpeech && (session.llmActive || session.ttsActive)) {
-      this.bargeIn(session, event);
+    if (isSpeech) this.confirmBargeIn(session);
+
+    // Barge-in: speech while the assistant talks cancels it. Audio still queued
+    // after the turn ended is the reply's tail, and is dropped too.
+    if (isSpeech && (session.llmActive || session.ttsActive || this.audioQueued(session))) {
+      this.bargeIn(session, { trigger: 'transcript', detectMs: event.speechStartedAgoMs });
     }
 
     if (event.isFinal && text.length > 0) {
@@ -944,18 +1008,86 @@ export class VoiceRuntime {
     session.pendingLastWordAt = null;
   }
 
-  private bargeIn(session: ActiveSession, event: SttTranscriptEvent): void {
+  /** Published audio is still ahead of the wall clock and the transport can drop it. */
+  private audioQueued(session: ActiveSession): boolean {
+    return session.transport.clearQueuedAudio !== undefined && session.playoutEndsAt > Date.now();
+  }
+
+  private recordInboundLevel(session: ActiveSession, frame: PcmFrame): void {
+    const now = Date.now();
+    const levels = session.inboundLevels;
+    levels.push({ at: now, ms: (frame.pcm.length / frame.sampleRate) * 1000, dbfs: frameDbfs(frame.pcm) });
+    while (levels.length > 0 && levels[0]!.at < now - INBOUND_LEVEL_HISTORY_MS) levels.shift();
+    if (session.speechOnset) this.checkSpeechOnset(session);
+  }
+
+  /** The STT heard speech begin at `onsetAt` (wall clock). Barge in once the level backs it. */
+  private handleSpeechStarted(session: ActiveSession, onsetAt: number): void {
+    if (session.ending) return;
+    if (session.speechOnset) clearTimeout(session.speechOnset.timer);
+    const timer = setTimeout(() => {
+      if (session.speechOnset?.timer === timer) session.speechOnset = null;
+    }, SPEECH_START_WINDOW_MS);
+    session.speechOnset = { at: onsetAt, timer };
+    this.checkSpeechOnset(session);
+  }
+
+  private checkSpeechOnset(session: ActiveSession): void {
+    const onset = session.speechOnset;
+    if (!onset || session.ending) return;
+    // Only while Curia is audible. Before the first frame nothing is heard yet,
+    // and a cancel there carries the utterance until the caller speaks again, so
+    // a cough would leave the turn unspoken. The transcript gate covers it.
+    if (!this.audioQueued(session)) return;
+    const minDbfs = this.config.bargeInSpeechStartMinDbfs ?? DEFAULT_SPEECH_START_MIN_DBFS;
+    let voicedMs = 0;
+    for (const level of session.inboundLevels) {
+      // A frame arriving after the onset carries audio from up to its own length before.
+      if (level.at + level.ms >= onset.at && level.dbfs >= minDbfs) voicedMs += level.ms;
+    }
+    if (voicedMs < SPEECH_START_VOICED_MS) return;
+    clearTimeout(onset.timer);
+    session.speechOnset = null;
+    this.bargeIn(session, { trigger: 'speech_start', detectMs: Math.max(0, Date.now() - onset.at) });
+  }
+
+  /** A qualifying transcript followed a speech-onset barge-in: it was the caller. */
+  private confirmBargeIn(session: ActiveSession): void {
+    if (!session.bargeInConfirmTimer) return;
+    clearTimeout(session.bargeInConfirmTimer);
+    session.bargeInConfirmTimer = null;
+  }
+
+  private bargeIn(session: ActiveSession, cause: BargeInTrigger): void {
     const controller = session.currentController;
-    if (!controller || controller.signal.aborted) return;
+    const turnActive = controller !== null && !controller.signal.aborted;
+    // A finished turn can leave its last seconds queued (Signal: PulseAudio).
+    if (!turnActive && !this.audioQueued(session)) return;
 
     const startedAt = Date.now();
-    for (const streamId of session.activeTtsStreamIds) {
-      this.config.tts.cancel(streamId);
+    if (turnActive) {
+      for (const streamId of session.activeTtsStreamIds) {
+        this.config.tts.cancel(streamId);
+      }
+      controller.abort();
+      session.ttsActive = false;
+      session.turnStats.bargeInCancels += 1;
     }
-    controller.abort();
-    session.ttsActive = false;
-    session.turnStats.bargeInCancels += 1;
     const stopMs = Date.now() - startedAt;
+
+    // No words yet: a noise loud enough to pass the level guard would cut Curia
+    // off just the same. Log it so false barge-ins can be counted (#2401).
+    if (cause.trigger === 'speech_start') {
+      if (session.bargeInConfirmTimer) clearTimeout(session.bargeInConfirmTimer);
+      session.bargeInConfirmTimer = setTimeout(() => {
+        session.bargeInConfirmTimer = null;
+        if (session.ending) return;
+        this.log.warn(
+          { sessionId: session.sessionId, confirmMs: SPEECH_START_CONFIRM_MS },
+          'voice barge-in on speech onset was not followed by speech',
+        );
+      }, SPEECH_START_CONFIRM_MS);
+    }
 
     // Audio already handed to the transport keeps playing unless it is dropped.
     // `aheadMs` is how far the transport has accepted writes ahead of the wall
@@ -984,7 +1116,9 @@ export class VoiceRuntime {
     this.log.info(
       {
         sessionId: session.sessionId,
-        'voice.barge_in_detect_ms': event.speechStartedAgoMs,
+        trigger: cause.trigger,
+        turnActive,
+        'voice.barge_in_detect_ms': cause.detectMs,
         'voice.barge_in_stop_ms': stopMs,
         'voice.barge_in_accepted_ahead_ms': Math.round(aheadMs),
         'voice.barge_in_transport_queued_ms': transportQueuedMs === undefined ? undefined : Math.round(transportQueuedMs),
@@ -2283,6 +2417,14 @@ export class VoiceRuntime {
     if (session.pauseTimer) {
       clearTimeout(session.pauseTimer);
       session.pauseTimer = null;
+    }
+    if (session.speechOnset) {
+      clearTimeout(session.speechOnset.timer);
+      session.speechOnset = null;
+    }
+    if (session.bargeInConfirmTimer) {
+      clearTimeout(session.bargeInConfirmTimer);
+      session.bargeInConfirmTimer = null;
     }
     // Taken in the same tick as `ending` is set, so a drain that runs later
     // finds nothing to join; paired below rather than left unpaired.

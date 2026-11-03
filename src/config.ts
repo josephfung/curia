@@ -612,6 +612,13 @@ export interface YamlConfig {
        * starts (#2240, #2379). Absent → VoiceRuntime's default; 0 → no hold.
        */
       turn_hold_ms?: number;
+      /**
+       * Barge in on the STT's speech-onset event, before any words (#2401).
+       * Absent → true.
+       */
+      barge_in_on_speech_start?: boolean;
+      /** Caller level (dBFS) that onset barge-in requires. Absent → VoiceRuntime's default. */
+      barge_in_speech_start_min_dbfs?: number;
     };
   };
   browser?: {
@@ -1291,6 +1298,16 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   const turnHoldMs: unknown = config.channels?.voice?.turn_hold_ms;
   if (turnHoldMs !== undefined && (!Number.isInteger(turnHoldMs) || (turnHoldMs as number) < 0 || (turnHoldMs as number) > 5_000)) {
     throw new Error(`channels.voice.turn_hold_ms must be an integer from 0 to 5000, got: ${String(turnHoldMs)}`);
+  }
+  // Same local.yaml path (#2401). A string "false" would read as enabled.
+  const bargeInOnSpeechStart: unknown = config.channels?.voice?.barge_in_on_speech_start;
+  if (bargeInOnSpeechStart !== undefined && typeof bargeInOnSpeechStart !== 'boolean') {
+    throw new Error(`channels.voice.barge_in_on_speech_start must be true or false, got: ${String(bargeInOnSpeechStart)}`);
+  }
+  const speechStartMinDbfs: unknown = config.channels?.voice?.barge_in_speech_start_min_dbfs;
+  if (speechStartMinDbfs !== undefined
+    && (typeof speechStartMinDbfs !== 'number' || !Number.isFinite(speechStartMinDbfs) || speechStartMinDbfs < -90 || speechStartMinDbfs > 0)) {
+    throw new Error(`channels.voice.barge_in_speech_start_min_dbfs must be a number from -90 to 0, got: ${String(speechStartMinDbfs)}`);
   }
 
   // Validate the browser block. config/local.yaml is deep-merged above but not

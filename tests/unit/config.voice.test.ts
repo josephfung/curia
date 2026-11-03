@@ -25,3 +25,26 @@ describe('loadYamlConfig: channels.voice.turn_hold_ms', () => {
     expect(() => loadYamlConfig(dir)).toThrow('channels.voice.turn_hold_ms');
   });
 });
+
+// Onset barge-in knobs (#2401), set the same way.
+describe('loadYamlConfig: channels.voice barge-in on speech start', () => {
+  it.each(['true', 'false'])('accepts barge_in_on_speech_start: %s', (value) => {
+    const dir = writeTempConfig(`channels:\n  voice:\n    barge_in_on_speech_start: ${value}\n`);
+    expect(loadYamlConfig(dir).channels?.voice?.barge_in_on_speech_start).toBe(value === 'true');
+  });
+
+  it.each(['"false"', '0', 'yes-please'])('rejects barge_in_on_speech_start: %s', (value) => {
+    const dir = writeTempConfig(`channels:\n  voice:\n    barge_in_on_speech_start: ${value}\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('channels.voice.barge_in_on_speech_start');
+  });
+
+  it.each([-90, -35, -20.5, 0])('accepts barge_in_speech_start_min_dbfs: %s', (value) => {
+    const dir = writeTempConfig(`channels:\n  voice:\n    barge_in_speech_start_min_dbfs: ${value}\n`);
+    expect(loadYamlConfig(dir).channels?.voice?.barge_in_speech_start_min_dbfs).toBe(value);
+  });
+
+  it.each(['-91', '3', '"-35"', '.nan'])('rejects barge_in_speech_start_min_dbfs: %s', (value) => {
+    const dir = writeTempConfig(`channels:\n  voice:\n    barge_in_speech_start_min_dbfs: ${value}\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('channels.voice.barge_in_speech_start_min_dbfs');
+  });
+});
