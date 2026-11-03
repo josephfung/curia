@@ -6,7 +6,7 @@
   "action_risk": "none",
   "inputs": {},
   "outputs": {
-    "tasks": "CatalogTaskWithStatus[] — catalog tasks with status, tier, handoff surface, credential_how_to, docs_url; restart_required: true when the task is configured but Curia must restart before it works",
+    "tasks": "CatalogTaskWithStatus[] — catalog tasks with status, tier, handoff surface, credential_how_to, docs_url; restart_required: true when the task is configured but Curia must restart before it works; done_means: \"credentials_saved\" on key-based tasks (Signal, Slack, SMS, voice, web research), where done means the keys are saved, not that the channel is enabled or running",
     "summary": "{ total: number, done: number, pending: number, deferred: number }"
   },
   "permissions": [],

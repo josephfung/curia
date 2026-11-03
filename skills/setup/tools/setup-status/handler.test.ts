@@ -331,6 +331,22 @@ describe('setup-status', () => {
       expect(persona?.vault_keys).toBeUndefined();
     });
 
+    // Key-based tasks check saved keys only, not that the channel is enabled or running.
+    // done_means says so, so the wizard doesn't describe a disabled channel as working.
+    it('marks key-based tasks done_means credentials_saved, and no other task', async () => {
+      const result = await handler.execute(makeCtx());
+      expect(result.success).toBe(true);
+      const { tasks } = (result as {
+        success: true;
+        data: { tasks: Array<{ id: string; vault_keys?: string[]; done_means?: string }> };
+      }).data;
+      for (const t of tasks) {
+        expect(t.done_means, t.id).toBe(t.vault_keys ? 'credentials_saved' : undefined);
+      }
+      expect(tasks.find(t => t.id === 'signal')?.done_means).toBe('credentials_saved');
+      expect(tasks.find(t => t.id === 'email')?.done_means).toBeUndefined();
+    });
+
     it('summary counts are accurate', async () => {
       // persona done, debrief pending, rest pending
       const ctx = makeCtx({ behavioralPreferences: ['concise'] });

@@ -2663,8 +2663,9 @@ async function main(): Promise<void> {
   // `restart_required` (enabled + the console's Enable gate passes) until the next start.
   const emailChannelDescriptor = CHANNEL_CATALOG.find(d => d.name === 'email');
   const emailChannelStatus = (): Promise<EmailChannelStatus> => resolveEmailChannelStatus({
-    // Setup-required mode builds adapters but never starts them (see adapter startup below).
-    runningAdapterCount: () => (setupRequiredAtBoot ? 0 : emailAdapters.length),
+    // Count only adapters that are polling: setup-required mode builds adapters but never
+    // starts them, and stop() clears `running` during shutdown while a turn may still run.
+    runningAdapterCount: () => emailAdapters.filter((a) => a.isOutboundReady()).length,
     isEnabled: async () => (await channelRegistryRepo.getRow('email'))?.enabled ?? false,
     gatePasses: async () =>
       !!emailChannelDescriptor && (await channelCredentialStatusFn(emailChannelDescriptor)).requiredResolvable,

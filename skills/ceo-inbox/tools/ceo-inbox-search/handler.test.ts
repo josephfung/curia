@@ -203,7 +203,9 @@ describe('CeoInboxSearchHandler — query parameter', () => {
 
     const result = await handler.execute(ctx);
     if (!result.success) throw new Error(result.error);
-    expect((result.data as { count: number }).count).toBe(1);
+    const data = result.data as { messages: Array<{ id: string }>; count: number };
+    expect(data.count).toBe(1);
+    expect(data.messages.map((m) => m.id)).toEqual(['2']);
   });
 });
 

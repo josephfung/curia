@@ -45,4 +45,14 @@ describe('migrateLegacyTavilyKey', () => {
     expect(vault.store.get('user.tavily_api_key')).toBe('tvly-abc');
     expect(vault.delete).not.toHaveBeenCalled();
   });
+
+  // The copy landed, so web-search can read tavily_api_key this boot; a failed cleanup
+  // must not surface as a migration failure (the boot warning would say search stays off).
+  it('reports moved, not a failure, when only the delete of the user key fails', async () => {
+    const vault = fakeVault({ 'user.tavily_api_key': 'tvly-abc' });
+    vault.delete.mockRejectedValueOnce(new Error('vault down'));
+    await expect(migrateLegacyTavilyKey(vault, logger)).resolves.toBe('moved');
+    expect(vault.store.get('tavily_api_key')).toBe('tvly-abc');
+    expect(vault.store.get('user.tavily_api_key')).toBe('tvly-abc');
+  });
 });

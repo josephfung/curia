@@ -42,7 +42,17 @@ export async function migrateLegacyTavilyKey(
   // Copy first, then delete: a failure between the two leaves the key in both places
   // (harmless; the next boot reports kept_existing), never in neither.
   await secrets.set(TAVILY_KEY, legacy);
-  await secrets.delete(LEGACY_TAVILY_KEY);
+  try {
+    await secrets.delete(LEGACY_TAVILY_KEY);
+  } catch (err) {
+    // The copy landed, so web-search can read its key on this boot. Only the cleanup failed;
+    // say so rather than let the caller report that web-search stays off.
+    logger.warn(
+      { err, from: LEGACY_TAVILY_KEY, to: TAVILY_KEY },
+      'Tavily key migration: copied the key but could not delete user.tavily_api_key; it stays as a stale copy',
+    );
+    return 'moved';
+  }
   logger.info(
     { from: LEGACY_TAVILY_KEY, to: TAVILY_KEY },
     'Tavily key migration: moved the Tavily key so web-search can read it',

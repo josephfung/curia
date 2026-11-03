@@ -44,6 +44,10 @@ export function channelCredentialKeys(): ReadonlySet<string> {
 // way to set them. #2361 replaces the grant with a sign-in link.
 const PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set(['ceo_nylas_grant_id', 'ceo_self_email']);
 
+// Shape check only (same pattern as the setup wizard's profile email): one @, no spaces,
+// a dot in the domain.
+const PRINCIPAL_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 /** A fresh copy of the principal-mailbox key set (see channelCredentialKeys for why a copy).
  *  Reused by the secret-capture system-name allowlist. */
 export function principalMailboxKeys(): ReadonlySet<string> {
@@ -137,6 +141,12 @@ export async function vaultRoutes(
         error: `'${name}' is not a required secret declared by any skill or MCP server, ` +
           `nor a known channel credential. Only declared secrets can be set here.`,
       });
+    }
+
+    // ceo_self_email is the self-address filter for the principal's mailbox (reply-all
+    // drafts drop it from CC). A value that is not an address would filter nothing.
+    if (name === 'ceo_self_email' && !PRINCIPAL_EMAIL_RE.test(value.trim())) {
+      return reply.status(400).send({ error: 'ceo_self_email must be an email address.' });
     }
 
     try {

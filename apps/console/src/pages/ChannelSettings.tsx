@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
@@ -375,11 +375,17 @@ export function ChannelsPage() {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
   }, [mobileOpen]);
 
+  // Monotonic request id, as in EmailAccountsSection: the email drawer's onChanged can start
+  // a load while an earlier one is in flight, and only the latest may write state.
+  const loadSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       const res = await apiFetch('/api/registry/channels');
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { channels: ChannelEntry[] };
+      if (seq !== loadSeq.current) return; // a newer load() started; discard this result
       const list = data.channels ?? [];
       setEntries(list);
       setLoadError(null); // clear any prior error on successful reload
@@ -389,6 +395,7 @@ export function ChannelsPage() {
         prev ? list.find(e => e.name === prev.name) ?? null : null,
       );
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setLoadError(e instanceof Error ? e.message : 'Failed to load');
     }
   }, []);

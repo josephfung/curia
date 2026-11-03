@@ -158,7 +158,9 @@ describe('CeoInboxListHandler — batch listing (no watermark)', () => {
 
     const result = await handler.execute(ctx);
     if (!result.success) throw new Error(result.error);
-    expect((result.data as { count: number }).count).toBe(1);
+    const data = result.data as { messages: Array<{ id: string }>; count: number };
+    expect(data.count).toBe(1);
+    expect(data.messages.map((m) => m.id)).toEqual(['m2']);
   });
 
   it('reports has_more from filtered results when the probe slot is Curia-self and nothing follows', async () => {
@@ -412,6 +414,18 @@ describe('CeoInboxListHandler — drafts routing (#1000)', () => {
     await handler.execute(ctx);
 
     expect(fetchedUrl(fetchSpy).pathname.endsWith('/drafts')).toBe(true);
+  });
+
+  // Drafts never use Curia's addresses, so a slow accounts read must not hold the branch up.
+  it('does not look up Curia addresses for a drafts listing', async () => {
+    const lookup = vi.fn(async () => ['curia@example.com']);
+    const ctx = { ...makeCtx({ folder: 'DRAFTS' }), curiaEmailAddresses: lookup } as ToolContext;
+    vi.stubGlobal('fetch', mockFetchReturning([]));
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(lookup).not.toHaveBeenCalled();
   });
 
   it('returns drafts under a `drafts` key, distinguishable from the messages path', async () => {

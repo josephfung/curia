@@ -37,6 +37,9 @@ interface CatalogTaskWithStatus extends Omit<CatalogTask, 'completion_check'> {
   vault_keys?: string[];
   // Present (true) when the task is configured but only takes effect after a restart.
   restart_required?: true;
+  // Present for vault_secrets_all tasks: their `done` means the keys are saved, not that the
+  // channel or integration is enabled and running (only email checks that, #2409).
+  done_means?: 'credentials_saved';
 }
 
 // ── Catalog loading ────────────────────────────────────────────────────────
@@ -232,7 +235,7 @@ export class SetupStatusHandler implements ToolHandler {
         return {
           ...rest,
           status,
-          ...(vault_keys ? { vault_keys } : {}),
+          ...(vault_keys ? { vault_keys, done_means: 'credentials_saved' as const } : {}),
           ...(restartRequired ? { restart_required: true as const } : {}),
         };
       });

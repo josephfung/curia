@@ -35,10 +35,6 @@ export class CeoInboxListHandler implements ToolHandler {
     const grantId = ctx.secret('ceo_nylas_grant_id');
     const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
-    // Curia's own addresses (its email accounts, read live) — messages from them are
-    // filtered out so the agent doesn't triage or act on its own outbound emails.
-    const curiaEmails = await curiaOwnAddresses(ctx, 'ceo-inbox-list');
-
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
 
@@ -73,6 +69,11 @@ export class CeoInboxListHandler implements ToolHandler {
         return { success: false, error: 'Failed to list principal inbox drafts' };
       }
     }
+
+    // Curia's own addresses — messages from them are filtered out so the agent doesn't
+    // triage or act on its own outbound emails. Read after the drafts branch, which has
+    // no use for them, so a slow lookup can't eat that branch's tool deadline.
+    const curiaEmails = await curiaOwnAddresses(ctx, 'ceo-inbox-list');
 
     const unreadOnly = input.unread_only !== false; // default true
 

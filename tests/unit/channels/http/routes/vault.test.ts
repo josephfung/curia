@@ -168,12 +168,24 @@ describe('vault routes', () => {
 
   // --- principal mailbox keys (#2409) ---
 
-  it.each(['ceo_nylas_grant_id', 'ceo_self_email'])('accepts the principal-mailbox key %s', async name => {
+  it.each([
+    ['ceo_nylas_grant_id', 'grant-v'],
+    ['ceo_self_email', 'principal@example.com'],
+  ])('accepts the principal-mailbox key %s', async (name, value) => {
     const secrets = fakeSecrets();
     app = await build(secrets, fakeRegistry());
-    const res = await put(app, name, { value: 'v' });
+    const res = await put(app, name, { value });
     expect(res.statusCode).toBe(200);
-    expect(secrets.sets).toEqual([{ name, value: 'v' }]);
+    expect(secrets.sets).toEqual([{ name, value }]);
+  });
+
+  // The address is the reply-all self-filter; a non-address would filter nothing.
+  it.each(['not-an-address', 'a@b', 'two words@example.com'])('rejects ceo_self_email %j', async value => {
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    const res = await put(app, 'ceo_self_email', { value });
+    expect(res.statusCode).toBe(400);
+    expect(secrets.sets).toEqual([]);
   });
 
   it('no longer accepts the flat email grant and address no adapter reads', async () => {
