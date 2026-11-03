@@ -249,6 +249,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`@hono/node-server` override floor** — raised to 2.1.6 to exclude three medium advisories. (#2427)
 - **`hono` override floor** — raised to 4.13.16 to exclude five advisories. (#2427)
 - **`basic-ftp` override floor** — raised to 6.2.4 to exclude two medium advisories. (#2388)
 - **Console chat links** — a `/chat?q=` link no longer sends a message as the principal. (#2351)
