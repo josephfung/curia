@@ -694,6 +694,17 @@ describe('phone-family derivation (#2447)', () => {
     expect(await statuses()).toEqual(['active', 'active']);
   });
 
+  it('a derived row cannot name a source on another contact', async () => {
+    const other = await contacts.createContact({ displayName: 'Harbour Catering', source: 'ceo_stated' });
+    await expect(contacts.linkIdentity({
+      contactId: other.id, channel: 'sms', channelIdentifier: NUMBER, source: 'derived', verified: true, derivedFromIdentityId: phoneId,
+    })).rejects.toThrow(/same contact/);
+    await expect(contacts.linkIdentity({
+      contactId: venueId, channel: 'sms', channelIdentifier: NUMBER, source: 'derived', verified: true,
+      derivedFromIdentityId: '00000000-0000-4000-8000-000000000000',
+    })).rejects.toThrow(/same contact/);
+  });
+
   it('bounced stays on the row it was set on: a delivery failure can be specific to one channel', async () => {
     await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
     await contacts.setIdentityStatus(phoneId, 'bounced');

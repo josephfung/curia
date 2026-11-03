@@ -1281,6 +1281,14 @@ export class ContactService {
     if ((options.source === 'derived') !== (options.derivedFromIdentityId !== undefined)) {
       throw new Error('derivedFromIdentityId is required for, and only allowed on, a derived identity');
     }
+    // ...and that source is on the same contact: defunct propagates down the derivation
+    // tree without regard to contact, so a foreign link would reach another contact's row.
+    if (options.derivedFromIdentityId !== undefined) {
+      const source = await this.backend.getIdentity(options.derivedFromIdentityId);
+      if (source?.contactId !== options.contactId) {
+        throw new Error('derivedFromIdentityId must name an identity on the same contact');
+      }
+    }
 
     // Normalize email addresses to lowercase for case-insensitive matching.
     // RFC 5321 allows case-sensitive local-parts, but in practice no major

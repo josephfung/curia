@@ -129,6 +129,15 @@ describeIf('phone-family derivation (migration 116)', () => {
 
     await contacts.setIdentityStatus(phone.id, 'defunct');
     expect([await statusOf(sms.id), await statusOf(signal.id)]).toEqual(['defunct', 'defunct']);
+
+    // A derived row may only name a source on its own contact, so propagation never
+    // reaches another contact's rows.
+    const other = await contacts.createContact({ displayName: 'Other Venue (itest-2447)', source: 'ceo_stated' });
+    createdContactIds.push(other.id);
+    await expect(contacts.linkIdentity({
+      contactId: other.id, channel: 'sms', channelIdentifier: number, source: 'derived', verified: true,
+      derivedFromIdentityId: phone.id,
+    })).rejects.toThrow(/same contact/);
     await contacts.setIdentityStatus(phone.id, 'active');
     expect([await statusOf(sms.id), await statusOf(signal.id)]).toEqual(['active', 'active']);
   });
