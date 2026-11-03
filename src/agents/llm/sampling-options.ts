@@ -3,6 +3,7 @@
 // the same helpers so the request and the audit row stay aligned.
 
 import type { Logger } from '../../logger.js';
+import type { LLMCallProvenance } from './provider.js';
 
 /**
  * Provider-neutral reasoning effort (ADR-048). Each provider maps it onto the
@@ -161,13 +162,16 @@ export function resolveTemperature(
  *
  * `rejectsSamplingParams` must come from the same registry lookup the provider
  * makes (`ModelRegistry.rejectsSamplingParams(requestedModel)`) so the audit
- * row cannot claim a temperature that was never sent (#2038).
+ * row cannot claim a temperature that was never sent (#2038). The response's
+ * provenance overrides it when the provider reports that it dropped the value,
+ * which covers a model the registry does not know (#2439).
  */
 export function sentTemperature(
   options: Record<string, unknown> | undefined,
   rejectsSamplingParams: boolean,
+  provenance?: Pick<LLMCallProvenance, 'samplingParamsOmitted'>,
 ): number | null {
-  if (rejectsSamplingParams) {
+  if (rejectsSamplingParams || provenance?.samplingParamsOmitted === true) {
     return null;
   }
   const parsed = parseTemperature(options);

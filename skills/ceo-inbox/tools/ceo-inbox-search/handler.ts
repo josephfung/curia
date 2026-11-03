@@ -1,4 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
+import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
 import { CeoNylasClient, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
 
@@ -37,18 +39,13 @@ function draftMatchesQuery(draft: NylasDraftSummary, query: string): boolean {
 
 export class CeoInboxSearchHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const apiKey = ctx.secret('nylas_api_key');
+    const apiKey = ceoNylasApiKey(ctx);
     const grantId = ctx.secret('ceo_nylas_grant_id');
     const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
-    // Curia's own email — filter out messages from this address so the agent
-    // can't operate on its own outbound emails even via search.
-    let curiaEmail: string | undefined;
-    try {
-      curiaEmail = ctx.secret('nylas_self_email').toLowerCase();
-    } catch {
-      ctx.log.warn({}, 'ceo-inbox-search: NYLAS_SELF_EMAIL not set — skipping Curia email filter');
-    }
+    // Curia's own addresses (its email accounts, read live) — filter out messages from
+    // them so the agent can't operate on its own outbound emails even via search.
+    const curiaEmails = await curiaOwnAddresses(ctx, 'ceo-inbox-search');
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -126,7 +123,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
         });
 
         for (const msg of raw) {
-          if (curiaEmail && msg.from.some((p) => p.email.toLowerCase() === curiaEmail)) {
+          if (msg.from.some((p) => curiaEmails.has(p.email.toLowerCase()))) {
             continue;
           }
           if (!includeSpamAndTrash && isSpamOrTrash(msg.folders)) {

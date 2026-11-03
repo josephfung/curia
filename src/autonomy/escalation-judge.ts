@@ -376,6 +376,7 @@ export class EscalationJudge {
         temperature: sentTemperature(
           { temperature: JUDGE_TEMPERATURE },
           this.modelRegistry.rejectsSamplingParams(result.provenance.requestedModel),
+          result.provenance,
         ),
         ...llmCallReasoningFields(result.usage, result.provenance),
         parentEventId: 'system',

@@ -29,12 +29,13 @@ export const CHANNEL_CATALOG: ChannelDescriptor[] = [
     name: 'email',
     description: 'Email channel via Nylas. Polls a connected mailbox and replies in-thread.',
     isToggleable: true,
+    // Only the API key is a channel-level credential. Each mailbox's grant and address live
+    // on its email account (Email accounts, channel.email.<name>.nylas_grant_id), and the
+    // Enable gate also requires one such account to resolve — see index.ts (#2409).
     credentialFields: [
       { key: 'nylas_api_key', label: 'Nylas API key', secret: true, envFallback: 'NYLAS_API_KEY' },
-      { key: 'nylas_grant_id', label: 'Nylas grant ID', secret: true, envFallback: 'NYLAS_GRANT_ID' },
-      { key: 'nylas_self_email', label: 'Mailbox address', secret: false, envFallback: 'NYLAS_SELF_EMAIL' },
     ],
-    requiredSecretKeys: ['nylas_api_key', 'nylas_grant_id', 'nylas_self_email'],
+    requiredSecretKeys: ['nylas_api_key'],
   },
   {
     name: 'signal',

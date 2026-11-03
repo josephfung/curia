@@ -1,4 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
 import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
@@ -19,7 +20,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
     let grantId: string;
     let selfEmail: string;
     try {
-      apiKey = ctx.secret('nylas_api_key');
+      apiKey = ceoNylasApiKey(ctx);
       grantId = ctx.secret('ceo_nylas_grant_id');
       selfEmail = ctx.secret('ceo_self_email').toLowerCase();
     } catch (err) {

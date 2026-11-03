@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 import { EmailAccountsSection } from '../components/EmailAccountsSection.js';
+import { PrincipalMailboxSection } from '../components/PrincipalMailboxSection.js';
 
 // ── Types (mirror src/channels/credential-resolver.ts CredentialFieldStatus and
 //    src/registry/channel-registry-types.ts ChannelRegistryEntry) ──────────────
@@ -251,8 +252,12 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
           )}
 
           {/* Email accounts sub-section — only for the email channel.
-              Lets the operator manage Nylas-backed mailboxes the agent uses. */}
-          {entry.name === 'email' && <EmailAccountsSection />}
+              Lets the operator manage Nylas-backed mailboxes the agent uses. Enable needs
+              at least one of them, so a change re-reads the channel status (#2409). */}
+          {entry.name === 'email' && <EmailAccountsSection onChanged={onChanged} />}
+
+          {/* The principal's own mailbox (#2409) — separate from Curia's accounts. */}
+          {entry.name === 'email' && <PrincipalMailboxSection />}
 
           <div className="form-field">
             <label>Installed</label>
@@ -295,7 +300,13 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
               type="button"
               className="btn btn-primary btn-sm"
               disabled={busy || !entry.requiredResolvable}
-              title={entry.requiredResolvable ? undefined : 'Configure the required credentials first'}
+              title={
+                entry.requiredResolvable
+                  ? undefined
+                  : entry.name === 'email'
+                    ? 'Save the API key and add an email account with a grant first'
+                    : 'Configure the required credentials first'
+              }
               onClick={() => void act('POST', '/enable')}
             >
               Enable
@@ -364,11 +375,17 @@ export function ChannelsPage() {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
   }, [mobileOpen]);
 
+  // Monotonic request id, as in EmailAccountsSection: the email drawer's onChanged can start
+  // a load while an earlier one is in flight, and only the latest may write state.
+  const loadSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       const res = await apiFetch('/api/registry/channels');
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { channels: ChannelEntry[] };
+      if (seq !== loadSeq.current) return; // a newer load() started; discard this result
       const list = data.channels ?? [];
       setEntries(list);
       setLoadError(null); // clear any prior error on successful reload
@@ -378,6 +395,7 @@ export function ChannelsPage() {
         prev ? list.find(e => e.name === prev.name) ?? null : null,
       );
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setLoadError(e instanceof Error ? e.message : 'Failed to load');
     }
   }, []);

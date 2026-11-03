@@ -33,12 +33,12 @@ function fakeBus(): EventBus & { published: unknown[] } {
   } as unknown as EventBus & { published: unknown[] };
 }
 
-function textResponse(content: string): LLMResponse {
+function textResponse(content: string, model = 'claude-haiku-4-5'): LLMResponse {
   return {
     type: 'text',
     content,
     usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
-    provenance: { requestedModel: 'claude-haiku-4-5', actualModel: 'claude-haiku-4-5', providerRequestId: 'test' },
+    provenance: { requestedModel: model, actualModel: model, providerRequestId: 'test' },
   };
 }
 
@@ -401,14 +401,16 @@ describe('EscalationJudge.classifyDisclosure', () => {
     expect(capturedSignal!.aborted).toBe(true);
   });
 
-  it('publishes one llm.call telemetry event on a successful verdict', async () => {
-    const { judge, bus } = makeJudge(
-      providerReturning(textResponse('{"class": "public", "reason": "fine"}')),
-    );
-    await judge.classifyDisclosure({ content: 'hello', recipientTier: 'unknown', conversationId: 'c1' });
-    const events = (bus as unknown as { published: Array<{ type: string; payload?: { temperature?: number | null } }> }).published.filter((e) => e.type === 'llm.call');
-    expect(events).toHaveLength(1);
-    expect(events[0]?.payload?.temperature).toBe(0);
+  it('publishes one llm.call telemetry event on a successful verdict, recording the temperature sent', async () => {
+    // An OpenRouter judge takes temperature 0; a Claude judge sends none (#2439).
+    const cases = [['google/gemini-3.1-flash-lite', 0], ['claude-haiku-4-5', null]] as const;
+    for (const [model, recorded] of cases) {
+      const { judge, bus } = makeJudge(providerReturning(textResponse('{"class": "public", "reason": "fine"}', model)), { model });
+      await judge.classifyDisclosure({ content: 'hello', recipientTier: 'unknown', conversationId: 'c1' });
+      const events = (bus as unknown as { published: Array<{ type: string; payload?: { temperature?: number | null } }> }).published.filter((e) => e.type === 'llm.call');
+      expect(events).toHaveLength(1);
+      expect(events[0]?.payload?.temperature, model).toBe(recorded);
+    }
   });
 
   it('requests temperature 0 so the provider builds a deterministic verdict call (#2038)', async () => {

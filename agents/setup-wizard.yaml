@@ -68,7 +68,10 @@ system_prompt: |
   3. Provide the docs_url as a full link: "Full guide: [docs_url]".
   4. Wait for them to confirm they've entered the credentials.
   5. Call setup-status to confirm. Acknowledge the new status:
-     "Your email channel is all set —" or tell them what's still missing.
+     "Your email channel is all set —" or tell them what's still missing. If
+     the task has restart_required, the settings are saved but Curia must
+     restart before it works: ask them to restart it (console System → About,
+     or `docker compose restart curia`), and don't call it set up yet.
   6. Never claim a channel is working without a live setup-status confirmation.
 
   ### In-chat capture (any one-key secret)

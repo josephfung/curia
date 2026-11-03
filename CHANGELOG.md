@@ -125,6 +125,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`@anthropic-ai/sdk` 1.x** — moves to API version 2026-10-21; Anthropic API requests no longer send `temperature`. (#2439)
 - **`web-search` keyless by default** — searches without a Tavily key; the key only raises limits. (#2445)
 - **Setup no longer asks for Tavily** — web research shows as done; the key is an optional upgrade. (#2445)
 - **`tavily` canary** — reports keyless mode instead of looking unconfigured when no key is set. (#2445)
@@ -252,6 +253,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`@hono/node-server` override floor** — raised to 2.1.6 to exclude three medium advisories. (#2427)
 - **`hono` override floor** — raised to 4.13.16 to exclude five advisories. (#2427)
 - **`basic-ftp` override floor** — raised to 6.2.4 to exclude two medium advisories. (#2388)
 - **Console chat links** — a `/chat?q=` link no longer sends a message as the principal. (#2351)
@@ -278,12 +280,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Tavily setup link** — saves the key web-search reads; boot copies any legacy `user.tavily_api_key`. (#2409, #2445)
 - **Console secret rows** — a configured key can be replaced in place. (#2445)
 - **Phone app icon** — white mark on near-black, so it stays legible in iOS dark mode. (#2341)
 - **Offline page** — says whether the device is offline or can't reach Curia; reconnects automatically. (#2341)
 - **Phone app typing** — text fields are 16px on touch screens, so iOS no longer zooms in. (#2341)
 - **Inbox labels on sent messages** — labelling, archiving or re-foldering a message the principal replied to no longer fails. (#2426)
+- **Setup checklist** — returns a result again, links to Channels correctly, and marks email done once polling. (#2409)
+- **Tavily setup link** — stores `tavily_api_key`, which web search reads; an old `user.tavily_api_key` moves over. (#2409)
+- **Email channel** — Enable needs only the API key and one email account; no duplicate grant. (#2409)
+- **Principal's mailbox** — grant and address can be set in the console's Email channel settings. (#2409)
+- **ceo-inbox tools** — read the Nylas API key the console saves; Curia's addresses come from email accounts. (#2409)
+- **Setup docs** — Signal and email steps now match the shipped compose file and boot logs. (#2409)
 - **Attachment downloads** — filenames shown with `[REDACTED]` now resolve; filename misses point the retry at `attachment_id`. (#2430)
 - **`email-draft-save`** — result names the mailbox, so drafts in Curia's mailbox aren't reported as the principal's. (#2431)
 - **Voice agendas** — an auto-opened agenda is marked open, and the call runs it topic by topic. (#2428)

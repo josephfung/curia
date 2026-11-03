@@ -26,7 +26,7 @@ function buildCtx(overrides: Partial<{
     input,
     secret(key: string): string {
       switch (key) {
-        case 'nylas_api_key': return 'test-api-key';
+        case 'channel.email.nylas_api_key': return 'test-api-key';
         case 'ceo_nylas_grant_id': return 'test-grant-id';
         default: throw new Error(`unknown secret: ${key}`);
       }

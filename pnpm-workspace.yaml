@@ -120,17 +120,10 @@ fetchTimeout: 90000
 #     that still ships a CommonJS build, which the CJS Nylas SDK requires; uuid@12+
 #     is ESM-only and would break `require('uuid')`.
 overrides:
-  # Raised off >=4.13.5, the follow-up 792fbabe deferred (Refs #1934): that floor admitted
-  # 4.13.5-4.13.10, which carry two more MED advisories:
-  #   - GHSA-5r4p-p66f-jhc7 (>=4.12.4 <4.13.11): serveStatic decodes the request path a
-  #     second time, so middleware on static paths can be bypassed. Still absent from
-  #     GitHub's global advisory DB, so Dependabot raises no alert for it.
-  #   - GHSA-hxh3-vqpv-xpqv (<4.13.7): hono/jsx renders plain strings unescaped in
-  #     boundary components (XSS)
-  # 4.13.11, not 4.13.7: the serveStatic advisory runs four patches further up the line.
-  # Raised again off >=4.13.11 (#2427): that floor admits 4.13.11-4.13.15, which carry
-  # GHSA-46wx-v44x-9hh2, GHSA-4h7h-rv7c-7m2v, GHSA-4m76-xfj5-7975, GHSA-h7mg-cq63-vhpq
-  # (all MED) and GHSA-3gg2-335m-rxc6 (LOW), all upstream-repo-only.
+  # 4.13.16 clears GHSA-46wx-v44x-9hh2, GHSA-4h7h-rv7c-7m2v, GHSA-4m76-xfj5-7975 and
+  # GHSA-h7mg-cq63-vhpq (all MED) and GHSA-3gg2-335m-rxc6 (LOW), which the previous
+  # >=4.13.11 floor admitted. Upstream-repo-only: absent from GitHub's global advisory DB,
+  # so Dependabot raises no alert for them (#2427).
   hono: '>=4.13.16'
   # fast-uri ships authority-parser advisories faster than any floor keeps up with, so
   # this pin is deliberately set at the newest published release rather than at the
@@ -232,11 +225,10 @@ overrides:
   shell-quote: '>=1.11.0'
   body-parser: '>=2.4.0'                    # GHSA-27r3-jxmh-p828 (compressed-body DoS)
   # Consumer is @modelcontextprotocol/sdk.
-  # Raised off >=2.0.10: that floor admitted 2.0.10-2.1.2, which carry
-  # GHSA-rmxm-3fg6-px4f (MED, >=1.19.10 <2.1.3) — the same serveStatic double-decode
-  # middleware bypass as hono's GHSA-5r4p-p66f-jhc7, and likewise not in GitHub's global
-  # advisory DB.
-  '@hono/node-server': '>=2.1.3'
+  # 2.1.6 clears GHSA-7v5p-43qr-wch5, GHSA-jpvv-r467-5p4w and GHSA-qv5m-9pm6-hqp3 (all
+  # medium), which the previous >=2.1.3 floor admitted. Upstream-repo-only: absent from
+  # GitHub's global advisory DB, so Dependabot raises no alert for them (#2427).
+  '@hono/node-server': '>=2.1.6'
   # GHSA-724g-mxrg-4qvm (!!omap) + GHSA-pm4m-ph32-ghv5 (nested flow DoS); targeted —
   # js-yaml@4.x via @apidevtools/json-schema-ref-parser stays on 4.x. Raised off >=5.2.2
   # (#1934): that floor admitted 5.2.2-5.4.0, which carry GHSA-r3ph-w7gj-g6xm (MED,

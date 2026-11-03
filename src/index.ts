@@ -91,8 +91,9 @@ import { resolvePrincipalCalendarGrant } from './channels/calendar/resolve-calen
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
 import { NylasPrincipalMailbox } from './contacts/nylas-principal-mailbox.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
-import { EmailAccountsRepo } from './channels/email/email-accounts-repo.js';
+import { EmailAccountsRepo, CURIA_ADDRESS_LOOKUP_TIMEOUT_MS } from './channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from './channels/email/resolve-email-accounts.js';
+import { emailChannelStatus as resolveEmailChannelStatus } from './channels/email/email-channel-status.js';
 import { SignalRpcClient } from './channels/signal/signal-rpc-client.js';
 import { SignalAdapter } from './channels/signal/signal-adapter.js';
 import { SlackClient } from './channels/slack/slack-client.js';
@@ -175,15 +176,15 @@ import { loadEncryptionKey } from './secrets/crypto.js';
 import { SecretsService } from './secrets/secrets-service.js';
 import { SecretCaptureService } from './secrets/secret-capture-service.js';
 import { SecretCaptureResumeSubscriber } from './secrets/secret-capture-resume-subscriber.js';
-import { channelCredentialKeys } from './channels/http/routes/vault.js';
-import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
+import { channelCredentialKeys, principalMailboxKeys } from './channels/http/routes/vault.js';
 import { migrateLegacyTavilyKey } from './secrets/migrate-legacy-tavily-key.js';
+import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
 import { applyChannelVaultSecrets } from './channels/apply-channel-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
 import { backfillDirectChannelSenders } from './memory/direct-sender-backfill.js';
 import type { DecayConfig } from './memory/dream-engine.js';
-import type { AgentPersona } from './skills/types.js';
+import type { AgentPersona, EmailChannelStatus } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
 import { BullpenService } from './memory/bullpen.js';
 import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
@@ -433,15 +434,6 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.fatal({ err }, 'Failed to resolve bootstrap secrets from vault');
     process.exit(1);
-  }
-
-  // A Tavily key saved by the old setup link under user.tavily_api_key never reached
-  // web-search; copy it to the key web-search reads (#2409 item 2, #2445). Not fatal:
-  // without the copy, web search still runs keyless at the free tier's limits.
-  try {
-    await migrateLegacyTavilyKey(secretsService, logger);
-  } catch (err) {
-    logger.error({ err }, 'Failed to copy legacy user.tavily_api_key to tavily_api_key; web search stays keyless');
   }
 
   // api_token is a REQUIRED secret with a fail-OPEN consumer: validateBearerToken()
@@ -1254,6 +1246,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // A Tavily key saved under the old checklist name reaches web-search on this boot (#2409).
+  // Non-fatal: a vault hiccup leaves web-search keyless (#2445), not Curia down.
+  try {
+    await migrateLegacyTavilyKey(secretsService, logger);
+  } catch (err) {
+    logger.warn({ err }, 'Tavily key migration failed; web-search stays keyless until tavily_api_key is set');
+  }
+
   try {
     await reconcileRegistries({
       toolRepo: toolRegistryRepo,
@@ -1758,27 +1758,25 @@ async function main(): Promise<void> {
   const channelRegistryRepo = new ChannelRegistryRepo(pool);
 
   // Config-satisfied keys per channel (the messy, config-shape-aware part lives here,
-  // keeping the resolver pure). Email is satisfied via config when ≥1 account resolved.
+  // keeping the resolver pure). Email's API key may come from the bootstrap vault key
+  // (nylas_api_key) rather than channel.email.nylas_api_key; config carries either.
   const channelConfigKeys = (descriptor: ChannelDescriptor): Set<string> => {
-    if (descriptor.name === 'email' && resolvedEmailAccounts.length > 0) {
-      // Email's runtime creds come from config/default.yaml accounts. Only mark a key
-      // as config-resolved when it is actually present, so registry state reflects what
-      // the adapter can really boot with (the API key in particular is global config,
-      // not per-account, so a resolved account does not by itself imply a key exists).
-      const keys = new Set<string>();
-      keys.add('nylas_grant_id');
-      keys.add('nylas_self_email');
-      if (config.nylasApiKey) keys.add('nylas_api_key');
-      return keys;
-    }
+    if (descriptor.name === 'email' && config.nylasApiKey) return new Set(['nylas_api_key']);
     return new Set<string>();
   };
 
-  const channelCredentialStatusFn = (descriptor: ChannelDescriptor) =>
-    channelCredentialStatus(
+  const channelCredentialStatusFn = async (descriptor: ChannelDescriptor) => {
+    const status = await channelCredentialStatus(
       { secrets: secretsService, configResolvedKeys: channelConfigKeys(descriptor), logger },
       descriptor,
     );
+    if (descriptor.name !== 'email' || !status.requiredResolvable) return status;
+    // Email also needs a mailbox: at least one enabled email account whose grant resolves,
+    // which is exactly what the adapter boots from (#2409). Read live rather than from the
+    // boot snapshot, so an account added in the console satisfies Enable without a restart.
+    const accounts = await resolveEmailAccounts(emailAccountsRepo, secretsService, logger);
+    return { ...status, requiredResolvable: accounts.length > 0 };
+  };
 
   try {
     await reconcileChannelRegistry({
@@ -2660,7 +2658,26 @@ async function main(): Promise<void> {
   // the subscriber and sweep below. Wiring the lookup while those are off would let a
   // pending row block that agent in that conversation with nothing left to resolve it.
   const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  // setup-status's email task (#2409). Done only when an adapter is actually polling: the
+  // adapters are built once at boot, so an account added and enabled afterwards is
+  // `restart_required` (enabled + the console's Enable gate passes) until the next start.
+  const emailChannelDescriptor = CHANNEL_CATALOG.find(d => d.name === 'email');
+  const emailChannelStatus = (): Promise<EmailChannelStatus> => resolveEmailChannelStatus({
+    // Count only adapters that are polling: setup-required mode builds adapters but never
+    // starts them, and stop() clears `running` during shutdown while a turn may still run.
+    runningAdapterCount: () => emailAdapters.filter((a) => a.isOutboundReady()).length,
+    isEnabled: async () => (await channelRegistryRepo.getRow('email'))?.enabled ?? false,
+    gatePasses: async () =>
+      !!emailChannelDescriptor && (await channelCredentialStatusFn(emailChannelDescriptor)).requiredResolvable,
+  });
+  // ceo-inbox list/search skip Curia's own mail (#2409). Read live, so a mailbox added in the
+  // console is excluded before the restart that starts polling it. Disabled accounts count:
+  // they are still Curia's addresses.
+  // The statement timeout matches the tools' wait (CURIA_ADDRESS_LOOKUP_TIMEOUT_MS), so a stalled read
+  // is cancelled server-side too instead of holding a pool connection after they give up.
+  const curiaEmailAddresses = (): Promise<string[]> =>
+    emailAccountsRepo.listSelfEmails(CURIA_ADDRESS_LOOKUP_TIMEOUT_MS);
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>
@@ -2794,7 +2811,7 @@ async function main(): Promise<void> {
   // route's CHANNEL_CREDENTIAL_KEYS so there's a single source of truth for writable names.
   const secretCaptureService = new SecretCaptureService(pool, secretsService, {
     getAllowedSystemNames: () =>
-      new Set([...registryService.declaredSecretNames(), ...channelCredentialKeys()]),
+      new Set([...registryService.declaredSecretNames(), ...channelCredentialKeys(), ...principalMailboxKeys()]),
     logger,
   });
   // Injected after construction because the ExecutionLayer is created before registryService

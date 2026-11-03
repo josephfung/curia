@@ -1,7 +1,10 @@
 // skills/setup-status/handler.test.ts
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as yaml from 'js-yaml';
 import { SetupStatusHandler } from './handler.js';
-import type { ToolContext } from '../../../../src/skills/types.js';
+import type { ToolContext, EmailChannelStatus } from '../../../../src/skills/types.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
 
 // ── EntityMemory mock helpers ────────────────────────────────────────────────
@@ -64,6 +67,24 @@ function makeEntityMemory(existingDeferrals?: string): MinimalEntityMemory {
   };
 }
 
+// The secrets tool.json declares. The ctx double enforces them exactly as the execution
+// layer does: an undeclared name throws "not declared in the manifest" (#2409 — a double
+// that answered any name hid a catalog key missing from the manifest).
+const manifest = JSON.parse(readFileSync(join(import.meta.dirname, 'tool.json'), 'utf-8')) as {
+  secrets: string[];
+  optional_capabilities?: string[];
+};
+const DECLARED = new Set(manifest.secrets);
+
+const catalog = yaml.load(readFileSync(join(import.meta.dirname, 'catalog.yaml'), 'utf-8')) as {
+  tasks: Array<{ id: string; completion_check: { type: string; keys?: string[] }; optional_upgrade?: { keys: string[] } }>;
+};
+// Every key the handler reads: completion checks plus optional upgrades (#2445).
+const CATALOG_VAULT_KEYS = catalog.tasks.flatMap(t => [
+  ...(t.completion_check.type === 'vault_secrets_all' ? (t.completion_check.keys ?? []) : []),
+  ...(t.optional_upgrade?.keys ?? []),
+]);
+
 function makeCtx(overrides: Partial<{
   secrets: Record<string, string>;
   existingDeferrals: string;
@@ -73,6 +94,7 @@ function makeCtx(overrides: Partial<{
   principal: { pronouns: string | null } | null;
   principalLookupError: Error;
   phoneAppReady: () => Promise<boolean>;
+  emailChannelStatus: () => Promise<EmailChannelStatus>;
 }> = {}): ToolContext {
   const secrets = overrides.secrets ?? {};
   return {
@@ -80,6 +102,9 @@ function makeCtx(overrides: Partial<{
     entityMemory: makeEntityMemory(overrides.existingDeferrals) as unknown as EntityMemory,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ToolContext['log'],
     secret: vi.fn((name: string) => {
+      if (!DECLARED.has(name)) {
+        throw new Error(`Secret '${name}' is not declared in the manifest for skill 'setup-status'`);
+      }
       // Vault infrastructure error takes priority — throws for every key, simulating
       // a vault outage rather than a missing specific key.
       if (overrides.secretError) throw overrides.secretError;
@@ -113,12 +138,49 @@ function makeCtx(overrides: Partial<{
       }),
     } as unknown as ToolContext['schedulerService'],
     ...(overrides.phoneAppReady ? { phoneAppReady: overrides.phoneAppReady } : {}),
+    ...(overrides.emailChannelStatus ? { emailChannelStatus: overrides.emailChannelStatus } : {}),
   } as unknown as ToolContext;
 }
 
 const handler = new SetupStatusHandler();
 
 describe('setup-status', () => {
+  describe('manifest', () => {
+    it('declares every vault key the catalog checks', () => {
+      const undeclared = CATALOG_VAULT_KEYS.filter(k => !DECLARED.has(k));
+      expect(undeclared).toEqual([]);
+    });
+
+    it('declares the optional capabilities its checks read', () => {
+      expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus']));
+    });
+
+    it('offers the Tavily key web-search reads as the upgrade', () => {
+      const webSearch = JSON.parse(
+        readFileSync(join(import.meta.dirname, '../../../web/tools/web-search/tool.json'), 'utf-8'),
+      ) as { secrets: string[] };
+      const webResearch = catalog.tasks.find(t => t.id === 'web_research');
+      expect(webResearch?.optional_upgrade?.keys).toEqual(webSearch.secrets);
+    });
+  });
+
+  describe('whole checklist', () => {
+    it('returns a result when no channel keys are set', async () => {
+      const result = await handler.execute(makeCtx());
+      expect(result.success).toBe(true);
+    });
+
+    it('returns a result with every catalog key set, and marks those tasks done', async () => {
+      const secrets = Object.fromEntries(CATALOG_VAULT_KEYS.map(k => [k, 'value']));
+      const result = await handler.execute(makeCtx({ secrets }));
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
+      for (const id of ['signal', 'slack', 'sms', 'voice', 'web_research']) {
+        expect(data.tasks.find(t => t.id === id)?.status, id).toBe('done');
+      }
+    });
+  });
+
   describe('completion checks', () => {
     it('persona: done when behavioralPreferences is non-empty', async () => {
       const ctx = makeCtx({ behavioralPreferences: ['prefers concise summaries'] });
@@ -198,30 +260,35 @@ describe('setup-status', () => {
       expect(tour?.status).toBe('done');
     });
 
-    it('email: done when all three nylas secrets are present', async () => {
-      const ctx = makeCtx({
-        secrets: {
-          'channel.email.nylas_api_key': 'nyk_v0_abc',
-          'channel.email.nylas_grant_id': 'grant-xyz',
-          'channel.email.nylas_self_email': 'ceo@example.com',
-        },
-      });
-      const result = await handler.execute(ctx);
+    it('email: done only when an email adapter is running', async () => {
+      const result = await handler.execute(makeCtx({ emailChannelStatus: async () => 'running' }));
       expect(result.success).toBe(true);
-      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; restart_required?: boolean }> } }).data;
       const email = data.tasks.find(t => t.id === 'email');
       expect(email?.status).toBe('done');
+      expect(email?.restart_required).toBeUndefined();
     });
 
-    it('email: pending when a required nylas secret is missing', async () => {
-      const ctx = makeCtx({
-        secrets: { 'channel.email.nylas_grant_id': 'grant-xyz' }, // api_key and self_email absent
-      });
-      const result = await handler.execute(ctx);
+    it('email: pending with restart_required when enabled since boot but not yet polling', async () => {
+      const result = await handler.execute(makeCtx({ emailChannelStatus: async () => 'restart_required' }));
       expect(result.success).toBe(true);
-      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; restart_required?: boolean }> } }).data;
       const email = data.tasks.find(t => t.id === 'email');
       expect(email?.status).toBe('pending');
+      expect(email?.restart_required).toBe(true);
+    });
+
+    it.each([
+      ['the check is absent', {}],
+      ['the channel is not configured', { emailChannelStatus: async (): Promise<EmailChannelStatus> => 'not_configured' }],
+      ['the check fails', { emailChannelStatus: async (): Promise<EmailChannelStatus> => { throw new Error('db down'); } }],
+    ] as const)('email: pending without restart_required when %s', async (_name, overrides) => {
+      const result = await handler.execute(makeCtx(overrides));
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; restart_required?: boolean }> } }).data;
+      const email = data.tasks.find(t => t.id === 'email');
+      expect(email?.status).toBe('pending');
+      expect(email?.restart_required).toBeUndefined();
     });
 
     it('email: deferred when no secrets and task_id in deferrals store', async () => {
@@ -239,11 +306,7 @@ describe('setup-status', () => {
       // email secrets are present (done=true) AND email is in the deferrals store
       // The status must be 'done', not 'deferred'
       const ctx = makeCtx({
-        secrets: {
-          'channel.email.nylas_api_key': 'nyk_v0_abc',
-          'channel.email.nylas_grant_id': 'grant-xyz',
-          'channel.email.nylas_self_email': 'ceo@example.com',
-        },
+        emailChannelStatus: async (): Promise<EmailChannelStatus> => 'running',
         existingDeferrals: JSON.stringify(['email']),
       });
       const result = await handler.execute(ctx);
@@ -262,15 +325,27 @@ describe('setup-status', () => {
         data: { tasks: Array<{ id: string; vault_keys?: string[] }> };
       }).data;
       // vault_secrets_all task — keys must be present for agent to call system-secret-capture-request
-      const email = data.tasks.find(t => t.id === 'email');
-      expect(email?.vault_keys).toEqual([
-        'channel.email.nylas_api_key',
-        'channel.email.nylas_grant_id',
-        'channel.email.nylas_self_email',
-      ]);
-      // non-vault task — vault_keys must be absent
+      // web research works keyless now (#2445); email checks the channel, not keys (#2409)
+      expect(data.tasks.find(t => t.id === 'web_research')?.vault_keys).toBeUndefined();
+      expect(data.tasks.find(t => t.id === 'email')?.vault_keys).toBeUndefined();
       const persona = data.tasks.find(t => t.id === 'persona');
       expect(persona?.vault_keys).toBeUndefined();
+    });
+
+    // Key-based tasks check saved keys only, not that the channel is enabled or running.
+    // done_means says so, so the wizard doesn't describe a disabled channel as working.
+    it('marks key-based tasks done_means credentials_saved, and no other task', async () => {
+      const result = await handler.execute(makeCtx());
+      expect(result.success).toBe(true);
+      const { tasks } = (result as {
+        success: true;
+        data: { tasks: Array<{ id: string; vault_keys?: string[]; done_means?: string }> };
+      }).data;
+      for (const t of tasks) {
+        expect(t.done_means, t.id).toBe(t.vault_keys ? 'credentials_saved' : undefined);
+      }
+      expect(tasks.find(t => t.id === 'signal')?.done_means).toBe('credentials_saved');
+      expect(tasks.find(t => t.id === 'email')?.done_means).toBeUndefined();
     });
 
     it('summary counts are accurate', async () => {
@@ -335,11 +410,7 @@ describe('setup-status', () => {
     it('re-derives status correctly without any stored progress', async () => {
       // Simulate restart: no storeData progress object, but vault keys present
       const ctx = makeCtx({
-        secrets: {
-          'channel.email.nylas_api_key': 'nyk_v0_abc',
-          'channel.email.nylas_grant_id': 'grant-xyz',
-          'channel.email.nylas_self_email': 'ceo@example.com',
-        },
+        emailChannelStatus: async (): Promise<EmailChannelStatus> => 'running',
         behavioralPreferences: ['prefers bullet points'],
         activeJobs: [{ intentAnchor: 'weekly_debrief', status: 'pending' }],
       });
@@ -366,11 +437,12 @@ describe('setup-status manifest covers the catalog', () => {
     const dir = import.meta.dirname;
     const manifest = JSON.parse(await readFile(join(dir, 'tool.json'), 'utf8')) as { secrets: string[] };
     const catalog = yaml.load(await readFile(join(dir, 'catalog.yaml'), 'utf8')) as {
-      tasks: Array<{ completion_check?: { type: string; keys?: string[] } }>;
+      tasks: Array<{ completion_check?: { type: string; keys?: string[] }; optional_upgrade?: { keys: string[] } }>;
     };
-    const read = catalog.tasks.flatMap((task) =>
-      task.completion_check?.type === 'vault_secrets_all' ? (task.completion_check.keys ?? []) : [],
-    );
+    const read = catalog.tasks.flatMap((task) => [
+      ...(task.completion_check?.type === 'vault_secrets_all' ? (task.completion_check.keys ?? []) : []),
+      ...(task.optional_upgrade?.keys ?? []),
+    ]);
     expect(read.length).toBeGreaterThan(0);
     const missing = read.filter((key) => !manifest.secrets.includes(key));
     expect(missing).toEqual([]);

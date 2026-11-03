@@ -60,6 +60,7 @@ export class TelemetryLlmProvider implements LLMProvider {
       const temperature = sentTemperature(
         params.options,
         this.modelRegistry.rejectsSamplingParams(response.provenance.requestedModel),
+        response.provenance,
       );
 
       const event = createLlmCall({

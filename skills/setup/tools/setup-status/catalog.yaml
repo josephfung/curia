@@ -47,14 +47,10 @@ tasks:
     value_prop: "Lets Curia read, draft, and send email on your behalf — unlocks ceo-inbox."
     tier: heavy
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
-      type: vault_secrets_all
-      keys:
-        - channel.email.nylas_api_key
-        - channel.email.nylas_grant_id
-        - channel.email.nylas_self_email
-    credential_how_to: "Get your Nylas API key and grant ID at app.nylas.com (free tier works). Enter the API key, grant ID, and your mailbox email address in Settings → Channels → Email."
+      type: email_channel_ready
+    credential_how_to: "Get your Nylas API key at app.nylas.com (free tier works) and connect Curia's mailbox there to get its grant ID. In Settings → Channels → Email, install the channel, save the API key, add the mailbox under Email accounts (name, address, grant ID), then enable the channel and restart."
     docs_url: /channels/email-setup
 
   - id: signal
@@ -62,13 +58,13 @@ tasks:
     value_prop: "Private, end-to-end encrypted messaging — Curia's highest-trust channel."
     tier: medium
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
       type: vault_secrets_all
       keys:
         - channel.signal.socket_path
         - channel.signal.phone_number
-    credential_how_to: "Set up signal-cli (included in docker-compose.yml), then enter the socket path and your phone number in Settings → Channels → Signal. After enabling, open Contacts → your principal and add your Signal number as a channel identity so outbound principal detection works."
+    credential_how_to: "Run signal-cli as a JSON-RPC daemon on a Unix socket Curia can reach (the shipped docker-compose.yml does not include it) and register Curia's Signal number with it, then enter the socket path and that number in Settings → Channels → Signal. After enabling, open Contacts → your principal and add your Signal number as a channel identity so outbound principal detection works."
     docs_url: /channels/signal-setup
 
   - id: slack
@@ -76,7 +72,7 @@ tasks:
     value_prop: "Let your team DM and @mention your agent in Slack — medium-trust workspace messaging."
     tier: medium
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
       type: vault_secrets_all
       keys:
@@ -90,7 +86,7 @@ tasks:
     value_prop: "Two-way text messaging on a dedicated Telnyx office DID — medium-trust SMS for the principal and third parties."
     tier: medium
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
       type: vault_secrets_all
       keys:
@@ -105,7 +101,7 @@ tasks:
     value_prop: "Live duplex spoken conversation from the web console via WebRTC."
     tier: medium
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
       type: vault_secrets_all
       keys:
