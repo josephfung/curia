@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`measure-2159-targets.sql`** — read-only prod queries for #2159's message and approval targets. (#2193)
 - **Phone app invitation link** — operators send the principal a single-use, 48-hour link that installs and pairs the app. (#2412)
 - **`async-offramp` now mode** — a call can wait for the full assistant's result instead of refusing. (#2428)
 - **`scheduler-get`** — reads one scheduled job in full, so routines can be quoted verbatim and edited safely. (#2399)
