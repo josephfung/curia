@@ -607,18 +607,88 @@ describe('phone-family derivation (#2447)', () => {
   });
 
   it('fails closed, with the cause, when the write throws', async () => {
-    const failing = { findLikelyDuplicates: contacts.findLikelyDuplicates.bind(contacts), linkIdentity: async () => { throw new Error('db down'); } };
+    const failing = {
+      findLikelyDuplicates: contacts.findLikelyDuplicates.bind(contacts),
+      getContactWithIdentities: contacts.getContactWithIdentities.bind(contacts),
+      linkIdentity: async () => { throw new Error('db down'); },
+    };
     const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, {
       contactService: contacts, principalContactId: undefined, deriver: failing,
     });
     expect(result).toMatchObject({ ok: false, cause: expect.any(Error) });
   });
 
+  it('a label hint picks its row even when an older row on another channel has the same number', async () => {
+    const office = await contacts.createContact({ displayName: 'Dana Office', source: 'ceo_stated' });
+    await contacts.linkIdentity({
+      contactId: office.id, channel: 'phone', channelIdentifier: '+14165550122', label: 'office', source: 'agent_stated', verified: true,
+    });
+    const signal = await contacts.linkIdentity({
+      contactId: office.id, channel: 'signal', channelIdentifier: '+14165550122', label: 'mobile', source: 'agent_stated', verified: true,
+    });
+    const result = await resolveRecipientReference(`${office.id}#mobile`, 'sms', { field: 'recipient' }, withDeriver());
+    expect(result).toMatchObject({ ok: true, identifier: '+14165550122', derivedFrom: 'signal' });
+    const sms = (await contacts.getContactWithIdentities(office.id))!.identities.find((i) => i.channel === 'sms');
+    expect(sms).toMatchObject({ label: 'mobile', derivedFromIdentityId: signal.id });
+  });
+
+  // Two sends deriving at once: the loser's insert hits the unique index.
+  const duplicateKey = (): Error => Object.assign(new Error('duplicate key'), { code: '23505' });
+
+  it('a concurrent derivation that already wrote this contact\'s row resolves to that row', async () => {
+    const racing = {
+      findLikelyDuplicates: contacts.findLikelyDuplicates.bind(contacts),
+      getContactWithIdentities: contacts.getContactWithIdentities.bind(contacts),
+      linkIdentity: async (options: Parameters<ContactService['linkIdentity']>[0]) => {
+        await contacts.linkIdentity(options); // the other send wins the insert
+        throw duplicateKey();
+      },
+    };
+    const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, {
+      contactService: contacts, principalContactId: undefined, deriver: racing,
+    });
+    const sms = (await contacts.getContactWithIdentities(venueId))!.identities.find((i) => i.channel === 'sms');
+    expect(result).toMatchObject({ ok: true, identifier: NUMBER, identityId: sms!.id });
+  });
+
+  it('a duplicate key held by anyone but this contact still refuses the send', async () => {
+    const racing = {
+      findLikelyDuplicates: contacts.findLikelyDuplicates.bind(contacts),
+      getContactWithIdentities: contacts.getContactWithIdentities.bind(contacts),
+      linkIdentity: async () => { throw duplicateKey(); },
+    };
+    const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, {
+      contactService: contacts, principalContactId: undefined, deriver: racing,
+    });
+    expect(result).toMatchObject({ ok: false, cause: expect.objectContaining({ code: '23505' }) });
+  });
+
+  it('marking the source number defunct takes its derived rows with it, so no send picks them', async () => {
+    await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    await contacts.setIdentityStatus(phoneId, 'defunct');
+    const sms = (await contacts.getContactWithIdentities(venueId))!.identities.find((i) => i.channel === 'sms');
+    expect(sms?.status).toBe('defunct');
+    const again = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    expect(again.ok).toBe(false);
+
+    // Back in use: the derived row comes back with it.
+    await contacts.setIdentityStatus(phoneId, 'active');
+    expect(await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver()))
+      .toMatchObject({ ok: true, identifier: NUMBER, derivedFrom: 'phone' });
+  });
+
+  it('bounced stays on the row it was set on: a delivery failure can be specific to one channel', async () => {
+    await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    await contacts.setIdentityStatus(phoneId, 'bounced');
+    const sms = (await contacts.getContactWithIdentities(venueId))!.identities.find((i) => i.channel === 'sms');
+    expect(sms?.status).toBe('active');
+  });
+
   it('derivedAddressData says delivery is unconfirmed only for a derived address', () => {
     expect(derivedAddressData({}, 'sms')).toEqual({});
     expect(derivedAddressData({ derivedFrom: 'phone' }, 'sms')).toEqual({
       delivery_unconfirmed: true,
-      address_note: expect.stringMatching(/on file as phone.*never confirmed on SMS.*delivery not confirmed/),
+      address_note: expect.stringMatching(/^Addressed to the number on file as phone.*never confirmed on SMS.*Report delivery as not confirmed\.$/),
     });
   });
 });

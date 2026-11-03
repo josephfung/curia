@@ -6,7 +6,9 @@
 //     the same contact and creates no new one (the reason the resolver writes the row)
 //   - the CHECK constraint and ON DELETE SET NULL on the new column
 //
-// Every fixture row is created by this suite and deleted by id in afterEach.
+// Every fixture row is created by this suite and deleted in afterEach. The suite refuses
+// to start if another suite already holds its random number, and the stray sweep only
+// takes contacts created during this run, so cleanup cannot reach another suite's rows.
 // Skips gracefully when DATABASE_URL is not set.
 
 import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest';
@@ -29,10 +31,14 @@ describeIf('phone-family derivation (migration 116)', () => {
   // A number unlikely to collide with another fixture: the fictional 555 exchange, random line.
   const number = `+1416555${String(randomInt(0, 10_000)).padStart(4, '0')}`;
 
-  async function contactsHolding(identifier: string): Promise<string[]> {
+  let suiteStart: Date;
+
+  async function contactsHolding(identifier: string, since?: Date): Promise<string[]> {
     const { rows } = await pool.query<{ contact_id: string }>(
-      `SELECT DISTINCT contact_id FROM contact_channel_identities WHERE channel_identifier = $1`,
-      [identifier],
+      `SELECT DISTINCT i.contact_id FROM contact_channel_identities i
+       JOIN contacts c ON c.id = i.contact_id
+       WHERE i.channel_identifier = $1 AND ($2::timestamptz IS NULL OR c.created_at >= $2)`,
+      [identifier, since ?? null],
     );
     return rows.map((row) => row.contact_id);
   }
@@ -42,12 +48,15 @@ describeIf('phone-family derivation (migration 116)', () => {
     contacts = ContactService.createWithPostgres(pool, undefined, createSilentLogger());
     // Fails fast when migration 116 has not been applied.
     await pool.query('SELECT derived_from_identity_id FROM contact_channel_identities LIMIT 0');
+    const held = await contactsHolding(number);
+    if (held.length > 0) throw new Error(`fixture number ${number} is already held by another suite; re-run`);
+    suiteStart = (await pool.query<{ now: Date }>('SELECT now()')).rows[0]!.now;
   });
 
   afterEach(async () => {
     if (createdContactIds.length > 0) {
       // Pick up any contact an inbound resolve created by mistake, so a failure leaves nothing behind.
-      const stray = await contactsHolding(number);
+      const stray = await contactsHolding(number, suiteStart);
       await pool.query(`DELETE FROM contact_channel_identities WHERE contact_id = ANY($1::uuid[])`, [[...createdContactIds, ...stray]]);
       await pool.query(`DELETE FROM contacts WHERE id = ANY($1::uuid[])`, [[...createdContactIds, ...stray]]);
       createdContactIds.length = 0;
@@ -79,6 +88,45 @@ describeIf('phone-family derivation (migration 116)', () => {
     });
     expect(inbound).toMatchObject({ contactId: venue.id, created: false });
     expect(await contactsHolding(number)).toEqual([venue.id]);
+  });
+
+  it('defunct on the source row reaches its derived rows; bounced stays on the source', async () => {
+    const venue = await contacts.createContact({ displayName: 'Harbour Venue (itest-2447)', source: 'ceo_stated' });
+    createdContactIds.push(venue.id);
+    const phone = await contacts.linkIdentity({
+      contactId: venue.id, channel: 'phone', channelIdentifier: number, source: 'agent_stated', verified: true,
+    });
+    const sms = await contacts.linkIdentity({
+      contactId: venue.id, channel: 'sms', channelIdentifier: number, source: 'derived', verified: true,
+      derivedFromIdentityId: phone.id,
+    });
+    const statusOf = async (id: string): Promise<string | undefined> =>
+      (await contacts.getContactWithIdentities(venue.id))!.identities.find((i) => i.id === id)?.status;
+
+    expect(await contacts.setIdentityStatus(phone.id, 'bounced')).toMatchObject({ id: phone.id, status: 'bounced' });
+    expect(await statusOf(sms.id)).toBe('active');
+
+    expect(await contacts.setIdentityStatus(phone.id, 'defunct')).toMatchObject({ id: phone.id, status: 'defunct' });
+    expect(await statusOf(sms.id)).toBe('defunct');
+
+    expect(await contacts.setIdentityStatus(phone.id, 'active')).toMatchObject({ id: phone.id, status: 'active' });
+    expect(await statusOf(sms.id)).toBe('active');
+  });
+
+  it('reactivating the source leaves a bounced derived row bounced', async () => {
+    const venue = await contacts.createContact({ displayName: 'Harbour Venue (itest-2447)', source: 'ceo_stated' });
+    createdContactIds.push(venue.id);
+    const phone = await contacts.linkIdentity({
+      contactId: venue.id, channel: 'phone', channelIdentifier: number, source: 'agent_stated', verified: true,
+    });
+    const sms = await contacts.linkIdentity({
+      contactId: venue.id, channel: 'sms', channelIdentifier: number, source: 'derived', verified: true,
+      derivedFromIdentityId: phone.id,
+    });
+    await contacts.setIdentityStatus(sms.id, 'bounced');
+    await contacts.setIdentityStatus(phone.id, 'active');
+    const after = (await contacts.getContactWithIdentities(venue.id))!.identities.find((i) => i.id === sms.id);
+    expect(after?.status).toBe('bounced');
   });
 
   it('only a derived row may name a source row, and deleting the source nulls the link', async () => {

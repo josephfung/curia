@@ -39,12 +39,17 @@ const E164 = /^\+[1-9]\d{6,14}$/;
  * decision someone else made, not one a derivation overrides.
  *
  * `identifier`, when given, keeps only sources holding that number.
+ *
+ * `rank`, when given, decides which row stands for a number held on several channels:
+ * the lowest rank wins, then the oldest. The send resolver ranks rows matching its label
+ * hint first, so a `mobile` hint is not lost to an older `office` row with the same number.
  */
 export function derivationSources(
   contact: Contact,
   identities: readonly ChannelIdentity[],
   channel: string,
   identifier?: string,
+  rank?: (identity: ChannelIdentity) => number,
 ): ChannelIdentity[] {
   if (!PHONE_CHANNELS.has(channel) || isStructuralContact(contact)) return [];
   const onChannel = identities.filter((identity) => identity.channel === channel);
@@ -58,8 +63,8 @@ export function derivationSources(
       && E164.test(identity.channelIdentifier)
       && (identifier === undefined || sameIdentifier(channel, identity.channelIdentifier, identifier))
       && !onChannel.some((held) => sameIdentifier(channel, held.channelIdentifier, identity.channelIdentifier)))
-    // Stable sort: rows with the same timestamp keep the backend's order.
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+    // Stable sort: rows with the same rank and timestamp keep the backend's order.
+    .sort((a, b) => (rank ? rank(a) - rank(b) : 0) || a.createdAt.getTime() - b.createdAt.getTime())
     .filter((identity) => {
       const digits = phoneDigits(identity.channelIdentifier);
       if (seen.has(digits)) return false;
@@ -77,6 +82,9 @@ export type DerivationResult =
    */
   | { ok: false; check: DuplicateCheck };
 
+/** The contact-service calls a derivation makes. */
+export type PhoneFamilyDeriver = Pick<ContactService, 'findLikelyDuplicates' | 'linkIdentity' | 'getContactWithIdentities'>;
+
 /**
  * Write the derived row for `source` on `channel`. The caller has chosen `source` from
  * derivationSources. The duplicate check still runs: another contact holding the number
@@ -89,7 +97,7 @@ export type DerivationResult =
  * keeps the source's label unless `label` is given. Errors propagate: callers refuse rather than skip the check.
  */
 export async function deriveIdentity(
-  contactService: Pick<ContactService, 'findLikelyDuplicates' | 'linkIdentity'>,
+  contactService: PhoneFamilyDeriver,
   target: {
     contact: Contact;
     channel: string;
@@ -116,14 +124,29 @@ export async function deriveIdentity(
   }
 
   const label = target.label ?? source.label ?? undefined;
-  const identity = await contactService.linkIdentity({
-    contactId: contact.id,
-    channel,
-    channelIdentifier: source.channelIdentifier,
-    ...(label ? { label } : {}),
-    source: DERIVED_IDENTITY_SOURCE,
-    verified: true,
-    derivedFromIdentityId: source.id,
-  });
-  return { ok: true, identity };
+  try {
+    const identity = await contactService.linkIdentity({
+      contactId: contact.id,
+      channel,
+      channelIdentifier: source.channelIdentifier,
+      ...(label ? { label } : {}),
+      source: DERIVED_IDENTITY_SOURCE,
+      verified: true,
+      derivedFromIdentityId: source.id,
+    });
+    return { ok: true, identity };
+  } catch (err) {
+    // Two sends to this contact can derive at once: both pass the duplicate check
+    // (it excludes the contact's own rows) and the second insert hits the unique
+    // index. If the row that won is this contact's own verified, active row for the
+    // number, use it. Any other holder still refuses: the error propagates.
+    if ((err as { code?: unknown } | null)?.code !== '23505') throw err;
+    const held = (await contactService.getContactWithIdentities(contact.id))?.identities.find((identity) =>
+      identity.channel === channel
+      && identity.channelIdentifier === source.channelIdentifier
+      && identity.verified
+      && identity.status === 'active');
+    if (!held) throw err;
+    return { ok: true, identity: held };
+  }
 }

@@ -44,6 +44,7 @@ import {
   DERIVED_IDENTITY_SOURCE,
   deriveIdentity,
   derivationSources,
+  type PhoneFamilyDeriver,
 } from '../../contacts/phone-family-derivation.js';
 import { isUuid } from '../../util/uuid.js';
 import { isAddressLikeName } from './address-like-name.js';
@@ -157,7 +158,7 @@ export interface RecipientResolverDeps {
    * channel (#2447). Callers that resolve before a send pass it; without it the
    * resolver only reads, and such a contact fails as before.
    */
-  deriver?: Pick<ContactService, 'findLikelyDuplicates' | 'linkIdentity'>;
+  deriver?: PhoneFamilyDeriver;
 }
 
 /**
@@ -461,32 +462,13 @@ function selectIdentity(
   const normalized = hint ? normalizeHint(hint) : '';
   if (!normalized) return { ok: true, identity: fallback };
 
-  const needle = normalized.toLowerCase();
-  const rows = usable.map((identity) => {
-    const cleaned = cleanedIdentityLabel(identity.label);
-    const bounded = cleaned ? cleaned.slice(0, MATCH_LABEL_MAX_CHARS) : null;
-    return {
-      identity,
-      bounded,
-      // The 40-character form, so a hint copied from the principal block matches.
-      visible: visibleIdentityLabel(identity.label),
-    };
-  });
-  const exact = rows.filter((row) => {
-    if (row.bounded === null) return false;
-    const quoted = row.bounded.slice(0, LABEL_HINT_MAX_CHARS).toLowerCase();
-    return row.bounded.toLowerCase() === needle
-      || quoted === needle
-      || row.visible?.toLowerCase() === needle;
-  });
-  const hintTokens = labelTokens(normalized);
-  const token = exact.length > 0 || hintTokens.length === 0
-    ? []
-    : rows.filter((row) => {
-        if (row.bounded === null) return false;
-        const tokens = new Set(labelTokens(row.bounded));
-        return hintTokens.every((part) => tokens.has(part));
-      });
+  const rows = usable.map((identity) => ({
+    identity,
+    bounded: boundedLabel(identity),
+    match: hintMatch(identity, normalized),
+  }));
+  const exact = rows.filter((row) => row.match === 'exact');
+  const token = exact.length > 0 ? [] : rows.filter((row) => row.match === 'token');
   const matches = exact.length > 0 ? exact : token;
 
   if (matches.length === 1) return { ok: true, identity: matches[0]!.identity };
@@ -499,6 +481,32 @@ function selectIdentity(
     return { ok: false, error: labelConflictError(contact, channel, usable, normalized, isPrincipal) };
   }
   return { ok: true, identity: fallback };
+}
+
+function boundedLabel(identity: ChannelIdentity): string | null {
+  const cleaned = cleanedIdentityLabel(identity.label);
+  return cleaned ? cleaned.slice(0, MATCH_LABEL_MAX_CHARS) : null;
+}
+
+/**
+ * How `identity`'s label matches a normalized, non-empty hint: `exact` (the label, its
+ * quoted prefix, or the 40-character form copied from the principal block), `token`
+ * (every token of the hint is a token of the label), or null.
+ */
+function hintMatch(identity: ChannelIdentity, normalized: string): 'exact' | 'token' | null {
+  const bounded = boundedLabel(identity);
+  if (bounded === null) return null;
+  const needle = normalized.toLowerCase();
+  const quoted = bounded.slice(0, LABEL_HINT_MAX_CHARS).toLowerCase();
+  if (
+    bounded.toLowerCase() === needle
+    || quoted === needle
+    || visibleIdentityLabel(identity.label)?.toLowerCase() === needle
+  ) return 'exact';
+  const hintTokens = labelTokens(normalized);
+  if (hintTokens.length === 0) return null;
+  const tokens = new Set(labelTokens(bounded));
+  return hintTokens.every((part) => tokens.has(part)) ? 'token' : null;
 }
 
 /**
@@ -638,8 +646,8 @@ export function derivedAddressData(
   return {
     delivery_unconfirmed: true,
     address_note:
-      `Sent to the number on file as ${resolution.derivedFrom}; it was never confirmed on ${on} ` +
-      `and may not take it. Report it as sent to that number, delivery not confirmed.`,
+      `Addressed to the number on file as ${resolution.derivedFrom}; it was never confirmed on ${on} ` +
+      `and may not take it. Report delivery as not confirmed.`,
   };
 }
 
@@ -656,7 +664,14 @@ async function deriveForChannel(
   hint: string | undefined,
   deriver: NonNullable<RecipientResolverDeps['deriver']>,
 ): Promise<{ ok: true; identity: ChannelIdentity } | { ok: false; error: string; cause?: unknown } | null> {
-  const sources = derivationSources(contact, identities, channel);
+  // Rank hint matches first, so the row the hint names stands for its number when the
+  // same number is on file on two channels under different labels.
+  const normalized = hint ? normalizeHint(hint) : '';
+  const HINT_RANK = { exact: 0, token: 1, none: 2 } as const;
+  const rank = normalized
+    ? (identity: ChannelIdentity): number => HINT_RANK[hintMatch(identity, normalized) ?? 'none']
+    : undefined;
+  const sources = derivationSources(contact, identities, channel, undefined, rank);
   if (sources.length === 0) return null;
   const pick = selectIdentity(contact, channel, sources, hint, false);
   if (!pick.ok) return pick;
