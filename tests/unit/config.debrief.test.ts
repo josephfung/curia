@@ -57,7 +57,7 @@ debrief:
     expect(config.debrief?.channel).toBeUndefined();
   });
 
-  it.each(['signal', 'sms', 'slack', 'email'])('accepts %s as a channel', (channel) => {
+  it.each(['signal', 'sms', 'web', 'slack', 'email'])('accepts %s as a channel', (channel) => {
     writeLocalYaml(`
 debrief:
   channel: ${channel}
@@ -71,17 +71,8 @@ debrief:
   channel: carrier-pigeon
 `);
     expect(() => loadYamlConfig(tempDir)).toThrow(
-      /debrief\.channel must be one of signal, sms, slack, email/,
+      /debrief\.channel must be one of signal, sms, web, slack, email/,
     );
-  });
-
-  // The debrief reply routes back through context_bridge, which web-send can't carry.
-  it('rejects web as a debrief channel', () => {
-    writeLocalYaml(`
-debrief:
-  channel: web
-`);
-    expect(() => loadYamlConfig(tempDir)).toThrow(/debrief\.channel must be one of signal, sms, slack, email/);
   });
 
   it('rejects non-integer reminderDelayMinutes', () => {

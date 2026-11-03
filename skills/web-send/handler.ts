@@ -41,10 +41,13 @@ function fallbackOrder(gateway: OutboundGateway): readonly FallbackChannel[] {
 
 export class WebSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { recipient, message } = ctx.input as {
+    const { recipient, message, context_bridge: contextBridge } = ctx.input as {
       recipient?: unknown;
       message?: unknown;
+      context_bridge?: unknown;
     };
+    // Same contract as the other send tools: a non-string bridge is unusable and dropped.
+    const contextBridgeRaw = typeof contextBridge === 'string' ? contextBridge : undefined;
     if (typeof message !== 'string' || message.trim().length === 0) {
       return { success: false, error: 'Missing required input: message (string)' };
     }
@@ -74,6 +77,15 @@ export class WebSendHandler implements ToolHandler {
       return { success: true, data: { channel: 'web', ...relayDeferredData(result) } };
     }
     if (result.success) {
+      // A principal turn on any channel sees active entries (#1817), so the answer can come
+      // back from the app or anywhere else. No recipientContactIds: principal turns only.
+      await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
+        channelId: 'web',
+        content: result.sentContent ?? message,
+        agentId: ctx.agentId ?? 'coordinator',
+        log: ctx.log,
+        boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
+      });
       return {
         success: true,
         data: { channel: 'web', ...redactionData(result) },
@@ -113,7 +125,7 @@ export class WebSendHandler implements ToolHandler {
           };
         }
         if (sent.success) {
-          await registerFallback(ctx, channel, message, resolved, sent);
+          await registerFallback(ctx, channel, message, resolved, sent, contextBridgeRaw);
           return {
             success: true,
             data: {
@@ -139,13 +151,14 @@ async function registerFallback(
   message: string,
   resolved: { identifier: string; contactId?: string },
   sent: OutboundSendResult,
+  contextBridgeRaw: string | undefined,
 ): Promise<void> {
   if (sent.deferredToDigest) return;
-  // No context_bridge input: the fallback gets the minimal entry with the channel's
-  // default TTL, and a task-wake turn still binds the principal's reply to its task
-  // (boundTask). No task_outreach row either: recordSendOutreach leaves out the
-  // principal's own addresses, and this send only ever reaches the principal.
-  await registerOutboundContext(ctx.outboundContext, undefined, {
+  // The caller's context_bridge carries over to the channel that took the message; without
+  // one the entry gets the channel's default TTL, and a task-wake turn still binds the
+  // principal's reply to its task (boundTask). No task_outreach row: recordSendOutreach
+  // leaves out the principal's own addresses, and this send only ever reaches the principal.
+  await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
     channelId: channel,
     content: sent.sentContent ?? message,
     agentId: ctx.agentId ?? 'coordinator',

@@ -174,7 +174,7 @@ describe('web-send', () => {
     expect(note).toContain('Standing preferences were not applied. Skipped sms, slack, email because they are not configured.');
   });
 
-  it('registers a delivered fallback with the channel default TTL, and takes no context_bridge', async () => {
+  it('registers a delivered fallback with the channel default TTL when no bridge is passed', async () => {
     const register = vi.fn(async (_entry: unknown) => undefined);
     const send = vi.fn(async (request: { channel: string }) => {
       if (request.channel === 'web') {
@@ -182,15 +182,8 @@ describe('web-send', () => {
       }
       return { success: true, sentContent: 'The board moved to Thursday.' };
     });
-    const base = ctx(send);
     const outboundContext = { register, explicitExpiryHours: 6, defaultExpiryHoursFor: () => 24 };
-    // A bridge the model passes anyway is not read: the manifest does not offer one.
-    const bridge = JSON.stringify({ agent_id: 'coordinator', expected_reply: 'yes or no', expires_in_hours: 48 });
-    const result = await handler.execute({
-      ...base,
-      input: { ...base.input, context_bridge: bridge },
-      outboundContext,
-    } as unknown as ToolContext);
+    const result = await handler.execute({ ...ctx(send), outboundContext } as unknown as ToolContext);
     expect(result.success).toBe(true);
     expect(register).toHaveBeenCalledOnce();
     expect(register.mock.calls[0]![0]).toEqual({
@@ -201,7 +194,50 @@ describe('web-send', () => {
       ttlSource: 'channel-default',
       recipientContactIds: ['c1'],
     });
-    expect(manifest.inputs).not.toHaveProperty('context_bridge');
+  });
+
+  // A clarification or debrief answered in the app must route back to the agent that asked
+  // (#2440): a delivered web send registers the caller's bridge, for principal turns only.
+  it('registers the context_bridge on a delivered phone-app send', async () => {
+    const register = vi.fn(async (_entry: unknown) => undefined);
+    const send = vi.fn(async () => ({ success: true, sentContent: 'The board moved to Thursday.' }));
+    const base = ctx(send);
+    const outboundContext = { register, explicitExpiryHours: 24, defaultExpiryHoursFor: () => 6 };
+    const bridge = JSON.stringify({ agent_id: 'meeting-debrief', expected_reply: 'takeaways', expires_in_hours: 48 });
+    const result = await handler.execute({
+      ...base,
+      input: { ...base.input, context_bridge: bridge },
+      outboundContext,
+    } as unknown as ToolContext);
+    expect(result.success).toBe(true);
+    expect(register).toHaveBeenCalledOnce();
+    expect(register.mock.calls[0]![0]).toMatchObject({
+      channelId: 'web',
+      agentId: 'meeting-debrief',
+      content: 'The board moved to Thursday.',
+      expectedReply: 'takeaways',
+      expiresInHours: 48,
+    });
+    expect(register.mock.calls[0]![0]).not.toHaveProperty('recipientContactIds');
+    expect(manifest.inputs).toHaveProperty('context_bridge');
+  });
+
+  it('carries the context_bridge over to the fallback channel', async () => {
+    const register = vi.fn(async (_entry: unknown) => undefined);
+    const send = vi.fn(async (request: { channel: string }) => (
+      request.channel === 'web'
+        ? { success: false, webDelivery: 'fallback' as const, blockedReason: 'dead' }
+        : { success: true, sentContent: 'The board moved to Thursday.' }
+    ));
+    const base = ctx(send);
+    const outboundContext = { register, explicitExpiryHours: 24, defaultExpiryHoursFor: () => 6 };
+    const bridge = JSON.stringify({ agent_id: 'coordinator', expected_reply: 'yes or no', expires_in_hours: 48 });
+    await handler.execute({
+      ...base,
+      input: { ...base.input, context_bridge: bridge },
+      outboundContext,
+    } as unknown as ToolContext);
+    expect(register.mock.calls[0]![0]).toMatchObject({ channelId: 'signal', expiresInHours: 48, recipientContactIds: ['c1'] });
   });
 
   it('declares each output once', () => {

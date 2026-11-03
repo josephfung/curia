@@ -187,7 +187,7 @@ When the meeting-debrief agent sends a prompt via Signal, the CEO's response arr
 
 When a meeting passes both detection stages, the agent sends a prompt via the CEO's configured channel.
 
-**Channel-agnostic design:** By default `debrief.channel` is unset and the coordinator sends the prompt by the principal's usual channel (Reaching the principal). An operator can pin it to `signal`, `sms`, `slack` or `email`. `web` is rejected at load, and the request tells the coordinator not to use the web app, because the reply routes back through a context bridge that `web-send` cannot carry (#2440).
+**Channel-agnostic design:** By default `debrief.channel` is unset and the coordinator sends the prompt by the principal's usual channel (Reaching the principal). An operator can pin it to any reach channel (`signal`, `sms`, `web`, `slack`, `email`). Every send tool, `web-send` included, takes the request's `context_bridge`, so the reply routes back to the debrief whichever channel carries it (#2440).
 
 **What the prompt says.** It names the attendees (enriched from contacts/KG) and asks for
 takeaways or follow-ups, open-ended, without assuming what kind of follow-up is needed. How
