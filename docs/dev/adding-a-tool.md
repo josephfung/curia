@@ -288,12 +288,24 @@ Note: Infrastructure skills (email, calendar) access Nylas clients via `ctx.outb
 A **separate** optional block from the runtime `secrets` allowlist above. While `secrets` declares which vault keys the handler may read *at invocation time*, `install.requires_secrets` declares the vault secret keys that must already be configured *before the skill can be installed or enabled* in the registry.
 
 ```json
-"install": { "requires_secrets": ["tavily_api_key"] }
+"install": { "requires_secrets": ["acme_api_key"] }
 ```
 
-The registry (`RegistryService`) enforces this: an install or enable request is **rejected** until every key listed here exists in the vault. This makes "a skill cannot be turned on without its credentials" a structural guarantee rather than a runtime surprise. `web-search` is the first consumer — it declares `"install": { "requires_secrets": ["tavily_api_key"] }`, so it cannot be enabled until `tavily_api_key` is seeded.
+The registry (`RegistryService`) enforces this: an install or enable request is **rejected** until every key listed here exists in the vault. This makes "a skill cannot be turned on without its credentials" a structural guarantee rather than a runtime surprise. No shipped tool uses it today (`web-search` did until #2445 made its key optional).
 
 Use `install.requires_secrets` for the credential that *gates the skill's existence* (the API key without which the skill is useless). Use `secrets` for the full set of vault keys the handler reads — the two often overlap but serve different purposes (gate vs. runtime-read allowlist).
+
+#### `install.optional_secrets` (optional)
+
+For a key the tool works without but improves with. Map each vault key to a one-line note on what it adds:
+
+```json
+"install": {
+  "optional_secrets": { "tavily_api_key": "Raises search limits. Without it, search runs keyless." }
+}
+```
+
+It never gates install or enable. The console shows each key under **Optional secrets** with its note, and the vault write route and setup-wizard capture link accept it. The handler must still list the key in `secrets` and treat "not set" as a normal path. `web-search` is the reference: with no key it searches keyless, and a vault *read failure* is still an error.
 
 #### `timeout` (optional, default: `30000`)
 

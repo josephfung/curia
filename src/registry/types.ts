@@ -36,6 +36,9 @@ export interface ManifestMetadata {
   /** Vault keys the skill's install block declares it needs (install.requires_secrets).
    *  Surfaced to the registry UI and consulted by the install/enable secrets gate. */
   requiresSecrets?: string[];
+  /** Vault keys the tool improves with but does not need (install.optional_secrets, #2445),
+   *  each with a note on what it adds. Shown by the registry UI; never gates install/enable. */
+  optionalSecrets?: { name: string; purpose: string }[];
   /** Member tool names for a SKILL.md bundle. Sourced from on-disk discovery, NOT
    *  SkillRegistry — a bundle that is disabled is never registered, so SkillRegistry
    *  cannot report its members. Skills only; undefined for tools and agents. */

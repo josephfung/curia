@@ -73,6 +73,11 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "description": "Vault secret keys this skill needs configured before it can be installed or enabled."
+        },
+        "optional_secrets": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "description": "Vault secret keys this skill works without but improves with, mapped to what each one adds. Never gates install or enable; the console shows them as optional and lets them be set."
         }
       }
     },
