@@ -1,12 +1,13 @@
 {
   "name": "web-send",
   "description": "Send a message to the principal's phone app. recipient must be \"principal\". If a browser has the thread open, no notification is sent. If no phone is subscribed, this fails and does not send another way. If a subscription is dead, push setup is rejected, or the push service does not accept the message, this sends on the next configured channel and tells you which one, so you do not send it again.",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
     "recipient": "string (must be \"principal\")",
-    "message": "string"
+    "message": "string",
+    "context_bridge": "string? (JSON, same shape and TTL rules as signal-send's context_bridge: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?})"
   },
   "outputs": {
     "channel": "string (web, or the channel used when the phone could not be reached)",
