@@ -278,6 +278,7 @@ export class OutboundLlmJudge implements OutboundJudge {
         temperature: sentTemperature(
           { temperature: JUDGE_TEMPERATURE },
           this.modelRegistry.rejectsSamplingParams(provenance.requestedModel),
+          provenance,
         ),
         ...llmCallReasoningFields(usage, provenance),
         parentEventId: 'system',

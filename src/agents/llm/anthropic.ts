@@ -132,6 +132,8 @@ export class AnthropicProvider implements LLMProvider {
     reasoningEffort?: ReasoningEffort;
     /** Passed-back thinking blocks the prefix guard dropped from this request. */
     reasoningBlocksDropped: number;
+    /** True when the caller passed a valid temperature that was not sent. */
+    samplingParamsOmitted: boolean;
   } {
     // Anthropic requires the system prompt as a separate top-level parameter,
     // not as an element in the messages array. We extract it here so agent
@@ -254,8 +256,9 @@ export class AnthropicProvider implements LLMProvider {
     // No temperature, top_p or top_k is ever sent. API version 2026-10-21,
     // which SDK 1.x sends, returns a 400 for any of them on every model, and
     // the SDK no longer types them (#2439). A caller temperature (judges pass
-    // 0) is still validated, then dropped; every Anthropic registry entry is
-    // flagged rejectsSamplingParams so sentTemperature() records null (#2077).
+    // 0) is still validated, then dropped. Provenance reports the drop, so
+    // sentTemperature() records null even for a model the registry does not
+    // know; every Anthropic registry entry is flagged rejectsSamplingParams too.
     const temperature = resolveTemperature(options, this.logger);
     if (temperature !== undefined) {
       this.logger.debug({ model, temperature }, 'Omitting temperature — the Anthropic API rejects sampling parameters');
@@ -381,6 +384,7 @@ export class AnthropicProvider implements LLMProvider {
       ...(prefixHash !== undefined ? { prefixHash } : {}),
       ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
       reasoningBlocksDropped,
+      samplingParamsOmitted: temperature !== undefined,
     };
   }
 
@@ -403,6 +407,7 @@ export class AnthropicProvider implements LLMProvider {
     requestedModel: string,
     reasoningEffort: ReasoningEffort | undefined,
     reasoningBlocksDropped: number,
+    samplingParamsOmitted: boolean,
   ): LLMCallProvenance {
     return {
       requestedModel,
@@ -410,6 +415,7 @@ export class AnthropicProvider implements LLMProvider {
       providerRequestId: response.id,
       ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
       ...(reasoningBlocksDropped > 0 ? { reasoningBlocksDropped } : {}),
+      ...(samplingParamsOmitted ? { samplingParamsOmitted: true as const } : {}),
     };
   }
 
@@ -445,7 +451,7 @@ export class AnthropicProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'chat');
       model = built.model;
-      const { createParams, signal, prefixHash, reasoningEffort, reasoningBlocksDropped } = built;
+      const { createParams, signal, prefixHash, reasoningEffort, reasoningBlocksDropped, samplingParamsOmitted } = built;
       const response = await this.client.messages.create(createParams, signal ? { signal } : undefined);
 
       this.logger.debug(
@@ -461,7 +467,7 @@ export class AnthropicProvider implements LLMProvider {
       );
 
       const usage = this.usageFromResponse(response);
-      const provenance = this.provenanceFromResponse(response, model, reasoningEffort, reasoningBlocksDropped);
+      const provenance = this.provenanceFromResponse(response, model, reasoningEffort, reasoningBlocksDropped, samplingParamsOmitted);
       const reasoning = reasoningFieldsFrom(response, usage);
 
       // Use type guard functions for narrowing — avoids casting and is safer
@@ -521,7 +527,7 @@ export class AnthropicProvider implements LLMProvider {
     try {
       const built = this.buildCreateParams(params, 'stream');
       model = built.model;
-      const { createParams, signal, prefixHash, reasoningEffort, reasoningBlocksDropped } = built;
+      const { createParams, signal, prefixHash, reasoningEffort, reasoningBlocksDropped, samplingParamsOmitted } = built;
       // The watchdog's stream sets streamMaxRetries: 0 so its chat() fallback owns the
       // retries (#2371); direct callers such as voice keep the SDK's default retries.
       const streamMaxRetries = resolveStreamMaxRetries(params.options);
@@ -574,7 +580,7 @@ export class AnthropicProvider implements LLMProvider {
         );
 
         const usage = this.usageFromResponse(response);
-        const provenance = this.provenanceFromResponse(response, model, reasoningEffort, reasoningBlocksDropped);
+        const provenance = this.provenanceFromResponse(response, model, reasoningEffort, reasoningBlocksDropped, samplingParamsOmitted);
         const toolCalls = this.toolCallsFromResponse(response);
         const content = this.textFromResponse(response);
         const reasoning = reasoningFieldsFrom(response, usage);

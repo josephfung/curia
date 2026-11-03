@@ -342,11 +342,31 @@ describe('AnthropicProvider — temperature', () => {
     },
   );
 
-  it('omits a temperature for a Claude model the registry does not know', async () => {
+  it('omits a temperature for a Claude model the registry does not know, and says so in provenance', async () => {
     const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
-    await provider.chat({ model: 'claude-future-9', messages: [{ role: 'user', content: 'Hello' }], options: { temperature: 0.5 } });
+    const result = await provider.chat({ model: 'claude-future-9', messages: [{ role: 'user', content: 'Hello' }], options: { temperature: 0.5 } });
 
     expect(mockCreate.mock.calls[0]![0]).not.toHaveProperty('temperature');
+    expect(result.type === 'text' && result.provenance.samplingParamsOmitted).toBe(true);
+  });
+
+  it('reports the dropped temperature on the streaming path too', async () => {
+    mockStream.mockReturnValue(makeStream([], makeTextResponse()));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'Hello' }], options: { temperature: 0 } }));
+
+    const end = events.at(-1);
+    expect(end?.type === 'message_end' && end.provenance.samplingParamsOmitted).toBe(true);
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['non-numeric', 'hot'],
+  ])('leaves samplingParamsOmitted off when the temperature is %s', async (_label, temperature) => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'Hello' }], options: { temperature } });
+
+    expect(result.type === 'text' && 'samplingParamsOmitted' in result.provenance).toBe(false);
   });
 
   it('omits temperature on chat when options.temperature is unset', async () => {

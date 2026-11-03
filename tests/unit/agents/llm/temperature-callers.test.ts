@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AnthropicProvider } from '../../../../src/agents/llm/anthropic.js';
 import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
+import { TelemetryLlmProvider } from '../../../../src/agents/llm/telemetry-provider.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import { OutboundLlmJudge } from '../../../../src/dispatch/outbound-judge.js';
 import { EscalationJudge } from '../../../../src/autonomy/escalation-judge.js';
@@ -140,6 +141,68 @@ describe('temperature:0 callers pass temperature 0 to the provider (#2038)', () 
 
     expect(passedTemperature()).toBe(0);
     expect(mockCreate.mock.calls[0]![0]).not.toHaveProperty('temperature');
+  });
+});
+
+// A Claude model the registry does not know is unflagged, so only the
+// provider's provenance can tell the audit row that no temperature went out.
+describe('llm.call rows for a Claude model the registry does not know (#2439)', () => {
+  const logger = createSilentLogger();
+  const registry = new ModelRegistry(logger);
+  const MODEL = 'claude-future-9';
+
+  beforeEach(() => {
+    mockCreate.mockReset();
+    mockCreate.mockResolvedValue({ ...makeTextResponse('{"leak": false, "reason": ""}'), model: MODEL });
+  });
+
+  it('is unflagged in the registry', () => {
+    expect(registry.rejectsSamplingParams(MODEL)).toBe(false);
+  });
+
+  it('outbound judge records null', async () => {
+    const bus = fakeBus();
+    const judge = new OutboundLlmJudge(
+      new AnthropicProvider('test-key', logger, registry),
+      { enabled: true, model: MODEL, timeoutMs: 5000, failMode: 'split' },
+      bus,
+      logger,
+      registry,
+    );
+    await judge.review({
+      content: 'To the CEO: backend issues. Armin — Friday works.',
+      recipients: [{ email: 'armin@external.com', isPrincipal: false }, { email: 'ceo@example.com', isPrincipal: true }],
+      principalIncluded: true,
+      principalIsSoleRecipient: false,
+      conversationId: '',
+      channelId: 'email',
+    });
+
+    expect(mockCreate.mock.calls[0]![0]).not.toHaveProperty('temperature');
+    expect(llmCallTemperatures(bus)).toEqual([null]);
+  });
+
+  it('escalation judge records null', async () => {
+    mockCreate.mockResolvedValue({ ...makeTextResponse('{"class": "public", "reason": "fine"}'), model: MODEL });
+    const bus = fakeBus();
+    const judge = new EscalationJudge(
+      new AnthropicProvider('test-key', logger, registry),
+      { enabled: true, model: MODEL, timeoutMs: 5000 },
+      bus,
+      logger,
+      registry,
+    );
+    await judge.classifyDisclosure({ content: 'hello', recipientTier: 'unknown', conversationId: 'c1' });
+
+    expect(llmCallTemperatures(bus)).toEqual([null]);
+  });
+
+  it('the telemetry wrapper records null', async () => {
+    const bus = fakeBus();
+    const provider = new TelemetryLlmProvider(new AnthropicProvider('test-key', logger, registry), bus, logger, 'drift-detector', registry);
+    await provider.chat({ model: MODEL, messages: [{ role: 'user', content: 'hi' }], options: { temperature: 0 } });
+
+    expect(llmCallTemperatures(bus)).toEqual([null]);
   });
 });
 

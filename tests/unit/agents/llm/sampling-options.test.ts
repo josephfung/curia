@@ -92,6 +92,11 @@ describe('sentTemperature (#2077)', () => {
     expect(sentTemperature({ temperature: 1 }, true)).toBeNull();
     expect(sentTemperature(undefined, true)).toBeNull();
   });
+
+  it('returns null when provenance says the provider dropped it, even for an unflagged model (#2439)', () => {
+    expect(sentTemperature({ temperature: 0 }, false, { samplingParamsOmitted: true })).toBeNull();
+    expect(sentTemperature({ temperature: 0 }, false, {})).toBe(0);
+  });
 });
 
 describe('reasoning options (ADR-048)', () => {
