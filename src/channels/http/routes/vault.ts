@@ -38,6 +38,22 @@ export function channelCredentialKeys(): ReadonlySet<string> {
   return new Set(CHANNEL_CREDENTIAL_KEYS);
 }
 
+// The principal's own mailbox (#2409): the Nylas grant that calendar and the ceo-inbox tools
+// act through, and the principal's address. Not a channel credential and not declared by
+// any skill's install.requires_secrets, so without this an image install had no supported
+// way to set them. #2361 replaces the grant with a sign-in link.
+const PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set(['ceo_nylas_grant_id', 'ceo_self_email']);
+
+// Shape check only (same pattern as the setup wizard's profile email): one @, no spaces,
+// a dot in the domain.
+const PRINCIPAL_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** A fresh copy of the principal-mailbox key set (see channelCredentialKeys for why a copy).
+ *  Reused by the secret-capture system-name allowlist. */
+export function principalMailboxKeys(): ReadonlySet<string> {
+  return new Set(PRINCIPAL_MAILBOX_KEYS);
+}
+
 /** True iff `name` is a valid channel credential key declared by the catalog. */
 function isChannelCredentialKey(name: string): boolean {
   return CHANNEL_CREDENTIAL_KEYS.has(name);
@@ -108,19 +124,29 @@ export async function vaultRoutes(
 
     // Scope guard: a name may be set only if it is a secret some skill declares, a valid
     // channel credential key from the catalog, a secret key declared by an installed MCP
-    // server, OR a per-account email grant key (channel.email.<name>.nylas_grant_id, written
-    // by the email-accounts console flow, #1101). This is the line between "configure a
-    // declared secret / known channel credential / per-account grant" and "write any key into
-    // the vault". Arbitrary `channel.*` names outside the catalog or the grant pattern, and
-    // arbitrary MCP keys not declared in config, are still rejected.
+    // server, a per-account email grant key (channel.email.<name>.nylas_grant_id, written
+    // by the email-accounts console flow, #1101), OR one of the principal-mailbox keys
+    // (#2409). This is the line between "configure a declared secret / known channel
+    // credential / per-account grant" and "write any key into the vault". Arbitrary
+    // `channel.*` names outside the catalog or the grant pattern, and arbitrary MCP keys not
+    // declared in config, are still rejected.
     const isSkillDeclared = registryService?.declaredSecretNames().includes(name) ?? false;
     const isMcpDeclared = options.mcpRegistryService?.declaredSecretKeys().includes(name) ?? false;
-    if (!isSkillDeclared && !isChannelCredentialKey(name) && !isMcpDeclared && !isPerAccountEmailGrantKey(name)) {
+    if (
+      !isSkillDeclared && !isChannelCredentialKey(name) && !isMcpDeclared &&
+      !isPerAccountEmailGrantKey(name) && !PRINCIPAL_MAILBOX_KEYS.has(name)
+    ) {
       request.log.info({ name }, 'vault set rejected: name not declared by any skill, MCP server, or channel');
       return reply.status(400).send({
         error: `'${name}' is not a required secret declared by any skill or MCP server, ` +
           `nor a known channel credential. Only declared secrets can be set here.`,
       });
+    }
+
+    // ceo_self_email is the self-address filter for the principal's mailbox (reply-all
+    // drafts drop it from CC). A value that is not an address would filter nothing.
+    if (name === 'ceo_self_email' && !PRINCIPAL_EMAIL_RE.test(value.trim())) {
+      return reply.status(400).send({ error: 'ceo_self_email must be an email address.' });
     }
 
     try {

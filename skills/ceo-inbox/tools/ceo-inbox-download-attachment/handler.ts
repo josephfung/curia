@@ -11,6 +11,7 @@
 //   5. Return base64-encoded content + metadata.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
 import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
 import {
   attachmentSelectorPresent,
@@ -21,7 +22,7 @@ import { MAX_TEMP_FILE_BYTES } from '../../../../src/skills/temp-file-store.js';
 
 export class CeoInboxDownloadAttachmentHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const apiKey = ctx.secret('nylas_api_key');
+    const apiKey = ceoNylasApiKey(ctx);
     const grantId = ctx.secret('ceo_nylas_grant_id');
     const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 

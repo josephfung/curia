@@ -67,4 +67,24 @@ describeIf('EmailAccountsRepo (integration)', () => {
     await repo.create({ name: 'alpha', selfEmail: 'a@example.com' });
     expect((await repo.list()).map(r => r.name)).toEqual(['alpha', 'beta']);
   });
+
+  it('listSelfEmails returns addresses ordered by name', async () => {
+    await repo.create({ name: 'beta', selfEmail: 'b@example.com' });
+    await repo.create({ name: 'alpha', selfEmail: 'a@example.com' });
+    expect(await repo.listSelfEmails(3000)).toEqual(['a@example.com', 'b@example.com']);
+  });
+
+  // The timeout is SET LOCAL: it must end with the read's transaction, not stay on the
+  // pooled connection and cancel some unrelated later query.
+  it('listSelfEmails leaves no statement_timeout on the pooled connection', async () => {
+    const single = new Pool({ connectionString: DATABASE_URL, max: 1 });
+    try {
+      const before = (await single.query<{ statement_timeout: string }>('SHOW statement_timeout')).rows[0]!.statement_timeout;
+      await new EmailAccountsRepo(single).listSelfEmails(1234);
+      const after = (await single.query<{ statement_timeout: string }>('SHOW statement_timeout')).rows[0]!.statement_timeout;
+      expect(after).toBe(before);
+    } finally {
+      await single.end();
+    }
+  });
 });

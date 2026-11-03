@@ -1,19 +1,16 @@
 {
   "name": "setup-status",
   "description": "Return the setup catalog with each task's live-derived status (done / pending / deferred / always_available). Call this at the start of every setup session and after any credential is captured. Never guess at setup state — always call this.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {},
   "outputs": {
-    "tasks": "CatalogTaskWithStatus[] — catalog tasks with status, tier, handoff surface, credential_how_to, docs_url",
+    "tasks": "CatalogTaskWithStatus[] — catalog tasks with status, tier, handoff surface, credential_how_to, docs_url; restart_required: true when the task is configured but Curia must restart before it works; done_means: \"credentials_saved\" on key-based tasks (Signal, Slack, SMS, voice, web research), where done means the keys are saved, not that the channel is enabled or running",
     "summary": "{ total: number, done: number, pending: number, deferred: number }"
   },
   "permissions": [],
   "secrets": [
-    "channel.email.nylas_api_key",
-    "channel.email.nylas_grant_id",
-    "channel.email.nylas_self_email",
     "channel.signal.socket_path",
     "channel.signal.phone_number",
     "channel.slack.bot_token",
@@ -27,10 +24,10 @@
     "channel.voice.deepgram_api_key",
     "channel.voice.cartesia_api_key",
     "channel.voice.cartesia_voice_id",
-    "user.tavily_api_key"
+    "tavily_api_key"
   ],
   "timeout": 15000,
   "capabilities": ["entityMemory", "schedulerService", "officeIdentityService"],
-  "optional_capabilities": ["phoneAppReady"],
+  "optional_capabilities": ["phoneAppReady", "emailChannelStatus"],
   "allowed_callers": ["setup-wizard"]
 }

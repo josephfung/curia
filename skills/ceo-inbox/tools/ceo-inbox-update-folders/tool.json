@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-update-folders",
   "description": "Add or remove folders/labels on a message in the principal's personal email inbox. Use to star (add STARRED), label, or move messages between folders. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -18,7 +18,7 @@
     "read_only_skipped": "string[] (SENT or DRAFT tokens in add_folders/remove_folders; Gmail sets these itself, so nothing changed for them)"
   },
   "permissions": [],
-  "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 15000,
   "capabilities": []
 }
