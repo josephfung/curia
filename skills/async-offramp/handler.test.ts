@@ -516,6 +516,79 @@ describe('AsyncOfframpHandler mode now (#2428)', () => {
     }
   });
 
+  // CodeRabbit round 3 on PR #2433.
+  it('returns the clarification context with the question, for the next brief', async () => {
+    const question = JSON.stringify({ _curia_protocol: 'clarification_request', question: 'Which account?', context: 'Job created; sign-in pending.', resume_token: 't' });
+    const { bus } = liveBus((task) => response(task, { content: question }));
+    const result = await handler.execute(makeCtx(bus, { brief: 'Check my feed', mode: 'now' }));
+    expect(result.success && result.data).toMatchObject({ needs_answer: true, question: 'Which account?', context: 'Job created; sign-in pending.' });
+    if (result.success) expect((result.data as { note: string }).note).toContain('context');
+  });
+
+  it('keeps the coordinator text when the work fails, on the call and in a forward', async () => {
+    const { bus } = liveBus((task) => response(task, { content: 'Sent the message, then the calendar step failed.', isError: true }));
+    const onCall = await handler.execute(makeCtx(bus, { brief: 'Two steps', mode: 'now' }));
+    expect(onCall.success && onCall.data).toMatchObject({ failed: true, result: 'Sent the message, then the calendar step failed.' });
+
+    resetAsyncOfframpDedupForTests();
+    const controller = new AbortController();
+    const late = liveBus();
+    const first = handler.execute(makeCtx(late.bus, { brief: 'Two steps later', mode: 'now' }, { inputSignal: controller.signal }));
+    await Promise.resolve();
+    controller.abort();
+    await first;
+    await late.respond(response(late.published[0] as AgentTaskEvent, { content: 'Sent it; then a step failed.', isError: true }));
+    expect((late.published[1] as AgentTaskEvent).payload.content).toContain('Sent it; then a step failed.');
+  });
+
+  it('forwards a late question with its context', async () => {
+    const controller = new AbortController();
+    const { bus, published, respond } = liveBus();
+    const first = handler.execute(makeCtx(bus, { brief: 'Long job', mode: 'now' }, { inputSignal: controller.signal }));
+    await Promise.resolve();
+    controller.abort();
+    await first;
+    const question = JSON.stringify({ _curia_protocol: 'clarification_request', question: 'Which account?', context: 'Two of three steps done.', resume_token: 't' });
+    await respond(response(published[0] as AgentTaskEvent, { content: question }));
+    expect((published[1] as AgentTaskEvent).payload.content).toContain('Two of three steps done.');
+  });
+
+  it('keeps the dedup entry while a forward is still retrying', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const { bus, published, respond } = liveBus();
+      let failures = 1;
+      const target = bus as unknown as { publishDetached: (l: string, e: BusEvent) => Promise<void> };
+      const realPublish = target.publishDetached;
+      target.publishDetached = async (layer, event) => {
+        if (published.length >= 1 && failures > 0) { failures -= 1; throw new Error('write-ahead failed'); }
+        await realPublish(layer, event);
+      };
+      const first = handler.execute(makeCtx(bus, { brief: 'Long job', mode: 'now' }, { inputSignal: controller.signal }));
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      await first;
+      const delivered = respond(response(published[0] as AgentTaskEvent, { content: 'Late result.' }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      const repeat = await handler.execute(makeCtx(bus, { brief: 'Long job', mode: 'now' }));
+      expect(repeat.success && repeat.data).toMatchObject({ deduplicated: true });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await delivered;
+      expect(published.filter((event) => (event as AgentTaskEvent).payload.content.includes('## Brief'))).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keys an explicit idempotency_key by mode too', async () => {
+    const { bus, published } = liveBus((task) => response(task, { content: 'ok' }));
+    await handler.execute(makeCtx(bus, { brief: 'Research it', idempotency_key: 'k1' }));
+    const now = await handler.execute(makeCtx(bus, { brief: 'Research it', idempotency_key: 'k1', mode: 'now' }));
+    expect(now.success && now.data).toMatchObject({ completed: true });
+    expect(published.filter((event) => event.type === 'agent.task')).toHaveLength(2);
+  });
+
   it('keeps after_call as the default and rejects an unknown mode', async () => {
     const { bus, published } = liveBus();
     const result = await handler.execute(makeCtx(bus, { brief: 'Research this' }));

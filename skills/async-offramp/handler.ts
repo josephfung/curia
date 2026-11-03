@@ -94,11 +94,13 @@ function buildIdempotencyKey(
   brief: string,
   followUpChannel: string,
   explicitKey: string | undefined,
+  mode: Mode,
 ): string {
   // Always scope to conversation — an LLM-supplied key like "deck" must not
-  // collide across sessions (CodeRabbit #1617).
+  // collide across sessions (CodeRabbit #1617). A now hand-off waits for its
+  // result, so it never reuses an after_call entry, even under the same key.
   if (explicitKey) {
-    return `explicit:${conversationId ?? 'unknown'}|${explicitKey}`;
+    return `explicit:${conversationId ?? 'unknown'}|${explicitKey}${mode === 'now' ? '|now' : ''}`;
   }
   const material = `${conversationId ?? 'unknown'}|${normalizeBrief(brief)}|${followUpChannel}`;
   return createHash('sha256').update(material).digest('hex');
@@ -177,7 +179,7 @@ function buildForwardContent(brief: string, followUpChannel: FollowUpChannel, re
 
 type NowOutcome =
   | { kind: 'reply'; event: AgentResponseEvent }
-  | { kind: 'question'; question: string }
+  | { kind: 'question'; question: string; context: string | null }
   | { kind: 'missed' };
 
 /** Mirrors the runtime's clarification envelope (src/agents/runtime.ts). */
@@ -194,14 +196,15 @@ const FORWARD_RETRY_DELAYS_MS = [5_000, 30_000];
 function classifyReply(response: AgentResponseEvent):
   | { kind: 'final' }
   | { kind: 'paused' }
-  | { kind: 'question'; question: string } {
+  | { kind: 'question'; question: string; context: string | null } {
   const content = response.payload.content;
   if (response.payload.isError || !content.trimStart().startsWith('{')) return { kind: 'final' };
   if (parseExecutionPausedPayload(content)) return { kind: 'paused' };
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>;
     if (parsed['_curia_protocol'] === CLARIFICATION_PROTOCOL && typeof parsed['question'] === 'string') {
-      return { kind: 'question', question: parsed['question'] };
+      const context = typeof parsed['context'] === 'string' && parsed['context'].trim() ? parsed['context'] : null;
+      return { kind: 'question', question: parsed['question'], context };
     }
   } catch {
     // Not JSON after all: prose that happens to start with a brace is a final reply.
@@ -211,10 +214,27 @@ function classifyReply(response: AgentResponseEvent):
 
 /** The text a forward carries for a reply the caller did not hear. */
 function forwardText(response: AgentResponseEvent): string {
-  if (response.payload.isError) return 'The work failed before it finished. Say so plainly.';
+  // An error reply can follow a send that already went out; keep its report so
+  // the principal is not asked to redo work that happened.
+  if (response.payload.isError) {
+    const report = response.payload.content.trim();
+    return report
+      ? `The work failed before it finished. Its last report, which says what did happen: ${report}`
+      : 'The work failed before it finished. Say so plainly.';
+  }
   const reply = classifyReply(response);
-  if (reply.kind === 'question') return `The work stopped with a question the principal needs to answer: ${reply.question}`;
+  if (reply.kind === 'question') {
+    return [
+      `The work stopped with a question the principal needs to answer: ${reply.question}`,
+      ...(reply.context ? [`What was done so far: ${reply.context}`] : []),
+    ].join('\n');
+  }
   return response.payload.content;
+}
+
+/** Release a dedup entry only if it still belongs to this hand-off (eviction can replace it). */
+function releaseDedup(key: string, taskEventId: string): void {
+  if (enqueuedByKey.get(key)?.taskEventId === taskEventId) enqueuedByKey.delete(key);
 }
 
 /**
@@ -294,6 +314,7 @@ export class AsyncOfframpHandler implements ToolHandler {
       brief,
       `${followUpChannel ?? 'usual'}${mode === 'now' ? '|now' : ''}`,
       explicitKey,
+      mode,
     );
 
     const prior = enqueuedByKey.get(idempotencyKey);
@@ -416,8 +437,10 @@ export class AsyncOfframpHandler implements ToolHandler {
             completed: false,
             needs_answer: true,
             question: outcome.question,
+            ...(outcome.context ? { context: outcome.context } : {}),
             task_event_id: taskEvent.id,
-            note: 'Ask the caller this, then hand the work off again with their answer in the brief.',
+            note: 'Ask the caller this. Then hand the work off again with a brief that has their answer and the context, '
+              + 'so finished steps (and sends) are not repeated.',
           },
         };
       }
@@ -431,8 +454,10 @@ export class AsyncOfframpHandler implements ToolHandler {
               mode,
               completed: false,
               failed: true,
+              result: payload.content,
+              sent: payload.sends ?? [],
               task_event_id: taskEvent.id,
-              note: 'The work failed. Tell the caller plainly that it did not get done and offer to try again.',
+              note: 'The work failed. Tell the caller plainly what did and did not happen (result, sent); do not redo a send that went out.',
             },
           };
         }
@@ -511,7 +536,7 @@ export class AsyncOfframpHandler implements ToolHandler {
           if (phase !== 'late') return;
           phase = 'closed';
           pendingReplies.delete(taskEventId);
-          enqueuedByKey.delete(idempotencyKey);
+          releaseDedup(idempotencyKey, taskEventId);
           ctx.log.warn({ taskEventId }, 'voice hand-off: no reply within the forward window; nothing forwarded');
         }, LATE_FORWARD_WINDOW_MS);
         lateTimer.unref?.();
@@ -530,7 +555,6 @@ export class AsyncOfframpHandler implements ToolHandler {
       const forward = async (response: AgentResponseEvent): Promise<void> => {
         if (forwarded) return;
         forwarded = true;
-        enqueuedByKey.delete(idempotencyKey);
         const task = createAgentTask({
           agentId: 'coordinator',
           conversationId: `voice-offramp-forward:${taskEventId.slice(0, 32)}`,
@@ -548,11 +572,15 @@ export class AsyncOfframpHandler implements ToolHandler {
         for (let attempt = 0; ; attempt += 1) {
           try {
             await bus.publishDetached('dispatch', task);
+            // Released only once the forward settles: until then a repeat of the
+            // brief is still this hand-off, not new work.
+            releaseDedup(idempotencyKey, taskEventId);
             ctx.log.info({ taskEventId, forwardTaskId: task.id }, 'voice hand-off: result forwarded to the principal');
             return;
           } catch (err) {
             const delay = FORWARD_RETRY_DELAYS_MS[attempt];
             if (delay === undefined) {
+              releaseDedup(idempotencyKey, taskEventId);
               ctx.log.error({ err, taskEventId, attempts: attempt + 1 }, 'voice hand-off: result could not be forwarded; the principal was not told');
               return;
             }
@@ -573,14 +601,16 @@ export class AsyncOfframpHandler implements ToolHandler {
           phase = 'closed';
           clearTimeout(waitTimer);
           // Settled on the call: a repeat of this brief is a new request (a retry after a failure).
-          enqueuedByKey.delete(idempotencyKey);
+          releaseDedup(idempotencyKey, taskEventId);
           // The turn can still be cancelled before the result is spoken (barge-in,
           // hang-up). A turn that finishes normally is never aborted afterwards, so
           // an abort from here on means the caller did not hear it all.
           if (signal && !response.payload.isError) {
             signal.addEventListener('abort', () => { void forward(response); }, { once: true });
           }
-          resolve(reply.kind === 'question' ? { kind: 'question', question: reply.question } : { kind: 'reply', event: response });
+          resolve(reply.kind === 'question'
+            ? { kind: 'question', question: reply.question, context: reply.context }
+            : { kind: 'reply', event: response });
           return;
         }
         phase = 'closed';
