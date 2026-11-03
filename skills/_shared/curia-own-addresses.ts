@@ -8,16 +8,16 @@
 // calls this declares optional capability `curiaEmailAddresses`.
 
 import type { ToolContext } from '../../src/skills/types.js';
+import { CURIA_ADDRESS_LOOKUP_TIMEOUT_MS } from '../../src/channels/email/email-accounts-repo.js';
 
-// The live read is a DB query with no timeout of its own. Callers run under a ~20 s tool
-// deadline, so a stalled read must give way to the boot list instead of using it all up.
-export const LIVE_LOOKUP_TIMEOUT_MS = 3000;
+// Callers run under a ~20 s tool deadline, so a slow live read must give way to the boot
+// list instead of using it all up. The read's statement timeout uses the same value.
 
 /** Lowercased. Never throws: a failed or slow live read logs and falls back to the boot list. */
 export async function curiaOwnAddresses(
   ctx: ToolContext,
   toolName: string,
-  timeoutMs = LIVE_LOOKUP_TIMEOUT_MS,
+  timeoutMs = CURIA_ADDRESS_LOOKUP_TIMEOUT_MS,
 ): Promise<Set<string>> {
   const addresses = new Set((ctx.selfEmails ?? []).map((e) => e.toLowerCase()));
   if (ctx.curiaEmailAddresses) {

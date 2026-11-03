@@ -57,6 +57,9 @@ export interface CreateEmailAccountInput {
  *
  * All methods use parameterized queries; never interpolate variables into SQL.
  */
+/** How long the ceo-inbox tools wait for listSelfEmails, and its statement timeout (#2409). */
+export const CURIA_ADDRESS_LOOKUP_TIMEOUT_MS = 3000;
+
 export class EmailAccountsRepo {
   constructor(private readonly pool: DbPool) {}
 
@@ -66,6 +69,37 @@ export class EmailAccountsRepo {
       `SELECT ${COLS} FROM email_accounts ORDER BY name ASC`,
     );
     return rows.map(mapRow);
+  }
+
+  /**
+   * Every account's address, with a server-side statement timeout. For the ceo-inbox tools'
+   * per-call Curia-mail filter (#2409): their caller stops waiting after a few seconds, and the
+   * timeout makes Postgres cancel a stalled read too, so it can't keep holding a pool connection.
+   */
+  async listSelfEmails(statementTimeoutMs: number): Promise<string[]> {
+    const client = await this.pool.connect();
+    let broken: Error | undefined;
+    try {
+      await client.query('BEGIN');
+      // set_config(..., true) is SET LOCAL with a bind parameter: it ends with the transaction.
+      await client.query("SELECT set_config('statement_timeout', $1, true)", [`${statementTimeoutMs}ms`]);
+      const { rows } = await client.query<{ self_email: string }>(
+        'SELECT self_email FROM email_accounts ORDER BY name ASC',
+      );
+      await client.query('COMMIT');
+      return rows.map(r => r.self_email);
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        // The connection is in an unknown state: have the pool destroy it, not reuse it.
+        // The caller still gets the original error below.
+        broken = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
+      }
+      throw err;
+    } finally {
+      client.release(broken);
+    }
   }
 
   /** Return one account by its logical name, or null if not found. */

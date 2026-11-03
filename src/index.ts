@@ -91,7 +91,7 @@ import { resolvePrincipalCalendarGrant } from './channels/calendar/resolve-calen
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
 import { NylasPrincipalMailbox } from './contacts/nylas-principal-mailbox.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
-import { EmailAccountsRepo } from './channels/email/email-accounts-repo.js';
+import { EmailAccountsRepo, CURIA_ADDRESS_LOOKUP_TIMEOUT_MS } from './channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from './channels/email/resolve-email-accounts.js';
 import { emailChannelStatus as resolveEmailChannelStatus } from './channels/email/email-channel-status.js';
 import { SignalRpcClient } from './channels/signal/signal-rpc-client.js';
@@ -2673,8 +2673,10 @@ async function main(): Promise<void> {
   // ceo-inbox list/search skip Curia's own mail (#2409). Read live, so a mailbox added in the
   // console is excluded before the restart that starts polling it. Disabled accounts count:
   // they are still Curia's addresses.
-  const curiaEmailAddresses = async (): Promise<string[]> =>
-    (await emailAccountsRepo.list()).map(a => a.selfEmail);
+  // The statement timeout matches the tools' wait (CURIA_ADDRESS_LOOKUP_TIMEOUT_MS), so a stalled read
+  // is cancelled server-side too instead of holding a pool connection after they give up.
+  const curiaEmailAddresses = (): Promise<string[]> =>
+    emailAccountsRepo.listSelfEmails(CURIA_ADDRESS_LOOKUP_TIMEOUT_MS);
   const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
