@@ -3462,9 +3462,12 @@ async function main(): Promise<void> {
       ? (account, draftId) => briefingGateway.readHeldDraft(account, draftId)
       : undefined,
     bus,
+    activity: activityService,
     officeTimezone: config.timezone,
     logger,
   });
+  // The home's tiles read a cached model; keep it warm only when the console is served.
+  if (config.webAppBootstrapSecret) briefingService.startWarming();
 
   const httpAdapter = new HttpAdapter({
     bus,
@@ -3598,6 +3601,7 @@ async function main(): Promise<void> {
     } catch (err) {
       logger.error({ err }, 'Error stopping HTTP API during shutdown');
     }
+    briefingService.stopWarming();
     try {
       scheduler.stop();
     } catch (err) {

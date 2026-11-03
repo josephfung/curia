@@ -595,9 +595,19 @@ export interface StatsData {
   /** Principal-minutes in the current and previous 7 days, plus the tile's explanation. */
   minutesSaved: { current: number; previous: number; help: string; detail: string };
   done: { current: number; previous: number };
-  contacts: { total: number; newThisWeek: number };
+  /** Open principal-owned tasks, any open status, and how many are past due. */
+  openTasks: { total: number; overdue: number };
   hiccups: { current: number; byDay: number[] };
   handledSinceYesterday: number;
+}
+
+export interface HiccupsData {
+  timezone: string;
+  /** The local day asked for, or null for the tile's 7-day window. */
+  day: string | null;
+  /** Hiccups the tile counts; more than items.length when the list is capped. */
+  total: number;
+  items: ActivityItem[];
 }
 
 export interface HistogramDay {
@@ -665,7 +675,7 @@ export async function fetchStats(signal?: AbortSignal): Promise<StatsData> {
   const data = await fetchJson<Record<string, unknown>>('/api/dashboard/stats', signal);
   const minutesSaved = requireRecord(data['minutesSaved'], '/api/dashboard/stats minutes');
   const done = requireRecord(data['done'], '/api/dashboard/stats done');
-  const contacts = requireRecord(data['contacts'], '/api/dashboard/stats contacts');
+  const openTasks = requireRecord(data['openTasks'], '/api/dashboard/stats open tasks');
   const hiccups = requireRecord(data['hiccups'], '/api/dashboard/stats hiccups');
   const byDay = requireArray<number>(hiccups['byDay'], '/api/dashboard/stats hiccups');
   if (byDay.some((n) => typeof n !== 'number')) {
@@ -687,14 +697,30 @@ export async function fetchStats(signal?: AbortSignal): Promise<StatsData> {
       current: requireNumber(done['current'], '/api/dashboard/stats done'),
       previous: requireNumber(done['previous'], '/api/dashboard/stats done'),
     },
-    contacts: {
-      total: requireNumber(contacts['total'], '/api/dashboard/stats contacts'),
-      newThisWeek: requireNumber(contacts['newThisWeek'], '/api/dashboard/stats contacts'),
+    openTasks: {
+      total: requireNumber(openTasks['total'], '/api/dashboard/stats open tasks'),
+      overdue: requireNumber(openTasks['overdue'], '/api/dashboard/stats open tasks'),
     },
     hiccups: { current: requireNumber(hiccups['current'], '/api/dashboard/stats hiccups'), byDay },
     handledSinceYesterday: requireNumber(data['handledSinceYesterday'], '/api/dashboard/stats'),
   };
 }
+
+// GET /api/dashboard/hiccups[?day=YYYY-MM-DD] → the jobs behind the Hiccups tile (#2350).
+export async function fetchHiccups(day?: string, signal?: AbortSignal): Promise<HiccupsData> {
+  const query = day ? `?${new URLSearchParams({ day }).toString()}` : '';
+  const data = await fetchJson<Record<string, unknown>>(`/api/dashboard/hiccups${query}`, signal);
+  const items = requireArray<ActivityItem>(data['items'], '/api/dashboard/hiccups');
+  return {
+    timezone: requireText(data['timezone'], '/api/dashboard/hiccups'),
+    day: typeof data['day'] === 'string' ? data['day'] : null,
+    total: requireNumber(data['total'], '/api/dashboard/hiccups'),
+    items,
+  };
+}
+
+// The Tasks page with the Open tasks tile's filters applied: the principal's, every open status.
+export const OPEN_TASKS_SEARCH = { owner: 'ceo', status: 'all_open' } as const;
 
 export async function fetchHistogram(signal?: AbortSignal): Promise<HistogramData> {
   const data = await fetchJson<Record<string, unknown>>('/api/dashboard/histogram', signal);

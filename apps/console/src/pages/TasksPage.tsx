@@ -477,6 +477,8 @@ type SortKey = 'title' | 'agentId' | 'owner' | 'priority' | 'status' | 'dueAt' |
 
 const STATUS_FILTERS = [
   'all',
+  // Every status a task is still open in; matches the backend's OPEN_TASK_STATUSES.
+  'all_open',
   // Primary task-lifecycle values
   'open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled',
   // Legacy scheduler values
@@ -486,17 +488,35 @@ type StatusFilter = typeof STATUS_FILTERS[number];
 
 type OwnerFilter = 'all' | TaskOwner;
 
+const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'in_progress', 'blocked', 'waiting']);
+const OWNER_FILTERS: readonly OwnerFilter[] = ['all', 'curia', 'ceo', 'external'];
+
+function statusFilterFrom(value: string | undefined): StatusFilter {
+  return (STATUS_FILTERS as readonly string[]).includes(value ?? '') ? value as StatusFilter : 'all';
+}
+
+function ownerFilterFrom(value: string | undefined): OwnerFilter {
+  return (OWNER_FILTERS as readonly string[]).includes(value ?? '') ? value as OwnerFilter : 'all';
+}
+
+function statusFilterLabel(value: StatusFilter): string {
+  if (value === 'all') return 'All';
+  if (value === 'all_open') return 'All open';
+  return value.replace('_', ' ');
+}
+
 export default function TasksPage() {
   const navigate = useNavigate();
-  const { task: taskIdFromUrl } = useSearch({ strict: false }) as { task?: string };
+  const { task: taskIdFromUrl, owner: ownerFromUrl, status: statusFromUrl } =
+    useSearch({ strict: false }) as { task?: string; owner?: string; status?: string };
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => statusFilterFrom(statusFromUrl));
+  const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>(() => ownerFilterFrom(ownerFromUrl));
   // Default sort: priority DESC; due_at ASC is the tiebreaker in the sort comparator.
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'priority', dir: 'desc' });
   const [page, setPage] = useState(1);
@@ -541,13 +561,15 @@ export default function TasksPage() {
     for (const t of tasks) {
       const cur = c[t.status];
       if (cur !== undefined) c[t.status] = cur + 1;
+      if (OPEN_STATUSES.has(t.status)) c['all_open'] = (c['all_open'] ?? 0) + 1;
     }
     return c;
   }, [tasks]);
 
   const filtered = useMemo(() => {
     let rows = tasks;
-    if (statusFilter !== 'all') rows = rows.filter(t => t.status === statusFilter);
+    if (statusFilter === 'all_open') rows = rows.filter(t => OPEN_STATUSES.has(t.status));
+    else if (statusFilter !== 'all') rows = rows.filter(t => t.status === statusFilter);
     if (ownerFilter !== 'all') rows = rows.filter(t => t.owner === ownerFilter);
     if (search) {
       const q = search.toLowerCase();
@@ -681,7 +703,7 @@ export default function TasksPage() {
                       className={`records-filter-chip${statusFilter === v ? ' active' : ''}`}
                       onClick={() => { setStatusFilter(v); setPage(1); }}
                     >
-                      {v === 'all' ? 'All' : v.replace('_', ' ')}
+                      {statusFilterLabel(v)}
                       <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, opacity: 0.7 }}>
                         {counts[v] ?? 0}
                       </span>

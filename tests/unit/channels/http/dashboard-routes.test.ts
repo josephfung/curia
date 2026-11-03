@@ -57,6 +57,7 @@ describe('dashboard routes', () => {
       '/api/dashboard/stats',
       '/api/dashboard/histogram',
       '/api/dashboard/bullpen',
+      '/api/dashboard/hiccups',
       '/api/dashboard/approvals/1/preview',
     ]) {
       const res = await server.inject({ method: 'GET', url });
@@ -110,6 +111,25 @@ describe('dashboard routes', () => {
     const res = await server.inject({ method: 'GET', url: '/api/dashboard/waiting', headers: AUTH });
     expect(res.statusCode).toBe(500);
     expect(JSON.parse(res.body)).toEqual({ error: 'Failed to load what is waiting on you' });
+  });
+
+  it('passes a hiccup day through and rejects a malformed one', async () => {
+    const service = briefing();
+    const hiccups = vi.spyOn(service, 'hiccups').mockResolvedValue({ timezone: 'UTC', day: '2026-11-02', total: 0, items: [] });
+    const server = await build(service);
+    const ok = await server.inject({ method: 'GET', url: '/api/dashboard/hiccups?day=2026-11-02', headers: AUTH });
+    expect(ok.statusCode).toBe(200);
+    expect(hiccups).toHaveBeenCalledWith(expect.any(Date), '2026-11-02');
+    const bad = await server.inject({ method: 'GET', url: '/api/dashboard/hiccups?day=yesterday', headers: AUTH });
+    expect(bad.statusCode).toBe(400);
+    expect(hiccups).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports the hiccup list as an error when there is no activity source', async () => {
+    const server = await build(briefing());
+    const res = await server.inject({ method: 'GET', url: '/api/dashboard/hiccups', headers: AUTH });
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body)).toEqual({ error: 'Failed to load the hiccups' });
   });
 
   it('forwards the review flag when the principal approves', async () => {

@@ -1,12 +1,15 @@
 // Briefing reads against Postgres (#2340 review): waiting counts, the histogram
-// aggregate, contact counts and the bullpen query. The unit tests mock the pool.
+// aggregate, open-task counts, the hiccup list and the bullpen query. The unit
+// tests mock the pool.
 
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
+import { ActivityService } from '../../src/activity/activity-service.js';
 import { timeSavedDetail, timeSavedHelp, UNDESCRIBED_CALL_MINUTES } from '../../src/activity/describers.js';
+import { AuditLogRepo } from '../../src/audit/audit-log-repo.js';
 import { BriefingService } from '../../src/dashboard/briefing-service.js';
 import { HISTOGRAM_DAYS, STATS_WINDOW_DAYS, addCalendarDays, localDayKey, localMidnight } from '../../src/dashboard/briefing.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
@@ -30,12 +33,12 @@ describeIf('briefing service against Postgres', () => {
     await pool.end();
   });
 
-  it('counts seeded tasks, approvals, jobs and contacts in the principal window', async () => {
+  it('counts seeded tasks, approvals and jobs in the principal window, and lists the hiccups', async () => {
     const client = await pool.connect();
     try {
       // REPEATABLE READ pins one snapshot for the whole test. The assertions are
       // deltas against a baseline, and some counts are global (open curia-owned
-      // tasks, all contacts). Under READ COMMITTED a concurrent test file that
+      // and ceo-owned tasks). Under READ COMMITTED a concurrent test file that
       // commits one between the baseline and the re-read breaks the delta (#2369).
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
       const now = await emptyFortnight(client);
@@ -47,17 +50,26 @@ describeIf('briefing service against Postgres', () => {
         actionLogRepo: new ActionLogRepo(client as unknown as pg.Pool, logger),
         taskRepo: new TaskRepo(client as unknown as pg.Pool, bus, logger),
         contactService: { findContactBySystemRole: async () => null },
+        activity: new ActivityService({
+          auditLogRepo: new AuditLogRepo(client as unknown as pg.Pool, logger),
+          contactService: {
+            getContact: async () => null,
+            findContactBySystemRole: async () => null,
+            resolveByChannelIdentity: async () => null,
+          } as unknown as ConstructorParameters<typeof ActivityService>[0]['contactService'],
+          officeTimezone: 'UTC',
+          logger,
+        }),
         officeTimezone: 'UTC',
         logger,
       });
 
       const beforeWaiting = await service.waiting(now);
-      const weekStart = localMidnight(addCalendarDays(today, -(7 - 1)), 'UTC');
-      const beforePeople = await client.query<{ total: number; recent: number }>(
-        `SELECT count(*) FILTER (WHERE kind = 'person')::int AS total,
-                count(*) FILTER (WHERE kind = 'person' AND created_at >= $1)::int AS recent
-         FROM contacts`,
-        [weekStart],
+      const beforeOpen = await client.query<{ total: number; overdue: number }>(
+        `SELECT count(*)::int AS total, count(*) FILTER (WHERE due_at < $1)::int AS overdue
+         FROM tasks
+         WHERE owner = 'ceo' AND status IN ('open', 'in_progress', 'blocked', 'waiting')`,
+        [now],
       );
 
       const title = `Briefing aggregate ${randomUUID()}`;
@@ -89,9 +101,9 @@ describeIf('briefing service against Postgres', () => {
         [now],
       );
       await client.query(
-        `INSERT INTO contacts (display_name, kind, created_at, updated_at)
-         VALUES ($1, 'person', $2, $2)`,
-        [`${title} person`, now],
+        `INSERT INTO tasks (agent_id, title, intent_anchor, status, progress, error_budget, owner, priority, source, created_by, tags, updated_at)
+         VALUES ('coordinator', $1, 'seeded', 'blocked', '{}'::jsonb, '{}'::jsonb, 'ceo', 50, 'agent', 'test', '{}', $2)`,
+        [`${title} blocked`, now],
       );
 
       const successRoot = await seedAudit(client, {
@@ -232,7 +244,7 @@ describeIf('briefing service against Postgres', () => {
         payload: { result: { success: true } },
       });
 
-      await seedAudit(client, {
+      const yesterdayRoot = await seedAudit(client, {
         timestamp: new Date(now.getTime() - 26 * 3_600_000),
         eventType: 'agent.task',
         payload: { agentId: 'ceo-inbox' },
@@ -250,6 +262,7 @@ describeIf('briefing service against Postgres', () => {
           outcome: 'failure',
           payload: { result: { success: false } },
         });
+        return root;
       });
 
       await seedAudit(client, {
@@ -268,9 +281,10 @@ describeIf('briefing service against Postgres', () => {
 
       const stats = await service.stats(now);
       const histogram = await service.histogram(now);
-      const people = beforePeople.rows[0]!;
-      expect(stats.contacts.total).toBe(Number(people.total) + 1);
-      expect(stats.contacts.newThisWeek).toBe(Number(people.recent) + 1);
+      // Seeded: one open and overdue, one blocked with no due date; done is not open.
+      const open = beforeOpen.rows[0]!;
+      expect(stats.openTasks.total).toBe(Number(open.total) + 2);
+      expect(stats.openTasks.overdue).toBe(Number(open.overdue) + 1);
       expect(stats.hiccups.current).toBe(histogram.days.slice(-7).reduce((sum, day) => sum + day.hiccups, 0));
 
       const todayBar = histogram.days.find((day) => day.key === today);
@@ -283,6 +297,15 @@ describeIf('briefing service against Postgres', () => {
       expect(yesterdayBar).toMatchObject({ total: 1, hiccups: 1 });
       expect(stats.done.current).toBe(4);
       expect(stats.handledSinceYesterday).toBe(6);
+
+      // The list behind the tile holds the same jobs as its number, newest first.
+      const hiccups = await service.hiccups(now);
+      expect(hiccups.total).toBe(stats.hiccups.current);
+      expect(hiccups.items.map((item) => item.id)).toEqual([partialRoot, replyRoot, yesterdayRoot]);
+      expect(hiccups.items.map((item) => item.outcome)).toEqual(['partial', 'failed', 'failed']);
+      const yesterdayOnly = await service.hiccups(now, yesterday);
+      expect(yesterdayOnly).toMatchObject({ day: yesterday, total: 1 });
+      expect(yesterdayOnly.items.map((item) => item.id)).toEqual([yesterdayRoot]);
 
       const bullpen = await service.bullpen(now);
       expect(bullpen).toEqual({ available: true, count: 1, agents: ['coordinator'] });

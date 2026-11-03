@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Hiccups list** — clicking the Hiccups tile lists the week's failed and partly failed jobs. (#2350)
 - **Phone app invitation link** — operators send the principal a single-use, 48-hour link that installs and pairs the app. (#2412)
 - **`async-offramp` now mode** — a call can wait for the full assistant's result instead of refusing. (#2428)
 - **`scheduler-get`** — reads one scheduled job in full, so routines can be quoted verbatim and edited safely. (#2399)
@@ -124,6 +125,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Open tasks tile** — replaces People known; counts open principal tasks and opens them on Tasks. (#2350)
 - **`@anthropic-ai/sdk` 1.x** — moves to API version 2026-10-21; Anthropic API requests no longer send `temperature`. (#2439)
 - **Console navigation** — Settings → System now holds About, Devices and Retention; Personality keeps behaviour settings. (#2341)
 - **User menu** — name and version open a menu with theme, Devices & notifications, and Log out. (#2341)
@@ -278,6 +280,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Console home tiles** — numbers come from a background-refreshed cache and shimmer while loading. (#2350)
 - **Phone app icon** — white mark on near-black, so it stays legible in iOS dark mode. (#2341)
 - **Offline page** — says whether the device is offline or can't reach Curia; reconnects automatically. (#2341)
 - **Phone app typing** — text fields are 16px on touch screens, so iOS no longer zooms in. (#2341)

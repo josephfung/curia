@@ -29,7 +29,10 @@ function deps(overrides: Partial<ActivityServiceDeps> = {}): ActivityServiceDeps
     row({ id: 'r3', eventType: 'tool.result', parentEventId: 'i3', outcome: 'success', payload: { toolName: 'ceo-inbox-archive', result: { success: true, data: {} } } }),
   ];
   return {
-    auditLogRepo: { findActivityJobs: vi.fn().mockResolvedValue({ roots, delegated: [], children, hasMore: false }) },
+    auditLogRepo: {
+      findActivityJobs: vi.fn().mockResolvedValue({ roots, delegated: [], children, hasMore: false }),
+      findActivityJobsByIds: vi.fn().mockResolvedValue({ roots, delegated: [], children }),
+    },
     actionLogRepo: { findTerminalBetween: vi.fn().mockResolvedValue([]) },
     contactService: {
       getContact: vi.fn().mockImplementation(async (id: string) => (id === CONTACT_ID ? { displayName: 'Jane Roe' } : undefined)),
@@ -92,7 +95,7 @@ describe('ActivityService', () => {
     };
     const findActivityJobs = vi.fn()
       .mockResolvedValueOnce(page(0)).mockResolvedValueOnce(page(1)).mockResolvedValueOnce(page(2)).mockResolvedValueOnce(page(3));
-    const result = await new ActivityService(deps({ auditLogRepo: { findActivityJobs } })).list({ from: new Date(0), to: T0, limit: 3 });
+    const result = await new ActivityService(deps({ auditLogRepo: { findActivityJobs, findActivityJobsByIds: vi.fn() } })).list({ from: new Date(0), to: T0, limit: 3 });
     expect(result.items).toHaveLength(3);
     expect(result.hasMore).toBe(true);
     // Stopped once it had more than `limit` items: four pages, each continuing from the last.
@@ -138,6 +141,27 @@ describe('ActivityService', () => {
     const page = await new ActivityService(deps()).list({ from: new Date(0), to: T0, limit: 1 });
     expect(page.items).toHaveLength(1);
     expect(page.hasMore).toBe(true);
+  });
+});
+
+describe('ActivityService.listByIds', () => {
+  it('projects the named roots, newest first, with names resolved', async () => {
+    const d = deps();
+    const items = await new ActivityService(d).listByIds(['t1', 't2'], T0);
+    expect(d.auditLogRepo.findActivityJobsByIds).toHaveBeenCalledWith(['t1', 't2'], T0);
+    expect(items.map((i) => i.id)).toEqual(['t1', 't2']);
+    expect(items[0]!.details).toEqual(['emailed Jane Roe', 'drafted a reply to John Doe']);
+  });
+
+  it('reads nothing more when no root matched', async () => {
+    const d = deps({
+      auditLogRepo: {
+        findActivityJobs: vi.fn(),
+        findActivityJobsByIds: vi.fn().mockResolvedValue({ roots: [], delegated: [], children: [] }),
+      },
+    });
+    expect(await new ActivityService(d).listByIds(['gone'], T0)).toEqual([]);
+    expect(d.contactService.findContactBySystemRole).not.toHaveBeenCalled();
   });
 });
 
