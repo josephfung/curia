@@ -6,7 +6,7 @@ import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 // Types + row-tree builder live in registry-rows.ts, shared with its unit tests
 // (mirrors src/registry/types.ts RegistryEntry).
-import { buildRows, collateralPins, formatCapabilities, registryPathSegment, uninstallBlockedReason, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
+import { buildRows, collateralPins, drawerOptionalSecrets, formatCapabilities, registryPathSegment, uninstallBlockedReason, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
 
 // Map each DerivedState to one of the existing .status-pill modifier classes
 // (app.css) so no new CSS is needed:
@@ -137,7 +137,8 @@ function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
   // PR2 (#939): required-secrets gate. Only skills declare install.requires_secrets.
   const required = entry.kind === 'tool' ? (entry.metadata?.requiresSecrets ?? []) : [];
   // #2445: keys the tool works without. Shown and settable, never part of the gate.
-  const optional = entry.kind === 'tool' ? (entry.metadata?.optionalSecrets ?? []) : [];
+  // A bundle drawer shows its members' keys, since member rows are read-only.
+  const optional = drawerOptionalSecrets(entry, row);
   const [configured, setConfigured] = useState<Set<string>>(new Set());
   const [secretsErr, setSecretsErr] = useState<string | null>(null);
 

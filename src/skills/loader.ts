@@ -121,11 +121,13 @@ export function parseToolDiscoveryDir(
       ? rawOptional.filter((s): s is string => typeof s === 'string')
       : undefined;
     // Same boundary for install.optional_secrets (#2445): keep only string → string pairs,
-    // since the keys widen the vault write allowlist. Non-object → undefined.
+    // since the keys widen the vault write allowlist. Non-object → undefined. A key also in
+    // requires_secrets still gates install, so it is required, not optional.
     const rawOptionalSecrets: unknown = manifest.install?.optional_secrets;
     const optionalSecrets = typeof rawOptionalSecrets === 'object' && rawOptionalSecrets !== null && !Array.isArray(rawOptionalSecrets)
       ? Object.entries(rawOptionalSecrets)
         .filter((e): e is [string, string] => e[0].length > 0 && typeof e[1] === 'string' && e[1].length > 0)
+        .filter(([name]) => !(requiresSecrets ?? []).includes(name))
         .map(([name, purpose]) => ({ name, purpose }))
       : undefined;
     if (entryName !== manifest.name) {

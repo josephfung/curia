@@ -108,6 +108,13 @@ describe('loadToolsFromDirectory', () => {
       expect(all.find(d => d.name === 'mixed')?.metadata?.optionalSecrets).toEqual([{ name: 'ok', purpose: 'fine' }]);
       expect(all.find(d => d.name === 'array')?.metadata?.optionalSecrets).toBeUndefined();
     });
+
+    it('drops a key that requires_secrets also lists, since it still gates install', () => {
+      writeSkill('both', { requires_secrets: ['shared'], optional_secrets: { shared: 'x', extra: 'y' } });
+      const disc = discoverToolManifests(tmpDir).find(d => d.name === 'both');
+      expect(disc?.metadata?.requiresSecrets).toEqual(['shared']);
+      expect(disc?.metadata?.optionalSecrets).toEqual([{ name: 'extra', purpose: 'y' }]);
+    });
   });
 
   it('throws for a nonexistent directory', async () => {

@@ -170,6 +170,32 @@ export function buildRows(
 }
 
 /**
+ * Optional secrets to show in an entry's drawer (#2445).
+ *
+ * A tool shows its own. A bundle shows its members': a bundle's member rows are
+ * read-only, so the bundle drawer is the only place the operator can set a member's key
+ * (web-search's tavily_api_key lives under the web bundle). First declaration wins
+ * when two members share a key.
+ */
+export function drawerOptionalSecrets(
+  entry: RegistryEntry,
+  row: Row | undefined,
+): { name: string; purpose: string }[] {
+  if (entry.kind === 'tool') return entry.metadata?.optionalSecrets ?? [];
+  if (entry.kind !== 'skill' || row === undefined) return [];
+  const seen = new Set<string>();
+  const out: { name: string; purpose: string }[] = [];
+  for (const member of row.members) {
+    for (const secret of member.metadata?.optionalSecrets ?? []) {
+      if (seen.has(secret.name)) continue;
+      seen.add(secret.name);
+      out.push(secret);
+    }
+  }
+  return out;
+}
+
+/**
  * Member tools of `row` that some agent pins directly, by tool name.
  *
  * Disabling a bundle cascades to its members, which would strip those tools from an

@@ -32,7 +32,7 @@ const KEYLESS_HEADER = 'X-Tavily-Access-Mode';
 // Where an operator adds or replaces the key. Both paths take effect on the next search:
 // the execution layer reads the vault on every invocation.
 const UPGRADE_PATHS =
-  'add one in the console (Settings → Tools → web-search), or ask Curia in chat to "add my Tavily key" for a secure link';
+  'add one in the console (Settings → Tools → web), or ask Curia in chat to "add my Tavily key" for a secure link';
 
 /**
  * Map a non-OK Tavily response to an error the agent can relay to the principal.

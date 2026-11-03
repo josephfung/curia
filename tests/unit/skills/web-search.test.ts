@@ -77,7 +77,7 @@ describe('WebSearchHandler', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('temporarily limited');
-        expect(result.error).toContain('Settings → Tools → web-search');
+        expect(result.error).toContain('Settings → Tools → web)');
         expect(result.error).toContain('add my Tavily key');
         expect(result.error).toContain('about 1 minute');
         expect(result.error).not.toMatch(/x402|pay/i);
@@ -188,7 +188,7 @@ describe('WebSearchHandler', () => {
     if (!result.success) {
       expect(result.error).toContain(String(status));
       expect(result.error).toContain('invalid');
-      expect(result.error).toContain('Settings → Tools → web-search');
+      expect(result.error).toContain('Settings → Tools → web)');
       expect(result.error).not.toContain('tvly-test-key');
     }
   });

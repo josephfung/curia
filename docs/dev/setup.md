@@ -323,7 +323,7 @@ and how to add a key, and agents relay it to the principal. A free Tavily key
 (1,000 credits a month, no card) raises the limit. Add it any of these ways; each
 takes effect on the next search, with no restart:
 
-- **Console:** **Settings → Tools → web-search → Optional secrets → `tavily_api_key`**.
+- **Console:** **Settings → Tools → web → Optional secrets → `tavily_api_key`**.
 - **Chat:** ask Curia to "add my Tavily key". The setup assistant sends a one-time
   secure link that saves `tavily_api_key` straight to the vault.
 - **Dev shortcut:** `TAVILY_API_KEY=tvly-... pnpm run seed-vault`.

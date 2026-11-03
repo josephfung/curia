@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRows, collateralPins, formatCapabilities, registryPathSegment, uninstallBlockedReason } from './registry-rows.js';
+import { buildRows, collateralPins, drawerOptionalSecrets, formatCapabilities, registryPathSegment, uninstallBlockedReason } from './registry-rows.js';
 import type { RegistryEntry } from './registry-rows.js';
 
 const entry = (name: string, over: Partial<RegistryEntry> = {}): RegistryEntry => ({
@@ -190,5 +190,36 @@ describe('formatCapabilities (#2028)', () => {
   it('shows an optional-only list without a required prefix', () => {
     expect(formatCapabilities(undefined, ['taskRepo'])).toBe('Optional: taskRepo');
     expect(formatCapabilities([], ['taskRepo', 'verification'])).toBe('Optional: taskRepo, verification');
+  });
+});
+
+describe('drawerOptionalSecrets', () => {
+  // #2445: bundle member rows are read-only, so web-search's optional tavily_api_key was
+  // reachable nowhere on /tools until the bundle drawer listed its members' keys.
+  const tool = (name: string, optionalSecrets: { name: string; purpose: string }[]) =>
+    entry(name, { metadata: { name, description: 'd', version: '1.0.0', optionalSecrets } });
+
+  it('returns a tool its own optional secrets', () => {
+    const t = tool('web-search', [{ name: 'tavily_api_key', purpose: 'raises limits' }]);
+    expect(drawerOptionalSecrets(t, undefined)).toEqual([{ name: 'tavily_api_key', purpose: 'raises limits' }]);
+  });
+
+  it("returns a bundle its members' optional secrets, first declaration winning", () => {
+    const rows = buildRows(
+      [bundle('web', ['web-search', 'web-fetch', 'web-browser'], [], 'enabled')],
+      [
+        tool('web-search', [{ name: 'tavily_api_key', purpose: 'raises limits' }]),
+        tool('web-fetch', [{ name: 'tavily_api_key', purpose: 'other' }]),
+        entry('web-browser'),
+      ],
+      [],
+    );
+    const row = rows[0]!;
+    expect(drawerOptionalSecrets(row.entry, row)).toEqual([{ name: 'tavily_api_key', purpose: 'raises limits' }]);
+  });
+
+  it('returns nothing for an agent or a bundle without its row', () => {
+    expect(drawerOptionalSecrets(entry('coordinator', { kind: 'agent' }), undefined)).toEqual([]);
+    expect(drawerOptionalSecrets(bundle('web', ['web-search'], [], 'enabled'), undefined)).toEqual([]);
   });
 });

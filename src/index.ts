@@ -1247,11 +1247,11 @@ async function main(): Promise<void> {
   }
 
   // A Tavily key saved under the old checklist name reaches web-search on this boot (#2409).
-  // Non-fatal: a vault hiccup leaves web-search keyless (#2445), not Curia down.
+  // Non-fatal: a vault hiccup leaves the old key unused (#2445), not Curia down.
   try {
     await migrateLegacyTavilyKey(secretsService, logger);
   } catch (err) {
-    logger.warn({ err }, 'Tavily key migration failed; web-search stays keyless until tavily_api_key is set');
+    logger.warn({ err }, 'Tavily key migration failed; check vault connectivity. A key saved under the old name is unused until this succeeds or tavily_api_key is set');
   }
 
   try {
