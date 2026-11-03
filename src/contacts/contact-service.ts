@@ -2865,15 +2865,21 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      // A defunct number is defunct on every channel, so the rows derived from it go
-      // with it (#2447): left active, a send could still pick them. Reactivating the
-      // source brings back the derived rows that are defunct, which a derivation would
-      // otherwise skip for good. Bounced stays per-row: a delivery failure can be
-      // specific to one channel.
-      `UPDATE contact_channel_identities
+      // A defunct number is defunct on every channel, so every row derived from it,
+      // directly or through another derived row, goes with it (#2447): left active, a
+      // send could still pick them. Reactivating the source brings back the descendants
+      // that are defunct, which a derivation would otherwise skip for good. Bounced
+      // stays per-row: a delivery failure can be specific to one channel.
+      `WITH RECURSIVE descendants AS (
+         SELECT id FROM contact_channel_identities WHERE derived_from_identity_id = $2
+         UNION
+         SELECT child.id FROM contact_channel_identities child
+         JOIN descendants parent ON child.derived_from_identity_id = parent.id
+       )
+       UPDATE contact_channel_identities
        SET status = $1, updated_at = now()
        WHERE id = $2
-          OR (derived_from_identity_id = $2
+          OR (id IN (SELECT id FROM descendants)
               AND ($1 = 'defunct' OR ($1 = 'active' AND status = 'defunct')))
        RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id`,
       [status, identityId],
@@ -3796,10 +3802,19 @@ class InMemoryContactBackend implements ContactServiceBackend {
     const updatedAt = new Date();
     const updated: ChannelIdentity = { ...identity, status, updatedAt };
     this.identities.set(identityId, updated);
-    // Same rule as the Postgres backend: defunct reaches the rows derived from this one,
-    // and active brings back the derived rows that are defunct.
-    for (const [id, other] of this.identities) {
-      if (other.derivedFromIdentityId !== identityId) continue;
+    // Same rule as the Postgres backend: defunct reaches every row derived from this
+    // one, directly or through another derived row, and active brings back the
+    // descendants that are defunct.
+    const descendants = new Set<string>();
+    for (let frontier = [identityId]; frontier.length > 0;) {
+      const parents = new Set(frontier);
+      frontier = [...this.identities.values()]
+        .filter((other) => other.derivedFromIdentityId != null && parents.has(other.derivedFromIdentityId) && !descendants.has(other.id))
+        .map((other) => other.id);
+      for (const id of frontier) descendants.add(id);
+    }
+    for (const id of descendants) {
+      const other = this.identities.get(id)!;
       if (status === 'defunct' || (status === 'active' && other.status === 'defunct')) {
         this.identities.set(id, { ...other, status, updatedAt });
       }

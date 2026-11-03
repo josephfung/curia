@@ -677,6 +677,23 @@ describe('phone-family derivation (#2447)', () => {
       .toMatchObject({ ok: true, identifier: NUMBER, derivedFrom: 'phone' });
   });
 
+  it('defunct reaches a row derived from a derived row, and reactivation brings both back', async () => {
+    const sms = await contacts.linkIdentity({
+      contactId: venueId, channel: 'sms', channelIdentifier: NUMBER, source: 'derived', verified: true, derivedFromIdentityId: phoneId,
+    });
+    const signal = await contacts.linkIdentity({
+      contactId: venueId, channel: 'signal', channelIdentifier: NUMBER, source: 'derived', verified: true, derivedFromIdentityId: sms.id,
+    });
+    const statuses = async (): Promise<Array<string | undefined>> => {
+      const rows = (await contacts.getContactWithIdentities(venueId))!.identities;
+      return [sms.id, signal.id].map((id) => rows.find((i) => i.id === id)?.status);
+    };
+    await contacts.setIdentityStatus(phoneId, 'defunct');
+    expect(await statuses()).toEqual(['defunct', 'defunct']);
+    await contacts.setIdentityStatus(phoneId, 'active');
+    expect(await statuses()).toEqual(['active', 'active']);
+  });
+
   it('bounced stays on the row it was set on: a delivery failure can be specific to one channel', async () => {
     await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
     await contacts.setIdentityStatus(phoneId, 'bounced');
