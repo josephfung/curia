@@ -148,6 +148,13 @@ export interface LLMCallProvenance {
    */
   reasoningBlocksDropped?: number;
   /**
+   * Set when the provider dropped a valid caller temperature because its API
+   * rejects sampling parameters (AnthropicProvider on every model, #2439).
+   * `sentTemperature()` then records null even for a model the registry does
+   * not know. Absent otherwise.
+   */
+  samplingParamsOmitted?: true;
+  /**
    * OpenRouter only: requests sent for this call, counting retries (always 1 on
    * stream(), which does not retry). Absent where the provider does not count them (#1915).
    */

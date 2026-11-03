@@ -3403,6 +3403,7 @@ export class AgentRuntime {
       const temperature = sentTemperature(
         params.options,
         this.config.modelRegistry?.rejectsSamplingParams(response.provenance.requestedModel) ?? false,
+        response.provenance,
       );
 
       const event = createLlmCall({

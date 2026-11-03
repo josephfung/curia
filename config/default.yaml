@@ -352,6 +352,9 @@ filter:
     enabled: true
     # Recommended: use a different vendor/family than the agent tiers for model diversity
     # (an attack tuned for the coordinator should not also fool the reviewer).
+    # The judge asks for temperature 0. A Claude judge cannot get it: the
+    # Anthropic API rejects sampling parameters (#2439), so it runs at the
+    # default. Pick an OpenRouter or Bedrock model to keep temperature 0.
     model: claude-haiku-5-5
     timeout_ms: 5000
     failMode: split   # split (default) | open | closed — see src/config.ts
@@ -367,6 +370,7 @@ filter:
 # There is no failMode key — local.yaml overrides are deep-merged but not schema-checked,
 # so an operator-added failMode is silently ignored (see EscalationJudgeConfig).
 # Recommended: use a different model family than the coordinator (model diversity).
+# Temperature: a Claude judge runs at the API default, as for the filter judge above.
 escalation:
   judge:
     enabled: true
