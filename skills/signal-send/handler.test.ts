@@ -193,6 +193,26 @@ describe('SignalSendHandler', () => {
       }
     });
 
+    it('flags a derived number as delivery unconfirmed (#2447)', async () => {
+      const gateway = {
+        send: vi.fn().mockResolvedValue({ success: true }),
+        resolveRecipientReference: vi.fn().mockResolvedValue({
+          ok: true, kind: 'contact', contactId: BOB_ID, identifier: '+14155551234', displayName: 'Bob', derivedFrom: 'phone',
+        }),
+      };
+      const result = await handler.execute(makeCtx({ input: { recipient: BOB_ID, message: 'hello' }, gateway }));
+      expect(result).toMatchObject({
+        success: true,
+        data: { delivered_to: '+14155551234', delivery_unconfirmed: true, address_note: expect.stringContaining('phone') },
+      });
+    });
+
+    it('does not flag a number verified on Signal', async () => {
+      const result = await handler.execute(makeCtx({ input: { recipient: BOB_ID, message: 'hello' } }));
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).not.toHaveProperty('delivery_unconfirmed');
+    });
+
     it('sends nothing when the reference does not resolve', async () => {
       const gateway = { send: vi.fn() };
       const ctx = makeCtx({ input: { recipient: 'principle', message: 'hello' }, gateway });

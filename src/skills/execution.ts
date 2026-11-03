@@ -1149,6 +1149,9 @@ export class ExecutionLayer {
           // a non-reference returns its error before any lookup.
           contactService: this.contactService ?? { getContactWithIdentities: async () => undefined },
           principalContactId: this.principalIdentities[0]?.contactId,
+          // The first resolve of a send writes any derived sms/signal row (#2447), so
+          // Gate C, the approval and the skill all see the same identity row.
+          ...(this.contactService ? { deriver: this.contactService } : {}),
         });
         if (!result.ok) {
           if (result.cause !== undefined) {

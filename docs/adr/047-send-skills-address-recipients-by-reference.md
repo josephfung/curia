@@ -7,6 +7,7 @@ Amended: 2026-10-08 — agent-entered identifiers are verified by provenance (#2
 Amended: 2026-10-08 — the principal's mailbox drafts address recipients by reference; a raw address needs a source (#2053)
 Amended: 2026-10-09 — `email-reply` verifies a recipient only when mail auth passes and the address is not ours (#2071)
 Amended: 2026-10-14 — `email-reply`'s `cc` resolves references beside literal addresses (#2131)
+Amended: 2026-11-03 — a verified number on one phone-family channel is derived onto the others (#2447)
 
 ## Context
 
@@ -170,6 +171,30 @@ Structural contacts are off limits to agents. No agent skill changes the address
 
 Apart from structural contacts, an agent may vouch only for what an agent typed. This is how agents reach contacts that a raw send created before this change.
 
+### Phone-family numbers are derived across channels (#2447)
+
+A number is the same on `phone`, `sms` and `signal` (`PHONE_CHANNELS`). Before this, a contact with the number verified as `phone` could not be texted: `sms-send` found no `sms` row, and linking the number as `sms` was refused as unsourced, because the web search that found it was in an earlier conversation. In the 2026-11-02 incident, nothing was sent and the principal was asked for a number Curia already had verified. Provenance exists to catch a mistyped or invented identifier. A number that exactly matches a verified identity on the same contact can be neither.
+
+**The rule** (`src/contacts/phone-family-derivation.ts`). A verified, active, E.164 identity on one phone-family channel can be used for another on the same contact. When it is, a real row is written for that channel:
+- source `derived`, with `derived_from_identity_id` naming the row it was copied from (migration 116). A CHECK allows that column on `derived` rows only. It is nulled, not cascaded, when the source row is deleted: the derived row is still a verified fact about the contact;
+- verified, since verification means "this number belongs to this contact", whatever the channel. It keeps the source's label;
+- a Signal ACI-UUID row has no number, and unverified rows (`sms_participant`, an unverified `outbound_recipient`, `self_claimed`) do not qualify. A number that already has a row on the target channel is left alone whatever that row's state: a derivation does not verify or reactivate someone else's decision;
+- the duplicate check still runs. Another contact holding the number on the target channel refuses the write. One holding it on a sibling channel is a candidate until named in `distinct_from`. A similar number on another contact is not a candidate: the derived number is an exact copy of a verified one, so it cannot be a typo of theirs.
+
+**Structural contacts never derive, the principal included.** The principal's `sms` and `signal` identities feed Gate C and principal recognition on spoofable SMS (ADR-036). They stay explicit links the principal manages. The `principal` send alias never derives either.
+
+**Two entry points share the rule.**
+- `contact-link-identity`: an identifier that matches a qualifying identity on the same contact links as a derived row, with or without a source in the conversation. One that matches nothing is checked for provenance as before.
+- The send skills: when `resolveRecipientReference` finds no usable identity on the channel and the caller passes a `deriver`, it writes the derived row and resolves to it. The execution layer's pre-gate resolve is the first to run, so Gate C, an approval's pin and the skill all see the same row. The gateway passes one too. Read-only callers (approval display, pin confirmation, mailbox drafts) do not.
+
+The resolver writes the row rather than reading through to `phone` at send time, for two reasons. Inbound matching is exact-channel (`resolveByChannelIdentity`), so without an `sms` row a reply from the number would create a second, unknown contact. And one write path keeps the two entry points from drifting apart.
+
+A number on file as `phone` may be a landline that cannot take SMS, or not be on Signal. So a send to any derived row, not only the first, returns `delivery_unconfirmed` with an `address_note`, and the agent reports the message as sent to the number on file, delivery not confirmed.
+
+The pre-gate resolve writes the row even when a gate then holds or refuses the send. That is accepted: the row records a fact about the contact, not the send.
+
+Out of scope: outbound calls (no call skill yet; one would add `phone` to `SENDABLE` and resolve through the same rule), and attributing unsolicited inbound on one channel to a number on file only on another, which is a trust change for its own decision.
+
 ### References are checked before any gate, and Gate C uses the result
 
 For the four send skills and `email-draft-save`, the execution layer checks and resolves recipients before the autonomy gates (`resolveSendSkillReferences` in `src/skills/execution.ts`), with the same resolver the skill uses. It refuses a retired raw-address input, an address or template token in a reference field, a reference that does not resolve, and more than 25 references, each with the skill's own message (#2041). So no gate files an approval for a send that cannot run. A contact-store outage is classified `DATABASE_UNAVAILABLE`.
@@ -229,3 +254,4 @@ Option A is not added. What send-by-reference does not cover:
 - Contacts the gateway created before this change still carry `ceo_stated` and verified identities. Relabelling them is a data change, left to the operator.
 - **#2061:** a cold outreach to an address with no source (no person stated it, no source tool read it, and the principal did not approve the write) is refused until the principal states it. That covers a pattern guess, an address from memory, and one found only in a delegate's reply. `agent_called` and `agent_stated` identities written before #2061 stay verified.
 - **`tool.json` gains `provenance_source` (public API).** Marking a tool is a security decision: its output must be data it read, never model text. `tests/unit/skills/provenance-source-manifests.test.ts` pins the list.
+- **#2447:** a contact whose number is verified on one of `phone`, `sms` or `signal` can be reached on the others. A send to a derived row reports delivery as unconfirmed. `IdentitySource` gains `derived`, and `contact_channel_identities` gains `derived_from_identity_id`.

@@ -1277,6 +1277,11 @@ export class ContactService {
       throw new Error('Cannot force-verify a self_claimed identity — principal confirmation required');
     }
 
+    // A derived row always names its source row, and only a derived row has one (#2447).
+    if ((options.source === 'derived') !== (options.derivedFromIdentityId !== undefined)) {
+      throw new Error('derivedFromIdentityId is required for, and only allowed on, a derived identity');
+    }
+
     // Normalize email addresses to lowercase for case-insensitive matching.
     // RFC 5321 allows case-sensitive local-parts, but in practice no major
     // provider enforces this — storing mixed-case causes lookup misses when
@@ -1295,6 +1300,7 @@ export class ContactService {
       verifiedAt: verified ? now : null,
       status: options.status ?? 'active',
       source: options.source,
+      derivedFromIdentityId: options.derivedFromIdentityId ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -2656,8 +2662,9 @@ class PostgresContactBackend implements ContactServiceBackend {
     );
     await this.pool.query(
       `INSERT INTO contact_channel_identities
-         (id, contact_id, channel, channel_identifier, label, verified, verified_at, source, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+         (id, contact_id, channel, channel_identifier, label, verified, verified_at, source, status, created_at, updated_at,
+          derived_from_identity_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         identity.id,
         identity.contactId,
@@ -2670,6 +2677,7 @@ class PostgresContactBackend implements ContactServiceBackend {
         identity.status,
         identity.createdAt,
         identity.updatedAt,
+        identity.derivedFromIdentityId ?? null,
       ],
     );
   }
@@ -2688,7 +2696,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id
        FROM contact_channel_identities WHERE id = $1`,
       [identityId],
     );
@@ -2710,7 +2718,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id
        FROM contact_channel_identities WHERE contact_id = $1 ORDER BY created_at ASC`,
       [contactId],
     );
@@ -2733,7 +2741,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id
        FROM contact_channel_identities WHERE channel = ANY($1::text[])`,
       [channels],
     );
@@ -2860,7 +2868,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       `UPDATE contact_channel_identities
        SET status = $1, updated_at = now()
        WHERE id = $2
-       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at`,
+       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id`,
       [status, identityId],
     );
 
@@ -2891,7 +2899,7 @@ class PostgresContactBackend implements ContactServiceBackend {
            verified_at = COALESCE(verified_at, now()),
            updated_at = now()
        WHERE id = $1
-       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at`,
+       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id`,
       [identityId],
     );
 
@@ -3496,6 +3504,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     source: string;
     created_at: Date;
     updated_at: Date;
+    derived_from_identity_id?: string | null;
   }): ChannelIdentity {
     return {
       id: row.id,
@@ -3507,6 +3516,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       verifiedAt: row.verified_at,
       status: row.status as IdentityStatus,
       source: row.source as IdentitySource,
+      derivedFromIdentityId: row.derived_from_identity_id ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

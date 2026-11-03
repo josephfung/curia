@@ -47,6 +47,28 @@ describe('sms-send handler', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('flags a derived number as delivery unconfirmed, and an sms-verified one not (#2447)', async () => {
+    const send = vi.fn().mockResolvedValue({ success: true, messageId: 'm3' });
+    const derived = vi.fn().mockResolvedValue({
+      ok: true, kind: 'contact', contactId: BOB_ID, identifier: '+14155552671', displayName: 'Bob', derivedFrom: 'phone',
+    });
+    const result = await new SmsSendHandler().execute(makeCtx({
+      input: { recipient: BOB_ID, message: 'hi' },
+      outboundGateway: { send, resolveRecipientReference: derived } as never,
+    }));
+    expect(result).toMatchObject({
+      success: true,
+      data: { delivered_to: '+14155552671', delivery_unconfirmed: true, address_note: expect.stringContaining('SMS') },
+    });
+
+    const plain = await new SmsSendHandler().execute(makeCtx({
+      input: { recipient: 'principal', message: 'hi' },
+      outboundGateway: { send, resolveRecipientReference } as never,
+    }));
+    expect(plain.success).toBe(true);
+    if (plain.success) expect(plain.data).not.toHaveProperty('delivery_unconfirmed');
+  });
+
   describe('send by reference (#2033)', () => {
     it('resolves recipient through the gateway and sends to the looked-up number', async () => {
       const send = vi.fn().mockResolvedValue({ success: true, messageId: 'm2' });

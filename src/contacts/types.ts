@@ -62,6 +62,11 @@ export interface ChannelIdentity {
   verifiedAt: Date | null;
   status: IdentityStatus;
   source: IdentitySource;
+  /**
+   * For a `derived` row, the identity it was derived from (#2447). Null once that
+   * row is deleted, and on every other source. Optional so fixtures need not set it.
+   */
+  derivedFromIdentityId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -91,7 +96,12 @@ export type IdentitySource =
   // send before #2041, or an email-reply whose From failed the auth, ownership,
   // or duplicate check. Not auto-verified (#2033, #2071, ADR-047). A later
   // reply that passes those checks verifies this identity in place.
-  | 'outbound_recipient';
+  | 'outbound_recipient'
+  // A phone-family row (phone, sms, signal) copied from a verified, active E.164
+  // identity on another phone-family channel of the same contact (#2447, ADR-047).
+  // Verified: the number belongs to this contact whatever the channel. The source row
+  // is recorded in derived_from_identity_id. Structural contacts never derive.
+  | 'derived';
 
 // -- Identity status --
 // active: address is believed to be valid and usable (default)
@@ -152,6 +162,8 @@ export interface LinkIdentityOptions {
   source: IdentitySource;
   verified?: boolean;
   status?: IdentityStatus;
+  /** The identity a `derived` row was copied from (#2447). Only valid with that source. */
+  derivedFromIdentityId?: string;
 }
 
 /** Result of resolving an inbound sender */
