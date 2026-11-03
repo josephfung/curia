@@ -6,7 +6,7 @@ import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 // Types + row-tree builder live in registry-rows.ts, shared with its unit tests
 // (mirrors src/registry/types.ts RegistryEntry).
-import { buildRows, collateralPins, formatCapabilities, registryPathSegment, uninstallBlockedReason, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
+import { buildRows, collateralPins, drawerOptionalSecrets, drawerRequiredSecrets, formatCapabilities, registryPathSegment, uninstallBlockedReason, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
 
 // Map each DerivedState to one of the existing .status-pill modifier classes
 // (app.css) so no new CSS is needed:
@@ -35,16 +35,20 @@ async function errorMessage(res: Response): Promise<string> {
 
 // ── Required-secret row (status + inline entry) ──────────────────────────────
 //
-// One required vault key. Shows a configured/missing pill; when missing, offers a
-// masked input + Save that PUTs the value to /api/vault/secrets/:name. On success it
-// calls onSaved so the drawer re-reads vault status and re-evaluates the install gate.
+// One vault key. Shows a configured/missing pill; when missing, offers a masked
+// input + Save that PUTs the value to /api/vault/secrets/:name. On success it calls
+// onSaved so the drawer re-reads vault status and re-evaluates the install gate.
+// An optional key (#2445) reads "not set" instead of "missing" and shows what it adds.
+// A configured key offers Replace, so a revoked or invalid key can be swapped in place.
 
-function SecretRow({ name, configured, onSaved }: {
+function SecretRow({ name, configured, onSaved, optionalPurpose }: {
   name: string;
   configured: boolean;
   onSaved: () => void;
+  optionalPurpose?: string;
 }) {
   const [value, setValue] = useState('');
+  const [replacing, setReplacing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -59,6 +63,7 @@ function SecretRow({ name, configured, onSaved }: {
       });
       if (!res.ok) throw new Error(await errorMessage(res));
       setValue(''); // don't keep the secret in component state after a successful save
+      setReplacing(false);
       onSaved();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to save secret');
@@ -70,12 +75,21 @@ function SecretRow({ name, configured, onSaved }: {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className={`status-pill ${configured ? 'confirmed' : 'blocked'}`}>
-          {configured ? 'configured' : 'missing'}
+        {/* A bare status-pill is neutral grey: an unset optional key is not a problem. */}
+        <span className={`status-pill ${configured ? 'confirmed' : optionalPurpose !== undefined ? '' : 'blocked'}`}>
+          {configured ? 'configured' : optionalPurpose !== undefined ? 'not set' : 'missing'}
         </span>
         <code style={{ fontSize: 13 }}>{name}</code>
+        {configured && !replacing && (
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReplacing(true)}>
+            Replace
+          </button>
+        )}
       </div>
-      {!configured && (
+      {optionalPurpose !== undefined && (
+        <p className="settings-page-sub" style={{ margin: 0 }}>{optionalPurpose}</p>
+      )}
+      {(!configured || replacing) && (
         <div style={{ display: 'flex', gap: 6 }}>
           <input
             type="password"
@@ -94,6 +108,11 @@ function SecretRow({ name, configured, onSaved }: {
           >
             Save
           </button>
+          {replacing && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { setReplacing(false); setValue(''); }}>
+              Cancel
+            </button>
+          )}
         </div>
       )}
       {err && <p className="autonomy-error" style={{ margin: 0 }}>{err}</p>}
@@ -115,8 +134,11 @@ function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // PR2 (#939): required-secrets gate. Only skills declare install.requires_secrets.
-  const required = entry.kind === 'tool' ? (entry.metadata?.requiresSecrets ?? []) : [];
+  // PR2 (#939): required-secrets gate. A bundle gates on its members' keys, as the server does.
+  const required = drawerRequiredSecrets(entry, row);
+  // #2445: keys the tool works without. Shown and settable, never part of the gate.
+  // A bundle drawer shows its members' keys, since member rows are read-only.
+  const optional = drawerOptionalSecrets(entry, row);
   const [configured, setConfigured] = useState<Set<string>>(new Set());
   const [secretsErr, setSecretsErr] = useState<string | null>(null);
 
@@ -124,7 +146,7 @@ function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
   // install/enable actions. Fail closed: if the status read fails we treat everything as
   // unconfigured (the gate stays on) rather than letting an install slip through.
   const loadVaultStatus = useCallback(async () => {
-    if (required.length === 0) return;
+    if (required.length === 0 && optional.length === 0) return;
     try {
       const res = await apiFetch('/api/vault/status');
       if (!res.ok) throw new Error(await errorMessage(res));
@@ -135,7 +157,7 @@ function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
       setConfigured(new Set());
       setSecretsErr(e instanceof Error ? e.message : 'Failed to load secret status');
     }
-  }, [required.length]);
+  }, [required.length, optional.length]);
 
   useEffect(() => { void loadVaultStatus(); }, [loadVaultStatus]);
 
@@ -315,6 +337,24 @@ function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
                     key={name}
                     name={name}
                     configured={configured.has(name)}
+                    onSaved={() => { void loadVaultStatus(); }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {optional.length > 0 && (
+            <div className="form-field">
+              <label>Optional secrets</label>
+              {required.length === 0 && secretsErr && <p className="autonomy-error" style={{ margin: 0 }}>{secretsErr}</p>}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {optional.map(s => (
+                  <SecretRow
+                    key={s.name}
+                    name={s.name}
+                    configured={configured.has(s.name)}
+                    optionalPurpose={s.purpose}
                     onSaved={() => { void loadVaultStatus(); }}
                   />
                 ))}

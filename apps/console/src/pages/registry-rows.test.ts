@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRows, collateralPins, formatCapabilities, registryPathSegment, uninstallBlockedReason } from './registry-rows.js';
+import { buildRows, collateralPins, drawerOptionalSecrets, drawerRequiredSecrets, formatCapabilities, registryPathSegment, uninstallBlockedReason } from './registry-rows.js';
 import type { RegistryEntry } from './registry-rows.js';
 
 const entry = (name: string, over: Partial<RegistryEntry> = {}): RegistryEntry => ({
@@ -190,5 +190,77 @@ describe('formatCapabilities (#2028)', () => {
   it('shows an optional-only list without a required prefix', () => {
     expect(formatCapabilities(undefined, ['taskRepo'])).toBe('Optional: taskRepo');
     expect(formatCapabilities([], ['taskRepo', 'verification'])).toBe('Optional: taskRepo, verification');
+  });
+});
+
+describe('drawerOptionalSecrets', () => {
+  // #2445: bundle member rows are read-only, so web-search's optional tavily_api_key was
+  // reachable nowhere on /tools until the bundle drawer listed its members' keys.
+  const tool = (name: string, optionalSecrets: { name: string; purpose: string }[]) =>
+    entry(name, { metadata: { name, description: 'd', version: '1.0.0', optionalSecrets } });
+
+  it('returns a tool its own optional secrets', () => {
+    const t = tool('web-search', [{ name: 'tavily_api_key', purpose: 'raises limits' }]);
+    expect(drawerOptionalSecrets(t, undefined)).toEqual([{ name: 'tavily_api_key', purpose: 'raises limits' }]);
+  });
+
+  it("returns a bundle its members' optional secrets, first declaration winning", () => {
+    const rows = buildRows(
+      [bundle('web', ['web-search', 'web-fetch', 'web-browser'], [], 'enabled')],
+      [
+        tool('web-search', [{ name: 'tavily_api_key', purpose: 'raises limits' }]),
+        tool('web-fetch', [{ name: 'tavily_api_key', purpose: 'other' }]),
+        entry('web-browser'),
+      ],
+      [],
+    );
+    const row = rows[0]!;
+    expect(drawerOptionalSecrets(row.entry, row)).toEqual([{ name: 'tavily_api_key', purpose: 'raises limits' }]);
+  });
+
+  it('leaves out a key another member requires, since it still gates the bundle', () => {
+    const rows = buildRows(
+      [bundle('web', ['web-search', 'web-fetch'], [], 'enabled')],
+      [
+        tool('web-search', [{ name: 'shared', purpose: 'p' }, { name: 'extra', purpose: 'q' }]),
+        entry('web-fetch', { metadata: { name: 'web-fetch', description: 'd', version: '1.0.0', requiresSecrets: ['shared'] } }),
+      ],
+      [],
+    );
+    const row = rows[0]!;
+    expect(drawerOptionalSecrets(row.entry, row)).toEqual([{ name: 'extra', purpose: 'q' }]);
+    // It moves to the required list rather than vanishing.
+    expect(drawerRequiredSecrets(row.entry, row)).toEqual(['shared']);
+  });
+
+  it('returns nothing for an agent or a bundle without its row', () => {
+    expect(drawerOptionalSecrets(entry('coordinator', { kind: 'agent' }), undefined)).toEqual([]);
+    expect(drawerOptionalSecrets(bundle('web', ['web-search'], [], 'enabled'), undefined)).toEqual([]);
+  });
+});
+
+describe('drawerRequiredSecrets', () => {
+  // Mirrors RegistryService.assertBundleSecretsConfigured: a bundle's install/enable is
+  // refused until every member's required key is set, so the drawer must show those keys.
+  const requiring = (name: string, requiresSecrets: string[]) =>
+    entry(name, { metadata: { name, description: 'd', version: '1.0.0', requiresSecrets } });
+
+  it('returns a tool its own required secrets', () => {
+    expect(drawerRequiredSecrets(requiring('signal-send', ['signal_key']), undefined)).toEqual(['signal_key']);
+  });
+
+  it("returns a bundle the deduplicated union of its members' required secrets", () => {
+    const rows = buildRows(
+      [bundle('b', ['t1', 't2', 't3'], [], 'installed')],
+      [requiring('t1', ['k1', 'k2']), requiring('t2', ['k2']), entry('t3')],
+      [],
+    );
+    const row = rows[0]!;
+    expect(drawerRequiredSecrets(row.entry, row)).toEqual(['k1', 'k2']);
+  });
+
+  it('returns nothing for an agent or a bundle without its row', () => {
+    expect(drawerRequiredSecrets(entry('coordinator', { kind: 'agent' }), undefined)).toEqual([]);
+    expect(drawerRequiredSecrets(bundle('b', ['t1'], [], 'installed'), undefined)).toEqual([]);
   });
 });

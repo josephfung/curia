@@ -58,7 +58,7 @@ export async function migrateLegacyTavilyKey(
     await secrets.delete(LEGACY_TAVILY_KEY);
   } catch (err) {
     // The copy landed, so web-search can read its key on this boot. Only the cleanup failed;
-    // say so rather than let the caller report that web-search stays off.
+    // say so rather than let the caller report that web-search stays keyless.
     logger.warn(
       { err, from: LEGACY_TAVILY_KEY, to: TAVILY_KEY },
       'Tavily key migration: copied the key but could not delete user.tavily_api_key; it stays as a stale copy',

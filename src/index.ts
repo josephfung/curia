@@ -1246,12 +1246,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Before reconciliation, so a Tavily key saved under the old checklist name enrolls
-  // web-search on this boot (#2409). Non-fatal: a vault hiccup leaves web-search off, not Curia.
+  // A Tavily key saved under the old checklist name reaches web-search on this boot (#2409).
+  // Non-fatal: a vault hiccup leaves the old key unused (#2445), not Curia down.
   try {
     await migrateLegacyTavilyKey(secretsService, logger);
   } catch (err) {
-    logger.warn({ err }, 'Tavily key migration failed; web-search stays off until tavily_api_key is set');
+    logger.warn({ err }, 'Tavily key migration failed; check vault connectivity. A key saved under the old name is unused until this succeeds or tavily_api_key is set');
   }
 
   try {
@@ -2520,8 +2520,8 @@ async function main(): Promise<void> {
   // HealthService — observability layer for liveness probes and canary jobs (#434).
   // Requires: pool, bus, logger (always available), scheduler (just constructed),
   // mcpSessions (loaded at line 926), and modelRoutingConfig (from line 393).
-  // Tavily is configured as a vault secret (not a config field) — pass undefined;
-  // canary is skipped. Google Workspace MCP uses OAuth env vars (no credential file)
+  // Tavily's key is a vault secret, resolved per canary run below; with none set the
+  // canary reports keyless mode (#2445). Google Workspace MCP uses OAuth env vars (no credential file)
   // — pass undefined; check falls back to a session ping if path is null.
   const healthConfig = resolveHealthConfig(yamlConfig.health);
   const healthService = new HealthService({
