@@ -177,6 +177,7 @@ import { SecretCaptureService } from './secrets/secret-capture-service.js';
 import { SecretCaptureResumeSubscriber } from './secrets/secret-capture-resume-subscriber.js';
 import { channelCredentialKeys } from './channels/http/routes/vault.js';
 import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
+import { migrateLegacyTavilyKey } from './secrets/migrate-legacy-tavily-key.js';
 import { applyChannelVaultSecrets } from './channels/apply-channel-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
@@ -432,6 +433,15 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.fatal({ err }, 'Failed to resolve bootstrap secrets from vault');
     process.exit(1);
+  }
+
+  // A Tavily key saved by the old setup link under user.tavily_api_key never reached
+  // web-search; copy it to the key web-search reads (#2409 item 2, #2445). Not fatal:
+  // without the copy, web search still runs keyless at the free tier's limits.
+  try {
+    await migrateLegacyTavilyKey(secretsService, logger);
+  } catch (err) {
+    logger.error({ err }, 'Failed to copy legacy user.tavily_api_key to tavily_api_key; web search stays keyless');
   }
 
   // api_token is a REQUIRED secret with a fail-OPEN consumer: validateBearerToken()
@@ -2510,8 +2520,8 @@ async function main(): Promise<void> {
   // HealthService — observability layer for liveness probes and canary jobs (#434).
   // Requires: pool, bus, logger (always available), scheduler (just constructed),
   // mcpSessions (loaded at line 926), and modelRoutingConfig (from line 393).
-  // Tavily is configured as a vault secret (not a config field) — pass undefined;
-  // canary is skipped. Google Workspace MCP uses OAuth env vars (no credential file)
+  // Tavily's key is a vault secret, resolved per canary run below; with none set the
+  // canary reports keyless mode (#2445). Google Workspace MCP uses OAuth env vars (no credential file)
   // — pass undefined; check falls back to a session ping if path is null.
   const healthConfig = resolveHealthConfig(yamlConfig.health);
   const healthService = new HealthService({

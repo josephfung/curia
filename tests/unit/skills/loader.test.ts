@@ -80,6 +80,36 @@ describe('loadToolsFromDirectory', () => {
     });
   });
 
+  // #2445: optional_secrets keys widen the vault write allowlist, so only clean
+  // string → string pairs survive discovery.
+  describe('install.optional_secrets normalization', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-loader-optional-secrets-'));
+
+    function writeSkill(name: string, install: unknown): void {
+      const dir = path.join(tmpDir, name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'tool.json'), JSON.stringify({
+        name, description: 'd', version: '1.0.0', action_risk: 'none', install,
+      }));
+    }
+
+    afterAll(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+    it('maps a well-formed object to name/purpose pairs', () => {
+      writeSkill('good', { optional_secrets: { a_key: 'raises limits' } });
+      const disc = discoverToolManifests(tmpDir).find(d => d.name === 'good');
+      expect(disc?.metadata?.optionalSecrets).toEqual([{ name: 'a_key', purpose: 'raises limits' }]);
+    });
+
+    it('drops non-string purposes and ignores non-object values', () => {
+      writeSkill('mixed', { optional_secrets: { ok: 'fine', bad: 42 } });
+      writeSkill('array', { optional_secrets: ['a_key'] });
+      const all = discoverToolManifests(tmpDir);
+      expect(all.find(d => d.name === 'mixed')?.metadata?.optionalSecrets).toEqual([{ name: 'ok', purpose: 'fine' }]);
+      expect(all.find(d => d.name === 'array')?.metadata?.optionalSecrets).toBeUndefined();
+    });
+  });
+
   it('throws for a nonexistent directory', async () => {
     // discoverToolManifests now owns the directory scan, so it is the
     // function that throws when the directory doesn't exist.

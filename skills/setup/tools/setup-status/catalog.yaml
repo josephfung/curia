@@ -131,13 +131,18 @@ tasks:
     docs_url: /channels/phone-app
 
   - id: web_research
-    label: "Web research (Tavily)"
-    value_prop: "Live web search for research tasks and news monitoring."
-    tier: one-key
+    label: "Web research"
+    value_prop: "Live web search for research tasks and news monitoring — works out of the box, no key needed."
+    tier: instant
     handoff: in-chat
     completion_check:
-      type: vault_secrets_all
+      type: always_available
+    # Keyless Tavily search is free but capped per hour (#2445). The key raises the cap;
+    # setup never asks for it — the wizard offers it on request.
+    optional_upgrade:
       keys:
-        - user.tavily_api_key
-    credential_how_to: "Get a free API key at tavily.com. I'll send you a secure link to enter it."
+        - tavily_api_key
+      value_prop: "Raises the web search limit — keyless search is capped at a few dozen searches an hour."
+      credential_how_to: "Get a free API key at tavily.com (1,000 searches a month, no card). I'll send you a secure link to enter it, or add it in the console under Settings → Tools → web-search."
+    credential_how_to: null
     docs_url: /integrations/tavily

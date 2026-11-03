@@ -11,7 +11,7 @@ function makeCtx(
 ): ToolContext {
   return {
     toolName: 'web-search',
-    toolVersion: '1.1.0',
+    toolVersion: '1.2.0',
     input,
     secret: (name: string) => {
       if (name === 'tavily_api_key') return secretValue;
@@ -40,29 +40,75 @@ describe('WebSearchHandler', () => {
     if (!result.success) expect(result.error).toContain('query');
   });
 
-  it('returns failure when API key is missing', async () => {
-    const ctx: ToolContext = {
-      toolName: 'web-search',
-      toolVersion: '1.1.0',
-      input: { query: 'test' },
-      // A genuinely-missing secret throws a plain Error with no `cause`.
-      secret: () => { throw new Error('Secret not set'); },
-      log: logger,
-    };
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error).toContain('API key');
-      // Guidance must lead the operator to the console/vault, not the env var.
-      expect(result.error).toContain('Skills');
-      expect(result.error).not.toContain('TAVILY_API_KEY');
+  describe('keyless mode (#2445)', () => {
+    // A genuinely-missing secret throws a plain Error with no `cause`.
+    function keylessCtx(input: Record<string, unknown>): ToolContext {
+      return {
+        toolName: 'web-search',
+        toolVersion: '1.2.0',
+        input,
+        secret: () => { throw new Error("Secret 'tavily_api_key' is declared but not set in the environment"); },
+        log: logger,
+      };
     }
+
+    it('searches keyless when no key is set: keyless header, no api_key', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+        results: [{ title: 'Example', url: 'https://example.com', content: 'c', score: 0.9 }],
+      }), { status: 200 }));
+      vi.stubGlobal('fetch', mockFetch);
+
+      const result = await handler.execute(keylessCtx({ query: 'test' }));
+      expect(result.success).toBe(true);
+      if (result.success) expect((result.data as { count: number }).count).toBe(1);
+      const init = mockFetch.mock.calls[0]![1] as RequestInit;
+      expect((init.headers as Record<string, string>)['X-Tavily-Access-Mode']).toBe('keyless');
+      expect(JSON.parse(init.body as string)).not.toHaveProperty('api_key');
+    });
+
+    it('returns a distinct rate-limit error naming both upgrade paths', async () => {
+      // Shape recorded from the live API on 2026-11-03: 429 + Retry-After + an
+      // hourly_cap_reached body that pushes x402 payment. None of that body is relayed.
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+        error: { code: 'hourly_cap_reached', message: 'pay via x402 agentic payment', window: 'hour', retry_after_seconds: 34 },
+      }), { status: 429, headers: { 'Retry-After': '34' } })));
+
+      const result = await handler.execute(keylessCtx({ query: 'test' }));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('temporarily limited');
+        expect(result.error).toContain('Settings → Tools → web-search');
+        expect(result.error).toContain('add my Tavily key');
+        expect(result.error).toContain('about 1 minute');
+        expect(result.error).not.toMatch(/x402|pay/i);
+      }
+    });
+
+    it('does not go keyless on an unexpected secret error (e.g. key not declared)', async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal('fetch', mockFetch);
+      const ctx: ToolContext = {
+        ...keylessCtx({ query: 'test' }),
+        secret: () => { throw new Error("Secret 'tavily_api_key' is not declared in the manifest for skill 'web-search'"); },
+      };
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('not declared');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('still reports a rate limit when Retry-After is absent', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 429 })));
+      const result = await handler.execute(keylessCtx({ query: 'test' }));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('within the hour');
+    });
   });
 
   it('surfaces vault read failures as operational errors, not missing-secret guidance', async () => {
     const ctx: ToolContext = {
       toolName: 'web-search',
-      toolVersion: '1.1.0',
+      toolVersion: '1.2.0',
       input: { query: 'test' },
       // The execution layer wraps a vault read failure in an Error with a `cause`
       // (see src/skills/execution.ts). That is an outage, not a misconfiguration —
@@ -74,6 +120,8 @@ describe('WebSearchHandler', () => {
       },
       log: logger,
     };
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -81,6 +129,8 @@ describe('WebSearchHandler', () => {
       expect(result.error).not.toContain('not configured');
       expect(result.error).not.toContain('Settings');
     }
+    // An outage must not fall back to a keyless search.
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('returns structured results on success', async () => {
@@ -119,16 +169,47 @@ describe('WebSearchHandler', () => {
     }
   });
 
-  it('returns failure on non-OK HTTP response', async () => {
+  it('sends the key, not the keyless header, when a key is set', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ results: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await handler.execute(makeCtx({ query: 'test' }));
+    expect(result.success).toBe(true);
+    const init = mockFetch.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(init.body as string).api_key).toBe('tvly-test-key');
+    expect(init.headers as Record<string, string>).not.toHaveProperty('X-Tavily-Access-Mode');
+  });
+
+  it.each([401, 403])('reports an invalid key when Tavily rejects it (HTTP %i)', async (status) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{"detail":{"error":"Unauthorized"}}', { status })));
+
+    const result = await handler.execute(makeCtx({ query: 'test' }));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain(String(status));
+      expect(result.error).toContain('invalid');
+      expect(result.error).toContain('Settings → Tools → web-search');
+      expect(result.error).not.toContain('tvly-test-key');
+    }
+  });
+
+  it('reports an exhausted plan when Tavily returns 432', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 432 })));
+    const result = await handler.execute(makeCtx({ query: 'test' }));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('usage limit');
+  });
+
+  it('returns a generic failure for other non-OK responses', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
-      status: 401,
-      statusText: 'Unauthorized',
+      status: 500,
+      statusText: 'Internal Server Error',
     }));
 
     const result = await handler.execute(makeCtx({ query: 'test' }));
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('401');
+    if (!result.success) expect(result.error).toContain('500');
   });
 
   it('returns failure on network error', async () => {

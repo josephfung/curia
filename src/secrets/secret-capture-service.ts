@@ -39,7 +39,7 @@ export function resolveSystemSecretName(input: string, allowedNames: ReadonlySet
   if (name.length === 0) throw new Error('secret_name must not be empty');
   if (!allowedNames.has(name)) {
     throw new Error(
-      `'${name}' is not a secret declared by any skill (install.requires_secrets) ` +
+      `'${name}' is not a secret declared by any skill (install.requires_secrets or optional_secrets) ` +
       `nor a known channel credential key. Only those names may be captured by ` +
       `system-secret-capture-request.`,
     );

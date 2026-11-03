@@ -1,5 +1,5 @@
 name: setup-wizard
-version: "0.4.0"
+version: "0.5.0"
 role: specialist
 description: >
   Resumable first-conversation concierge and setup guide. Invoke when the principal
@@ -10,8 +10,8 @@ description: >
   status summaries, or a capability menu.
 delegate_when: >-
   The principal's setup: their first message after setup ("Just finished setup"), "help
-  me set up X" for any integration or feature, "what can you do?", and coming back to
-  finish deferred setup. You relay what it returns.
+  me set up X" for any integration or feature, adding an API key ("add my Tavily key"),
+  "what can you do?", and coming back to finish deferred setup. You relay what it returns.
 model:
   tier: standard
 system_prompt: |
@@ -71,17 +71,23 @@ system_prompt: |
      "Your email channel is all set —" or tell them what's still missing.
   6. Never claim a channel is working without a live setup-status confirmation.
 
-  ### In-chat capture (Tavily, any one-key secret)
+  ### In-chat capture (any one-key secret)
   For tasks with handoff "in-chat" that need a secret:
   1. Call system-secret-capture-request with the exact vault key from the
-     catalog task's completion_check.keys[0]
-     (e.g. "user.tavily_api_key").
+     catalog task's vault_keys[0].
   2. Send the one-time link. Explain: "Click the link, paste your key — it goes
      straight to the vault; I never see it."
   3. After they fill it in, you may be resumed automatically. Call setup-status
      to confirm, then acknowledge.
-  4. Channel and system secrets need a restart to take effect; user.* secrets
-     (Tavily) are live immediately.
+  4. Channel secrets need a restart to take effect; skill keys (such as
+     tavily_api_key) are live on the next call.
+
+  ### Optional upgrades (web research)
+  A task with optional_upgrade already works without a credential — web research
+  searches keyless. Never ask for the key during setup. Offer it only when the
+  principal asks, or after web search reports it is temporarily limited. Then
+  relay the upgrade's value_prop and credential_how_to, and capture
+  optional_upgrade.vault_keys[0] the same way as an in-chat secret.
 
   ## Deferral
 

@@ -61,11 +61,12 @@ This guide is organized into three tiers. Start with the minimum and add service
 
 | Tier | Services | What you get |
 |---|---|---|
-| **1 - Minimum** | Anthropic + Postgres | Agents running, CLI and web app working |
+| **1 - Minimum** | Anthropic + Postgres | Agents running, CLI and web app working, web research (keyless) |
 | **2 - Recommended** | + Nylas + embeddings (OpenAI or your own endpoint) | Email channel active, entity memory and semantic search working |
-| **3 - Full** | + Tavily + Signal | Web research skill, encrypted Signal messaging |
+| **3 - Full** | + Signal | Encrypted Signal messaging |
 
-Complete each tier before moving to the next.
+Complete each tier before moving to the next. Web search needs no key; a Tavily key is
+an [optional upgrade](#optional-higher-web-search-limits-tavily-key) for higher limits.
 
 ---
 
@@ -102,7 +103,8 @@ for you:
 3. Prompts for your **Anthropic API key** (validated against `sk-ant-...`,
    3 retries).
 4. Writes `.env` from `.env.example`, leaving optional channel vars
-   (Nylas, embeddings, Tavily, Signal) commented out for Tiers 2 and 3.
+   (Nylas, embeddings, Tavily, Signal) commented out for Tiers 2 and 3 and the
+   optional Tavily upgrade.
 5. Starts the Postgres container, waits for it to be healthy, and applies
    all database migrations.
 6. **Seeds the encrypted secrets vault** from the values it just generated
@@ -183,7 +185,8 @@ full design is documented in
 
 ## Adding secrets after setup
 
-Tiers 2 and 3 add credentials (Nylas, embeddings, Tavily, Signal). These are
+Tiers 2 and 3 add credentials (Nylas, embeddings, Signal), and the optional
+Tavily key raises web search limits. These are
 **secrets**, and most of them resolve from the encrypted vault only (see
 [ADR-021](../adr/021-vault-only-secret-resolution.md)) — setting the key in
 `.env` alone has no effect. The one documented exception is `TAVILY_API_KEY`,
@@ -289,30 +292,7 @@ The command refuses to run beside a live Curia, and names the process that holds
 
 ## Tier 3 - Full
 
-Adds web research capability and (when available) Signal messaging.
-
-### Tavily (Web Search)
-
-Powers the `web-search` skill, which lets agents research topics and look up current information.
-
-`web-search` is **excluded from the default core set** and is **gated by `install.requires_secrets: [tavily_api_key]`**. It cannot be installed or enabled until the Tavily key exists in the vault. This makes it the reference flow for provisioning a skill secret through the console.
-
-**Provision via the console (recommended):**
-
-1. Sign up at [tavily.com](https://tavily.com) and copy your API key (`tvly-...`).
-2. In the console, open **Settings -> Skills -> web-search -> Required secrets**. `tavily_api_key` shows as **missing** and **Install & enable** is disabled.
-3. Paste the key inline. It is stored encrypted in the vault; the status flips to **configured** and the button enables.
-4. Click **Install & enable**. Enforcement is restart-based. The skill registers and becomes usable on the next process restart.
-
-**Alternative (dev shortcut):** seed the key into the vault directly, then enable web-search in the console:
-
-```bash
-TAVILY_API_KEY=tvly-... pnpm run seed-vault
-```
-
-`ctx.secret('tavily_api_key')` resolves vault-first with a `TAVILY_API_KEY` env-var fallback. In production the vault is the single source of truth. Do **not** leave `TAVILY_API_KEY` set in the deploy environment, since a lingering env var would mask whether the vault entry is actually being used.
-
-> **Revocation caveat:** the install/enable gate checks the vault only, but the runtime resolver falls back to the env var. So if `TAVILY_API_KEY` is still set, deleting `tavily_api_key` from the vault does not revoke web-search. The skill keeps working off the env var, and only the `secret.accessed` event (`source: env`) reveals it. Treat removing the env var as a prerequisite for vault-based key rotation/revocation, not just initial setup.
+Adds Signal messaging (when available).
 
 ### Signal
 
@@ -333,6 +313,32 @@ That's the E.164 number you registered via `signal-cli register` + `verify`. `SI
 Restart Curia, then **install and enable the Signal channel** in the console (**Settings -> Channels -> Signal**). The phone number in the vault and a populated `signal-data` volume are prerequisites, but the channel still requires an explicit install then enable before it starts.
 
 ---
+
+## Optional: higher web search limits (Tavily key)
+
+`web-search` works on a fresh install with no key. It enrolls with the default `web`
+bundle and calls Tavily in **keyless mode** (the `X-Tavily-Access-Mode: keyless`
+header): free, same results, but capped per server IP per hour. In a 2026-11-03 test
+the 30th search in an hour got HTTP 429 (#2445). Tavily doesn't publish the limit.
+
+When the cap is hit, `web-search` returns an error saying search is temporarily limited
+and how to add a key, and agents relay it to the principal. A free Tavily key
+(1,000 credits a month, no card) raises the limit. Add it any of these ways; each
+takes effect on the next search, with no restart:
+
+- **Console:** **Settings → Tools → web-search → Optional secrets → `tavily_api_key`**.
+- **Chat:** ask Curia to "add my Tavily key". The setup assistant sends a one-time
+  secure link that saves `tavily_api_key` straight to the vault.
+- **Dev shortcut:** `TAVILY_API_KEY=tvly-... pnpm run seed-vault`.
+
+With a key set, requests are authenticated with it and never marked keyless. A bad key
+returns an "invalid key" error; there is no silent fallback to keyless. Before #2445 the
+setup link saved the key as `user.tavily_api_key`, which web-search never read. Boot now
+copies such a key to `tavily_api_key` when that is unset.
+
+`ctx.secret('tavily_api_key')` resolves vault-first with a `TAVILY_API_KEY` env-var fallback. In production the vault is the single source of truth. Do **not** leave `TAVILY_API_KEY` set in the deploy environment, since a lingering env var would mask whether the vault entry is actually being used.
+
+> **Revocation caveat:** the runtime resolver falls back to the env var. So if `TAVILY_API_KEY` is still set, deleting `tavily_api_key` from the vault does not stop keyed searches. The skill keeps using the env var, and only the `secret.accessed` event (`source: env`) reveals it. Remove the env var before rotating or revoking the key through the vault.
 
 ## Audit log integrity check
 

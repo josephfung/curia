@@ -262,8 +262,6 @@ describe('setup-status', () => {
         data: { tasks: Array<{ id: string; vault_keys?: string[] }> };
       }).data;
       // vault_secrets_all task — keys must be present for agent to call system-secret-capture-request
-      const webResearch = data.tasks.find(t => t.id === 'web_research');
-      expect(webResearch?.vault_keys).toEqual(['user.tavily_api_key']);
       const email = data.tasks.find(t => t.id === 'email');
       expect(email?.vault_keys).toEqual([
         'channel.email.nylas_api_key',
@@ -304,6 +302,35 @@ describe('setup-status', () => {
     });
   });
 
+  describe('web research (keyless, #2445)', () => {
+    type UpgradeTask = {
+      id: string;
+      status: string;
+      vault_keys?: string[];
+      optional_upgrade?: { vault_keys: string[]; configured: boolean; value_prop: string; credential_how_to: string };
+    };
+    async function webResearch(ctx: ToolContext): Promise<UpgradeTask | undefined> {
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      return (result as { success: true; data: { tasks: UpgradeTask[] } }).data.tasks.find(t => t.id === 'web_research');
+    }
+
+    it('is done with no Tavily key, and offers the key as an unconfigured optional upgrade', async () => {
+      const task = await webResearch(makeCtx());
+      expect(task?.status).toBe('done');
+      expect(task?.vault_keys).toBeUndefined();
+      expect(task?.optional_upgrade?.vault_keys).toEqual(['tavily_api_key']);
+      expect(task?.optional_upgrade?.configured).toBe(false);
+      expect(task?.optional_upgrade?.credential_how_to).toMatch(/tavily\.com/);
+    });
+
+    it('marks the upgrade configured once tavily_api_key is set', async () => {
+      const task = await webResearch(makeCtx({ secrets: { tavily_api_key: 'tvly-abc' } }));
+      expect(task?.status).toBe('done');
+      expect(task?.optional_upgrade?.configured).toBe(true);
+    });
+  });
+
   describe('status across simulated restart', () => {
     it('re-derives status correctly without any stored progress', async () => {
       // Simulate restart: no storeData progress object, but vault keys present
@@ -312,7 +339,6 @@ describe('setup-status', () => {
           'channel.email.nylas_api_key': 'nyk_v0_abc',
           'channel.email.nylas_grant_id': 'grant-xyz',
           'channel.email.nylas_self_email': 'ceo@example.com',
-          'user.tavily_api_key': 'tvly-abc',
         },
         behavioralPreferences: ['prefers bullet points'],
         activeJobs: [{ intentAnchor: 'weekly_debrief', status: 'pending' }],

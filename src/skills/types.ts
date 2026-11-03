@@ -96,6 +96,10 @@ export interface ToolManifest {
   install?: {
     /** Vault secret keys that must exist before install/enable. Enforced by RegistryService. */
     requires_secrets?: string[];
+    /** Vault secret keys the skill works without but improves with (#2445), mapped to a
+     *  one-line note on what each adds. Never gates install/enable; the console offers them
+     *  as optional and the vault write allowlist accepts them. */
+    optional_secrets?: Record<string, string>;
   };
   /** Reserved uninstall block — PARSED BUT INERT. PR3 (config) will define its contents. */
   uninstall?: Record<string, unknown>;

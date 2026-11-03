@@ -118,7 +118,7 @@ export async function vaultRoutes(
     if (!isSkillDeclared && !isChannelCredentialKey(name) && !isMcpDeclared && !isPerAccountEmailGrantKey(name)) {
       request.log.info({ name }, 'vault set rejected: name not declared by any skill, MCP server, or channel');
       return reply.status(400).send({
-        error: `'${name}' is not a required secret declared by any skill or MCP server, ` +
+        error: `'${name}' is not a secret declared by any skill or MCP server, ` +
           `nor a known channel credential. Only declared secrets can be set here.`,
       });
     }
