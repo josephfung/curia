@@ -170,13 +170,26 @@ export function buildRows(
 }
 
 /**
+ * Required secrets to show, and gate install/enable on, in an entry's drawer.
+ *
+ * A tool shows its own. A bundle shows the union of its members', the same set
+ * RegistryService.assertBundleSecretsConfigured gates bundle install and enable on, so
+ * the drawer never offers an action the server will refuse without the field to fix it.
+ */
+export function drawerRequiredSecrets(entry: RegistryEntry, row: Row | undefined): string[] {
+  if (entry.kind === 'tool') return entry.metadata?.requiresSecrets ?? [];
+  if (entry.kind !== 'skill' || row === undefined) return [];
+  return [...new Set(row.members.flatMap(m => m.metadata?.requiresSecrets ?? []))];
+}
+
+/**
  * Optional secrets to show in an entry's drawer (#2445).
  *
  * A tool shows its own. A bundle shows its members': a bundle's member rows are
  * read-only, so the bundle drawer is the only place the operator can set a member's key
  * (web-search's tavily_api_key lives under the web bundle). First declaration wins
  * when two members share a key. A key any member requires is left out: it still gates
- * the bundle, so calling it optional would be wrong.
+ * the bundle, so drawerRequiredSecrets lists it instead.
  */
 export function drawerOptionalSecrets(
   entry: RegistryEntry,
@@ -184,7 +197,7 @@ export function drawerOptionalSecrets(
 ): { name: string; purpose: string }[] {
   if (entry.kind === 'tool') return entry.metadata?.optionalSecrets ?? [];
   if (entry.kind !== 'skill' || row === undefined) return [];
-  const seen = new Set<string>(row.members.flatMap(m => m.metadata?.requiresSecrets ?? []));
+  const seen = new Set<string>(drawerRequiredSecrets(entry, row));
   const out: { name: string; purpose: string }[] = [];
   for (const member of row.members) {
     for (const secret of member.metadata?.optionalSecrets ?? []) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRows, collateralPins, drawerOptionalSecrets, formatCapabilities, registryPathSegment, uninstallBlockedReason } from './registry-rows.js';
+import { buildRows, collateralPins, drawerOptionalSecrets, drawerRequiredSecrets, formatCapabilities, registryPathSegment, uninstallBlockedReason } from './registry-rows.js';
 import type { RegistryEntry } from './registry-rows.js';
 
 const entry = (name: string, over: Partial<RegistryEntry> = {}): RegistryEntry => ({
@@ -229,10 +229,38 @@ describe('drawerOptionalSecrets', () => {
     );
     const row = rows[0]!;
     expect(drawerOptionalSecrets(row.entry, row)).toEqual([{ name: 'extra', purpose: 'q' }]);
+    // It moves to the required list rather than vanishing.
+    expect(drawerRequiredSecrets(row.entry, row)).toEqual(['shared']);
   });
 
   it('returns nothing for an agent or a bundle without its row', () => {
     expect(drawerOptionalSecrets(entry('coordinator', { kind: 'agent' }), undefined)).toEqual([]);
     expect(drawerOptionalSecrets(bundle('web', ['web-search'], [], 'enabled'), undefined)).toEqual([]);
+  });
+});
+
+describe('drawerRequiredSecrets', () => {
+  // Mirrors RegistryService.assertBundleSecretsConfigured: a bundle's install/enable is
+  // refused until every member's required key is set, so the drawer must show those keys.
+  const requiring = (name: string, requiresSecrets: string[]) =>
+    entry(name, { metadata: { name, description: 'd', version: '1.0.0', requiresSecrets } });
+
+  it('returns a tool its own required secrets', () => {
+    expect(drawerRequiredSecrets(requiring('signal-send', ['signal_key']), undefined)).toEqual(['signal_key']);
+  });
+
+  it("returns a bundle the deduplicated union of its members' required secrets", () => {
+    const rows = buildRows(
+      [bundle('b', ['t1', 't2', 't3'], [], 'installed')],
+      [requiring('t1', ['k1', 'k2']), requiring('t2', ['k2']), entry('t3')],
+      [],
+    );
+    const row = rows[0]!;
+    expect(drawerRequiredSecrets(row.entry, row)).toEqual(['k1', 'k2']);
+  });
+
+  it('returns nothing for an agent or a bundle without its row', () => {
+    expect(drawerRequiredSecrets(entry('coordinator', { kind: 'agent' }), undefined)).toEqual([]);
+    expect(drawerRequiredSecrets(bundle('b', ['t1'], [], 'installed'), undefined)).toEqual([]);
   });
 });
