@@ -20,5 +20,6 @@
   "permissions": [],
   "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 20000,
-  "capabilities": []
+  "capabilities": [],
+  "optional_capabilities": ["curiaEmailAddresses"]
 }

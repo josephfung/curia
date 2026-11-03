@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as yaml from 'js-yaml';
-import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult, EmailChannelStatus } from '../../../../src/skills/types.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 
 // ── Catalog types ──────────────────────────────────────────────────────────
@@ -35,6 +35,8 @@ interface CatalogTaskWithStatus extends Omit<CatalogTask, 'completion_check'> {
   status: TaskStatus;
   // Present for vault_secrets_all tasks — the agent uses keys[0] with system-secret-capture-request.
   vault_keys?: string[];
+  // Present (true) when the task is configured but only takes effect after a restart.
+  restart_required?: true;
 }
 
 // ── Catalog loading ────────────────────────────────────────────────────────
@@ -173,12 +175,12 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
-      // Same gate as the console's email Enable button (#2409): an API key plus at least one
-      // enabled email account with a grant, and the channel enabled.
-      let emailReady = false;
-      if (ctx.emailChannelReady) {
+      // Done only when an email adapter is polling (#2409). Configured-and-enabled after boot
+      // reads as pending with restart_required, so "done" never precedes a running mailbox.
+      let emailStatus: EmailChannelStatus = 'not_configured';
+      if (ctx.emailChannelStatus) {
         try {
-          emailReady = await ctx.emailChannelReady();
+          emailStatus = await ctx.emailChannelStatus();
         } catch (err) {
           ctx.log.warn({ err }, 'setup-status: email channel check failed — reporting pending');
         }
@@ -186,6 +188,7 @@ export class SetupStatusHandler implements ToolHandler {
 
       const annotated: CatalogTaskWithStatus[] = tasks.map(task => {
         let done = false;
+        let restartRequired = false;
         // Cast to include undefined: catalog.yaml is loaded without per-entry validation,
         // so a malformed entry missing completion_check must not throw a TypeError here.
         const check = task.completion_check as CompletionCheck | undefined;
@@ -211,7 +214,8 @@ export class SetupStatusHandler implements ToolHandler {
               done = phoneReady;
               break;
             case 'email_channel_ready':
-              done = emailReady;
+              done = emailStatus === 'running';
+              restartRequired = emailStatus === 'restart_required';
               break;
           }
         } else {
@@ -225,7 +229,12 @@ export class SetupStatusHandler implements ToolHandler {
         // system-secret-capture-request for in-chat credential capture tasks.
         const { completion_check: _check, ...rest } = task;
         const vault_keys = _check?.type === 'vault_secrets_all' ? _check.keys : undefined;
-        return vault_keys ? { ...rest, status, vault_keys } : { ...rest, status };
+        return {
+          ...rest,
+          status,
+          ...(vault_keys ? { vault_keys } : {}),
+          ...(restartRequired ? { restart_required: true as const } : {}),
+        };
       });
 
       const summary = {

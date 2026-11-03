@@ -6,7 +6,7 @@
   "action_risk": "none",
   "inputs": {},
   "outputs": {
-    "tasks": "CatalogTaskWithStatus[] — catalog tasks with status, tier, handoff surface, credential_how_to, docs_url",
+    "tasks": "CatalogTaskWithStatus[] — catalog tasks with status, tier, handoff surface, credential_how_to, docs_url; restart_required: true when the task is configured but Curia must restart before it works",
     "summary": "{ total: number, done: number, pending: number, deferred: number }"
   },
   "permissions": [],
@@ -28,6 +28,6 @@
   ],
   "timeout": 15000,
   "capabilities": ["entityMemory", "schedulerService", "officeIdentityService"],
-  "optional_capabilities": ["phoneAppReady", "emailChannelReady"],
+  "optional_capabilities": ["phoneAppReady", "emailChannelStatus"],
   "allowed_callers": ["setup-wizard"]
 }

@@ -10,12 +10,13 @@ import type { Logger } from '../../../../src/logger.js';
  *  so no entityMemory wiring is needed. */
 function makeCtx(
   input: Record<string, unknown>,
-  opts: { selfEmail?: string } = {},
+  opts: { selfEmail?: string; liveSelfEmails?: string[] } = {},
 ): ToolContext {
   return {
     input,
     // Curia's own addresses come from its email accounts, not a vault key (#2409).
     selfEmails: opts.selfEmail ? [opts.selfEmail] : [],
+    ...(opts.liveSelfEmails ? { curiaEmailAddresses: async () => opts.liveSelfEmails! } : {}),
     secret(name: string) {
       if (name === 'channel.email.nylas_api_key') return 'test-key';
       if (name === 'ceo_nylas_grant_id') return 'test-grant';
@@ -144,6 +145,20 @@ describe('CeoInboxListHandler — batch listing (no watermark)', () => {
     const data = result.data as { count: number; has_more: boolean };
     expect(data.count).toBe(1);
     expect(data.has_more).toBe(false);
+  });
+
+  it('filters a Curia mailbox added in the console since boot (#2409)', async () => {
+    // Not in the boot-time selfEmails, only in the live email-accounts read.
+    const added = 'sched@example.com';
+    const ctx = makeCtx({ unread_only: true, limit: 5 }, { liveSelfEmails: [added] });
+    vi.stubGlobal('fetch', mockFetchReturning([
+      { id: 'm1', threadId: 't1', date: 1, subject: 'a', from: [{ email: 'Sched@Example.com', name: 'Curia' }], to: [], cc: [], snippet: '', unread: true, folders: ['INBOX'], attachments: [] },
+      { id: 'm2', threadId: 't2', date: 2, subject: 'b', from: [{ email: 'other@x.com', name: 'Other' }], to: [], cc: [], snippet: '', unread: true, folders: ['INBOX'], attachments: [] },
+    ]));
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    expect((result.data as { count: number }).count).toBe(1);
   });
 
   it('reports has_more from filtered results when the probe slot is Curia-self and nothing follows', async () => {

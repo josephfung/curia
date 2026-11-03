@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as yaml from 'js-yaml';
 import { SetupStatusHandler } from './handler.js';
-import type { ToolContext } from '../../../../src/skills/types.js';
+import type { ToolContext, EmailChannelStatus } from '../../../../src/skills/types.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
 
 // ── EntityMemory mock helpers ────────────────────────────────────────────────
@@ -92,7 +92,7 @@ function makeCtx(overrides: Partial<{
   principal: { pronouns: string | null } | null;
   principalLookupError: Error;
   phoneAppReady: () => Promise<boolean>;
-  emailChannelReady: () => Promise<boolean>;
+  emailChannelStatus: () => Promise<EmailChannelStatus>;
 }> = {}): ToolContext {
   const secrets = overrides.secrets ?? {};
   return {
@@ -136,7 +136,7 @@ function makeCtx(overrides: Partial<{
       }),
     } as unknown as ToolContext['schedulerService'],
     ...(overrides.phoneAppReady ? { phoneAppReady: overrides.phoneAppReady } : {}),
-    ...(overrides.emailChannelReady ? { emailChannelReady: overrides.emailChannelReady } : {}),
+    ...(overrides.emailChannelStatus ? { emailChannelStatus: overrides.emailChannelStatus } : {}),
   } as unknown as ToolContext;
 }
 
@@ -150,7 +150,7 @@ describe('setup-status', () => {
     });
 
     it('declares the optional capabilities its checks read', () => {
-      expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelReady']));
+      expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus']));
     });
 
     it('checks the Tavily key web-search reads', () => {
@@ -258,22 +258,35 @@ describe('setup-status', () => {
       expect(tour?.status).toBe('done');
     });
 
-    it('email: done when the email channel is enabled and ready', async () => {
-      const result = await handler.execute(makeCtx({ emailChannelReady: async () => true }));
+    it('email: done only when an email adapter is running', async () => {
+      const result = await handler.execute(makeCtx({ emailChannelStatus: async () => 'running' }));
       expect(result.success).toBe(true);
-      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
-      expect(data.tasks.find(t => t.id === 'email')?.status).toBe('done');
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; restart_required?: boolean }> } }).data;
+      const email = data.tasks.find(t => t.id === 'email');
+      expect(email?.status).toBe('done');
+      expect(email?.restart_required).toBeUndefined();
+    });
+
+    it('email: pending with restart_required when enabled since boot but not yet polling', async () => {
+      const result = await handler.execute(makeCtx({ emailChannelStatus: async () => 'restart_required' }));
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; restart_required?: boolean }> } }).data;
+      const email = data.tasks.find(t => t.id === 'email');
+      expect(email?.status).toBe('pending');
+      expect(email?.restart_required).toBe(true);
     });
 
     it.each([
       ['the check is absent', {}],
-      ['the channel is not ready', { emailChannelReady: async (): Promise<boolean> => false }],
-      ['the check fails', { emailChannelReady: async (): Promise<boolean> => { throw new Error('db down'); } }],
-    ] as const)('email: pending when %s', async (_name, overrides) => {
+      ['the channel is not configured', { emailChannelStatus: async (): Promise<EmailChannelStatus> => 'not_configured' }],
+      ['the check fails', { emailChannelStatus: async (): Promise<EmailChannelStatus> => { throw new Error('db down'); } }],
+    ] as const)('email: pending without restart_required when %s', async (_name, overrides) => {
       const result = await handler.execute(makeCtx(overrides));
       expect(result.success).toBe(true);
-      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
-      expect(data.tasks.find(t => t.id === 'email')?.status).toBe('pending');
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; restart_required?: boolean }> } }).data;
+      const email = data.tasks.find(t => t.id === 'email');
+      expect(email?.status).toBe('pending');
+      expect(email?.restart_required).toBeUndefined();
     });
 
     it('email: deferred when no secrets and task_id in deferrals store', async () => {
@@ -291,7 +304,7 @@ describe('setup-status', () => {
       // email secrets are present (done=true) AND email is in the deferrals store
       // The status must be 'done', not 'deferred'
       const ctx = makeCtx({
-        emailChannelReady: async () => true,
+        emailChannelStatus: async (): Promise<EmailChannelStatus> => 'running',
         existingDeferrals: JSON.stringify(['email']),
       });
       const result = await handler.execute(ctx);
@@ -352,7 +365,7 @@ describe('setup-status', () => {
       // Simulate restart: no storeData progress object, but vault keys present
       const ctx = makeCtx({
         secrets: { tavily_api_key: 'tvly-abc' },
-        emailChannelReady: async () => true,
+        emailChannelStatus: async (): Promise<EmailChannelStatus> => 'running',
         behavioralPreferences: ['prefers bullet points'],
         activeJobs: [{ intentAnchor: 'weekly_debrief', status: 'pending' }],
       });

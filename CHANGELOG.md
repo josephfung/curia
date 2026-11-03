@@ -279,7 +279,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Offline page** — says whether the device is offline or can't reach Curia; reconnects automatically. (#2341)
 - **Phone app typing** — text fields are 16px on touch screens, so iOS no longer zooms in. (#2341)
 - **Inbox labels on sent messages** — labelling, archiving or re-foldering a message the principal replied to no longer fails. (#2426)
-- **Setup checklist** — returns a result again; every key it checks is now declared. (#2409)
+- **Setup checklist** — returns a result again, links to Channels correctly, and marks email done once polling. (#2409)
 - **Tavily setup link** — stores `tavily_api_key`, which web search reads; an old `user.tavily_api_key` moves over. (#2409)
 - **Email channel** — Enable needs only the API key and one email account; no duplicate grant. (#2409)
 - **Principal's mailbox** — grant and address can be set in the console's Email channel settings. (#2409)

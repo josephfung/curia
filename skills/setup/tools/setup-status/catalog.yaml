@@ -47,7 +47,7 @@ tasks:
     value_prop: "Lets Curia read, draft, and send email on your behalf — unlocks ceo-inbox."
     tier: heavy
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
       type: email_channel_ready
     credential_how_to: "Get your Nylas API key at app.nylas.com (free tier works) and connect Curia's mailbox there to get its grant ID. In Settings → Channels → Email, install the channel, save the API key, add the mailbox under Email accounts (name, address, grant ID), then enable the channel and restart."
@@ -58,7 +58,7 @@ tasks:
     value_prop: "Private, end-to-end encrypted messaging — Curia's highest-trust channel."
     tier: medium
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
       type: vault_secrets_all
       keys:
@@ -72,7 +72,7 @@ tasks:
     value_prop: "Let your team DM and @mention your agent in Slack — medium-trust workspace messaging."
     tier: medium
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
       type: vault_secrets_all
       keys:
@@ -86,7 +86,7 @@ tasks:
     value_prop: "Two-way text messaging on a dedicated Telnyx office DID — medium-trust SMS for the principal and third parties."
     tier: medium
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
       type: vault_secrets_all
       keys:
@@ -101,7 +101,7 @@ tasks:
     value_prop: "Live duplex spoken conversation from the web console via WebRTC."
     tier: medium
     handoff: console
-    handoff_path: /settings/channels
+    handoff_path: /channels
     completion_check:
       type: vault_secrets_all
       keys:

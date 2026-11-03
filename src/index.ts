@@ -93,6 +93,7 @@ import { NylasPrincipalMailbox } from './contacts/nylas-principal-mailbox.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
 import { EmailAccountsRepo } from './channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from './channels/email/resolve-email-accounts.js';
+import { emailChannelStatus as resolveEmailChannelStatus } from './channels/email/email-channel-status.js';
 import { SignalRpcClient } from './channels/signal/signal-rpc-client.js';
 import { SignalAdapter } from './channels/signal/signal-adapter.js';
 import { SlackClient } from './channels/slack/slack-client.js';
@@ -183,7 +184,7 @@ import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
 import { backfillDirectChannelSenders } from './memory/direct-sender-backfill.js';
 import type { DecayConfig } from './memory/dream-engine.js';
-import type { AgentPersona } from './skills/types.js';
+import type { AgentPersona, EmailChannelStatus } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
 import { BullpenService } from './memory/bullpen.js';
 import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
@@ -2657,16 +2658,23 @@ async function main(): Promise<void> {
   // the subscriber and sweep below. Wiring the lookup while those are off would let a
   // pending row block that agent in that conversation with nothing left to resolve it.
   const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
-  // setup-status's email task (#2409): done once the channel is enabled and its Enable gate
-  // passes — the same check the console's Enable button uses, so the two always agree.
+  // setup-status's email task (#2409). Done only when an adapter is actually polling: the
+  // adapters are built once at boot, so an account added and enabled afterwards is
+  // `restart_required` (enabled + the console's Enable gate passes) until the next start.
   const emailChannelDescriptor = CHANNEL_CATALOG.find(d => d.name === 'email');
-  const emailChannelReady = async (): Promise<boolean> => {
-    if (!emailChannelDescriptor) return false;
-    const row = await channelRegistryRepo.getRow('email');
-    if (!row?.enabled) return false;
-    return (await channelCredentialStatusFn(emailChannelDescriptor)).requiredResolvable;
-  };
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelReady, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  const emailChannelStatus = (): Promise<EmailChannelStatus> => resolveEmailChannelStatus({
+    // Setup-required mode builds adapters but never starts them (see adapter startup below).
+    runningAdapterCount: () => (setupRequiredAtBoot ? 0 : emailAdapters.length),
+    isEnabled: async () => (await channelRegistryRepo.getRow('email'))?.enabled ?? false,
+    gatePasses: async () =>
+      !!emailChannelDescriptor && (await channelCredentialStatusFn(emailChannelDescriptor)).requiredResolvable,
+  });
+  // ceo-inbox list/search skip Curia's own mail (#2409). Read live, so a mailbox added in the
+  // console is excluded before the restart that starts polling it. Disabled accounts count:
+  // they are still Curia's addresses.
+  const curiaEmailAddresses = async (): Promise<string[]> =>
+    (await emailAccountsRepo.list()).map(a => a.selfEmail);
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>

@@ -1,5 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
+import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
 import { CeoNylasClient, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
 
@@ -42,12 +43,9 @@ export class CeoInboxSearchHandler implements ToolHandler {
     const grantId = ctx.secret('ceo_nylas_grant_id');
     const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
-    // Curia's own addresses (its email accounts) — filter out messages from them so the
-    // agent can't operate on its own outbound emails even via search.
-    const curiaEmails = new Set((ctx.selfEmails ?? []).map((e) => e.toLowerCase()));
-    if (curiaEmails.size === 0) {
-      ctx.log.warn({}, 'ceo-inbox-search: no email accounts configured — skipping Curia email filter');
-    }
+    // Curia's own addresses (its email accounts, read live) — filter out messages from
+    // them so the agent can't operate on its own outbound emails even via search.
+    const curiaEmails = await curiaOwnAddresses(ctx, 'ceo-inbox-search');
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};

@@ -28,6 +28,9 @@ export type ActionRisk = 'none' | 'low' | 'medium' | 'high' | 'critical' | numbe
  * Skill manifest shape — loaded from tool.json files in each skill directory.
  * Declares what the skill does, what it needs, and its security classification.
  */
+/** See ToolContext.emailChannelStatus. */
+export type EmailChannelStatus = 'running' | 'restart_required' | 'not_configured';
+
 export interface ToolManifest {
   name: string;
   description: string;
@@ -59,7 +62,7 @@ export interface ToolManifest {
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
-   *  voiceSessions, phoneAppReady, emailChannelReady.
+   *  voiceSessions, phoneAppReady, emailChannelStatus, curiaEmailAddresses.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -175,11 +178,18 @@ export interface ToolContext {
    */
   phoneAppReady?: () => Promise<boolean>;
   /**
-   * True when the email channel's Enable gate passes: a Nylas API key resolves and at
-   * least one enabled email account has a grant (#2409). Injected for skills that declare
-   * optional capability `emailChannelReady`. Absent means the setup task stays pending.
+   * Whether the email channel is polling a mailbox (#2409). `running`: adapters started
+   * this boot. `restart_required`: enabled and its Enable gate passes, but nothing started
+   * yet (configured after boot). `not_configured`: neither. Injected for skills that
+   * declare optional capability `emailChannelStatus`. Absent means the setup task stays pending.
    */
-  emailChannelReady?: () => Promise<boolean>;
+  emailChannelStatus?: () => Promise<EmailChannelStatus>;
+  /**
+   * Curia's own mailbox addresses, read from the email accounts table at call time
+   * (#2409) — unlike `selfEmails`, which is fixed at boot. Injected for skills that
+   * declare optional capability `curiaEmailAddresses`.
+   */
+  curiaEmailAddresses?: () => Promise<string[]>;
   /** Contact confidence scoring pipeline — available to skills declaring 'confidencePipeline'
    *  in capabilities. Skills that modify trust-related data (trust level, identity pairings)
    *  should declare this capability and fire scoring signals through it. */

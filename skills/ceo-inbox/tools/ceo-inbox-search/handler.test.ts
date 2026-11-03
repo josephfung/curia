@@ -7,7 +7,7 @@ import type { Logger } from '../../../../src/logger.js';
 
 function makeCtx(
   input: Record<string, unknown>,
-  opts: { selfEmail?: string } = {},
+  opts: { selfEmail?: string; liveSelfEmails?: string[] } = {},
 ): ToolContext {
   return {
     toolName: 'ceo-inbox-search',
@@ -15,6 +15,7 @@ function makeCtx(
     input,
     // Curia's own addresses come from its email accounts, not a vault key (#2409).
     selfEmails: opts.selfEmail ? [opts.selfEmail] : [],
+    ...(opts.liveSelfEmails ? { curiaEmailAddresses: async () => opts.liveSelfEmails! } : {}),
     secret(name: string) {
       if (name === 'channel.email.nylas_api_key') return 'test-key';
       if (name === 'ceo_nylas_grant_id') return 'test-grant';
@@ -190,6 +191,19 @@ describe('CeoInboxSearchHandler — query parameter', () => {
       expect(data.count).toBe(1);
       expect(data.messages).toHaveLength(1);
     }
+  });
+
+  it('filters a Curia mailbox added in the console since boot (#2409)', async () => {
+    const added = 'sched@example.com';
+    const ctx = makeCtx({ query: 'test' }, { liveSelfEmails: [added] });
+    vi.stubGlobal('fetch', mockFetchReturning([
+      { id: '1', from: [{ email: added, name: 'Curia' }], thread_id: '1', subject: '', snippet: '', date: 0, unread: false, folders: [] },
+      { id: '2', from: [{ email: 'someone@example.com', name: 'Someone' }], thread_id: '2', subject: '', snippet: '', date: 0, unread: false, folders: [] },
+    ]));
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    expect((result.data as { count: number }).count).toBe(1);
   });
 });
 

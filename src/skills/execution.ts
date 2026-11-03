@@ -17,7 +17,7 @@
 // before invoking the handler. The handler receives ctx.entityContext[] and
 // never needs to call entity-context itself.
 
-import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk } from './types.js';
+import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
@@ -288,7 +288,8 @@ export class ExecutionLayer {
   private logger: Logger;
   private bus?: EventBus;
   private phoneAppReady?: () => Promise<boolean>;
-  private emailChannelReady?: () => Promise<boolean>;
+  private emailChannelStatus?: () => Promise<EmailChannelStatus>;
+  private curiaEmailAddresses?: () => Promise<string[]>;
   private agentRegistry?: AgentRegistry;
   private contactService?: ContactService;
   private outboundGateway?: OutboundGateway;
@@ -403,8 +404,10 @@ export class ExecutionLayer {
     voiceSessions?: Pick<import('../channels/voice/session-store.js').VoiceSessionStore, 'markNotesRequested'>;
     /** setup-status: a paired phone has a live push subscription (#2341). */
     phoneAppReady?: () => Promise<boolean>;
-    /** setup-status: the email channel's Enable gate passes (#2409). */
-    emailChannelReady?: () => Promise<boolean>;
+    /** setup-status: whether the email channel is polling a mailbox (#2409). */
+    emailChannelStatus?: () => Promise<EmailChannelStatus>;
+    /** ceo-inbox list/search: Curia's own addresses, read live (#2409). */
+    curiaEmailAddresses?: () => Promise<string[]>;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     tempFileStore?: TempFileStore;
     infraLlmService?: InfraLlmService;
@@ -442,7 +445,8 @@ export class ExecutionLayer {
     this.logger = logger;
     this.bus = options?.bus;
     this.phoneAppReady = options?.phoneAppReady;
-    this.emailChannelReady = options?.emailChannelReady;
+    this.emailChannelStatus = options?.emailChannelStatus;
+    this.curiaEmailAddresses = options?.curiaEmailAddresses;
     this.agentRegistry = options?.agentRegistry;
     this.contactService = options?.contactService;
     this.outboundGateway = options?.outboundGateway;
@@ -526,7 +530,8 @@ export class ExecutionLayer {
       workingDocs: this.workingDocsRepo,
       voiceSessions: this.voiceSessions,
       phoneAppReady: this.phoneAppReady,
-      emailChannelReady: this.emailChannelReady,
+      emailChannelStatus: this.emailChannelStatus,
+      curiaEmailAddresses: this.curiaEmailAddresses,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).
       // Listed here so the missing-cap guard knows it's configured when this.tempFileStore is set.
