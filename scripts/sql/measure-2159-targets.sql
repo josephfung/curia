@@ -11,9 +11,10 @@
 --
 -- Definitions (written here so later runs measure the same thing):
 --
---   Piece of work     A task (audit_log.task_id) or, where the row has none, its conversation_id.
---                     outbound.delivered's conversationId is the SENDER'S turn, so it stands in
---                     for a thread only when no task exists.
+--   Piece of work     The email thread the message joined (payload.threadId); else the
+--                     conversation of the agent.task event that caused the send (found through
+--                     payload.taskEventId, since outbound.delivered rows carry no task_id); else
+--                     the row's own conversationId, which is the SENDER'S turn and so a last resort.
 --   Principal-bound   An outbound.delivered row whose recipient (payload.channel + recipientId)
 --                     is one of the principal contact's channel identities. Matched on the
 --                     recipient, never on conversation_id. 'web' recipientId 'principal' counts.
@@ -41,10 +42,23 @@ WITH principal_ids AS (
   WHERE c.system_role = 'principal'
 ),
 delivered AS (
+  -- Piece of work, most specific first: the email thread the message joined; else the
+  -- conversation of the agent.task event that caused the send (payload.taskEventId is that
+  -- event's id; outbound.delivered rows never carry task_id themselves); else the row's own
+  -- conversationId (the sender's turn, so a last resort).
   SELECT a.id,
-         COALESCE(a.task_id, a.payload->>'taskId', a.conversation_id, a.payload->>'conversationId') AS work,
+         a.timestamp,
+         COALESCE(
+           a.payload->>'threadId',
+           t.conversation_id,
+           a.conversation_id,
+           a.payload->>'conversationId'
+         ) AS work,
          a.payload->>'content' AS content
   FROM audit_log a
+  LEFT JOIN audit_log t
+    ON t.id::text = a.payload->>'taskEventId'
+   AND t.event_type = 'agent.task'
   WHERE a.event_type = 'outbound.delivered'
     AND a.timestamp >= :'since'::timestamptz
     AND a.timestamp <  :'until'::timestamptz
@@ -80,6 +94,39 @@ SELECT
   COALESCE(max(n), 0)                                                AS max,
   count(*) FILTER (WHERE n >= 5)                                     AS pieces_at_or_over_5
 FROM immediate;
+
+-- Pieces of work with 5 or more immediate messages: how many, and over what span. A long span
+-- is a standing thread (messages spread over days); a short one is the burst the target is about.
+-- Counts and hours only, no ids.
+\echo '== 1b. pieces of work at 5+ immediate messages (messages, span in hours) =='
+WITH principal_ids AS (
+  SELECT cci.channel, lower(cci.channel_identifier) AS ident
+  FROM contacts c
+  JOIN contact_channel_identities cci ON cci.contact_id = c.id
+  WHERE c.system_role = 'principal'
+),
+delivered AS (
+  SELECT a.timestamp,
+         COALESCE(a.payload->>'threadId', t.conversation_id, a.conversation_id, a.payload->>'conversationId') AS work,
+         a.payload->>'content' AS content
+  FROM audit_log a
+  LEFT JOIN audit_log t ON t.id::text = a.payload->>'taskEventId' AND t.event_type = 'agent.task'
+  WHERE a.event_type = 'outbound.delivered'
+    AND a.timestamp >= :'since'::timestamptz
+    AND a.timestamp <  :'until'::timestamptz
+    AND (
+      EXISTS (SELECT 1 FROM principal_ids p WHERE p.channel = a.payload->>'channel' AND p.ident = lower(a.payload->>'recipientId'))
+      OR (a.payload->>'channel' = 'web' AND a.payload->>'recipientId' = 'principal')
+    )
+)
+SELECT count(*) AS messages,
+       round(extract(epoch FROM max(timestamp) - min(timestamp)) / 3600) AS span_hours
+FROM delivered
+WHERE work IS NOT NULL
+  AND content NOT LIKE '%Spot check (optional, reply with a number):%'
+GROUP BY work
+HAVING count(*) >= 5
+ORDER BY 1 DESC;
 
 -- ---------------------------------------------------------------------------
 -- 2. Approvals per week (autonomy_action_log), by how they ended
