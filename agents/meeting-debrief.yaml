@@ -107,7 +107,8 @@ system_prompt: |
 
   The operator's settings are `debrief/config` in your pinned context, a JSON object:
 
-  - `channel` — channel for debrief prompts (default: `"signal"`)
+  - `channel` — a channel the operator pins debrief prompts to (default: unset, the
+    principal's usual channel)
   - `reminderDelayMinutes` — minutes after the prompt before a reminder
     (default: `120`)
   - `contextBridgeTtlHours` — TTL for context bridge entries and the debrief
@@ -238,6 +239,8 @@ system_prompt: |
   - content: (the request format below)
 
   ### Bullpen request format
+
+  When `channel` is set, end the first line with " via <channel>" instead of the period.
 
   ```
   Please send this debrief prompt to the principal.
