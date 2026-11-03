@@ -1,24 +1,37 @@
 {
   "name": "async-offramp",
-  "description": "Take a request that cannot finish on this call and work on it after the call. Voice-only — not available on text turns. Use after the principal agrees to a follow-up, or when the ask clearly needs more time (deep research, bulk triage, multi-document drafting, clarification loops). Anything the caller wants emailed or messaged after the call, such as links or research results, goes here: you cannot send on the call. A recap of this call is meeting-notes-start, not this tool. Provide a crisp brief of what to do and how to follow up (signal or email). Returns accepted:true only when the work was actually enqueued — never claim a follow-up on failure. Tell the caller as a person would, for example \"I'll work on that after we hang up and email it to you.\" This tool and whoever picks the work up stay unspoken.",
-  "version": "0.1.5",
+  "description": "Hand work you cannot do on this call to your full self, which has the vault and saved sign-ins, scheduling, browsing, documents, and your own Signal and email. Voice-only. Use it on the first ask when a request needs one. Do not judge whether it is possible, and never tell the caller you lack a login, access or a tool. mode now: the caller wants it done while you talk (set something up, check a site, message someone). The result comes back within about a minute, or it is still working and reaches the principal afterwards. mode after_call (default): longer work such as research or drafting, or anything to email the principal after the call. A message to anyone but the principal goes here with mode now: the principal's inbox specialist only saves drafts in their mailbox. Say something was sent or done only when the result shows it. A recap of this call is meeting-notes-start, not this tool. Tell the caller as a person would, for example \"Let me take care of that now.\" or \"I'll work on that after we hang up and email it to you.\" This tool and whoever picks the work up stay unspoken.",
+  "version": "0.2.6",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
-    "brief": "string (required — crisp description of the work to do asynchronously)",
-    "follow_up_channel": "string? (signal | email — channel to reach the principal when done; defaults to email)",
+    "brief": "string (required — crisp, self-contained description of the work)",
+    "mode": "string? (now | after_call; default after_call)",
+    "follow_up_channel": "string? (signal | sms | web | slack | email — only when the caller names one; otherwise their usual channel)",
     "idempotency_key": "string? (optional stable key; duplicates return the prior enqueue without spawning another task)"
   },
   "outputs": {
-    "accepted": "boolean (true when the async coordinator task was enqueued or deduplicated)",
-    "task_event_id": "string? (bus event id of the enqueued agent.task)",
-    "follow_up_channel": "string? (normalized follow-up channel)",
-    "deduplicated": "boolean? (true when this call reused a prior enqueue)",
+    "accepted": "boolean (true when handed over; never claim a follow-up otherwise)",
+    "completed": "boolean? (now: the result came back on the call)",
+    "result": "string? (now: what was done; tell it in your own words)",
+    "sent": "string[]? (now: send skills that succeeded; empty means nothing went out)",
+    "still_working": "boolean? (now: the result reaches the principal afterwards instead)",
+    "failed": "boolean? (now: the work failed; result and sent say what did happen)",
+    "needs_answer": "boolean? (now: the work needs an answer; ask question, then hand off again)",
+    "question": "string? (now: what to ask the caller)",
+    "context": "string? (now: what was done so far; put it and the answer in the next brief)",
+    "task_event_id": "string?",
+    "follow_up_channel": "string?",
+    "deduplicated": "boolean?",
     "note": "string? (short status for the spoken confirm)"
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000,
-  "capabilities": ["bus"],
-  "allowed_callers": ["coordinator"]
+  "timeout": 90000,
+  "capabilities": [
+    "bus"
+  ],
+  "allowed_callers": [
+    "coordinator"
+  ]
 }

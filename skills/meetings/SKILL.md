@@ -2,7 +2,7 @@
 name: meetings
 description: >
   Park an agenda for an upcoming principal call, and follow up meeting minutes (Curia's own, or minutes from elsewhere) into tasks, drafts and a recap.
-version: "0.2.0"
+version: "0.2.1"
 tools:
   - meeting-agenda-park
 ---
@@ -36,9 +36,9 @@ Whatever you send is one message to the recipient `principal`, through the norma
 Judge from the minutes whether the call was a formal meeting: an agenda worked through, decisions recorded, other attendees. When unsure, treat it as casual.
 
 - **Casual.** A short recap in the first person, the way you would message a colleague after a call. Leave the minutes link out unless the principal asked for the minutes.
-- **Formal.** The minutes link when you have one, then a bullet list of the decisions. Pasted minutes have no link; never make one up.
+- **Formal.** Lead with the key notes and decisions as bullets, then the action items with who owns each. Close with the minutes link when you have one, as a short linked phrase such as `[Full minutes](link)`. Pasted minutes have no link; never make one up.
 
-Never paste the storage path. Do not label items "directed" or "Curia's idea".
+Never show a bare URL or paste the storage path. Do not label items "directed" or "Curia's idea".
 
 ### Minutes from elsewhere, or a redo
 

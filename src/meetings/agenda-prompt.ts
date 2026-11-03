@@ -17,9 +17,13 @@ function remainingLine(snapshot: AgendaSnapshot): string | null {
   return `Left from earlier calls: ${parts.join(', ')}`;
 }
 
+// The first dry run (#2428) rendered an auto-opened agenda as bare background:
+// the model never knew it had it, invented ids for meeting-agenda-load, and told
+// the caller it couldn't pull the agenda up. Say plainly that it is open.
 function renderLoaded(snapshot: AgendaSnapshot): string {
   const lines = [
-    `### ${snapshot.title}`,
+    `### Open on this call: ${snapshot.title}`,
+    `Already open (id ${snapshot.agendaId}): you have it in front of you. Do not call meeting-agenda-load for it.`,
     'Topics:',
     ...snapshot.topics.map((topic, index) => `${index + 1}. ${topic}`),
   ];
@@ -56,6 +60,21 @@ const SPOKEN_AGENDA_WORDS =
   'Talk about agendas the way a person would: "let me pull that up", "let\'s go over it". '
   + 'The words "load" and "loading" belong to the tool. Never say them to the caller.';
 
+// With an agenda open, the call drifted and never ran it (#2428). Only rendered
+// when an agenda is open, so a free-form call carries none of it (ADR-046).
+// The agenda's free-text role is how Curia behaves on the call (agenda-minutes
+// design: "observer", "chair", ...). Code does not interpret it yet, so the
+// guidance defers to it rather than overriding an observer or note-taker role.
+const RUNNING_THE_AGENDA = [
+  '### Running the agenda',
+  'Unless the agenda\'s role says otherwise, such as an observer or note-taker, run this call against the open agenda. '
+    + 'Early on, tell the caller you have the agenda and how many topics '
+    + 'it has, and offer to take them in order. Take one topic at a time: give its gist in a sentence or two, get what '
+    + 'the caller needs to say or decide, then move to the next. When the conversation drifts, handle what the caller '
+    + 'raised, then steer back to the next open topic. Before the call wraps up, name any topics not yet covered and ask '
+    + 'whether to take them now or leave them for next time.',
+].join('\n');
+
 // Tool results do not survive in voice history, so the notes flag is restated every turn (#2347).
 function notesBlock(recap: boolean): string {
   return [
@@ -83,6 +102,7 @@ export function formatAgendaPromptBlock(
       SPOKEN_AGENDA_WORDS,
     );
     for (const snapshot of input.loaded) sections.push(renderLoaded(snapshot));
+    if (input.loaded.length > 0) sections.push(RUNNING_THE_AGENDA);
     if (input.index.length > 0) sections.push(renderIndex(input.index, timezone));
   }
   if (input.notes) sections.push(notesBlock(input.notes.recap));

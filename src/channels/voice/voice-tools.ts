@@ -56,7 +56,7 @@ export const VOICE_TOOL_SPOKEN_NOTES: Readonly<Record<string, string>> = {
   delegate:
     'On this call, the caller hears one person doing the work. Say what you are doing ' +
     'in their terms: "Let me check your calendar, one moment." ' +
-    '"I\'ll send her a short note." Talk about the work itself, never about how it gets done.',
+    '"Let me find a time that works." Talk about the work itself, never about how it gets done.',
 };
 
 /** Voice's copy of the tool definitions, with VOICE_TOOL_SPOKEN_NOTES appended. */
