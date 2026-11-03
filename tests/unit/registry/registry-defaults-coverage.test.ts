@@ -163,6 +163,8 @@ describe('registry-defaults.yaml on a fresh install (#1974)', () => {
       // Fail closed on a missing entityMemory capability instead of gating on a vault key
       // that an install using its own embedding endpoint never holds (#2023).
       'query-relationships', 'delete-relationship',
+      // Searches keyless without a Tavily key; the key is an optional upgrade (#2445).
+      'web-search',
     ]) {
       expect(enabled.tools.has(tool), tool).toBe(true);
     }
@@ -172,10 +174,6 @@ describe('registry-defaults.yaml on a fresh install (#1974)', () => {
     const enabled = await freshInstall('bare');
     const calendar = bundleMembers.get('calendar') ?? [];
     expect(calendar.length).toBeGreaterThan(0);
-    for (const tool of ['web-search']) {
-      expect(toolManifests.get(tool)?.requiresSecrets.length, `${tool} declares requires_secrets`).toBeGreaterThan(0);
-      expect(enabled.tools.has(tool), tool).toBe(false);
-    }
     // Every calendar member that talks to Nylas declares the client capability and stays
     // off. calendar-register is the exception by design: a DB-only write (links a calendar
     // id to a contact) callable only by the calendar agent, which isn't a default.

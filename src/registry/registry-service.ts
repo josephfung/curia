@@ -148,7 +148,8 @@ export class RegistryService {
     return entries;
   }
 
-  /** Every vault key declared across tools' install.requires_secrets (deduped).
+  /** Every vault key declared across tools' install.requires_secrets and
+   *  install.optional_secrets (deduped).
    *  Scopes the vault write endpoint: only a secret some tool actually needs may be set
    *  through it, so the console can't write arbitrary keys into the vault. Reads from
    *  in-memory discovery — no DB round-trip.
@@ -158,6 +159,7 @@ export class RegistryService {
     const names = new Set<string>();
     for (const d of this.toolDiscovery) {
       for (const s of d.metadata?.requiresSecrets ?? []) names.add(s);
+      for (const s of d.metadata?.optionalSecrets ?? []) names.add(s.name);
     }
     return [...names];
   }

@@ -121,7 +121,7 @@ The heartbeat key identifies the capability tier, not the vendor. If you remap `
 | `nylas_calendar` | `listCalendars()` via the principal calendar client (`ceo_nylas_grant_id`) | Calendar not configured (no `NylasCalendarClient`) |
 | `signal` | Signal-cli socket ping | Signal not configured |
 | `google_workspace` | `list_drive_items` (one item) through the MCP session, which exercises the OAuth grant. Also fails on a `zero_tools` or `unavailable` boot | `google-workspace` MCP server not enabled |
-| `tavily` | `GET https://api.tavily.com/usage` with the key (no search credits spent) | No `tavily_api_key` in the vault and no `TAVILY_API_KEY` env var |
+| `tavily` | `GET https://api.tavily.com/usage` with the key (no search credits spent) | No `tavily_api_key` in the vault and no `TAVILY_API_KEY` env var. web-search then runs keyless, and the result's detail says "keyless mode" (#2445). A keyless probe would spend a free search, so none is made |
 
 ### LLM canaries make no billed calls
 

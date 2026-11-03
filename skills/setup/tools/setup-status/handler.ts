@@ -16,6 +16,14 @@ type CompletionCheck =
   | { type: 'paired_push_subscription' }
   | { type: 'email_channel_ready' };
 
+/** A credential that improves a task that already works without it (#2445). Setup never
+ *  asks for it; the wizard offers it on request. */
+interface OptionalUpgrade {
+  keys: string[];
+  value_prop: string;
+  credential_how_to: string;
+}
+
 interface CatalogTask {
   id: string;
   label: string;
@@ -25,13 +33,14 @@ interface CatalogTask {
   handoff_path?: string;
   optional?: boolean;
   completion_check: CompletionCheck;
+  optional_upgrade?: OptionalUpgrade;
   credential_how_to: string | null;
   docs_url: string | null;
 }
 
 type TaskStatus = 'done' | 'pending' | 'deferred';
 
-interface CatalogTaskWithStatus extends Omit<CatalogTask, 'completion_check'> {
+interface CatalogTaskWithStatus extends Omit<CatalogTask, 'completion_check' | 'optional_upgrade'> {
   status: TaskStatus;
   // Present for vault_secrets_all tasks — the agent uses keys[0] with system-secret-capture-request.
   vault_keys?: string[];
@@ -40,6 +49,8 @@ interface CatalogTaskWithStatus extends Omit<CatalogTask, 'completion_check'> {
   // Present for vault_secrets_all tasks: their `done` means the keys are saved, not that the
   // channel or integration is enabled and running (only email checks that, #2409).
   done_means?: 'credentials_saved';
+  // Present when the task has an optional upgrade. `configured` is true once every key is set.
+  optional_upgrade?: { vault_keys: string[]; configured: boolean; value_prop: string; credential_how_to: string };
 }
 
 // ── Catalog loading ────────────────────────────────────────────────────────
@@ -230,14 +241,23 @@ export class SetupStatusHandler implements ToolHandler {
 
         // Expose vault key names so the agent can pass the correct key to
         // system-secret-capture-request for in-chat credential capture tasks.
-        const { completion_check: _check, ...rest } = task;
+        const { completion_check: _check, optional_upgrade: upgrade, ...rest } = task;
         const vault_keys = _check?.type === 'vault_secrets_all' ? _check.keys : undefined;
-        return {
+        const annotatedTask: CatalogTaskWithStatus = {
           ...rest,
           status,
           ...(vault_keys ? { vault_keys, done_means: 'credentials_saved' as const } : {}),
           ...(restartRequired ? { restart_required: true as const } : {}),
         };
+        if (upgrade) {
+          annotatedTask.optional_upgrade = {
+            vault_keys: upgrade.keys,
+            configured: upgrade.keys.every(k => secretPresent(ctx, k)),
+            value_prop: upgrade.value_prop,
+            credential_how_to: upgrade.credential_how_to,
+          };
+        }
+        return annotatedTask;
       });
 
       const summary = {
