@@ -280,7 +280,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Tavily setup link** — saves the key web-search reads; boot copies any legacy `user.tavily_api_key`. (#2409, #2445)
 - **Console secret rows** — a configured key can be replaced in place. (#2445)
 - **Phone app icon** — white mark on near-black, so it stays legible in iOS dark mode. (#2341)
 - **Offline page** — says whether the device is offline or can't reach Curia; reconnects automatically. (#2341)

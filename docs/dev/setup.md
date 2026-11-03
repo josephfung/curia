@@ -330,8 +330,9 @@ takes effect on the next search, with no restart:
 
 With a key set, requests are authenticated with it and never marked keyless. A bad key
 returns an "invalid key" error; there is no silent fallback to keyless. Before #2445 the
-setup link saved the key as `user.tavily_api_key`, which web-search never read. Boot now
-copies such a key to `tavily_api_key` when that is unset.
+setup link saved the key as `user.tavily_api_key`, which web-search never read. Boot moves
+such a key to `tavily_api_key` (copy, then delete the `user.*` entry), so deleting
+`tavily_api_key` later, to revoke it or go back to keyless, sticks across restarts (#2409).
 
 `ctx.secret('tavily_api_key')` resolves vault-first with a `TAVILY_API_KEY` env-var fallback. In production the vault is the single source of truth. Do **not** leave `TAVILY_API_KEY` set in the deploy environment, since a lingering env var would mask whether the vault entry is actually being used.
 

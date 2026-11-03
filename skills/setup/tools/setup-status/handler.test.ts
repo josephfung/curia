@@ -77,11 +77,13 @@ const manifest = JSON.parse(readFileSync(join(import.meta.dirname, 'tool.json'),
 const DECLARED = new Set(manifest.secrets);
 
 const catalog = yaml.load(readFileSync(join(import.meta.dirname, 'catalog.yaml'), 'utf-8')) as {
-  tasks: Array<{ id: string; completion_check: { type: string; keys?: string[] } }>;
+  tasks: Array<{ id: string; completion_check: { type: string; keys?: string[] }; optional_upgrade?: { keys: string[] } }>;
 };
-const CATALOG_VAULT_KEYS = catalog.tasks.flatMap(t =>
-  t.completion_check.type === 'vault_secrets_all' ? (t.completion_check.keys ?? []) : [],
-);
+// Every key the handler reads: completion checks plus optional upgrades (#2445).
+const CATALOG_VAULT_KEYS = catalog.tasks.flatMap(t => [
+  ...(t.completion_check.type === 'vault_secrets_all' ? (t.completion_check.keys ?? []) : []),
+  ...(t.optional_upgrade?.keys ?? []),
+]);
 
 function makeCtx(overrides: Partial<{
   secrets: Record<string, string>;
@@ -153,12 +155,12 @@ describe('setup-status', () => {
       expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus']));
     });
 
-    it('checks the Tavily key web-search reads', () => {
+    it('offers the Tavily key web-search reads as the upgrade', () => {
       const webSearch = JSON.parse(
         readFileSync(join(import.meta.dirname, '../../../web/tools/web-search/tool.json'), 'utf-8'),
       ) as { secrets: string[] };
       const webResearch = catalog.tasks.find(t => t.id === 'web_research');
-      expect(webResearch?.completion_check.keys).toEqual(webSearch.secrets);
+      expect(webResearch?.optional_upgrade?.keys).toEqual(webSearch.secrets);
     });
   });
 
@@ -435,11 +437,12 @@ describe('setup-status manifest covers the catalog', () => {
     const dir = import.meta.dirname;
     const manifest = JSON.parse(await readFile(join(dir, 'tool.json'), 'utf8')) as { secrets: string[] };
     const catalog = yaml.load(await readFile(join(dir, 'catalog.yaml'), 'utf8')) as {
-      tasks: Array<{ completion_check?: { type: string; keys?: string[] } }>;
+      tasks: Array<{ completion_check?: { type: string; keys?: string[] }; optional_upgrade?: { keys: string[] } }>;
     };
-    const read = catalog.tasks.flatMap((task) =>
-      task.completion_check?.type === 'vault_secrets_all' ? (task.completion_check.keys ?? []) : [],
-    );
+    const read = catalog.tasks.flatMap((task) => [
+      ...(task.completion_check?.type === 'vault_secrets_all' ? (task.completion_check.keys ?? []) : []),
+      ...(task.optional_upgrade?.keys ?? []),
+    ]);
     expect(read.length).toBeGreaterThan(0);
     const missing = read.filter((key) => !manifest.secrets.includes(key));
     expect(missing).toEqual([]);
