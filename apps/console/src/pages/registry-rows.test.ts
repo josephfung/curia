@@ -218,6 +218,19 @@ describe('drawerOptionalSecrets', () => {
     expect(drawerOptionalSecrets(row.entry, row)).toEqual([{ name: 'tavily_api_key', purpose: 'raises limits' }]);
   });
 
+  it('leaves out a key another member requires, since it still gates the bundle', () => {
+    const rows = buildRows(
+      [bundle('web', ['web-search', 'web-fetch'], [], 'enabled')],
+      [
+        tool('web-search', [{ name: 'shared', purpose: 'p' }, { name: 'extra', purpose: 'q' }]),
+        entry('web-fetch', { metadata: { name: 'web-fetch', description: 'd', version: '1.0.0', requiresSecrets: ['shared'] } }),
+      ],
+      [],
+    );
+    const row = rows[0]!;
+    expect(drawerOptionalSecrets(row.entry, row)).toEqual([{ name: 'extra', purpose: 'q' }]);
+  });
+
   it('returns nothing for an agent or a bundle without its row', () => {
     expect(drawerOptionalSecrets(entry('coordinator', { kind: 'agent' }), undefined)).toEqual([]);
     expect(drawerOptionalSecrets(bundle('web', ['web-search'], [], 'enabled'), undefined)).toEqual([]);

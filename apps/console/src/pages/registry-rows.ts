@@ -175,7 +175,8 @@ export function buildRows(
  * A tool shows its own. A bundle shows its members': a bundle's member rows are
  * read-only, so the bundle drawer is the only place the operator can set a member's key
  * (web-search's tavily_api_key lives under the web bundle). First declaration wins
- * when two members share a key.
+ * when two members share a key. A key any member requires is left out: it still gates
+ * the bundle, so calling it optional would be wrong.
  */
 export function drawerOptionalSecrets(
   entry: RegistryEntry,
@@ -183,7 +184,7 @@ export function drawerOptionalSecrets(
 ): { name: string; purpose: string }[] {
   if (entry.kind === 'tool') return entry.metadata?.optionalSecrets ?? [];
   if (entry.kind !== 'skill' || row === undefined) return [];
-  const seen = new Set<string>();
+  const seen = new Set<string>(row.members.flatMap(m => m.metadata?.requiresSecrets ?? []));
   const out: { name: string; purpose: string }[] = [];
   for (const member of row.members) {
     for (const secret of member.metadata?.optionalSecrets ?? []) {
