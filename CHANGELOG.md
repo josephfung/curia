@@ -124,7 +124,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **`@anthropic-ai/sdk` 1.x** — moves to API version 2026-10-21; Claude requests no longer send `temperature`. (#2439)
+- **`@anthropic-ai/sdk` 1.x** — moves to API version 2026-10-21; Anthropic API requests no longer send `temperature`. (#2439)
 - **Console navigation** — Settings → System now holds About, Devices and Retention; Personality keeps behaviour settings. (#2341)
 - **User menu** — name and version open a menu with theme, Devices & notifications, and Log out. (#2341)
 - **Device notifications** — the toggle names this phone or browser; the device list marks notified devices. (#2341)
