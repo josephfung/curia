@@ -82,7 +82,8 @@ export interface HealthServiceDeps {
   embeddingsEnabled?: boolean;
   /**
    * Resolves the Tavily key at canary time, vault first then `TAVILY_API_KEY`, as the
-   * execution layer does for web-search (#2242). null → the tavily canary is skipped.
+   * execution layer does for web-search (#2242). null → web-search runs keyless (#2445)
+   * and the tavily canary is skipped with a "keyless mode" detail.
    */
   resolveTavilyApiKey?: () => Promise<string | null>;
   /**
@@ -351,7 +352,9 @@ export class HealthService {
     // Tavily canary — the usage endpoint authenticates the key without spending credits.
     await run('tavily', async () => {
       const apiKey = resolveTavilyApiKey ? await resolveTavilyApiKey() : null;
-      if (!apiKey) return { name: 'tavily', status: 'skipped' };
+      // No key: web-search runs keyless (#2445). A keyless probe would spend one of the
+      // install's few free hourly searches, so report the mode instead of probing.
+      if (!apiKey) return { name: 'tavily', status: 'skipped', detail: 'keyless mode (no API key set)' };
       return this.canaryTavily(apiKey);
     });
 

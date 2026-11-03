@@ -45,7 +45,9 @@ Fails fast with a one-line message and install link if any are missing:
 2. Prompt for an Anthropic API key (validated against `sk-ant-[A-Za-z0-9_-]+`,
    3 retries).
 3. Write `.env` from `.env.example`, substituting generated and collected values.
-   Optional channel vars (Nylas, OpenAI, Signal, Tavily) stay commented.
+   Optional channel vars (Nylas, OpenAI, Signal) and the optional Tavily key stay
+   commented. Web search needs no key: it runs Tavily keyless, and a key only raises
+   its limits (#2445).
 4. `docker compose up -d postgres`, poll health every 2s up to 60s.
 5. Install npm dependencies (`pnpm install --frozen-lockfile`) when
    `node_modules/` is absent.
@@ -246,6 +248,13 @@ The v0.2.0 prompt replaces the fixed 4-turn interview script with an
 The catalog of setup tasks (`skills/setup/tools/setup-status/catalog.yaml`) is owned
 by the skill bundle. The agent can show the full menu on request and can
 resume deferred tasks in any subsequent session.
+
+A task can carry an `optional_upgrade`: a credential that improves something that
+already works. Web research is the one example (#2445). It reports done with no key,
+since search runs Tavily keyless, and `setup-status` lists `tavily_api_key` as an
+upgrade with a `configured` flag. The wizard never asks for an upgrade key during
+setup. It offers the key on request, or after search reports it is temporarily
+limited, using the same one-time capture link as other keys.
 
 ### Skills pinned to setup-wizard
 

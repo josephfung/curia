@@ -120,6 +120,14 @@ export function parseToolDiscoveryDir(
     const optionalCapabilities = Array.isArray(rawOptional)
       ? rawOptional.filter((s): s is string => typeof s === 'string')
       : undefined;
+    // Same boundary for install.optional_secrets (#2445): keep only string → string pairs,
+    // since the keys widen the vault write allowlist. Non-object → undefined.
+    const rawOptionalSecrets: unknown = manifest.install?.optional_secrets;
+    const optionalSecrets = typeof rawOptionalSecrets === 'object' && rawOptionalSecrets !== null && !Array.isArray(rawOptionalSecrets)
+      ? Object.entries(rawOptionalSecrets)
+        .filter((e): e is [string, string] => e[0].length > 0 && typeof e[1] === 'string' && e[1].length > 0)
+        .map(([name, purpose]) => ({ name, purpose }))
+      : undefined;
     if (entryName !== manifest.name) {
       logger?.warn(
         { dir, manifestName: manifest.name },
@@ -141,6 +149,7 @@ export function parseToolDiscoveryDir(
         // PR2 (#939): surface the install-time secrets gate to the registry UI + service.
         // Normalized above to a clean string[] | undefined.
         requiresSecrets,
+        optionalSecrets,
       },
     };
   } catch (err) {

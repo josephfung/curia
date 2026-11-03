@@ -1,8 +1,8 @@
 ---
 name: web
 description: >
-  Web fetch, search (Tavily-gated), and browser tools. Per-tool install.requires_secrets gating is preserved — the bundle does not gate on Tavily.
-version: "0.2.0"
+  Web fetch, search (Tavily, keyless by default), and browser tools.
+version: "0.2.1"
 tools:
   - web-fetch
   - web-search

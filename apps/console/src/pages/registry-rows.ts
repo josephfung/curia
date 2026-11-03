@@ -18,6 +18,8 @@ export interface ManifestMetadata {
   // PR2 (#939): vault keys a skill declares in install.requires_secrets. Cross-referenced
   // against GET /api/vault/status to show configured/missing status and gate install/enable.
   requiresSecrets?: string[];
+  /** Vault keys from install.optional_secrets (#2445): settable here, never a gate. */
+  optionalSecrets?: { name: string; purpose: string }[];
   /** Member tool names — skill bundles only. */
   tools?: string[];
   /** Agents whose pinned_skills reference this bundle — skill bundles only. */
