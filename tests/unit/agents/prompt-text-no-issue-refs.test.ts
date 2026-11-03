@@ -12,8 +12,8 @@
 // - prompt modules (src/agents/prompts/ and any src file named *prompt*,
 //   *guidance* or *instruction*): every string literal in the source, so text
 //   built inside a function (the agenda block) is covered, not just exports
-// - the voice prompt constants exported from src/channels/voice/voice-runtime.ts
-//   (a runtime module: its log messages are operator text, so exports only)
+// - every string literal in src/channels/voice/voice-runtime.ts, which builds
+//   the voice prompt inside functions (log-call arguments are skipped)
 //
 // Log messages may cite issues; they are read by operators, not the model.
 
@@ -45,11 +45,6 @@ function stringHits(value: unknown, where: string, hits: string[]): void {
   } else if (value && typeof value === 'object') {
     for (const [key, item] of Object.entries(value)) stringHits(item, `${where}.${key}`, hits);
   }
-}
-
-async function exportedStrings(file: string, hits: string[]): Promise<void> {
-  const mod = await import(file) as Record<string, unknown>;
-  for (const [name, value] of Object.entries(mod)) stringHits(value, `${relative(ROOT, file)} ${name}`, hits);
 }
 
 /** Prompt-text modules. prompt-budget measures prompts and holds none. */
@@ -138,7 +133,8 @@ describe('model-facing text carries no issue references', () => {
     // A rename that drops every module would pass this test vacuously.
     expect(modules.some((file) => file.endsWith('/src/meetings/agenda-prompt.ts'))).toBe(true);
     for (const file of modules) literalHits(file, hits);
-    await exportedStrings(join(ROOT, 'src/channels/voice/voice-runtime.ts'), hits);
+    // The voice runtime builds its prompt inside functions; log calls are skipped.
+    literalHits(join(ROOT, 'src/channels/voice/voice-runtime.ts'), hits);
     expect(hits).toEqual([]);
   });
 });

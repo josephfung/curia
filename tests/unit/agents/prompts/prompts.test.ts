@@ -29,5 +29,10 @@ describe('shared prompt guardrails (#1595 / ADR-038)', () => {
     expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).toContain('async-offramp');
     expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).toContain('follow up');
     expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).toContain('Do **not** pretend you finished');
+    // CodeRabbit on PR #2433: the guidance must match the tool contract.
+    expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).toContain('`now`');
+    expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).toContain('`after_call`');
+    expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).toContain('Leave `follow_up_channel` out unless the caller names one');
+    expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).not.toMatch(/Signal or email/i);
   });
 });

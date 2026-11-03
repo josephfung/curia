@@ -454,6 +454,68 @@ describe('AsyncOfframpHandler mode now (#2428)', () => {
     expect(pendingReplyCountForTests()).toBe(0);
   });
 
+  // CodeRabbit on PR #2433: a clarification pause is not a result.
+  it('returns the coordinator question when it pauses to ask one', async () => {
+    const question = JSON.stringify({ _curia_protocol: 'clarification_request', question: 'Which LinkedIn account?', context: 'x', resume_token: 't' });
+    const { bus } = liveBus((task) => response(task, { content: question, sends: [] }));
+    const result = await handler.execute(makeCtx(bus, { brief: 'Check my feed', mode: 'now' }));
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toMatchObject({ completed: false, needs_answer: true, question: 'Which LinkedIn account?' });
+    expect(JSON.stringify(result.data)).not.toContain('_curia_protocol');
+  });
+
+  it('keeps waiting through an execution pause and settles on the final reply', async () => {
+    const paused = JSON.stringify({ _curia_protocol: 'execution_paused', done: 1, total: 3, cursor: null, last_slice_units: 1, next: 'slice 2' });
+    const { bus, published, respond } = liveBus((task) => response(task, { content: paused }));
+    const pending = handler.execute(makeCtx(bus, { brief: 'Long multi-step', mode: 'now' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await respond(response(published[0] as AgentTaskEvent, { content: 'All three done.', sends: [] }));
+    const result = await pending;
+    expect(result.success && result.data).toMatchObject({ completed: true, result: 'All three done.' });
+  });
+
+  it('forwards a late question as a question, not protocol JSON', async () => {
+    const controller = new AbortController();
+    const { bus, published, respond } = liveBus();
+    const first = handler.execute(makeCtx(bus, { brief: 'Long job', mode: 'now' }, { inputSignal: controller.signal }));
+    await Promise.resolve();
+    controller.abort();
+    await first;
+    const question = JSON.stringify({ _curia_protocol: 'clarification_request', question: 'Which account?', context: 'x', resume_token: 't' });
+    await respond(response(published[0] as AgentTaskEvent, { content: question }));
+    const forward = (published[1] as AgentTaskEvent).payload.content;
+    expect(forward).toContain('Which account?');
+    expect(forward).not.toContain('_curia_protocol');
+  });
+
+  // CodeRabbit on PR #2433: a failed forward publish dropped the result.
+  it('retries a forward whose publish fails', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const { bus, published, respond } = liveBus();
+      let failures = 2;
+      const realPublish = (bus as unknown as { publishDetached: (l: string, e: BusEvent) => Promise<void> }).publishDetached;
+      (bus as unknown as { publishDetached: (l: string, e: BusEvent) => Promise<void> }).publishDetached = async (layer, event) => {
+        if (published.length >= 1 && failures > 0) { failures -= 1; throw new Error('write-ahead failed'); }
+        await realPublish(layer, event);
+      };
+      const first = handler.execute(makeCtx(bus, { brief: 'Long job', mode: 'now' }, { inputSignal: controller.signal }));
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      await first;
+      // The forward waits out its retry delays, so advance time before awaiting it.
+      const delivered = respond(response(published[0] as AgentTaskEvent, { content: 'Late result.' }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      await delivered;
+      expect(published).toHaveLength(2);
+      expect((published[1] as AgentTaskEvent).payload.content).toContain('Late result.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps after_call as the default and rejects an unknown mode', async () => {
     const { bus, published } = liveBus();
     const result = await handler.execute(makeCtx(bus, { brief: 'Research this' }));

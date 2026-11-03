@@ -110,6 +110,23 @@ describe('minutes writer', () => {
     expect(parseMinutesOutput(closed, [agenda])).toEqual({ markdown: closed, coverage: null });
   });
 
+  // CodeRabbit on PR #2433: braces inside a topic name, and CRLF line ends.
+  it('a cut-off block keeps a topic whose name contains braces', () => {
+    const braced: AgendaSnapshot = { ...agenda, topics: ['Budget {Q4}', 'hiring'] };
+    const raw = '## Board\nDone.\n\n```json\n'
+      + `{"coverage":[{"agendaId":"${agenda.agendaId}","topics":[{"topic":"Budget {Q4}","coverage":"partial"},{"topic":"hir`;
+    expect(parseMinutesOutput(raw, [braced]).coverage?.[0]?.topics[0]).toEqual({ topic: 'Budget {Q4}', coverage: 'partial' });
+  });
+
+  it('accepts CRLF after the opening fence, closed or cut off', () => {
+    const closed = `## Board\r\nDone.\r\n\r\n\`\`\`json\r\n{"coverage":[{"agendaId":"${agenda.agendaId}","topics":[{"topic":"runway","coverage":"covered"}]}]}\r\n\`\`\``;
+    expect(parseMinutesOutput(closed, [agenda]).coverage?.[0]?.topics[0]).toEqual({ topic: 'runway', coverage: 'covered' });
+    const cut = `## Board\r\nDone.\r\n\r\n\`\`\`json\r\n{"coverage":[{"agendaId":"${agenda.agendaId}","topics":[{"topic":"runway","coverage":"covered"},{"to`;
+    const parsed = parseMinutesOutput(cut, [agenda]);
+    expect(parsed.markdown).toBe('## Board\r\nDone.');
+    expect(parsed.coverage?.[0]?.topics[0]).toEqual({ topic: 'runway', coverage: 'covered' });
+  });
+
   it('a cut-off block with no complete topic gives null coverage', () => {
     const raw = '## Board\nRunway discussed.\n\n```json\n{"coverage":[{"agendaId":"11111111';
     expect(parseMinutesOutput(raw, [agenda])).toEqual({ markdown: '## Board\nRunway discussed.', coverage: null });

@@ -33,6 +33,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/type
 import { createAgentTask } from '../../src/bus/events.js';
 import type { AgentResponseEvent, BusEvent } from '../../src/bus/events.js';
 import { principalSendTool, REACH_CHANNELS, type ReachChannel } from '../../src/agents/principal-reach.js';
+import { parseExecutionPausedPayload } from '../../src/agents/resumable-task.js';
 
 /**
  * A follow-up goes on the channel the caller named, or else the principal's usual
@@ -176,7 +177,45 @@ function buildForwardContent(brief: string, followUpChannel: FollowUpChannel, re
 
 type NowOutcome =
   | { kind: 'reply'; event: AgentResponseEvent }
+  | { kind: 'question'; question: string }
   | { kind: 'missed' };
+
+/** Mirrors the runtime's clarification envelope (src/agents/runtime.ts). */
+const CLARIFICATION_PROTOCOL = 'clarification_request';
+
+/** Waits between attempts to publish a forward; the result is lost only if all fail. */
+const FORWARD_RETRY_DELAYS_MS = [5_000, 30_000];
+
+/**
+ * What a coordinator reply means for a waiting hand-off. A paused execution is
+ * not final: the task continues and replies again. A clarification is a
+ * question, not a result (CodeRabbit on PR #2433).
+ */
+function classifyReply(response: AgentResponseEvent):
+  | { kind: 'final' }
+  | { kind: 'paused' }
+  | { kind: 'question'; question: string } {
+  const content = response.payload.content;
+  if (response.payload.isError || !content.trimStart().startsWith('{')) return { kind: 'final' };
+  if (parseExecutionPausedPayload(content)) return { kind: 'paused' };
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    if (parsed['_curia_protocol'] === CLARIFICATION_PROTOCOL && typeof parsed['question'] === 'string') {
+      return { kind: 'question', question: parsed['question'] };
+    }
+  } catch {
+    // Not JSON after all: prose that happens to start with a brace is a final reply.
+  }
+  return { kind: 'final' };
+}
+
+/** The text a forward carries for a reply the caller did not hear. */
+function forwardText(response: AgentResponseEvent): string {
+  if (response.payload.isError) return 'The work failed before it finished. Say so plainly.';
+  const reply = classifyReply(response);
+  if (reply.kind === 'question') return `The work stopped with a question the principal needs to answer: ${reply.question}`;
+  return response.payload.content;
+}
 
 /**
  * Pending now hand-offs, by the coordinator task's event id. One agent.response
@@ -368,6 +407,20 @@ export class AsyncOfframpHandler implements ToolHandler {
 
     if (nowWait) {
       const outcome = await nowWait.outcome;
+      if (outcome.kind === 'question') {
+        return {
+          success: true,
+          data: {
+            accepted: true,
+            mode,
+            completed: false,
+            needs_answer: true,
+            question: outcome.question,
+            task_event_id: taskEvent.id,
+            note: 'Ask the caller this, then hand the work off again with their answer in the brief.',
+          },
+        };
+      }
       if (outcome.kind === 'reply') {
         const { payload } = outcome.event;
         if (payload.isError) {
@@ -471,7 +524,8 @@ export class AsyncOfframpHandler implements ToolHandler {
         else signal.addEventListener('abort', () => miss('caller spoke'), { once: true });
       }
 
-      // Send a result the caller did not hear to the principal, once.
+      // Send a result the caller did not hear to the principal, once. A failed
+      // publish is retried; the result is lost only when every attempt fails.
       let forwarded = false;
       const forward = async (response: AgentResponseEvent): Promise<void> => {
         if (forwarded) return;
@@ -482,11 +536,7 @@ export class AsyncOfframpHandler implements ToolHandler {
           conversationId: `voice-offramp-forward:${taskEventId.slice(0, 32)}`,
           channelId: 'internal',
           senderId,
-          content: buildForwardContent(
-            brief,
-            followUpChannel,
-            response.payload.isError ? 'The work failed before it finished. Say so plainly.' : response.payload.content,
-          ),
+          content: buildForwardContent(brief, followUpChannel, forwardText(response)),
           metadata: {
             voiceOfframp: true,
             offrampForwardOf: taskEventId,
@@ -495,17 +545,29 @@ export class AsyncOfframpHandler implements ToolHandler {
           },
           parentEventId: response.id,
         });
-        try {
-          await bus.publishDetached('dispatch', task);
-          ctx.log.info({ taskEventId, forwardTaskId: task.id }, 'voice hand-off: result forwarded to the principal');
-        } catch (err) {
-          ctx.log.error({ err, taskEventId }, 'voice hand-off: result could not be forwarded; the principal was not told');
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            await bus.publishDetached('dispatch', task);
+            ctx.log.info({ taskEventId, forwardTaskId: task.id }, 'voice hand-off: result forwarded to the principal');
+            return;
+          } catch (err) {
+            const delay = FORWARD_RETRY_DELAYS_MS[attempt];
+            if (delay === undefined) {
+              ctx.log.error({ err, taskEventId, attempts: attempt + 1 }, 'voice hand-off: result could not be forwarded; the principal was not told');
+              return;
+            }
+            ctx.log.warn({ err, taskEventId, attempt: attempt + 1, retryInMs: delay }, 'voice hand-off: forward publish failed; retrying');
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
         }
       };
 
       ensureReplyRouter(bus);
       pendingReplies.set(taskEventId, async (response: AgentResponseEvent) => {
         if (phase === 'closed') return;
+        const reply = classifyReply(response);
+        // A paused execution replies again when it finishes; keep listening.
+        if (reply.kind === 'paused') return;
         pendingReplies.delete(taskEventId);
         if (phase === 'waiting') {
           phase = 'closed';
@@ -518,7 +580,7 @@ export class AsyncOfframpHandler implements ToolHandler {
           if (signal && !response.payload.isError) {
             signal.addEventListener('abort', () => { void forward(response); }, { once: true });
           }
-          resolve({ kind: 'reply', event: response });
+          resolve(reply.kind === 'question' ? { kind: 'question', question: reply.question } : { kind: 'reply', event: response });
           return;
         }
         phase = 'closed';
