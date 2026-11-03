@@ -22,9 +22,9 @@ const AutonomyPage = lazy(() =>
 const PersonalityPage = lazy(() => import('./pages/PersonalitySettingsPage'));
 const GhostwritingPage = lazy(() => import('./pages/GhostwritingSettingsPage'));
 const PosturePage = lazy(() => import('./pages/PostureSettingsPage'));
-const MemoryPage = lazy(() => import('./pages/MemorySettingsPage'));
+const RetentionPage = lazy(() => import('./pages/RetentionSettingsPage'));
 const DevicesPage = lazy(() => import('./pages/DevicesSettingsPage'));
-const SystemPage = lazy(() => import('./pages/SystemSettingsPage'));
+const AboutPage = lazy(() => import('./pages/AboutSettingsPage'));
 const ToolsPage = lazy(() =>
   import('./pages/RegistrySettings').then(m => ({ default: m.ToolsPage })),
 );
@@ -147,31 +147,38 @@ const autonomyRoute = createRoute({
   component: AutonomyPage,
 });
 
-const memoryRoute = createRoute({
-  getParentRoute: () => settingsRoute,
-  path: '/memory',
-  component: MemoryPage,
+// Settings → System: this install. Bare /system opens About.
+const systemRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/system',
+  beforeLoad: ({ location }) => {
+    if (location.pathname === '/system' || location.pathname === '/system/') {
+      throw redirect({ to: '/system/about' });
+    }
+  },
+  component: () => (
+    <Suspense fallback={null}>
+      <Outlet />
+    </Suspense>
+  ),
+});
+
+const aboutRoute = createRoute({
+  getParentRoute: () => systemRoute,
+  path: '/about',
+  component: AboutPage,
 });
 
 const devicesRoute = createRoute({
-  getParentRoute: () => settingsRoute,
+  getParentRoute: () => systemRoute,
   path: '/devices',
   component: DevicesPage,
 });
 
-// System is a standalone top-level page (peer to Tools/Agents/Channels), no
-// longer rendered inside the settings shell. Preserve old /settings/system
-// bookmarks by redirecting to /system (#1765).
-const systemRoute = createRoute({
-  getParentRoute: () => authedRoute,
-  path: '/system',
-  component: SystemPage,
-});
-
-const systemSettingsRedirect = createRoute({
-  getParentRoute: () => settingsRoute,
-  path: '/system',
-  beforeLoad: () => { throw redirect({ to: '/system' }); },
+const retentionRoute = createRoute({
+  getParentRoute: () => systemRoute,
+  path: '/retention',
+  component: RetentionPage,
 });
 
 // Tools and Agents are standalone top-level pages (peer to Contacts/Tasks),
@@ -319,15 +326,16 @@ const routeTree = rootRoute.addChildren([
     mcpSkillsRoute,
     kgRoute,
     documentsRoute,
-    systemRoute,
+    systemRoute.addChildren([
+      aboutRoute,
+      devicesRoute,
+      retentionRoute,
+    ]),
     settingsRoute.addChildren([
       personalityRoute,
       ghostwritingRoute,
       postureRoute,
       autonomyRoute,
-      memoryRoute,
-      devicesRoute,
-      systemSettingsRedirect,
       assistantRedirect,
       workspaceRedirect,
       skillsSettingsRedirect,

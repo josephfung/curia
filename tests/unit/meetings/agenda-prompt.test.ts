@@ -46,6 +46,31 @@ describe('formatAgendaPromptBlock', () => {
     expect(block).not.toContain('Pipeline (covered)');
   });
 
+  // #2428: an auto-opened agenda read as background. The model never knew it
+  // had it, invented ids for meeting-agenda-load, and told the caller it couldn't.
+  it('says an open agenda is already in front of the model, with its id', () => {
+    const block = formatAgendaPromptBlock({ loaded: [snapshot()], index: [] }) ?? '';
+    expect(block).toContain('### Open on this call: Q3 review');
+    expect(block).toContain('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    expect(block).toContain('Do not call meeting-agenda-load for it');
+  });
+
+  it('tells the model to run an open agenda, and only when one is open', () => {
+    const open = formatAgendaPromptBlock({ loaded: [snapshot()], index: [] }) ?? '';
+    expect(open).toContain('### Running the agenda');
+    expect(open).toContain('how many topics');
+    expect(open).toContain('one topic at a time');
+    expect(open).toContain('steer back');
+    expect(open).toContain('Before the call wraps up');
+    // PR #2433 review: an observer or note-taker role is not told to run the meeting.
+    expect(open).toContain("Unless the agenda's role says otherwise, such as an observer or note-taker");
+    const queuedOnly = formatAgendaPromptBlock({
+      loaded: [],
+      index: [{ agendaId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', title: 'Friday sync', scheduledFor: null }],
+    }) ?? '';
+    expect(queuedOnly).not.toContain('### Running the agenda');
+  });
+
   it('renders an index with load instructions', () => {
     const block = formatAgendaPromptBlock({
       loaded: [],

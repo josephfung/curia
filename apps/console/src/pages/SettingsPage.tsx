@@ -274,24 +274,42 @@ function AutonomySection() {
 
 // ── Settings layout ───────────────────────────────────────────────────────────
 
-// In-page settings nav (#1376). Order: Personality → Ghostwriting → Posture →
-// Autonomy → Memory. System lives as a standalone sidebar page outside this
-// shell (#1765), same as Skills / Agents / Channels.
-const SETTINGS_SECTIONS = [
-  { id: 'personality',  label: 'Personality',  href: '/settings/personality' },
-  { id: 'ghostwriting', label: 'Ghostwriting', href: '/settings/ghostwriting' },
-  { id: 'posture',      label: 'Standing preferences', href: '/settings/posture' },
-  { id: 'autonomy',     label: 'Autonomy',     href: '/settings/autonomy' },
-  { id: 'memory',       label: 'Memory',       href: '/settings/memory' },
-  { id: 'devices',      label: 'Devices',      href: '/settings/devices' },
-] as const;
+// In-page settings navs (#1376). Settings → Personality is how Curia behaves;
+// Settings → System is this install: what's running, what's signed in, and
+// the retention config. Each group gets its own sub-nav in the same shell.
+const SECTION_GROUPS = {
+  personality: {
+    title: 'Personality',
+    sidebarView: 'settings',
+    sections: [
+      { id: 'personality',  label: 'Personality',  href: '/settings/personality' },
+      { id: 'ghostwriting', label: 'Ghostwriting', href: '/settings/ghostwriting' },
+      { id: 'posture',      label: 'Standing preferences', href: '/settings/posture' },
+      { id: 'autonomy',     label: 'Autonomy',     href: '/settings/autonomy' },
+    ],
+  },
+  system: {
+    title: 'System',
+    sidebarView: 'system',
+    sections: [
+      { id: 'about',     label: 'About',     href: '/system/about' },
+      { id: 'devices',   label: 'Devices',   href: '/system/devices' },
+      { id: 'retention', label: 'Retention', href: '/system/retention' },
+    ],
+  },
+} as const;
+
+export type SettingsGroup = keyof typeof SECTION_GROUPS;
 
 interface SettingsLayoutProps {
+  /** Which sub-nav to show. Defaults to Personality. */
+  group?: SettingsGroup;
   activeSection: string;
   children: React.ReactNode;
 }
 
-export function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
+export function SettingsLayout({ group = 'personality', activeSection, children }: SettingsLayoutProps) {
+  const { title, sidebarView, sections } = SECTION_GROUPS[group];
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -299,18 +317,25 @@ export function SettingsLayout({ activeSection, children }: SettingsLayoutProps)
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
   }, [mobileOpen]);
 
-  const activeLabel = SETTINGS_SECTIONS.find(s => s.id === activeSection)?.label ?? 'Settings';
+  const activeLabel = sections.find(s => s.id === activeSection)?.label ?? title;
 
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
-        <Sidebar activeView="settings" theme={theme} onThemeChange={setTheme} />
+        <Sidebar activeView={sidebarView} theme={theme} onThemeChange={setTheme} />
+        {mobileOpen && (
+          <div
+            className="sidebar-backdrop"
+            onClick={() => setMobileOpen(false)}
+            aria-hidden="true"
+          />
+        )}
         <main className="main">
-          <Topbar crumb="Settings" title={activeLabel} />
+          <Topbar crumb={`Settings · ${title}`} title={activeLabel} />
           <div className="settings-shell">
-            <nav className="settings-nav">
-              <div className="settings-nav-title">Settings</div>
-              {SETTINGS_SECTIONS.map(s => (
+            <nav className="settings-nav" aria-label={`${title} settings`}>
+              <div className="settings-nav-title">{title}</div>
+              {sections.map(s => (
                 <Link
                   key={s.id}
                   to={s.href}

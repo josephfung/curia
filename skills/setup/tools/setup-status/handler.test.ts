@@ -329,3 +329,24 @@ describe('setup-status', () => {
     });
   });
 });
+
+// #2428: catalog.yaml listed Slack, SMS and voice keys the manifest never declared,
+// so ctx.secret() threw "not declared" and every setup-status call failed in prod.
+describe('setup-status manifest covers the catalog', () => {
+  it('declares every vault key a catalog completion check reads', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const yaml = await import('js-yaml');
+    const dir = import.meta.dirname;
+    const manifest = JSON.parse(await readFile(join(dir, 'tool.json'), 'utf8')) as { secrets: string[] };
+    const catalog = yaml.load(await readFile(join(dir, 'catalog.yaml'), 'utf8')) as {
+      tasks: Array<{ completion_check?: { type: string; keys?: string[] } }>;
+    };
+    const read = catalog.tasks.flatMap((task) =>
+      task.completion_check?.type === 'vault_secrets_all' ? (task.completion_check.keys ?? []) : [],
+    );
+    expect(read.length).toBeGreaterThan(0);
+    const missing = read.filter((key) => !manifest.secrets.includes(key));
+    expect(missing).toEqual([]);
+  });
+});

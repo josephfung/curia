@@ -60,6 +60,7 @@ import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeech
 import { TtsHttpError } from '../../speech/index.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
 import { findInternalJargon } from './spoken-jargon.js';
+import { findCompletionClaim } from './completion-claim.js';
 import { VoiceTurnError, VoiceTurnRunner } from './turn-runner.js';
 
 export {
@@ -256,7 +257,8 @@ export const VOICE_TOOL_RESULT_POLICY =
   'that you could not check — for example "I couldn\'t reach your calendar just now" — ' +
   'and offer to try again. Never present a failed or incomplete lookup as a definitive ' +
   'answer. Only report an empty result ("nothing on your calendar tomorrow") when the ' +
-  'check succeeded and genuinely returned no items.';
+  'check succeeded and genuinely returned no items. Say something was sent, booked or ' +
+  'done only when a tool result in this turn shows it; a saved draft is not a send.';
 
 /**
  * Delegation guidance for spoken turns. The slim Phase 1 prompt never told the
@@ -280,8 +282,9 @@ export const VOICE_DELEGATION_GUIDANCE =
   'Many requests are handled by delegating to a specialist with the delegate tool: ' +
   'calendar and scheduling, contacts and people lookups, research, and reading the ' +
   'principal\'s inbox all belong to the specialists listed below. A recap of this ' +
-  'call is meeting-notes-start. Anything else to email or message after the call, ' +
-  'such as links or research results, goes to async-offramp, not a specialist. When a request ' +
+  'call is meeting-notes-start. Anything that needs the vault or a saved sign-in, a ' +
+  'scheduled task, browsing, documents, or a message to anyone goes to async-offramp: ' +
+  'mode now while the caller waits, after_call for longer work. When a request ' +
   'falls in a specialist\'s domain, delegate rather than answering from memory or ' +
   'guessing. Resolve pronouns before delegating: "my calendar" spoken by the ' +
   'principal means the principal\'s calendar. Fold the specialist\'s result into ' +
@@ -412,6 +415,8 @@ export interface VoiceRuntimeConfig {
       turnDateResolveResults?: readonly import('../../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
       /** The turn's inbound.message id — the parent of its tool audit events (#1968). */
       turnEventId?: string;
+      /** Aborted when the turn is cancelled (barge-in, hang-up). A waiting hand-off stops holding the call (#2428). */
+      signal?: AbortSignal;
     },
   ) => Promise<{ content: string; is_error?: boolean }>;
   /**
@@ -474,6 +479,8 @@ export interface VoiceToolBridge {
       turnDateResolveResults?: readonly import('../../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
       /** The turn's inbound.message id — the parent of its tool audit events (#1968). */
       turnEventId?: string;
+      /** Aborted when the turn is cancelled (barge-in, hang-up). A waiting hand-off stops holding the call (#2428). */
+      signal?: AbortSignal;
     },
   ) => Promise<{ content: string; is_error?: boolean }>;
   /**
@@ -755,7 +762,7 @@ export class VoiceRuntime {
         queuedFragments: 0,
         drainScheduled: false,
         carryOver: null,
-        turnStats: { utterances: 0, turns: 0, bargeInCancels: 0, joinedUtterances: 0 },
+        turnStats: { utterances: 0, turns: 0, bargeInCancels: 0, joinedUtterances: 0, unbackedCompletionClaims: 0 },
         ttsSeq: 0,
         ending: false,
         consecutiveTtsFailures: 0,
@@ -1286,6 +1293,7 @@ export class VoiceRuntime {
               caller: session.caller,
               turnDateResolveResults: turnDateResolveTracker.snapshot(),
               turnEventId: opts.turnEventId,
+              signal: controller.signal,
             });
             if (call.name === 'date-resolve') {
               turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
@@ -1307,6 +1315,7 @@ export class VoiceRuntime {
                 caller: session.caller,
                 turnDateResolveResults: turnDateResolveTracker.snapshot(),
                 turnEventId: opts.turnEventId,
+                signal: controller.signal,
               });
               if (call.name === 'date-resolve') {
                 turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
@@ -1353,6 +1362,15 @@ export class VoiceRuntime {
         return;
       }
 
+      // #2428: "Done, boss" with no tool call, and nothing was sent. A prod signal,
+      // not a filter: the reply was already spoken. The claim, not the reply text.
+      if (!toolInvoked) {
+        const claim = findCompletionClaim(result.finalText);
+        if (claim) {
+          session.turnStats.unbackedCompletionClaims += 1;
+          this.log.warn({ sessionId: session.sessionId, claim }, 'voice reply claimed an action in a turn with no tool call');
+        }
+      }
       await opts.persistSuccess(result.finalText);
       completed = true;
     } catch (err) {
@@ -1736,9 +1754,10 @@ export class VoiceRuntime {
     if (result.is_error) return;
     const snapshot = parseAgendaLoadResult(result.content);
     if (!snapshot) return;
-    if (!session.loadedAgendas.some((agenda) => agenda.agendaId === snapshot.agendaId)) {
-      session.loadedAgendas.push(snapshot);
-    }
+    // Asking again for an agenda the call already holds succeeds (#2428); its
+    // load is already recorded, so don't append a second one.
+    if (session.loadedAgendas.some((agenda) => agenda.agendaId === snapshot.agendaId)) return;
+    session.loadedAgendas.push(snapshot);
     session.agendaIndex = session.agendaIndex.filter((entry) => entry.agendaId !== snapshot.agendaId);
     const load: SessionAgendaLoad = {
       agendaId: snapshot.agendaId,

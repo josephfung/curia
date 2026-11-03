@@ -6,7 +6,7 @@
   "start_url": "/chat",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#F5F4F1",
+  "background_color": "#1C1C1E",
   "theme_color": "#1A6B5E",
   "icons": [
     {

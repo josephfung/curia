@@ -2022,6 +2022,11 @@ export interface VoiceSessionTurnStats {
   bargeInCancels: number;
   /** Utterances folded into another utterance's turn instead of reaching their own outcome. */
   joinedUtterances: number;
+  /**
+   * Replies that said something was done or sent in a turn that called no tool (#2428).
+   * Nothing on a call can act without a tool, so each one is very likely false.
+   */
+  unbackedCompletionClaims: number;
 }
 
 interface VoiceSessionEndedPayload {

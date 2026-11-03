@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { apiFetch } from '../api';
 import { endConsoleSession } from '../auth/log-out.js';
 import { timeAgo } from '../components/settings/ConfigHistory';
+import { HidePreviewsSetting } from '../pwa/HidePreviewsSetting';
 import { NotificationsPanel } from '../pwa/NotificationsPanel';
 import { InvitePhonePanel } from './devices/InvitePhonePanel';
 import { PairPhonePanel } from './devices/PairPhonePanel';
@@ -46,7 +47,7 @@ function kindLabel(kind: DeviceSession['kind']): string {
 
 export default function DevicesSettingsPage() {
   return (
-    <SettingsLayout activeSection="devices">
+    <SettingsLayout group="system" activeSection="devices">
       <DevicesSection />
     </SettingsLayout>
   );
@@ -174,13 +175,18 @@ function DevicesSection() {
       <div className="settings-page-header">
         <h2 className="settings-page-title">Devices</h2>
         <p className="settings-page-sub">
-          Browsers and phones signed in to this Curia. A device stays signed in for 90 days after its last use. Signing it out here ends that session immediately.
+          This device's notifications, the browsers and phones signed in to this Curia, and adding a phone.
         </p>
       </div>
 
-      <PairPhonePanel onPaired={() => { void load().catch(() => undefined); }} />
-      <InvitePhonePanel onPaired={() => { void load().catch(() => undefined); }} />
-      <NotificationsPanel />
+      <NotificationsPanel onChange={() => { void load().catch(() => undefined); }} />
+
+      <section className="devices-section" aria-labelledby="signed-in-devices">
+        <h3 className="settings-section-title" id="signed-in-devices">Signed-in devices</h3>
+        <p className="settings-section-sub">
+          A device stays signed in for 90 days after its last use. Signing it out here ends that session immediately.
+        </p>
+      </section>
 
       {loadError && <p className="autonomy-error" role="alert">{loadError}</p>}
       {actionError && <p className="autonomy-error" role="alert">{actionError}</p>}
@@ -196,7 +202,12 @@ function DevicesSection() {
               <article key={device.id} className="device-row">
                 <div className="device-row-head">
                   <span className="device-name">{deviceLabel(device)}</span>
-                  {device.current && <span className="device-badge">This device</span>}
+                  <span className="device-badges">
+                    {device.notificationsEnabled && (
+                      <span className="device-badge device-badge-on">Notifications on</span>
+                    )}
+                    {device.current && <span className="device-badge">This device</span>}
+                  </span>
                 </div>
                 <p className="device-meta">
                   {kindLabel(device.kind)}
@@ -204,8 +215,7 @@ function DevicesSection() {
                   {device.current ? 'Active now' : `Last seen ${timeAgo(device.lastSeenAt)}`}
                   {' · Created '}
                   {formatCreated(device.createdAt)}
-                  {' · '}
-                  {device.notificationsEnabled ? 'Notifications on' : 'Notifications off'}
+                  {!device.notificationsEnabled && ' · Notifications off'}
                 </p>
                 {renamingId === device.id ? (
                   <form
@@ -264,6 +274,18 @@ function DevicesSection() {
           </div>
         </>
       )}
+
+      {/* Outside the list block: a failed device list must not hide this setting. */}
+      <HidePreviewsSetting />
+
+      <section className="devices-section" aria-labelledby="add-a-phone">
+        <h3 className="settings-section-title" id="add-a-phone">Add a phone</h3>
+        <p className="settings-section-sub">
+          From a computer: scan a code with your own phone, or send someone else an invitation link.
+        </p>
+      </section>
+      <PairPhonePanel onPaired={() => { void load().catch(() => undefined); }} />
+      <InvitePhonePanel onPaired={() => { void load().catch(() => undefined); }} />
     </>
   );
 }

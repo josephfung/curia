@@ -173,7 +173,7 @@ agents keep choosing the channel. Code decides only whether the app is reachable
 Pairing (decision 2) assumes the operator is holding the phone: the QR code lasts ten minutes
 and is scanned from the desktop. Onboarding needs the operator to bring in the principal, who
 is somewhere else and opens the link later. So the operator can also mint an **invitation
-link** for the principal, from Settings → Devices, and send it through their own channel.
+link** for the principal, from Settings → System → Devices, and send it through their own channel.
 Curia doesn't send it.
 
 - **Same link, same redemption.** The link is `https://<phone-origin>/pair#c=<token>`, like

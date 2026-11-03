@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Phone app invitation link** — operators send the principal a single-use, 48-hour link that installs and pairs the app. (#2412)
+- **`async-offramp` now mode** — a call can wait for the full assistant's result instead of refusing. (#2428)
 - **`scheduler-get`** — reads one scheduled job in full, so routines can be quoted verbatim and edited safely. (#2399)
 - **Voice audio telemetry** — per-turn last-word gap, per-chunk TTS timing and starvation, per-call event-loop delay. (#2379)
 - **Recurring calendar events** — create, edit and delete a series or one occurrence; standing meetings become one event. (#2385)
@@ -123,9 +124,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Console navigation** — Settings → System now holds About, Devices and Retention; Personality keeps behaviour settings. (#2341)
+- **User menu** — name and version open a menu with theme, Devices & notifications, and Log out. (#2341)
+- **Device notifications** — the toggle names this phone or browser; the device list marks notified devices. (#2341)
+- **Chat composer** — Send is icon-only on phones and lines up exactly with the message box. (#2341)
 - **Node 26** — runtime, image and `engines` move to the new Active LTS; corepack now installed hash-pinned. (#2402)
 - **`operator.session`** — **public API:** new `invite` and `cancel_invite` actions, and an `invitation` flag on pair. (#2412)
 - **meeting-debrief** — follow-ups become coordinator tasks that wake at once; the coordinator does them. (#2431)
+- **Voice sends** — a message to anyone goes through the hand-off, never a draft in the principal's inbox. (#2428)
+- **`async-offramp` follow-up** — uses the principal's usual channel unless the caller names one. (#2428)
+- **`voice.session.ended` turn stats** — adds `unbackedCompletionClaims`: replies claiming done without a tool call. (#2428)
 - **CI bundle import check** — CI builds the backend and fails on imports Node rejects at startup. (#2410)
 - **Meetings skill** — minutes follow-up guidance moves into the `meetings` bundle; usable outside the post-call task. (#2400)
 - **Voice turn hold** — 350 ms instead of 600, so replies start sooner; `channels.voice.turn_hold_ms` overrides. (#2379)
@@ -240,6 +248,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`hono` override floor** — raised to 4.13.16 to exclude five advisories. (#2427)
 - **`basic-ftp` override floor** — raised to 6.2.4 to exclude two medium advisories. (#2388)
 - **Console chat links** — a `/chat?q=` link no longer sends a message as the principal. (#2351)
 - **Band review** — a steered reply carrying unsupported personal details is rewritten, not held showing them. (#2333)
@@ -265,8 +274,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Phone app icon** — white mark on near-black, so it stays legible in iOS dark mode. (#2341)
+- **Offline page** — says whether the device is offline or can't reach Curia; reconnects automatically. (#2341)
+- **Phone app typing** — text fields are 16px on touch screens, so iOS no longer zooms in. (#2341)
 - **Attachment downloads** — filenames shown with `[REDACTED]` now resolve; filename misses point the retry at `attachment_id`. (#2430)
 - **`email-draft-save`** — result names the mailbox, so drafts in Curia's mailbox aren't reported as the principal's. (#2431)
+- **Voice agendas** — an auto-opened agenda is marked open, and the call runs it topic by topic. (#2428)
+- **`meeting-agenda-load`** — succeeds for an agenda already open; an unknown id lists the real choices. (#2428)
+- **Meeting minutes coverage** — survives a reply cut off by the token cap; budget raised to 16,000. (#2428)
+- **Minutes recap email** — leads with notes and action items; the minutes link closes it as text. (#2428)
+- **`setup-status`** — declares the Slack, SMS and voice secrets its catalog checks, so it runs again. (#2428)
 - **Startup with web push** — the built app no longer crashes loading `web-push`, a CommonJS package. (#2341)
 - **Timezone label tests** — no longer fail when Toronto switches between daylight and standard time.
 - **Inbox triage cron** — skips while a drain cycle is running, so it no longer completes the drain mid-batch. (#2378)

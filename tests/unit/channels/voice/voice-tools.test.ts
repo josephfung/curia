@@ -26,7 +26,8 @@ const SOURCES = {
  */
 // #2322 added meeting-agenda-load (voice-only, same standing as async-offramp).
 // #2347 added meeting-notes-start (452 bytes; 13,795 total).
-const VOICE_TOOL_DEFINITION_BYTES_BUDGET = 15_000;
+// #2428 gave async-offramp a now mode and its result fields (15,084 total).
+const VOICE_TOOL_DEFINITION_BYTES_BUDGET = 15_500;
 
 function catalog(): ToolRegistry {
   const registry = new ToolRegistry('America/Toronto');

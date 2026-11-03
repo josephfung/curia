@@ -128,7 +128,10 @@ overrides:
   #   - GHSA-hxh3-vqpv-xpqv (<4.13.7): hono/jsx renders plain strings unescaped in
   #     boundary components (XSS)
   # 4.13.11, not 4.13.7: the serveStatic advisory runs four patches further up the line.
-  hono: '>=4.13.11'
+  # Raised again off >=4.13.11 (#2427): that floor admits 4.13.11-4.13.15, which carry
+  # GHSA-46wx-v44x-9hh2, GHSA-4h7h-rv7c-7m2v, GHSA-4m76-xfj5-7975, GHSA-h7mg-cq63-vhpq
+  # (all MED) and GHSA-3gg2-335m-rxc6 (LOW), all upstream-repo-only.
+  hono: '>=4.13.16'
   # fast-uri ships authority-parser advisories faster than any floor keeps up with, so
   # this pin is deliberately set at the newest published release rather than at the
   # minimum patched version. The prior >=4.1.2 floor was satisfied by 4.1.3, so ajv

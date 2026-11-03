@@ -38,7 +38,7 @@ describe('meetings bundle', () => {
     const { skills } = loadRegistries();
     const meetings = skills.get('meetings');
     expect(meetings).toBeDefined();
-    expect(meetings!.manifest.version).toBe('0.2.0');
+    expect(meetings!.manifest.version).toBe('0.2.1');
     expect(meetings!.manifest.tools).toEqual(['meeting-agenda-park']);
     const instructions = meetings!.manifest.instructions;
     expect(instructions).toContain('## Parking an agenda');
@@ -60,7 +60,23 @@ describe('meetings bundle', () => {
     expect(general).not.toContain('progress note');
     expect(general).not.toContain('this task');
     // Pasted minutes have no link; a required link would invite a made-up one.
-    expect(general).toContain('The minutes link when you have one');
+    expect(general).toContain('when you have one');
+  });
+
+  // The first dry run's recap opened with a bare URL (#2428): notes and action
+  // items lead, and the minutes close the message as linked text.
+  it('leads a formal recap with notes and action items and ends with the minutes as linked text', () => {
+    const { instructions } = loadRegistries().skills.get('meetings')!.manifest;
+    const formal = instructions.slice(instructions.indexOf('- **Formal.**'));
+    const formalLine = formal.slice(0, formal.indexOf('\n'));
+    // indexOf is -1 for a missing phrase, which would pass an order check.
+    expect(formalLine).toContain('key notes and decisions');
+    expect(formalLine).toContain('action items');
+    expect(formalLine).toContain('minutes link');
+    expect(formalLine.indexOf('key notes and decisions')).toBeLessThan(formalLine.indexOf('action items'));
+    expect(formalLine.indexOf('action items')).toBeLessThan(formalLine.indexOf('minutes link'));
+    expect(formalLine).toContain('[Full minutes](link)');
+    expect(instructions).toContain('Never show a bare URL');
   });
 
   // Third-party minutes cannot prove the principal directed anything (#2405 review).

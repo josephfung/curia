@@ -2977,6 +2977,9 @@ async function main(): Promise<void> {
                 voiceSessionId: ctx.sessionId,
               },
               identifierSources,
+              // Only the hand-off waits on the call; a cancelled turn ends that wait and its
+              // reply is forwarded instead (#2428). Other tools keep their own timing.
+              ...(call.name === 'async-offramp' && ctx.signal ? { inputSignal: ctx.signal } : {}),
             }),
           });
           if (result.success) {
