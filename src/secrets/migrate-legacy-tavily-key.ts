@@ -30,8 +30,20 @@ export async function migrateLegacyTavilyKey(
   if (!legacy) return 'nothing_to_move';
 
   const current = (await secrets.get(TAVILY_KEY))?.trim();
+  if (current && current === legacy) {
+    // Same value under both names: the copy from an earlier boot whose cleanup failed. Retry
+    // the delete now, or removing tavily_api_key later would see this copy moved back in.
+    try {
+      await secrets.delete(LEGACY_TAVILY_KEY);
+      logger.info({ from: LEGACY_TAVILY_KEY }, 'Tavily key migration: removed the stale user.tavily_api_key copy');
+    } catch (err) {
+      logger.warn({ err, from: LEGACY_TAVILY_KEY }, 'Tavily key migration: could not delete the stale user.tavily_api_key copy; will retry next boot');
+    }
+    return 'kept_existing';
+  }
   if (current) {
-    // Both set: tavily_api_key wins, and the user.* copy stays where the principal put it.
+    // Both set to different values: tavily_api_key wins, and the user.* copy stays where the
+    // principal put it.
     logger.info(
       { from: LEGACY_TAVILY_KEY, to: TAVILY_KEY },
       'Tavily key migration: tavily_api_key already set; leaving user.tavily_api_key in place',

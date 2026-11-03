@@ -55,4 +55,19 @@ describe('migrateLegacyTavilyKey', () => {
     expect(vault.store.get('tavily_api_key')).toBe('tvly-abc');
     expect(vault.store.get('user.tavily_api_key')).toBe('tvly-abc');
   });
+
+  // The stale copy left by a failed cleanup must go on a later boot, or removing
+  // tavily_api_key would see it moved back and web-search turned on again.
+  it('retries the cleanup when both keys hold the same value, so a removal sticks', async () => {
+    const vault = fakeVault({ 'user.tavily_api_key': 'tvly-abc' });
+    vault.delete.mockRejectedValueOnce(new Error('vault down'));
+    await migrateLegacyTavilyKey(vault, logger);
+
+    await expect(migrateLegacyTavilyKey(vault, logger)).resolves.toBe('kept_existing');
+    expect(Object.fromEntries(vault.store)).toEqual({ tavily_api_key: 'tvly-abc' });
+
+    vault.store.delete('tavily_api_key'); // the operator removes the key
+    await expect(migrateLegacyTavilyKey(vault, logger)).resolves.toBe('nothing_to_move');
+    expect(vault.store.size).toBe(0);
+  });
 });

@@ -20,6 +20,13 @@ describe('curiaOwnAddresses (#2409)', () => {
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error) }), expect.stringContaining('lookup failed'));
   });
 
+  // A stalled query never rejects; the boot list must still come back before the tool deadline.
+  it('falls back to the boot list when the live read stalls past the timeout', async () => {
+    const { ctx, warn } = ctxWith(['curia@example.com'], () => new Promise<string[]>(() => {}));
+    expect(await curiaOwnAddresses(ctx, 't', 20)).toEqual(new Set(['curia@example.com']));
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error) }), expect.stringContaining('lookup failed'));
+  });
+
   it('uses the boot list when the capability is absent, and warns when there is nothing', async () => {
     expect(await curiaOwnAddresses(ctxWith(['a@x.com']).ctx, 't')).toEqual(new Set(['a@x.com']));
     const { ctx, warn } = ctxWith([]);

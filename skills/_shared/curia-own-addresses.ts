@@ -9,14 +9,29 @@
 
 import type { ToolContext } from '../../src/skills/types.js';
 
-/** Lowercased. Never throws: a failed live read logs and falls back to the boot list. */
-export async function curiaOwnAddresses(ctx: ToolContext, toolName: string): Promise<Set<string>> {
+// The live read is a DB query with no timeout of its own. Callers run under a ~20 s tool
+// deadline, so a stalled read must give way to the boot list instead of using it all up.
+export const LIVE_LOOKUP_TIMEOUT_MS = 3000;
+
+/** Lowercased. Never throws: a failed or slow live read logs and falls back to the boot list. */
+export async function curiaOwnAddresses(
+  ctx: ToolContext,
+  toolName: string,
+  timeoutMs = LIVE_LOOKUP_TIMEOUT_MS,
+): Promise<Set<string>> {
   const addresses = new Set((ctx.selfEmails ?? []).map((e) => e.toLowerCase()));
   if (ctx.curiaEmailAddresses) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs);
+    });
     try {
-      for (const email of await ctx.curiaEmailAddresses()) addresses.add(email.toLowerCase());
+      const live = await Promise.race([ctx.curiaEmailAddresses(), timeout]);
+      for (const email of live) addresses.add(email.toLowerCase());
     } catch (err) {
       ctx.log.warn({ err }, `${toolName}: email accounts lookup failed — using the addresses from startup`);
+    } finally {
+      clearTimeout(timer);
     }
   }
   if (addresses.size === 0) {
