@@ -23,6 +23,14 @@
 // is part of the string every caller already passes, so the skill, the pre-gate
 // check, Gate C and the approval display cannot choose different addresses.
 //
+// A contact with no usable identity on a phone-family channel (sms, signal) may have
+// the number verified on a sibling one (a business on file as `phone`). The resolver
+// then writes a derived row for the skill's channel and sends to it (#2447): the row
+// makes a reply from the number resolve to this contact, since inbound matching is
+// exact-channel. The resolution says the address is derived, so the agent reports the
+// delivery as unconfirmed (the number may be a landline). Never for the principal or
+// another structural contact. See src/contacts/phone-family-derivation.ts.
+//
 // There is no raw-address path (#2041). Someone who is not a contact yet is added
 // first with contact-create, which returns the contact ID to send to. The retired
 // raw-address inputs are refused, never ignored.
@@ -32,6 +40,12 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import { hasPresentValue } from '../../contacts/principal-carveout-parse.js';
 import type { ChannelIdentity, Contact } from '../../contacts/types.js';
 import { findPrincipalChannelRules } from '../../contacts/principal-channel-registry.js';
+import {
+  DERIVED_IDENTITY_SOURCE,
+  deriveIdentity,
+  derivationSources,
+  type PhoneFamilyDeriver,
+} from '../../contacts/phone-family-derivation.js';
 import { isUuid } from '../../util/uuid.js';
 import { isAddressLikeName } from './address-like-name.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from './placeholder-guard.js';
@@ -113,6 +127,12 @@ export type RecipientResolution =
        * or a different name (#2047).
        */
       identityId: string;
+      /**
+       * Set when the address is a derived row (#2447): the channel the number was
+       * verified on (`phone`), or `another channel` when that row is gone. The number
+       * was never confirmed on this channel, so delivery is not confirmed.
+       */
+      derivedFrom?: string;
     }
   /**
    * `error` is agent-facing and complete. `cause` is set only when the contact
@@ -133,6 +153,12 @@ export interface RecipientResolverDeps {
    * identity snapshot, which holds verified, active rows only.
    */
   principalContactId: string | undefined;
+  /**
+   * Writes a derived phone-family row when the contact has no usable identity on the
+   * channel (#2447). Callers that resolve before a send pass it; without it the
+   * resolver only reads, and such a contact fails as before.
+   */
+  deriver?: PhoneFamilyDeriver;
 }
 
 /**
@@ -436,32 +462,13 @@ function selectIdentity(
   const normalized = hint ? normalizeHint(hint) : '';
   if (!normalized) return { ok: true, identity: fallback };
 
-  const needle = normalized.toLowerCase();
-  const rows = usable.map((identity) => {
-    const cleaned = cleanedIdentityLabel(identity.label);
-    const bounded = cleaned ? cleaned.slice(0, MATCH_LABEL_MAX_CHARS) : null;
-    return {
-      identity,
-      bounded,
-      // The 40-character form, so a hint copied from the principal block matches.
-      visible: visibleIdentityLabel(identity.label),
-    };
-  });
-  const exact = rows.filter((row) => {
-    if (row.bounded === null) return false;
-    const quoted = row.bounded.slice(0, LABEL_HINT_MAX_CHARS).toLowerCase();
-    return row.bounded.toLowerCase() === needle
-      || quoted === needle
-      || row.visible?.toLowerCase() === needle;
-  });
-  const hintTokens = labelTokens(normalized);
-  const token = exact.length > 0 || hintTokens.length === 0
-    ? []
-    : rows.filter((row) => {
-        if (row.bounded === null) return false;
-        const tokens = new Set(labelTokens(row.bounded));
-        return hintTokens.every((part) => tokens.has(part));
-      });
+  const rows = usable.map((identity) => ({
+    identity,
+    bounded: boundedLabel(identity),
+    match: hintMatch(identity, normalized),
+  }));
+  const exact = rows.filter((row) => row.match === 'exact');
+  const token = exact.length > 0 ? [] : rows.filter((row) => row.match === 'token');
   const matches = exact.length > 0 ? exact : token;
 
   if (matches.length === 1) return { ok: true, identity: matches[0]!.identity };
@@ -474,6 +481,32 @@ function selectIdentity(
     return { ok: false, error: labelConflictError(contact, channel, usable, normalized, isPrincipal) };
   }
   return { ok: true, identity: fallback };
+}
+
+function boundedLabel(identity: ChannelIdentity): string | null {
+  const cleaned = cleanedIdentityLabel(identity.label);
+  return cleaned ? cleaned.slice(0, MATCH_LABEL_MAX_CHARS) : null;
+}
+
+/**
+ * How `identity`'s label matches a normalized, non-empty hint: `exact` (the label, its
+ * quoted prefix, or the 40-character form copied from the principal block), `token`
+ * (every token of the hint is a token of the label), or null.
+ */
+function hintMatch(identity: ChannelIdentity, normalized: string): 'exact' | 'token' | null {
+  const bounded = boundedLabel(identity);
+  if (bounded === null) return null;
+  const needle = normalized.toLowerCase();
+  const quoted = bounded.slice(0, LABEL_HINT_MAX_CHARS).toLowerCase();
+  if (
+    bounded.toLowerCase() === needle
+    || quoted === needle
+    || visibleIdentityLabel(identity.label)?.toLowerCase() === needle
+  ) return 'exact';
+  const hintTokens = labelTokens(normalized);
+  if (hintTokens.length === 0) return null;
+  const tokens = new Set(labelTokens(bounded));
+  return hintTokens.every((part) => tokens.has(part)) ? 'token' : null;
 }
 
 /**
@@ -552,11 +585,17 @@ export async function resolveRecipientReference(
 
   const onChannel = found.identities.filter((identity) => identity.channel === channel);
   const sendable = SENDABLE[channel];
-  const usable = onChannel
+  let usable = onChannel
     .filter((identity) => identity.verified && identity.status === 'active')
     .filter((identity) => !sendable || sendable.test(identity.channelIdentifier))
     // Stable sort: rows with the same timestamp keep the backend's order.
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+  if (usable.length === 0 && !isPrincipal && deps.deriver) {
+    const derived = await deriveForChannel(found.contact, found.identities, channel, ref.label, deps.deriver);
+    if (derived !== null && !derived.ok) return derived;
+    if (derived !== null) usable = [derived.identity];
+  }
 
   if (usable.length === 0) {
     // Do not echo an unverified address back, in the name either: the model would
@@ -584,5 +623,84 @@ export async function resolveRecipientReference(
     displayName: found.contact.displayName,
     identityName: identityNameFor(found.contact, channel, chosen),
     identityId: chosen.id,
+    ...(chosen.source === DERIVED_IDENTITY_SOURCE
+      ? {
+          derivedFrom: found.identities.find((identity) => identity.id === chosen.derivedFromIdentityId)?.channel
+            ?? 'another channel',
+        }
+      : {}),
   };
+}
+
+/**
+ * What a send result adds when it went to a derived address (#2447). The number was
+ * verified on another channel, so it may not take this one (a landline cannot take
+ * SMS, a number need not be on Signal). The agent reports the send as unconfirmed.
+ */
+export function derivedAddressData(
+  resolution: { derivedFrom?: string },
+  channel: 'sms' | 'signal',
+): { delivery_unconfirmed: true; address_note: string } | Record<string, never> {
+  if (resolution.derivedFrom === undefined) return {};
+  const on = channel === 'sms' ? 'SMS' : 'Signal';
+  return {
+    delivery_unconfirmed: true,
+    address_note:
+      `Addressed to the number on file as ${resolution.derivedFrom}; it was never confirmed on ${on} ` +
+      `and may not take it. Report delivery as not confirmed.`,
+  };
+}
+
+/**
+ * Derive an identity on `channel` from a verified number on a sibling channel (#2447).
+ * Null when the contact has no qualifying number. A hint picks among several numbers
+ * the way it picks among addresses; the derived row keeps the source's label, so the
+ * same hint names it afterwards.
+ */
+async function deriveForChannel(
+  contact: Contact,
+  identities: readonly ChannelIdentity[],
+  channel: string,
+  hint: string | undefined,
+  deriver: NonNullable<RecipientResolverDeps['deriver']>,
+): Promise<{ ok: true; identity: ChannelIdentity } | { ok: false; error: string; cause?: unknown } | null> {
+  // Rank hint matches first, so the row the hint names stands for its number when the
+  // same number is on file on two channels under different labels.
+  const normalized = hint ? normalizeHint(hint) : '';
+  const HINT_RANK = { exact: 0, token: 1, none: 2 } as const;
+  const rank = normalized
+    ? (identity: ChannelIdentity): number => HINT_RANK[hintMatch(identity, normalized) ?? 'none']
+    : undefined;
+  const sources = derivationSources(contact, identities, channel, undefined, rank);
+  if (sources.length === 0) return null;
+  const pick = selectIdentity(contact, channel, sources, hint, false);
+  if (!pick.ok) return pick;
+  const source = pick.identity;
+  try {
+    const derived = await deriveIdentity(deriver, { contact, channel, source });
+    if (derived.ok) return derived;
+    // Contacts by name and ID only, never the number: a model handed one retypes it.
+    const name = (other: Contact): string => (other.systemRole === 'principal' ? 'the principal' : contactWho(other));
+    const lead = `${contactWho(contact)} has no ${channel} address. Their ${source.channel} number could be used, but`;
+    const taken = derived.check.taken[0];
+    if (taken) {
+      return {
+        ok: false,
+        error: `${lead} it is already ${name(taken.contact)}'s ${channel} address. Nothing was sent. ` +
+          'If they are the same person, merge the contacts; otherwise reach this contact on another channel.',
+      };
+    }
+    const others = derived.check.candidates.map((candidate) => name(candidate.contact)).join(', ');
+    return {
+      ok: false,
+      error: `${lead} another contact also has that number (${others}). Nothing was sent. If the number is this ` +
+        `contact's, link it as ${channel} with contact-link-identity, listing those contacts in distinct_from, then send again.`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Recording ${contactWho(contact)}'s number for ${channel} failed, so nothing was sent. Try again.`,
+      cause: err,
+    };
+  }
 }

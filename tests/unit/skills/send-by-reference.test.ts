@@ -894,3 +894,59 @@ describe('cold outreach creates a contact first (#2041)', () => {
     expect(delivered(h)).toEqual(['new.person@cold.example']);
   });
 });
+
+// #2447: the execution layer's pre-gate resolve derives the sms row, so a contact known
+// only by a verified phone number can be texted. Without the layer's deriver the send is
+// refused before the gates, whatever the gateway would do.
+describe('sms-send to a phone-only contact through the execution layer (#2447)', () => {
+  const NUMBER = '+14165550177';
+  const smsManifest: ToolManifest = {
+    name: 'sms-send',
+    description: 'sms-send description',
+    version: '1.0.0',
+    sensitivity: 'normal',
+    action_risk: 'medium',
+    inputs: {},
+    outputs: {},
+    permissions: [],
+    secrets: [],
+    timeout: 5000,
+    capabilities: ['outboundGateway'],
+  };
+
+  it('delivers to the number, records a derived sms row and flags delivery as unconfirmed', async () => {
+    const h = await harness();
+    const venue = await h.contacts.createContact({ displayName: 'Harbour Venue', source: 'ceo_stated', tier: 'known' });
+    const phone = await h.contacts.linkIdentity({
+      contactId: venue.id, channel: 'phone', channelIdentifier: NUMBER, source: 'agent_stated', verified: true,
+    });
+    const registry = new ToolRegistry();
+    registry.register(smsManifest, SKILLS.sms.handler);
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: { getConfig: vi.fn().mockResolvedValue({ score: 100 }) } as never,
+      bus: { publish: vi.fn().mockResolvedValue(undefined), subscribe: vi.fn() } as never,
+      contactService: h.contacts,
+      outboundGateway: h.gateway,
+      principalIdentities: h.principalIdentities,
+    });
+
+    const result = await layer.invoke('sms-send', SKILLS.sms.input(venue.id), undefined, {
+      senderId: '+15195550100',
+      taskMetadata: {
+        originator: {
+          contactId: h.principalId,
+          systemRole: 'principal',
+          channel: 'signal',
+          initiatedAt: new Date().toISOString(),
+          tier: 'known' as const,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ delivery_unconfirmed: true });
+    expect(delivered(h)).toEqual([NUMBER]);
+    const sms = (await h.contacts.getContactWithIdentities(venue.id))!.identities.find((i) => i.channel === 'sms');
+    expect(sms).toMatchObject({ source: 'derived', derivedFromIdentityId: phone.id });
+  });
+});

@@ -326,4 +326,67 @@ describe('ContactLinkIdentityHandler — identifier provenance (#2061)', () => {
     const verified = await handler.execute(makeCtx(contacts, input, { identifierSources: sourcesFrom('dana@newco.example') }));
     expect(verified).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
   });
+
+  // #2447: a number already verified on a sibling phone-family channel of this contact
+  // needs no source in the conversation. It is linked as a derived row.
+  describe('derivation from a verified number on the contact', () => {
+    const NOTHING_SOURCED: Partial<ToolContext> = { identifierSources: sourcesFrom('nothing here') };
+
+    it('links an unsourced number matching a verified phone identity as a derived row', async () => {
+      const phone = await contacts.linkIdentity({
+        contactId: danaId, channel: 'phone', channelIdentifier: '+14165550100', source: 'crm_import', label: 'office',
+      });
+      const result = await handler.execute(makeCtx(contacts,
+        { contact_id: danaId, channel: 'sms', identifier: '(416) 555-0100' }, NOTHING_SOURCED));
+      expect(result).toMatchObject({
+        success: true, data: { verified: true, already_linked: false, derived_from: 'phone' },
+      });
+      const sms = (await contacts.getContactWithIdentities(danaId))!.identities.find((i) => i.channel === 'sms');
+      expect(sms).toMatchObject({
+        channelIdentifier: '+14165550100', source: 'derived', verified: true, derivedFromIdentityId: phone.id, label: 'office',
+      });
+    });
+
+    it('stores the label the agent passed', async () => {
+      await contacts.linkIdentity({ contactId: danaId, channel: 'signal', channelIdentifier: '+14165550100', source: 'signal_participant' });
+      const result = await handler.execute(makeCtx(contacts,
+        { contact_id: danaId, channel: 'phone', identifier: '+14165550100', label: 'mobile' }, NOTHING_SOURCED));
+      expect(result.success).toBe(true);
+      const phone = (await contacts.getContactWithIdentities(danaId))!.identities.find((i) => i.channel === 'phone');
+      expect(phone).toMatchObject({ source: 'derived', label: 'mobile' });
+    });
+
+    it('still refuses an unsourced number that matches nothing on the contact', async () => {
+      await contacts.linkIdentity({ contactId: danaId, channel: 'phone', channelIdentifier: '+14165550100', source: 'crm_import' });
+      const result = await handler.execute(makeCtx(contacts,
+        { contact_id: danaId, channel: 'sms', identifier: '+14165550199' }, NOTHING_SOURCED));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('Nothing was linked.');
+      expect((await contacts.getContactWithIdentities(danaId))!.identities).toHaveLength(1);
+    });
+
+    it('does not derive from an unverified number', async () => {
+      await contacts.linkIdentity({ contactId: danaId, channel: 'sms', channelIdentifier: '+14165550100', source: 'sms_participant' });
+      const result = await handler.execute(makeCtx(contacts,
+        { contact_id: danaId, channel: 'signal', identifier: '+14165550100' }, NOTHING_SOURCED));
+      expect(result.success).toBe(false);
+    });
+
+    it('lists another contact with the number on a sibling channel until distinct_from names it', async () => {
+      const priyaId = (await contacts.createContact({ displayName: 'Priya Natarajan', source: 'ceo_stated' })).id;
+      await contacts.linkIdentity({ contactId: danaId, channel: 'phone', channelIdentifier: '+14165550100', source: 'crm_import' });
+      await contacts.linkIdentity({ contactId: priyaId, channel: 'signal', channelIdentifier: '+14165550100', source: 'signal_participant' });
+      const input = { contact_id: danaId, channel: 'sms', identifier: '+14165550100' };
+
+      const refused = await handler.execute(makeCtx(contacts, input, NOTHING_SOURCED));
+      expect(refused.success).toBe(false);
+      if (!refused.success) {
+        expect(refused.error).toContain(`"Priya Natarajan" (${priyaId}): same number on signal`);
+        expect(refused.error).not.toContain('5550100');
+      }
+
+      const linked = await handler.execute(makeCtx(contacts, { ...input, distinct_from: [priyaId] }, NOTHING_SOURCED));
+      expect(linked).toMatchObject({ success: true, data: { derived_from: 'phone' } });
+    });
+  });
 });

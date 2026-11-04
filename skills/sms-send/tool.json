@@ -1,7 +1,7 @@
 {
   "name": "sms-send",
   "description": "Send an SMS text message to a person via the office Telnyx DID. recipient takes a contact ID, or \"principal\" for the principal; you choose the person and the number comes from their verified SMS identity. A #label (principal#personal) is a hint for which labelled identity, not a phone number. 1:1 only (no groups/MMS in v1). If Telnyx returns a carrier STOP (error 40300), treat the recipient as opted out and record a contact KG fact — do not retry.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
@@ -13,6 +13,8 @@
     "delivered_to": "string",
     "recipient_identity": "string? (label of the number used for a reference, or \"primary\" or \"unlabelled\")",
     "channel": "string",
+    "delivery_unconfirmed": "boolean? (true when the number came from another phone-family channel and was never confirmed on SMS)",
+    "address_note": "string? (with delivery_unconfirmed: what to tell the principal)",
     "deferred_to_digest": "boolean? (true when the relay budget held this message for the principal's digest instead of sending it)",
     "note": "string? (with deferred_to_digest: the message is queued, so do not re-send it another way)",
     "redactions": "array? ({label, field} for each detail removed before sending, e.g. a phone number the recipient may not see; labels only, never the values)",
