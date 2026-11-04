@@ -9,6 +9,8 @@ import {
   fetchSetupGaps,
   setupGaps,
   fetchActivity,
+  fetchHiccups,
+  fetchStats,
   activityHref,
   agentLabel,
   formatActivityTime,
@@ -247,6 +249,55 @@ describe('fetchActivity', () => {
   it('throws when the 200 body is missing its items array', async () => {
     vi.stubGlobal('fetch', mockFetch(200, {}));
     await expect(fetchActivity()).rejects.toThrow(/unexpected response/);
+  });
+});
+
+describe('fetchStats', () => {
+  const body = {
+    timezone: 'America/Toronto',
+    minutesSaved: { current: 90, previous: 60, help: 'help', detail: 'detail' },
+    done: { current: 12, previous: 9 },
+    openTasks: { total: 5, overdue: 2 },
+    hiccups: { current: 1, byDay: [0, 1] },
+    handledSinceYesterday: 4,
+  };
+
+  it('reads the open-task counts', async () => {
+    vi.stubGlobal('fetch', mockFetch(200, body));
+    expect((await fetchStats()).openTasks).toEqual({ total: 5, overdue: 2 });
+  });
+
+  it('throws when open tasks are missing rather than showing a zero', async () => {
+    vi.stubGlobal('fetch', mockFetch(200, { ...body, openTasks: undefined }));
+    await expect(fetchStats()).rejects.toThrow(/unexpected response/);
+  });
+});
+
+describe('fetchHiccups', () => {
+  const item = {
+    id: 'h', ts: '2026-11-02T13:00:00.000Z', actor: 'coordinator', headline: "couldn't send an email",
+    details: [], outcome: 'failed', autonomy: null, link: null,
+  };
+
+  it('asks for the 7-day list by default and returns it', async () => {
+    const fetchMock = mockFetch(200, { timezone: 'UTC', day: null, total: 3, items: [item] });
+    vi.stubGlobal('fetch', fetchMock);
+    const data = await fetchHiccups();
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/dashboard/hiccups');
+    expect(data).toMatchObject({ timezone: 'UTC', day: null, total: 3 });
+    expect(data.items.map(i => i.id)).toEqual(['h']);
+  });
+
+  it('narrows to one day', async () => {
+    const fetchMock = mockFetch(200, { timezone: 'UTC', day: '2026-11-02', total: 1, items: [item] });
+    vi.stubGlobal('fetch', fetchMock);
+    expect((await fetchHiccups('2026-11-02')).day).toBe('2026-11-02');
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/dashboard/hiccups?day=2026-11-02');
+  });
+
+  it('throws on a body without items', async () => {
+    vi.stubGlobal('fetch', mockFetch(200, { timezone: 'UTC', total: 0 }));
+    await expect(fetchHiccups()).rejects.toThrow(/unexpected response/);
   });
 });
 

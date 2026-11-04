@@ -16,8 +16,11 @@ export const AGENT_SERIES_LIMIT = 6;
 /** agent.task roots older than this are not "working right now". */
 export const BULLPEN_IN_FLIGHT_MS = 20 * 60 * 1000;
 
-/** How long stats and the histogram share one aggregate. Short enough that a new day shows up. */
+/** How long stats and the histogram share one aggregate, and how often it is re-read in the background. */
 export const AGGREGATE_CACHE_MS = 45_000;
+
+/** How old an aggregate may be served while a refresh runs behind it (#2350). */
+export const AGGREGATE_STALE_MS = 10 * 60_000;
 
 export type JobOutcome = 'success' | 'partial' | 'failed';
 

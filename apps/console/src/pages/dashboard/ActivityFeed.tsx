@@ -29,6 +29,30 @@ function Headline({ item }: { item: ActivityItem }) {
   return <span className="dash-activity-headline">{item.headline}</span>;
 }
 
+/** One job: its time, headline (linked to the job or its replay), actor and details. */
+export function ActivityRow({ item, timezone }: { item: ActivityItem; timezone: string }) {
+  const note = autonomyNote(item);
+  return (
+    <div className={`dash-activity-item ${item.outcome === 'success' ? '' : item.outcome}`}>
+      <span className="dash-activity-time">{formatActivityTime(item.ts, timezone)}</span>
+      <div className="dash-activity-text">
+        <Headline item={item} />
+        <span className="dash-activity-meta">
+          {agentLabel(item.actor)}{note ? ` · ${note}` : ''}
+          {item.outcome === 'partial' && <span className="dash-activity-partial"> · partly failed</span>}
+        </span>
+        {item.details.length > 0 && (
+          <ul className="dash-activity-details">
+            {item.details.map((d, i) => (
+              <li key={i} className={`dash-activity-detail ${d.startsWith("couldn't") ? 'failed' : ''}`}>{d}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ActivityFeed() {
   const { data, error, loading, retry } = useAsyncData(fetchActivity);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -75,28 +99,7 @@ export function ActivityFeed() {
             {groupActivityByDay(data.items, data.timezone).map(group => (
               <Fragment key={group.key}>
                 {group.label && <div className="dash-activity-day">{group.label}</div>}
-                {group.items.map(item => {
-                  const note = autonomyNote(item);
-                  return (
-                    <div key={item.id} className={`dash-activity-item ${item.outcome === 'success' ? '' : item.outcome}`}>
-                      <span className="dash-activity-time">{formatActivityTime(item.ts, data.timezone)}</span>
-                      <div className="dash-activity-text">
-                        <Headline item={item} />
-                        <span className="dash-activity-meta">
-                          {agentLabel(item.actor)}{note ? ` · ${note}` : ''}
-                          {item.outcome === 'partial' && <span className="dash-activity-partial"> · partly failed</span>}
-                        </span>
-                        {item.details.length > 0 && (
-                          <ul className="dash-activity-details">
-                            {item.details.map((d, i) => (
-                              <li key={i} className={`dash-activity-detail ${d.startsWith("couldn't") ? 'failed' : ''}`}>{d}</li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                {group.items.map(item => <ActivityRow key={item.id} item={item} timezone={data.timezone} />)}
               </Fragment>
             ))}
             {data.hasMore && (

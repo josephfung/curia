@@ -313,12 +313,48 @@ export class AuditLogRepo {
     const roots = hasMore ? allRoots.slice(0, limit) : allRoots;
     const oldest = roots[roots.length - 1];
     const nextCursor = hasMore && oldest ? { timestamp: oldest.timestamp, id: oldest.id } : undefined;
-    if (roots.length === 0) return { roots, delegated: [], children: [], hasMore, nextCursor };
+    const { delegated, children } = await this.jobRowsUnder(roots, query.to);
+    this.logger.debug(
+      { roots: roots.length, delegated: delegated.length, children: children.length, hasMore },
+      'audit-log-repo: findActivityJobs',
+    );
+    return { roots, delegated, children, hasMore, nextCursor };
+  }
+
+  /**
+   * The same rows as {@link findActivityJobs}, for named root agent.task ids
+   * (the console's hiccup list, #2350). Roots come back newest first; an id
+   * that is not a root agent.task row is skipped. `to` bounds delegated work
+   * the same way the window end does there.
+   */
+  async findActivityJobsByIds(ids: string[], to: Date): Promise<{
+    roots: AuditLogRow[];
+    delegated: AuditLogRow[];
+    children: AuditLogRow[];
+  }> {
+    if (ids.length === 0) return { roots: [], delegated: [], children: [] };
+    const rootResult = await this.pool.query(
+      `SELECT ${SELECT_COLUMNS}
+       FROM audit_log
+       WHERE id = ANY($1::uuid[])
+         AND event_type = 'agent.task'
+         AND (payload->'metadata'->'delegationOrigin'->>'taskEventId') IS NULL
+       ORDER BY timestamp DESC, id DESC`,
+      [ids],
+    );
+    const roots = rootResult.rows.map(mapRow);
+    const { delegated, children } = await this.jobRowsUnder(roots, to);
+    return { roots, delegated, children };
+  }
+
+  /** Delegated tasks, tool calls, replies and summaries under the given roots. */
+  private async jobRowsUnder(roots: AuditLogRow[], to: Date): Promise<{ delegated: AuditLogRow[]; children: AuditLogRow[] }> {
+    if (roots.length === 0) return { delegated: [], children: [] };
 
     // Delegated tasks start after their root, so the oldest root bounds the scan
     // from below. Above, the window end plus a margin for jobs still running at it.
-    const earliest = roots[roots.length - 1]!.timestamp;
-    const latest = new Date(query.to.getTime() + DELEGATION_TAIL_MS);
+    const earliest = roots.reduce((min, r) => (r.timestamp < min ? r.timestamp : min), roots[0]!.timestamp);
+    const latest = new Date(to.getTime() + DELEGATION_TAIL_MS);
     const delegated: AuditLogRow[] = [];
     let frontier = roots.map((r) => r.id);
     // Walk until no task delegated further. The bound only guards against a cycle
@@ -368,12 +404,7 @@ export class AuditLogRepo {
       );
       children.push(...resultRows.rows.map(mapRow));
     }
-
-    this.logger.debug(
-      { roots: roots.length, delegated: delegated.length, children: children.length, hasMore },
-      'audit-log-repo: findActivityJobs',
-    );
-    return { roots, delegated, children, hasMore, nextCursor };
+    return { delegated, children };
   }
 
   /**

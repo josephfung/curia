@@ -4,6 +4,8 @@
 // reports unavailable) so the card can show an error instead of a false zero.
 
 import type { Pool } from 'pg';
+import type { ActivityService } from '../activity/activity-service.js';
+import type { ActivityItem } from '../activity/types.js';
 import { hiddenToolNames, minutesForCall, timeSavedDetail, timeSavedHelp, UNDESCRIBED_CALL_MINUTES, visibleToolNames } from '../activity/describers.js';
 import { OPEN_TASK_STATUSES } from '../agents/prompts/backlog-line.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
@@ -15,6 +17,7 @@ import type { Logger } from '../logger.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import {
   AGGREGATE_CACHE_MS,
+  AGGREGATE_STALE_MS,
   BULLPEN_IN_FLIGHT_MS,
   HISTOGRAM_DAYS,
   STATS_WINDOW_DAYS,
@@ -77,9 +80,20 @@ export interface StatsResponse {
    */
   minutesSaved: { current: number; previous: number; help: string; detail: string };
   done: { current: number; previous: number };
-  contacts: { total: number; newThisWeek: number };
+  /** Open principal-owned tasks (every OPEN_TASK_STATUSES status), and how many are past due. */
+  openTasks: { total: number; overdue: number };
   hiccups: { current: number; byDay: number[] };
   handledSinceYesterday: number;
+}
+
+export interface HiccupsResponse {
+  timezone: string;
+  /** The local day asked for, or null for the tile's whole 7-day window. */
+  day: string | null;
+  /** Hiccup jobs the tile and histogram count for that window. */
+  total: number;
+  /** Those jobs as Recent Activity rows, newest first, at most MAX_HICCUP_ITEMS. */
+  items: ActivityItem[];
 }
 
 export interface BullpenResponse {
@@ -98,6 +112,8 @@ export interface BriefingDeps {
   deleteMailboxDraft?: (account: string | undefined, draftId: string) => Promise<void>;
   loadHeldDraft?: (account: string | undefined, draftId: string) => Promise<HeldDraftView | null>;
   bus?: Pick<EventBus, 'publish'>;
+  /** Renders the hiccup list. Without it, hiccups() throws and the route reports an error. */
+  activity?: Pick<ActivityService, 'listByIds'>;
   officeTimezone: string;
   logger: Logger;
 }
@@ -105,17 +121,48 @@ export interface BriefingDeps {
 /** Delegated work can finish after the window's end. Matches audit-log-repo's tail. */
 const DELEGATION_TAIL_MS = 6 * 60 * 60 * 1000;
 const MAX_DELEGATION_DEPTH = 10;
+/** Rows the hiccup list renders. The response's `total` still counts every hiccup. */
+const MAX_HICCUP_ITEMS = 100;
 
 interface BriefingWindow {
   model: HistogramModel;
   /** Principal-minutes per histogram day, same index and clock as `model.days`. */
   minutesByDay: number[];
+  /** Root ids of partial and failed jobs, newest first, with their local day. */
+  hiccupRoots: { id: string; day: string }[];
 }
 
 export class BriefingService {
-  private modelCache: { key: string; expires: number; pending: Promise<BriefingWindow> } | null = null;
+  private modelCache: { key: string; loadedAt: number; window: BriefingWindow } | null = null;
+  private inflight: { key: string; promise: Promise<BriefingWindow> } | null = null;
+  private warmTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly deps: BriefingDeps) {}
+
+  /**
+   * Re-read the 14-day model every AGGREGATE_CACHE_MS, so a console load is
+   * served from memory instead of waiting on HISTOGRAM_SQL (#2350). The first
+   * read starts now. A failed refresh is logged; the last good model is still
+   * served until it is AGGREGATE_STALE_MS old.
+   */
+  startWarming(): void {
+    if (this.warmTimer) return;
+    const tick = async () => {
+      try {
+        await this.reloadModel(new Date(), await this.timeZone());
+      } catch (err) {
+        this.deps.logger.warn({ err }, 'briefing: background model refresh failed');
+      }
+    };
+    void tick();
+    this.warmTimer = setInterval(() => void tick(), AGGREGATE_CACHE_MS);
+    this.warmTimer.unref();
+  }
+
+  stopWarming(): void {
+    if (this.warmTimer) clearInterval(this.warmTimer);
+    this.warmTimer = null;
+  }
 
   async waiting(now: Date = new Date()): Promise<WaitingResponse> {
     const timezone = await this.timeZone();
@@ -181,11 +228,9 @@ export class BriefingService {
 
   async stats(now: Date = new Date()): Promise<StatsResponse> {
     const timezone = await this.timeZone();
-    const today = localDayKey(now, timezone);
-    const currentStart = localMidnight(addCalendarDays(today, -(STATS_WINDOW_DAYS - 1)), timezone);
-    const [{ model, minutesByDay }, contacts] = await Promise.all([
+    const [{ model, minutesByDay }, openTasks] = await Promise.all([
       this.cachedModel(now, timezone),
-      this.contactCounts(currentStart),
+      this.openTaskCounts(now),
     ]);
     const last7 = model.days.slice(-STATS_WINDOW_DAYS);
     const prev7 = model.days.slice(0, HISTOGRAM_DAYS - STATS_WINDOW_DAYS);
@@ -203,7 +248,7 @@ export class BriefingService {
         current: outcomeTotal(last7, DONE_OUTCOMES),
         previous: outcomeTotal(prev7, DONE_OUTCOMES),
       },
-      contacts,
+      openTasks,
       hiccups: {
         current: hiccupsOver(model, STATS_WINDOW_DAYS),
         byDay: model.days.map((day) => day.hiccups),
@@ -216,6 +261,23 @@ export class BriefingService {
     const timezone = await this.timeZone();
     const { model } = await this.cachedModel(now, timezone);
     return { timezone, ...model };
+  }
+
+  /**
+   * The jobs behind the Hiccups tile (#2350): the same roots HISTOGRAM_SQL
+   * classifies as partial or failed, so the list and the number agree. `day`
+   * (YYYY-MM-DD, local) narrows it to one histogram bar; without it the window
+   * is the tile's last STATS_WINDOW_DAYS days.
+   */
+  async hiccups(now: Date = new Date(), day?: string): Promise<HiccupsResponse> {
+    const activity = this.deps.activity;
+    if (!activity) throw new Error('briefing: no activity source for the hiccup list');
+    const timezone = await this.timeZone();
+    const { model, hiccupRoots } = await this.cachedModel(now, timezone);
+    const days = new Set(day ? [day] : model.days.slice(-STATS_WINDOW_DAYS).map((d) => d.key));
+    const ids = hiccupRoots.filter((root) => days.has(root.day)).map((root) => root.id);
+    const items = ids.length > 0 ? await activity.listByIds(ids.slice(0, MAX_HICCUP_ITEMS), now) : [];
+    return { timezone, day: day ?? null, total: ids.length, items };
   }
 
   /**
@@ -284,28 +346,50 @@ export class BriefingService {
   }
 
   /**
-   * One grouped read of the 14-day window, shared by stats and the histogram.
-   * Outcome follows the activity feed: only described, non-hidden tools count,
-   * and only failure, error and denied are hard failures. A job the feed drops
-   * entirely (no visible call and no error reply) still counts as success.
+   * One grouped read of the 14-day window, shared by stats, the histogram and
+   * the hiccup list. Outcome follows the activity feed: only described,
+   * non-hidden tools count, and only failure, error and denied are hard
+   * failures. A job the feed drops entirely (no visible call and no error
+   * reply) still counts as success.
+   *
+   * A model older than AGGREGATE_CACHE_MS is still served, up to
+   * AGGREGATE_STALE_MS, while a refresh runs behind it. A new local day or
+   * timezone is a new key and always waits for a fresh read.
    */
   private cachedModel(now: Date, timezone: string): Promise<BriefingWindow> {
-    const today = localDayKey(now, timezone);
-    const from = localMidnight(addCalendarDays(today, -(HISTOGRAM_DAYS - 1)), timezone);
-    const key = `${timezone}|${from.toISOString()}|${today}`;
     const hit = this.modelCache;
-    if (hit && hit.key === key && hit.expires > Date.now()) return hit.pending;
-    const pending = this.loadModel(from, now, timezone);
-    this.modelCache = { key, expires: Date.now() + AGGREGATE_CACHE_MS, pending };
-    pending.catch(() => {
-      if (this.modelCache?.pending === pending) this.modelCache = null;
-    });
-    return pending;
+    if (hit && hit.key === modelKey(now, timezone)) {
+      const age = Date.now() - hit.loadedAt;
+      if (age < AGGREGATE_CACHE_MS) return Promise.resolve(hit.window);
+      if (age < AGGREGATE_STALE_MS) {
+        this.reloadModel(now, timezone).catch((err: unknown) => {
+          this.deps.logger.warn({ err }, 'briefing: model refresh failed; serving the previous read');
+        });
+        return Promise.resolve(hit.window);
+      }
+    }
+    return this.reloadModel(now, timezone);
+  }
+
+  /** Read the model and cache it. Concurrent reads for one key share a query. */
+  private reloadModel(now: Date, timezone: string): Promise<BriefingWindow> {
+    const key = modelKey(now, timezone);
+    if (this.inflight?.key === key) return this.inflight.promise;
+    const from = localMidnight(addCalendarDays(localDayKey(now, timezone), -(HISTOGRAM_DAYS - 1)), timezone);
+    const promise = this.loadModel(from, now, timezone)
+      .then((window) => {
+        this.modelCache = { key, loadedAt: Date.now(), window };
+        return window;
+      })
+      .finally(() => {
+        if (this.inflight?.promise === promise) this.inflight = null;
+      });
+    this.inflight = { key, promise };
+    return promise;
   }
 
   private async loadModel(from: Date, to: Date, timezone: string): Promise<BriefingWindow> {
-    const result = await this.deps.pool.query<{ histogram: unknown; saved_calls: unknown; undescribed_by_day: unknown }>(
-      HISTOGRAM_SQL,
+    const result = await this.queryModel(
       [from, to, new Date(to.getTime() + DELEGATION_TAIL_MS), timezone, MAX_DELEGATION_DEPTH, visibleToolNames(), hiddenToolNames()],
     );
     const row = result.rows[0];
@@ -332,19 +416,47 @@ export class BriefingService {
     return {
       model,
       minutesByDay: model.days.map((day) => perDay.get(day.key) ?? 0),
+      hiccupRoots: parseHiccupRoots(row?.hiccup_roots),
     };
   }
 
-  private async contactCounts(since: Date): Promise<{ total: number; newThisWeek: number }> {
-    const result = await this.deps.pool.query<{ total: number; recent: number }>(
+  /**
+   * HISTOGRAM_SQL on its own connection with JIT off. The planner overestimates
+   * the job count, so JIT compiled the query on every read: on prod that was
+   * 0.86 s of a 1.7 s read, against 0.55 s for the whole read without it (#2350).
+   * A connection that fails part way may still have JIT off, so it is destroyed
+   * instead of returned to the pool.
+   */
+  private async queryModel(params: unknown[]) {
+    const client = await this.deps.pool.connect();
+    let failure: Error | undefined;
+    try {
+      await client.query('SET jit = off');
+      const result = await client.query<{ histogram: unknown; saved_calls: unknown; undescribed_by_day: unknown; hiccup_roots: unknown }>(
+        HISTOGRAM_SQL,
+        params,
+      );
+      await client.query('RESET jit');
+      return result;
+    } catch (err) {
+      failure = err instanceof Error ? err : new Error(String(err));
+      throw err;
+    } finally {
+      client.release(failure);
+    }
+  }
+
+  private async openTaskCounts(now: Date): Promise<{ total: number; overdue: number }> {
+    const result = await this.deps.pool.query<{ total: number; overdue: number }>(
       `SELECT
-         count(*) FILTER (WHERE kind = 'person')::int AS total,
-         count(*) FILTER (WHERE kind = 'person' AND created_at >= $1)::int AS recent
-       FROM contacts`,
-      [since],
+         count(*)::int AS total,
+         count(*) FILTER (WHERE due_at < $2)::int AS overdue
+       FROM tasks
+       WHERE owner = 'ceo' AND status = ANY($1::text[])`,
+      [OPEN_TASK_STATUSES, now],
     );
     const row = result.rows[0];
-    return { total: Number(row?.total ?? 0), newThisWeek: Number(row?.recent ?? 0) };
+    return { total: Number(row?.total ?? 0), overdue: Number(row?.overdue ?? 0) };
   }
 
   private async count(sql: string, params: unknown[]): Promise<number> {
@@ -374,6 +486,11 @@ export class BriefingService {
   }
 }
 
+/** The model's cache key: one model per local day per timezone. */
+function modelKey(now: Date, timezone: string): string {
+  return `${timezone}|${localDayKey(now, timezone)}`;
+}
+
 function asIso(value: unknown): string | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
   if (typeof value === 'string' && value.length > 0) return value;
@@ -391,8 +508,9 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
 /**
  * One row: `histogram` (day × actor × outcome counts), `saved_calls` (each
  * successful visible call, with the input and data its weight can depend on),
- * and `undescribed_by_day` (a count per day of successful calls the describers
- * do not name).
+ * `undescribed_by_day` (a count per day of successful calls the describers
+ * do not name), and `hiccup_roots` (the partial and failed roots behind the
+ * histogram's hiccup counts, newest first).
  *
  * Root jobs in [$1, $2). Delegated tasks fold into their root, up to $5 levels,
  * and may finish as late as $3. The day is the root task's timestamp in $4, for
@@ -414,6 +532,13 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
  * cannot see a dry run, an unplaced hold, or a scratch note. An undescribed call
  * contributes only to its day's count: the default depends on the name being
  * absent, not on the payload.
+ *
+ * Read cost (#2350, measured on prod with ~1.5M audit_log rows): `calls` reaches
+ * each task's invokes and each invoke's result through idx_audit_log_parent_event_id.
+ * The OFFSET 0 keeps the planner from flattening those lookups into a join, which
+ * it costed as a seq scan of every invoke in the table. Input and data are built
+ * in `saved`, only for the calls that need them, because reading them unpacks
+ * each payload in full.
  */
 const HISTOGRAM_SQL = `
 WITH RECURSIVE chain AS (
@@ -451,6 +576,8 @@ calls AS (
   SELECT
     c.root_id,
     c.root_ts,
+    i.id AS invoke_id,
+    r.id AS result_id,
     COALESCE(
       CASE
         WHEN i.target_type = 'skill'
@@ -476,7 +603,27 @@ calls AS (
       WHEN r.outcome IN ('failure', 'error', 'denied') THEN 'bad'
       WHEN r.payload->'result'->>'success' = 'true' THEN 'ok'
       ELSE 'bad'
-    END AS kind,
+    END AS kind
+  FROM chain c
+  CROSS JOIN LATERAL (
+    SELECT inv.id, inv.target_type, inv.target_id, inv.payload
+    FROM audit_log inv
+    WHERE inv.parent_event_id = c.id::text
+      AND inv.event_type = ANY(ARRAY['tool.invoke', 'skill.invoke']::text[])
+    OFFSET 0
+  ) i
+  CROSS JOIN LATERAL (
+    SELECT res.id, res.target_type, res.target_id, res.outcome, res.payload
+    FROM audit_log res
+    WHERE res.parent_event_id = i.id::text
+      AND res.event_type = ANY(ARRAY['tool.result', 'skill.result']::text[])
+    OFFSET 0
+  ) r
+),
+saved AS (
+  SELECT
+    calls.root_ts,
+    calls.tool_name,
     CASE
       WHEN jsonb_typeof(i.payload->'input') = 'object'
       THEN (i.payload->'input') - ARRAY['body', 'content', 'message', 'prompt', 'html', 'text']
@@ -487,11 +634,11 @@ calls AS (
       THEN ((r.payload->'result'->'data') - ARRAY['body', 'content', 'message', 'html', 'text']) #- '{document,body}'::text[]
       ELSE NULL
     END AS data
-  FROM audit_log r
-  JOIN audit_log i ON r.parent_event_id = i.id::text
-  JOIN chain c ON i.parent_event_id = c.id::text
-  WHERE r.event_type = ANY(ARRAY['tool.result', 'skill.result']::text[])
-    AND i.event_type = ANY(ARRAY['tool.invoke', 'skill.invoke']::text[])
+  FROM calls
+  JOIN audit_log i ON i.id = calls.invoke_id
+  JOIN audit_log r ON r.id = calls.result_id
+  WHERE calls.kind = 'ok'
+    AND calls.tool_name = ANY($6::text[])
 ),
 results AS (
   SELECT root_id, kind
@@ -507,6 +654,7 @@ responses AS (
 ),
 classified AS (
   SELECT
+    roots.root_id,
     roots.root_ts,
     roots.actor,
     CASE
@@ -550,9 +698,7 @@ SELECT
       'input', input,
       'data', data
     )), '[]'::jsonb)
-    FROM calls
-    WHERE kind = 'ok'
-      AND tool_name = ANY($6::text[])
+    FROM saved
   ) AS saved_calls,
   (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -572,7 +718,15 @@ SELECT
         AND NOT (tool_name = ANY($7::text[]))
       GROUP BY 1
     ) undescribed
-  ) AS undescribed_by_day`;
+  ) AS undescribed_by_day,
+  (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'id', root_id,
+      'day', to_char(root_ts AT TIME ZONE $4, 'YYYY-MM-DD')
+    ) ORDER BY root_ts DESC, root_id DESC), '[]'::jsonb)
+    FROM classified
+    WHERE outcome <> 'success'
+  ) AS hiccup_roots`;
 
 function sumWindow(values: readonly number[]): number {
   let n = 0;
@@ -629,6 +783,17 @@ function parseUndescribedByDay(value: unknown): UndescribedDay[] {
     days.push({ day: row.day, n });
   }
   return days;
+}
+
+function parseHiccupRoots(value: unknown): { id: string; day: string }[] {
+  if (!Array.isArray(value)) return [];
+  const roots: { id: string; day: string }[] = [];
+  for (const entry of value) {
+    const row = asRecord(entry);
+    if (!row || typeof row.id !== 'string' || typeof row.day !== 'string') continue;
+    roots.push({ id: row.id, day: row.day });
+  }
+  return roots;
 }
 
 function parseSavedCalls(value: unknown): SavedCall[] {
