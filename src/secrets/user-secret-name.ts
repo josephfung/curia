@@ -205,3 +205,51 @@ export function resolveUserSecretName(input: string, existingUserKeys: readonly 
 
   return proposed;
 }
+
+const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/**
+ * The registrable site name from a sign-in URL: `www.rogers.com` -> `rogers`,
+ * `www.amazon.co.uk` -> `amazon`. IPv4 hosts and dot-free hosts (`localhost`) are
+ * returned as-is. Throws on an unparseable or non-http(s) URL.
+ */
+export function siteIdentityFromUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`'${url}' is not a valid URL`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('login URL must be http or https');
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (IPV4_RE.test(host) || !host.includes('.')) return host;
+
+  const labels = host.split('.');
+  const last = labels[labels.length - 1]!;
+  const prev = labels[labels.length - 2]!;
+  // Two-letter country TLD under a short second-level label (co.uk, com.au): the site is one label further left.
+  if (last.length === 2 && prev.length <= 3 && labels.length >= 3) {
+    return labels[labels.length - 3]!;
+  }
+  return prev;
+}
+
+/**
+ * The free-text name the console feeds to `resolveUserSecretName`: the site for a
+ * website login, the user's own label otherwise.
+ */
+export function consoleSecretNameInput(input: {
+  type: 'website_login' | 'other';
+  label?: string;
+  loginUrl?: string;
+}): string {
+  if (input.type === 'website_login') {
+    if (!input.loginUrl) throw new Error('loginUrl is required for a website login');
+    return `${siteIdentityFromUrl(input.loginUrl)} password`;
+  }
+  const label = input.label?.trim() ?? '';
+  if (label.length === 0) throw new Error('label is required');
+  return label;
+}
