@@ -15,6 +15,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Saved cards** — gated `#field` addressing fills card number, CVV and expiry without exposing them. (#1358)
+- **Card-use confirmation** — the principal approves each checkout; grants last 30 minutes, two fills. (#1358)
+- **`secret.accessed.secretField`** — **public API:** names the card field filled, never its value. (#1358)
+- **`card_use.requested` / `card_use.decided`** — **public API:** checkout confirmation events; brand and last four only. (#1358)
+- **`resolveSecretRef`** — **public API:** `siteUrl` option; `ToolContext` gains `approvalVia` and `cardUse`. (#1358)
+- **ADR-060** — card use needs a per-checkout confirmation; ADR-027 amended. (#1358)
 - **Personal secrets in the console** — create, edit and remove website logins; platform keys read-only. (#2478)
 - **Band grounding scenarios** — 35a (RSVP dietary details) and 35b (out-of-office claim) join the release gate. (#2192)
 - **Secrets page** — one searchable, sortable list of personal, system and platform secrets with drawers. (#2453)
@@ -265,6 +271,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Bare card refs** — refused; a card's JSON can no longer be typed into a field. (#1358)
 - **Postgres host port** — loopback only; `POSTGRES_BIND` opts in. Existing installs: prefix its `ports:` entry with `127.0.0.1:`, recreate. (#2408)
 - **Curia port 3000** — local and HTTPS installs, existing HTTPS ones on re-run, bind it to 127.0.0.1 (`HTTP_BIND`). (#2408)
 - **LiveKit signaling** — 7880 loopback by default; recreate livekit (`--profile voice`); direct-7880 installs set `LIVEKIT_HTTP_BIND` first. (#2408)
