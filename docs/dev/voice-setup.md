@@ -37,9 +37,22 @@ Signaling has been loopback-only by default since #2408, so `--dev` credentials
 are never reachable from outside the host. A browser on the same machine uses
 `ws://localhost:7880`. To serve browsers elsewhere, front `127.0.0.1:7880` with a
 TLS proxy on the host, or set `LIVEKIT_HTTP_BIND=0.0.0.0` (IPv4) or `::`
-(IPv4 + IPv6) in `.env` with real keys. Existing installs that connected to
-`ws://<host>:7880` directly need one of the two after updating their compose
-file; `install.sh` says so on re-run.
+(IPv4 + IPv6) in `.env` with real keys.
+
+Existing voice installs pick the change up only when LiveKit is recreated:
+`install.sh` runs `docker compose up -d` without the voice profile (unless
+`COMPOSE_PROFILES=voice` is set), which leaves a running `livekit` on its old
+bindings. After updating the compose file, decide first: if browsers connect to
+`ws://<host>:7880` directly, set `LIVEKIT_HTTP_BIND` or add a TLS proxy. Then
+recreate it:
+
+```bash
+docker compose --profile voice up -d livekit
+```
+
+`install.sh` warns on re-run while signaling is still published beyond
+loopback, and again once it is loopback-only. Set `LIVEKIT_HTTP_BIND=127.0.0.1`
+to silence the second note once a proxy is in place.
 
 For local development the profiled service runs `livekit-server --dev`, which
 uses known credentials (`devkey` / `secret`). **Never expose `--dev` on a

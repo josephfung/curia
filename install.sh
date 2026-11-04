@@ -324,21 +324,40 @@ check_http_exposure() {
 }
 
 # Run after an upgrade's stack starts. Since #2408 LiveKit signaling (7880) is
-# published on loopback unless LIVEKIT_HTTP_BIND is set. A voice install whose
-# browsers connected to ws://<host>:7880 directly would otherwise lose
-# signaling with no sign of why, so say so when that is the live state.
+# published on loopback unless LIVEKIT_HTTP_BIND is set. Two live states need
+# saying, both only while LIVEKIT_HTTP_BIND is unset (any value, including
+# 127.0.0.1 once an on-host proxy is in place, is a decision and silences this):
+#   - Still beyond loopback. install.sh's `up -d` leaves a running livekit
+#     alone unless the voice profile is active (e.g. COMPOSE_PROFILES=voice),
+#     and an old compose file never moves it, so the change has not landed.
+#     Say how to apply it before the operator's next restart breaks browsers
+#     that use ws://<host>:7880 directly.
+#   - Loopback. Browsers that connected to ws://<host>:7880 directly have lost
+#     signaling; say why and how to fix or silence it.
 note_livekit_signaling() {
   local env="$1" bindings
   [[ -z "${LIVEKIT_HTTP_BIND:-$(env_value "$env" LIVEKIT_HTTP_BIND)}" ]] || return 0
   bindings="$(published_bindings livekit 7880)"
   [[ -n "$bindings" ]] || return 0   # voice not running
-  bindings_are_loopback "$bindings" || return 0
 
   echo "" >&2
+  if ! bindings_are_loopback "$bindings"; then
+    warn "LiveKit signaling (7880) is still published beyond loopback: $(echo "$bindings" | tr '\n' ' ')(#2408)"
+    hint "This release binds it to 127.0.0.1. Check that docker-compose.yml's livekit"
+    hint "signaling entry reads - \"\${LIVEKIT_HTTP_BIND:-127.0.0.1}:\${LIVEKIT_HTTP_PORT:-7880}:7880\","
+    hint "then recreate it to apply:"
+    hint "  docker compose --project-directory \"$INSTALL_DIR\" --profile voice up -d livekit"
+    hint "If browsers use ws://<host>:7880 directly, first set LIVEKIT_HTTP_BIND in .env"
+    hint "(real keys only, never --dev) or front 127.0.0.1:7880 with a TLS proxy."
+    hint "See docs/dev/voice-setup.md."
+    return 0
+  fi
+
   warn "LiveKit signaling (7880) is published on loopback only (#2408)."
   hint "Browsers can no longer reach ws://<host>:7880 directly. If your Voice"
   hint "channel's LiveKit URL points there, front 127.0.0.1:7880 with a TLS proxy"
   hint "on this host, or set LIVEKIT_HTTP_BIND in .env (real keys only, never --dev)."
+  hint "Already proxied, or local only? Set LIVEKIT_HTTP_BIND=127.0.0.1 in .env to silence this."
   hint "See docs/dev/voice-setup.md."
 }
 

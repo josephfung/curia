@@ -613,6 +613,8 @@ echo "=== install.sh: check_postgres_exposure / check_http_exposure ==="
 
 _xp_env=$(mktemp)
 _STUB_BINDINGS=""
+# Keep the real function so it can be restored after the stubbed block.
+eval "_orig_$(declare -f published_bindings)"
 published_bindings() { printf '%s' "$_STUB_BINDINGS"; }
 
 # $1 desc, $2 env file contents, $3 stub bindings, $4 want: ok | stopped
@@ -671,8 +673,38 @@ _assert_hb "TLS overlay, explicit empty kept"   'COMPOSE_FILE=docker-compose.yml
 _assert_hb "TLS overlay, explicit value kept"   'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\nHTTP_BIND=10.0.0.5\n' 10.0.0.5
 _assert_hb "local/proxy install untouched"      'HTTP_PORT=3000\n'                                           '<absent>'
 
+# note_livekit_signaling: warns while signaling is still public (change not
+# applied yet) and once it is loopback-only; any LIVEKIT_HTTP_BIND silences it.
+_assert_lk() {
+    local desc="$1" envtxt="$2" want="$4" out got
+    printf '%b' "$envtxt" > "$_xp_env"
+    _STUB_BINDINGS="$3"
+    out="$(LIVEKIT_HTTP_BIND="" note_livekit_signaling "$_xp_env" 2>&1)"
+    if [[ "$out" == *"still published beyond loopback"* ]]; then got=recreate
+    elif [[ "$out" == *"loopback only"* ]]; then got=loopback-note
+    else got=quiet; fi
+    if [[ "$got" == "$want" ]]; then
+        echo "  ✓ livekit: $desc → $want"; PASS=$((PASS+1))
+    else
+        echo "  ✗ livekit: $desc — got $got want $want"; FAIL=$((FAIL+1))
+    fi
+}
+_assert_lk "voice not running"                 ''                                 ''                          quiet
+_assert_lk "unset, still public (not recreated)" ''                               $'0.0.0.0:7880\n[::]:7880'  recreate
+_assert_lk "unset, loopback"                   ''                                 '127.0.0.1:7880'            loopback-note
+_assert_lk "LIVEKIT_HTTP_BIND=127.0.0.1 (proxied)" 'LIVEKIT_HTTP_BIND=127.0.0.1\n'  '127.0.0.1:7880'            quiet
+_assert_lk "LIVEKIT_HTTP_BIND=0.0.0.0 (direct)" 'LIVEKIT_HTTP_BIND=0.0.0.0\n'      '0.0.0.0:7880'              quiet
+
 rm -f "$_xp_env"
-unset -f published_bindings
+# Restore the real published_bindings for anything below.
+eval "$(declare -f _orig_published_bindings | sed '1s/^_orig_//')"
+unset -f _orig_published_bindings
+
+if declare -f published_bindings | grep -q 'docker compose'; then
+    echo "  ✓ real published_bindings restored after the stubs"; PASS=$((PASS+1))
+else
+    echo "  ✗ published_bindings not restored"; FAIL=$((FAIL+1))
+fi
 
 # --- shipped docker-compose.yml bind defaults ---
 
