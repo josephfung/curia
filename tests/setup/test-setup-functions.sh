@@ -548,6 +548,15 @@ _assert_var "last assignment wins"         "$(env_value "$_ev_env" HTTP_BIND)"  
 _assert_var "value containing colons"      "$(env_value "$_ev_env" POSTGRES_BIND)" "::"
 _assert_var "commented-out key is absent"  "$(env_value "$_ev_env" POSTGRES_PORT)" ""
 _assert_var "missing file is absent"       "$(env_value "$_ev_env.missing" HTTP_BIND)" ""
+# Compose's .env parser strips one layer of matching quotes; env_value must too,
+# or HTTP_BIND="127.0.0.1" would read as non-loopback and skip the checks.
+printf 'A="127.0.0.1"\nB=\x27::1\x27\nC="mismatched\x27\nD="\nE=""\n' > "$_ev_env"
+_assert_var "double-quoted value stripped"   "$(env_value "$_ev_env" A)" "127.0.0.1"
+_assert_var "single-quoted value stripped"   "$(env_value "$_ev_env" B)" "::1"
+_assert_var "mismatched quotes kept"         "$(env_value "$_ev_env" C)" "\"mismatched'"
+_assert_var "lone quote kept"                "$(env_value "$_ev_env" D)" '"'
+_assert_var "empty quoted value is empty"    "$(env_value "$_ev_env" E)" ""
+
 # install.sh runs under `set -euo pipefail`; an absent key must not abort it
 # from inside an assignment (it did, before env_value swallowed grep's status).
 if ( set -euo pipefail; _v="$(env_value "$_ev_env" NOT_THERE)"; [[ -z "$_v" ]] ); then
@@ -558,6 +567,112 @@ else
     FAIL=$((FAIL+1))
 fi
 rm -f "$_ev_env"
+
+# --- install.sh: bind_value_is_loopback / uses_tls_overlay ---
+
+echo ""
+echo "=== install.sh: bind_value_is_loopback ==="
+
+_assert_rc() {
+    local desc="$1" want="$2"; shift 2
+    local got=0
+    "$@" || got=$?
+    [[ "$got" -ne 0 ]] && got=1
+    if [[ "$got" == "$want" ]]; then
+        echo "  ✓ $desc"; PASS=$((PASS+1))
+    else
+        echo "  ✗ $desc — got rc $got want $want"; FAIL=$((FAIL+1))
+    fi
+}
+
+_assert_rc "127.0.0.1 is loopback"   0 bind_value_is_loopback 127.0.0.1
+_assert_rc "127.0.0.2 is loopback"   0 bind_value_is_loopback 127.0.0.2
+_assert_rc "::1 is loopback"         0 bind_value_is_loopback ::1
+_assert_rc "[::1] is loopback"       0 bind_value_is_loopback '[::1]'
+_assert_rc "localhost is loopback"   0 bind_value_is_loopback localhost
+_assert_rc "empty is not loopback"   1 bind_value_is_loopback ''
+_assert_rc "0.0.0.0 is not loopback" 1 bind_value_is_loopback 0.0.0.0
+_assert_rc ":: is not loopback"      1 bind_value_is_loopback ::
+_assert_rc "10.0.0.5 is not loopback" 1 bind_value_is_loopback 10.0.0.5
+
+echo ""
+echo "=== install.sh: uses_tls_overlay ==="
+
+_assert_rc "base + TLS overlay"              0 uses_tls_overlay 'docker-compose.yml:docker-compose.tls.yml'
+_assert_rc "TLS overlay plus a voice overlay" 0 uses_tls_overlay 'docker-compose.yml:docker-compose.tls.yml:docker-compose.voice.yml'
+_assert_rc "base only"                       1 uses_tls_overlay 'docker-compose.yml'
+_assert_rc "unset"                           1 uses_tls_overlay ''
+
+# --- install.sh: exposure check decisions (Docker stubbed) ---
+# published_bindings is the only Docker call; stub it so the skip/verify
+# decisions run without containers. Each case runs in a subshell because a
+# refused prompt exits.
+
+echo ""
+echo "=== install.sh: check_postgres_exposure / check_http_exposure ==="
+
+_xp_env=$(mktemp)
+_STUB_BINDINGS=""
+published_bindings() { printf '%s' "$_STUB_BINDINGS"; }
+
+# $1 desc, $2 env file contents, $3 stub bindings, $4 want: ok | stopped
+_assert_pg() {
+    local desc="$1" envtxt="$2" want="$4" got
+    printf '%b' "$envtxt" > "$_xp_env"
+    _STUB_BINDINGS="$3"
+    if ( POSTGRES_BIND=""; check_postgres_exposure "$_xp_env" <<< "n" ) >/dev/null 2>&1; then got=ok; else got=stopped; fi
+    if [[ "$got" == "$want" ]]; then
+        echo "  ✓ postgres: $desc → $want"; PASS=$((PASS+1))
+    else
+        echo "  ✗ postgres: $desc — got $got want $want"; FAIL=$((FAIL+1))
+    fi
+}
+_exposed=$'0.0.0.0:5432\n[::]:5432'
+_assert_pg "unset, old file exposes"                ''                         "$_exposed"        stopped
+_assert_pg "loopback POSTGRES_BIND, old file ignores it" 'POSTGRES_BIND=127.0.0.1\n' "$_exposed"  stopped
+_assert_pg "quoted loopback, old file ignores it"   'POSTGRES_BIND="127.0.0.1"\n' "$_exposed"     stopped
+_assert_pg "non-loopback opt-in 0.0.0.0"           'POSTGRES_BIND=0.0.0.0\n'   "$_exposed"        ok
+_assert_pg "non-loopback opt-in ::"                'POSTGRES_BIND=::\n'        "$_exposed"        ok
+_assert_pg "unset, new file binds loopback"        ''                          '127.0.0.1:5432'   ok
+
+# check_http_exposure only warns; detect the warning on stderr.
+_assert_http() {
+    local desc="$1" envtxt="$2" want="$4" out got
+    printf '%b' "$envtxt" > "$_xp_env"
+    _STUB_BINDINGS="$3"
+    out="$(check_http_exposure "$_xp_env" 2>&1)"
+    if [[ "$out" == *"still published beyond loopback"* ]]; then got=warned; else got=quiet; fi
+    if [[ "$got" == "$want" ]]; then
+        echo "  ✓ http: $desc → $want"; PASS=$((PASS+1))
+    else
+        echo "  ✗ http: $desc — got $got want $want"; FAIL=$((FAIL+1))
+    fi
+}
+_assert_http "HTTP_BIND unset (proxy topology)"     ''                       '0.0.0.0:3000' quiet
+_assert_http "loopback asked, old file ignores it"  'HTTP_BIND=127.0.0.1\n'  '0.0.0.0:3000' warned
+_assert_http "quoted loopback, old file ignores it" 'HTTP_BIND="127.0.0.1"\n' '0.0.0.0:3000' warned
+_assert_http "loopback asked and honoured"          'HTTP_BIND=127.0.0.1\n'  '127.0.0.1:3000' quiet
+
+# ensure_https_http_bind: the upgrade-time HTTP_BIND rewrite.
+_assert_hb() {
+    local desc="$1" envtxt="$2" want="$3" got
+    printf '%b' "$envtxt" > "$_xp_env"
+    ensure_https_http_bind "$_xp_env" 2>/dev/null
+    if grep -qE '^HTTP_BIND=' "$_xp_env"; then got="$(env_value "$_xp_env" HTTP_BIND)"; got="${got:-<empty>}"; else got="<absent>"; fi
+    if [[ "$got" == "$want" ]]; then
+        echo "  ✓ upgrade: $desc → HTTP_BIND $want"; PASS=$((PASS+1))
+    else
+        echo "  ✗ upgrade: $desc — got $got want $want"; FAIL=$((FAIL+1))
+    fi
+}
+_assert_hb "TLS overlay, no HTTP_BIND"          'DOMAIN=x.example\nCOMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\n' 127.0.0.1
+_assert_hb "DOMAIN by hand, no overlay"         'DOMAIN=x.example\n'                                         '<absent>'
+_assert_hb "TLS overlay, explicit empty kept"   'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\nHTTP_BIND=\n' '<empty>'
+_assert_hb "TLS overlay, explicit value kept"   'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\nHTTP_BIND=10.0.0.5\n' 10.0.0.5
+_assert_hb "local/proxy install untouched"      'HTTP_PORT=3000\n'                                           '<absent>'
+
+rm -f "$_xp_env"
+unset -f published_bindings
 
 # --- shipped docker-compose.yml bind defaults ---
 

@@ -54,9 +54,11 @@ services:
     ports:
       # HTTP/WebSocket signaling. Use wss://<host> when served behind TLS.
       # Loopback by default so the --dev credentials above are never reachable
-      # from outside the host: a laptop browser uses ws://localhost:7880, and a
-      # server routes wss://<domain>/rtc through Caddy over the compose network.
-      # Set LIVEKIT_HTTP_BIND to publish it beyond loopback (real keys only).
+      # from outside the host: a laptop browser uses ws://localhost:7880. The
+      # shipped Caddyfile proxies only curia, so a server either terminates
+      # wss:// with its own proxy on this host (to 127.0.0.1:7880) or sets
+      # LIVEKIT_HTTP_BIND to publish 7880 directly (real keys only, never --dev).
+      # See docs/dev/voice-setup.md.
       - "${LIVEKIT_HTTP_BIND:-127.0.0.1}:${LIVEKIT_HTTP_PORT:-7880}:7880"
       # WebRTC TCP fallback.
       - "${LIVEKIT_RTC_TCP_PORT:-7881}:7881"

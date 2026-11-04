@@ -202,12 +202,39 @@ install_is_complete() {
 }
 
 # Echo the value of KEY from an env file (last assignment wins), or nothing when
-# the key is absent or the file is missing. Always returns 0: this script runs
-# under `set -euo pipefail`, where grep's no-match status would abort the
-# installer from inside `x="$(env_value ...)"`.
+# the key is absent or the file is missing. One layer of matching "..." or '...'
+# is stripped, as Compose's .env parser does, so HTTP_BIND="127.0.0.1" reads the
+# same as HTTP_BIND=127.0.0.1. Always returns 0: this script runs under
+# `set -euo pipefail`, where grep's no-match status would abort the installer
+# from inside `x="$(env_value ...)"`.
 env_value() {
-  local env="$1" key="$2"
-  { grep -E "^${key}=" "$env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-
+  local env="$1" key="$2" v
+  v="$({ grep -E "^${key}=" "$env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-)"
+  if [[ ${#v} -ge 2 ]]; then
+    case "$v" in
+      \"*\"|\'*\') v="${v:1:${#v}-2}" ;;
+    esac
+  fi
+  printf '%s' "$v"
+}
+
+# Returns 0 when a *_BIND value ($1) names a loopback address. Empty is not
+# loopback here; callers decide what an unset value means.
+bind_value_is_loopback() {
+  case "$1" in
+    127.*|::1|"[::1]"|localhost) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Returns 0 when a COMPOSE_FILE value ($1) includes the Caddy TLS overlay, the
+# direct signal that Caddy fronts curia:3000 (DOMAIN alone can be set by hand
+# behind an operator's own proxy).
+uses_tls_overlay() {
+  case "$1" in
+    *docker-compose.tls.yml*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # Returns 0 when every host binding in `docker port` output ($1, one
@@ -249,11 +276,13 @@ published_bindings() {
 # Run right after Postgres starts, on both the fresh and upgrade paths:
 # fetch_bundle never overwrites an existing docker-compose.yml, so an older or
 # hand-edited one can still publish Postgres on every interface (#2408). Asks
-# before continuing; POSTGRES_BIND set in .env or the shell is a deliberate
-# opt-in and skips the check.
+# before continuing. Only a non-loopback POSTGRES_BIND (in the shell or .env)
+# skips the check, as a deliberate remote opt-in; unset or loopback means
+# "verify Docker honours it", since an old compose file ignores the variable.
 check_postgres_exposure() {
-  local env="$1" bindings ans
-  if [[ -n "${POSTGRES_BIND:-}" || -n "$(env_value "$env" POSTGRES_BIND)" ]]; then
+  local env="$1" want bindings ans
+  want="${POSTGRES_BIND:-$(env_value "$env" POSTGRES_BIND)}"
+  if [[ -n "$want" ]] && ! bind_value_is_loopback "$want"; then
     return 0
   fi
   bindings="$(published_bindings postgres 5432)"
@@ -266,7 +295,7 @@ check_postgres_exposure() {
   hint "  - \"\${POSTGRES_BIND:-127.0.0.1}:\${POSTGRES_PORT:-5432}:5432\""
   hint "then re-run install.sh, which recreates the container."
   hint "Current file for reference: $(bundle_asset_url docker-compose.yml docker-compose.yml)"
-  hint "To keep remote access on purpose, set POSTGRES_BIND in .env instead."
+  hint "To keep remote access on purpose, set a non-loopback POSTGRES_BIND in .env instead."
   warn "If you continue, Postgres stays exposed after this run."
   read -rp "Continue anyway? [y/N]: " ans || ans=""
   if [[ ! "$ans" =~ ^[Yy] ]]; then
@@ -282,10 +311,7 @@ check_postgres_exposure() {
 check_http_exposure() {
   local env="$1" want bindings
   want="$(env_value "$env" HTTP_BIND)"
-  case "$want" in
-    127.*|::1) ;;
-    *) return 0 ;;
-  esac
+  bind_value_is_loopback "$want" || return 0
   bindings="$(published_bindings curia 3000)"
   bindings_are_loopback "$bindings" && return 0
 
@@ -295,6 +321,43 @@ check_http_exposure() {
   hint "Fix: in $INSTALL_DIR/docker-compose.yml, change the curia ports: entry to"
   hint "  - \"\${HTTP_BIND:-}:\${HTTP_PORT:-3000}:3000\""
   hint "then run: docker compose --project-directory \"$INSTALL_DIR\" up -d curia"
+}
+
+# Run after an upgrade's stack starts. Since #2408 LiveKit signaling (7880) is
+# published on loopback unless LIVEKIT_HTTP_BIND is set. A voice install whose
+# browsers connected to ws://<host>:7880 directly would otherwise lose
+# signaling with no sign of why, so say so when that is the live state.
+note_livekit_signaling() {
+  local env="$1" bindings
+  [[ -z "${LIVEKIT_HTTP_BIND:-$(env_value "$env" LIVEKIT_HTTP_BIND)}" ]] || return 0
+  bindings="$(published_bindings livekit 7880)"
+  [[ -n "$bindings" ]] || return 0   # voice not running
+  bindings_are_loopback "$bindings" || return 0
+
+  echo "" >&2
+  warn "LiveKit signaling (7880) is published on loopback only (#2408)."
+  hint "Browsers can no longer reach ws://<host>:7880 directly. If your Voice"
+  hint "channel's LiveKit URL points there, front 127.0.0.1:7880 with a TLS proxy"
+  hint "on this host, or set LIVEKIT_HTTP_BIND in .env (real keys only, never --dev)."
+  hint "See docs/dev/voice-setup.md."
+}
+
+# Upgrade path: HTTPS (Caddy overlay) installs from before #2408 have no
+# HTTP_BIND; add it so :3000 leaves the public interface (Caddy uses the
+# compose network). Keyed on the overlay in COMPOSE_FILE rather than DOMAIN,
+# which an operator may set by hand behind their own proxy. Local and proxy
+# installs look alike in .env, so those are left as they are. An explicit
+# HTTP_BIND= (even empty) is respected and never rewritten.
+ensure_https_http_bind() {
+  local env="$1"
+  if uses_tls_overlay "$(env_value "$env" COMPOSE_FILE)" && ! grep -qE '^HTTP_BIND=' "$env" 2>/dev/null; then
+    set_env_var "$env" HTTP_BIND 127.0.0.1
+    echo "" >&2
+    warn "HTTPS install: port 3000 is now published on 127.0.0.1 only (HTTP_BIND, #2408)."
+    hint "Curia stays reachable through Caddy on 443. Anything that hit <host>:3000"
+    hint "directly (e.g. an uptime probe) stops working; point it at https://$(env_value "$env" DOMAIN)."
+    hint "To keep :3000 public, set HTTP_BIND= (empty) in .env and re-run."
+  fi
 }
 
 # Validate prereqs: Docker daemon up, compose plugin present, curl available.
@@ -525,13 +588,7 @@ existing_install() {
   info "Existing install detected — running in upgrade/restart mode."
   info "No secrets will be regenerated."
 
-  # HTTPS installs from before #2408 have no HTTP_BIND; add it so :3000 leaves
-  # the public interface (Caddy uses the compose network). Local and proxy
-  # installs look alike in .env, so those are left as they are.
-  if grep -qE '^DOMAIN=.+' "$env" 2>/dev/null && ! grep -qE '^HTTP_BIND=' "$env" 2>/dev/null; then
-    info "HTTPS install: publishing port 3000 on 127.0.0.1 only (HTTP_BIND, #2408)."
-    set_env_var "$env" HTTP_BIND 127.0.0.1
-  fi
+  ensure_https_http_bind "$env"
 
   # Re-apply migrations idempotently. node-pg-migrate skips already-applied
   # migrations, so this is safe on every re-run.
@@ -578,6 +635,7 @@ existing_install() {
     exit 1
   fi
   check_http_exposure "$env"
+  note_livekit_signaling "$env"
 
   # Load the URL-shaping values from .env so print_summary shows the right
   # address for this existing install: DOMAIN (HTTPS topology) and a custom
