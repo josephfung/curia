@@ -980,6 +980,9 @@ interface SecretAccessedPayload {
   // #973) rather than via a manifest-declared ctx.secret() call. Distinguishes the
   // two access paths in the audit trail. Absent/false for declared-secret access.
   byReference?: boolean;
+  // Saved-card field that was resolved (e.g. 'number', 'expiry_mm_yy'). The name only,
+  // never the value (#1358). Absent for whole-secret reads.
+  secretField?: string;
 }
 
 // SecretChangedPayload — the principal set or removed a vault secret from the console

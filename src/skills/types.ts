@@ -365,7 +365,10 @@ export interface ToolContext {
    *  resolve (system/channel keys are rejected); each call emits secret.accessed (name only,
    *  byReference: true). The returned value is for runtime use only — handlers MUST NOT place
    *  it in ToolResult.data, error strings, or logs. */
-  resolveSecretRef?: (ref: string) => Promise<string>;
+  resolveSecretRef?: (ref: string, opts?: { siteUrl?: string }) => Promise<string>;
+  // Saved cards (#1358): a card is addressed one field at a time ("user.visa#number"); a bare
+  // card ref is refused. Card fields also need `opts.siteUrl` (the page being filled) and a
+  // card-use grant for that site's domain; each number/CVV fill consumes the grant.
   /** List `user.*` vault key names (never values, never other namespaces) — available only
    *  to skills declaring 'userSecretIndex' in capabilities AND on the execution-layer
    *  allowlist (#1497). Backed by SecretsService.listUserNames(), not list(). */

@@ -305,3 +305,19 @@ export function describeCard(pub: CreditCardPublicFields, label: string | null):
   const base = `${BRAND_LABELS[pub.brand]} ••${pub.last4}`;
   return label ? `${base} (${label})` : base;
 }
+
+// ---------------------------------------------------------------------------
+// Resolver error copy (#1358). Shared by the resolver and the browser/chat surfaces
+// so the model sees one wording. None of these include a secret value.
+// ---------------------------------------------------------------------------
+
+export function BARE_CARD_REF_ERROR(name: string): string {
+  return `\`${name}\` is a saved card. Address one field, e.g. \`${name}#number\`. Fields: ${CARD_FIELDS.join(', ')}`;
+}
+
+export function CARD_USE_REQUIRED_ERROR(name: string, domain: string): string {
+  return `Using \`${name}\` on ${domain} needs the principal's confirmation for this checkout. Call card-use-request with the amount and purpose, wait for the approval, then fill again.`;
+}
+
+export const CARD_FILL_LIMIT_ERROR =
+  "This confirmation's card-number and CVV fills are used up. Ask the principal again with card-use-request for another checkout.";

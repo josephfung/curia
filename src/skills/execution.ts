@@ -45,6 +45,15 @@ import {
   ORIGIN_TURN_OWNS_REPLY_KEY,
   parseOriginTurnOwnsReply,
 } from '../dispatch/origin-turn-reply.js';
+import {
+  BARE_CARD_REF_ERROR,
+  CARD_FILL_LIMIT_ERROR,
+  CARD_USE_REQUIRED_ERROR,
+  isCardSecretField,
+  parseSecretRef,
+  projectCardField,
+} from '../secrets/structured-secret-schema.js';
+import { registrableDomain } from '../verification/domain.js';
 import { createSecretAccessed, createAutonomySkillBlocked, createAuthorizationDecision, createPrincipalReport } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
@@ -302,6 +311,8 @@ export class ExecutionLayer {
   // secretsService is NOT in capabilityServices — it is infrastructure accessed
   // through ctx.secret(), not a capability granted directly to skill handlers.
   private secretsService?: import('../secrets/secrets-service.js').SecretsService;
+  // Saved-card use grants (#1358). Unset in unit setups: card fields then fail closed.
+  private cardUseRepo?: import('../secrets/card-use-repo.js').CardUseRepo;
   private executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   private officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
   private browserService?: BrowserService;
@@ -377,6 +388,7 @@ export class ExecutionLayer {
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
     secretsService?: import('../secrets/secrets-service.js').SecretsService;
+    cardUseRepo?: import('../secrets/card-use-repo.js').CardUseRepo;
     executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
     officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
     browserService?: BrowserService;
@@ -457,6 +469,7 @@ export class ExecutionLayer {
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
     this.secretsService = options?.secretsService;
+    this.cardUseRepo = options?.cardUseRepo;
     this.executiveProfileService = options?.executiveProfileService;
     this.officeIdentityService = options?.officeIdentityService;
     this.browserService = options?.browserService;
@@ -2860,7 +2873,8 @@ export class ExecutionLayer {
         //   2. Audit: every resolution emits secret.accessed (name + source, byReference:true)
         //      — never the value. The value is returned to the handler only; the handler
         //      contract (see ToolContext.resolveSecretRef) forbids placing it in results/logs.
-        ctx.resolveSecretRef = async (ref: string): Promise<string> => {
+        ctx.resolveSecretRef = async (ref: string, opts?: { siteUrl?: string }): Promise<string> => {
+          // Guard first, on the whole ref: '#cvv' (empty name) and 'channel.x#number' die here.
           if (typeof ref !== 'string' || !ref.startsWith(USER_SECRET_PREFIX)) {
             throw new Error(
               `resolveSecretRef: only ${USER_SECRET_PREFIX}* secret references may be resolved by reference (got '${ref}')`,
@@ -2871,28 +2885,74 @@ export class ExecutionLayer {
             // secretsService is unset — but fail loud rather than silently returning ''.
             throw new Error('resolveSecretRef: secrets service is not configured');
           }
-          const value = await this.secretsService.get(ref);
-          if (value === null) {
-            throw new Error(`resolveSecretRef: secret '${ref}' was not found in the vault`);
+          const { name, field } = parseSecretRef(ref);
+          const schema = await this.secretsService.getStructuredSchema(name);
+
+          let value: string;
+          if (field === null) {
+            // A saved card is only ever addressed one field at a time (#1358).
+            if (schema !== null) throw new Error(BARE_CARD_REF_ERROR(name));
+            const plain = await this.secretsService.get(name);
+            if (plain === null) {
+              throw new Error(`resolveSecretRef: secret '${name}' was not found in the vault`);
+            }
+            value = plain;
+          } else {
+            if (schema !== 'credit_card') {
+              throw new Error(`\`#\` field addressing works only on saved cards; \`${name}\` isn't one`);
+            }
+            const siteUrl = opts?.siteUrl;
+            if (siteUrl === undefined || siteUrl === '') {
+              throw new Error('card fields can only be filled into a web page');
+            }
+            // The grant check runs on every path (humanApproved and principal-originated tasks
+            // included): it lives here, in the closure, not in the gates. Without a repo or a
+            // conversation there is no grant, so fail closed.
+            const conversationId = options?.conversationId;
+            const outcome = this.cardUseRepo && conversationId
+              ? await this.cardUseRepo.consumeFill({
+                secretName: name,
+                siteUrl,
+                conversationId,
+                field: isCardSecretField(field) ? field : null,
+              })
+              : 'no_grant';
+            if (outcome === 'no_grant') {
+              throw new Error(CARD_USE_REQUIRED_ERROR(name, registrableDomain(siteUrl) ?? 'this site'));
+            }
+            if (outcome === 'fill_limit') throw new Error(CARD_FILL_LIMIT_ERROR);
+
+            const card = await this.secretsService.getCardPublic(name);
+            if (card === null) {
+              throw new Error(`resolveSecretRef: secret '${name}' was not found in the vault`);
+            }
+            const secretDoc = isCardSecretField(field) ? await this.secretsService.getCardSecret(name) : null;
+            const projected = projectCardField(field, card.publicFields, secretDoc);
+            if (projected === '') {
+              throw new Error(`\`${name}\` has no ${field} saved`);
+            }
+            value = projected;
           }
-          // Audit — fire-and-forget, name + source only, flagged as by-reference.
+
+          // Audit — fire-and-forget, name (+ card field name) and source only, flagged as by-reference.
           if (this.bus) {
             this.bus.publish('execution', createSecretAccessed({
               toolName,
-              secretName: ref,
+              secretName: name,
+              ...(field !== null ? { secretField: field } : {}),
               agentId: options?.agentId,
               taskEventId: options?.taskEventId,
               source: 'vault',
               byReference: true,
             })).catch((err) => {
               skillLogger.error(
-                { err, secretName: ref, toolName, agentId: options?.agentId, taskEventId: options?.taskEventId },
+                { err, secretName: name, secretField: field ?? undefined, toolName, agentId: options?.agentId, taskEventId: options?.taskEventId },
                 'AUDIT FAILURE: secret.accessed (by-reference) event could not be published — secret was returned but access may not be recorded',
               );
             });
           }
-          // Debug log records the NAME only, never the value.
-          skillLogger.debug({ secretName: ref, source: 'vault', byReference: true }, 'Secret resolved by reference');
+          // Debug log records the NAME (and field name) only, never the value.
+          skillLogger.debug({ secretName: name, secretField: field ?? undefined, source: 'vault', byReference: true }, 'Secret resolved by reference');
           return value;
         };
       } else if (cap === 'userSecretIndex') {
