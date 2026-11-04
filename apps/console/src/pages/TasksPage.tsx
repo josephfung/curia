@@ -650,7 +650,8 @@ export default function TasksPage() {
     setCreating(false);
     if (taskIdFromUrl) {
       appliedUrlTaskRef.current = undefined;
-      void navigate({ to: '/tasks', search: { task: undefined }, replace: true });
+      // Keep owner/status: the filters stay applied, so the URL must keep them for a reload.
+      void navigate({ to: '/tasks', search: (prev) => ({ ...prev, task: undefined }), replace: true });
     }
   }
 
