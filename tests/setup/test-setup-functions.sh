@@ -679,10 +679,12 @@ _assert_lk() {
     local desc="$1" envtxt="$2" want="$4" out got
     printf '%b' "$envtxt" > "$_xp_env"
     _STUB_BINDINGS="$3"
-    out="$(LIVEKIT_HTTP_BIND="" note_livekit_signaling "$_xp_env" 2>&1)"
+    out="$(LIVEKIT_HTTP_BIND="" LIVEKIT_COMMAND="" note_livekit_signaling "$_xp_env" 2>&1)"
     if [[ "$out" == *"still published beyond loopback"* ]]; then got=recreate
     elif [[ "$out" == *"loopback only"* ]]; then got=loopback-note
-    else got=quiet; fi
+    elif [[ "$out" == *"--dev credentials"* ]]; then got=dev-warning
+    elif [[ -z "$out" ]]; then got=quiet
+    else got="unexpected: $out"; fi
     if [[ "$got" == "$want" ]]; then
         echo "  ✓ livekit: $desc → $want"; PASS=$((PASS+1))
     else
@@ -693,7 +695,12 @@ _assert_lk "voice not running"                 ''                               
 _assert_lk "unset, still public (not recreated)" ''                               $'0.0.0.0:7880\n[::]:7880'  recreate
 _assert_lk "unset, loopback"                   ''                                 '127.0.0.1:7880'            loopback-note
 _assert_lk "LIVEKIT_HTTP_BIND=127.0.0.1 (proxied)" 'LIVEKIT_HTTP_BIND=127.0.0.1\n'  '127.0.0.1:7880'            quiet
-_assert_lk "LIVEKIT_HTTP_BIND=0.0.0.0 (direct)" 'LIVEKIT_HTTP_BIND=0.0.0.0\n'      '0.0.0.0:7880'              quiet
+_assert_lk "loopback intent, still public (not recreated)" 'LIVEKIT_HTTP_BIND=127.0.0.1\n' $'0.0.0.0:7880\n[::]:7880' recreate
+_assert_lk "quoted loopback intent, still public" 'LIVEKIT_HTTP_BIND="127.0.0.1"\n' '0.0.0.0:7880'              recreate
+_assert_lk "public opt-in, real config"         'LIVEKIT_HTTP_BIND=0.0.0.0\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '0.0.0.0:7880' quiet
+_assert_lk "public opt-in, LIVEKIT_COMMAND unset (--dev default)" 'LIVEKIT_HTTP_BIND=0.0.0.0\n' '0.0.0.0:7880'   dev-warning
+_assert_lk "public opt-in, explicit --dev"      'LIVEKIT_HTTP_BIND=::\nLIVEKIT_COMMAND=--dev --bind 0.0.0.0\n' '[::]:7880' dev-warning
+_assert_lk "public opt-in, --dev, not yet recreated off loopback" 'LIVEKIT_HTTP_BIND=0.0.0.0\n' '127.0.0.1:7880' quiet
 
 rm -f "$_xp_env"
 # Restore the real published_bindings for anything below.

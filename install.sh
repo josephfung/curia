@@ -324,24 +324,40 @@ check_http_exposure() {
 }
 
 # Run after an upgrade's stack starts. Since #2408 LiveKit signaling (7880) is
-# published on loopback unless LIVEKIT_HTTP_BIND is set. Two live states need
-# saying, both only while LIVEKIT_HTTP_BIND is unset (any value, including
-# 127.0.0.1 once an on-host proxy is in place, is a decision and silences this):
-#   - Still beyond loopback. install.sh's `up -d` leaves a running livekit
-#     alone unless the voice profile is active (e.g. COMPOSE_PROFILES=voice),
-#     and an old compose file never moves it, so the change has not landed.
-#     Say how to apply it before the operator's next restart breaks browsers
-#     that use ws://<host>:7880 directly.
-#   - Loopback. Browsers that connected to ws://<host>:7880 directly have lost
-#     signaling; say why and how to fix or silence it.
+# published on loopback unless LIVEKIT_HTTP_BIND says otherwise. The live
+# binding is checked against that intent, as check_postgres_exposure does:
+#   - Non-loopback LIVEKIT_HTTP_BIND is a deliberate public opt-in. The only
+#     thing said then is a warning if it is actually public while running the
+#     --dev credentials (LIVEKIT_COMMAND unset or containing --dev).
+#   - Unset or loopback intent, but still beyond loopback: install.sh's `up -d`
+#     leaves a running livekit alone unless the voice profile is active (e.g.
+#     COMPOSE_PROFILES=voice), and an old compose file never moves it, so the
+#     change has not landed. Say how to apply it before the operator's next
+#     restart breaks browsers that use ws://<host>:7880 directly. A loopback
+#     LIVEKIT_HTTP_BIND does not silence this.
+#   - Loopback live, intent unset: browsers that connected to ws://<host>:7880
+#     directly have lost signaling; say why, and that LIVEKIT_HTTP_BIND=127.0.0.1
+#     (proxied or local) silences it. Loopback intent and loopback live: quiet.
 note_livekit_signaling() {
-  local env="$1" bindings
-  [[ -z "${LIVEKIT_HTTP_BIND:-$(env_value "$env" LIVEKIT_HTTP_BIND)}" ]] || return 0
+  local env="$1" want bindings cmd
+  want="${LIVEKIT_HTTP_BIND:-$(env_value "$env" LIVEKIT_HTTP_BIND)}"
   bindings="$(published_bindings livekit 7880)"
   [[ -n "$bindings" ]] || return 0   # voice not running
 
-  echo "" >&2
+  if [[ -n "$want" ]] && ! bind_value_is_loopback "$want"; then
+    cmd="${LIVEKIT_COMMAND:-$(env_value "$env" LIVEKIT_COMMAND)}"
+    if ! bindings_are_loopback "$bindings" && [[ -z "$cmd" || "$cmd" == *--dev* ]]; then
+      echo "" >&2
+      warn "LiveKit signaling is public ($(echo "$bindings" | tr '\n' ' ')) and runs --dev credentials (devkey/secret)."
+      hint "Anyone who can reach 7880 can mint LiveKit tokens without Curia's auth."
+      hint "Set LIVEKIT_COMMAND to a real config with your own keys (docs/dev/voice-setup.md),"
+      hint "or remove LIVEKIT_HTTP_BIND from .env to keep signaling on loopback."
+    fi
+    return 0
+  fi
+
   if ! bindings_are_loopback "$bindings"; then
+    echo "" >&2
     warn "LiveKit signaling (7880) is still published beyond loopback: $(echo "$bindings" | tr '\n' ' ')(#2408)"
     hint "This release binds it to 127.0.0.1. Check that docker-compose.yml's livekit"
     hint "signaling entry reads - \"\${LIVEKIT_HTTP_BIND:-127.0.0.1}:\${LIVEKIT_HTTP_PORT:-7880}:7880\","
@@ -353,6 +369,8 @@ note_livekit_signaling() {
     return 0
   fi
 
+  [[ -z "$want" ]] || return 0   # loopback intent, loopback live: proxied or local
+  echo "" >&2
   warn "LiveKit signaling (7880) is published on loopback only (#2408)."
   hint "Browsers can no longer reach ws://<host>:7880 directly. If your Voice"
   hint "channel's LiveKit URL points there, front 127.0.0.1:7880 with a TLS proxy"
