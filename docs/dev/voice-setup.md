@@ -11,7 +11,8 @@ PSTN/SIP are Phase 2.
 - LiveKit server, either the bundled Docker Compose service or your own deploy.
 - Deepgram account and API key.
 - Cartesia account and API key.
-- Host firewall/NAT access for LiveKit signaling and RTC ports.
+- Host firewall/NAT access for LiveKit's RTC ports (and for signaling only if
+  you publish it directly with `LIVEKIT_HTTP_BIND`).
 
 ## Start LiveKit with Docker Compose
 
@@ -26,11 +27,39 @@ docker compose --profile voice up -d livekit
 
 Default ports are:
 
-| Purpose | Container | Host env override |
-|---|---:|---|
-| HTTP/WebSocket signaling | `7880/tcp` | `LIVEKIT_HTTP_PORT` |
-| WebRTC TCP fallback | `7881/tcp` | `LIVEKIT_RTC_TCP_PORT` |
-| WebRTC UDP media | `7882/udp` | `LIVEKIT_RTC_UDP_PORT` |
+| Purpose | Container | Host env override | Published on |
+|---|---:|---|---|
+| HTTP/WebSocket signaling | `7880/tcp` | `LIVEKIT_HTTP_PORT` | `127.0.0.1` (`LIVEKIT_HTTP_BIND` to change) |
+| WebRTC TCP fallback | `7881/tcp` | `LIVEKIT_RTC_TCP_PORT` | every interface |
+| WebRTC UDP media | `7882/udp` | `LIVEKIT_RTC_UDP_PORT` | every interface |
+
+Signaling has been loopback-only by default since #2408, so `--dev` credentials
+are not reachable from outside the host by default. A browser on the same machine
+uses `ws://localhost:7880`. Before serving browsers elsewhere, replace `--dev` with
+a real config and keys (see the config-file deploy paragraph below): a proxy in
+front of `127.0.0.1:7880` exposes `--dev` just as a public bind does. Then either
+front `127.0.0.1:7880` with a TLS proxy on the host, or set
+`LIVEKIT_HTTP_BIND=0.0.0.0` (IPv4) or `::` (IPv4 + IPv6) in `.env`.
+
+Existing voice installs pick the change up only when LiveKit is recreated:
+`install.sh` runs `docker compose up -d` without the voice profile (unless
+`COMPOSE_PROFILES=voice` is set), which leaves a running `livekit` on its old
+bindings. After updating the compose file, decide first: if browsers connect to
+`ws://<host>:7880` directly, set `LIVEKIT_HTTP_BIND` or add a TLS proxy. Then
+recreate it:
+
+```bash
+docker compose --profile voice up -d livekit
+```
+
+`install.sh` warns on re-run while signaling is still published beyond
+loopback, and again once it is loopback-only. Set `LIVEKIT_HTTP_BIND=127.0.0.1`
+to silence the second note once a proxy is in place; it does not silence the
+first, which keeps firing until the container is actually recreated on
+loopback. With a public `LIVEKIT_HTTP_BIND`, `install.sh` warns while the
+running container is still on loopback (not yet recreated). On every run, fresh
+or upgrade, it warns when signaling is public and the running container uses the
+`--dev` credentials. It reads the container's own command, not `.env`.
 
 For local development the profiled service runs `livekit-server --dev`, which
 uses known credentials (`devkey` / `secret`). **Never expose `--dev` on a
@@ -134,16 +163,21 @@ through `ExecutionLayer` and external sends still hit the gateway.
 
 ## Public IP, ICE, and TLS
 
-- Open `7880/tcp`, `7881/tcp`, and `7882/udp` on the host firewall.
+- Open `7881/tcp` and `7882/udp` on the host firewall. Open `7880/tcp` too only
+  if you publish signaling directly by setting `LIVEKIT_HTTP_BIND` (it is
+  loopback-only by default; a TLS proxy on the host reaches `127.0.0.1:7880`).
 - Forward those ports through NAT if Curia is behind a router.
 - Keep `rtc.use_external_ip: true` for a simple public-VPS deploy.
 - The optional `docker-compose.tls.yml` Caddy overlay terminates HTTPS for Curia
-  on ports 80/443. It proxies only Curia — not LiveKit. Caddy can terminate
-  HTTPS/WSS for signaling on `7880` via a separate proxy; `7881/tcp` (TCP
-  fallback) and `7882/udp` (media) still need direct firewall/NAT exposure.
+  on ports 80/443. The shipped `deploy/Caddyfile` proxies only Curia — not
+  LiveKit. Terminate HTTPS/WSS for signaling with a separate proxy on the host
+  (to `127.0.0.1:7880`); `7881/tcp` (TCP fallback) and `7882/udp` (media) still
+  need direct firewall/NAT exposure.
 - Set the Voice channel LiveKit URL to the browser-reachable signaling endpoint:
-  `ws://<host>:7880` for private local testing, or `wss://<voice-host>` when you
-  terminate TLS for LiveKit through a separate proxy.
+  `ws://localhost:7880` for local testing on the same machine,
+  `ws://<host>:7880` only with `LIVEKIT_HTTP_BIND` set (private networks, real
+  keys), or `wss://<voice-host>` when you terminate TLS for LiveKit through a
+  separate proxy.
 - **Signaling vs management:** the vault `channel.voice.livekit_url` is for the
   **browser** (`wss://…` / `ws://…`). Curia's server-side RoomService calls
   (`DeleteRoom` on hangup, and any future admin ops) use a **separate** HTTP
