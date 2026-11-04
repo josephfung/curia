@@ -983,7 +983,8 @@ interface SecretAccessedPayload {
 }
 
 // SecretChangedPayload — the principal set or removed a vault secret from the console
-// Secrets page (#2453), or revealed a structured secret's details (`details`). Audit-only:
+// Secrets page (#2453), or edited the sign-in details (login URL / username) of a `user.*`
+// secret (`details`). Audit-only:
 // nothing subscribes to act on it. Carries the key NAME and what happened — NEVER a value.
 //
 // Two-stage, like document.console_action and operator.session. `requested` is published
