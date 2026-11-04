@@ -323,6 +323,18 @@ a confirmation.
   or CVV.
 - `select` with `secret_ref` registers the value for redaction, suppresses that call's
   screenshot and fills the projected value; `secret_ref` with `value` is rejected.
+- **Dropdown expiry forms are filled end to end** in browser tests against fixture checkout
+  pages (served with `context.route`), not just two-digit text boxes. At minimum:
+  - month `<select>` labelled with full names ("January" … "December") whose option values
+    are opaque (e.g. `value="m12"`), filled via `#expiry_month_name`;
+  - month `<select>` labelled with short names ("Jan" … "Dec"), via `#expiry_month_short`;
+  - month `<select>` labelled "01" … "12", via `#expiry_mm`;
+  - year `<select>` labelled "2027", "2028" … with two-digit values ("27"), via
+    `#expiry_yyyy`;
+  - a single `MM/YY` text box, and separate `MM` and `YYYY` boxes, for contrast.
+
+  Each test asserts the right option is selected, the screenshot is suppressed, and no value
+  appears in the tool result.
 - Each resolve emits exactly one `secret.accessed` with `secretField`, no value.
 - `list-user-secrets` returns label, brand, last four, expiry and expired for each card. A
   scenario covers "use my personal Visa" with two Visas (Personal and Work) and one Amex:
