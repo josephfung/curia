@@ -54,8 +54,10 @@ docker compose --profile voice up -d livekit
 loopback, and again once it is loopback-only. Set `LIVEKIT_HTTP_BIND=127.0.0.1`
 to silence the second note once a proxy is in place; it does not silence the
 first, which keeps firing until the container is actually recreated on
-loopback. With a public `LIVEKIT_HTTP_BIND`, `install.sh` also warns if
-LiveKit still runs the `--dev` credentials.
+loopback. With a public `LIVEKIT_HTTP_BIND`, `install.sh` warns while the
+running container is still on loopback (not yet recreated). On every run, fresh
+or upgrade, it warns when signaling is public and the running container uses the
+`--dev` credentials. It reads the container's own command, not `.env`.
 
 For local development the profiled service runs `livekit-server --dev`, which
 uses known credentials (`devkey` / `secret`). **Never expose `--dev` on a
