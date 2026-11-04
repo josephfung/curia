@@ -2,11 +2,16 @@ services:
   postgres:
     image: ghcr.io/josephfung/curia-postgres:${CURIA_POSTGRES_TAG:-pg16}
     restart: unless-stopped
-    # POSTGRES_PORT is parameterized so a second stack can coexist on the same
-    # host (e.g. testing a fresh `pnpm run setup` against a sibling clone while
-    # the dev stack runs on 5432). Defaults to the standard port if unset.
+    # Published on loopback only: the curia container reaches Postgres over the
+    # compose network (postgres:5432), so the host port exists just for host-side
+    # tools (pnpm migrate, seed-vault) that connect via localhost. Docker's
+    # published ports bypass host firewalls such as ufw, so binding 0.0.0.0 would
+    # expose the database on an internet-facing host. POSTGRES_BIND is an explicit
+    # opt-in for remote access (see .env.example). POSTGRES_PORT lets a second
+    # stack coexist on the same host (e.g. testing a fresh `pnpm run setup`
+    # against a sibling clone while the dev stack runs on 5432).
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     environment:

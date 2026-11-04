@@ -195,6 +195,15 @@ install_is_complete() {
   grep -q "^# SETUP_COMPLETE" "$env" 2>/dev/null
 }
 
+# Returns 0 when a compose file still publishes Postgres on every interface —
+# the pre-#2408 `"${POSTGRES_PORT:-5432}:5432"` line with no bind address.
+# fetch_bundle never overwrites an existing docker-compose.yml, so upgrades keep
+# the old line until the operator replaces the file; existing_install warns.
+compose_publishes_postgres_publicly() {
+  local compose="$1"
+  grep -qE '^[[:space:]]*-[[:space:]]*"?\$\{POSTGRES_PORT:-5432\}:5432"?[[:space:]]*$' "$compose" 2>/dev/null
+}
+
 # ---------------------------------------------------------------------------
 # Non-interactive helpers (not unit-tested; rely on Docker or filesystem state)
 # ---------------------------------------------------------------------------
@@ -417,6 +426,11 @@ existing_install() {
   local env="$1"
   info "Existing install detected — running in upgrade/restart mode."
   info "No secrets will be regenerated."
+
+  if compose_publishes_postgres_publicly "$INSTALL_DIR/docker-compose.yml"; then
+    warn "docker-compose.yml publishes Postgres on all network interfaces (#2408)."
+    hint "Replace it with this release's docker-compose.yml, which binds 127.0.0.1 only."
+  fi
 
   # Re-apply migrations idempotently. node-pg-migrate skips already-applied
   # migrations, so this is safe on every re-run.

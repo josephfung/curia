@@ -496,6 +496,42 @@ fi
 
 rm -f "$_ic_env"
 
+# --- install.sh: compose_publishes_postgres_publicly ---
+
+echo ""
+echo "=== install.sh: compose_publishes_postgres_publicly ==="
+
+_pp_compose=$(mktemp)
+printf 'services:\n  postgres:\n    ports:\n      - "${POSTGRES_PORT:-5432}:5432"\n' > "$_pp_compose"
+if compose_publishes_postgres_publicly "$_pp_compose"; then
+    echo "  ✓ pre-#2408 all-interfaces publish → flagged"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ pre-#2408 all-interfaces publish should be flagged"
+    FAIL=$((FAIL+1))
+fi
+
+printf 'services:\n  postgres:\n    ports:\n      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"\n' > "$_pp_compose"
+if ! compose_publishes_postgres_publicly "$_pp_compose"; then
+    echo "  ✓ loopback-bound publish → not flagged"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ loopback-bound publish should not be flagged"
+    FAIL=$((FAIL+1))
+fi
+
+rm -f "$_pp_compose"
+
+# The shipped compose file itself must bind Postgres to loopback by default.
+if ! compose_publishes_postgres_publicly "$TEST_DIR/../../docker-compose.yml" \
+  && grep -qF '"${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"' "$TEST_DIR/../../docker-compose.yml"; then
+    echo "  ✓ shipped docker-compose.yml binds Postgres to 127.0.0.1 by default"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ shipped docker-compose.yml must bind Postgres to 127.0.0.1 by default"
+    FAIL=$((FAIL+1))
+fi
+
 # --- install.sh: resolve_version ---
 
 echo ""

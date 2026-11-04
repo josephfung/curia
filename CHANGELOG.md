@@ -256,6 +256,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Postgres host port** — published on 127.0.0.1 only; `POSTGRES_BIND` opts in. Existing installs: replace `docker-compose.yml`. (#2408)
 - **`@hono/node-server` override floor** — raised to 2.1.6 to exclude three medium advisories. (#2427)
 - **`hono` override floor** — raised to 4.13.16 to exclude five advisories. (#2427)
 - **`basic-ftp` override floor** — raised to 6.2.4 to exclude two medium advisories. (#2388)
