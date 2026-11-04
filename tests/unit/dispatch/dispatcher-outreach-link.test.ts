@@ -209,6 +209,9 @@ describe('Dispatcher outreach link (#2312)', () => {
     h.bus.subscribe('outbound.message', 'channel', (e) => { relays.push(e as OutboundMessageEvent); });
     await sendEmail(h);
     const first = h.tasks[0]!;
+    // Both must be present on the first task, or the equality checks below pass on undefined.
+    expect(first.payload.metadata?.['originator']).toEqual(expect.objectContaining({ contactId: 'contact-acme-1' }));
+    expect(first.payload.metadata?.['linkedTask']).toEqual(expect.objectContaining({ strength: 'strong' }));
 
     await h.bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
