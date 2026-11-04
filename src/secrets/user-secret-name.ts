@@ -54,6 +54,8 @@ const TYPE_CANONICAL: Readonly<Record<string, string>> = {
   tokens: 'token',
   key: 'key',
   keys: 'key',
+  card: 'card',
+  cards: 'card',
 };
 
 /** Lower number = stronger type. Used when a name carries more than one type token. */
@@ -65,6 +67,7 @@ const TYPE_PRIORITY: Readonly<Record<string, number>> = {
   key: 4,
   secret: 5,
   pin: 6,
+  card: 7,
 };
 
 export interface UserSecretFingerprint {

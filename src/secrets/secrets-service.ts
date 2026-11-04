@@ -5,10 +5,19 @@
 // never semantic — OAuth token sets and browser sessions are just 'json' secrets
 // whose shape is a convention owned by their consumer. The service does NOT fire
 // audit events; the execution-layer ctx.secret() closure remains the audit boundary.
-import type { DbPool } from '../db/connection.js';
+import type { DbPool, DbPoolClient } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import { encrypt, decrypt } from './crypto.js';
 import type { UserSecretDetails } from './user-secret-details.js';
+import {
+  isStructuredSchemaTag,
+  type CreditCardPublicFields,
+  type CreditCardSecretDoc,
+  type StructuredSchemaTag,
+} from './structured-secret-schema.js';
+
+/** Anything with a pg-style query method: the pool, or one client inside a transaction. */
+type Queryable = Pick<DbPool, 'query'> | Pick<DbPoolClient, 'query'>;
 
 export type ValueFormat = 'string' | 'json';
 
@@ -115,8 +124,11 @@ export class SecretsService {
   /** Non-secret sign-in details (login URL, username) per `user.*` key (#2201). Keys with
    *  no row are absent from the map. Never reads the secrets table. */
   async listUserDetails(): Promise<Map<string, UserSecretDetails>> {
-    const result = await this.pool.query<{ name: string; login_url: string | null; username: string | null }>(
-      `SELECT name, login_url, username FROM user_secret_details
+    const result = await this.pool.query<{
+      name: string; login_url: string | null; username: string | null;
+      schema: string | null; label: string | null; public_fields: CreditCardPublicFields | null;
+    }>(
+      `SELECT name, login_url, username, schema, label, public_fields FROM user_secret_details
         WHERE starts_with(name, 'user.')`,
     );
     const out = new Map<string, UserSecretDetails>();
@@ -125,6 +137,10 @@ export class SecretsService {
       out.set(row.name, {
         ...(row.login_url ? { loginUrl: row.login_url } : {}),
         ...(row.username ? { username: row.username } : {}),
+        ...(isStructuredSchemaTag(row.schema) && row.public_fields
+          ? { schema: row.schema, publicFields: row.public_fields }
+          : {}),
+        ...(row.label ? { label: row.label } : {}),
       });
     }
     return out;
@@ -167,6 +183,99 @@ export class SecretsService {
     );
   }
 
+  // -------------------------------------------------------------------------
+  // Credit cards (#1358). Number and CVV are one encrypted json secret; the
+  // non-secret facts live on the details row so viewing a card never decrypts.
+  // -------------------------------------------------------------------------
+
+  /** Save a card: encrypted doc in `secrets`, public fields in the details row, in one
+   *  transaction. Existing login_url / username on the details row are kept. */
+  async setCard(
+    name: string,
+    secret: CreditCardSecretDoc,
+    publicFields: CreditCardPublicFields,
+    label: string | null,
+  ): Promise<void> {
+    assertUserKey(name);
+    await this.inTransaction(async client => {
+      await this.writeJson(client, name, secret);
+      await this.writeCardDetails(client, name, publicFields, label, true);
+    });
+  }
+
+  /** The schema tag a key holds, from the details row only. Null for a plain or unknown key. */
+  async getStructuredSchema(name: string): Promise<StructuredSchemaTag | null> {
+    const result = await this.pool.query<{ schema: string | null }>(
+      'SELECT schema FROM user_secret_details WHERE name = $1',
+      [name],
+    );
+    const tag = result.rows[0]?.schema;
+    return isStructuredSchemaTag(tag) ? tag : null;
+  }
+
+  /** A card's label and public fields. Reads the details row only: nothing is decrypted. */
+  async getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields } | null> {
+    const result = await this.pool.query<{ label: string | null; public_fields: CreditCardPublicFields | null; schema: string | null }>(
+      'SELECT label, public_fields, schema FROM user_secret_details WHERE name = $1',
+      [name],
+    );
+    const row = result.rows[0];
+    if (!row || row.schema !== 'credit_card' || !row.public_fields) return null;
+    return { label: row.label, publicFields: row.public_fields };
+  }
+
+  /** Edit a card's label and/or public fields. Never writes `secrets`, so the vault row's
+   *  updated_at is untouched. Omitted keys are kept; `label: null` clears the label. */
+  async patchCardPublic(
+    name: string,
+    patch: { label?: string | null; publicFields?: CreditCardPublicFields },
+  ): Promise<void> {
+    assertUserKey(name);
+    const result = await this.pool.query(
+      `UPDATE user_secret_details SET
+         label         = CASE WHEN $2::boolean THEN $3::text ELSE label END,
+         public_fields = CASE WHEN $4::boolean THEN $5::jsonb ELSE public_fields END,
+         updated_at    = now()
+       WHERE name = $1 AND schema = 'credit_card'`,
+      [
+        name,
+        patch.label !== undefined, patch.label ?? null,
+        patch.publicFields !== undefined,
+        patch.publicFields === undefined ? null : JSON.stringify(patch.publicFields),
+      ],
+    );
+    if (result.rowCount === 0) throw new Error(`'${name}' is not a saved card`);
+  }
+
+  /** Replace a card's secret. `{ cvv }` swaps only the CVV and keeps the number; the full
+   *  form replaces the doc and the public fields. One transaction. */
+  async replaceCardSecret(
+    name: string,
+    change: { cvv: string } | { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields },
+  ): Promise<void> {
+    assertUserKey(name);
+    if ('cvv' in change) {
+      const current = await this.getCardSecret(name);
+      await this.writeJson(this.pool, name, { ...current, cvv: change.cvv });
+      return;
+    }
+    await this.inTransaction(async client => {
+      await this.writeJson(client, name, change.secret);
+      // Keep the existing label; only the public fields change here.
+      await this.writeCardDetails(client, name, change.publicFields, null, false);
+    });
+  }
+
+  /** The decrypted card doc. For the resolver only. Throws unless the stored doc is a credit_card. */
+  async getCardSecret(name: string): Promise<CreditCardSecretDoc> {
+    const doc = await this.getJSON<{ _schema?: unknown }>(name);
+    if (doc === null || doc._schema !== 'credit_card') {
+      throw new Error(`Secret '${name}' is not a credit_card`);
+    }
+    // _schema was checked above; the rest of the shape was validated when the card was saved.
+    return doc as unknown as CreditCardSecretDoc;
+  }
+
   /** Remove a key's sign-in details. No error if there are none. */
   async deleteUserDetails(name: string): Promise<void> {
     await this.pool.query('DELETE FROM user_secret_details WHERE name = $1', [name]);
@@ -178,16 +287,70 @@ export class SecretsService {
   }
 
   private async upsert(name: string, format: ValueFormat, ciphertext: string, iv: string): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO secrets (name, value_format, encrypted_value, iv, updated_at)
-       VALUES ($1, $2, $3, $4, now())
-      -- created_at is set once on INSERT (DEFAULT now()) and never modified on conflict.
-       ON CONFLICT (name) DO UPDATE
-         SET value_format = EXCLUDED.value_format,
-             encrypted_value = EXCLUDED.encrypted_value,
-             iv = EXCLUDED.iv,
-             updated_at = now()`,
-      [name, format, ciphertext, iv],
+    await upsertSecretRow(this.pool, name, format, ciphertext, iv);
+  }
+
+  private async writeJson(db: Queryable, name: string, obj: unknown): Promise<void> {
+    const { ciphertext, iv } = encrypt(JSON.stringify(obj), this.key);
+    await upsertSecretRow(db, name, 'json', ciphertext, iv);
+  }
+
+  /** Upsert the card columns of the details row, leaving login_url / username alone.
+   *  `setLabel` false keeps an existing label (used when only the secret is replaced). */
+  private async writeCardDetails(
+    db: Queryable,
+    name: string,
+    publicFields: CreditCardPublicFields,
+    label: string | null,
+    setLabel: boolean,
+  ): Promise<void> {
+    await db.query(
+      `INSERT INTO user_secret_details (name, schema, label, public_fields)
+       VALUES ($1, 'credit_card', $2, $3::jsonb)
+       ON CONFLICT (name) DO UPDATE SET
+         schema        = 'credit_card',
+         label         = CASE WHEN $4::boolean THEN EXCLUDED.label ELSE user_secret_details.label END,
+         public_fields = EXCLUDED.public_fields,
+         updated_at    = now()`,
+      [name, label, JSON.stringify(publicFields), setLabel],
     );
   }
+
+  private async inTransaction<T>(fn: (client: DbPoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const out = await fn(client);
+      await client.query('COMMIT');
+      return out;
+    } catch (err) {
+      // Roll back, then rethrow the original failure; a failed rollback must not mask it.
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+function assertUserKey(name: string): void {
+  if (!name.startsWith('user.')) {
+    throw new Error(`Cards are only stored under user.* keys, not '${name}'`);
+  }
+}
+
+async function upsertSecretRow(
+  db: Queryable, name: string, format: ValueFormat, ciphertext: string, iv: string,
+): Promise<void> {
+  await db.query(
+    `INSERT INTO secrets (name, value_format, encrypted_value, iv, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+    -- created_at is set once on INSERT (DEFAULT now()) and never modified on conflict.
+     ON CONFLICT (name) DO UPDATE
+       SET value_format = EXCLUDED.value_format,
+           encrypted_value = EXCLUDED.encrypted_value,
+           iv = EXCLUDED.iv,
+           updated_at = now()`,
+    [name, format, ciphertext, iv],
+  );
 }

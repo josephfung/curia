@@ -3,10 +3,17 @@
 // Where to sign in and with which username. Neither is a secret: they are stored in plain
 // text beside the vault (user_secret_details) and returned by list-user-secrets so an agent
 // signs in directly instead of searching the web for a login page.
+import type { CreditCardPublicFields, StructuredSchemaTag } from './structured-secret-schema.js';
 
 export interface UserSecretDetails {
   loginUrl?: string;
   username?: string;
+  /** Structured-secret type this key holds (#1358); absent for a plain secret. */
+  schema?: StructuredSchemaTag;
+  /** Owner-given nickname for a structured secret ("Personal"). */
+  label?: string;
+  /** Non-secret facts of a structured secret; present exactly when `schema` is. */
+  publicFields?: CreditCardPublicFields;
 }
 
 const MAX_URL_LENGTH = 500;
