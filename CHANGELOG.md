@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Personal secrets in the console** — create, edit and remove website logins; platform keys read-only.
 - **Secrets page** — Memory → Secrets lists, sets, replaces and removes vault secrets; values never shown. (#2453)
 - **`DELETE /api/vault/secrets/:name`** — removes a declared secret; refused while an enabled component needs it, unless forced. (#2453)
 - **`secret.changed`** — **public API:** two-stage audit event for console secret set and delete; key name only. (#2453)
@@ -130,6 +131,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Secrets page** — one searchable, sortable list of personal, system and platform secrets with drawers. (#2453 follow-up)
+- **`secret.changed` event** — new `details` action for sign-in detail edits. Bus event type change.
 - **Open tasks tile** — replaces People known; counts open principal tasks and opens them on Tasks. (#2350)
 - **Voice barge-in** — Curia stops when the caller starts speaking, before words transcribe; Signal calls drop queued audio. (#2401)
 - **`@anthropic-ai/sdk` 1.x** — moves to API version 2026-10-21; Anthropic API requests no longer send `temperature`. (#2439)
