@@ -11,13 +11,13 @@
       "unstubbed": 0,
       "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-11-04T19:10:01.594Z"
+      "recordedAt": "2026-11-04T19:22:11.053Z"
     },
     "band grounding rsvp dietary details": {
       "unstubbed": 0,
       "runs": 3,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-11-04T19:11:32.585Z"
+      "recordedAt": "2026-11-04T19:23:15.663Z"
     },
     "booking link on a cc thread books through it": {
       "unstubbed": 0,
