@@ -48,3 +48,17 @@ describe('loadYamlConfig: channels.voice barge-in on speech start', () => {
     expect(() => loadYamlConfig(dir)).toThrow('channels.voice.barge_in_speech_start_min_dbfs');
   });
 });
+
+// A scalar or list in place of the voice mapping would make every check above read
+// undefined and pass (#2401). An empty `voice:` key is null and still boots.
+describe('loadYamlConfig: channels.voice shape', () => {
+  it.each(['5', '"on"', 'true', '[1, 2]', '\n    - turn_hold_ms: 600000'])('rejects channels.voice: %s', (value) => {
+    const dir = writeTempConfig(`channels:\n  voice: ${value}\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('channels.voice must be a YAML mapping');
+  });
+
+  it('accepts an empty voice key', () => {
+    const dir = writeTempConfig('channels:\n  voice:\n');
+    expect(() => loadYamlConfig(dir)).not.toThrow();
+  });
+});

@@ -19,6 +19,13 @@ import type { Logger } from '../../../logger.js';
 import type { AudioTransport, AudioTransportCloseReason } from '../audio-transport.js';
 import type { PcmFrame } from '../../../speech/index.js';
 
+/**
+ * Audio PulseAudio can hold for pacat's stream past the pipe, out of our reach (see
+ * clearQueuedAudio). After the runtime's playout estimate runs out the caller can
+ * still hear up to this much of the reply, so it still counts as audible (#2401).
+ */
+const PULSE_PLAYBACK_BUFFER_MS = 2_000;
+
 /** 20 ms @ 48 kHz mono = 960 samples = 1920 bytes (s16le). */
 export const SIGNAL_FRAME_SAMPLES = 960;
 const SIGNAL_FRAME_BYTES = SIGNAL_FRAME_SAMPLES * 2;
@@ -164,6 +171,9 @@ export class SignalAudioTransport implements AudioTransport {
       if (pacat === this.pacat) this.markPacatGone();
     });
   }
+
+  /** PulseAudio's buffer can still be playing after the runtime's estimate runs out. */
+  readonly playoutLatencyMs = PULSE_PLAYBACK_BUFFER_MS;
 
   /**
    * Drop the audio queued for playout (#2401). PulseAudio holds up to ~2 s for

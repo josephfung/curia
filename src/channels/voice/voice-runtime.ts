@@ -642,6 +642,11 @@ interface ActiveSession {
    * real time from the first frame. Ahead of now = audio still queued (#2379).
    */
   playoutEndsAt: number;
+  /**
+   * When the caller stops hearing published audio: playoutEndsAt plus the
+   * transport's playoutLatencyMs (Signal: PulseAudio's buffer). A flush resets it.
+   */
+  audibleUntil: number;
   /** Audio published by the current assistant turn, ms. */
   turnAudioMs: number;
   /** Call-wide TTS delivery stats, logged when the session ends (#2379). */
@@ -665,6 +670,11 @@ interface ActiveSession {
 interface InboundLevel {
   /** Wall-clock arrival of the frame. */
   at: number;
+  /**
+   * Wall-clock end of the frame's audio. Frames from one transport chunk arrive
+   * together, so each ends one frame before the next (#2401).
+   */
+  end: number;
   ms: number;
   dbfs: number;
 }
@@ -827,6 +837,7 @@ export class VoiceRuntime {
         pendingLastWordAt: null,
         queuedTiming: null,
         playoutEndsAt: 0,
+        audibleUntil: 0,
         turnAudioMs: 0,
         audioStats: { chunks: 0, audioMs: 0, gapMs: 0, starvedMs: 0, starvedCount: 0 },
         loopDelay: monitorEventLoopDelay({ resolution: 10 }),
@@ -904,10 +915,12 @@ export class VoiceRuntime {
 
     // Gate on length + confidence so speaker echo / noise neither interrupts
     // Curia mid-sentence nor holds a finished utterance open.
-    const isSpeech = text.length >= BARGE_IN_MIN_CHARS
-      && (event.confidence === undefined || event.confidence >= BARGE_IN_MIN_CONFIDENCE);
+    const confident = event.confidence === undefined || event.confidence >= BARGE_IN_MIN_CONFIDENCE;
+    const isSpeech = text.length >= BARGE_IN_MIN_CHARS && confident;
 
-    if (isSpeech) this.confirmBargeIn(session);
+    // Any confident words confirm an onset barge-in, a short "no" included: the
+    // length gate is there to stop echo starting a barge-in, not to judge one.
+    if (text.length > 0 && confident) this.confirmBargeIn(session);
 
     // Barge-in: speech while the assistant talks cancels it. Audio still queued
     // after the turn ended is the reply's tail, and is dropped too.
@@ -1010,15 +1023,24 @@ export class VoiceRuntime {
     session.pendingLastWordAt = null;
   }
 
-  /** Published audio is still ahead of the wall clock and the transport can drop it. */
+  /** Published audio may still be playing and the transport can drop it. */
   private audioQueued(session: ActiveSession): boolean {
-    return session.transport.clearQueuedAudio !== undefined && session.playoutEndsAt > Date.now();
+    return session.transport.clearQueuedAudio !== undefined && session.audibleUntil > Date.now();
+  }
+
+  /** Nothing published is left to play: the transport's queue was just dropped. */
+  private markPlayoutFlushed(session: ActiveSession): void {
+    session.playoutEndsAt = Date.now();
+    session.audibleUntil = session.playoutEndsAt;
   }
 
   private recordInboundLevel(session: ActiveSession, frame: PcmFrame): void {
     const now = Date.now();
     const levels = session.inboundLevels;
-    levels.push({ at: now, ms: (frame.pcm.length / frame.sampleRate) * 1000, dbfs: frameDbfs(frame.pcm) });
+    const ms = (frame.pcm.length / frame.sampleRate) * 1000;
+    // Earlier frames of the same chunk played before this one: move their ends back.
+    for (let i = levels.length - 1; i >= 0 && levels[i]!.at === now; i -= 1) levels[i]!.end -= ms;
+    levels.push({ at: now, end: now, ms, dbfs: frameDbfs(frame.pcm) });
     while (levels.length > 0 && levels[0]!.at < now - INBOUND_LEVEL_HISTORY_MS) levels.shift();
     if (session.speechOnset) this.checkSpeechOnset(session);
   }
@@ -1070,9 +1092,10 @@ export class VoiceRuntime {
     let voicedMs = 0;
     let maxDbfs = -Infinity;
     for (const level of session.inboundLevels) {
-      // A frame arriving after the onset carries audio from up to its own length before.
-      if (level.at + level.ms < onsetAt) continue;
-      if (level.dbfs >= minDbfs) voicedMs += level.ms;
+      // Only the part of the frame's audio after the onset counts.
+      const afterOnsetMs = Math.min(level.ms, level.end - onsetAt);
+      if (afterOnsetMs <= 0) continue;
+      if (level.dbfs >= minDbfs) voicedMs += afterOnsetMs;
       maxDbfs = Math.max(maxDbfs, level.dbfs);
     }
     return { voicedMs, maxDbfs };
@@ -1137,7 +1160,7 @@ export class VoiceRuntime {
     if (session.transport.clearQueuedAudio) {
       try {
         session.transport.clearQueuedAudio();
-        session.playoutEndsAt = Date.now();
+        this.markPlayoutFlushed(session);
         flushed = true;
       } catch (err) {
         this.log.warn({ sessionId: session.sessionId, err }, 'failed to clear queued audio on barge-in');
@@ -1734,6 +1757,7 @@ export class VoiceRuntime {
           }
           const frameMs = (frame.pcm.length / frame.channels / frame.sampleRate) * 1000;
           session.playoutEndsAt = Math.max(session.playoutEndsAt, Date.now()) + frameMs;
+          session.audibleUntil = session.playoutEndsAt + (session.transport.playoutLatencyMs ?? 0);
           session.turnAudioMs += frameMs;
           chunkAudioMs += frameMs;
         }
@@ -2337,7 +2361,7 @@ export class VoiceRuntime {
       if (session.transport.clearQueuedAudio) {
         try {
           session.transport.clearQueuedAudio();
-          session.playoutEndsAt = Date.now();
+          this.markPlayoutFlushed(session);
         } catch (err) {
           this.log.warn({ sessionId: session.sessionId, err }, 'failed to clear queued audio on caller mute');
         }

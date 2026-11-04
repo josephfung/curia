@@ -47,4 +47,10 @@ export interface AudioTransport {
    * what PulseAudio buffers past pacat, so it leaves this out.
    */
   queuedAudioMs?(): number;
+  /**
+   * How long audio can keep playing after the runtime's real-time playout estimate
+   * runs out, in ms: a buffer past the transport's reach that queuedAudioMs cannot
+   * report. Signal declares PulseAudio's playback buffer. Absent means none.
+   */
+  readonly playoutLatencyMs?: number;
 }

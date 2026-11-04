@@ -1292,6 +1292,15 @@ export function loadYamlConfig(configDir: string): YamlConfig {
 
   resolveIdentityGateMode(config.filter);
 
+  // channels.voice must be a mapping: a scalar or list there makes every read below
+  // undefined, so a bad override would pass and leave onset barge-in on (#2401).
+  // null is left alone: an empty `voice:` key (its children commented out) parses as
+  // null, and refusing to boot over it would be worse than reading the defaults.
+  const voiceSection: unknown = config.channels?.voice;
+  if (voiceSection !== undefined && voiceSection !== null
+    && (typeof voiceSection !== 'object' || Array.isArray(voiceSection))) {
+    throw new Error(`channels.voice must be a YAML mapping, got: ${JSON.stringify(voiceSection)}`);
+  }
   // channels.voice.turn_hold_ms is meant to be set in config/local.yaml (#2379), which
   // is merged but not schema-checked. It becomes a setTimeout delay on every spoken
   // turn, so a string, fraction, negative, or minutes-long value must fail at boot.
