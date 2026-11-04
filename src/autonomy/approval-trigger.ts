@@ -268,6 +268,8 @@ export class ApprovalTriggerService {
      * send when the identity or its name no longer matches (#2047).
      */
     sendResolution?: readonly SendRecipientPin[];
+    /** How long the approval stays answerable. Default 24 hours; a card-use request asks for 30 minutes. */
+    expiresInMs?: number;
   }): Promise<ApprovalRequestResult> {
     const { taskId, conversationId, toolName, actionRisk, input, currentScore, requiredScore } = opts;
     const shown = opts.displayInput ?? input;
@@ -321,7 +323,7 @@ export class ApprovalTriggerService {
     // Sanitize description before storing and sending — the input fields come from
     // LLM-generated skill arguments and may contain dangerous tags.
     const description = sanitizeOutput(buildDescription(toolName, shown));
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
+    const expiresAt = new Date(Date.now() + (opts.expiresInMs ?? 24 * 60 * 60 * 1000)); // default 24h from now
 
     for (let attempt = 1; attempt <= MAX_INSERT_RETRIES; attempt++) {
       shortRef = generateShortRef();

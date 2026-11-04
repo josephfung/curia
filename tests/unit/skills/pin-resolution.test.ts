@@ -168,6 +168,23 @@ describe('resolvePinnedSkills', () => {
     expect(r.toolNames).toEqual([...TASK_TOOLS]);
   });
 
+  it('does not offer a system-only member tool through a bundle pin (#1358)', () => {
+    const tools = new ToolRegistry();
+    tools.register(toolManifest('card-use-request', 'low'), noopHandler);
+    tools.register({ ...toolManifest('card-use-confirm', 'critical'), allowed_callers: ['system'] }, noopHandler);
+    const skills = new SkillRegistry();
+    skills.register({
+      name: 'web',
+      description: 'web',
+      tools: ['card-use-request', 'card-use-confirm'],
+      instructions: '',
+    }, '/tmp/web');
+
+    const r = resolvePinnedSkills(['web'], skills, tools);
+    expect(r.toolNames).toEqual(['card-use-request']);
+    expect(r.unresolvedPins).toEqual([]);
+  });
+
   it('does not flatten per-tool action_risk when expanding calendar', () => {
     const tools = new ToolRegistry();
     tools.register(toolManifest('calendar-list-events', 'none'), noopHandler);

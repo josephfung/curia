@@ -17,7 +17,7 @@
 // before invoking the handler. The handler receives ctx.entityContext[] and
 // never needs to call entity-context itself.
 
-import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus } from './types.js';
+import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, ApprovalVia } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
@@ -187,6 +187,11 @@ const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 // http-request skill) can be added deliberately rather than by manifest edit alone.
 export const SECRET_RESOLVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['web-browser']);
 
+// Saved-card approvals (#1358) — see ctx.cardUse. Hard-allowlisted: declaring `cardUse`
+// elsewhere is refused. dismiss-action may only decline a request; the other two file and
+// confirm it.
+export const CARD_USE_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['card-use-request', 'card-use-confirm', 'dismiss-action']);
+
 // Names-only `user.*` index (#1497) — see ctx.listUserSecretNames.
 // Hard-allowlisted to list-user-secrets: declaring userSecretIndex elsewhere has no effect.
 export const USER_SECRET_INDEX_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['list-user-secrets']);
@@ -224,6 +229,9 @@ export interface InvokeOptions {
    *  All other checks (elevated-skill gate, content filter, blocked-contact) still run.
    *  See ADR-018. */
   humanApproved?: boolean;
+  /** Which approval path is replaying the call (#1358). Set with humanApproved by approve-action
+   *  ('coordinator'), the reaction mapper ('reaction') and console approval ('console'). */
+  approvalVia?: ApprovalVia;
   /**
    * Hinted recipients recorded when the approval was filed. On a humanApproved
    * replay, the send is refused unless each one still resolves to the same
@@ -326,6 +334,7 @@ export class ExecutionLayer {
   private secretsService?: import('../secrets/secrets-service.js').SecretsService;
   // Saved-card use grants (#1358). Unset in unit setups: card fields then fail closed.
   private cardUseRepo?: import('../secrets/card-use-repo.js').CardUseRepo;
+  private cardUseService?: import('../secrets/card-use-service.js').CardUseCapability;
   private executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   private officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
   private browserService?: BrowserService;
@@ -402,6 +411,7 @@ export class ExecutionLayer {
     autonomyService?: AutonomyService;
     secretsService?: import('../secrets/secrets-service.js').SecretsService;
     cardUseRepo?: import('../secrets/card-use-repo.js').CardUseRepo;
+    cardUseService?: import('../secrets/card-use-service.js').CardUseCapability;
     executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
     officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
     browserService?: BrowserService;
@@ -483,6 +493,7 @@ export class ExecutionLayer {
     this.autonomyService = options?.autonomyService;
     this.secretsService = options?.secretsService;
     this.cardUseRepo = options?.cardUseRepo;
+    this.cardUseService = options?.cardUseService;
     this.executiveProfileService = options?.executiveProfileService;
     this.officeIdentityService = options?.officeIdentityService;
     this.browserService = options?.browserService;
@@ -578,6 +589,9 @@ export class ExecutionLayer {
       // Injected as a plain field (default branch in the loop). Listed here so the
       // missing-cap guard fails closed if a skill declares it before it's wired.
       secretCapture: this.secretCaptureService,
+      // cardUse files and confirms saved-card checkout approvals (#1358). Plain field injection,
+      // restricted to CARD_USE_ALLOWED_TOOLS below.
+      cardUse: this.cardUseService,
       // secretResolver injects the by-reference resolver closure (#973), built in the
       // loop below. Backed by secretsService — listed here so the missing-cap guard fails
       // closed when a skill declares the capability but no vault is wired.
@@ -2633,6 +2647,7 @@ export class ExecutionLayer {
       taskEventId: options?.taskEventId,
       conversationId: options?.conversationId,
       humanApproved: options?.humanApproved,
+      approvalVia: options?.humanApproved ? options.approvalVia : undefined,
       channelId: options?.channelId,
       // Pre-construct the memory write source key so skills pass a rate-limit-compatible
       // source to entityMemory.storeFact(). This key matches the format that
@@ -2758,6 +2773,21 @@ export class ExecutionLayer {
         success: false,
         error: this.wrapSkillError(
           `Tool '${toolName}' declares capability 'secretResolver' but is not on the resolver allowlist`,
+        ),
+      };
+    }
+
+    // Hard-restrict cardUse to the allowlist (#1358): it files and settles the principal's
+    // per-checkout card approvals.
+    if (caps.includes('cardUse') && !CARD_USE_ALLOWED_TOOLS.has(manifest.name)) {
+      skillLogger.error(
+        { toolName, manifestName: manifest.name },
+        'SECURITY: cardUse capability is restricted to an allowlist — refusing to run skill',
+      );
+      return {
+        success: false,
+        error: this.wrapSkillError(
+          `Tool '${toolName}' declares capability 'cardUse' but is not on the card-use allowlist`,
         ),
       };
     }

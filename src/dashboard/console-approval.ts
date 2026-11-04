@@ -16,6 +16,7 @@ import type { TaskOriginator } from '../contacts/types.js';
 import type { Logger } from '../logger.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import { STALE_SEND_APPROVAL_ERROR } from '../skills/_shared/recipient-reference.js';
+import { cardUseRequestIdOf, type CardUseCapability } from '../secrets/card-use-service.js';
 import { approvalNeedsDraft, approvalReviewSummary, mailboxDraftRef } from './briefing.js';
 
 export type ApprovalOutcome =
@@ -48,6 +49,8 @@ export interface ConsoleApprovalDeps {
   actionLogRepo: Pick<ActionLogRepo, 'resolveRow' | 'rejectStaleApproval' | 'insert'>;
   executionLayer?: Pick<ExecutionLayer, 'invoke' | 'confirmPinnedSendResolution'>;
   disclosureDecisions?: Pick<DisclosureDecisionRecorder, 'recordForApproval'>;
+  /** Settles a denied card-use request and resumes its conversation (#1358). */
+  cardUse?: Pick<CardUseCapability, 'decline'>;
   deleteMailboxDraft?: (account: string | undefined, draftId: string) => Promise<void>;
   /** Reads a held send-draft, searching every mailbox when account is omitted. */
   loadHeldDraft?: (account: string | undefined, draftId: string) => Promise<HeldDraftView | null>;
@@ -170,6 +173,21 @@ async function rememberDisclosure(
   await deps.disclosureDecisions.recordForApproval(row, decision, 'principal_via_coordinator');
 }
 
+/** A denied card checkout: no grant, and the agent is resumed with "declined" (#1358). */
+async function declineCardUse(deps: ConsoleApprovalDeps, row: ActionLogRow): Promise<void> {
+  const requestId = cardUseRequestIdOf(row);
+  if (requestId === null) return;
+  if (!deps.cardUse) {
+    deps.logger.error({ rowId: row.id, requestId }, 'console-approval: cardUse not wired — the denied card request is not settled');
+    return;
+  }
+  try {
+    await deps.cardUse.decline(requestId);
+  } catch (err) {
+    deps.logger.error({ err, rowId: row.id, requestId }, 'console-approval: failed to settle the denied card-use request');
+  }
+}
+
 export interface ApproveOptions {
   /** True only after the console rendered the review text for this row. */
   shown?: boolean;
@@ -231,6 +249,7 @@ export async function approveFromConsole(
     { contactId: deps.principalContactId, role: 'ceo', channel: 'web' },
     {
       humanApproved: true,
+      approvalVia: 'console',
       sendResolution: pins ?? undefined,
       conversationId: row.conversationId ?? undefined,
       taskEventId: row.taskId,
@@ -290,6 +309,7 @@ export async function denyFromConsole(
   }
 
   await rememberDisclosure(deps, row, 'no', false);
+  await declineCardUse(deps, row);
   await publishDecision(deps, row, 'deny');
   deps.logger.info({ rowId: row.id, draftDeleted: draft !== null }, 'console-approval: denied');
   return { ok: true, sent: false };

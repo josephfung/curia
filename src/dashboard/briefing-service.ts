@@ -109,6 +109,7 @@ export interface BriefingDeps {
   contactService: Pick<ContactService, 'findContactBySystemRole'>;
   executionLayer?: Pick<ExecutionLayer, 'invoke' | 'confirmPinnedSendResolution'>;
   disclosureDecisions?: Pick<DisclosureDecisionRecorder, 'recordForApproval'>;
+  cardUse?: Pick<import('../secrets/card-use-service.js').CardUseCapability, 'decline'>;
   deleteMailboxDraft?: (account: string | undefined, draftId: string) => Promise<void>;
   loadHeldDraft?: (account: string | undefined, draftId: string) => Promise<HeldDraftView | null>;
   bus?: Pick<EventBus, 'publish'>;

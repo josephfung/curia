@@ -11,6 +11,7 @@ import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import type { DisclosureDecisionRecorder } from '../../../src/autonomy/disclosure-decisions.js';
 import type { EventBus } from '../../../src/bus/bus.js';
+import type { CardUseCapability } from '../../../src/secrets/card-use-service.js';
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import { createSilentLogger } from '../../../src/logger.js';
 import type { Logger } from '../../../src/logger.js';
@@ -257,6 +258,65 @@ describe('ReactionApprovalMapper', () => {
         payload: expect.objectContaining({ decision: 'deny' }),
       }),
     );
+  });
+
+  describe('card-use confirmations (#1358)', () => {
+    const cardRow = () => makeRow({ toolName: 'card-use-confirm', payload: { request_id: 'req-1' } });
+    let decline: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      decline = vi.fn().mockResolvedValue(undefined);
+      mapper = new ReactionApprovalMapper({
+        bus: bus as unknown as EventBus,
+        logger: createSilentLogger(),
+        actionLogRepo: actionLogRepo as unknown as ActionLogRepo,
+        contactService: contactService as unknown as ContactService,
+        executionLayer: executionLayer as unknown as ExecutionLayer,
+        principalIdentities: [makePrincipal('slack', 'U_CEO')],
+        cardUse: { decline } as unknown as CardUseCapability,
+      });
+    });
+
+    const react = (emoji: string) => mapper.handleReaction(createInboundReaction({
+      conversationId: 'slack:D123',
+      channelId: 'slack',
+      senderId: 'U_CEO',
+      emoji,
+      targetMessageId: '1710000000.000100',
+    }));
+
+    it('replays an approved confirmation as approvalVia reaction', async () => {
+      actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(cardRow());
+      await react('thumbsup');
+      expect(executionLayer.invoke).toHaveBeenCalledWith(
+        'card-use-confirm',
+        { request_id: 'req-1' },
+        expect.anything(),
+        expect.objectContaining({ humanApproved: true, approvalVia: 'reaction' }),
+      );
+      expect(decline).not.toHaveBeenCalled();
+    });
+
+    it('declines the card-use request and resumes when the principal reacts 👎', async () => {
+      actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(cardRow());
+      await react('thumbsdown');
+      expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'denied', 'principal');
+      expect(decline).toHaveBeenCalledWith('req-1');
+      expect(executionLayer.invoke).not.toHaveBeenCalled();
+    });
+
+    it('does not decline when the row was already resolved', async () => {
+      actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(cardRow());
+      actionLogRepo.resolveRow.mockResolvedValue(false);
+      await react('thumbsdown');
+      expect(decline).not.toHaveBeenCalled();
+    });
+
+    it('does not decline for an unrelated row', async () => {
+      actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(makeRow());
+      await react('thumbsdown');
+      expect(decline).not.toHaveBeenCalled();
+    });
   });
 
   it('still resolves + publishes when re-execution fails (invoke returns success:false)', async () => {

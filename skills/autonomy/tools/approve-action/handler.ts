@@ -17,6 +17,7 @@ import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipi
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 import { hasPersonalDetails, UNSHOWN_PERSONAL_DETAILS_ERROR } from '../../../../src/autonomy/approval-notification.js';
+import { CARD_USE_CONFIRM_TOOL, SAME_TURN_CARD_USE_ERROR, UNSHOWN_CARD_USE_ERROR } from '../../../../src/secrets/card-use-service.js';
 
 export { UNSHOWN_PERSONAL_DETAILS_ERROR };
 
@@ -69,6 +70,21 @@ export class ApproveActionHandler implements ToolHandler {
         return { success: false, error: UNSHOWN_PERSONAL_DETAILS_ERROR };
       }
 
+      // A card checkout is the principal's call alone (#1358). The coordinator can neither approve
+      // one the principal was never shown, nor one it filed in this very turn, even when the
+      // principal's message already said "buy it with my Visa". Refused, not resolved: the row
+      // stays pending for a later message.
+      if (row.toolName === CARD_USE_CONFIRM_TOOL) {
+        if (row.notificationSentAt === null) {
+          ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: undelivered card-use approval — refusing until it is delivered');
+          return { success: false, error: UNSHOWN_CARD_USE_ERROR };
+        }
+        if (row.taskId === ctx.taskEventId) {
+          ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: card-use approval requested in this turn — refusing');
+          return { success: false, error: SAME_TURN_CARD_USE_ERROR };
+        }
+      }
+
       const pins = row.sendResolution;
       if (pins && pins.length > 0) {
         const still = await ctx.executionLayer.confirmPinnedSendResolution(row.toolName, pins);
@@ -118,9 +134,14 @@ export class ApproveActionHandler implements ToolHandler {
         ctx.caller,
         {
           humanApproved: true,
+          approvalVia: 'coordinator',
           sendResolution: pins ?? undefined,
           taskEventId: ctx.taskEventId,
-          conversationId: row.conversationId ?? undefined,
+          // A card-use replay compares the approving conversation with the requesting one to
+          // decide whether this turn continues the checkout or the originator is resumed (#1358).
+          conversationId: row.toolName === CARD_USE_CONFIRM_TOOL
+            ? ctx.conversationId
+            : row.conversationId ?? undefined,
           taskMetadata: ctx.taskMetadata,
         },
       );

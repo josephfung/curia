@@ -1,7 +1,7 @@
 {
   "name": "dismiss-action",
   "description": "Dismiss a pending approval request because the principal handled the action outside Curia (e.g. created the calendar event directly). Specify short_ref to target a specific request, or omit when only one is pending. Approvals ('Approval N') only, not learning items ('task N').",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "sensitivity": "elevated",
   "action_risk": "none",
   "inputs": {
@@ -14,5 +14,6 @@
   "secrets": [],
   "timeout": 15000,
   "capabilities": ["bus", "actionLogRepo"],
+  "optional_capabilities": ["cardUse"],
   "allowed_callers": ["coordinator"]
 }

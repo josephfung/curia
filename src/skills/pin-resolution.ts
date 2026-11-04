@@ -46,6 +46,12 @@ export interface PinResolution {
   unresolvedPins: UnresolvedPin[];
 }
 
+/** True when allowed_callers is exactly ["system"]: no agent can ever call the tool. */
+function isSystemOnlyTool(toolRegistry: ToolRegistry, name: string): boolean {
+  const allowed = toolRegistry.get(name)?.manifest.allowed_callers;
+  return allowed !== undefined && allowed.length === 1 && allowed[0] === 'system';
+}
+
 /**
  * Resolve an agent's pinned_skills list against SkillRegistry + ToolRegistry.
  *
@@ -92,6 +98,9 @@ export function resolvePinnedSkills(
       resolvedPins.push({ pin, kind: 'skill' });
       const missingTools: string[] = [];
       for (const t of skill.manifest.tools) {
+        // A tool only the system may call (allowed_callers: ["system"]) is never offered to an
+        // agent through a bundle. card-use-confirm lives in `web` so it ships with its siblings.
+        if (isSystemOnlyTool(toolRegistry, t)) continue;
         if (!pushTool(t, pin)) missingTools.push(t);
       }
       if (missingTools.length > 0) {

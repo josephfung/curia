@@ -96,6 +96,39 @@ describe('denyFromConsole', () => {
   });
 });
 
+describe('card-use confirmations from the console (#1358)', () => {
+  const cardRow = () => row({ toolName: 'card-use-confirm', payload: { request_id: 'req-1' } });
+
+  it('replays an approved confirmation as approvalVia console', async () => {
+    const d = deps();
+    await approveFromConsole(cardRow(), d);
+    expect(d.executionLayer!.invoke).toHaveBeenCalledWith(
+      'card-use-confirm',
+      { request_id: 'req-1' },
+      expect.anything(),
+      expect.objectContaining({ humanApproved: true, approvalVia: 'console' }),
+    );
+  });
+
+  it('declines the card-use request when the principal denies it', async () => {
+    const decline = vi.fn(async () => undefined);
+    const d = deps({ cardUse: { decline } });
+    const result = await denyFromConsole(cardRow(), d);
+    expect(result).toEqual({ ok: true, sent: false });
+    expect(decline).toHaveBeenCalledWith('req-1');
+    expect(d.executionLayer!.invoke).not.toHaveBeenCalled();
+  });
+
+  it('does not decline when the row was no longer waiting', async () => {
+    const decline = vi.fn(async () => undefined);
+    const d = deps({ cardUse: { decline } });
+    (d.actionLogRepo.resolveRow as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    const result = await denyFromConsole(cardRow(), d);
+    expect(result.ok).toBe(false);
+    expect(decline).not.toHaveBeenCalled();
+  });
+});
+
 describe('approveFromConsole', () => {
   it('resolves as console and re-runs the blocked tool', async () => {
     const d = deps();

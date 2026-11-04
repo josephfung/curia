@@ -61,7 +61,7 @@ export interface ToolManifest {
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
-   *  taskRepo, workingDocs, secretCapture, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
+   *  taskRepo, workingDocs, secretCapture, cardUse, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
    *  voiceSessions, phoneAppReady, emailChannelStatus, curiaEmailAddresses.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
@@ -150,6 +150,9 @@ export interface AgentPersona {
   emailSignature?: string;
 }
 
+/** How the principal's approval reached an approval replay (#1358). */
+export type ApprovalVia = 'coordinator' | 'reaction' | 'console';
+
 /**
  * The sandboxed context passed to every skill invocation.
  * Skills cannot access the bus, database, or filesystem directly —
@@ -227,6 +230,8 @@ export interface ToolContext {
   conversationId?: string;
   /** True when re-invoked after principal approval via approve-action (ADR-018, #201). */
   humanApproved?: boolean;
+  /** Which approval path replayed this call (#1358). Set only alongside humanApproved. */
+  approvalVia?: ApprovalVia;
   /** Channel ID from the originating task event (e.g. "http", "internal", "signal").
    *  Used with agentId and taskEventId to construct the memory write source key. */
   channelId?: string;
@@ -358,6 +363,10 @@ export interface ToolContext {
    *  a MINT-ONLY surface: there is no method that returns a stored secret value, so the
    *  "LLM never sees secrets" guarantee is structural rather than prompt-enforced. */
   secretCapture?: import('../secrets/secret-capture-service.js').SecretCaptureMinter;
+  /** Saved-card use (#1358) — available to skills declaring 'cardUse' that are on the
+   *  execution-layer allowlist. Files and confirms the principal's per-checkout approval;
+   *  no method returns card material. */
+  cardUse?: import('../secrets/card-use-service.js').CardUseCapability;
   /** Resolve a `user.*` secret by reference at runtime — available only to skills declaring
    *  'secretResolver' in capabilities AND on the execution-layer allowlist (#973). Unlike
    *  ctx.secret() (which is restricted to manifest-declared static names), this resolves

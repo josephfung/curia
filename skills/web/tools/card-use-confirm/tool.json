@@ -1,0 +1,20 @@
+{
+  "name": "card-use-confirm",
+  "description": "Internal. Runs only when the principal approves a card-use request, by reply, reaction or console; it refuses any other call. Writes the grant that lets one saved card be filled at one checkout. Not for agents to call.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "critical",
+  "inputs": {
+    "request_id": "string (the card-use request this approval answers)"
+  },
+  "outputs": {
+    "outcome": "string (approved, expired or already_resolved)",
+    "resumed": "boolean",
+    "message": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["cardUse"],
+  "allowed_callers": ["system"]
+}

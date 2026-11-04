@@ -28,6 +28,7 @@ import type { EventBus } from '../bus/bus.js';
 import { createPrincipalReport } from '../bus/events.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { ActionLogRow } from './action-log-types.js';
+import { cardUseRequestIdOf, type CardUseCapability } from '../secrets/card-use-service.js';
 import type { ApprovalChannel, ApprovalDelivery, DeliverResult } from './approval-delivery.js';
 
 export interface ApprovalExpirySweepOptions {
@@ -35,6 +36,8 @@ export interface ApprovalExpirySweepOptions {
   bus: Pick<EventBus, 'publish'>;
   /** Absent without an outbound stack: the safety-net pass is skipped. */
   approvalDelivery?: Pick<ApprovalDelivery, 'deliver' | 'availableChannels'>;
+  /** Settles an expired card-use request and resumes its conversation (#1358). */
+  cardUse?: Pick<CardUseCapability, 'decline'>;
   logger: Logger;
   intervalMinutes: number;
   /** How long an approval may wait undelivered before the safety net sends it. Default 15. */
@@ -143,6 +146,7 @@ export class ApprovalExpirySweep {
       );
     }
 
+    await this.declineCardUseRequests(actuallyExpired);
     const notified = await this.queueReports(actuallyExpired);
 
     const result = { expired: actuallyExpired.length, notified, safetyNetDelivered };
@@ -217,6 +221,26 @@ export class ApprovalExpirySweep {
     }
     // `order` always has email, so the loop ran at least once.
     return result as DeliverResult;
+  }
+
+  /**
+   * An expired card-use approval leaves its request pending; settle it as expired and resume
+   * the conversation (#1358). A failure on one row is logged and does not stop the others.
+   */
+  private async declineCardUseRequests(rows: ActionLogRow[]): Promise<void> {
+    for (const r of rows) {
+      const requestId = cardUseRequestIdOf(r);
+      if (requestId === null) continue;
+      if (!this.opts.cardUse) {
+        this.opts.logger.error({ id: r.id, requestId }, 'ApprovalExpirySweep: cardUse not wired — the expired card request is not settled');
+        continue;
+      }
+      try {
+        await this.opts.cardUse.decline(requestId, 'expired');
+      } catch (err) {
+        this.opts.logger.error({ err, id: r.id, requestId }, 'ApprovalExpirySweep: failed to settle the expired card-use request');
+      }
+    }
   }
 
   /** Queue one digest item per expired row. Returns how many were queued. */
