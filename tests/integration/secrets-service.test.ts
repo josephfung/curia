@@ -273,6 +273,23 @@ describeIf('SecretsService', () => {
       expect(await service.getCardPublic(n)).toEqual({ label: 'Keep', publicFields: nextPub });
     });
 
+    it('a CVV replace racing a full replace never mixes old number with new cvv', async () => {
+      const next: CreditCardSecretDoc = { _schema: 'credit_card', number: '5555555555554444', cvv: '321' };
+      const nextPub: CreditCardPublicFields = { ...PUB, brand: 'mastercard', last4: '4444' };
+      for (let i = 0; i < 10; i++) {
+        const n = `${P}race${i}`;
+        await service.setCard(n, SECRET, PUB, null);
+        await Promise.all([
+          service.replaceCardSecret(n, { cvv: '999' }),
+          service.replaceCardSecret(n, { secret: next, publicFields: nextPub }),
+        ]);
+        const doc = await service.getCardSecret(n);
+        // Either order is fine; the old number surviving means the cvv write used a stale read.
+        expect(doc.number).toBe(next.number);
+        expect(['321', '999']).toContain(doc.cvv);
+      }
+    });
+
     it('getCardSecret refuses a non-card secret', async () => {
       const n = `${P}notcard`;
       await service.setJSON(n, { hello: 'world' });

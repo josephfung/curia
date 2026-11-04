@@ -255,8 +255,18 @@ export class SecretsService {
   ): Promise<void> {
     assertUserKey(name);
     if ('cvv' in change) {
-      const current = await this.getCardSecret(name);
-      await this.writeJson(this.pool, name, { ...current, cvv: change.cvv });
+      // Read-modify-write under a row lock, so a racing replace cannot be overwritten
+      // with the number this call read before it.
+      await this.inTransaction(async client => {
+        const row = (await client.query<{ encrypted_value: string; iv: string; value_format: ValueFormat }>(
+          'SELECT encrypted_value, iv, value_format FROM secrets WHERE name = $1 FOR UPDATE',
+          [name],
+        )).rows[0];
+        if (!row || row.value_format !== 'json') throw new Error(`Secret '${name}' is not a credit_card`);
+        const doc = JSON.parse(decrypt(row.encrypted_value, row.iv, this.key)) as { _schema?: unknown };
+        if (doc._schema !== 'credit_card') throw new Error(`Secret '${name}' is not a credit_card`);
+        await this.writeJson(client, name, { ...(doc as unknown as CreditCardSecretDoc), cvv: change.cvv });
+      });
       return;
     }
     await this.inTransaction(async client => {

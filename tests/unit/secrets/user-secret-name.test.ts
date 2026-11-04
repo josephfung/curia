@@ -251,6 +251,10 @@ describe('consoleSecretNameInput + resolveUserSecretName', () => {
 });
 
 describe('card type token', () => {
+  it('fingerprints card as the type, not identity', () => {
+    expect(fingerprintUserSecret('personal visa card')).toEqual({ identity: ['personal', 'visa'], type: 'card' });
+  });
+
   it('names cards by owner and brand', () => {
     expect(resolveUserSecretName('personal visa card', [])).toBe('user.personal_visa_card');
     expect(resolveUserSecretName('work visa card', [])).toBe('user.work_visa_card');
