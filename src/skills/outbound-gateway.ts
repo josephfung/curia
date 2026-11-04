@@ -81,7 +81,7 @@ import {
 import { OutboundQueueFullError, type OutboundQueueRepo } from './outbound-queue-repo.js';
 import type { ExportItem } from '../security/export-controls.js';
 import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
-import { describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/resolved-entities.js';
+import { blankExactPhrases, describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/resolved-entities.js';
 import type { IdentityGateMode } from '../config.js';
 import type { ErrorType } from '../errors/types.js';
 import type { CallBudget } from '../util/call-budget.js';
@@ -3093,9 +3093,6 @@ export class OutboundGateway {
     if (!taskEventId || !state.turnIdentities.has(taskEventId)) return null;
 
     const covered: string[] = [...state.principalNames];
-    // Curia's own name and title, as it signs a reply ("Alex Curia, Digital EA"): its
-    // signature is not a person to resolve (#2192). Live: index.ts updates it on hot-reload.
-    if (this.agentPersona) covered.push(this.agentPersona.displayName, this.agentPersona.title);
     for (const card of state.turnIdentities.get(taskEventId)) {
       covered.push(card.displayName);
       if (card.preferredName) covered.push(card.preferredName);
@@ -3130,11 +3127,15 @@ export class OutboundGateway {
       );
     }
 
+    // Curia's own name and title, as it signs a reply ("Alex Curia, Digital EA"), are not a
+    // person to resolve (#2192). Exempt only in full: as covered names they would also cover a
+    // guest who shares the first name ("Alex"). Live: index.ts updates it on hot-reload.
+    const own = this.agentPersona ? [this.agentPersona.displayName, this.agentPersona.title] : [];
     // Subject is hedges-only. A Title Case subject must not block a clean body.
     return describeUnresolvedIdentity(
       request.channel === 'email'
-        ? { body: request.body, subject: request.subject }
-        : { body: request.message },
+        ? { body: blankExactPhrases(request.body, own), subject: request.subject }
+        : { body: blankExactPhrases(request.message, own) },
       covered,
     );
   }

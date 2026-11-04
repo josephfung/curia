@@ -221,6 +221,22 @@ export function formatResolvedEntitiesBlock(
   return assemble(header, lines);
 }
 
+/**
+ * `text` with each exact, whole-word occurrence of `phrases` blanked (same length, so
+ * positions and line breaks are kept). For names that are exempt only in full, such as
+ * Curia's own signature: "Alex Curia" is blanked, a lone "Alex" is still scanned (#2192).
+ */
+export function blankExactPhrases(text: string, phrases: readonly string[]): string {
+  let out = text;
+  for (const phrase of phrases) {
+    const p = phrase.trim();
+    if (p === '') continue;
+    const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'gu'), m => m.replace(/\S/g, ' '));
+  }
+  return out;
+}
+
 export interface IdentityScan {
   /** Message body. Person-shaped mentions are taken from here only. */
   body: string;

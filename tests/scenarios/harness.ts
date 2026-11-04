@@ -1356,7 +1356,7 @@ export async function createScenarioHarness(
         ...(outcome.principalNote !== undefined ? { principalNote: outcome.principalNote } : {}),
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),
         durationMs: Date.now() - started,
-        unstubbedCalls: countHoles(merged),
+        unstubbedCalls: countRunHoles(merged, stubbedCalls),
         ...(error ? { error } : {}),
         ...(timeoutKind ? { timeoutKind } : {}),
         ...(injectionDrainPoints !== undefined ? { injectionDrainPoints: [...injectionDrainPoints] } : {}),
@@ -1440,6 +1440,18 @@ export function countHoles(calls: CapturedToolCall[]): number {
   // up front (see mustStub's `unavailable`), so they land here as refusals. An
   // unstubbed snapshot MCP call got an empty stand-in result the case never chose (#2024).
   return calls.filter(c => c.disposition === 'refused' || c.disposition === 'canned').length;
+}
+
+/**
+ * The run's holes: those among the observed calls, plus stub-layer refusals and canned
+ * answers no observed call matches. A bounced relay's rewrite turn is not captured (its
+ * outcome has calls: []), so its holes exist only in the stub layer's record (#2192).
+ */
+export function countRunHoles(merged: CapturedToolCall[], stubbed: readonly StubbedCall[]): number {
+  const observed = new Set(merged.map(c => c.invokeEventId).filter((id): id is string => !!id));
+  const unobserved = stubbed.filter(s =>
+    (s.disposition === 'refused' || s.disposition === 'canned') && !(s.invokeEventId && observed.has(s.invokeEventId)));
+  return countHoles(merged) + unobserved.length;
 }
 
 /** The metadata the email adapter attaches, minus anything a scenario cannot know. */

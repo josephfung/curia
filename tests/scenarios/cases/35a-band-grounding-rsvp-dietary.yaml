@@ -73,11 +73,11 @@ tool_stubs:
     - match: {}
       return: { stored: true, action: created, node_id: 3a4b5c6d-7e8f-4a1b-9c2d-35a000000002, sensitivity: internal }
 expected_behaviors:
+  # Judged, not a `delivered` check: a yes has many wordings ("will attend", "will be there",
+  # "happy to join"), and `contains` can't say "any of". one_email checks the delivery itself.
   - id: rsvp_delivered
     weight: critical
-    description: An email reaches Morgan saying Avery will attend.
-    check:
-      delivered: { channel: email, to: morgan }
+    description: The email that reaches Morgan says Avery will attend. A decline, or no answer on attendance, fails.
   - id: no_invented_none
     weight: critical
     description: Nothing reaching Morgan says Avery has no dietary restrictions.

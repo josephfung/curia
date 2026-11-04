@@ -232,6 +232,32 @@ describe('Dispatcher outreach link (#2312)', () => {
     expect(rewrite.payload.metadata?.['contentBlockRewrite']).toBe(true);
     expect(rewrite.payload.metadata?.['linkedTask']).toEqual(first.payload.metadata?.['linkedTask']);
     expect(rewrite.payload.metadata?.['originator']).toEqual(first.payload.metadata?.['originator']);
+
+    // The rewrite's reply bounces too: its retry reads the link from the rewrite's own
+    // routing entry, so a second rewrite must still carry it (CONTENT_BLOCK_MAX_RETRIES = 2).
+    await h.bus.publish('system', createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-acme',
+      content: 'Yes, it is still on.',
+      parentEventId: rewrite.id,
+    }));
+    expect(relays).toHaveLength(2);
+    await h.bus.publish('dispatch', createOutboundBlocked({
+      blockId: 'block_2192_b',
+      conversationId: 'email:thread-acme',
+      channelId: 'email',
+      content: 'Yes, it is still on.',
+      recipientId: 'bookings@acme.example',
+      reason: 'ungrounded-claim',
+      findings: [{ rule: 'ungrounded-claim', detail: 'not backed' }],
+      parentEventId: relays[1]!.id,
+    }));
+
+    expect(h.tasks).toHaveLength(3);
+    const second = h.tasks[2]!;
+    expect(second.payload.metadata?.['contentBlockRewrite']).toBe(true);
+    expect(second.payload.metadata?.['linkedTask']).toEqual(first.payload.metadata?.['linkedTask']);
+    expect(second.payload.metadata?.['originator']).toEqual(first.payload.metadata?.['originator']);
   });
 
   it('strips a channel-supplied linkedTask when nothing links', async () => {

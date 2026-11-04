@@ -117,7 +117,8 @@ describe('buildBriefUserPrompt', () => {
 
   // #2192: "the review is still on" bounced on a reply linked to the principal's own open task.
   it('lets a principal-originated task support that the principal still wants that work, and nothing more', () => {
-    expect(BRIEF_SYSTEM_PROMPT).toContain('whose originator has systemRole "principal" (boundTask, rootTask, or a linkedTask with strength "strong") supports that the principal asked for that work and still wants it done');
+    // A strong link's root counts too, as band-send-review.ts linkToPrincipalTask does.
+    expect(BRIEF_SYSTEM_PROMPT).toContain('whose originator, or the originator of its root, has systemRole "principal" (boundTask, rootTask, or a linkedTask with strength "strong") supports that the principal asked for that work and still wants it done');
     expect(BRIEF_SYSTEM_PROMPT).toContain('it supports nothing more, such as a time, a reason or another fact.');
     expect(BRIEF_SYSTEM_PROMPT).toContain('Saying that work the principal asked for is still wanted or still on is supported when a principal-originated task for it is in the authority block');
   });

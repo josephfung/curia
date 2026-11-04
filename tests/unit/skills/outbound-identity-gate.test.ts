@@ -113,6 +113,41 @@ describe('outbound identity gate (#1818)', () => {
     expect(nylasClient.sendMessage).toHaveBeenCalledOnce();
   });
 
+  it('still blocks an unresolved person when a persona is configured', async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    const { gw, nylasClient } = gateway(entities, { agentPersona: { displayName: 'Alex Curia', title: 'Digital EA' } });
+
+    const result = await gw.send({
+      channel: 'email',
+      to: 'dani@wrcf.ca',
+      subject: 'Registration',
+      body: 'He and Xiaopu (last name to be confirmed) would like to attend.',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    expect(result.success).toBe(false);
+    expect(result.blockedRules).toEqual(['unresolved-identity']);
+    expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  // Only the full persona name is exempt: a guest who shares its first name is still a person.
+  it("blocks a guest who shares the persona's first name, while the full signature passes", async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    const { gw, nylasClient } = gateway(entities, { agentPersona: { displayName: 'Alex Curia', title: 'Digital EA' } });
+
+    const result = await gw.send({
+      channel: 'email',
+      to: 'dani@wrcf.ca',
+      subject: 'RSVP',
+      body: 'Joseph Fung will attend with Alex.\nBest,\nAlex Curia\nDigital EA',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    expect(result.success).toBe(false);
+    expect(result.blockedRules).toEqual(['unresolved-identity']);
+    expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
   it('names the unresolved words in the blocked event, so a relayed reply\'s rewrite can fix them (#2192)', async () => {
     const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
     entities.turnIdentities.begin(TASK);
