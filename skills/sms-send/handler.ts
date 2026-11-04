@@ -15,6 +15,7 @@ import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
 import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../src/skills/_shared/principal-directed.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
+  derivedAddressData,
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../src/skills/_shared/recipient-reference.js';
@@ -134,6 +135,8 @@ export class SmsSendHandler implements ToolHandler {
           ...(contactId ? { contact_id: contactId } : {}),
           ...(identityName ? { recipient_identity: identityName } : {}),
           channel: 'sms',
+          // A number verified on another phone-family channel (#2447): delivery unconfirmed.
+          ...derivedAddressData(resolved, 'sms'),
           // Held by the relay budget for the principal's digest (#1320).
           ...relayDeferredData(result),
           // Details the gateway removed before sending (#2312).

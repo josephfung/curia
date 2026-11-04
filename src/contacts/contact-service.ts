@@ -1277,6 +1277,19 @@ export class ContactService {
       throw new Error('Cannot force-verify a self_claimed identity — principal confirmation required');
     }
 
+    // A derived row always names its source row, and only a derived row has one (#2447).
+    if ((options.source === 'derived') !== (options.derivedFromIdentityId !== undefined)) {
+      throw new Error('derivedFromIdentityId is required for, and only allowed on, a derived identity');
+    }
+    // ...and that source is on the same contact: defunct propagates down the derivation
+    // tree without regard to contact, so a foreign link would reach another contact's row.
+    if (options.derivedFromIdentityId !== undefined) {
+      const source = await this.backend.getIdentity(options.derivedFromIdentityId);
+      if (source?.contactId !== options.contactId) {
+        throw new Error('derivedFromIdentityId must name an identity on the same contact');
+      }
+    }
+
     // Normalize email addresses to lowercase for case-insensitive matching.
     // RFC 5321 allows case-sensitive local-parts, but in practice no major
     // provider enforces this — storing mixed-case causes lookup misses when
@@ -1295,6 +1308,7 @@ export class ContactService {
       verifiedAt: verified ? now : null,
       status: options.status ?? 'active',
       source: options.source,
+      derivedFromIdentityId: options.derivedFromIdentityId ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -2656,8 +2670,9 @@ class PostgresContactBackend implements ContactServiceBackend {
     );
     await this.pool.query(
       `INSERT INTO contact_channel_identities
-         (id, contact_id, channel, channel_identifier, label, verified, verified_at, source, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+         (id, contact_id, channel, channel_identifier, label, verified, verified_at, source, status, created_at, updated_at,
+          derived_from_identity_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         identity.id,
         identity.contactId,
@@ -2670,6 +2685,7 @@ class PostgresContactBackend implements ContactServiceBackend {
         identity.status,
         identity.createdAt,
         identity.updatedAt,
+        identity.derivedFromIdentityId ?? null,
       ],
     );
   }
@@ -2688,7 +2704,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id
        FROM contact_channel_identities WHERE id = $1`,
       [identityId],
     );
@@ -2710,7 +2726,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id
        FROM contact_channel_identities WHERE contact_id = $1 ORDER BY created_at ASC`,
       [contactId],
     );
@@ -2733,7 +2749,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id
        FROM contact_channel_identities WHERE channel = ANY($1::text[])`,
       [channels],
     );
@@ -2857,14 +2873,27 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `UPDATE contact_channel_identities
+      // A defunct number is defunct on every channel, so every row derived from it,
+      // directly or through another derived row, goes with it (#2447): left active, a
+      // send could still pick them. Reactivating the source brings back the descendants
+      // that are defunct, which a derivation would otherwise skip for good. Bounced
+      // stays per-row: a delivery failure can be specific to one channel.
+      `WITH RECURSIVE descendants AS (
+         SELECT id FROM contact_channel_identities WHERE derived_from_identity_id = $2
+         UNION
+         SELECT child.id FROM contact_channel_identities child
+         JOIN descendants parent ON child.derived_from_identity_id = parent.id
+       )
+       UPDATE contact_channel_identities
        SET status = $1, updated_at = now()
        WHERE id = $2
-       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at`,
+          OR (id IN (SELECT id FROM descendants)
+              AND ($1 = 'defunct' OR ($1 = 'active' AND status = 'defunct')))
+       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id`,
       [status, identityId],
     );
 
-    const row = result.rows[0];
+    const row = result.rows.find((candidate) => candidate.id === identityId);
     if (!row) {
       throw new IdentityNotFoundError(identityId);
     }
@@ -2891,7 +2920,7 @@ class PostgresContactBackend implements ContactServiceBackend {
            verified_at = COALESCE(verified_at, now()),
            updated_at = now()
        WHERE id = $1
-       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at`,
+       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at, derived_from_identity_id`,
       [identityId],
     );
 
@@ -3496,6 +3525,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     source: string;
     created_at: Date;
     updated_at: Date;
+    derived_from_identity_id?: string | null;
   }): ChannelIdentity {
     return {
       id: row.id,
@@ -3507,6 +3537,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       verifiedAt: row.verified_at,
       status: row.status as IdentityStatus,
       source: row.source as IdentitySource,
+      derivedFromIdentityId: row.derived_from_identity_id ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -3776,12 +3807,26 @@ class InMemoryContactBackend implements ContactServiceBackend {
     if (!identity) {
       throw new IdentityNotFoundError(identityId);
     }
-    const updated: ChannelIdentity = {
-      ...identity,
-      status,
-      updatedAt: new Date(),
-    };
+    const updatedAt = new Date();
+    const updated: ChannelIdentity = { ...identity, status, updatedAt };
     this.identities.set(identityId, updated);
+    // Same rule as the Postgres backend: defunct reaches every row derived from this
+    // one, directly or through another derived row, and active brings back the
+    // descendants that are defunct.
+    const descendants = new Set<string>();
+    for (let frontier = [identityId]; frontier.length > 0;) {
+      const parents = new Set(frontier);
+      frontier = [...this.identities.values()]
+        .filter((other) => other.derivedFromIdentityId != null && parents.has(other.derivedFromIdentityId) && !descendants.has(other.id))
+        .map((other) => other.id);
+      for (const id of frontier) descendants.add(id);
+    }
+    for (const id of descendants) {
+      const other = this.identities.get(id)!;
+      if (status === 'defunct' || (status === 'active' && other.status === 'defunct')) {
+        this.identities.set(id, { ...other, status, updatedAt });
+      }
+    }
     return updated;
   }
 

@@ -284,6 +284,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Phone-family identities** — a number verified on phone, SMS or Signal works on the others, flagged unconfirmed. (#2447)
 - **Setup wizard routing line** — shorter, so the coordinator's specialist roster fits curia-deploy's budget again. (#2466)
 - **Console secret rows** — a configured key can be replaced in place. (#2445)
 - **Phone app icon** — white mark on near-black, so it stays legible in iOS dark mode. (#2341)
