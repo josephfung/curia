@@ -7,6 +7,7 @@ import {
   PRINCIPAL_RECIPIENT_ALIAS,
   RECIPIENT_REFERENCE_SKILLS,
   addressOrReferenceError,
+  derivedAddressData,
   findRetiredRecipientField,
   formatResolvedRecipient,
   parseRecipientReference,
@@ -521,6 +522,202 @@ describe('label hint (#2047)', () => {
       expect(result.error).not.toContain('pat.work@hint.test');
       expect(result.error).not.toContain('pat.home@hint.test');
     }
+  });
+});
+
+// #2447: no usable identity on sms/signal, but a verified number on a sibling
+// phone-family channel. A resolver given a deriver writes the derived row and uses it.
+describe('phone-family derivation (#2447)', () => {
+  const NUMBER = '+14165550100';
+  let contacts: ContactService;
+  let venueId: string;
+  let phoneId: string;
+
+  beforeEach(async () => {
+    contacts = ContactService.createInMemory();
+    venueId = (await contacts.createContact({ displayName: 'Harbour Venue', source: 'ceo_stated' })).id;
+    phoneId = (await contacts.linkIdentity({
+      contactId: venueId, channel: 'phone', channelIdentifier: NUMBER, source: 'agent_stated', verified: true,
+    })).id;
+  });
+
+  const withDeriver = () => ({ contactService: contacts, principalContactId: undefined, deriver: contacts });
+
+  it.each(['sms', 'signal'])('writes a derived %s row from a verified phone number and resolves to it', async (channel) => {
+    const result = await resolveRecipientReference(venueId, channel, { field: 'recipient' }, withDeriver());
+    expect(result).toMatchObject({ ok: true, kind: 'contact', identifier: NUMBER, derivedFrom: 'phone' });
+    const row = (await contacts.getContactWithIdentities(venueId))!.identities.find((i) => i.channel === channel);
+    expect(row).toMatchObject({ source: 'derived', verified: true, derivedFromIdentityId: phoneId });
+    if (result.ok) expect(result.identityId).toBe(row!.id);
+    // A reply from the number on this channel finds the same contact.
+    expect((await contacts.resolveByChannelIdentity(channel, NUMBER))?.contactId).toBe(venueId);
+  });
+
+  it('a later resolve uses the derived row without writing again, still flagged', async () => {
+    const first = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    const second = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    expect(second).toMatchObject({ ok: true, derivedFrom: 'phone' });
+    if (first.ok && second.ok) expect(second.identityId).toBe(first.identityId);
+    expect((await contacts.getContactWithIdentities(venueId))!.identities).toHaveLength(2);
+  });
+
+  it('does not derive without a deriver: read-only callers fail as before', async () => {
+    const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, {
+      contactService: contacts, principalContactId: undefined,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/no verified, active sms address/);
+    expect((await contacts.getContactWithIdentities(venueId))!.identities).toHaveLength(1);
+  });
+
+  it('a send to a verified sms row is not flagged', async () => {
+    await contacts.linkIdentity({ contactId: venueId, channel: 'sms', channelIdentifier: '+14165550111', source: 'ceo_stated' });
+    const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    expect(result).toMatchObject({ ok: true, identifier: '+14165550111' });
+    if (result.ok) expect(result.derivedFrom).toBeUndefined();
+  });
+
+  it('never derives for the principal alias', async () => {
+    const result = await resolveRecipientReference('principal', 'sms', { field: 'recipient' }, {
+      contactService: contacts, principalContactId: venueId, deriver: contacts,
+    });
+    expect(result.ok).toBe(false);
+    expect((await contacts.getContactWithIdentities(venueId))!.identities).toHaveLength(1);
+  });
+
+  it('never derives for a structural contact referenced by ID', async () => {
+    const venue = (await contacts.getContactWithIdentities(venueId))!.contact;
+    await contacts.saveContact({ ...venue, systemRole: 'principal' });
+    const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    expect(result.ok).toBe(false);
+    expect((await contacts.getContactWithIdentities(venueId))!.identities).toHaveLength(1);
+  });
+
+  it('refuses, naming the other contact and not the number, when another contact has the number', async () => {
+    const other = await contacts.createContact({ displayName: 'Harbour Catering', source: 'ceo_stated' });
+    await contacts.linkIdentity({ contactId: other.id, channel: 'signal', channelIdentifier: NUMBER, source: 'ceo_stated' });
+    const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(`"Harbour Catering" (${other.id})`);
+      expect(result.error).toMatch(/distinct_from/);
+      expect(result.error).not.toContain('5550100');
+    }
+    expect(await contacts.resolveByChannelIdentity('sms', NUMBER)).toBeNull();
+  });
+
+  it('fails closed, with the cause, when the write throws', async () => {
+    const failing = {
+      findLikelyDuplicates: contacts.findLikelyDuplicates.bind(contacts),
+      getContactWithIdentities: contacts.getContactWithIdentities.bind(contacts),
+      linkIdentity: async () => { throw new Error('db down'); },
+    };
+    const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, {
+      contactService: contacts, principalContactId: undefined, deriver: failing,
+    });
+    expect(result).toMatchObject({ ok: false, cause: expect.any(Error) });
+  });
+
+  it('a label hint picks its row even when an older row on another channel has the same number', async () => {
+    const office = await contacts.createContact({ displayName: 'Dana Office', source: 'ceo_stated' });
+    await contacts.linkIdentity({
+      contactId: office.id, channel: 'phone', channelIdentifier: '+14165550122', label: 'office', source: 'agent_stated', verified: true,
+    });
+    const signal = await contacts.linkIdentity({
+      contactId: office.id, channel: 'signal', channelIdentifier: '+14165550122', label: 'mobile', source: 'agent_stated', verified: true,
+    });
+    const result = await resolveRecipientReference(`${office.id}#mobile`, 'sms', { field: 'recipient' }, withDeriver());
+    expect(result).toMatchObject({ ok: true, identifier: '+14165550122', derivedFrom: 'signal' });
+    const sms = (await contacts.getContactWithIdentities(office.id))!.identities.find((i) => i.channel === 'sms');
+    expect(sms).toMatchObject({ label: 'mobile', derivedFromIdentityId: signal.id });
+  });
+
+  // Two sends deriving at once: the loser's insert hits the unique index.
+  const duplicateKey = (): Error => Object.assign(new Error('duplicate key'), { code: '23505' });
+
+  it('a concurrent derivation that already wrote this contact\'s row resolves to that row', async () => {
+    const racing = {
+      findLikelyDuplicates: contacts.findLikelyDuplicates.bind(contacts),
+      getContactWithIdentities: contacts.getContactWithIdentities.bind(contacts),
+      linkIdentity: async (options: Parameters<ContactService['linkIdentity']>[0]) => {
+        await contacts.linkIdentity(options); // the other send wins the insert
+        throw duplicateKey();
+      },
+    };
+    const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, {
+      contactService: contacts, principalContactId: undefined, deriver: racing,
+    });
+    const sms = (await contacts.getContactWithIdentities(venueId))!.identities.find((i) => i.channel === 'sms');
+    expect(result).toMatchObject({ ok: true, identifier: NUMBER, identityId: sms!.id });
+  });
+
+  it('a duplicate key held by anyone but this contact still refuses the send', async () => {
+    const racing = {
+      findLikelyDuplicates: contacts.findLikelyDuplicates.bind(contacts),
+      getContactWithIdentities: contacts.getContactWithIdentities.bind(contacts),
+      linkIdentity: async () => { throw duplicateKey(); },
+    };
+    const result = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, {
+      contactService: contacts, principalContactId: undefined, deriver: racing,
+    });
+    expect(result).toMatchObject({ ok: false, cause: expect.objectContaining({ code: '23505' }) });
+  });
+
+  it('marking the source number defunct takes its derived rows with it, so no send picks them', async () => {
+    await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    await contacts.setIdentityStatus(phoneId, 'defunct');
+    const sms = (await contacts.getContactWithIdentities(venueId))!.identities.find((i) => i.channel === 'sms');
+    expect(sms?.status).toBe('defunct');
+    const again = await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    expect(again.ok).toBe(false);
+
+    // Back in use: the derived row comes back with it.
+    await contacts.setIdentityStatus(phoneId, 'active');
+    expect(await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver()))
+      .toMatchObject({ ok: true, identifier: NUMBER, derivedFrom: 'phone' });
+  });
+
+  it('defunct reaches a row derived from a derived row, and reactivation brings both back', async () => {
+    const sms = await contacts.linkIdentity({
+      contactId: venueId, channel: 'sms', channelIdentifier: NUMBER, source: 'derived', verified: true, derivedFromIdentityId: phoneId,
+    });
+    const signal = await contacts.linkIdentity({
+      contactId: venueId, channel: 'signal', channelIdentifier: NUMBER, source: 'derived', verified: true, derivedFromIdentityId: sms.id,
+    });
+    const statuses = async (): Promise<Array<string | undefined>> => {
+      const rows = (await contacts.getContactWithIdentities(venueId))!.identities;
+      return [sms.id, signal.id].map((id) => rows.find((i) => i.id === id)?.status);
+    };
+    await contacts.setIdentityStatus(phoneId, 'defunct');
+    expect(await statuses()).toEqual(['defunct', 'defunct']);
+    await contacts.setIdentityStatus(phoneId, 'active');
+    expect(await statuses()).toEqual(['active', 'active']);
+  });
+
+  it('a derived row cannot name a source on another contact', async () => {
+    const other = await contacts.createContact({ displayName: 'Harbour Catering', source: 'ceo_stated' });
+    await expect(contacts.linkIdentity({
+      contactId: other.id, channel: 'sms', channelIdentifier: NUMBER, source: 'derived', verified: true, derivedFromIdentityId: phoneId,
+    })).rejects.toThrow(/same contact/);
+    await expect(contacts.linkIdentity({
+      contactId: venueId, channel: 'sms', channelIdentifier: NUMBER, source: 'derived', verified: true,
+      derivedFromIdentityId: '00000000-0000-4000-8000-000000000000',
+    })).rejects.toThrow(/same contact/);
+  });
+
+  it('bounced stays on the row it was set on: a delivery failure can be specific to one channel', async () => {
+    await resolveRecipientReference(venueId, 'sms', { field: 'recipient' }, withDeriver());
+    await contacts.setIdentityStatus(phoneId, 'bounced');
+    const sms = (await contacts.getContactWithIdentities(venueId))!.identities.find((i) => i.channel === 'sms');
+    expect(sms?.status).toBe('active');
+  });
+
+  it('derivedAddressData says delivery is unconfirmed only for a derived address', () => {
+    expect(derivedAddressData({}, 'sms')).toEqual({});
+    expect(derivedAddressData({ derivedFrom: 'phone' }, 'sms')).toEqual({
+      delivery_unconfirmed: true,
+      address_note: expect.stringMatching(/^Addressed to the number on file as phone.*never confirmed on SMS.*Report delivery as not confirmed\.$/),
+    });
   });
 });
 

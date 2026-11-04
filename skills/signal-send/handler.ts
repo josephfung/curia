@@ -23,6 +23,7 @@ import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redaction
 import { hasPresentValue } from '../../src/contacts/principal-carveout-parse.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
+  derivedAddressData,
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../src/skills/_shared/recipient-reference.js';
@@ -265,6 +266,8 @@ export class SignalSendHandler implements ToolHandler {
           ...(contactId ? { contact_id: contactId } : {}),
           ...(identityName ? { recipient_identity: identityName } : {}),
           channel: 'signal',
+          // A number verified on another phone-family channel (#2447): delivery unconfirmed.
+          ...derivedAddressData(resolved, 'signal'),
           // Held by the relay budget for the principal's digest (#1320).
           ...relayDeferredData(result),
           // Details the gateway removed before sending (#2312).

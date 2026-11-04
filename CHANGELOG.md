@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Hiccups list** — clicking the Hiccups tile lists the week's failed and partly failed jobs. (#2350)
+- **`measure-2159-targets.sql`** — read-only prod queries for #2159's message and approval targets. (#2193)
 - **`install.optional_secrets`** — **public API:** `tool.json` keys a tool improves with; shown and settable, never gating. (#2445)
 - **Phone app invitation link** — operators send the principal a single-use, 48-hour link that installs and pairs the app. (#2412)
 - **`async-offramp` now mode** — a call can wait for the full assistant's result instead of refusing. (#2428)
@@ -286,6 +287,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Console home tiles** — stats query 6× faster; tiles read a background-refreshed cache and shimmer while loading. (#2350)
+- **Phone-family identities** — a number verified on phone, SMS or Signal works on the others, flagged unconfirmed. (#2447)
 - **Setup wizard routing line** — shorter, so the coordinator's specialist roster fits curia-deploy's budget again. (#2466)
 - **Console secret rows** — a configured key can be replaced in place. (#2445)
 - **Phone app icon** — white mark on near-black, so it stays legible in iOS dark mode. (#2341)

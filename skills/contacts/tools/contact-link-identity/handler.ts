@@ -9,6 +9,11 @@
 // and once it is found in the conversation's sources (#2061): a message a person sent,
 // or a source-tool result. An address found in neither is refused.
 //
+// A phone-family number that matches a verified, active E.164 identity already on the
+// contact on a sibling channel (a `phone` number linked as `sms`) is linked as a
+// derived row (#2447): it is an exact copy of a verified number, so it needs no source
+// in the conversation. The duplicate check still runs.
+//
 // Re-stating an address already on this contact is how an agent vouches for one it
 // typed earlier. An unverified outbound_recipient identity (recorded by the gateway
 // after a first-time send) is verified in place, after the same two checks: verifying
@@ -25,8 +30,10 @@ import type { DuplicateCheck } from '../../../../src/contacts/types.js';
 import { LINKABLE_CHANNEL_IDENTITY_SET } from '../../../../src/contacts/linkable-channels.js';
 import { normalizeAgentIdentifier } from '../../../../src/contacts/agent-identifier.js';
 import { sameIdentifier } from '../../../../src/contacts/identifier-near-miss.js';
+import { deriveIdentity, derivationSources } from '../../../../src/contacts/phone-family-derivation.js';
 import {
   candidatesError,
+  distinctFromToken,
   parseDistinctFrom,
   takenError,
   uncoveredCandidates,
@@ -36,6 +43,8 @@ import { identifierHasSource, unsourcedIdentifierError } from '../../../../src/s
 
 const NOT_LINKED = 'Nothing was linked.';
 const NOT_VERIFIED = 'Nothing was verified.';
+const NEXT_SAME_NUMBER =
+  'If this number belongs to both, call contact-link-identity again with distinct_from listing every ID above.';
 const NEXT =
   'Check the address: it resembles theirs. If it is right, call contact-link-identity again with distinct_from listing every ID above.';
 
@@ -174,6 +183,32 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         return {
           success: false,
           error: 'That address is already on this contact, unverified. Only the principal can verify it, in the console. Nothing changed.',
+        };
+      }
+
+      // The number is already verified on a sibling channel of this contact: derive it.
+      const source = derivationSources(target.contact, target.identities, channel, normalized.identifier)[0];
+      if (source) {
+        const derived = await deriveIdentity(ctx.contactService, {
+          contact: target.contact,
+          channel,
+          source,
+          isDistinct: (candidate) => distinctFrom.tokens.has(distinctFromToken(candidate).toLowerCase()),
+          ...(label ? { label } : {}),
+        });
+        if (!derived.ok) {
+          const taken = derived.check.taken[0];
+          if (taken) return { success: false, error: takenError(taken, NOT_LINKED) };
+          ctx.log.info({ candidates: derived.check.candidates.length }, 'contact-link-identity: derivation refused — likely duplicate (#2447)');
+          return { success: false, error: candidatesError(derived.check.candidates, NOT_LINKED, NEXT_SAME_NUMBER) };
+        }
+        ctx.log.info(
+          { identityId: derived.identity.id, contactId: contact_id, channel, sourceChannel: source.channel },
+          'contact-link-identity: linked as derived from a verified number on the contact (#2447)',
+        );
+        return {
+          success: true,
+          data: { identity_id: derived.identity.id, verified: true, already_linked: false, derived_from: source.channel },
         };
       }
 
