@@ -578,9 +578,10 @@ export async function vaultRoutes(
       };
       if (!await auditRequested(request, reply, change)) return;
       // A delete that throws gets no outcome row: it may have committed first.
-      await secretsService.delete(name);
-      // A personal key's sign-in details go with it.
+      // A personal key's sign-in details go first, so a failure between the two can't leave
+      // stale details for a later create of the same name to inherit.
       if (name.startsWith(USER_SECRET_PREFIX)) await secretsService.deleteUserDetails(name);
+      await secretsService.delete(name);
       await auditCompleted(request, change);
       return reply.send({ ok: true, removed: true });
     } catch (err) {
@@ -644,20 +645,20 @@ export async function vaultRoutes(
     const checked = checkValue(body?.value);
     if ('error' in checked) return reply.status(400).send({ error: checked.error });
 
-    let details: UserSecretDetails;
-    try {
-      details = parseUserSecretDetails({ login_url: body?.loginUrl, username: body?.username });
-    } catch (err) {
-      // Not the message: it can quote the URL.
-      request.log.info('vault personal secret details rejected');
-      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Invalid sign-in details.' });
-    }
-
     let name: string | undefined;
     try {
       const named = await resolveConsoleName(request, body);
       if ('error' in named) return reply.status(400).send({ error: named.error });
       name = named.name;
+      // After naming, so a bad login URL reports the same message as preview.
+      let details: UserSecretDetails;
+      try {
+        details = parseUserSecretDetails({ login_url: body?.loginUrl, username: body?.username });
+      } catch (err) {
+        // Not the message: it can quote the URL.
+        request.log.info('vault personal secret details rejected');
+        return reply.status(400).send({ error: err instanceof Error ? err.message : 'Invalid sign-in details.' });
+      }
       const meta = await metadataFor(name);
       if (meta?.valueFormat === 'json') {
         return reply.status(409).send({ error: structuredValueRefusal(name) });
@@ -728,9 +729,16 @@ export async function vaultRoutes(
       for (const change of changes) {
         if (!await auditRequested(request, reply, change)) return;
       }
-      if (value !== undefined) await secretsService.set(name, value);
-      if (hasDetails) await secretsService.patchUserDetails(name, patch);
-      for (const change of changes) await auditCompleted(request, change);
+      // Each outcome row follows its own write, so a details failure doesn't drop the
+      // completed row for a value that was set.
+      if (value !== undefined) {
+        await secretsService.set(name, value);
+        await auditCompleted(request, { name, action: 'set' });
+      }
+      if (hasDetails) {
+        await secretsService.patchUserDetails(name, patch);
+        await auditCompleted(request, { name, action: 'details' });
+      }
       return reply.send({ ok: true });
     } catch (err) {
       // No outcome row: the write may have committed before it threw. Key name only.

@@ -31,6 +31,8 @@ interface RecordingSecrets extends VaultSecretsPort {
   upserts: Array<{ name: string; details: UserSecretDetails }>;
   patches: Array<{ name: string; patch: UserSecretDetailsPatch }>;
   detailDeletes: string[];
+  /** Every write in call order, e.g. 'details-delete:user.x', 'delete:user.x'. */
+  order: string[];
 }
 
 const CREATED = new Date('2026-09-01T00:00:00.000Z');
@@ -46,6 +48,7 @@ function fakeSecrets(
   const upserts: Array<{ name: string; details: UserSecretDetails }> = [];
   const patches: Array<{ name: string; patch: UserSecretDetailsPatch }> = [];
   const detailDeletes: string[] = [];
+  const order: string[] = [];
   const present = new Set(preset);
   return {
     sets,
@@ -53,19 +56,21 @@ function fakeSecrets(
     upserts,
     patches,
     detailDeletes,
+    order,
     list: async () => [...present],
     listMetadata: async () => [...present].map(name => ({ name, valueFormat: formats[name] ?? 'string', createdAt: CREATED, updatedAt: UPDATED })),
     listUserNames: async () => [...present].filter(n => n.startsWith('user.')),
     listUserDetails: async () => new Map(Object.entries(details)),
     upsertUserDetails: async (name: string, d: UserSecretDetails) => { upserts.push({ name, details: d }); },
     patchUserDetails: async (name: string, patch: UserSecretDetailsPatch) => { patches.push({ name, patch }); },
-    deleteUserDetails: async (name: string) => { detailDeletes.push(name); },
+    deleteUserDetails: async (name: string) => { detailDeletes.push(name); order.push(`details-delete:${name}`); },
     set: async (name: string, value: string) => {
       sets.push({ name, value });
       present.add(name);
     },
     delete: async (name: string) => {
       deletes.push(name);
+      order.push(`delete:${name}`);
       present.delete(name);
     },
   };
@@ -661,6 +666,16 @@ describe('vault routes', () => {
       expect(secrets.sets).toEqual([]);
     });
 
+    it('POST names before parsing details, so a bad URL gets the naming message', async () => {
+      const secrets = fakeSecrets();
+      app = await build(secrets, fakeRegistry());
+      const bad = await post(app, '/api/vault/user-secrets', { type: 'website_login', loginUrl: 'ftp://x', value: 'v' });
+      const preview = await post(app, '/api/vault/user-secrets/preview', { type: 'website_login', loginUrl: 'ftp://x' });
+      expect(bad.statusCode).toBe(400);
+      expect(bad.json().error).toBe(preview.json().error);
+      expect(secrets.sets).toEqual([]);
+    });
+
     it('POST rejects an oversized value, a bad type and bad details', async () => {
       const secrets = fakeSecrets();
       app = await build(secrets, fakeRegistry());
@@ -735,6 +750,17 @@ describe('vault routes', () => {
       expect(JSON.stringify(published)).not.toContain('pw-patched');
     });
 
+    it('PATCH keeps the set:completed row when the details write fails', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password']);
+      secrets.patchUserDetails = async () => { throw new Error('db down'); };
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await patch(app, 'user.rogers_password', { value: 'pw-patched', username: 'u' });
+      expect(res.statusCode).toBe(500);
+      expect(secrets.sets).toHaveLength(1);
+      expect(changes(published)).toEqual(['set:requested', 'details:requested', 'set:completed']);
+    });
+
     it('PATCH with only a value never touches the details', async () => {
       const { bus, published } = fakeBus();
       const secrets = fakeSecrets(['user.rogers_password']);
@@ -798,6 +824,8 @@ describe('vault routes', () => {
       expect(res.json()).toEqual({ ok: true, removed: true });
       expect(secrets.deletes).toEqual(['user.rogers_password']);
       expect(secrets.detailDeletes).toEqual(['user.rogers_password']);
+      // Details go first so a failure cannot leave stale details for a later create to inherit.
+      expect(secrets.order).toEqual(['details-delete:user.rogers_password', 'delete:user.rogers_password']);
       expect(changes(published)).toEqual(['delete:requested', 'delete:completed']);
     });
 
