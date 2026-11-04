@@ -47,12 +47,25 @@ import {
 } from '../dispatch/origin-turn-reply.js';
 import {
   BARE_CARD_REF_ERROR,
+  CARD_FIELDS,
   CARD_FILL_LIMIT_ERROR,
   CARD_USE_REQUIRED_ERROR,
   isCardSecretField,
   parseSecretRef,
   projectCardField,
 } from '../secrets/structured-secret-schema.js';
+/** True when a vault string is a saved-card document (JSON object tagged credit_card). */
+function looksLikeCardDoc(value: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === 'object' && parsed !== null
+      && (parsed as { _schema?: unknown })._schema === 'credit_card';
+  } catch {
+    // Not JSON: an ordinary string secret.
+    return false;
+  }
+}
+
 import { registrableDomain } from '../verification/domain.js';
 import { createSecretAccessed, createAutonomySkillBlocked, createAuthorizationDecision, createPrincipalReport } from '../bus/events.js';
 import type { Logger } from '../logger.js';
@@ -2896,6 +2909,9 @@ export class ExecutionLayer {
             if (plain === null) {
               throw new Error(`resolveSecretRef: secret '${name}' was not found in the vault`);
             }
+            // Defense in depth: if the schema tag row is gone but the vault row still holds a
+            // card, the bare ref must not hand out the whole card JSON.
+            if (looksLikeCardDoc(plain)) throw new Error(BARE_CARD_REF_ERROR(name));
             value = plain;
           } else {
             if (schema !== 'credit_card') {
@@ -2904,6 +2920,15 @@ export class ExecutionLayer {
             const siteUrl = opts?.siteUrl;
             if (siteUrl === undefined || siteUrl === '') {
               throw new Error('card fields can only be filled into a web page');
+            }
+            // Validate the field name and load the public fields BEFORE the grant check, so a
+            // typo or a row with missing public fields fails without consuming a fill.
+            if (!CARD_FIELDS.includes(field)) {
+              throw new Error(`Unknown card field '${field}'. Fields: ${CARD_FIELDS.join(', ')}`);
+            }
+            const card = await this.secretsService.getCardPublic(name);
+            if (card === null) {
+              throw new Error(`resolveSecretRef: secret '${name}' was not found in the vault`);
             }
             // The grant check runs on every path (humanApproved and principal-originated tasks
             // included): it lives here, in the closure, not in the gates. Without a repo or a
@@ -2922,10 +2947,6 @@ export class ExecutionLayer {
             }
             if (outcome === 'fill_limit') throw new Error(CARD_FILL_LIMIT_ERROR);
 
-            const card = await this.secretsService.getCardPublic(name);
-            if (card === null) {
-              throw new Error(`resolveSecretRef: secret '${name}' was not found in the vault`);
-            }
             const secretDoc = isCardSecretField(field) ? await this.secretsService.getCardSecret(name) : null;
             const projected = projectCardField(field, card.publicFields, secretDoc);
             if (projected === '') {

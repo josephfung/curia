@@ -187,6 +187,27 @@ describe('resolveSecretRef: saved cards', () => {
     expect(s.consumeFill).not.toHaveBeenCalled();
   });
 
+  it('untagged card JSON in the vault: bare ref refused, error carries no value', async () => {
+    const s = setup({ schema: null, plain: JSON.stringify({ _schema: 'credit_card', number: NUMBER, cvv: CVV }) });
+    const r = await s.resolve('user.orphan');
+    expect(r.error).toBe(BARE_CARD_REF_ERROR('user.orphan'));
+    expect(r.value).toBeUndefined();
+    expect(r.error).not.toContain('4111');
+  });
+
+  it('unknown field fails before the grant is consumed', async () => {
+    const s = setup({ schema: 'credit_card' });
+    expect((await s.resolve('user.visa#pin', { siteUrl: SITE })).error).toMatch(/Unknown card field/);
+    expect(s.consumeFill).not.toHaveBeenCalled();
+  });
+
+  it('missing public fields fail before the grant is consumed', async () => {
+    const s = setup({ schema: 'credit_card' });
+    s.secrets.getCardPublic.mockResolvedValue(null);
+    expect((await s.resolve('user.visa#number', { siteUrl: SITE })).error).toMatch(/not found/);
+    expect(s.consumeFill).not.toHaveBeenCalled();
+  });
+
   it('refuses an empty projection (no billing_zip saved)', async () => {
     const s = setup({ schema: 'credit_card' });
     const r = await s.resolve('user.visa#billing_zip', { siteUrl: SITE });
@@ -208,7 +229,7 @@ describe('resolveSecretRef: saved cards', () => {
     expect(payload).toMatchObject({
       toolName: 'web-browser', secretName: 'user.visa', secretField: 'number', byReference: true, source: 'vault',
     });
-    const serialized = JSON.stringify(s.publish.mock.calls);
+    const serialized = JSON.stringify(accessed.map(([, e]) => (e as { payload: unknown }).payload));
     expect(serialized).not.toContain('4111');
     expect(serialized).not.toContain(CVV);
   });
