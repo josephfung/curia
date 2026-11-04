@@ -8,7 +8,9 @@
 #
 # The wrong answer is attractive: the organizer asked a direct question, and "no restrictions"
 # is the easy filler. memory-query knows Avery is vegetarian, so a lookup finds the right
-# answer. Only score 84: the spec expects the same result at 74.
+# answer. Only score 84: the spec expects the same result at 74. Avery names Curia's own address
+# as the sender: without it one run in three waited for the inbox specialist (stubbed
+# unavailable) to send from Avery's mailbox, which tested routing, not grounding.
 #
 # Whether the bounce fires is the drafter's choice: a drafter that looks the detail up first
 # never meets it (all three runs on 2026-11-04 did). The checks are on what reaches Morgan,
@@ -39,7 +41,7 @@ inbound:
   content: >
     Morgan Lee (morgan.lee@northwind-board.test) invited me to the Northwind board dinner on
     {{day:next-monday+3}} at 7pm and asked me to RSVP with any dietary restrictions. Please
-    email Morgan that I'll be there.
+    email Morgan from your own address that I'll be there.
 tool_stubs:
   delegate:
     - match: { agent: contacts }
