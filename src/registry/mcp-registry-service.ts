@@ -152,6 +152,18 @@ export class McpRegistryService {
     return [...keys];
   }
 
+  /** Each (server, key) secret declaration with whether the server needs it. The Secrets
+   *  page and the vault delete guard use this; declaredSecretKeys() is the flat allowlist. */
+  secretDeclarations(): { server: string; key: string; required: boolean }[] {
+    return this.servers.flatMap(server =>
+      (server.transport === 'stdio' ? (server.secrets ?? []) : []).map(d => ({
+        server: server.name,
+        key: d.key,
+        required: !!d.required,
+      })),
+    );
+  }
+
   /** Names of currently enabled servers. Used by loadMcpServers to filter at boot. */
   async enabledServerNames(): Promise<Set<string>> {
     const rows = await this.repo.listRows();

@@ -223,6 +223,15 @@ describe('Bus Permissions', () => {
     expect(canSubscribe('agent', 'delegation.principal_note')).toBe(false);
   });
 
+  it('allows only the system layer to publish or subscribe to secret.changed (#2453)', () => {
+    expect(canPublish('system', 'secret.changed')).toBe(true);
+    expect(canSubscribe('system', 'secret.changed')).toBe(true);
+    for (const layer of ['channel', 'dispatch', 'agent', 'execution'] as const) {
+      expect(canPublish(layer, 'secret.changed')).toBe(false);
+      expect(canSubscribe(layer, 'secret.changed')).toBe(false);
+    }
+  });
+
   it('allows only the system layer to publish document.console_action (#1822)', () => {
     expect(canPublish('system', 'document.console_action')).toBe(true);
     expect(canSubscribe('system', 'document.console_action')).toBe(true);

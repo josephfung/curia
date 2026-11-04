@@ -2,19 +2,30 @@
 // Session-cookie or x-web-bootstrap-secret auth (same pattern as registry.ts/autonomy.ts).
 // Only mounted when webAppBootstrapSecret + secretsService + registryService are configured.
 //
-//   GET  /api/vault/status            — names of configured secrets (keys only, never values)
-//   PUT  /api/vault/secrets/:name      — set a secret value (body: { value })
+//   GET    /api/vault/status            — names of configured secrets (keys only, never values)
+//   GET    /api/vault/secrets          — every allowlisted secret: set or not, required or optional,
+//                                         and what declares it (#2453). Never values.
+//   PUT    /api/vault/secrets/:name    — set a secret value (body: { value })
+//   DELETE /api/vault/secrets/:name    — remove a secret (idempotent; refused while an enabled
+//                                         component requires it, unless ?force=true)
 //
-// The PUT endpoint is deliberately narrow: a name may only be set if some installed-or-on-disk
-// skill DECLARES it in install.requires_secrets. That keeps this a skill-secrets entry surface,
-// not a general-purpose write-any-key vault editor — it can't clobber unrelated secrets.
+// PUT and DELETE are deliberately narrow and share one allowlist (isAllowedVaultName): a name is
+// accepted only if a skill, MCP server or channel declares it, or it is a per-account email grant
+// or principal-mailbox key. That keeps this a declared-secrets surface, not a general-purpose
+// write-any-key vault editor — it can't clobber or delete unrelated secrets. Every set and
+// delete is audited by key name, never by value.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { RegistryService } from '../../../registry/registry-service.js';
 import type { McpRegistryService } from '../../../registry/mcp-registry-service.js';
+import type { ChannelRegistryService } from '../../../registry/channel-registry-service.js';
+import type { EventBus } from '../../../bus/bus.js';
+import { createSecretChanged } from '../../../bus/events.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
 import { CHANNEL_CATALOG } from '../../catalog.js';
-import { isPerAccountEmailGrantKey } from '../../email/email-account-secrets.js';
+import { emailAccountGrantSecretName, isPerAccountEmailGrantKey } from '../../email/email-account-secrets.js';
+import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
+import { actorFromRequest } from './sessions.js';
 
 // Allow-set of valid channel credential vault keys, derived once from the static catalog.
 // A channel credential is stored as `channel.<channel>.<field.key>`; only the exact
@@ -59,10 +70,39 @@ function isChannelCredentialKey(name: string): boolean {
   return CHANNEL_CREDENTIAL_KEYS.has(name);
 }
 
-/** The narrow slice of SecretsService these routes need — list names + set a string value. */
+/** The narrow slice of SecretsService these routes need — list names, set a string value,
+ *  remove a secret. */
 export interface VaultSecretsPort {
   list(): Promise<string[]>;
   set(name: string, value: string): Promise<void>;
+  delete(name: string): Promise<void>;
+}
+
+/** What declares a vault secret, as shown on the console Secrets page. */
+export interface VaultSecretDeclarer {
+  kind: 'tool' | 'mcp' | 'channel' | 'principal-mailbox' | 'email-account';
+  /** Tool, MCP server or channel name; the kind's own label for the other kinds. */
+  name: string;
+  /** Whether this declarer needs the secret (true) or merely improves with it (false). */
+  required: boolean;
+  /** Whether the declaring component is currently enabled. Always true for kinds that
+   *  have no enabled state. */
+  enabled: boolean;
+  /** Skill-declared optional secrets say what the key adds. */
+  purpose?: string;
+}
+
+export interface VaultSecretSummary {
+  name: string;
+  /** Set in the vault. An environment fallback does not count. */
+  configured: boolean;
+  /** Some ENABLED declarer requires it. Each declarer's own `required` stays in declaredBy,
+   *  so the page can say "required by Slack (disabled)" without flagging it as missing. */
+  required: boolean;
+  /** Name of the environment variable supplying the value while the vault has none, else
+   *  null. Name only — never the value. Remove does not clear it. */
+  envFallback: string | null;
+  declaredBy: VaultSecretDeclarer[];
 }
 
 /** Generous ceiling for a string secret (API keys, tokens). Structured/JSON secrets use
@@ -77,6 +117,33 @@ export interface VaultRouteOptions {
   sessions: SessionStore;
   /** Optional: when present, declared MCP secret keys are added to the write allowlist. */
   mcpRegistryService?: McpRegistryService;
+  /** Optional: when present, a delete is refused while an enabled channel requires the key. */
+  channelRegistryService?: ChannelRegistryService;
+  /** Optional: when present, a delete is refused while an enabled email account needs its grant. */
+  emailAccounts?: Pick<EmailAccountsRepo, 'list'>;
+  /** Every set and delete is published here as a secret.changed audit event (#2453). */
+  bus: EventBus;
+}
+
+/** The one allowlist check behind both PUT and DELETE (#2453): a name is accepted only if
+ *  a skill declares it, a valid channel credential key from the catalog, a secret key
+ *  declared by an installed MCP server, a per-account email grant key
+ *  (channel.email.<name>.nylas_grant_id, written by the email-accounts console flow, #1101),
+ *  or one of the principal-mailbox keys (#2409). This is the line between "manage a declared
+ *  secret / known channel credential / per-account grant" and "touch any key in the vault".
+ *  Arbitrary `channel.*` names outside the catalog or the grant pattern, and arbitrary MCP
+ *  keys not declared in config, are rejected. */
+export function isAllowedVaultName(
+  name: string,
+  deps: Pick<VaultRouteOptions, 'registryService' | 'mcpRegistryService'>,
+): boolean {
+  return (
+    (deps.registryService?.declaredSecretNames().includes(name) ?? false) ||
+    isChannelCredentialKey(name) ||
+    (deps.mcpRegistryService?.declaredSecretKeys().includes(name) ?? false) ||
+    isPerAccountEmailGrantKey(name) ||
+    PRINCIPAL_MAILBOX_KEYS.has(name)
+  );
 }
 
 export async function vaultRoutes(
@@ -91,6 +158,153 @@ export async function vaultRoutes(
   function requireAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
+
+  // Two-stage audit for a set or delete (#2453), published as secret.changed — key name only,
+  // never a value. `requested` goes out BEFORE the vault is touched; if it can't be written
+  // the change is refused (this sends the 500 itself and returns false). `completed` follows
+  // a successful write. A vault write that throws is NOT recorded as failed: the statement may
+  // have committed before the connection dropped, so a `requested` with no `completed` means
+  // the change did not happen or its outcome is unknown, never that it happened.
+  type SecretChange = { name: string; action: 'set' | 'delete'; force?: boolean; affected?: { kind: string; name: string }[] };
+
+  function changePayload(request: FastifyRequest, change: SecretChange, stage: 'requested' | 'completed') {
+    return createSecretChanged({
+      secretName: change.name,
+      action: change.action,
+      stage,
+      ...actorFromRequest(request, sessions),
+      force: change.force,
+      affected: change.affected,
+    });
+  }
+
+  async function auditRequested(request: FastifyRequest, reply: FastifyReply, change: SecretChange): Promise<boolean> {
+    try {
+      await options.bus.publish('system', changePayload(request, change, 'requested'));
+      return true;
+    } catch (err) {
+      request.log.error({ err, name: change.name, action: change.action }, 'vault change audit write failed — change refused');
+      void reply.status(500).send({
+        error: 'Nothing was changed: the change could not be audited, so it was not made. Check the server logs.',
+      });
+      return false;
+    }
+  }
+
+  // The change has already been made, so a miss here is logged rather than turned into an
+  // error that would invite retrying a change that happened.
+  async function auditCompleted(request: FastifyRequest, change: SecretChange): Promise<void> {
+    try {
+      await options.bus.publish('system', changePayload(request, change, 'completed'));
+    } catch (err) {
+      request.log.error({ err, name: change.name, action: change.action }, 'vault change outcome audit write failed');
+    }
+  }
+
+  // Every declaration of a vault key across tools, MCP servers, channels, email accounts and
+  // the principal mailbox. Reads in-memory discovery plus enabled state from the registry rows only —
+  // never the registries' list() views, which decrypt every declared credential to report
+  // whether it is set.
+  async function collectDeclarations(): Promise<Map<string, VaultSecretDeclarer[]>> {
+    const out = new Map<string, VaultSecretDeclarer[]>();
+    const add = (name: string, d: VaultSecretDeclarer) => {
+      const list = out.get(name) ?? [];
+      list.push(d);
+      out.set(name, list);
+    };
+
+    if (registryService) {
+      for (const tool of await registryService.list('tool')) {
+        const enabled = tool.state === 'enabled';
+        for (const s of tool.metadata?.requiresSecrets ?? []) {
+          add(s, { kind: 'tool', name: tool.name, required: true, enabled });
+        }
+        for (const s of tool.metadata?.optionalSecrets ?? []) {
+          add(s.name, { kind: 'tool', name: tool.name, required: false, enabled, purpose: s.purpose });
+        }
+      }
+    }
+
+    if (options.mcpRegistryService) {
+      const enabledServers = await options.mcpRegistryService.enabledServerNames();
+      for (const d of options.mcpRegistryService.secretDeclarations()) {
+        add(d.key, { kind: 'mcp', name: d.server, required: d.required, enabled: enabledServers.has(d.server) });
+      }
+    }
+
+    const enabledChannels = options.channelRegistryService
+      ? await options.channelRegistryService.enabledChannelNames()
+      : new Set<string>();
+    for (const descriptor of CHANNEL_CATALOG) {
+      for (const field of descriptor.credentialFields) {
+        add(`channel.${descriptor.name}.${field.key}`, {
+          kind: 'channel',
+          name: descriptor.name,
+          required: descriptor.requiredSecretKeys.includes(field.key),
+          // Always-on channels (http, cli) have no registry row.
+          enabled: enabledChannels.has(descriptor.name) || !descriptor.isToggleable,
+        });
+      }
+    }
+
+    // The principal's Nylas grant is what calendar runs on (index.ts turns calendar off
+    // without it) and what ceo-inbox and nylas-principal-mailbox read. The address only
+    // filters reply-all CC.
+    add('ceo_nylas_grant_id', { kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true });
+    add('ceo_self_email', { kind: 'principal-mailbox', name: 'Principal inbox', required: false, enabled: true });
+
+    // Each email account boots from its own grant (resolve-email-accounts.ts skips an enabled
+    // account that has none), so an enabled account requires it.
+    if (options.emailAccounts) {
+      for (const acct of await options.emailAccounts.list()) {
+        add(emailAccountGrantSecretName(acct.name), { kind: 'email-account', name: acct.name, required: true, enabled: acct.enabled });
+      }
+    }
+    return out;
+  }
+
+  // The environment variable standing in for a vault key, if one is set. Tool secrets fall
+  // back to the upper-cased key name (execution.ts); channel credentials to the catalog's
+  // envFallback. Name only — the value is never read into a response.
+  function envFallbackFor(name: string, declaredBy: VaultSecretDeclarer[]): string | null {
+    const candidates: string[] = [];
+    if (declaredBy.some(d => d.kind === 'tool')) candidates.push(name.toUpperCase());
+    for (const descriptor of CHANNEL_CATALOG) {
+      for (const field of descriptor.credentialFields) {
+        if (field.envFallback && name === `channel.${descriptor.name}.${field.key}`) candidates.push(field.envFallback);
+      }
+    }
+    return candidates.find(v => !!process.env[v]) ?? null;
+  }
+
+  // -- GET /api/vault/secrets — the allowlisted secrets with status and declarer (no values) --
+  app.get('/api/vault/secrets', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    try {
+      const configured = new Set(await secretsService.list());
+      const declarations = await collectDeclarations();
+      // A grant left behind by a deleted email account is still listed, so it can be removed.
+      for (const name of configured) {
+        if (isPerAccountEmailGrantKey(name) && !declarations.has(name)) {
+          const account = name.slice('channel.email.'.length, -'.nylas_grant_id'.length);
+          declarations.set(name, [{ kind: 'email-account', name: `${account} (account removed)`, required: false, enabled: true }]);
+        }
+      }
+      const secrets: VaultSecretSummary[] = [...declarations.entries()]
+        .map(([name, declaredBy]) => ({
+          name,
+          configured: configured.has(name),
+          required: declaredBy.some(d => d.required && d.enabled),
+          envFallback: configured.has(name) ? null : envFallbackFor(name, declaredBy),
+          declaredBy,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return reply.send({ secrets });
+    } catch (err) {
+      request.log.error({ err }, 'GET /api/vault/secrets failed');
+      return reply.status(500).send({ error: 'Failed to read secrets. Check server logs.' });
+    }
+  });
 
   // -- GET /api/vault/status — names of configured secrets (no values) --
   app.get('/api/vault/status', AUTH_RATE, async (request, reply) => {
@@ -122,20 +336,8 @@ export async function vaultRoutes(
       return reply.status(400).send({ error: `Secret value exceeds ${MAX_SECRET_VALUE_LENGTH} characters.` });
     }
 
-    // Scope guard: a name may be set only if it is a secret some skill declares, a valid
-    // channel credential key from the catalog, a secret key declared by an installed MCP
-    // server, a per-account email grant key (channel.email.<name>.nylas_grant_id, written
-    // by the email-accounts console flow, #1101), OR one of the principal-mailbox keys
-    // (#2409). This is the line between "configure a declared secret / known channel
-    // credential / per-account grant" and "write any key into the vault". Arbitrary
-    // `channel.*` names outside the catalog or the grant pattern, and arbitrary MCP keys not
-    // declared in config, are still rejected.
-    const isSkillDeclared = registryService?.declaredSecretNames().includes(name) ?? false;
-    const isMcpDeclared = options.mcpRegistryService?.declaredSecretKeys().includes(name) ?? false;
-    if (
-      !isSkillDeclared && !isChannelCredentialKey(name) && !isMcpDeclared &&
-      !isPerAccountEmailGrantKey(name) && !PRINCIPAL_MAILBOX_KEYS.has(name)
-    ) {
+    // Scope guard — the same allowlist DELETE uses (isAllowedVaultName).
+    if (!isAllowedVaultName(name, options)) {
       request.log.info({ name }, 'vault set rejected: name not declared by any skill, MCP server, or channel');
       return reply.status(400).send({
         error: `'${name}' is not a secret declared by any skill or MCP server, ` +
@@ -149,13 +351,69 @@ export async function vaultRoutes(
       return reply.status(400).send({ error: 'ceo_self_email must be an email address.' });
     }
 
+    // Write-ahead audit: a change never lands without its audit row. Key name only.
+    const change: SecretChange = { name, action: 'set' };
+    if (!await auditRequested(request, reply, change)) return;
+
     try {
       await secretsService.set(name, value);
+      await auditCompleted(request, change);
       return reply.send({ ok: true });
     } catch (err) {
-      // Do NOT log the value — only the key name.
+      // No outcome row: the write may have committed before it threw. Do NOT log the value — only the key name.
       request.log.error({ err, name }, 'vault set failed');
       return reply.status(500).send({ error: 'Failed to save secret. Check server logs.' });
+    }
+  });
+
+  // -- DELETE /api/vault/secrets/:name — remove a declared secret (idempotent) --
+  // Refused with 409 while an enabled tool, MCP server, channel or email account requires the key, naming
+  // what would stop working; the console confirms and retries with ?force=true. Deleting a
+  // key that isn't set is a no-op: 200 with removed:false.
+  app.delete('/api/vault/secrets/:name', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    const { name } = request.params as { name: string };
+    const force = (request.query as { force?: string } | undefined)?.force === 'true';
+
+    if (!isAllowedVaultName(name, options)) {
+      request.log.info({ name }, 'vault delete rejected: name not declared by any skill, MCP server, or channel');
+      return reply.status(400).send({
+        error: `'${name}' is not a secret declared by any skill or MCP server, ` +
+          `nor a known channel credential. Only declared secrets can be removed here.`,
+      });
+    }
+
+    try {
+      if (!(await secretsService.list()).includes(name)) {
+        return reply.send({ ok: true, removed: false });
+      }
+
+      const affected = ((await collectDeclarations()).get(name) ?? [])
+        .filter(d => d.required && d.enabled);
+      if (affected.length > 0 && !force) {
+        // Tool secrets are re-read from the vault on every call; channel credentials, MCP
+        // keys and the principal grant are read at boot, so they keep working until restart.
+        const effect = (d: VaultSecretDeclarer) => d.kind === 'tool' ? 'on its next call' : 'after the next restart';
+        return reply.status(409).send({
+          error: `'${name}' is required by ${affected.map(d => `enabled ${d.kind === 'principal-mailbox' ? d.name : `${d.kind === 'email-account' ? 'email account' : d.kind} '${d.name}'`} (stops working ${effect(d)})`).join(', ')}. ` +
+            `It will not work again until the secret is set.`,
+          affected: affected.map(d => ({ kind: d.kind, name: d.name })),
+        });
+      }
+
+      const change: SecretChange = {
+        name,
+        action: 'delete',
+        ...(force ? { force: true, affected: affected.map(d => ({ kind: d.kind, name: d.name })) } : {}),
+      };
+      if (!await auditRequested(request, reply, change)) return;
+      // A delete that throws gets no outcome row: it may have committed first.
+      await secretsService.delete(name);
+      await auditCompleted(request, change);
+      return reply.send({ ok: true, removed: true });
+    } catch (err) {
+      request.log.error({ err, name }, 'vault delete failed');
+      return reply.status(500).send({ error: 'Failed to remove secret. Check server logs.' });
     }
   });
 }

@@ -204,6 +204,24 @@ are skipped, never cleared). You can pass several at once. Then restart Curia so
 the relevant channel or skill picks the secret up. The env-var snippets in the
 tiers below name the variables to seed.
 
+To **remove** a secret (for example a Tavily key that has been revoked), open
+**Memory → Secrets** in the console and choose **Remove** on its row. The seeder never
+clears a value, so the console is the way back. Optional secrets can also be removed from
+the tool's drawer under **Settings → Tools**.
+
+Two things to know before relying on a removal:
+
+- **Environment fallbacks survive it.** Removing a secret deletes the vault row only. A tool
+  secret falls back to the upper-cased env var (`tavily_api_key` → `TAVILY_API_KEY`), and a
+  channel credential to its catalog `envFallback`. If one is set, web search keeps using the
+  Tavily key and the channel keeps its token. The Secrets page marks such a row
+  **from environment** and names the variable; unset it in the deploy environment to finish
+  the removal.
+- **When it takes effect.** Tool secrets are re-read on every call, so a removal bites on the
+  tool's next call. Channel credentials, MCP server keys and `ceo_nylas_grant_id` are read at
+  boot, so the old value keeps working until the next restart. Removing a leaked channel
+  token does not revoke it; revoke it at the provider as well.
+
 > Only the four vault-bootstrap values (`DB_USER`, `DB_PASSWORD`,
 > `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) plus non-secret config (`TIMEZONE`,
 > etc.) belong in `.env`. Everything else goes through the vault. The principal's
@@ -333,8 +351,9 @@ returns an "invalid key" error; there is no silent fallback to keyless. Before #
 setup link saved the key as `user.tavily_api_key`, which web-search never read. Boot moves
 such a key to `tavily_api_key` (copy, then delete the `user.*` entry), so the migrated
 value survives restarts and is never copied back once removed (#2409). To fix a rejected
-key, use Replace in the console. Neither the console nor the vault API can delete a
-secret yet (#2453), so going back to keyless is not a supported step today.
+key, use Replace in the console. To go back to keyless, remove the key from
+**Memory → Secrets** (see [Adding secrets after setup](#adding-secrets-after-setup)), and
+make sure `TAVILY_API_KEY` is not set in the environment, which would keep supplying it.
 
 `ctx.secret('tavily_api_key')` resolves vault-first with a `TAVILY_API_KEY` env-var fallback. In production the vault is the single source of truth. Do **not** leave `TAVILY_API_KEY` set in the deploy environment, since a lingering env var would mask whether the vault entry is actually being used.
 

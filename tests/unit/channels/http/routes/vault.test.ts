@@ -5,10 +5,16 @@
 // The scope guard on PUT /api/vault/secrets/:name accepts a name only if it is EITHER a
 // skill-declared secret OR a valid channel credential key from CHANNEL_CATALOG. These tests
 // prove both accept paths and the reject paths (arbitrary names and bogus channel keys).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
+import cookie from '@fastify/cookie';
 import { vaultRoutes, type VaultSecretsPort } from '../../../../../src/channels/http/routes/vault.js';
 import type { RegistryService } from '../../../../../src/registry/registry-service.js';
+import type { RegistryEntry } from '../../../../../src/registry/types.js';
+import type { McpRegistryService } from '../../../../../src/registry/mcp-registry-service.js';
+import type { ChannelRegistryService } from '../../../../../src/registry/channel-registry-service.js';
+import type { EventBus } from '../../../../../src/bus/bus.js';
+import { hashToken } from '../../../../../src/channels/http/session-auth.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 
@@ -18,23 +24,55 @@ const DECLARED_SECRET = 'some_skill_secret';
 /** Records set() calls so tests can assert the secret was actually written. */
 interface RecordingSecrets extends VaultSecretsPort {
   sets: Array<{ name: string; value: string }>;
+  deletes: string[];
 }
 
-function fakeSecrets(): RecordingSecrets {
+function fakeSecrets(preset: string[] = []): RecordingSecrets {
   const sets: Array<{ name: string; value: string }> = [];
+  const deletes: string[] = [];
+  const present = new Set(preset);
   return {
     sets,
-    list: async () => sets.map(s => s.name),
+    deletes,
+    list: async () => [...present],
     set: async (name: string, value: string) => {
       sets.push({ name, value });
+      present.add(name);
+    },
+    delete: async (name: string) => {
+      deletes.push(name);
+      present.delete(name);
+    },
+  };
+}
+
+/** Collects published audit events; `fail` makes publish reject (audit write failure). */
+function fakeBus(fail = false) {
+  const published: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const bus = {
+    publish: vi.fn(async (_layer: string, event: { type: string; payload: Record<string, unknown> }) => {
+      if (fail) throw new Error('audit down');
+      published.push(event);
+    }),
+  } as unknown as EventBus;
+  return { bus, published };
+}
+
+function toolEntry(name: string, state: RegistryEntry['state'], requires: string[], optional: string[] = []): RegistryEntry {
+  return {
+    name, kind: 'tool', state, installedAt: null, installedBy: null, enabledAt: null, enabledBy: null,
+    metadata: {
+      name, description: 'd', version: '1.0.0', requiresSecrets: requires,
+      optionalSecrets: optional.map(n => ({ name: n, purpose: 'adds a thing' })),
     },
   };
 }
 
 // Minimal RegistryService fake — only declaredSecretNames() is called by these routes.
-function fakeRegistry(declared: string[] = [DECLARED_SECRET]): RegistryService {
+function fakeRegistry(declared: string[] = [DECLARED_SECRET], tools: RegistryEntry[] = []): RegistryService {
   const base: Partial<RegistryService> = {
     declaredSecretNames: () => declared,
+    list: async () => tools,
   };
   return base as RegistryService;
 }
@@ -42,11 +80,18 @@ function fakeRegistry(declared: string[] = [DECLARED_SECRET]): RegistryService {
 async function build(
   secretsService: VaultSecretsPort,
   registryService: RegistryService,
+  extra: { bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }> } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify();
   await app.register(vaultRoutes, {
     secretsService,
     registryService,
+    mcpRegistryService: extra.mcp,
+    channelRegistryService: extra.channels,
+    emailAccounts: extra.emailAccounts
+      ? { list: async () => extra.emailAccounts!.map(a => ({ ...a, selfEmail: `${a.name}@example.com`, provider: 'nylas', createdAt: new Date(), createdBy: 'test', updatedAt: new Date() })) }
+      : undefined,
+    bus: extra.bus ?? fakeBus().bus,
     webAppBootstrapSecret: BOOTSTRAP,
     sessions: new Map(),
   });
@@ -62,6 +107,10 @@ function put(app: FastifyInstance, name: string, body: unknown) {
     headers: auth,
     payload: body as object,
   });
+}
+
+function del(app: FastifyInstance, name: string, query = '') {
+  return app.inject({ method: 'DELETE', url: `/api/vault/secrets/${name}${query}`, headers: auth });
 }
 
 describe('vault routes', () => {
@@ -196,5 +245,209 @@ describe('vault routes', () => {
       expect(res.statusCode, name).toBe(400);
     }
     expect(secrets.sets).toEqual([]);
+  });
+
+  // --- delete + audit + list (#2453) ---
+
+  it('PUT and DELETE reject the same unknown names', async () => {
+    const secrets = fakeSecrets(['random_key', 'channel.email.not_a_field']);
+    app = await build(secrets, fakeRegistry());
+    for (const name of ['random_key', 'channel.email.not_a_field', 'channel.email.curia.nylas_api_key']) {
+      expect((await put(app, name, { value: 'x' })).statusCode, `PUT ${name}`).toBe(400);
+      expect((await del(app, name)).statusCode, `DELETE ${name}`).toBe(400);
+    }
+    expect(secrets.sets).toEqual([]);
+    expect(secrets.deletes).toEqual([]);
+  });
+
+  it('DELETE removes an allowlisted secret and repeating it is idempotent', async () => {
+    const secrets = fakeSecrets([DECLARED_SECRET]);
+    app = await build(secrets, fakeRegistry());
+    const first = await del(app, DECLARED_SECRET);
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toEqual({ ok: true, removed: true });
+    const second = await del(app, DECLARED_SECRET);
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual({ ok: true, removed: false });
+    expect(secrets.deletes).toEqual([DECLARED_SECRET]);
+  });
+
+  it('DELETE without auth returns 401 and removes nothing', async () => {
+    const secrets = fakeSecrets([DECLARED_SECRET]);
+    app = await build(secrets, fakeRegistry());
+    const res = await app.inject({ method: 'DELETE', url: `/api/vault/secrets/${DECLARED_SECRET}` });
+    expect(res.statusCode).toBe(401);
+    expect(secrets.deletes).toEqual([]);
+  });
+
+  it('refuses to delete a secret an enabled tool requires, naming the tool, unless forced', async () => {
+    const secrets = fakeSecrets(['k']);
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'])]));
+    const refused = await del(app, 'k');
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toContain("tool 'needs-k'");
+    expect(refused.json().affected).toEqual([{ kind: 'tool', name: 'needs-k' }]);
+    expect(secrets.deletes).toEqual([]);
+
+    const forced = await del(app, 'k', '?force=true');
+    expect(forced.statusCode).toBe(200);
+    expect(secrets.deletes).toEqual(['k']);
+  });
+
+  it('deletes freely when only a disabled tool requires it or the tool treats it as optional', async () => {
+    const secrets = fakeSecrets(['req', 'opt']);
+    app = await build(secrets, fakeRegistry(['req', 'opt'], [
+      toolEntry('off', 'installed', ['req']),
+      toolEntry('on', 'enabled', [], ['opt']),
+    ]));
+    expect((await del(app, 'req')).statusCode).toBe(200);
+    expect((await del(app, 'opt')).statusCode).toBe(200);
+  });
+
+  it('refuses to delete a credential an enabled channel requires', async () => {
+    const secrets = fakeSecrets(['channel.slack.bot_token']);
+    const channels = { enabledChannelNames: async () => new Set(['slack']) } as unknown as ChannelRegistryService;
+    app = await build(secrets, fakeRegistry(), { channels });
+    const res = await del(app, 'channel.slack.bot_token');
+    expect(res.statusCode).toBe(409);
+    expect(res.json().affected).toEqual([{ kind: 'channel', name: 'slack' }]);
+    // Channel credentials are read at boot, so the message says when it bites.
+    expect(res.json().error).toContain('after the next restart');
+  });
+
+  it('says a tool secret stops working on its next call', async () => {
+    const secrets = fakeSecrets(['k']);
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'])]));
+    expect((await del(app, 'k')).json().error).toContain('on its next call');
+  });
+
+  it('refuses to delete the principal calendar grant, but not the optional address', async () => {
+    const secrets = fakeSecrets(['ceo_nylas_grant_id', 'ceo_self_email']);
+    app = await build(secrets, fakeRegistry());
+    const refused = await del(app, 'ceo_nylas_grant_id');
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toContain('Calendar and principal inbox');
+    expect((await del(app, 'ceo_self_email')).statusCode).toBe(200);
+  });
+
+  it('audits set and delete in two stages by key name with no value', async () => {
+    const { bus, published } = fakeBus();
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry(), { bus });
+    await put(app, DECLARED_SECRET, { value: 'super-secret-value' });
+    await del(app, DECLARED_SECRET);
+    expect(published.map(e => e.type)).toEqual(['secret.changed', 'secret.changed', 'secret.changed', 'secret.changed']);
+    expect(published.map(e => [e.payload['action'], e.payload['stage'], e.payload['secretName']])).toEqual([
+      ['set', 'requested', DECLARED_SECRET],
+      ['set', 'completed', DECLARED_SECRET],
+      ['delete', 'requested', DECLARED_SECRET],
+      ['delete', 'completed', DECLARED_SECRET],
+    ]);
+    expect(JSON.stringify(published)).not.toContain('super-secret-value');
+  });
+
+  // A write that throws may have committed, so it gets no outcome row at all: `requested`
+  // alone reads as "not done or unknown", never as a confirmed failure.
+  it('records no outcome when the vault write throws', async () => {
+    const { bus, published } = fakeBus();
+    const secrets = fakeSecrets([DECLARED_SECRET]);
+    secrets.set = async () => { throw new Error('db down'); };
+    secrets.delete = async () => { throw new Error('db down'); };
+    app = await build(secrets, fakeRegistry(), { bus });
+    expect((await put(app, DECLARED_SECRET, { value: 'v' })).statusCode).toBe(500);
+    expect((await del(app, DECLARED_SECRET)).statusCode).toBe(500);
+    expect(published.map(e => `${e.payload['action']}:${e.payload['stage']}`)).toEqual([
+      'set:requested', 'delete:requested',
+    ]);
+  });
+
+  it('records force and the affected components on a forced delete', async () => {
+    const { bus, published } = fakeBus();
+    const secrets = fakeSecrets(['k']);
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'])]), { bus });
+    await del(app, 'k', '?force=true');
+    expect(published.map(e => e.payload)).toEqual([
+      { secretName: 'k', action: 'delete', stage: 'requested', initiatedBy: 'bootstrap_secret', force: true, affected: [{ kind: 'tool', name: 'needs-k' }] },
+      { secretName: 'k', action: 'delete', stage: 'completed', initiatedBy: 'bootstrap_secret', force: true, affected: [{ kind: 'tool', name: 'needs-k' }] },
+    ]);
+  });
+
+  it('records the console session as the actor when a session cookie authenticated the change', async () => {
+    const { bus, published } = fakeBus();
+    const sessions = new Map([[hashToken('tok'), { id: 'sess-1', expiresAt: Date.now() + 60_000, renewedAt: Date.now() }]]);
+    app = Fastify();
+    await app.register(cookie);
+    await app.register(vaultRoutes, { secretsService: fakeSecrets(), registryService: fakeRegistry(), bus, webAppBootstrapSecret: BOOTSTRAP, sessions });
+    const res = await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_SECRET}`, cookies: { curia_session: 'tok' }, payload: { value: 'v' } });
+    expect(res.statusCode).toBe(200);
+    expect(published.map(e => [e.payload['initiatedBy'], e.payload['actorSessionId']])).toEqual([
+      ['session', 'sess-1'], ['session', 'sess-1'],
+    ]);
+  });
+
+  it("refuses to delete an enabled email account's grant without force", async () => {
+    const grant = 'channel.email.work.nylas_grant_id';
+    const secrets = fakeSecrets([grant, 'channel.email.old.nylas_grant_id']);
+    app = await build(secrets, fakeRegistry(), { emailAccounts: [{ name: 'work', enabled: true }, { name: 'old', enabled: false }] });
+    const refused = await del(app, grant);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toContain("email account 'work' (stops working after the next restart)");
+    expect(refused.json().affected).toEqual([{ kind: 'email-account', name: 'work' }]);
+    expect(secrets.deletes).toEqual([]);
+    // A disabled account does not block, and force goes through.
+    expect((await del(app, 'channel.email.old.nylas_grant_id')).statusCode).toBe(200);
+    expect((await del(app, grant, '?force=true')).statusCode).toBe(200);
+    expect(secrets.deletes).toEqual(['channel.email.old.nylas_grant_id', grant]);
+  });
+
+  it('refuses a set or delete when the audit row cannot be written', async () => {
+    const secrets = fakeSecrets([DECLARED_SECRET]);
+    app = await build(secrets, fakeRegistry(), { bus: fakeBus(true).bus });
+    expect((await put(app, DECLARED_SECRET, { value: 'v' })).statusCode).toBe(500);
+    expect((await del(app, DECLARED_SECRET)).statusCode).toBe(500);
+    expect(secrets.sets).toEqual([]);
+    expect(secrets.deletes).toEqual([]);
+  });
+
+  it('does not count a disabled declarer as making a secret required', async () => {
+    // Slack is not enabled (no registry): its credentials are declared but not "missing".
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('off', 'installed', ['k'])]));
+    const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+    const byName = new Map((res.json().secrets as Array<{ name: string; required: boolean; declaredBy: Array<{ required: boolean; enabled: boolean }> }>).map(x => [x.name, x]));
+    expect(byName.get('k')).toMatchObject({ required: false, declaredBy: [{ required: true, enabled: false }] });
+    expect(byName.get('channel.slack.bot_token')).toMatchObject({ required: false, declaredBy: [{ required: true, enabled: false }] });
+  });
+
+  it('reports the environment variable supplying a value, by name only', async () => {
+    process.env['VAULT_TEST_FALLBACK_KEY'] = 'env-secret-value';
+    try {
+      app = await build(fakeSecrets(), fakeRegistry(['vault_test_fallback_key'], [toolEntry('t', 'enabled', [], ['vault_test_fallback_key'])]));
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+      const row = (res.json().secrets as Array<{ name: string; envFallback: string | null }>).find(x => x.name === 'vault_test_fallback_key');
+      expect(row?.envFallback).toBe('VAULT_TEST_FALLBACK_KEY');
+      expect(res.body).not.toContain('env-secret-value');
+    } finally {
+      delete process.env['VAULT_TEST_FALLBACK_KEY'];
+    }
+  });
+
+  it('lists allowlisted secrets with status and declarers, never values', async () => {
+    const secrets = fakeSecrets(['k', 'channel.email.curia.nylas_grant_id']);
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'], ['opt'])]));
+    const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+    expect(res.statusCode).toBe(200);
+    const list = res.json().secrets as Array<{ name: string; configured: boolean; required: boolean; declaredBy: Array<{ kind: string; name: string }> }>;
+    const byName = new Map(list.map(s => [s.name, s]));
+    expect(byName.get('k')).toMatchObject({ configured: true, required: true, declaredBy: [{ kind: 'tool', name: 'needs-k' }] });
+    expect(byName.get('opt')).toMatchObject({ configured: false, required: false });
+    expect(byName.get('channel.slack.bot_token')).toMatchObject({ configured: false, required: false });
+    expect(byName.get('ceo_self_email')).toMatchObject({ configured: false, required: false });
+    expect(byName.get('ceo_nylas_grant_id')).toMatchObject({ configured: false, required: true });
+    // No email_accounts row for 'curia': listed as a leftover so it can still be removed.
+    expect(byName.get('channel.email.curia.nylas_grant_id')).toMatchObject({
+      configured: true, required: false, declaredBy: [{ kind: 'email-account', name: 'curia (account removed)' }],
+    });
+    expect(list.map(s => s.name)).toEqual([...list.map(s => s.name)].sort((a, b) => a.localeCompare(b)));
   });
 });
