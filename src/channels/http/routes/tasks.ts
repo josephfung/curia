@@ -79,9 +79,9 @@ export async function taskRoutes(
 
   // Full enriched query for the GET list: joins contacts for display name and
   // uses a correlated subquery to surface the next pending scheduled wake-up.
-  // Open tasks sort first, so the 500-row cap drops old closed tasks before any
-  // open one: the home's Open tasks tile links to this list and must find them
-  // all (#2350). The console sorts the rows itself, so this order only picks rows.
+  // Every open task is returned; the 500-row cap applies to closed tasks only.
+  // The home's Open tasks tile links to this list and must find every task it
+  // counts (#2350). The console filters and sorts the rows itself.
   const TASK_ENRICHED_QUERY = `
     SELECT
       t.id, t.agent_id, t.title, t.intent_anchor, t.description, t.status,
@@ -96,8 +96,14 @@ export async function taskRoutes(
        ORDER BY COALESCE(sj.deferred_wake_at, sj.next_run_at) ASC LIMIT 1) AS next_wake_at
     FROM tasks t
     LEFT JOIN contacts c ON c.id = t.waiting_on_contact_id
-    ORDER BY (t.status = ANY($1::text[])) DESC, t.updated_at DESC
-    LIMIT 500`;
+    WHERE t.status = ANY($1::text[])
+       OR t.id IN (
+         SELECT closed.id FROM tasks closed
+         WHERE NOT (closed.status = ANY($1::text[]))
+         ORDER BY closed.updated_at DESC
+         LIMIT 500
+       )
+    ORDER BY (t.status = ANY($1::text[])) DESC, t.updated_at DESC`;
 
   function serializeTask(row: DbTaskRow) {
     return {

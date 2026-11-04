@@ -151,7 +151,8 @@ interface DrawerProps {
   task: Task | null;
   creating: boolean;
   onClose: () => void;
-  onSaved: (task: Task) => void;
+  /** `created` is true for a new task (POST), false for an edit (PATCH). */
+  onSaved: (task: Task, created: boolean) => void;
   onDeleted: (id: string) => void;
   /** Resolve a task ID to a summary for display in related-task links. */
   lookupTask: (id: string) => { id: string; title: string } | undefined;
@@ -256,7 +257,7 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
 
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { task: Task };
-      onSaved(data.task);
+      onSaved(data.task, creating);
     } catch (err) {
       console.error('[TaskEditDrawer] save failed:', err);
       setError(err instanceof Error ? err.message : 'Save failed');
@@ -622,7 +623,7 @@ export default function TasksPage() {
   const ariaSort = (key: SortKey): 'ascending' | 'descending' | 'none' =>
     sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
 
-  function handleSaved(task: Task) {
+  function handleSaved(task: Task, created: boolean) {
     setTasks(prev => {
       const idx = prev.findIndex(t => t.id === task.id);
       if (idx >= 0) {
@@ -630,9 +631,11 @@ export default function TasksPage() {
         next[idx] = task;
         return next;
       }
-      setFilters({ status: 'all' });
       return [...prev, task];
     });
+    // A new task may not match the current status filter; show it. Outside the
+    // updater, which React requires to be pure (it navigates).
+    if (created) setFilters({ status: 'all' });
     setEditing(task);
     setCreating(false);
   }
