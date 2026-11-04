@@ -181,6 +181,39 @@ describe('SecretViewDrawer', () => {
     expect(document.body.textContent).toContain('Read when Curia starts; individual reads aren\'t recorded.');
   });
 
+  it('fetches uses for a startup-read key with a recorded use', async () => {
+    mocks.respond = path => path.includes('/uses')
+      ? json({ uses: [{ at: new Date().toISOString(), agentId: 'ceo-inbox', toolName: '', source: 'vault', byReference: false }] })
+      : json({});
+    const grant = row({
+      name: 'ceo_nylas_grant_id', kind: 'system', readAtStartup: true, lastUsedAt: new Date().toISOString(),
+      declaredBy: [{ kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true }],
+    });
+    await render(<SecretViewDrawer row={grant} onClose={() => {}} onEdit={() => {}} onRemoved={() => {}} />);
+    await settle();
+    expect(mocks.calls[0]?.path).toBe('/api/vault/secrets/ceo_nylas_grant_id/uses?limit=5');
+    // An empty toolName falls back to the source.
+    expect(document.body.textContent).toContain('ceo-inbox · vault');
+    expect(document.body.textContent).not.toContain('Read when Curia starts');
+  });
+
+  it('does not claim an unset startup-read key is read at startup', async () => {
+    const unset = row({
+      name: 'channel.telegram.bot_token', kind: 'system', configured: false, readAtStartup: true, valueFormat: null,
+      declaredBy: [{ kind: 'channel', name: 'telegram', required: true, enabled: true }],
+    });
+    await render(<SecretViewDrawer row={unset} onClose={() => {}} onEdit={() => {}} onRemoved={() => {}} />);
+    expect(document.body.textContent).not.toContain('Read when Curia starts');
+  });
+
+  it('gives a configured orphan Remove but no Edit or Set value', async () => {
+    const orphan = row({ name: 'old_tool_key', kind: 'system', declaredBy: [] });
+    await render(<SecretViewDrawer row={orphan} onClose={() => {}} onEdit={() => {}} onRemoved={() => {}} />);
+    expect(button('Remove')).toBeDefined();
+    expect(button('Edit')).toBeUndefined();
+    expect(button('Set value')).toBeUndefined();
+  });
+
   it('has no footer buttons for a platform key', async () => {
     const platform = row({
       name: 'api_token', kind: 'platform', required: true, readAtStartup: true,

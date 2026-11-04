@@ -8,6 +8,7 @@ import {
   declarerLabel,
   errorMessage,
   lastUsedText,
+  canEditValue,
   readableLabel,
   removeSecretFlow,
   secretStatus,
@@ -158,18 +159,21 @@ function EnvFallbackNote({ row }: { row: SecretRowData }) {
 interface SecretUse {
   at: string;
   agentId: string | null;
-  toolName: string | null;
+  /** '' when the read wasn't made through a tool. */
+  toolName: string;
   source: string | null;
-  byReference: string | null;
+  byReference: boolean;
 }
 
 function RecentUses({ row }: { row: SecretRowData }) {
   const [uses, setUses] = useState<SecretUse[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Most boot-read keys emit no secret.accessed rows, but a few are also read through
+  // ctx.secret(); fetch only when a use is recorded.
+  const skipFetch = row.readAtStartup && !row.lastUsedAt;
 
   useEffect(() => {
-    // Boot-read keys emit no secret.accessed rows, so there is nothing to fetch.
-    if (row.readAtStartup) return;
+    if (skipFetch) return;
     let cancelled = false;
     setUses(null);
     setError(null);
@@ -184,10 +188,12 @@ function RecentUses({ row }: { row: SecretRowData }) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load recent uses');
       });
     return () => { cancelled = true; };
-  }, [row.name, row.readAtStartup]);
+  }, [row.name, skipFetch]);
 
-  if (row.readAtStartup) {
-    return <p className="secrets-hint">Read when Curia starts; individual reads aren't recorded.</p>;
+  if (skipFetch) {
+    return row.configured || row.envFallback
+      ? <p className="secrets-hint">Read when Curia starts; individual reads aren't recorded.</p>
+      : <p className="secrets-hint">Not set, so there is nothing to read.</p>;
   }
   if (error) return <p className="autonomy-error">{error}</p>;
   if (uses === null) return <p className="secrets-hint">Loading…</p>;
@@ -200,7 +206,7 @@ function RecentUses({ row }: { row: SecretRowData }) {
         <ul className="secrets-uses">
           {uses.map((u, i) => (
             <li key={`${u.at}-${i}`}>
-              <span>{u.agentId ?? 'Unknown agent'} · {u.toolName ?? u.source ?? 'unknown'}</span>
+              <span>{u.agentId ?? 'Unknown agent'} · {u.toolName || u.source || 'unknown'}</span>
               {/* Same relative wording as the Last used column. */}
               <span className="secrets-hint">{lastUsedText({ ...row, readAtStartup: false, configured: true, lastUsedAt: u.at }, now)}</span>
             </li>
@@ -250,7 +256,7 @@ export function SecretViewDrawer({ row, onClose, onEdit, onRemoved }: {
           {busy ? 'Removing…' : 'Remove'}
         </button>
         <div style={{ flex: 1 }} />
-        <button className="btn btn-primary btn-sm" disabled={busy} onClick={onEdit}>Edit</button>
+        {canEditValue(row) && <button className="btn btn-primary btn-sm" disabled={busy} onClick={onEdit}>Edit</button>}
       </>
     );
   }

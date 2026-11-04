@@ -105,6 +105,12 @@ export function secretStatus(row: SecretRowData): SecretStatus {
   return 'not_set';
 }
 
+/** Whether the console can set or change this row's value. Platform keys belong to the
+ *  deployment; an orphan (no declarer) can be removed but not set. */
+export function canEditValue(row: SecretRowData): boolean {
+  return row.kind !== 'platform' && !(row.kind === 'system' && row.declaredBy.length === 0);
+}
+
 /** Hostname of a login URL: lower-cased, leading "www." stripped; null when absent or unparseable. */
 export function siteHost(loginUrl?: string): string | null {
   if (!loginUrl) return null;
@@ -222,11 +228,13 @@ export function readableLabel(name: string): string {
 /** Text for the "Last used" cell. "Used" means Curia read it. The short date past 30 days
  *  uses the viewer's zone; `timeZone` exists so tests can pin one. */
 export function lastUsedText(row: SecretRowData, now: Date, timeZone?: string): string {
-  // A boot-read key with no vault value and no environment fallback is never read at all.
-  if (row.readAtStartup) return row.configured || row.envFallback ? 'At startup' : 'n/a';
-  if (!row.lastUsedAt) return row.configured ? 'Never' : 'n/a';
-  const then = new Date(row.lastUsedAt);
-  if (Number.isNaN(then.getTime())) return 'Never';
+  // A recorded read wins even for a boot-read key: some are also read through ctx.secret().
+  const then = row.lastUsedAt ? new Date(row.lastUsedAt) : null;
+  if (!then || Number.isNaN(then.getTime())) {
+    // A boot-read key with no vault value and no environment fallback is never read at all.
+    if (row.readAtStartup) return row.configured || row.envFallback ? 'At startup' : 'n/a';
+    return row.configured ? 'Never' : 'n/a';
+  }
   const minutes = Math.max(0, Math.floor((now.getTime() - then.getTime()) / 60_000));
   if (minutes < 1) return 'just now';
   if (minutes < 60) return `${minutes}m ago`;

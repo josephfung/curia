@@ -11,6 +11,7 @@ import {
   filterCounts,
   filterSecrets,
   lastUsedText,
+  canEditValue,
   siteHost,
   sortSecrets,
   type SecretFilters,
@@ -274,11 +275,11 @@ export function SecretsPage() {
                             <td><StatusPill row={r} /></td>
                             <td><UsedFor row={r} sameSite={hints.get(r.name)} /></td>
                             <td className={`secrets-nowrap ${r.updatedAt ? 'cell-mono' : 'cell-muted'}`}>{shortDate(r.updatedAt, now)}</td>
-                            <td className={`secrets-nowrap ${r.lastUsedAt && !r.readAtStartup ? 'cell-mono' : 'cell-muted'}`}>{lastUsedText(r, now)}</td>
+                            <td className={`secrets-nowrap ${r.lastUsedAt ? 'cell-mono' : 'cell-muted'}`}>{lastUsedText(r, now)}</td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>
-                                {/* Platform keys belong to the deployment: no edit affordance. */}
-                                {r.kind !== 'platform' && (
+                                {/* Platform keys belong to the deployment and orphans can only be removed: no edit affordance. */}
+                                {canEditValue(r) && (
                                   <button className="btn-icon" title="Edit" aria-label={`Edit ${r.name}`} onClick={() => openEdit(r)}>
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                       <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>

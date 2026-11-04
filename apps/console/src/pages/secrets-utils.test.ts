@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   declarerLabel, forceRemoveConfirmation, removeSecretFlow, secretStatus, filterSecrets, filterCounts,
-  sortSecrets, siteHost, duplicateSiteHints, readableLabel, lastUsedText,
+  sortSecrets, siteHost, duplicateSiteHints, readableLabel, lastUsedText, canEditValue,
   type SecretRowData, type SecretDeclarer, type SecretFilters,
 } from './secrets-utils.js';
 
@@ -216,11 +216,24 @@ describe('readableLabel', () => {
   });
 });
 
+describe('canEditValue', () => {
+  it('is false for platform keys and orphans, true otherwise', () => {
+    expect(canEditValue(row({ kind: 'platform' }))).toBe(false);
+    expect(canEditValue(row({ kind: 'system', declaredBy: [] }))).toBe(false);
+    expect(canEditValue(row({ kind: 'personal', declaredBy: [] }))).toBe(true);
+    expect(canEditValue(row({ kind: 'system', declaredBy: [{ kind: 'tool', name: 't', required: true, enabled: true }] }))).toBe(true);
+  });
+});
+
 describe('lastUsedText', () => {
   const now = new Date('2026-11-04T12:00:00Z');
   it('says At startup for startup reads', () => {
     expect(lastUsedText(row({ readAtStartup: true, configured: true }), now)).toBe('At startup');
     expect(lastUsedText(row({ readAtStartup: true, configured: false, envFallback: 'TELEGRAM_BOT_TOKEN' }), now)).toBe('At startup');
+  });
+  it('shows the recorded use of a startup-read key instead of the startup text', () => {
+    const used = row({ readAtStartup: true, configured: true, lastUsedAt: '2026-11-04T09:00:00Z' });
+    expect(lastUsedText(used, now)).toBe('3h ago');
   });
   it('says n/a for a startup key with nothing to read', () => {
     expect(lastUsedText(row({ readAtStartup: true, configured: false, envFallback: null }), now)).toBe('n/a');
