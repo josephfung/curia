@@ -89,6 +89,25 @@ describe('filterOptions', () => {
     expect(opts.types).toContainEqual({ value: 'project', count: 0 });
     expect(opts.sensitivities.at(-1)).toEqual({ value: 'secret', count: 0 });
   });
+
+  it('carries whole-graph totals and lists graph types missing from the canvas (#2479)', () => {
+    const totals = {
+      byType: { person: 40, fact: 900, project: 12 },
+      bySensitivity: { internal: 930, restricted: 2, confidential: 20 },
+    };
+    const opts = filterOptions(nodes, emptyFilter(), totals);
+    expect(opts.types).toEqual([
+      { value: 'fact', count: 1, total: 900 },
+      { value: 'person', count: 2, total: 40 },
+      { value: 'project', count: 0, total: 12 },
+    ]);
+    expect(opts.sensitivities).toEqual([
+      { value: 'public', count: 0, total: 0 },
+      { value: 'internal', count: 2, total: 930 },
+      { value: 'confidential', count: 0, total: 20 },
+      { value: 'restricted', count: 1, total: 2 },
+    ]);
+  });
 });
 
 describe('normalizeSensitivity', () => {
