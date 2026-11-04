@@ -25,6 +25,12 @@ import {
   type ToolCall,
   type ToolDescription,
 } from './describers.js';
+import {
+  EMPTY_CATALOG,
+  GENERIC_ACTION_ATTEMPT,
+  GENERIC_ACTION_TALLY,
+  type DescriberCatalog,
+} from './learned-describers.js';
 import type { ActivityAutonomy, ActivityItem, ActivityLink, ActivityOutcome } from './types.js';
 
 /** What the repo hands the projection (AuditLogRepo.findActivityJobs). */
@@ -42,6 +48,8 @@ export interface ProjectionContext extends DescribeContext {
   jobLabel(jobId: string): string | null;
   /** Terminal autonomy_action_log rows covering the window. */
   autonomyRows: ActionLogRow[];
+  /** Learned describers and known writes for tools with no code describer (ADR-059). */
+  catalog?: DescriberCatalog;
 }
 
 /** Everything the service must resolve before projecting. */
@@ -59,6 +67,8 @@ const AUTONOMY_MATCH_WINDOW_MS = 5 * 60 * 1000;
 const LINK_PAD_MS = 60 * 1000;
 
 interface Call extends ToolCall {
+  /** The agent whose task made the call: a delegated specialist, not the root's agent. */
+  agentId: string;
   taskEventId: string;
   conversationId: string | null;
   ts: Date;
@@ -85,6 +95,11 @@ function delegationOriginOf(task: AuditLogRow): string | null {
   return typeof id === 'string' && id.length > 0 ? id : null;
 }
 
+function agentOf(task: AuditLogRow): string {
+  const agentId = task.payload.agentId;
+  return typeof agentId === 'string' && agentId.length > 0 ? agentId : task.sourceId;
+}
+
 function readCallOk(row: AuditLogRow): boolean {
   // Structured outcome column first; payload for pre-hardening rows.
   if (row.outcome === 'success') return true;
@@ -96,6 +111,8 @@ function readCallOk(row: AuditLogRow): boolean {
 function buildJobs(rows: ActivityRows): Job[] {
   const jobs = new Map<string, Job>();
   const rootOfTask = new Map<string, string>();
+  const agentOfTask = new Map<string, string>();
+  for (const task of [...rows.roots, ...rows.delegated]) agentOfTask.set(task.id, agentOf(task));
   for (const root of rows.roots) {
     jobs.set(root.id, {
       root,
@@ -170,6 +187,7 @@ function buildJobs(rows: ActivityRows): Job[] {
       input: rec(invoke.payload.input) ?? {},
       data,
       ok,
+      agentId: agentOfTask.get(invoke.parentEventId!) ?? agentOf(job.root),
       taskEventId: invoke.parentEventId!,
       conversationId: invoke.conversationId,
       ts: invoke.timestamp,
@@ -273,17 +291,61 @@ function conversationalFallback(job: Job): string | null {
   return 'answered a question';
 }
 
+/** Lookup lines named by tool family, most specific first. */
+const LOOKUP_PREFIX_RULES: ReadonlyArray<{ matches: (toolName: string) => boolean; phrase: string }> = [
+  { matches: (t) => t.startsWith('ceo-inbox-') || t.startsWith('email-'), phrase: 'checked the inbox' },
+  { matches: (t) => t.startsWith('calendar-'), phrase: 'checked the calendar' },
+  { matches: (t) => t.startsWith('contact-') || t === 'entity-context', phrase: 'looked up contacts' },
+];
+
+/**
+ * The lookup line a tool family already gets, or null. The learner skips reads
+ * this names: a learned phrase for them would never show.
+ */
+export function lookupPrefixPhrase(toolName: string): string | null {
+  return LOOKUP_PREFIX_RULES.find((rule) => rule.matches(toolName))?.phrase ?? null;
+}
+
 /**
  * Line for a job whose only tool work was lookups: nothing changed and no reply
- * went out, but Curia did check something. Named by what it read, never by tool.
+ * went out, but Curia did check something. Named by what it read, never by tool:
+ * a known tool family first, then a learned read ("checked the expense sheet").
  */
-function lookupFallback(job: Job): string | null {
-  const read = job.calls.filter((c) => c.ok).map((c) => c.toolName);
+function lookupFallback(job: Job, catalog: DescriberCatalog): string | null {
+  const read = job.calls.filter((c) => c.ok);
   if (read.length === 0) return null;
-  if (read.some((t) => t.startsWith('ceo-inbox-') || t.startsWith('email-'))) return 'checked the inbox';
-  if (read.some((t) => t.startsWith('calendar-'))) return 'checked the calendar';
-  if (read.some((t) => t.startsWith('contact-') || t === 'entity-context')) return 'looked up contacts';
+  for (const rule of LOOKUP_PREFIX_RULES) {
+    if (read.some((c) => rule.matches(c.toolName))) return rule.phrase;
+  }
+  for (const call of read) {
+    const learned = catalog.learned(call.agentId, call.toolName);
+    if (learned?.effect === 'read') return `${learned.verb} ${learned.one}`;
+  }
   return 'looked into a request';
+}
+
+/**
+ * Description for a call with no code describer (ADR-059). A learned write is a
+ * tally; a known write with no row yet is the generic "took an action". Reads,
+ * and tools with no row and no signal, stay unnamed, so they are never a hiccup.
+ */
+function describeUndescribed(call: Call, catalog: DescriberCatalog): ToolDescription | null {
+  const learned = catalog.learned(call.agentId, call.toolName);
+  if (learned) {
+    if (learned.effect !== 'write') return null;
+    const tally = { verb: learned.verb, one: learned.one, many: learned.many };
+    return {
+      prominence: 'count',
+      text: call.ok ? formatTally(tally, 1) : `couldn't ${learned.attempt}`,
+      tally,
+    };
+  }
+  if (!catalog.knownWrite(call.toolName)) return null;
+  return {
+    prominence: 'count',
+    text: call.ok ? formatTally(GENERIC_ACTION_TALLY, 1) : `couldn't ${GENERIC_ACTION_ATTEMPT}`,
+    tally: GENERIC_ACTION_TALLY,
+  };
 }
 
 function linkFor(job: Job, jobId: string | undefined): ActivityLink | null {
@@ -307,9 +369,10 @@ function projectJob(job: Job, ctx: ProjectionContext): ActivityItem | null {
   const counts: ToolDescription[] = [];
   const failures: ToolDescription[] = [];
   const autonomy: ActivityAutonomy[] = [];
+  const catalog = ctx.catalog ?? EMPTY_CATALOG;
 
   for (const call of job.calls) {
-    const desc = describeToolCall(call, ctx);
+    const desc = describeToolCall(call, ctx) ?? describeUndescribed(call, catalog);
     if (!desc || desc.prominence === 'hidden') continue;
     if (!call.ok) failures.push(desc);
     else if (desc.prominence === 'line') lines.push(desc);
@@ -358,7 +421,7 @@ function projectJob(job: Job, ctx: ProjectionContext): ActivityItem | null {
     headline = 'ran into an error';
     details = [];
   } else {
-    headline = conversationalFallback(job) ?? lookupFallback(job);
+    headline = conversationalFallback(job) ?? lookupFallback(job, catalog);
     details = [];
   }
 

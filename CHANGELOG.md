@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Learned activity describers** — Recent Activity names custom agents' undescribed writes and counts their failures as hiccups. (#2455)
+- **ADR-059** — tools with no describer get one learned per agent; display only, never autonomy. (#2455)
 - **Secrets page** — Memory → Secrets lists, sets, replaces and removes vault secrets; values never shown. (#2453)
 - **`DELETE /api/vault/secrets/:name`** — removes a declared secret; refused while an enabled component needs it, unless forced. (#2453)
 - **`secret.changed`** — **public API:** two-stage audit event for console secret set and delete; key name only. (#2453)

@@ -9,6 +9,7 @@ import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import { ActivityService } from '../../src/activity/activity-service.js';
 import { timeSavedDetail, timeSavedHelp, UNDESCRIBED_CALL_MINUTES } from '../../src/activity/describers.js';
+import { LearnedDescriberRepo } from '../../src/activity/learned-describer-repo.js';
 import { AuditLogRepo } from '../../src/audit/audit-log-repo.js';
 import { BriefingService } from '../../src/dashboard/briefing-service.js';
 import { HISTOGRAM_DAYS, STATS_WINDOW_DAYS, addCalendarDays, localDayKey, localMidnight } from '../../src/dashboard/briefing.js';
@@ -461,6 +462,117 @@ describeIf('briefing service against Postgres', () => {
       expect(stats.done.previous).toBe(2);
       expect(stats.minutesSaved.help).toBe(timeSavedHelp());
       expect(stats.minutesSaved.detail).toBe(timeSavedDetail());
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
+
+  it('counts undescribed writes as the feed does: learned rows per agent, known writes, never reads (#2455)', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      const now = await emptyFortnight(client);
+      const suffix = randomUUID().slice(0, 8);
+      const expenses = `expenses-${suffix}`;
+      const sheetWrite = `sheet-append-${suffix}`;
+      const sheetRead = `sheet-read-${suffix}`;
+      const payment = `custom-payment-${suffix}`;
+      await client.query(
+        `INSERT INTO activity_describers (agent_id, tool_name, effect, verb, one, many, attempt, description_hash, source)
+         VALUES ($1, $2, 'write', 'logged', 'an expense', 'expenses', 'log an expense', 'h', 'learned'),
+                ($1, $3, 'read', 'checked', 'the expense sheet', 'the expense sheet', 'check the expense sheet', 'h', 'hint')`,
+        [expenses, sheetWrite, sheetRead],
+      );
+      const activity = new ActivityService({
+        auditLogRepo: new AuditLogRepo(client as unknown as pg.Pool, logger),
+        contactService: {
+          getContact: async () => null,
+          findContactBySystemRole: async () => null,
+          resolveByChannelIdentity: async () => null,
+        } as unknown as ConstructorParameters<typeof ActivityService>[0]['contactService'],
+        describers: new LearnedDescriberRepo(client),
+        knownWriteTools: () => [payment],
+        officeTimezone: 'UTC',
+        logger,
+      });
+      const bus = { publish: async () => {} } as unknown as EventBus;
+      const service = new BriefingService({
+        pool: asPool(client),
+        actionLogRepo: new ActionLogRepo(client as unknown as pg.Pool, logger),
+        taskRepo: new TaskRepo(client as unknown as pg.Pool, bus, logger),
+        contactService: { findContactBySystemRole: async () => null },
+        activity,
+        knownWriteTools: () => [payment],
+        officeTimezone: 'UTC',
+        logger,
+      });
+
+      let minute = 0;
+      const at = () => new Date(now.getTime() - 3 * 3_600_000 + (minute += 1) * 60_000);
+      const root = (agentId: string, metadata?: Record<string, unknown>) =>
+        seedAudit(client, { timestamp: at(), eventType: 'agent.task', payload: { agentId, channelId: 'internal', ...(metadata ? { metadata } : {}) } });
+      const call = async (taskId: string, toolName: string, ok: boolean) => {
+        const invoke = await seedAudit(client, { timestamp: at(), eventType: 'tool.invoke', parentEventId: taskId, payload: { toolName } });
+        await seedAudit(client, {
+          timestamp: at(),
+          eventType: 'tool.result',
+          parentEventId: invoke,
+          outcome: ok ? 'success' : 'failure',
+          payload: { result: ok ? { success: true, data: {} } : { success: false, error: 'quota' } },
+        });
+      };
+
+      const loggedOnly = await root(expenses);
+      await call(loggedOnly, sheetWrite, true);
+      await call(loggedOnly, sheetWrite, true);
+      const partial = await root(expenses);
+      await call(partial, sheetWrite, true);
+      await call(partial, sheetWrite, false);
+      const failedAlone = await root(expenses);
+      await call(failedAlone, sheetWrite, false);
+      // A retried read: the failure is never a hiccup.
+      const retriedRead = await root(expenses);
+      await call(retriedRead, sheetRead, false);
+      await call(retriedRead, sheetRead, true);
+      // A known write with no row.
+      const knownWrite = await root(expenses);
+      await call(knownWrite, payment, false);
+      // A specialist's failed write under the coordinator's job, keyed by the specialist.
+      const delegating = await root('coordinator');
+      const specialist = await root(expenses, { delegationOrigin: { taskEventId: delegating } });
+      await call(specialist, sheetWrite, false);
+      // The same tool from an agent with no row and no signal stays out.
+      const otherAgent = await root(`other-${suffix}`);
+      await call(otherAgent, sheetWrite, false);
+
+      const stats = await service.stats(now);
+      const hiccups = await service.hiccups(now);
+      expect(hiccups.total).toBe(stats.hiccups.current);
+      expect(hiccups.items.map((item) => [item.id, item.outcome])).toEqual([
+        [delegating, 'failed'],
+        [knownWrite, 'failed'],
+        [failedAlone, 'failed'],
+        [partial, 'partial'],
+      ]);
+      expect(hiccups.total).toBe(4);
+
+      const histogram = await service.histogram(now);
+      const today = histogram.days.find((day) => day.key === localDayKey(now, 'UTC'));
+      expect(today).toMatchObject({ hiccups: 4 });
+      expect(today?.byOutcome).toMatchObject({ partial: 1, failed: 3 });
+
+      // The feed agrees, row by row, and names no tool.
+      const feed = await activity.listByIds([loggedOnly, partial, failedAlone, retriedRead, knownWrite, delegating], now);
+      const byId = new Map(feed.map((item) => [item.id, item]));
+      expect(byId.get(loggedOnly)).toMatchObject({ headline: 'logged 2 expenses', outcome: 'success' });
+      expect(byId.get(partial)).toMatchObject({ headline: 'logged an expense', outcome: 'partial' });
+      expect(byId.get(failedAlone)).toMatchObject({ headline: "couldn't log an expense", outcome: 'failed' });
+      expect(byId.get(retriedRead)).toMatchObject({ headline: 'checked the expense sheet', outcome: 'success' });
+      expect(byId.get(knownWrite)).toMatchObject({ headline: "couldn't finish an action", outcome: 'failed' });
+      expect(byId.get(delegating)).toMatchObject({ outcome: 'failed' });
+      const text = feed.flatMap((item) => [item.headline, ...item.details]).join('\n');
+      for (const tool of [sheetWrite, sheetRead, payment]) expect(text).not.toContain(tool);
     } finally {
       await client.query('ROLLBACK');
       client.release();

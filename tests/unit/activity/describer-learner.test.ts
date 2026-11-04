@@ -1,0 +1,170 @@
+import { describe, expect, it, vi } from 'vitest';
+import { EventBus } from '../../../src/bus/bus.js';
+import { createToolResult, type ToolResultEvent } from '../../../src/bus/events.js';
+import type { LLMProvider, LLMResponse } from '../../../src/agents/llm/provider.js';
+import { DescriberLearner, parseLearnedWords, RETRY_AFTER_MS } from '../../../src/activity/describer-learner.js';
+import { describerHash, type LearnedDescriber, type ToolFacts } from '../../../src/activity/learned-describers.js';
+import { createSilentLogger } from '../../../src/logger.js';
+
+function textResponse(content: string): LLMResponse {
+  return {
+    type: 'text',
+    content,
+    usage: { inputTokens: 10, outputTokens: 5 },
+    provenance: { requestedModel: 'fast', actualModel: 'fast' },
+  } as unknown as LLMResponse;
+}
+
+const GOOD = JSON.stringify({ effect: 'write', verb: 'Logged', one: 'an expense', many: 'expenses', attempt: 'log an expense' });
+
+const TOOLS: Record<string, ToolFacts> = {
+  'sheet-append': { name: 'sheet-append', description: 'Append a row to a spreadsheet', inputSchema: { type: 'object' }, actionRisk: 'none', mcp: true },
+  'sheet-read': { name: 'sheet-read', description: 'Read rows', inputSchema: {}, actionRisk: 'high', mcp: true, readOnlyHint: true },
+  'custom-payment': { name: 'custom-payment', description: 'Pay a vendor', inputSchema: {}, actionRisk: 'critical', mcp: false },
+  'calendar-free-busy': { name: 'calendar-free-busy', description: 'Free/busy', inputSchema: {}, actionRisk: 'none', mcp: false },
+};
+
+function setup(llmResults: Array<LLMResponse | Error>, existing: LearnedDescriber[] = []) {
+  const logger = createSilentLogger();
+  const bus = new EventBus(logger);
+  const chat = vi.fn();
+  for (const result of llmResults) {
+    if (result instanceof Error) chat.mockRejectedValueOnce(result);
+    else chat.mockResolvedValueOnce(result);
+  }
+  const llm: LLMProvider = { id: 'mock', chat } as unknown as LLMProvider;
+  const rows = new Map(existing.map((r) => [`${r.agentId}|${r.toolName}`, r]));
+  const repo = {
+    get: vi.fn(async (agentId: string, toolName: string) => rows.get(`${agentId}|${toolName}`) ?? null),
+    upsert: vi.fn(async (row: LearnedDescriber) => { rows.set(`${row.agentId}|${row.toolName}`, row); return true; }),
+  };
+  let clock = 1_000_000;
+  const learner = new DescriberLearner({
+    bus,
+    llm,
+    model: 'fast-model',
+    repo,
+    toolFacts: (name) => TOOLS[name] ?? null,
+    agentContext: (agentId) => (agentId === 'expenses' ? 'Tracks the principal\'s expenses in a sheet' : null),
+    logger,
+    now: () => clock,
+  });
+  return { bus, chat, repo, rows, learner, advance: (ms: number) => { clock += ms; } };
+}
+
+function result(toolName: string, agentId = 'expenses', ok = true): ToolResultEvent {
+  return createToolResult({
+    agentId,
+    conversationId: 'conv-1',
+    toolName,
+    result: ok ? { success: true, data: { amount: 42 } } : { success: false, error: 'quota' },
+    durationMs: 10,
+    parentEventId: 'invoke-1',
+  });
+}
+
+describe('DescriberLearner', () => {
+  it('learns once per agent and tool, even when several results arrive at once', async () => {
+    const { chat, repo, rows, learner } = setup([textResponse(GOOD)]);
+    await Promise.all([learner.handleResult(result('sheet-append')), learner.handleResult(result('sheet-append'))]);
+    await learner.handleResult(result('sheet-append'));
+    expect(chat).toHaveBeenCalledOnce();
+    expect(repo.upsert).toHaveBeenCalledOnce();
+    expect(rows.get('expenses|sheet-append')).toMatchObject({
+      effect: 'write', verb: 'logged', one: 'an expense', many: 'expenses', attempt: 'log an expense',
+      source: 'learned', descriptionHash: describerHash(TOOLS['sheet-append']!),
+    });
+  });
+
+  it('learns from the bus subscription', async () => {
+    const { bus, chat, learner } = setup([textResponse(GOOD)]);
+    learner.register();
+    await bus.publish('execution', result('sheet-append'));
+    await vi.waitFor(() => expect(chat).toHaveBeenCalledOnce());
+  });
+
+  it('wraps the tool and agent text as data and asks a short no-reasoning call', async () => {
+    const { chat, learner } = setup([textResponse(GOOD)]);
+    await learner.handleResult(result('sheet-append'));
+    const request = chat.mock.calls[0]![0];
+    expect(request).toMatchObject({ model: 'fast-model', options: { max_tokens: 150 } });
+    const user = request.messages[1].content as string;
+    expect(user).toContain('<agent>Tracks the principal\'s expenses in a sheet</agent>');
+    expect(user).toContain('Append a row to a spreadsheet');
+    // Call data (the amount in the result) never reaches the prompt.
+    expect(user).not.toContain('42');
+  });
+
+  it('keeps a deterministic effect over the model\'s answer and records it as a hint', async () => {
+    const readAnswer = JSON.stringify({ effect: 'write', verb: 'checked', one: 'the expense sheet', many: 'expense sheets', attempt: 'check the expense sheet' });
+    const { chat, rows, learner } = setup([textResponse(readAnswer)]);
+    await learner.handleResult(result('sheet-read'));
+    expect(rows.get('expenses|sheet-read')).toMatchObject({ effect: 'read', source: 'hint' });
+    expect(chat.mock.calls[0]![0].messages[1].content).toContain('This tool only reads.');
+  });
+
+  it('skips tools described in code, unknown tools, and reads the feed already names by family', async () => {
+    const { chat, learner } = setup([]);
+    await learner.handleResult(result('email-archive'));
+    await learner.handleResult(result('not-registered'));
+    await learner.handleResult(result('calendar-free-busy'));
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it('leaves an operator row and a current row alone, and relearns when the tool changed', async () => {
+    const base = { verb: 'x', one: 'y', many: 'z', attempt: 'w', effect: 'write' as const };
+    const { chat, rows, learner } = setup([textResponse(GOOD)], [
+      { agentId: 'ops', toolName: 'sheet-append', descriptionHash: 'stale', source: 'operator', ...base },
+      { agentId: 'expenses', toolName: 'custom-payment', descriptionHash: describerHash(TOOLS['custom-payment']!), source: 'hint', ...base },
+      { agentId: 'expenses', toolName: 'sheet-append', descriptionHash: 'stale', source: 'learned', ...base },
+    ]);
+    await learner.handleResult(result('sheet-append', 'ops'));
+    await learner.handleResult(result('custom-payment'));
+    expect(chat).not.toHaveBeenCalled();
+    await learner.handleResult(result('sheet-append'));
+    expect(chat).toHaveBeenCalledOnce();
+    expect(rows.get('expenses|sheet-append')).toMatchObject({ verb: 'logged' });
+    expect(rows.get('ops|sheet-append')).toMatchObject({ verb: 'x', source: 'operator' });
+  });
+
+  it('writes no row when the call fails, and tries again only after the retry interval', async () => {
+    const { chat, repo, learner, advance } = setup([new Error('fast tier down'), textResponse('not json'), textResponse(GOOD)]);
+    await learner.handleResult(result('sheet-append'));
+    expect(repo.upsert).not.toHaveBeenCalled();
+    await learner.handleResult(result('sheet-append'));
+    expect(chat).toHaveBeenCalledOnce();
+    advance(RETRY_AFTER_MS);
+    await learner.handleResult(result('sheet-append'));
+    expect(repo.upsert).not.toHaveBeenCalled();
+    advance(RETRY_AFTER_MS);
+    await learner.handleResult(result('sheet-append'));
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect(repo.upsert).toHaveBeenCalledOnce();
+  });
+});
+
+describe('parseLearnedWords', () => {
+  it('reads JSON inside a fence and lower-cases the words', () => {
+    expect(parseLearnedWords('```json\n' + GOOD + '\n```', 'sheet-append')).toEqual({
+      effect: 'write', verb: 'logged', one: 'an expense', many: 'expenses', attempt: 'log an expense',
+    });
+  });
+
+  it.each([
+    ['a figure', { one: '42 expenses' }],
+    ['the tool name', { one: 'a sheet-append row' }],
+    ['identifier punctuation', { one: 'a sheet_row' }],
+    ['an email address', { one: 'ada@example.com' }],
+    ['a missing field', { attempt: undefined }],
+    ['an unknown effect', { effect: 'delete' }],
+    ['an over-long phrase', { verb: 'logged and then carefully reconciled' }],
+  ])('rejects %s', (_label, change) => {
+    const answer = { ...JSON.parse(GOOD), ...change };
+    expect(parseLearnedWords(JSON.stringify(answer), 'sheet-append')).toBeNull();
+  });
+
+  it('rejects text that is not JSON', () => {
+    expect(parseLearnedWords('logged an expense', 'sheet-append')).toBeNull();
+    expect(parseLearnedWords('{not json}', 'sheet-append')).toBeNull();
+  });
+});

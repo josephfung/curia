@@ -471,6 +471,18 @@ export interface RegisteredTool {
    * preserving the full JSON Schema fidelity from the MCP server's documentation.
    */
   mcpInputSchema?: ToolDefinition['input_schema'];
+  /**
+   * The MCP server's behaviour hints for this tool, when it sent any. Display
+   * only: the activity feed reads them to tell a read from a write (ADR-059).
+   * Autonomy never does, since a server can claim anything about its own tools.
+   */
+  mcpAnnotations?: McpToolAnnotations;
+}
+
+/** The MCP `annotations` hints the activity feed reads (MCP spec, tools/list). */
+export interface McpToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
 }
 
 /**
