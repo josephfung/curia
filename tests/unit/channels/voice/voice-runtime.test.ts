@@ -3978,7 +3978,7 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     // Long frames keep Curia audible past the onset window, so the ignored onset is logged.
     const { runtime, stt, transport, tts, info } = await speakingSession({ tts: new LongFrameTtsProvider(50, 5) });
 
-    stt.emitSpeechStarted({ startedAgoMs: 0 });
+    stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
     emitInbound(transport, ECHO, 40);
     await delay(20);
 
