@@ -189,6 +189,16 @@ describe('describeUnresolvedIdentity', () => {
     )).toBeNull();
   });
 
+  it('does not treat an imperative or a preposition opening a line as a person (#2192)', () => {
+    // Scheduling and RSVP replies: the cue ("invite", "behalf") sits beside an ordinary opener.
+    expect(describeUnresolvedIdentity('Tell me which works and I\'ll send the invite.', [])).toBeNull();
+    expect(describeUnresolvedIdentity('Send us a couple of windows and I\'ll send the invite.', [])).toBeNull();
+    expect(describeUnresolvedIdentity('Best,\nAlex Curia\nOn behalf of Joseph Fung', ['Joseph Fung', 'Alex Curia'])).toBeNull();
+    expect(describeUnresolvedIdentity('If neither works, I\'ll send a new invite.', [])).toBeNull();
+    // An uncommon word opening the sentence is still a name.
+    expect(describeUnresolvedIdentity('Xiaopu would like to attend.', [])).toContain('Xiaopu');
+  });
+
   it('flags a two-letter name when a person cue is nearby', () => {
     expect(describeUnresolvedIdentity('Al Li would like to attend.', [])).toContain('Al Li');
     expect(describeUnresolvedIdentity('Al Li would like to attend.', ['Al Li'])).toBeNull();

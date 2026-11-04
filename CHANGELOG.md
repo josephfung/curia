@@ -292,6 +292,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Band grounding** — a reply on the principal's own open task may say the work is still on. (#2192)
+- **Identity check** — "I'll", imperatives and Curia's own signature no longer read as unresolved people. (#2192)
 - **Console home tiles** — stats query 6× faster; tiles read a background-refreshed cache and shimmer while loading. (#2350)
 - **Phone-family identities** — a number verified on phone, SMS or Signal works on the others, flagged unconfirmed. (#2447)
 - **Setup wizard routing line** — shorter, so the coordinator's specialist roster fits curia-deploy's budget again. (#2466)

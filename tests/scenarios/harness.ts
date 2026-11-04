@@ -34,7 +34,7 @@
 // acts only on the run's own. readGatewayOutcome reads all of it before cleanup removes it.
 import { randomUUID } from 'node:crypto';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
-import { createAgentDiscuss, createAgentTask, createInboundMessage, type AgentTaskEvent, type InjectionDrainPoint } from '../../src/bus/events.js';
+import { createAgentDiscuss, createAgentTask, createInboundMessage, type AgentErrorEvent, type AgentResponseEvent, type AgentTaskEvent, type InjectionDrainPoint } from '../../src/bus/events.js';
 import { stampOriginator } from '../../src/contacts/stamp-originator.js';
 import {
   buildInboundEmailIdentifierBlock,
@@ -437,6 +437,39 @@ export async function createScenarioHarness(
   let delegationCapture: DelegationCapture | undefined;
   // The turn capture, built after boot; the approval-wake observer reads it at event time.
   let lateCapture: ReturnType<typeof createTurnCapture> | undefined;
+  // Rewrite turns of a bounced relay (#2192), by agent.task id: answered by their agent.response.
+  const rewriteTurns = new Map<string, (reply: string | null, relayed: boolean, error?: string) => void>();
+  /**
+   * The rewrite turn a bounced relay started, until its reply has been relayed and reviewed.
+   * Its tool calls are not captured (the first turn's capture may still hold the conversation);
+   * what it sent, held or had bounced is in the run's gateway records like any relay.
+   */
+  const awaitRewriteTurn = (taskId: string, agentId: string, scope: SeedScope): Promise<TurnOutcome> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        rewriteTurns.delete(taskId);
+        resolve({ calls: [], reply: null, error: `Timeout waiting for ${agentId}'s rewrite of a bounced reply (${Math.round(RUN_TIMEOUT_MS / 1000)}s)`, errorKind: 'timeout' });
+      }, RUN_TIMEOUT_MS);
+      rewriteTurns.set(taskId, (reply, relayed, error) => {
+        clearTimeout(timer);
+        rewriteTurns.delete(taskId);
+        if (error !== undefined || !relayed) {
+          resolve({ calls: [], reply, ...(error !== undefined ? { error } : {}) });
+          return;
+        }
+        // The dispatcher relays the reply after this response: it ends delivered or blocked.
+        const before = scope.relayOutcomes;
+        const deadline = Date.now() + RUN_TIMEOUT_MS;
+        const poll = (): void => {
+          if (scope.relayOutcomes > before || Date.now() > deadline) {
+            resolve({ calls: [], reply });
+            return;
+          }
+          setTimeout(poll, 250);
+        };
+        poll();
+      });
+    });
 
   const stack = await createTestModeStack({
     config: { ...config, databaseUrl: withApplicationName(config.databaseUrl) },
@@ -497,14 +530,46 @@ export async function createScenarioHarness(
       // tool calls get the run's stubs, deliver-approval runs for real) and capture it. Called
       // before the agent runtime sees the task, so the capture sees the whole turn.
       bus.subscribe('agent.task', 'system', (event) => {
-        const { conversationId } = (event as AgentTaskEvent).payload;
+        const { conversationId, agentId, metadata } = (event as AgentTaskEvent).payload;
         const scope = currentScope();
-        if (!conversationId.startsWith(APPROVAL_WAKE_PREFIX) || !scope?.throughGateway || !scope.rootConversation) return;
+        if (!scope?.throughGateway || !scope.rootConversation) return;
+        // A relayed reply that band review bounced gets a rewrite turn on the run's own
+        // conversation (the dispatcher's outbound.blocked retry, #1355/#2159). Wait for it like a
+        // wake, so the rewritten reply's review and delivery are the run's (#2192). Matched by
+        // its task id, not the conversation: the bounce can land before the capture has closed
+        // the first turn, which still holds the conversation.
+        if (metadata?.['contentBlockRewrite'] === true && conversationId === scope.rootConversation) {
+          if (controller.rootOf(scope.rootConversation) === undefined) return;
+          scope.wakeTurns.push(awaitRewriteTurn(event.id, agentId, scope));
+          return;
+        }
+        if (!conversationId.startsWith(APPROVAL_WAKE_PREFIX)) return;
         // The run already closed (a late wake): its tool calls are refused as stale, as before.
         if (scope.followOnConversations.has(conversationId) || controller.rootOf(scope.rootConversation) === undefined) return;
         scope.followOnConversations.add(conversationId);
         controller.attach(scope.rootConversation, conversationId);
         if (lateCapture) scope.wakeTurns.push(lateCapture.waitFor(conversationId, RUN_TIMEOUT_MS, COORDINATOR));
+      });
+      // How the run's relays ended, so a rewrite turn's wait stops at its relay's outcome.
+      for (const type of ['outbound.delivered', 'outbound.blocked'] as const) {
+        bus.subscribe(type, 'system', () => {
+          const scope = currentScope();
+          if (scope?.throughGateway) scope.relayOutcomes++;
+        });
+      }
+      bus.subscribe('agent.response', 'system', (event) => {
+        const answer = event.parentEventId ? rewriteTurns.get(event.parentEventId) : undefined;
+        if (!answer) return;
+        const { content, suppressDelivery, isError } = (event as AgentResponseEvent).payload;
+        if (isError) { answer(content, false, `rewrite turn returned an error response: ${content.slice(0, 200)}`); return; }
+        // An exact NO_REPLY is lifted out before publish (#1732): nothing is relayed.
+        answer(suppressDelivery && content === '' ? 'NO_REPLY' : content, !suppressDelivery);
+      });
+      bus.subscribe('agent.error', 'system', (event) => {
+        const answer = event.parentEventId ? rewriteTurns.get(event.parentEventId) : undefined;
+        if (!answer) return;
+        const { errorType, message } = (event as AgentErrorEvent).payload;
+        answer(null, false, `rewrite turn agent.error ${errorType}: ${message}`);
       });
       delegationCapture = createDelegationCapture(
         bus,

@@ -3046,9 +3046,11 @@ export class OutboundGateway {
         content: scrubPii(args.messageBody),
         recipientId: args.recipientId,
         reason: 'unresolved_identity',
+        // The reason names the words and how to fix them: a relayed reply's rewrite brief shows
+        // only the findings, and without the words every rewrite repeated them (#2192).
         findings: [{
           rule: 'unresolved-identity',
-          detail: 'Outbound message names a person who is not resolved to a contact ID in this turn',
+          detail: identityReason,
         }],
         parentEventId: args.options?.parentEventId ?? '',
       }));
@@ -3091,6 +3093,9 @@ export class OutboundGateway {
     if (!taskEventId || !state.turnIdentities.has(taskEventId)) return null;
 
     const covered: string[] = [...state.principalNames];
+    // Curia's own name and title, as it signs a reply ("Alex Curia, Digital EA"): its
+    // signature is not a person to resolve (#2192). Live: index.ts updates it on hot-reload.
+    if (this.agentPersona) covered.push(this.agentPersona.displayName, this.agentPersona.title);
     for (const card of state.turnIdentities.get(taskEventId)) {
       covered.push(card.displayName);
       if (card.preferredName) covered.push(card.preferredName);

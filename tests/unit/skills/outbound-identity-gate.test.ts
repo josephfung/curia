@@ -8,6 +8,7 @@ import { ConversationEntityState } from '../../../src/entity-context/conversatio
 import type { ResolvedEntityCard } from '../../../src/agents/resolved-entities.js';
 import type { IdentityGateMode } from '../../../src/config.js';
 import type { Logger } from '../../../src/logger.js';
+import type { AgentPersona } from '../../../src/skills/types.js';
 
 const XIAOPU = '11111111-1111-4111-8111-111111111111';
 const TASK = 'task-turn-3';
@@ -26,7 +27,7 @@ function card(): ResolvedEntityCard {
 
 function gateway(
   entities: ConversationEntityState,
-  options?: { identityGate?: IdentityGateMode; contactService?: ContactService },
+  options?: { identityGate?: IdentityGateMode; contactService?: ContactService; agentPersona?: AgentPersona },
 ) {
   const nylasClient = {
     sendMessage: vi.fn().mockResolvedValue({ id: 'msg-123' }),
@@ -71,6 +72,7 @@ function gateway(
     }],
     conversationEntities: entities,
     identityGate: options?.identityGate,
+    ...(options?.agentPersona ? { agentPersona: options.agentPersona } : {}),
     logger,
   });
   return { gw, nylasClient, bus, warn };
@@ -93,6 +95,42 @@ describe('outbound identity gate (#1818)', () => {
     expect(result.blockedReason).toContain('Xiaopu');
     expect(result.blockedRules).toEqual(['unresolved-identity']);
     expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not block Curia signing with its own name and title (#2192)', async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    const { gw, nylasClient } = gateway(entities, { agentPersona: { displayName: 'Alex Curia', title: 'Digital EA' } });
+
+    const result = await gw.send({
+      channel: 'email',
+      to: 'dani@wrcf.ca',
+      subject: 'RSVP',
+      body: 'Thanks for the invitation: Joseph Fung will attend.\nBest,\nAlex Curia\nDigital EA',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    expect(result.success).toBe(true);
+    expect(nylasClient.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('names the unresolved words in the blocked event, so a relayed reply\'s rewrite can fix them (#2192)', async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    const { gw, bus } = gateway(entities);
+
+    await gw.send({
+      channel: 'email',
+      to: 'dani@wrcf.ca',
+      subject: 'Registration',
+      body: 'Xiaopu Chen would like to attend.',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    const blocked = vi.mocked(bus.publish).mock.calls
+      .map(([, event]) => event)
+      .find((event) => event.type === 'outbound.blocked');
+    expect(blocked?.type).toBe('outbound.blocked');
+    if (blocked?.type !== 'outbound.blocked') return;
+    expect(blocked.payload.findings[0]!.detail).toContain('Xiaopu Chen');
   });
 
   it('names a recipient that matches no contact, since its reason says only "an external recipient" (#2033)', async () => {
