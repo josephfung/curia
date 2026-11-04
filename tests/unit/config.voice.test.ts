@@ -57,6 +57,11 @@ describe('loadYamlConfig: channels.voice shape', () => {
     expect(() => loadYamlConfig(dir)).toThrow('channels.voice must be a YAML mapping');
   });
 
+  it.each(['5', '"voice"', '[voice]'])('rejects channels: %s', (value) => {
+    const dir = writeTempConfig(`channels: ${value}\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('channels must be a YAML mapping');
+  });
+
   it('accepts an empty voice key', () => {
     const dir = writeTempConfig('channels:\n  voice:\n');
     expect(() => loadYamlConfig(dir)).not.toThrow();

@@ -1292,6 +1292,13 @@ export function loadYamlConfig(configDir: string): YamlConfig {
 
   resolveIdentityGateMode(config.filter);
 
+  // channels must be a mapping too: a scalar or list there hides every channel's
+  // settings, voice included, and the voice check below would read undefined.
+  const channelsSection: unknown = config.channels;
+  if (channelsSection !== undefined && channelsSection !== null
+    && (typeof channelsSection !== 'object' || Array.isArray(channelsSection))) {
+    throw new Error(`channels must be a YAML mapping, got: ${JSON.stringify(channelsSection)}`);
+  }
   // channels.voice must be a mapping: a scalar or list there makes every read below
   // undefined, so a bad override would pass and leave onset barge-in on (#2401).
   // null is left alone: an empty `voice:` key (its children commented out) parses as
