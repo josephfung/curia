@@ -650,8 +650,11 @@ _STUB_CMD=""
 # Keep the real functions so they can be restored after the stubbed block.
 eval "_orig_$(declare -f published_bindings)"
 eval "_orig_$(declare -f live_command)"
+eval "_orig_$(declare -f service_running)"
+_STUB_RUNNING=""
 published_bindings() { printf '%s' "$_STUB_BINDINGS"; return "$_STUB_RC"; }
 live_command() { printf '%s' "$_STUB_CMD"; }
+service_running() { [[ -n "$_STUB_RUNNING" ]]; }
 
 # $1 desc, $2 env file contents, $3 stub bindings, $4 want: ok | stopped
 _assert_pg() {
@@ -701,7 +704,9 @@ _assert_http() {
       [[ -z "${_SHELL_HTTP_BIND:-}" ]] || export HTTP_BIND="$_SHELL_HTTP_BIND"
       check_http_exposure "$_xp_env" 2>&1
     )"
-    if [[ "$out" == *"still published beyond loopback"* ]]; then got=warned; else got=quiet; fi
+    if [[ "$out" == *"still published beyond loopback"* ]]; then got=warned
+    elif [[ "$out" == *"does not resolve"* ]]; then got=unresolved
+    else got=quiet; fi
     if [[ "$got" == "$want" ]]; then
         echo "  ✓ http: $desc → $want"; PASS=$((PASS+1))
     else
@@ -713,6 +718,7 @@ _assert_http "loopback asked, old file ignores it"  'HTTP_BIND=127.0.0.1\n'  '0.
 _assert_http "quoted loopback, old file ignores it" 'HTTP_BIND="127.0.0.1"\n' '0.0.0.0:3000' warned
 _assert_http "loopback asked and honoured"          'HTTP_BIND=127.0.0.1\n'  '127.0.0.1:3000' quiet
 _assert_http "loopback with a comment, old file ignores it" 'HTTP_BIND=127.0.0.1 # https\n' '0.0.0.0:3000' warned
+_assert_http "\${...} reference left unresolved"   'HTTP_BIND=${HOST_BIND:-127.0.0.1}\n' '0.0.0.0:3000' unresolved
 _SHELL_HTTP_BIND=127.0.0.1
 _assert_http "loopback asked in the shell, old file ignores it" '' '0.0.0.0:3000' warned
 _SHELL_HTTP_BIND=""
@@ -759,6 +765,8 @@ _assert_lk() {
     if [[ "$out" == *"still published beyond loopback"* ]]; then got=recreate
     elif [[ "$out" == *"is still on loopback"* ]]; then got=not-applied
     elif [[ "$out" == *"is published on:"* ]]; then got=mismatch
+    elif [[ "$out" == *"publishes no port 7880"* ]]; then got=unpublished
+    elif [[ "$out" == *"does not resolve"* ]]; then got=unresolved
     elif [[ "$out" == *"loopback only"* ]]; then got=loopback-note
     elif [[ "$out" == *"--dev credentials"* ]]; then got=dev-warning
     elif [[ -z "$out" ]]; then got=quiet
@@ -780,6 +788,11 @@ _assert_lk "public opt-in, LIVEKIT_COMMAND unset (--dev default)" 'LIVEKIT_HTTP_
 _assert_lk "public opt-in, explicit --dev"      'LIVEKIT_HTTP_BIND=::\nLIVEKIT_COMMAND=--dev --bind 0.0.0.0\n' '[::]:7880' dev-warning
 _assert_lk "specific opt-in, old file ignores it" 'LIVEKIT_HTTP_BIND=10.0.0.5\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' $'0.0.0.0:7880\n[::]:7880' mismatch
 _assert_lk "specific opt-in, honoured"          'LIVEKIT_HTTP_BIND=10.0.0.5\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '10.0.0.5:7880' quiet
+_assert_lk "\${...} reference left unresolved"  'LIVEKIT_HTTP_BIND=${LK:-0.0.0.0}\n' '0.0.0.0:7880'         unresolved
+_STUB_RUNNING=1
+_assert_lk "public opt-in, running, 7880 unpublished" 'LIVEKIT_HTTP_BIND=0.0.0.0\n'     ''                          unpublished
+_assert_lk "unset intent, running, 7880 unpublished"  ''                                ''                          quiet
+_STUB_RUNNING=""
 _assert_lk "public opt-in, not yet recreated off loopback" 'LIVEKIT_HTTP_BIND=0.0.0.0\n' '127.0.0.1:7880' not-applied
 # The running container's command wins over .env: one not recreated keeps --dev.
 _STUB_CMD="--dev --bind 0.0.0.0"
@@ -810,11 +823,25 @@ _assert_lkdev "public opt-in, real config" 'LIVEKIT_HTTP_BIND=0.0.0.0\nLIVEKIT_C
 _assert_lkdev "loopback intent, resumed install still public" 'LIVEKIT_HTTP_BIND=127.0.0.1\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '0.0.0.0:7880' recreate
 _assert_lkdev "unset intent, still public, --dev" ''                                        $'0.0.0.0:7880\n[::]:7880' recreate
 
+# The recreate rows classify on the first message; check the --dev warning
+# separately, for unset and loopback intent alike.
+for _lk_env in '' 'LIVEKIT_HTTP_BIND=127.0.0.1\n'; do
+    printf '%b' "$_lk_env" > "$_xp_env"
+    _STUB_BINDINGS=$'0.0.0.0:7880\n[::]:7880'
+    _out="$(unset LIVEKIT_HTTP_BIND LIVEKIT_COMMAND; check_livekit_exposure "$_xp_env" 2>&1)"
+    if [[ "$_out" == *"--dev credentials"* ]]; then
+        echo "  ✓ livekit (fresh): '${_lk_env%\\n}' intent, public, --dev also warns about the credentials"; PASS=$((PASS+1))
+    else
+        echo "  ✗ livekit (fresh): '${_lk_env%\\n}' intent, public, --dev has no credentials warning"; FAIL=$((FAIL+1))
+    fi
+done
+
 rm -f "$_xp_env"
 # Restore the real functions for anything below.
 eval "$(declare -f _orig_published_bindings | sed '1s/^_orig_//')"
 eval "$(declare -f _orig_live_command | sed '1s/^_orig_//')"
-unset -f _orig_published_bindings _orig_live_command
+eval "$(declare -f _orig_service_running | sed '1s/^_orig_//')"
+unset -f _orig_published_bindings _orig_live_command _orig_service_running
 
 if declare -f published_bindings | grep -q 'docker compose'; then
     echo "  ✓ real published_bindings restored after the stubs"; PASS=$((PASS+1))
@@ -844,12 +871,14 @@ _assert_pb() {
       got="bindings"
       # The exact address must pass through: a rewritten host would hide exposure.
       [[ "$(cat "$outf")" == "$port_out" ]] || got="bindings-mismatch: $(cat "$outf")"
+      [[ "$rc" == 0 ]] || got="bindings but exit $rc"
     elif grep -q "Could not read" "$err"; then
       got=warned
       # Unknown must be reported as such (exit 2) so check_postgres_exposure can ask.
       [[ "$rc" == 2 ]] || got="warned but exit $rc"
     else
       got=empty
+      [[ "$rc" == 0 ]] || got="empty but exit $rc"
     fi
     rm -f "$outf" "$outf.rc" "$err"
     if [[ "$got" == "$want" ]]; then

@@ -207,7 +207,7 @@ install_is_complete() {
 # what the quotes hold, anything after the closing quote (e.g. `# note`) is
 # dropped; an unquoted value ends at a ` #` inline comment, blanks around it
 # trimmed. So HTTP_BIND="127.0.0.1" # note reads as 127.0.0.1. ${VAR}
-# interpolation inside .env is not resolved. Always returns 0: this script runs
+# interpolation inside .env is not resolved (is_unresolved flags it). Always returns 0: this script runs
 # under `set -euo pipefail`, where grep's no-match status would abort the
 # installer from inside `x="$(env_value ...)"`.
 env_value() {
@@ -226,6 +226,12 @@ env_value() {
       ;;
   esac
   printf '%s' "$v"
+}
+
+# Returns 0 when a value ($1) holds a ${...} reference that env_value leaves
+# unresolved, so a check keyed on it can't tell what Compose will use.
+is_unresolved() {
+  [[ "$1" == *'${'* ]]
 }
 
 # Echo VAR as Compose resolves it: the shell's value when the shell sets it
@@ -335,6 +341,15 @@ published_bindings() {
   return 2
 }
 
+# Returns 0 when a compose service has a running container. Distinguishes a
+# running service that publishes nothing from one that is not running at all,
+# which published_bindings alone reports the same way (empty output).
+service_running() {
+  local cid
+  cid="$(docker compose --project-directory "$INSTALL_DIR" ps -q "$1" 2>/dev/null)" || return 1
+  [[ -n "$cid" ]]
+}
+
 # Echo the command a running compose service's container was created with, or
 # nothing when it is not running or cannot be inspected. A container that was
 # not recreated keeps its old command whatever .env now says.
@@ -401,6 +416,12 @@ check_postgres_exposure() {
 check_http_exposure() {
   local env="$1" want bindings
   want="$(compose_var "$env" HTTP_BIND)"
+  if is_unresolved "$want"; then
+    echo "" >&2
+    warn "HTTP_BIND=$want uses a \${...} reference the installer does not resolve, so port 3000's exposure was not checked."
+    hint "Check by hand: docker compose --project-directory \"$INSTALL_DIR\" port curia 3000"
+    return 0
+  fi
   bind_value_is_loopback "$want" || return 0
   bindings="$(published_bindings curia 3000)" || return 0   # unknown: already warned
   bindings_are_loopback "$bindings" && return 0
@@ -448,8 +469,24 @@ warn_public_livekit_dev() {
 #     LIVEKIT_HTTP_BIND does not silence this.
 check_livekit_bind() {
   local env="$1" bindings="$2" want shown
-  [[ -n "$bindings" ]] || return 0   # voice not running
   want="$(compose_var "$env" LIVEKIT_HTTP_BIND)"
+  if [[ -z "$bindings" ]]; then
+    # Nothing published: voice not running, or (an override) running without
+    # 7880. Only the second matters, and only when public access was asked for.
+    if [[ -n "$want" ]] && ! bind_value_is_loopback "$want" && service_running livekit; then
+      echo "" >&2
+      warn "LIVEKIT_HTTP_BIND=$want is set, but the running livekit container publishes no port 7880 (#2408)."
+      hint "Remote browsers can't reach signaling. Check the livekit ports: entry in docker-compose.yml"
+      hint "and any override (COMPOSE_FILE), then: docker compose --project-directory \"$INSTALL_DIR\" --profile voice up -d livekit"
+    fi
+    return 0
+  fi
+  if is_unresolved "$want"; then
+    echo "" >&2
+    warn "LIVEKIT_HTTP_BIND=$want uses a \${...} reference the installer does not resolve, so signaling's exposure was not checked."
+    hint "Check by hand: docker compose --project-directory \"$INSTALL_DIR\" --profile voice port livekit 7880"
+    return 0
+  fi
   shown="$(echo "$bindings" | tr '\n' ' ')"
 
   if [[ -n "$want" ]] && ! bind_value_is_loopback "$want"; then
