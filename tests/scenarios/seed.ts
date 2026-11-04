@@ -101,6 +101,8 @@ export class SeedScope {
   readonly deliveries: RecordedSend[] = [];
   /** Each band review of the run's sends: labels and outcome only (#2312). */
   readonly reviews: RecordedReview[] = [];
+  /** outbound.delivered and outbound.blocked events in this run: a rewrite turn's relay has ended (#2192). */
+  relayOutcomes = 0;
   /** What each approval raised this run shows the principal, by short ref (#2312). */
   readonly approvalDisplays = new Map<string, ApprovalDisplay>();
   /** The run's inbound email as the fake mailbox serves it, by Nylas message id (#2312). */
@@ -142,6 +144,7 @@ export class SeedScope {
     this.wakeTurns.length = 0;
     this.deliveries.length = 0;
     this.reviews.length = 0;
+    this.relayOutcomes = 0;
     this.approvalDisplays.clear();
     this.inboundMessages.clear();
     this.taskIds.clear();

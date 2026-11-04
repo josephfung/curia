@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Personal secrets in the console** — create, edit and remove website logins; platform keys read-only. (#2478)
+- **Band grounding scenarios** — 35a (RSVP dietary details) and 35b (out-of-office claim) join the release gate. (#2192)
 - **Secrets page** — one searchable, sortable list of personal, system and platform secrets with drawers. (#2453)
 - **`DELETE /api/vault/secrets/:name`** — removes declared, personal and orphaned secrets; refused while required unless forced; platform keys get 403. (#2453)
 - **`secret.changed`** — **public API:** two-stage audit of secret set, delete and `details` edits; key names only. (#2453)
@@ -131,6 +132,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`autonomy.gating` defaults to `band`** — the score decides when Curia asks; set `gating: tier` in `local.yaml` to keep tier. (#2192, spec 14)
 - **Open tasks tile** — replaces People known; counts open principal tasks and opens them on Tasks. (#2350)
 - **Voice barge-in** — Curia stops when the caller starts speaking, before words transcribe; Signal calls drop queued audio. (#2401)
 - **`@anthropic-ai/sdk` 1.x** — moves to API version 2026-10-21; Anthropic API requests no longer send `temperature`. (#2439)
@@ -295,6 +297,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Band grounding** — a reply on the principal's own open task may say the work is still on. (#2192)
+- **Identity check** — "I'll", imperatives and Curia's own signature no longer read as unresolved people. (#2192)
+- **Bounced reply rewrites** — keep the first turn's authority, so a fixed reply isn't blocked or held. (#2192)
 - **Console home tiles** — stats query 6× faster; tiles read a background-refreshed cache and shimmer while loading. (#2350)
 - **Phone-family identities** — a number verified on phone, SMS or Signal works on the others, flagged unconfirmed. (#2447)
 - **Setup wizard routing line** — shorter, so the coordinator's specialist roster fits curia-deploy's budget again. (#2466)

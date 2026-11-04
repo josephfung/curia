@@ -61,9 +61,9 @@ Alternatives considered and rejected:
    `secret-pattern`, `system-prompt-fragment`, `internal-structure`, `principal-note-markup`,
    the KG-write block for unknown senders (#1290) and the missing-tier fail-closed rule
    (#1059). `contact-data-leak` and the tier × disclosure table are off under band gating.
-8. **Rollback is one setting.** `autonomy.gating: band | tier` ships as `tier`. Prod flips it
-   to `band`; the default changes after a clean week; the tier code paths are deleted in a
-   follow-up once `band` has run in prod.
+8. **Rollback is one setting.** `autonomy.gating: band | tier` shipped as `tier`. Prod flipped
+   it to `band` on 2026-10-19, and the default became `band` after a clean week (#2192). The
+   tier code paths are deleted one release later (#2194).
 
 ## Consequences
 

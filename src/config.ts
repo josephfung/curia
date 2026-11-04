@@ -355,9 +355,9 @@ export function resolveReportFallbackConfig(yaml: YamlConfig['autonomy']): Repor
   };
 }
 
-/** Resolve autonomy.gating. Ships as 'tier' (#2159); prod flips it, then the default changes. */
+/** Resolve autonomy.gating. Defaults to 'band' (#2192); 'tier' stays selectable until #2194. */
 export function resolveAutonomyGating(yaml: YamlConfig['autonomy']): AutonomyGating {
-  return yaml?.gating ?? 'tier';
+  return yaml?.gating ?? 'band';
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,7 +1064,7 @@ export interface YamlConfig {
     };
   };
   autonomy?: {
-    /** band: the score decides and the judge reviews sends; tier: the pre-#2159 contact-tier gates. Default tier. */
+    /** band: the score decides and the judge reviews sends; tier: the pre-#2159 contact-tier gates. Default band (#2192). */
     gating?: AutonomyGating;
     /**
      * Bypass-ladder thresholds (#1125) — raw autonomy scores governing how much LINEAGE
