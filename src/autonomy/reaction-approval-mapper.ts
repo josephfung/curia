@@ -401,6 +401,8 @@ export class ReactionApprovalMapper {
       },
     );
 
+    if (!reResult.success) await this.declineCardUse(row, 'expired');
+
     try {
       await this.actionLogRepo.insert({
         taskId: row.taskId,
@@ -452,8 +454,8 @@ export class ReactionApprovalMapper {
     );
   }
 
-  /** Settles the card-use request behind a denied approval; nothing for any other row. */
-  private async declineCardUse(row: ActionLogRow): Promise<void> {
+  /** Settles the card-use request behind a denied approval or failed replay; nothing for any other row. */
+  private async declineCardUse(row: ActionLogRow, status: 'denied' | 'expired' = 'denied'): Promise<void> {
     const requestId = cardUseRequestIdOf(row);
     if (requestId === null) return;
     if (!this.cardUse) {
@@ -461,7 +463,7 @@ export class ReactionApprovalMapper {
       return;
     }
     try {
-      await this.cardUse.decline(requestId);
+      await this.cardUse.decline(requestId, status);
     } catch (err) {
       this.log.error({ err, rowId: row.id, requestId }, 'reaction-approval: failed to settle the denied card-use request');
     }

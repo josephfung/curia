@@ -191,6 +191,27 @@ describe('ApproveActionHandler', () => {
       expect(execLayer.invoke).not.toHaveBeenCalled();
     });
 
+    it('settles the request as expired when the replay fails', async () => {
+      const decline = vi.fn().mockResolvedValue(undefined);
+      const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: cardRow }) });
+      const execLayer = makeMockExecutionLayer({ success: false, error: 'boom' });
+      await new ApproveActionHandler().execute(makeCtx({
+        actionLogRepo: repo, bus: makeMockBus(), executionLayer: execLayer, conversationId: 'conv-now',
+        cardUse: { decline } as unknown as ToolContext['cardUse'],
+      }));
+      expect(decline).toHaveBeenCalledWith('req-1', 'expired');
+    });
+
+    it('does not settle the request when the replay succeeds', async () => {
+      const decline = vi.fn();
+      const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: cardRow }) });
+      await new ApproveActionHandler().execute(makeCtx({
+        actionLogRepo: repo, bus: makeMockBus(), executionLayer: makeMockExecutionLayer(), conversationId: 'conv-now',
+        cardUse: { decline } as unknown as ToolContext['cardUse'],
+      }));
+      expect(decline).not.toHaveBeenCalled();
+    });
+
     it('replays a delivered row from a later turn as the coordinator, naming the approving conversation', async () => {
       const { result, execLayer } = await approve(cardRow);
       expect(result.success).toBe(true);

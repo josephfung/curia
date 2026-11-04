@@ -297,11 +297,18 @@ describe('ReactionApprovalMapper', () => {
       expect(decline).not.toHaveBeenCalled();
     });
 
+    it('settles the request as expired when the replay fails', async () => {
+      actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(cardRow());
+      executionLayer.invoke.mockResolvedValue({ success: false, error: 'boom' });
+      await react('thumbsup');
+      expect(decline).toHaveBeenCalledWith('req-1', 'expired');
+    });
+
     it('declines the card-use request and resumes when the principal reacts 👎', async () => {
       actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(cardRow());
       await react('thumbsdown');
       expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'denied', 'principal');
-      expect(decline).toHaveBeenCalledWith('req-1');
+      expect(decline).toHaveBeenCalledWith('req-1', 'denied');
       expect(executionLayer.invoke).not.toHaveBeenCalled();
     });
 

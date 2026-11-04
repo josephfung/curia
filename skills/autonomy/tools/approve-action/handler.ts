@@ -17,7 +17,7 @@ import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipi
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 import { hasPersonalDetails, UNSHOWN_PERSONAL_DETAILS_ERROR } from '../../../../src/autonomy/approval-notification.js';
-import { CARD_USE_CONFIRM_TOOL, SAME_TURN_CARD_USE_ERROR, UNSHOWN_CARD_USE_ERROR } from '../../../../src/secrets/card-use-service.js';
+import { cardUseRequestIdOf, CARD_USE_CONFIRM_TOOL, SAME_TURN_CARD_USE_ERROR, UNSHOWN_CARD_USE_ERROR } from '../../../../src/secrets/card-use-service.js';
 
 export { UNSHOWN_PERSONAL_DETAILS_ERROR };
 
@@ -145,6 +145,21 @@ export class ApproveActionHandler implements ToolHandler {
           taskMetadata: ctx.taskMetadata,
         },
       );
+
+      // A card checkout whose replay failed would leave the request pending and the agent waiting:
+      // settle it as expired so the conversation is resumed (#1358).
+      const failedCardRequestId = reResult.success ? null : cardUseRequestIdOf(row);
+      if (failedCardRequestId !== null) {
+        if (ctx.cardUse) {
+          try {
+            await ctx.cardUse.decline(failedCardRequestId, 'expired');
+          } catch (err) {
+            ctx.log.error({ err, rowId: row.id, failedCardRequestId }, 'approve-action: failed to settle the card-use request after a failed replay');
+          }
+        } else {
+          ctx.log.error({ rowId: row.id, failedCardRequestId }, 'approve-action: cardUse not wired — the failed card request is not settled');
+        }
+      }
 
       // Step 3: Write child row for the re-execution result
       const childOutcome = reResult.success ? 'success' : 'failure';

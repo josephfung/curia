@@ -110,12 +110,28 @@ describe('card-use confirmations from the console (#1358)', () => {
     );
   });
 
+  it('refuses to approve an undelivered confirmation', async () => {
+    const d = deps();
+    const result = await approveFromConsole(row({ toolName: 'card-use-confirm', payload: { request_id: 'req-1' }, notificationSentAt: null }), d, new Date(), { shown: true });
+    expect(result).toMatchObject({ ok: false, status: 409 });
+    expect(d.actionLogRepo.resolveRow).not.toHaveBeenCalled();
+    expect(d.executionLayer!.invoke).not.toHaveBeenCalled();
+  });
+
+  it('settles the request as expired when the replay fails', async () => {
+    const decline = vi.fn(async () => undefined);
+    const d = deps({ cardUse: { decline } });
+    (d.executionLayer!.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ success: false, error: 'boom' });
+    await approveFromConsole(cardRow(), d);
+    expect(decline).toHaveBeenCalledWith('req-1', 'expired');
+  });
+
   it('declines the card-use request when the principal denies it', async () => {
     const decline = vi.fn(async () => undefined);
     const d = deps({ cardUse: { decline } });
     const result = await denyFromConsole(cardRow(), d);
     expect(result).toEqual({ ok: true, sent: false });
-    expect(decline).toHaveBeenCalledWith('req-1');
+    expect(decline).toHaveBeenCalledWith('req-1', 'denied');
     expect(d.executionLayer!.invoke).not.toHaveBeenCalled();
   });
 

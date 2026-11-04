@@ -79,7 +79,7 @@ export const UNSHOWN_CARD_USE_ERROR =
 
 /** approve-action refuses a card-use row filed in the same turn (#1358). */
 export const SAME_TURN_CARD_USE_ERROR =
-  'The principal has to answer this confirmation themselves, in a later message.';
+  'The principal has to answer this confirmation themselves in a later message — ask them to reply "approve N" again or react 👍.';
 
 export const CARD_USE_CONTINUE_MESSAGE = 'Approved. Continue the checkout now in the same browser session.';
 export const CARD_USE_EXPIRED_MESSAGE =

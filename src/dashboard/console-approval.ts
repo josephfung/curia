@@ -16,7 +16,7 @@ import type { TaskOriginator } from '../contacts/types.js';
 import type { Logger } from '../logger.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import { STALE_SEND_APPROVAL_ERROR } from '../skills/_shared/recipient-reference.js';
-import { cardUseRequestIdOf, type CardUseCapability } from '../secrets/card-use-service.js';
+import { CARD_USE_CONFIRM_TOOL, UNSHOWN_CARD_USE_ERROR, cardUseRequestIdOf, type CardUseCapability } from '../secrets/card-use-service.js';
 import { approvalNeedsDraft, approvalReviewSummary, mailboxDraftRef } from './briefing.js';
 
 export type ApprovalOutcome =
@@ -174,7 +174,7 @@ async function rememberDisclosure(
 }
 
 /** A denied card checkout: no grant, and the agent is resumed with "declined" (#1358). */
-async function declineCardUse(deps: ConsoleApprovalDeps, row: ActionLogRow): Promise<void> {
+async function declineCardUse(deps: ConsoleApprovalDeps, row: ActionLogRow, status: 'denied' | 'expired' = 'denied'): Promise<void> {
   const requestId = cardUseRequestIdOf(row);
   if (requestId === null) return;
   if (!deps.cardUse) {
@@ -182,7 +182,7 @@ async function declineCardUse(deps: ConsoleApprovalDeps, row: ActionLogRow): Pro
     return;
   }
   try {
-    await deps.cardUse.decline(requestId);
+    await deps.cardUse.decline(requestId, status);
   } catch (err) {
     deps.logger.error({ err, rowId: row.id, requestId }, 'console-approval: failed to settle the denied card-use request');
   }
@@ -212,6 +212,12 @@ export async function approveFromConsole(
   }
   if (!deps.principalContactId) {
     return { ok: false, status: 503, error: 'No principal is configured.' };
+  }
+
+  // A card checkout the principal was never sent can't be approved unseen, whatever the panel
+  // shows (#1358). Deliver it first.
+  if (row.toolName === CARD_USE_CONFIRM_TOOL && row.notificationSentAt === null) {
+    return { ok: false, status: 409, error: UNSHOWN_CARD_USE_ERROR };
   }
 
   const loaded = await payloadForReview(row, deps);
@@ -256,6 +262,8 @@ export async function approveFromConsole(
       taskMetadata: { originator },
     },
   );
+
+  if (!reResult.success) await declineCardUse(deps, row, 'expired');
 
   try {
     await deps.actionLogRepo.insert({

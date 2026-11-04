@@ -188,9 +188,9 @@ const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 export const SECRET_RESOLVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['web-browser']);
 
 // Saved-card approvals (#1358) — see ctx.cardUse. Hard-allowlisted: declaring `cardUse`
-// elsewhere is refused. dismiss-action may only decline a request; the other two file and
-// confirm it.
-export const CARD_USE_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['card-use-request', 'card-use-confirm', 'dismiss-action']);
+// elsewhere is refused. dismiss-action and deny-action decline a request, and approve-action settles one whose replay
+// failed; the card-use tools file and confirm it.
+export const CARD_USE_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['card-use-request', 'card-use-confirm', 'dismiss-action', 'deny-action', 'approve-action']);
 
 // Names-only `user.*` index (#1497) — see ctx.listUserSecretNames.
 // Hard-allowlisted to list-user-secrets: declaring userSecretIndex elsewhere has no effect.

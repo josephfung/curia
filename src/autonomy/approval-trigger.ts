@@ -179,6 +179,14 @@ export function buildDescription(
   input: Record<string, unknown>,
 ): string {
   // Determine verb
+  // A card checkout shows what is being paid, from the masked display only (#1358).
+  if (toolName === 'card-use-confirm') {
+    const str = (k: string): string => (typeof input[k] === 'string' ? (input[k] as string).trim() : '');
+    const [amount, site, card, purpose] = [str('amount'), str('site'), str('card'), str('purpose')];
+    if (!amount || !site || !card) return 'Pay with a saved card';
+    return truncate(`Pay ${amount} at ${site} with ${card}${purpose ? ` for: ${purpose}` : ''}`, MAX_DESCRIPTION_LENGTH);
+  }
+
   let verb = '';
   for (const rule of VERB_RULES) {
     if (rule.test(toolName)) { verb = rule.verb; break; }
