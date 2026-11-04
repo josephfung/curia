@@ -162,18 +162,20 @@ Getting a grant:
 - A new tool **`card-use-request`** (in the `web` bundle, coordinator only). Inputs, in this
   order: `secret_name`, `site_url`, `amount` (as the page shows it, e.g. "CA$412.30"),
   `purpose` (one line, e.g. "Air Canada YYZ–SFO, Dec 12"), `session_id?`.
-- It never acts on its own call. It always goes through the existing approval path: a
-  `pending_approval` row in `autonomy_action_log`, delivered with `deliver-approval`, and
-  answered the usual ways (reply "approve N", 👍 reaction, console). Holding regardless of
-  score and initiator needs a new execution-layer rule: a tool manifest field
-  `"approval": "always"` that holds every call before any other gate and before the
-  principal-originated skip. `card-use-request` is its only user.
+- It never grants anything itself. It records the request (with the conversation's resume
+  routing, as capture links do) and files a `pending_approval` row for an internal tool,
+  **`card-use-confirm`**, through the existing approval path. That row is delivered with
+  `deliver-approval` and answered the usual ways (reply "approve N", 👍 reaction, console).
+  `card-use-confirm` runs only as an approval replay (`humanApproved`), and refuses any
+  other call, so the principal's yes is the only way a grant gets written. No manifest schema
+  change is needed.
 - The message reads: "Curia wants to pay **CA$412.30** at **aircanada.com** with **Visa
   ••1111 (Personal)** for: Air Canada YYZ–SFO, Dec 12. The amount is what Curia read on the
   page." Brand, last four and label come from public fields.
-- On approval, the replay (`humanApproved`) writes the grant (new table
-  `card_use_grants`: card name, site domain, conversation id, approved_at, approval ref,
-  `number_fills`, `cvv_fills`; incremented atomically on resolve)
+- On approval, the `card-use-confirm` replay writes the grant on the request row (new table
+  `card_use_requests`: card name, site domain, conversation id, resume routing, status,
+  approved_at, approval ref, `number_fills`, `cvv_fills`; the fill counts go up atomically on
+  each resolve)
   and **resumes the originating conversation** with the purpose. That way the agent continues
   the checkout in its warm browser session whichever way the principal answered, the same way
   `secret-capture-resume-subscriber` brings the agent back after a capture. Today only the
@@ -275,10 +277,10 @@ validation is the authority.
 
 - Amend ADR-027 (storage split, bare-ref refusal, discovery through `list-user-secrets`,
   capture through `secret-capture-request`); write **ADR-059: card use needs a per-checkout
-  confirmation** (the `"approval": "always"` rule and grants). Check the next free ADR number
+  confirmation** (the approval-only `card-use-confirm` replay and grants). Check the next free ADR number
   at writing time.
 - CHANGELOG under Unreleased, with public-API notes for `secret.accessed.secretField`, the
-  `card_use.*` events, the `approval` manifest field, and the three tool versions.
+  `card_use.*` events, the `resolveSecretRef` signature change, and the tool versions.
 - `docs/specs/03-tools-and-execution.md` and `06-audit-and-security.md` updated at the next
   docs sync.
 - No setup-wizard catalog entry: a card is not part of first-run setup.
@@ -290,7 +292,7 @@ confirmation gate lands in PR 1, so there's never a window where a card can be f
 a confirmation.
 
 1. **Core.** Registry, migration 118, `setStructured`, resolver `#` and bare-ref refusal,
-   `secretField`, card-use grants, the `approval: always` rule, `card-use-request` and the
+   `secretField`, card-use grants, `card-use-request` / `card-use-confirm` and the
    resume, ADRs.
 2. **Agent surface.** `select` + `secret_ref`, `list-user-secrets` card output and selection
    rule, `secret-capture-request` templates and card `details_only`, migration 119, capture
@@ -367,8 +369,9 @@ a confirmation.
 - Discovery extends `list-user-secrets` and capture extends `secret-capture-request`, instead
   of a new browser action and a new tool.
 - The last four go to the agent as well as the console, so it can name cards when asking.
-- The confirmation reuses the existing approval delivery and answer paths; a new
-  `"approval": "always"` manifest rule makes it unconditional.
+- The confirmation reuses the existing approval delivery and answer paths. It's unconditional
+  because the grant is written only by `card-use-confirm`, which runs only as an approval
+  replay.
 - The amount is what the agent reports from the page; the message says so.
 - A card-use approval must be delivered and answered by the principal after delivery; the
   coordinator can't self-approve. It expires after 30 minutes.
