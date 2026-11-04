@@ -162,6 +162,25 @@ describe('sortSecrets', () => {
   });
 });
 
+describe('sortSecrets by status', () => {
+  const mk = (name: string, over: Partial<SecretRowData>) => row({ name, ...over });
+  const rows = [
+    mk('configured', { configured: true }),
+    mk('orphan', { declaredBy: [] }),
+    mk('env', { envFallback: 'X', required: true }),
+    mk('not_set', {}),
+    mk('missing', { required: true }),
+  ];
+  const order = ['missing', 'not_set', 'env', 'orphan', 'configured'];
+  it('default order runs missing, not_set, env, not_declared, configured', () => {
+    expect(sortSecrets(rows, null).map(r => r.name)).toEqual(order);
+  });
+  it('sorts by status ascending and descending', () => {
+    expect(sortSecrets(rows, { key: 'status', dir: 'asc' }).map(r => r.name)).toEqual(order);
+    expect(sortSecrets(rows, { key: 'status', dir: 'desc' }).map(r => r.name)).toEqual([...order].reverse());
+  });
+});
+
 describe('siteHost', () => {
   it('lower-cases and strips a leading www.', () => {
     expect(siteHost('https://WWW.Rogers.com/a')).toBe('rogers.com');
@@ -212,8 +231,13 @@ describe('lastUsedText', () => {
     expect(lastUsedText(at(3 * 3_600_000), now)).toBe('3h ago');
     expect(lastUsedText(at(2 * 86_400_000), now)).toBe('2d ago');
   });
-  it('falls back to a short date past 30 days', () => {
-    const text = lastUsedText(row({ configured: true, lastUsedAt: '2026-09-01T12:00:00Z' }), now);
-    expect(text).toBe('Sep 1');
+  it('says just now under a minute, and Never for an unparseable timestamp', () => {
+    expect(lastUsedText(row({ configured: true, lastUsedAt: new Date(now.getTime() - 20_000).toISOString() }), now)).toBe('just now');
+    expect(lastUsedText(row({ configured: true, lastUsedAt: 'garbage' }), now)).toBe('Never');
+  });
+  it('falls back to a short date in the viewer zone past 30 days', () => {
+    const r = row({ configured: true, lastUsedAt: '2026-09-01T03:00:00Z' });
+    expect(lastUsedText(r, now, 'UTC')).toBe('Sep 1');
+    expect(lastUsedText(r, now, 'America/Toronto')).toBe('Aug 31');
   });
 });

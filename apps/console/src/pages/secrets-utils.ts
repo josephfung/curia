@@ -219,16 +219,19 @@ export function readableLabel(name: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** Text for the "Last used" cell. "Used" means Curia read it. */
-export function lastUsedText(row: SecretRowData, now: Date): string {
+/** Text for the "Last used" cell. "Used" means Curia read it. The short date past 30 days
+ *  uses the viewer's zone; `timeZone` exists so tests can pin one. */
+export function lastUsedText(row: SecretRowData, now: Date, timeZone?: string): string {
   if (row.readAtStartup) return 'At startup';
   if (!row.lastUsedAt) return row.configured ? 'Never' : 'n/a';
   const then = new Date(row.lastUsedAt);
+  if (Number.isNaN(then.getTime())) return 'Never';
   const minutes = Math.max(0, Math.floor((now.getTime() - then.getTime()) / 60_000));
+  if (minutes < 1) return 'just now';
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days <= 30) return `${days}d ago`;
-  return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone });
 }
