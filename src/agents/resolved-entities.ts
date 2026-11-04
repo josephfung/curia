@@ -6,6 +6,14 @@
 // vanish. Callers persist the IDs (not the snapshot text) and re-render a
 // fresh block from the current contact row.
 
+// TODO(#2476): the person detection below is a known stopgap. It is English-only
+// heuristics: a Title-Case regex, a short cue-word list, and hand-written
+// stopword, place and org lists. Recall is limited to English sentences that
+// contain a cue word. Lowercase names, particle surnames, most non-Latin scripts
+// and non-English hedges pass unchecked. Do not treat a pass as "no unresolved
+// people", and do not extend the lists to fix a miss. #2476 replaces this with
+// contact-name matching plus judge-based extraction.
+
 import { isUuid } from '../util/uuid.js';
 
 /** How many most-recent contacts a turn will re-inject. */
@@ -33,6 +41,9 @@ const NAME_RE = new RegExp(
 const CJK_NAME_RE = /(?<![\p{L}\p{N}])\p{Lo}{2,4}(?![\p{L}\p{N}])/gu;
 
 /**
+ * TODO(#2476): every list from here to EMAIL_LOCAL_STOP is non-exhaustive and
+ * English-only. See the file header.
+ *
  * A capitalized span is a person only when one of these sits nearby. Bare
  * Title Case ("Quarterly Planning Session", "Google Drive", "Zoom") is not.
  */

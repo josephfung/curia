@@ -130,6 +130,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Unresolved-identity gate** — source now flags its English-only person heuristics as a known stopgap. (#2476)
 - **Open tasks tile** — replaces People known; counts open principal tasks and opens them on Tasks. (#2350)
 - **Voice barge-in** — Curia stops when the caller starts speaking, before words transcribe; Signal calls drop queued audio. (#2401)
 - **`@anthropic-ai/sdk` 1.x** — moves to API version 2026-10-21; Anthropic API requests no longer send `temperature`. (#2439)
