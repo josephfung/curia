@@ -515,8 +515,21 @@ export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => statusFilterFrom(statusFromUrl));
-  const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>(() => ownerFilterFrom(ownerFromUrl));
+  // The URL holds the status and owner filters, so a reload, a shared link and
+  // back/forward all show what the controls show (#2350). 'all' leaves the key out.
+  const statusFilter = statusFilterFrom(statusFromUrl);
+  const ownerFilter = ownerFilterFrom(ownerFromUrl);
+  function setFilters(next: { status?: StatusFilter; owner?: OwnerFilter }) {
+    void navigate({
+      to: '/tasks',
+      search: (prev) => ({
+        ...prev,
+        ...(next.status !== undefined ? { status: next.status === 'all' ? undefined : next.status } : {}),
+        ...(next.owner !== undefined ? { owner: next.owner === 'all' ? undefined : next.owner } : {}),
+      }),
+      replace: true,
+    });
+  }
   // Default sort: priority DESC; due_at ASC is the tiebreaker in the sort comparator.
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'priority', dir: 'desc' });
   const [page, setPage] = useState(1);
@@ -617,7 +630,7 @@ export default function TasksPage() {
         next[idx] = task;
         return next;
       }
-      setStatusFilter('all');
+      setFilters({ status: 'all' });
       return [...prev, task];
     });
     setEditing(task);
@@ -650,7 +663,7 @@ export default function TasksPage() {
     setCreating(false);
     if (taskIdFromUrl) {
       appliedUrlTaskRef.current = undefined;
-      // Keep owner/status: the filters stay applied, so the URL must keep them for a reload.
+      // Keep owner/status: they are the page's filters (see setFilters).
       void navigate({ to: '/tasks', search: (prev) => ({ ...prev, task: undefined }), replace: true });
     }
   }
@@ -702,7 +715,7 @@ export default function TasksPage() {
                     <button
                       key={v}
                       className={`records-filter-chip${statusFilter === v ? ' active' : ''}`}
-                      onClick={() => { setStatusFilter(v); setPage(1); }}
+                      onClick={() => { setFilters({ status: v }); setPage(1); }}
                     >
                       {statusFilterLabel(v)}
                       <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, opacity: 0.7 }}>
@@ -720,7 +733,7 @@ export default function TasksPage() {
                     id="tasks-owner-filter"
                     className="records-filter-select"
                     value={ownerFilter}
-                    onChange={e => { setOwnerFilter(e.target.value as OwnerFilter); setPage(1); }}
+                    onChange={e => { setFilters({ owner: e.target.value as OwnerFilter }); setPage(1); }}
                   >
                     <option value="all">All</option>
                     <option value="curia">curia</option>

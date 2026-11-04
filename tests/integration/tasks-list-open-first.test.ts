@@ -34,19 +34,25 @@ describeIf('GET /api/tasks open-first cap (#2350)', () => {
     await pool?.end();
   });
 
-  it('returns an old open task even when 500 newer closed tasks fill the cap', async () => {
+  it('returns old tasks in every open status even when 500 newer closed tasks fill the cap', async () => {
     const client = await pool.connect();
     const app = Fastify();
     try {
       await client.query('BEGIN');
-      const { rows } = await client.query<{ id: string }>(
-        `INSERT INTO tasks (agent_id, title, intent_anchor, status, progress, error_budget, owner, priority, source, created_by, tags, updated_at)
-         VALUES ('coordinator', 'itest-2350 old open', 'seeded', 'waiting', '{}'::jsonb, '{}'::jsonb, 'ceo', 50, 'agent', 'test', '{}',
-                 now() + interval '1 day')
-         RETURNING id`,
-      );
-      const openId = rows[0]!.id;
-      // 500 closed tasks, all touched after the open one.
+      // One old task per open status, written as literals: dropping any status from
+      // the route's open list then fails this test.
+      const openIds: string[] = [];
+      for (const status of ['open', 'in_progress', 'blocked', 'waiting']) {
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO tasks (agent_id, title, intent_anchor, status, progress, error_budget, owner, priority, source, created_by, tags, updated_at)
+           VALUES ('coordinator', $1, 'seeded', $2, '{}'::jsonb, '{}'::jsonb, 'ceo', 50, 'agent', 'test', '{}',
+                   now() + interval '1 day')
+           RETURNING id`,
+          [`itest-2350 old ${status}`, status],
+        );
+        openIds.push(rows[0]!.id);
+      }
+      // 500 closed tasks, all touched after the open ones.
       await client.query(
         `INSERT INTO tasks (agent_id, title, intent_anchor, status, progress, error_budget, owner, priority, source, created_by, tags, updated_at)
          SELECT 'coordinator', 'itest-2350 done ' || n, 'seeded', 'done', '{}'::jsonb, '{}'::jsonb, 'ceo', 50, 'agent', 'test', '{}',
@@ -66,7 +72,8 @@ describeIf('GET /api/tasks open-first cap (#2350)', () => {
       expect(res.statusCode).toBe(200);
       const tasks = (res.json() as { tasks: Array<{ id: string }> }).tasks;
       expect(tasks).toHaveLength(500);
-      expect(tasks.map((task) => task.id)).toContain(openId);
+      const returned = tasks.map((task) => task.id);
+      for (const id of openIds) expect(returned).toContain(id);
     } finally {
       await app.close();
       await client.query('ROLLBACK');
