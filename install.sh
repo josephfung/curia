@@ -231,6 +231,7 @@ env_value() {
 # Returns 0 when a value ($1) holds a ${...} reference that env_value leaves
 # unresolved, so a check keyed on it can't tell what Compose will use.
 is_unresolved() {
+  # shellcheck disable=SC2016  # a literal ${, not an expansion
   [[ "$1" == *'${'* ]]
 }
 
