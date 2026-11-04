@@ -7,12 +7,14 @@
 // prove both accept paths and the reject paths (arbitrary names and bogus channel keys).
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
+import cookie from '@fastify/cookie';
 import { vaultRoutes, type VaultSecretsPort } from '../../../../../src/channels/http/routes/vault.js';
 import type { RegistryService } from '../../../../../src/registry/registry-service.js';
 import type { RegistryEntry } from '../../../../../src/registry/types.js';
 import type { McpRegistryService } from '../../../../../src/registry/mcp-registry-service.js';
 import type { ChannelRegistryService } from '../../../../../src/registry/channel-registry-service.js';
 import type { EventBus } from '../../../../../src/bus/bus.js';
+import { hashToken } from '../../../../../src/channels/http/session-auth.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 
@@ -78,7 +80,7 @@ function fakeRegistry(declared: string[] = [DECLARED_SECRET], tools: RegistryEnt
 async function build(
   secretsService: VaultSecretsPort,
   registryService: RegistryService,
-  extra: { bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService } = {},
+  extra: { bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }> } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify();
   await app.register(vaultRoutes, {
@@ -86,6 +88,9 @@ async function build(
     registryService,
     mcpRegistryService: extra.mcp,
     channelRegistryService: extra.channels,
+    emailAccounts: extra.emailAccounts
+      ? { list: async () => extra.emailAccounts!.map(a => ({ ...a, selfEmail: `${a.name}@example.com`, provider: 'nylas', createdAt: new Date(), createdBy: 'test', updatedAt: new Date() })) }
+      : undefined,
     bus: extra.bus ?? fakeBus().bus,
     webAppBootstrapSecret: BOOTSTRAP,
     sessions: new Map(),
@@ -341,7 +346,9 @@ describe('vault routes', () => {
     expect(JSON.stringify(published)).not.toContain('super-secret-value');
   });
 
-  it('records a failed stage, not a completed one, when the vault write throws', async () => {
+  // A write that throws may have committed, so it gets no outcome row at all: `requested`
+  // alone reads as "not done or unknown", never as a confirmed failure.
+  it('records no outcome when the vault write throws', async () => {
     const { bus, published } = fakeBus();
     const secrets = fakeSecrets([DECLARED_SECRET]);
     secrets.set = async () => { throw new Error('db down'); };
@@ -350,7 +357,7 @@ describe('vault routes', () => {
     expect((await put(app, DECLARED_SECRET, { value: 'v' })).statusCode).toBe(500);
     expect((await del(app, DECLARED_SECRET)).statusCode).toBe(500);
     expect(published.map(e => `${e.payload['action']}:${e.payload['stage']}`)).toEqual([
-      'set:requested', 'set:failed', 'delete:requested', 'delete:failed',
+      'set:requested', 'delete:requested',
     ]);
   });
 
@@ -360,9 +367,37 @@ describe('vault routes', () => {
     app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'])]), { bus });
     await del(app, 'k', '?force=true');
     expect(published.map(e => e.payload)).toEqual([
-      { secretName: 'k', action: 'delete', stage: 'requested', force: true, affected: [{ kind: 'tool', name: 'needs-k' }] },
-      { secretName: 'k', action: 'delete', stage: 'completed', force: true, affected: [{ kind: 'tool', name: 'needs-k' }] },
+      { secretName: 'k', action: 'delete', stage: 'requested', initiatedBy: 'bootstrap_secret', force: true, affected: [{ kind: 'tool', name: 'needs-k' }] },
+      { secretName: 'k', action: 'delete', stage: 'completed', initiatedBy: 'bootstrap_secret', force: true, affected: [{ kind: 'tool', name: 'needs-k' }] },
     ]);
+  });
+
+  it('records the console session as the actor when a session cookie authenticated the change', async () => {
+    const { bus, published } = fakeBus();
+    const sessions = new Map([[hashToken('tok'), { id: 'sess-1', expiresAt: Date.now() + 60_000, renewedAt: Date.now() }]]);
+    app = Fastify();
+    await app.register(cookie);
+    await app.register(vaultRoutes, { secretsService: fakeSecrets(), registryService: fakeRegistry(), bus, webAppBootstrapSecret: BOOTSTRAP, sessions });
+    const res = await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_SECRET}`, cookies: { curia_session: 'tok' }, payload: { value: 'v' } });
+    expect(res.statusCode).toBe(200);
+    expect(published.map(e => [e.payload['initiatedBy'], e.payload['actorSessionId']])).toEqual([
+      ['session', 'sess-1'], ['session', 'sess-1'],
+    ]);
+  });
+
+  it("refuses to delete an enabled email account's grant without force", async () => {
+    const grant = 'channel.email.work.nylas_grant_id';
+    const secrets = fakeSecrets([grant, 'channel.email.old.nylas_grant_id']);
+    app = await build(secrets, fakeRegistry(), { emailAccounts: [{ name: 'work', enabled: true }, { name: 'old', enabled: false }] });
+    const refused = await del(app, grant);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toContain("email account 'work' (stops working after the next restart)");
+    expect(refused.json().affected).toEqual([{ kind: 'email-account', name: 'work' }]);
+    expect(secrets.deletes).toEqual([]);
+    // A disabled account does not block, and force goes through.
+    expect((await del(app, 'channel.email.old.nylas_grant_id')).statusCode).toBe(200);
+    expect((await del(app, grant, '?force=true')).statusCode).toBe(200);
+    expect(secrets.deletes).toEqual(['channel.email.old.nylas_grant_id', grant]);
   });
 
   it('refuses a set or delete when the audit row cannot be written', async () => {
@@ -409,7 +444,10 @@ describe('vault routes', () => {
     expect(byName.get('channel.slack.bot_token')).toMatchObject({ configured: false, required: false });
     expect(byName.get('ceo_self_email')).toMatchObject({ configured: false, required: false });
     expect(byName.get('ceo_nylas_grant_id')).toMatchObject({ configured: false, required: true });
-    expect(byName.get('channel.email.curia.nylas_grant_id')).toMatchObject({ configured: true });
+    // No email_accounts row for 'curia': listed as a leftover so it can still be removed.
+    expect(byName.get('channel.email.curia.nylas_grant_id')).toMatchObject({
+      configured: true, required: false, declaredBy: [{ kind: 'email-account', name: 'curia (account removed)' }],
+    });
     expect(list.map(s => s.name)).toEqual([...list.map(s => s.name)].sort((a, b) => a.localeCompare(b)));
   });
 });

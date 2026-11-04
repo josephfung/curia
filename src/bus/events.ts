@@ -988,13 +988,17 @@ interface SecretAccessedPayload {
 //
 // Two-stage, like document.console_action and operator.session. `requested` is published
 // BEFORE the vault is touched, and the console refuses the change if it cannot be recorded.
-// `completed` follows a successful write; `failed` means the write threw and nothing
-// changed. A `requested` with neither is a change whose outcome is unknown (the process
-// died between the write and its record).
+// `completed` follows a successful write. There is no `failed` stage: a vault write that
+// throws may still have committed, so a `requested` with no `completed` is a change that did
+// not happen or whose outcome is unknown — never one known to have happened.
 interface SecretChangedPayload {
   secretName: string;
   action: 'set' | 'delete';
-  stage: 'requested' | 'completed' | 'failed';
+  stage: 'requested' | 'completed';
+  /** A console session, or the bootstrap-secret header with no cookie. */
+  initiatedBy: 'session' | 'bootstrap_secret';
+  /** sessions.id of the actor. Absent when initiatedBy is bootstrap_secret. */
+  actorSessionId?: string;
   /** A delete that went ahead although an enabled component requires the key. */
   force?: boolean;
   /** The enabled components that require the key — what a forced delete broke. */

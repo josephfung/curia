@@ -1,22 +1,10 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
-import { declarerLabel, forceRemoveConfirmation, type SecretRowData } from './secrets-utils.js';
-
-// Safe error message extraction — guards against non-JSON error bodies.
-async function errorMessage(res: Response): Promise<string> {
-  const ct = res.headers.get('content-type') ?? '';
-  if (ct.includes('application/json')) {
-    try {
-      const d = await res.json() as { error?: string };
-      if (d.error) return d.error;
-    } catch { /* fall through to HTTP status */ }
-  }
-  return `HTTP ${res.status}`;
-}
+import { declarerLabel, errorMessage, removeSecretFlow, type SecretRowData } from './secrets-utils.js';
 
 // One vault secret. The page never receives a value: it shows set / not set, and the
 // entry field is write-only and cleared after a save (#2453).
@@ -46,23 +34,17 @@ function SecretRow({ row, onChanged }: { row: SecretRowData; onChanged: () => vo
     }
   }, [row.name, value, onChanged]);
 
-  // Ask first, then send the delete WITHOUT force. If an enabled tool, MCP server or channel
-  // requires the key the server answers 409 with what breaks and when; that message goes in
-  // a second confirmation and only an explicit yes retries with force. The server, not this
-  // page's possibly stale list, decides whether the removal is dangerous.
+  // Two confirmations, the second only when the server says something enabled needs the
+  // key (removeSecretFlow).
   const remove = useCallback(async () => {
-    if (!window.confirm(`Remove ${row.name}?`)) return;
     setBusy(true);
     setErr(null);
     try {
-      let res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(row.name)}`, { method: 'DELETE' });
-      if (res.status === 409) {
-        const message = await errorMessage(res);
-        if (!window.confirm(forceRemoveConfirmation(message))) return;
-        res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(row.name)}?force=true`, { method: 'DELETE' });
-      }
-      if (!res.ok) throw new Error(await errorMessage(res));
-      onChanged();
+      const outcome = await removeSecretFlow(row.name, {
+        confirm: message => window.confirm(message),
+        del: force => apiFetch(`/api/vault/secrets/${encodeURIComponent(row.name)}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
+      });
+      if (outcome === 'removed') onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to remove secret');
     } finally {
@@ -133,14 +115,20 @@ export function SecretsPage() {
   const [rows, setRows] = useState<SecretRowData[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Two refreshes can overlap (a second Remove while the first reload is pending); only the
+  // newest request's response is applied, so an older list can't land last.
+  const latestLoad = useRef(0);
   const load = useCallback(async () => {
+    const id = ++latestLoad.current;
     try {
       const res = await apiFetch('/api/vault/secrets');
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { secrets?: SecretRowData[] };
+      if (id !== latestLoad.current) return;
       setRows(data.secrets ?? []);
       setLoadError(null);
     } catch (e) {
+      if (id !== latestLoad.current) return;
       setLoadError(e instanceof Error ? e.message : 'Failed to load secrets');
     }
   }, []);
@@ -167,7 +155,10 @@ export function SecretsPage() {
         <main className="main">
           <Topbar crumb="Memory" title="Secrets" />
           {loadError ? (
-            <div style={{ padding: 32, color: 'var(--app-destructive)', fontSize: 13 }}>{loadError}</div>
+            <div style={{ padding: 32, color: 'var(--app-destructive)', fontSize: 13 }}>
+              <p style={{ margin: '0 0 12px' }}>{loadError}</p>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()}>Retry</button>
+            </div>
           ) : rows === null ? (
             <div style={{ padding: 32 }}><p className="settings-muted-hint">Loading…</p></div>
           ) : (

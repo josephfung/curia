@@ -10,7 +10,8 @@ import { vaultRoutes } from '../../src/channels/http/routes/vault.js';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
 import { RegistryService } from '../../src/registry/registry-service.js';
 import { RegistryRepo } from '../../src/registry/registry-repo.js';
-import type { EventBus } from '../../src/bus/bus.js';
+import { EventBus } from '../../src/bus/bus.js';
+import { AuditLogger } from '../../src/audit/logger.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env['DATABASE_URL'];
@@ -48,7 +49,10 @@ describeIf('vault routes', () => {
     const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
     app = Fastify();
     await app.register(cookie);
-    const bus = { publish: async () => {} } as unknown as EventBus;
+    // The real write-ahead audit hook, as in production: a set or delete must leave
+    // secret.changed rows in audit_log, not just a resolved publish.
+    const auditLogger = new AuditLogger(pool, logger);
+    const bus = new EventBus(logger, (e) => auditLogger.log(e), (id) => auditLogger.markAcknowledged(id));
     await app.register(vaultRoutes, { secretsService, registryService, bus, webAppBootstrapSecret: SECRET, sessions });
     await app.ready();
   });
@@ -105,8 +109,24 @@ describeIf('vault routes', () => {
     expect((res.json() as { error: string }).error).toMatch(/exceeds/);
   });
 
-  // After a delete the vault returns null, which is what makes the next web-search run
-  // keyless: the execution layer re-reads declared secrets from the vault on every call.
+  it('writes secret.changed audit rows for a set and a delete, by key name only', async () => {
+    const since = new Date();
+    await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr, payload: { value: 'tok-audited' } });
+    await app.inject({ method: 'DELETE', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr });
+    const { rows } = await pool.query<{ action: string; outcome: string; initiator_id: string; payload: string }>(
+      `SELECT action, outcome, initiator_id, payload::text AS payload FROM audit_log
+        WHERE event_type = 'secret.changed' AND target_id = $1 AND timestamp >= $2
+        ORDER BY timestamp, seq`,
+      [DECLARED_KEY, since],
+    );
+    expect(rows.map(r => `${r.action}:${r.outcome}`)).toEqual(['set:pending', 'set:success', 'delete:pending', 'delete:success']);
+    expect(rows.every(r => r.initiator_id === 'bootstrap_secret')).toBe(true);
+    expect(rows.map(r => r.payload).join()).not.toContain('tok-audited');
+  });
+
+  // After a delete the vault returns null. The execution layer re-reads declared secrets on
+  // every call, and tests/unit/skills/web-search-keyless-caller.test.ts shows a null read
+  // makes web-search run keyless.
   it('deletes a secret from the real vault, idempotently', async () => {
     const svc = new SecretsService(pool, KEY, logger);
     await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr, payload: { value: 'tok-del' } });

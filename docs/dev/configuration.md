@@ -596,21 +596,22 @@ Nylas trio, Signal number, Tavily) lives only in the vault.
   holds. It upserts present values; absent ones are skipped, never cleared.
 
 **Viewing, changing and removing secrets (console):** **Memory → Secrets** lists every
-secret Curia knows how to use — each tool's `requires_secrets` and `optional_secrets`, channel
+declared secret — each tool's `requires_secrets` and `optional_secrets`, channel
 credentials, MCP server keys, per-account email grants and the principal-mailbox keys — with
 whether it is set, whether it is required, and what declares it. Values are never shown. From
 there you can **Set**, **Replace** or **Remove** a secret; an optional tool secret also has a
 **Remove** button in the tool's drawer under **Settings → Tools**. Removing a secret an enabled
-tool, MCP server or channel requires asks for confirmation first and names what will stop
-working: tool secrets on their next call, channel credentials, MCP keys and the principal
+tool, MCP server, channel or email account requires asks for confirmation first and names what will stop
+working: tool secrets on their next call, channel credentials, MCP keys, email account grants and the principal
 calendar grant after the next restart (they are read at boot). Removal deletes the vault row only; an
 environment fallback (`TAVILY_API_KEY`, a channel's `envFallback`) keeps supplying the value,
 and the page marks such a row **from environment**. The same operations are `PUT` and
 `DELETE /api/vault/secrets/:name`; both accept only declared names, and a `DELETE` of a key that
 is not set returns `removed: false`. A delete an enabled component requires returns 409 unless
 `?force=true`. Every set and delete is audit-logged as a two-stage `secret.changed` event
-(`requested`, then `completed` or `failed`; a forced delete also records `force` and what it
-affected), by key name, never by value.
+(`requested`, then `completed`; a write that throws gets no outcome row, since it may have
+committed; a forced delete also records `force` and what it affected), with the actor (console
+session or bootstrap secret), by key name, never by value.
 
 **Missing secrets:** a missing *required* secret fails closed. Most fail at their consumer
 (e.g. a provider key, which fails the boot with the tier, model and provider named). `api_token` is special-cased with an explicit boot guard that

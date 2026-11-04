@@ -23,7 +23,9 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createSecretChanged } from '../../../bus/events.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
 import { CHANNEL_CATALOG } from '../../catalog.js';
-import { isPerAccountEmailGrantKey } from '../../email/email-account-secrets.js';
+import { emailAccountGrantSecretName, isPerAccountEmailGrantKey } from '../../email/email-account-secrets.js';
+import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
+import { actorFromRequest } from './sessions.js';
 
 // Allow-set of valid channel credential vault keys, derived once from the static catalog.
 // A channel credential is stored as `channel.<channel>.<field.key>`; only the exact
@@ -117,7 +119,9 @@ export interface VaultRouteOptions {
   mcpRegistryService?: McpRegistryService;
   /** Optional: when present, a delete is refused while an enabled channel requires the key. */
   channelRegistryService?: ChannelRegistryService;
-  /** Every set and delete is published here as a config.change audit event (#2453). */
+  /** Optional: when present, a delete is refused while an enabled email account needs its grant. */
+  emailAccounts?: Pick<EmailAccountsRepo, 'list'>;
+  /** Every set and delete is published here as a secret.changed audit event (#2453). */
   bus: EventBus;
 }
 
@@ -157,14 +161,26 @@ export async function vaultRoutes(
 
   // Two-stage audit for a set or delete (#2453), published as secret.changed — key name only,
   // never a value. `requested` goes out BEFORE the vault is touched; if it can't be written
-  // the change is refused (this sends the 500 itself and returns false). `completed` or
-  // `failed` follows, so a `requested` with no outcome row means the change did not happen
-  // or its outcome is unknown, never that it happened.
+  // the change is refused (this sends the 500 itself and returns false). `completed` follows
+  // a successful write. A vault write that throws is NOT recorded as failed: the statement may
+  // have committed before the connection dropped, so a `requested` with no `completed` means
+  // the change did not happen or its outcome is unknown, never that it happened.
   type SecretChange = { name: string; action: 'set' | 'delete'; force?: boolean; affected?: { kind: string; name: string }[] };
+
+  function changePayload(request: FastifyRequest, change: SecretChange, stage: 'requested' | 'completed') {
+    return createSecretChanged({
+      secretName: change.name,
+      action: change.action,
+      stage,
+      ...actorFromRequest(request, sessions),
+      force: change.force,
+      affected: change.affected,
+    });
+  }
 
   async function auditRequested(request: FastifyRequest, reply: FastifyReply, change: SecretChange): Promise<boolean> {
     try {
-      await options.bus.publish('system', createSecretChanged({ secretName: change.name, action: change.action, stage: 'requested', force: change.force, affected: change.affected }));
+      await options.bus.publish('system', changePayload(request, change, 'requested'));
       return true;
     } catch (err) {
       request.log.error({ err, name: change.name, action: change.action }, 'vault change audit write failed — change refused');
@@ -175,18 +191,18 @@ export async function vaultRoutes(
     }
   }
 
-  // The change has already been made (or has already failed), so a miss here is logged
-  // rather than turned into an error that would invite retrying a change that happened.
-  async function auditOutcome(request: FastifyRequest, change: SecretChange, stage: 'completed' | 'failed'): Promise<void> {
+  // The change has already been made, so a miss here is logged rather than turned into an
+  // error that would invite retrying a change that happened.
+  async function auditCompleted(request: FastifyRequest, change: SecretChange): Promise<void> {
     try {
-      await options.bus.publish('system', createSecretChanged({ secretName: change.name, action: change.action, stage, force: change.force, affected: change.affected }));
+      await options.bus.publish('system', changePayload(request, change, 'completed'));
     } catch (err) {
-      request.log.error({ err, name: change.name, action: change.action, stage }, 'vault change outcome audit write failed');
+      request.log.error({ err, name: change.name, action: change.action }, 'vault change outcome audit write failed');
     }
   }
 
-  // Every declaration of a vault key across tools, MCP servers, channels and the principal
-  // mailbox. Reads in-memory discovery plus enabled state from the registry rows only —
+  // Every declaration of a vault key across tools, MCP servers, channels, email accounts and
+  // the principal mailbox. Reads in-memory discovery plus enabled state from the registry rows only —
   // never the registries' list() views, which decrypt every declared credential to report
   // whether it is set.
   async function collectDeclarations(): Promise<Map<string, VaultSecretDeclarer[]>> {
@@ -236,6 +252,14 @@ export async function vaultRoutes(
     // filters reply-all CC.
     add('ceo_nylas_grant_id', { kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true });
     add('ceo_self_email', { kind: 'principal-mailbox', name: 'Principal inbox', required: false, enabled: true });
+
+    // Each email account boots from its own grant (resolve-email-accounts.ts skips an enabled
+    // account that has none), so an enabled account requires it.
+    if (options.emailAccounts) {
+      for (const acct of await options.emailAccounts.list()) {
+        add(emailAccountGrantSecretName(acct.name), { kind: 'email-account', name: acct.name, required: true, enabled: acct.enabled });
+      }
+    }
     return out;
   }
 
@@ -259,10 +283,11 @@ export async function vaultRoutes(
     try {
       const configured = new Set(await secretsService.list());
       const declarations = await collectDeclarations();
-      // Per-account email grants are pattern-allowlisted, so they can only be listed once set.
+      // A grant left behind by a deleted email account is still listed, so it can be removed.
       for (const name of configured) {
         if (isPerAccountEmailGrantKey(name) && !declarations.has(name)) {
-          declarations.set(name, [{ kind: 'email-account', name: 'Email account', required: false, enabled: true }]);
+          const account = name.slice('channel.email.'.length, -'.nylas_grant_id'.length);
+          declarations.set(name, [{ kind: 'email-account', name: `${account} (account removed)`, required: false, enabled: true }]);
         }
       }
       const secrets: VaultSecretSummary[] = [...declarations.entries()]
@@ -332,18 +357,17 @@ export async function vaultRoutes(
 
     try {
       await secretsService.set(name, value);
-      await auditOutcome(request, change, 'completed');
+      await auditCompleted(request, change);
       return reply.send({ ok: true });
     } catch (err) {
-      await auditOutcome(request, change, 'failed');
-      // Do NOT log the value — only the key name.
+      // No outcome row: the write may have committed before it threw. Do NOT log the value — only the key name.
       request.log.error({ err, name }, 'vault set failed');
       return reply.status(500).send({ error: 'Failed to save secret. Check server logs.' });
     }
   });
 
   // -- DELETE /api/vault/secrets/:name — remove a declared secret (idempotent) --
-  // Refused with 409 while an enabled tool, MCP server or channel requires the key, naming
+  // Refused with 409 while an enabled tool, MCP server, channel or email account requires the key, naming
   // what would stop working; the console confirms and retries with ?force=true. Deleting a
   // key that isn't set is a no-op: 200 with removed:false.
   app.delete('/api/vault/secrets/:name', AUTH_RATE, async (request, reply) => {
@@ -371,7 +395,7 @@ export async function vaultRoutes(
         // keys and the principal grant are read at boot, so they keep working until restart.
         const effect = (d: VaultSecretDeclarer) => d.kind === 'tool' ? 'on its next call' : 'after the next restart';
         return reply.status(409).send({
-          error: `'${name}' is required by ${affected.map(d => `enabled ${d.kind === 'principal-mailbox' ? d.name : `${d.kind} '${d.name}'`} (stops working ${effect(d)})`).join(', ')}. ` +
+          error: `'${name}' is required by ${affected.map(d => `enabled ${d.kind === 'principal-mailbox' ? d.name : `${d.kind === 'email-account' ? 'email account' : d.kind} '${d.name}'`} (stops working ${effect(d)})`).join(', ')}. ` +
             `It will not work again until the secret is set.`,
           affected: affected.map(d => ({ kind: d.kind, name: d.name })),
         });
@@ -383,13 +407,9 @@ export async function vaultRoutes(
         ...(force ? { force: true, affected: affected.map(d => ({ kind: d.kind, name: d.name })) } : {}),
       };
       if (!await auditRequested(request, reply, change)) return;
-      try {
-        await secretsService.delete(name);
-      } catch (err) {
-        await auditOutcome(request, change, 'failed');
-        throw err;
-      }
-      await auditOutcome(request, change, 'completed');
+      // A delete that throws gets no outcome row: it may have committed first.
+      await secretsService.delete(name);
+      await auditCompleted(request, change);
       return reply.send({ ok: true, removed: true });
     } catch (err) {
       request.log.error({ err, name }, 'vault delete failed');
