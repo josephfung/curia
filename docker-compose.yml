@@ -2,14 +2,16 @@ services:
   postgres:
     image: ghcr.io/josephfung/curia-postgres:${CURIA_POSTGRES_TAG:-pg16}
     restart: unless-stopped
-    # Published on loopback only: the curia container reaches Postgres over the
-    # compose network (postgres:5432), so the host port exists just for host-side
-    # tools (pnpm migrate, seed-vault) that connect via localhost. Docker's
-    # published ports bypass host firewalls such as ufw, so binding 0.0.0.0 would
-    # expose the database on an internet-facing host. POSTGRES_BIND is an explicit
-    # opt-in for remote access (see .env.example). POSTGRES_PORT lets a second
-    # stack coexist on the same host (e.g. testing a fresh `pnpm run setup`
-    # against a sibling clone while the dev stack runs on 5432).
+    # Published on loopback only. The curia container reaches Postgres over the
+    # compose network (postgres:5432). On an image install, install.sh runs
+    # migrations and seed-vault inside the container too, so nothing on the host
+    # uses this port; it exists for the source/dev path, where `pnpm migrate` and
+    # `seed-vault` connect via localhost. Docker's published ports bypass host
+    # firewalls such as ufw, so publishing on every interface would expose the
+    # database on an internet-facing host. POSTGRES_BIND is an explicit opt-in
+    # for remote access (see .env.example). POSTGRES_PORT lets a second stack
+    # coexist on the same host (e.g. testing a fresh `pnpm run setup` against a
+    # sibling clone while the dev stack runs on 5432).
     ports:
       - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -51,7 +53,11 @@ services:
     command: ${LIVEKIT_COMMAND:---dev --bind 0.0.0.0}
     ports:
       # HTTP/WebSocket signaling. Use wss://<host> when served behind TLS.
-      - "${LIVEKIT_HTTP_PORT:-7880}:7880"
+      # Loopback by default so the --dev credentials above are never reachable
+      # from outside the host: a laptop browser uses ws://localhost:7880, and a
+      # server routes wss://<domain>/rtc through Caddy over the compose network.
+      # Set LIVEKIT_HTTP_BIND to publish it beyond loopback (real keys only).
+      - "${LIVEKIT_HTTP_BIND:-127.0.0.1}:${LIVEKIT_HTTP_PORT:-7880}:7880"
       # WebRTC TCP fallback.
       - "${LIVEKIT_RTC_TCP_PORT:-7881}:7881"
       # WebRTC UDP. Open this on the host firewall/NAT.
@@ -64,8 +70,13 @@ services:
     # was global to the Docker daemon and made it impossible to run a second curia
     # stack on the same host (e.g. for testing a fresh install alongside a dev one).
     restart: unless-stopped
+    # HTTP_BIND empty (the default) publishes on every interface, which the
+    # public-IP / own-proxy topology needs. install.sh writes HTTP_BIND=127.0.0.1
+    # for the local and HTTPS topologies: under HTTPS, Caddy reaches curia:3000
+    # over the compose network, and a public :3000 would let session and
+    # bootstrap traffic bypass TLS (and ufw, which Docker's published ports skip).
     ports:
-      - "${HTTP_PORT:-3000}:3000"
+      - "${HTTP_BIND:-}:${HTTP_PORT:-3000}:3000"
     env_file: .env
     environment:
       # Override DATABASE_URL so the container reaches postgres by service name,

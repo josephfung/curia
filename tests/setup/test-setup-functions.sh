@@ -496,47 +496,6 @@ fi
 
 rm -f "$_ic_env"
 
-# --- install.sh: compose_publishes_postgres_publicly ---
-
-echo ""
-echo "=== install.sh: compose_publishes_postgres_publicly ==="
-
-_pp_compose=$(mktemp)
-printf 'services:\n  postgres:\n    ports:\n      - "${POSTGRES_PORT:-5432}:5432"\n' > "$_pp_compose"
-if compose_publishes_postgres_publicly "$_pp_compose"; then
-    echo "  ✓ pre-#2408 all-interfaces publish → flagged"
-    PASS=$((PASS+1))
-else
-    echo "  ✗ pre-#2408 all-interfaces publish should be flagged"
-    FAIL=$((FAIL+1))
-fi
-
-printf 'services:\n  postgres:\n    ports:\n      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"\n' > "$_pp_compose"
-if ! compose_publishes_postgres_publicly "$_pp_compose"; then
-    echo "  ✓ loopback-bound publish → not flagged"
-    PASS=$((PASS+1))
-else
-    echo "  ✗ loopback-bound publish should not be flagged"
-    FAIL=$((FAIL+1))
-fi
-
-rm -f "$_pp_compose"
-
-# The shipped compose file itself must bind Postgres to loopback by default.
-if ! compose_publishes_postgres_publicly "$TEST_DIR/../../docker-compose.yml" \
-  && grep -qF '"${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"' "$TEST_DIR/../../docker-compose.yml"; then
-    echo "  ✓ shipped docker-compose.yml binds Postgres to 127.0.0.1 by default"
-    PASS=$((PASS+1))
-else
-    echo "  ✗ shipped docker-compose.yml must bind Postgres to 127.0.0.1 by default"
-    FAIL=$((FAIL+1))
-fi
-
-# --- install.sh: resolve_version ---
-
-echo ""
-echo "=== install.sh: resolve_version ==="
-
 _assert_var() {
     local desc="$1" got="$2" want="$3"
     if [[ "$got" == "$want" ]]; then
@@ -545,6 +504,84 @@ _assert_var() {
         echo "  ✗ $desc — got '$got' want '$want'"; FAIL=$((FAIL+1))
     fi
 }
+
+# --- install.sh: bindings_are_loopback ---
+# Judges `docker port` output, so every compose file shape (quoting, a changed
+# default, a trailing comment, an override or COMPOSE_FILE overlay) reduces to
+# the same few binding lines.
+
+echo ""
+echo "=== install.sh: bindings_are_loopback ==="
+
+_assert_loopback() {
+    local desc="$1" bindings="$2" want="$3" got
+    if bindings_are_loopback "$bindings"; then got=loopback; else got=exposed; fi
+    if [[ "$got" == "$want" ]]; then
+        echo "  ✓ $desc → $want"
+        PASS=$((PASS+1))
+    else
+        echo "  ✗ $desc: got $got, want $want"
+        FAIL=$((FAIL+1))
+    fi
+}
+
+_assert_loopback "no host IP (pre-#2408 default)"  $'0.0.0.0:5432\n[::]:5432'  exposed
+_assert_loopback "explicit 0.0.0.0"                 '0.0.0.0:5432'             exposed
+_assert_loopback "explicit ::"                      '[::]:5432'                exposed
+_assert_loopback "private interface address"        '10.0.0.5:5432'            exposed
+_assert_loopback "changed host port, all interfaces" $'0.0.0.0:5433\n[::]:5433' exposed
+_assert_loopback "loopback plus a public binding"   $'127.0.0.1:5432\n0.0.0.0:5433' exposed
+_assert_loopback "127.0.0.1"                        '127.0.0.1:5432'           loopback
+_assert_loopback "other 127/8 address"              '127.0.0.2:5432'           loopback
+_assert_loopback "IPv6 loopback"                    '[::1]:5432'               loopback
+_assert_loopback "not published (empty output)"     ''                         loopback
+_assert_loopback "trailing blank line"              $'127.0.0.1:5432\n'        loopback
+
+# --- install.sh: env_value ---
+
+echo ""
+echo "=== install.sh: env_value ==="
+
+_ev_env=$(mktemp)
+printf 'HTTP_BIND=127.0.0.1\nPOSTGRES_BIND=::\nHTTP_BIND=0.0.0.0\n# POSTGRES_PORT=5432\n' > "$_ev_env"
+_assert_var "last assignment wins"         "$(env_value "$_ev_env" HTTP_BIND)"     "0.0.0.0"
+_assert_var "value containing colons"      "$(env_value "$_ev_env" POSTGRES_BIND)" "::"
+_assert_var "commented-out key is absent"  "$(env_value "$_ev_env" POSTGRES_PORT)" ""
+_assert_var "missing file is absent"       "$(env_value "$_ev_env.missing" HTTP_BIND)" ""
+# install.sh runs under `set -euo pipefail`; an absent key must not abort it
+# from inside an assignment (it did, before env_value swallowed grep's status).
+if ( set -euo pipefail; _v="$(env_value "$_ev_env" NOT_THERE)"; [[ -z "$_v" ]] ); then
+    echo "  ✓ absent key survives set -euo pipefail"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ absent key aborts under set -euo pipefail"
+    FAIL=$((FAIL+1))
+fi
+rm -f "$_ev_env"
+
+# --- shipped docker-compose.yml bind defaults ---
+
+echo ""
+echo "=== docker-compose.yml: bind defaults ==="
+
+_compose="$TEST_DIR/../../docker-compose.yml"
+for _line in \
+    '"${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"' \
+    '"${HTTP_BIND:-}:${HTTP_PORT:-3000}:3000"' \
+    '"${LIVEKIT_HTTP_BIND:-127.0.0.1}:${LIVEKIT_HTTP_PORT:-7880}:7880"'; do
+    if grep -qF -- "$_line" "$_compose"; then
+        echo "  ✓ publishes $_line"
+        PASS=$((PASS+1))
+    else
+        echo "  ✗ missing ports entry $_line"
+        FAIL=$((FAIL+1))
+    fi
+done
+
+# --- install.sh: resolve_version ---
+
+echo ""
+echo "=== install.sh: resolve_version ==="
 
 # latest (default): release assets + image tag "latest".
 CURIA_REF=""; CURIA_VERSION="latest"; resolve_version

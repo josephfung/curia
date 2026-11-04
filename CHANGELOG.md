@@ -256,7 +256,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **Postgres host port** — published on 127.0.0.1 only; `POSTGRES_BIND` opts in. Existing installs: replace `docker-compose.yml`. (#2408)
+- **Postgres host port** — loopback only; `POSTGRES_BIND` opts in. Existing installs: prefix its `ports:` entry with `127.0.0.1:`, recreate. (#2408)
+- **Curia port 3000** — local and HTTPS installs publish it on 127.0.0.1; `HTTP_BIND` controls it. (#2408)
+- **LiveKit signaling** — port 7880 published on 127.0.0.1 by default; `LIVEKIT_HTTP_BIND` opts in. (#2408)
+- **Installer exposure check** — asks before continuing while Postgres is published beyond loopback, whatever the compose file. (#2408)
 - **`@hono/node-server` override floor** — raised to 2.1.6 to exclude three medium advisories. (#2427)
 - **`hono` override floor** — raised to 4.13.16 to exclude five advisories. (#2427)
 - **`basic-ftp` override floor** — raised to 6.2.4 to exclude two medium advisories. (#2388)

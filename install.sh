@@ -110,10 +110,16 @@ resolve_version
 #   $1 = local path (e.g. scripts/setup-common.sh), $2 = flat asset name (e.g. setup-common.sh)
 fetch_asset() {
   local local_path="$1" asset="$2"
+  curl -fsSL "$(bundle_asset_url "$local_path" "$asset")" -o "$INSTALL_DIR/$local_path"
+}
+
+# URL of a bundled file for this release/ref (same arguments as fetch_asset).
+bundle_asset_url() {
+  local local_path="$1" asset="$2"
   if [[ "$ASSET_MODE" == "release" ]]; then
-    curl -fsSL "${ASSET_BASE}/${asset}" -o "$INSTALL_DIR/$local_path"
+    printf '%s' "${ASSET_BASE}/${asset}"
   else
-    curl -fsSL "${RAW_BASE}/${local_path}" -o "$INSTALL_DIR/$local_path"
+    printf '%s' "${RAW_BASE}/${local_path}"
   fi
 }
 
@@ -195,18 +201,101 @@ install_is_complete() {
   grep -q "^# SETUP_COMPLETE" "$env" 2>/dev/null
 }
 
-# Returns 0 when a compose file still publishes Postgres on every interface —
-# the pre-#2408 `"${POSTGRES_PORT:-5432}:5432"` line with no bind address.
-# fetch_bundle never overwrites an existing docker-compose.yml, so upgrades keep
-# the old line until the operator replaces the file; existing_install warns.
-compose_publishes_postgres_publicly() {
-  local compose="$1"
-  grep -qE '^[[:space:]]*-[[:space:]]*"?\$\{POSTGRES_PORT:-5432\}:5432"?[[:space:]]*$' "$compose" 2>/dev/null
+# Echo the value of KEY from an env file (last assignment wins), or nothing when
+# the key is absent or the file is missing. Always returns 0: this script runs
+# under `set -euo pipefail`, where grep's no-match status would abort the
+# installer from inside `x="$(env_value ...)"`.
+env_value() {
+  local env="$1" key="$2"
+  { grep -E "^${key}=" "$env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-
+}
+
+# Returns 0 when every host binding in `docker port` output ($1, one
+# "<host>:<port>" per line, e.g. "0.0.0.0:5432" / "[::]:5432" /
+# "127.0.0.1:5432") is a loopback address. Empty output (nothing published)
+# counts as loopback. Judging Docker's live bindings rather than the compose
+# text covers hand-edited files, overrides and COMPOSE_FILE overlays alike.
+bindings_are_loopback() {
+  local line host
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    host="${line%:*}"
+    case "$host" in
+      127.*|"[::1]") ;;
+      *) return 1 ;;
+    esac
+  done <<< "$1"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
 # Non-interactive helpers (not unit-tested; rely on Docker or filesystem state)
 # ---------------------------------------------------------------------------
+
+# Echo the host bindings of a running compose service's container port, one
+# per line (`docker port` format). Echoes nothing when the container is not
+# running or the port is not published: `docker port` exits 1 for an
+# unpublished port, which is the "nothing exposed" answer, not an error.
+published_bindings() {
+  local service="$1" port="$2" cid
+  if ! cid="$(docker compose --project-directory "$INSTALL_DIR" ps -q "$service")"; then
+    warn "Could not look up the $service container; skipping its port exposure check."
+    return 0
+  fi
+  [[ -n "$cid" ]] || return 0
+  docker port "$cid" "${port}/tcp" 2>/dev/null || return 0
+}
+
+# Run right after Postgres starts, on both the fresh and upgrade paths:
+# fetch_bundle never overwrites an existing docker-compose.yml, so an older or
+# hand-edited one can still publish Postgres on every interface (#2408). Asks
+# before continuing; POSTGRES_BIND set in .env or the shell is a deliberate
+# opt-in and skips the check.
+check_postgres_exposure() {
+  local env="$1" bindings ans
+  if [[ -n "${POSTGRES_BIND:-}" || -n "$(env_value "$env" POSTGRES_BIND)" ]]; then
+    return 0
+  fi
+  bindings="$(published_bindings postgres 5432)"
+  bindings_are_loopback "$bindings" && return 0
+
+  echo "" >&2
+  warn "Postgres is published beyond loopback: $(echo "$bindings" | tr '\n' ' ')(#2408)"
+  hint "Docker's published ports bypass host firewalls such as ufw."
+  hint "Fix: in $INSTALL_DIR/docker-compose.yml, change the postgres ports: entry to"
+  hint "  - \"\${POSTGRES_BIND:-127.0.0.1}:\${POSTGRES_PORT:-5432}:5432\""
+  hint "then re-run install.sh, which recreates the container."
+  hint "Current file for reference: $(bundle_asset_url docker-compose.yml docker-compose.yml)"
+  hint "To keep remote access on purpose, set POSTGRES_BIND in .env instead."
+  warn "If you continue, Postgres stays exposed after this run."
+  read -rp "Continue anyway? [y/N]: " ans || ans=""
+  if [[ ! "$ans" =~ ^[Yy] ]]; then
+    info "Stopped. Make the change above, then re-run install.sh."
+    exit 1
+  fi
+}
+
+# Run after the full stack starts. Only checks when .env asks for a loopback
+# HTTP_BIND (local/HTTPS topologies): an older compose file without the
+# HTTP_BIND variable ignores it and still publishes :3000 everywhere. The stack
+# is already up, so this warns rather than asks.
+check_http_exposure() {
+  local env="$1" want bindings
+  want="$(env_value "$env" HTTP_BIND)"
+  case "$want" in
+    127.*|::1) ;;
+    *) return 0 ;;
+  esac
+  bindings="$(published_bindings curia 3000)"
+  bindings_are_loopback "$bindings" && return 0
+
+  echo "" >&2
+  warn "Curia's port 3000 is still published beyond loopback: $(echo "$bindings" | tr '\n' ' ')(#2408)"
+  hint "HTTP_BIND=$want is set, but this docker-compose.yml ignores it."
+  hint "Fix: in $INSTALL_DIR/docker-compose.yml, change the curia ports: entry to"
+  hint "  - \"\${HTTP_BIND:-}:\${HTTP_PORT:-3000}:3000\""
+  hint "then run: docker compose --project-directory \"$INSTALL_DIR\" up -d curia"
+}
 
 # Validate prereqs: Docker daemon up, compose plugin present, curl available.
 # The operator path deliberately does NOT require Node, pnpm, or openssl.
@@ -347,6 +436,9 @@ fresh_install() {
       done
       set_env_var "$env" DOMAIN "$dom"
       set_env_var "$env" COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+      # Caddy reaches curia:3000 over the compose network; keep :3000 off the
+      # public interface so traffic can't bypass TLS.
+      set_env_var "$env" HTTP_BIND 127.0.0.1
       # Expose DOMAIN as a shell variable so print_summary can build the HTTPS URL.
       # shellcheck disable=SC2034  # read by print_summary (sourced from setup-common.sh)
       DOMAIN="$dom"
@@ -360,7 +452,11 @@ fresh_install() {
         fi
       fi
       ;;
-    *) : ;;  # local / proxy: base compose only, HTTP on :3000
+    local)
+      # Evaluation on this machine: http://localhost:3000 only.
+      set_env_var "$env" HTTP_BIND 127.0.0.1
+      ;;
+    *) : ;;  # proxy: base compose only, HTTP on :3000 on every interface
   esac
 
   # Start Postgres and wait for it to be ready before running migrations.
@@ -371,6 +467,7 @@ fresh_install() {
     exit 1
   fi
   wait_for_postgres  # from setup-common.sh; uses $REPO_ROOT
+  check_postgres_exposure "$env"
 
   # Run migrations inside the pulled image (tsx direct — no host pnpm needed).
   info "Applying database migrations (in-container)..."
@@ -411,6 +508,7 @@ fresh_install() {
     hint "Check logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
     exit 1
   fi
+  check_http_exposure "$env"
 
   # Mark setup as complete. On subsequent re-runs, install_is_complete() sees
   # this marker and takes the upgrade path instead of rotating secrets.
@@ -427,9 +525,12 @@ existing_install() {
   info "Existing install detected — running in upgrade/restart mode."
   info "No secrets will be regenerated."
 
-  if compose_publishes_postgres_publicly "$INSTALL_DIR/docker-compose.yml"; then
-    warn "docker-compose.yml publishes Postgres on all network interfaces (#2408)."
-    hint "Replace it with this release's docker-compose.yml, which binds 127.0.0.1 only."
+  # HTTPS installs from before #2408 have no HTTP_BIND; add it so :3000 leaves
+  # the public interface (Caddy uses the compose network). Local and proxy
+  # installs look alike in .env, so those are left as they are.
+  if grep -qE '^DOMAIN=.+' "$env" 2>/dev/null && ! grep -qE '^HTTP_BIND=' "$env" 2>/dev/null; then
+    info "HTTPS install: publishing port 3000 on 127.0.0.1 only (HTTP_BIND, #2408)."
+    set_env_var "$env" HTTP_BIND 127.0.0.1
   fi
 
   # Re-apply migrations idempotently. node-pg-migrate skips already-applied
@@ -441,6 +542,7 @@ existing_install() {
     exit 1
   fi
   wait_for_postgres
+  check_postgres_exposure "$env"
 
   if ! docker compose --project-directory "$INSTALL_DIR" run --rm curia \
     ./node_modules/.bin/tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up \
@@ -475,6 +577,7 @@ existing_install() {
     hint "Check logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
     exit 1
   fi
+  check_http_exposure "$env"
 
   # Load the URL-shaping values from .env so print_summary shows the right
   # address for this existing install: DOMAIN (HTTPS topology) and a custom
