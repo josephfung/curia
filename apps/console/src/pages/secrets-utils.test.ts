@@ -1,27 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { breakingDeclarers, declarerLabel, removeConfirmation, type SecretRowData } from './secrets-utils.js';
-
-const row = (declaredBy: SecretRowData['declaredBy']): SecretRowData => ({
-  name: 'k', configured: true, required: declaredBy.some(d => d.required), declaredBy,
-});
+import { declarerLabel, forceRemoveConfirmation } from './secrets-utils.js';
 
 describe('secrets-utils', () => {
   it('labels declarers by kind', () => {
     expect(declarerLabel({ kind: 'tool', name: 'web-search', required: false, enabled: true })).toBe('Tool web-search');
-    expect(declarerLabel({ kind: 'principal-mailbox', name: 'Principal mailbox', required: false, enabled: true })).toBe('Principal mailbox');
+    expect(declarerLabel({ kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true })).toBe('Calendar and principal inbox');
   });
 
-  it('only enabled, required declarers break on removal', () => {
-    const r = row([
-      { kind: 'tool', name: 'on', required: true, enabled: true },
-      { kind: 'tool', name: 'off', required: true, enabled: false },
-      { kind: 'tool', name: 'opt', required: false, enabled: true },
-    ]);
-    expect(breakingDeclarers(r).map(d => d.name)).toEqual(['on']);
-    expect(removeConfirmation(r)).toBe('Remove k? Tool on will stop working until it is set again.');
+  it('marks a disabled declarer so it reads as not needed yet', () => {
+    expect(declarerLabel({ kind: 'channel', name: 'slack', required: true, enabled: false })).toBe('Channel slack (disabled)');
   });
 
-  it('asks a plain question when nothing breaks', () => {
-    expect(removeConfirmation(row([{ kind: 'tool', name: 'opt', required: false, enabled: true }]))).toBe('Remove k?');
+  it('puts the server message in the force-remove confirmation', () => {
+    expect(forceRemoveConfirmation("'k' is required by enabled tool 'x'.")).toBe("'k' is required by enabled tool 'x'.\n\nRemove it anyway?");
   });
 });

@@ -16,7 +16,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Secrets page** — Memory → Secrets lists, sets, replaces and removes vault secrets; values never shown. (#2453)
-- **`DELETE /api/vault/secrets/:name`** — removes a declared secret; set and delete are audit-logged by key name. (#2453)
+- **`DELETE /api/vault/secrets/:name`** — removes a declared secret; refused while an enabled component needs it, unless forced. (#2453)
+- **`secret.changed`** — **public API:** two-stage audit event for console secret set and delete; key name only. (#2453)
 - **`measure-2159-targets.sql`** — read-only prod queries for #2159's message and approval targets. (#2193)
 - **`install.optional_secrets`** — **public API:** `tool.json` keys a tool improves with; shown and settable, never gating. (#2445)
 - **Phone app invitation link** — operators send the principal a single-use, 48-hour link that installs and pairs the app. (#2412)

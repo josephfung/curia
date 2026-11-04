@@ -982,6 +982,25 @@ interface SecretAccessedPayload {
   byReference?: boolean;
 }
 
+// SecretChangedPayload — the principal set or removed a vault secret from the console
+// Secrets page (#2453). Audit-only: nothing subscribes to act on it. Carries the key NAME
+// and what happened — NEVER a value.
+//
+// Two-stage, like document.console_action and operator.session. `requested` is published
+// BEFORE the vault is touched, and the console refuses the change if it cannot be recorded.
+// `completed` follows a successful write; `failed` means the write threw and nothing
+// changed. A `requested` with neither is a change whose outcome is unknown (the process
+// died between the write and its record).
+interface SecretChangedPayload {
+  secretName: string;
+  action: 'set' | 'delete';
+  stage: 'requested' | 'completed' | 'failed';
+  /** A delete that went ahead although an enabled component requires the key. */
+  force?: boolean;
+  /** The enabled components that require the key — what a forced delete broke. */
+  affected?: { kind: string; name: string }[];
+}
+
 // SecretCapturedPayload — emitted when a user submits a value to a one-time capture link and
 // it is redeemed into the vault (#972). Carries the secret NAME/label and the routing context
 // needed to re-enter the originating agent — NEVER the value. The resume subscriber turns this
@@ -1894,6 +1913,12 @@ export interface PrincipalReportEvent extends BaseEvent {
   payload: PrincipalReportPayload;
 }
 
+export interface SecretChangedEvent extends BaseEvent {
+  type: 'secret.changed';
+  sourceLayer: 'system';
+  payload: SecretChangedPayload;
+}
+
 // SecretCapturedEvent — published by the capture endpoint (trusted system infra) when a
 // one-time link is redeemed (#972). sourceLayer 'system' because the capture endpoint
 // self-authorizes via the token and writes to the vault, like the scheduler emitting its
@@ -2195,6 +2220,7 @@ export type BusEvent =
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | AuthorizationDecisionEvent // Spec 09 / #1379: authorization gate allow/deny/escalate audit
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
+  | SecretChangedEvent       // #2453: console set/delete of a vault secret (name only, never value)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | DelegationTimedOutEvent     // #1799: delegate wait timed out, specialist possibly still running
   | DelegationLateResolvedEvent // #1799: a late specialist response was delivered, recorded, or lost
@@ -2845,6 +2871,16 @@ export function createSecretAccessed(
     sourceLayer: 'execution',
     payload,
     parentEventId,
+  };
+}
+
+export function createSecretChanged(payload: SecretChangedPayload): SecretChangedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'secret.changed',
+    sourceLayer: 'system',
+    payload,
   };
 }
 

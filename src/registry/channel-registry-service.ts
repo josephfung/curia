@@ -56,6 +56,12 @@ export class ChannelRegistryService {
     return entries;
   }
 
+  /** Names of enabled channels, from registry rows only. Unlike list(), it does not resolve
+   *  (decrypt) each channel's credentials, so callers that need only enabled state use this. */
+  async enabledChannelNames(): Promise<Set<string>> {
+    return new Set((await this.repo.listRows()).filter(r => r.enabled).map(r => r.name));
+  }
+
   async install(name: string, actor: string): Promise<ChannelRegistryEntry> {
     const d = this.descriptor(name);
     await this.repo.install(name, actor, d.isToggleable);

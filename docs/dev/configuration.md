@@ -602,9 +602,15 @@ whether it is set, whether it is required, and what declares it. Values are neve
 there you can **Set**, **Replace** or **Remove** a secret; an optional tool secret also has a
 **Remove** button in the tool's drawer under **Settings → Tools**. Removing a secret an enabled
 tool, MCP server or channel requires asks for confirmation first and names what will stop
-working. The same operations are `PUT` and `DELETE /api/vault/secrets/:name`; both accept only
-declared names, and a `DELETE` of a key that is not set returns `removed: false`. Every set and
-delete is audit-logged (`config.change`, `vault_secret`) by key name, never by value.
+working: tool secrets on their next call, channel credentials, MCP keys and the principal
+calendar grant after the next restart (they are read at boot). Removal deletes the vault row only; an
+environment fallback (`TAVILY_API_KEY`, a channel's `envFallback`) keeps supplying the value,
+and the page marks such a row **from environment**. The same operations are `PUT` and
+`DELETE /api/vault/secrets/:name`; both accept only declared names, and a `DELETE` of a key that
+is not set returns `removed: false`. A delete an enabled component requires returns 409 unless
+`?force=true`. Every set and delete is audit-logged as a two-stage `secret.changed` event
+(`requested`, then `completed` or `failed`; a forced delete also records `force` and what it
+affected), by key name, never by value.
 
 **Missing secrets:** a missing *required* secret fails closed. Most fail at their consumer
 (e.g. a provider key, which fails the boot with the tier, model and provider named). `api_token` is special-cased with an explicit boot guard that

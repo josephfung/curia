@@ -10,8 +10,12 @@ export interface SecretDeclarer {
 
 export interface SecretRowData {
   name: string;
+  /** Set in the vault; an environment fallback does not count. */
   configured: boolean;
+  /** An enabled declarer requires it. */
   required: boolean;
+  /** Environment variable supplying the value while the vault has none (name only). */
+  envFallback: string | null;
   declaredBy: SecretDeclarer[];
 }
 
@@ -23,20 +27,16 @@ const KIND_LABEL: Record<SecretDeclarer['kind'], string> = {
   'email-account': '',
 };
 
-/** "Tool web-search" / "MCP server linear"; the mailbox kinds read as their name alone. */
+/** "Tool web-search" / "MCP server linear (disabled)"; the mailbox kinds read as their name alone.
+ *  A disabled declarer is labelled so, because it does not make the secret "missing". */
 export function declarerLabel(d: SecretDeclarer): string {
   const kind = KIND_LABEL[d.kind];
-  return kind ? `${kind} ${d.name}` : d.name;
+  const label = kind ? `${kind} ${d.name}` : d.name;
+  return d.enabled ? label : `${label} (disabled)`;
 }
 
-/** Declarers whose enabled state means removing the secret breaks something. */
-export function breakingDeclarers(row: SecretRowData): SecretDeclarer[] {
-  return row.declaredBy.filter(d => d.required && d.enabled && d.kind !== 'principal-mailbox');
-}
-
-/** Confirmation copy for removing a secret; names what stops working, if anything. */
-export function removeConfirmation(row: SecretRowData): string {
-  const breaking = breakingDeclarers(row);
-  if (breaking.length === 0) return `Remove ${row.name}?`;
-  return `Remove ${row.name}? ${breaking.map(declarerLabel).join(', ')} will stop working until it is set again.`;
+/** What the server reports for a 409: the confirmation dialog shows its words, so the
+ *  server stays the one source of truth for what breaks and when. */
+export function forceRemoveConfirmation(serverError: string): string {
+  return `${serverError}\n\nRemove it anyway?`;
 }

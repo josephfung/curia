@@ -4,7 +4,7 @@ import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
-import { declarerLabel, removeConfirmation, type SecretRowData } from './secrets-utils.js';
+import { declarerLabel, forceRemoveConfirmation, type SecretRowData } from './secrets-utils.js';
 
 // Safe error message extraction — guards against non-JSON error bodies.
 async function errorMessage(res: Response): Promise<string> {
@@ -46,14 +46,21 @@ function SecretRow({ row, onChanged }: { row: SecretRowData; onChanged: () => vo
     }
   }, [row.name, value, onChanged]);
 
-  // The server refuses with 409 while an enabled component requires the key; the
-  // confirmation names those components up front, and confirming retries with force.
+  // Ask first, then send the delete WITHOUT force. If an enabled tool, MCP server or channel
+  // requires the key the server answers 409 with what breaks and when; that message goes in
+  // a second confirmation and only an explicit yes retries with force. The server, not this
+  // page's possibly stale list, decides whether the removal is dangerous.
   const remove = useCallback(async () => {
-    if (!window.confirm(removeConfirmation(row))) return;
+    if (!window.confirm(`Remove ${row.name}?`)) return;
     setBusy(true);
     setErr(null);
     try {
-      const res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(row.name)}?force=true`, { method: 'DELETE' });
+      let res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(row.name)}`, { method: 'DELETE' });
+      if (res.status === 409) {
+        const message = await errorMessage(res);
+        if (!window.confirm(forceRemoveConfirmation(message))) return;
+        res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(row.name)}?force=true`, { method: 'DELETE' });
+      }
       if (!res.ok) throw new Error(await errorMessage(res));
       onChanged();
     } catch (e) {
@@ -61,14 +68,15 @@ function SecretRow({ row, onChanged }: { row: SecretRowData; onChanged: () => vo
     } finally {
       setBusy(false);
     }
-  }, [row, onChanged]);
+  }, [row.name, onChanged]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 20px', borderTop: '1px solid var(--app-border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <code style={{ fontSize: 13 }}>{row.name}</code>
-        <span className={`status-pill ${row.configured ? 'confirmed' : row.required ? 'blocked' : ''}`}>
-          {row.configured ? 'configured' : row.required ? 'missing' : 'not set'}
+        {/* Red only when something enabled is missing the key and nothing else supplies it. */}
+        <span className={`status-pill ${row.configured ? 'confirmed' : row.envFallback ? 'provisional' : row.required ? 'blocked' : ''}`}>
+          {row.configured ? 'configured' : row.envFallback ? 'from environment' : row.required ? 'missing' : 'not set'}
         </span>
         <span className="settings-muted-hint">{row.required ? 'required' : 'optional'}</span>
         <span style={{ flex: 1 }} />
@@ -86,6 +94,12 @@ function SecretRow({ row, onChanged }: { row: SecretRowData; onChanged: () => vo
       <p className="settings-page-sub" style={{ margin: 0, fontSize: 12 }}>
         {row.declaredBy.map(declarerLabel).join(', ')}
       </p>
+      {row.envFallback && (
+        <p className="settings-page-sub" style={{ margin: 0, fontSize: 12 }}>
+          Supplied by the {row.envFallback} environment variable. Setting a value here takes precedence;
+          removing it here does not clear the variable.
+        </p>
+      )}
       {row.declaredBy.filter(d => d.purpose).map(d => (
         <p key={d.name} className="settings-page-sub" style={{ margin: 0, fontSize: 12 }}>{d.purpose}</p>
       ))}

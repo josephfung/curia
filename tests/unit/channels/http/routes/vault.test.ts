@@ -301,25 +301,68 @@ describe('vault routes', () => {
 
   it('refuses to delete a credential an enabled channel requires', async () => {
     const secrets = fakeSecrets(['channel.slack.bot_token']);
-    const channels = { list: async () => [{ name: 'slack', state: 'enabled' }] } as unknown as ChannelRegistryService;
+    const channels = { enabledChannelNames: async () => new Set(['slack']) } as unknown as ChannelRegistryService;
     app = await build(secrets, fakeRegistry(), { channels });
     const res = await del(app, 'channel.slack.bot_token');
     expect(res.statusCode).toBe(409);
     expect(res.json().affected).toEqual([{ kind: 'channel', name: 'slack' }]);
+    // Channel credentials are read at boot, so the message says when it bites.
+    expect(res.json().error).toContain('after the next restart');
   });
 
-  it('audits set and delete by key name with no value', async () => {
+  it('says a tool secret stops working on its next call', async () => {
+    const secrets = fakeSecrets(['k']);
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'])]));
+    expect((await del(app, 'k')).json().error).toContain('on its next call');
+  });
+
+  it('refuses to delete the principal calendar grant, but not the optional address', async () => {
+    const secrets = fakeSecrets(['ceo_nylas_grant_id', 'ceo_self_email']);
+    app = await build(secrets, fakeRegistry());
+    const refused = await del(app, 'ceo_nylas_grant_id');
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toContain('Calendar and principal inbox');
+    expect((await del(app, 'ceo_self_email')).statusCode).toBe(200);
+  });
+
+  it('audits set and delete in two stages by key name with no value', async () => {
     const { bus, published } = fakeBus();
     const secrets = fakeSecrets();
     app = await build(secrets, fakeRegistry(), { bus });
     await put(app, DECLARED_SECRET, { value: 'super-secret-value' });
     await del(app, DECLARED_SECRET);
-    expect(published.map(e => e.type)).toEqual(['config.change', 'config.change']);
-    expect(published.map(e => e.payload['diff_summary'])).toEqual([
-      `Set vault secret '${DECLARED_SECRET}'`,
-      `Deleted vault secret '${DECLARED_SECRET}'`,
+    expect(published.map(e => e.type)).toEqual(['secret.changed', 'secret.changed', 'secret.changed', 'secret.changed']);
+    expect(published.map(e => [e.payload['action'], e.payload['stage'], e.payload['secretName']])).toEqual([
+      ['set', 'requested', DECLARED_SECRET],
+      ['set', 'completed', DECLARED_SECRET],
+      ['delete', 'requested', DECLARED_SECRET],
+      ['delete', 'completed', DECLARED_SECRET],
     ]);
     expect(JSON.stringify(published)).not.toContain('super-secret-value');
+  });
+
+  it('records a failed stage, not a completed one, when the vault write throws', async () => {
+    const { bus, published } = fakeBus();
+    const secrets = fakeSecrets([DECLARED_SECRET]);
+    secrets.set = async () => { throw new Error('db down'); };
+    secrets.delete = async () => { throw new Error('db down'); };
+    app = await build(secrets, fakeRegistry(), { bus });
+    expect((await put(app, DECLARED_SECRET, { value: 'v' })).statusCode).toBe(500);
+    expect((await del(app, DECLARED_SECRET)).statusCode).toBe(500);
+    expect(published.map(e => `${e.payload['action']}:${e.payload['stage']}`)).toEqual([
+      'set:requested', 'set:failed', 'delete:requested', 'delete:failed',
+    ]);
+  });
+
+  it('records force and the affected components on a forced delete', async () => {
+    const { bus, published } = fakeBus();
+    const secrets = fakeSecrets(['k']);
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'])]), { bus });
+    await del(app, 'k', '?force=true');
+    expect(published.map(e => e.payload)).toEqual([
+      { secretName: 'k', action: 'delete', stage: 'requested', force: true, affected: [{ kind: 'tool', name: 'needs-k' }] },
+      { secretName: 'k', action: 'delete', stage: 'completed', force: true, affected: [{ kind: 'tool', name: 'needs-k' }] },
+    ]);
   });
 
   it('refuses a set or delete when the audit row cannot be written', async () => {
@@ -331,6 +374,29 @@ describe('vault routes', () => {
     expect(secrets.deletes).toEqual([]);
   });
 
+  it('does not count a disabled declarer as making a secret required', async () => {
+    // Slack is not enabled (no registry): its credentials are declared but not "missing".
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('off', 'installed', ['k'])]));
+    const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+    const byName = new Map((res.json().secrets as Array<{ name: string; required: boolean; declaredBy: Array<{ required: boolean; enabled: boolean }> }>).map(x => [x.name, x]));
+    expect(byName.get('k')).toMatchObject({ required: false, declaredBy: [{ required: true, enabled: false }] });
+    expect(byName.get('channel.slack.bot_token')).toMatchObject({ required: false, declaredBy: [{ required: true, enabled: false }] });
+  });
+
+  it('reports the environment variable supplying a value, by name only', async () => {
+    process.env['VAULT_TEST_FALLBACK_KEY'] = 'env-secret-value';
+    try {
+      app = await build(fakeSecrets(), fakeRegistry(['vault_test_fallback_key'], [toolEntry('t', 'enabled', [], ['vault_test_fallback_key'])]));
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+      const row = (res.json().secrets as Array<{ name: string; envFallback: string | null }>).find(x => x.name === 'vault_test_fallback_key');
+      expect(row?.envFallback).toBe('VAULT_TEST_FALLBACK_KEY');
+      expect(res.body).not.toContain('env-secret-value');
+    } finally {
+      delete process.env['VAULT_TEST_FALLBACK_KEY'];
+    }
+  });
+
   it('lists allowlisted secrets with status and declarers, never values', async () => {
     const secrets = fakeSecrets(['k', 'channel.email.curia.nylas_grant_id']);
     app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'], ['opt'])]));
@@ -340,8 +406,9 @@ describe('vault routes', () => {
     const byName = new Map(list.map(s => [s.name, s]));
     expect(byName.get('k')).toMatchObject({ configured: true, required: true, declaredBy: [{ kind: 'tool', name: 'needs-k' }] });
     expect(byName.get('opt')).toMatchObject({ configured: false, required: false });
-    expect(byName.get('channel.slack.bot_token')).toMatchObject({ configured: false, required: true });
+    expect(byName.get('channel.slack.bot_token')).toMatchObject({ configured: false, required: false });
     expect(byName.get('ceo_self_email')).toMatchObject({ configured: false, required: false });
+    expect(byName.get('ceo_nylas_grant_id')).toMatchObject({ configured: false, required: true });
     expect(byName.get('channel.email.curia.nylas_grant_id')).toMatchObject({ configured: true });
     expect(list.map(s => s.name)).toEqual([...list.map(s => s.name)].sort((a, b) => a.localeCompare(b)));
   });

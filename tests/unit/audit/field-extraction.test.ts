@@ -74,6 +74,26 @@ describe('extractStructuredFields', () => {
     });
   });
 
+  it.each([
+    ['requested', 'pending'],
+    ['completed', 'success'],
+    ['failed', 'failure'],
+  ])('maps a %s secret.changed to outcome %s, targeting the key name (#2453)', (stage, outcome) => {
+    expect(extractStructuredFields(
+      'secret.changed',
+      { stage, action: 'delete', secretName: 'tavily_api_key' },
+      'evt-secret',
+      logger,
+    )).toEqual({
+      action: 'delete',
+      outcome,
+      target_type: 'secret',
+      target_id: 'tavily_api_key',
+      initiator_type: 'human',
+      initiator_id: 'principal',
+    });
+  });
+
   it('maps a requested document.console_action as pending (write-ahead)', () => {
     expect(extractStructuredFields(
       'document.console_action',

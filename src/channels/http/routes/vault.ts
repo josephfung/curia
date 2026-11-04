@@ -20,7 +20,7 @@ import type { RegistryService } from '../../../registry/registry-service.js';
 import type { McpRegistryService } from '../../../registry/mcp-registry-service.js';
 import type { ChannelRegistryService } from '../../../registry/channel-registry-service.js';
 import type { EventBus } from '../../../bus/bus.js';
-import { createConfigChange } from '../../../bus/events.js';
+import { createSecretChanged } from '../../../bus/events.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
 import { CHANNEL_CATALOG } from '../../catalog.js';
 import { isPerAccountEmailGrantKey } from '../../email/email-account-secrets.js';
@@ -92,8 +92,14 @@ export interface VaultSecretDeclarer {
 
 export interface VaultSecretSummary {
   name: string;
+  /** Set in the vault. An environment fallback does not count. */
   configured: boolean;
+  /** Some ENABLED declarer requires it. Each declarer's own `required` stays in declaredBy,
+   *  so the page can say "required by Slack (disabled)" without flagging it as missing. */
   required: boolean;
+  /** Name of the environment variable supplying the value while the vault has none, else
+   *  null. Name only — never the value. Remove does not clear it. */
+  envFallback: string | null;
   declaredBy: VaultSecretDeclarer[];
 }
 
@@ -149,27 +155,19 @@ export async function vaultRoutes(
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
 
-  // Write-ahead audit for a set or delete (#2453), published as config.change. Carries the
-  // key name only — never a value. If the row can't be written the change is refused: this
-  // sends the 500 itself and returns false.
-  async function auditChange(
-    request: FastifyRequest,
-    reply: FastifyReply,
-    name: string,
-    action: 'set' | 'deleted',
-  ): Promise<boolean> {
+  // Two-stage audit for a set or delete (#2453), published as secret.changed — key name only,
+  // never a value. `requested` goes out BEFORE the vault is touched; if it can't be written
+  // the change is refused (this sends the 500 itself and returns false). `completed` or
+  // `failed` follows, so a `requested` with no outcome row means the change did not happen
+  // or its outcome is unknown, never that it happened.
+  type SecretChange = { name: string; action: 'set' | 'delete'; force?: boolean; affected?: { kind: string; name: string }[] };
+
+  async function auditRequested(request: FastifyRequest, reply: FastifyReply, change: SecretChange): Promise<boolean> {
     try {
-      await options.bus.publish('system', createConfigChange({
-        config_type: 'vault_secret',
-        version: 0,
-        previous_version: 0,
-        changed_by: 'console',
-        note: name,
-        diff_summary: `${action === 'set' ? 'Set' : 'Deleted'} vault secret '${name}'`,
-      }));
+      await options.bus.publish('system', createSecretChanged({ secretName: change.name, action: change.action, stage: 'requested', force: change.force, affected: change.affected }));
       return true;
     } catch (err) {
-      request.log.error({ err, name, action }, 'vault change audit write failed — change refused');
+      request.log.error({ err, name: change.name, action: change.action }, 'vault change audit write failed — change refused');
       void reply.status(500).send({
         error: 'Nothing was changed: the change could not be audited, so it was not made. Check the server logs.',
       });
@@ -177,8 +175,20 @@ export async function vaultRoutes(
     }
   }
 
+  // The change has already been made (or has already failed), so a miss here is logged
+  // rather than turned into an error that would invite retrying a change that happened.
+  async function auditOutcome(request: FastifyRequest, change: SecretChange, stage: 'completed' | 'failed'): Promise<void> {
+    try {
+      await options.bus.publish('system', createSecretChanged({ secretName: change.name, action: change.action, stage, force: change.force, affected: change.affected }));
+    } catch (err) {
+      request.log.error({ err, name: change.name, action: change.action, stage }, 'vault change outcome audit write failed');
+    }
+  }
+
   // Every declaration of a vault key across tools, MCP servers, channels and the principal
-  // mailbox. Reads in-memory discovery plus the registries' enabled state; no vault values.
+  // mailbox. Reads in-memory discovery plus enabled state from the registry rows only —
+  // never the registries' list() views, which decrypt every declared credential to report
+  // whether it is set.
   async function collectDeclarations(): Promise<Map<string, VaultSecretDeclarer[]>> {
     const out = new Map<string, VaultSecretDeclarer[]>();
     const add = (name: string, d: VaultSecretDeclarer) => {
@@ -200,15 +210,15 @@ export async function vaultRoutes(
     }
 
     if (options.mcpRegistryService) {
-      const states = new Map((await options.mcpRegistryService.list()).map(e => [e.name, e.state === 'enabled']));
+      const enabledServers = await options.mcpRegistryService.enabledServerNames();
       for (const d of options.mcpRegistryService.secretDeclarations()) {
-        add(d.key, { kind: 'mcp', name: d.server, required: d.required, enabled: states.get(d.server) ?? false });
+        add(d.key, { kind: 'mcp', name: d.server, required: d.required, enabled: enabledServers.has(d.server) });
       }
     }
 
-    const channelStates = options.channelRegistryService
-      ? new Map((await options.channelRegistryService.list()).map(e => [e.name, e.state === 'enabled']))
-      : new Map<string, boolean>();
+    const enabledChannels = options.channelRegistryService
+      ? await options.channelRegistryService.enabledChannelNames()
+      : new Set<string>();
     for (const descriptor of CHANNEL_CATALOG) {
       for (const field of descriptor.credentialFields) {
         add(`channel.${descriptor.name}.${field.key}`, {
@@ -216,15 +226,31 @@ export async function vaultRoutes(
           name: descriptor.name,
           required: descriptor.requiredSecretKeys.includes(field.key),
           // Always-on channels (http, cli) have no registry row.
-          enabled: channelStates.get(descriptor.name) ?? !descriptor.isToggleable,
+          enabled: enabledChannels.has(descriptor.name) || !descriptor.isToggleable,
         });
       }
     }
 
-    for (const key of PRINCIPAL_MAILBOX_KEYS) {
-      add(key, { kind: 'principal-mailbox', name: 'Principal mailbox', required: false, enabled: true });
-    }
+    // The principal's Nylas grant is what calendar runs on (index.ts turns calendar off
+    // without it) and what ceo-inbox and nylas-principal-mailbox read. The address only
+    // filters reply-all CC.
+    add('ceo_nylas_grant_id', { kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true });
+    add('ceo_self_email', { kind: 'principal-mailbox', name: 'Principal inbox', required: false, enabled: true });
     return out;
+  }
+
+  // The environment variable standing in for a vault key, if one is set. Tool secrets fall
+  // back to the upper-cased key name (execution.ts); channel credentials to the catalog's
+  // envFallback. Name only — the value is never read into a response.
+  function envFallbackFor(name: string, declaredBy: VaultSecretDeclarer[]): string | null {
+    const candidates: string[] = [];
+    if (declaredBy.some(d => d.kind === 'tool')) candidates.push(name.toUpperCase());
+    for (const descriptor of CHANNEL_CATALOG) {
+      for (const field of descriptor.credentialFields) {
+        if (field.envFallback && name === `channel.${descriptor.name}.${field.key}`) candidates.push(field.envFallback);
+      }
+    }
+    return candidates.find(v => !!process.env[v]) ?? null;
   }
 
   // -- GET /api/vault/secrets — the allowlisted secrets with status and declarer (no values) --
@@ -243,7 +269,8 @@ export async function vaultRoutes(
         .map(([name, declaredBy]) => ({
           name,
           configured: configured.has(name),
-          required: declaredBy.some(d => d.required),
+          required: declaredBy.some(d => d.required && d.enabled),
+          envFallback: configured.has(name) ? null : envFallbackFor(name, declaredBy),
           declaredBy,
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
@@ -300,12 +327,15 @@ export async function vaultRoutes(
     }
 
     // Write-ahead audit: a change never lands without its audit row. Key name only.
-    if (!await auditChange(request, reply, name, 'set')) return;
+    const change: SecretChange = { name, action: 'set' };
+    if (!await auditRequested(request, reply, change)) return;
 
     try {
       await secretsService.set(name, value);
+      await auditOutcome(request, change, 'completed');
       return reply.send({ ok: true });
     } catch (err) {
+      await auditOutcome(request, change, 'failed');
       // Do NOT log the value — only the key name.
       request.log.error({ err, name }, 'vault set failed');
       return reply.status(500).send({ error: 'Failed to save secret. Check server logs.' });
@@ -335,17 +365,31 @@ export async function vaultRoutes(
       }
 
       const affected = ((await collectDeclarations()).get(name) ?? [])
-        .filter(d => d.required && d.enabled && d.kind !== 'principal-mailbox');
+        .filter(d => d.required && d.enabled);
       if (affected.length > 0 && !force) {
+        // Tool secrets are re-read from the vault on every call; channel credentials, MCP
+        // keys and the principal grant are read at boot, so they keep working until restart.
+        const effect = (d: VaultSecretDeclarer) => d.kind === 'tool' ? 'on its next call' : 'after the next restart';
         return reply.status(409).send({
-          error: `'${name}' is required by enabled ${affected.map(d => `${d.kind} '${d.name}'`).join(', ')}; ` +
-            `removing it will stop them working until it is set again.`,
+          error: `'${name}' is required by ${affected.map(d => `enabled ${d.kind === 'principal-mailbox' ? d.name : `${d.kind} '${d.name}'`} (stops working ${effect(d)})`).join(', ')}. ` +
+            `It will not work again until the secret is set.`,
           affected: affected.map(d => ({ kind: d.kind, name: d.name })),
         });
       }
 
-      if (!await auditChange(request, reply, name, 'deleted')) return;
-      await secretsService.delete(name);
+      const change: SecretChange = {
+        name,
+        action: 'delete',
+        ...(force ? { force: true, affected: affected.map(d => ({ kind: d.kind, name: d.name })) } : {}),
+      };
+      if (!await auditRequested(request, reply, change)) return;
+      try {
+        await secretsService.delete(name);
+      } catch (err) {
+        await auditOutcome(request, change, 'failed');
+        throw err;
+      }
+      await auditOutcome(request, change, 'completed');
       return reply.send({ ok: true, removed: true });
     } catch (err) {
       request.log.error({ err, name }, 'vault delete failed');

@@ -136,6 +136,17 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     };
   },
 
+  // Console Secrets page: the principal set or removed a vault secret (#2453). The target
+  // is the key name, never a value.
+  'secret.changed': (p, fail) => ({
+    action: str(p, 'action', fail),
+    outcome: p.stage === 'requested' ? 'pending' : p.stage === 'failed' ? 'failure' : 'success',
+    target_type: 'secret',
+    target_id: str(p, 'secretName', fail),
+    initiator_type: 'human',
+    initiator_id: 'principal',
+  }),
+
   // Same-contact follow-up drained into a live turn (#2018). The host task id
   // is not a structured column here — the logger maps payload.hostTaskEventId
   // onto task_id, and the factory sets parent_event_id to the inbound. No
