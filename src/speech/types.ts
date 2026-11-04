@@ -29,6 +29,12 @@ export interface SttTranscriptEvent {
   speechEndedAgoMs?: number;
 }
 
+/** The provider's voice-activity detector heard speech begin, before any words (#2401). */
+export interface SttSpeechStartedEvent {
+  /** How long before this event arrived the speech began, in ms of stream audio. */
+  startedAgoMs: number;
+}
+
 export interface SttSessionOptions {
   sampleRate: number;
   language?: string;
@@ -40,6 +46,8 @@ export interface SttSession {
   sendAudio(frame: PcmFrame): void;
   end(): Promise<void>;
   onTranscript(cb: (e: SttTranscriptEvent) => void): void;
+  /** Optional: a provider without voice-activity events never calls it. */
+  onSpeechStarted?(cb: (e: SttSpeechStartedEvent) => void): void;
   cancel(): void;
 }
 

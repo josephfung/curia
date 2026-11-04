@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Hiccups list** — clicking the Hiccups tile lists the week's failed and partly failed jobs. (#2350)
 - **`measure-2159-targets.sql`** — read-only prod queries for #2159's message and approval targets. (#2193)
 - **`install.optional_secrets`** — **public API:** `tool.json` keys a tool improves with; shown and settable, never gating. (#2445)
 - **Phone app invitation link** — operators send the principal a single-use, 48-hour link that installs and pairs the app. (#2412)
@@ -126,6 +127,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Open tasks tile** — replaces People known; counts open principal tasks and opens them on Tasks. (#2350)
+- **Voice barge-in** — Curia stops when the caller starts speaking, before words transcribe; Signal calls drop queued audio. (#2401)
 - **`@anthropic-ai/sdk` 1.x** — moves to API version 2026-10-21; Anthropic API requests no longer send `temperature`. (#2439)
 - **`web-search` keyless by default** — searches without a Tavily key; the key only raises limits. (#2445)
 - **Setup no longer asks for Tavily** — web research shows as done; the key is an optional upgrade. (#2445)
@@ -288,6 +291,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Console home tiles** — stats query 6× faster; tiles read a background-refreshed cache and shimmer while loading. (#2350)
 - **Phone-family identities** — a number verified on phone, SMS or Signal works on the others, flagged unconfirmed. (#2447)
 - **Setup wizard routing line** — shorter, so the coordinator's specialist roster fits curia-deploy's budget again. (#2466)
 - **Console secret rows** — a configured key can be replaced in place. (#2445)

@@ -2194,6 +2194,8 @@ async function main(): Promise<void> {
         workingMemory: memory,
         maxUtteranceBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
         turnHoldMs: yamlConfig.channels?.voice?.turn_hold_ms,
+        bargeInOnSpeechStart: yamlConfig.channels?.voice?.barge_in_on_speech_start,
+        bargeInSpeechStartMinDbfs: yamlConfig.channels?.voice?.barge_in_speech_start_min_dbfs,
         // Same per-turn date/timezone grounding the coordinator gets — without it
         // "tomorrow / next week" is un-anchored for every voice tool call (#1551).
         timezone: config.timezone,
@@ -3462,9 +3464,12 @@ async function main(): Promise<void> {
       ? (account, draftId) => briefingGateway.readHeldDraft(account, draftId)
       : undefined,
     bus,
+    activity: activityService,
     officeTimezone: config.timezone,
     logger,
   });
+  // The home's tiles read a cached model; keep it warm only when the console is served.
+  if (config.webAppBootstrapSecret) briefingService.startWarming();
 
   const httpAdapter = new HttpAdapter({
     bus,
@@ -3598,6 +3603,7 @@ async function main(): Promise<void> {
     } catch (err) {
       logger.error({ err }, 'Error stopping HTTP API during shutdown');
     }
+    briefingService.stopWarming();
     try {
       scheduler.stop();
     } catch (err) {

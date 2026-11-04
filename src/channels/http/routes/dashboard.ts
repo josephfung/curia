@@ -60,6 +60,21 @@ export async function dashboardRoutes(app: FastifyInstance, options: DashboardRo
     }
   });
 
+  // The jobs behind the Hiccups tile; ?day=YYYY-MM-DD narrows to one histogram day (#2350).
+  app.get('/api/dashboard/hiccups', CONSOLE_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const { day } = request.query as { day?: string };
+    if (day !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return reply.status(400).send({ error: 'Invalid day.' });
+    }
+    try {
+      return reply.send(await briefing.hiccups(new Date(), day));
+    } catch (err) {
+      logger.error({ err, day }, 'dashboard: hiccup list failed');
+      return reply.status(500).send({ error: 'Failed to load the hiccups' });
+    }
+  });
+
   app.get('/api/dashboard/bullpen', CONSOLE_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     try {

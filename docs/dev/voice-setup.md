@@ -230,6 +230,18 @@ Voice emits structured pino fields for latency debugging:
   and prompt assembly, which a model change does not move.
 - `voice.tts_first_byte_ms` — TTS time to first audio frame.
 - `voice.barge_in_stop_ms` — time to stop assistant audio after barge-in.
+- `voice.barge_in_detect_ms` — for `trigger: speech_start`, speech onset to barge-in
+  (Deepgram's onset event, backed by the caller's level). For `trigger: transcript`
+  (an interim with words), the age of the first word's Deepgram start, not VAD onset;
+  omitted when the transcript has no word timings. The two do not share an origin,
+  so compare them only within one trigger. `flushed: true` means queued audio was
+  dropped; Signal does it by restarting `pacat` (#2401). A `speech_start` barge-in
+  with no words after it logs `voice barge-in on speech onset was not followed by
+  speech` at `warn`: count those to tune `channels.voice.barge_in_speech_start_min_dbfs`.
+- `voice.barge_in_caller_dbfs` — on a `speech_start` barge-in, the loudest caller frame
+  since the onset. An onset that never reached the level while Curia was talking logs
+  `voice speech onset below barge-in level; Curia kept talking` with
+  `voice.speech_start_caller_dbfs`, which is how loud the echo or noise was.
 
 Use these fields to compare models, regions, and provider accounts before
 changing `channels.voice.model`.

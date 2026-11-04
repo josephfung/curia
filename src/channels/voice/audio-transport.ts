@@ -36,8 +36,9 @@ export interface AudioTransport {
   publishAudio(frame: PcmFrame): Promise<void>;
   /**
    * Drop published audio that has not played yet, so a barge-in stops the
-   * assistant at once instead of after the queue drains (#2379). Optional: a
-   * transport without it plays out what it already has.
+   * assistant at once instead of after the queue drains (#2379). LiveKit clears
+   * its AudioSource queue; Signal restarts pacat (#2401). Optional: a transport
+   * without it plays out what it already has.
    */
   clearQueuedAudio?(): void;
   /**
@@ -46,4 +47,10 @@ export interface AudioTransport {
    * what PulseAudio buffers past pacat, so it leaves this out.
    */
   queuedAudioMs?(): number;
+  /**
+   * How long audio can keep playing after the runtime's real-time playout estimate
+   * runs out, in ms: a buffer past the transport's reach that queuedAudioMs cannot
+   * report. Signal declares PulseAudio's playback buffer. Absent means none.
+   */
+  readonly playoutLatencyMs?: number;
 }

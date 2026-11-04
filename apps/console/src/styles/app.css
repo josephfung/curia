@@ -650,6 +650,34 @@ a.dash-activity-headline:hover { text-decoration: underline; }
   margin: 4px 0 0; color: var(--app-fg-muted); font-size: 11px; line-height: 1.35;
 }
 .dash-spark { width: 100%; height: 18px; display: block; }
+/* Tiles that open something (#2350): Open tasks is a link, Hiccups stretches its title button. */
+.dash-num-link {
+  position: relative; color: inherit; text-decoration: none; cursor: pointer;
+  transition: border-color 120ms;
+}
+.dash-num-link:hover { border-color: var(--app-teal); text-decoration: none; }
+a.dash-num-link:focus-visible, .dash-num-link:has(.dash-num-open:focus-visible) {
+  outline: 2px solid var(--app-teal); outline-offset: 2px;
+}
+.dash-num-open {
+  margin: 0; padding: 0; border: 0; background: none; text-align: left; cursor: pointer;
+  font-family: inherit;
+}
+.dash-num-open:focus-visible { outline: none; }
+.dash-num-open::after { content: ''; position: absolute; inset: 0; border-radius: 8px; }
+.dash-num-foot.overdue { color: var(--app-destructive); font-weight: 600; }
+/* Loading value: a shimmer bar the height of the number. */
+.dash-num-skeleton {
+  display: inline-block; width: 4.5ch; height: 0.8em; border-radius: 4px; vertical-align: middle;
+  background: linear-gradient(90deg, var(--app-muted) 25%, var(--app-border) 50%, var(--app-muted) 75%);
+  background-size: 200% 100%;
+  animation: dash-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes dash-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .dash-num-skeleton { animation: none; }
+}
+.dash-hiccups-dialog .dash-activity { max-height: min(60vh, 520px); overflow-y: auto; }
 
 .dash-split {
   display: grid;
