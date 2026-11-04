@@ -12,6 +12,20 @@ import type { UserSecretDetails } from './user-secret-details.js';
 
 export type ValueFormat = 'string' | 'json';
 
+/** Non-secret facts about a stored secret. Deliberately has no value or ciphertext field. */
+export interface SecretMetadata {
+  name: string;
+  valueFormat: ValueFormat;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Partial edit of a key's sign-in details: an omitted field keeps its stored value, null clears it. */
+export interface UserSecretDetailsPatch {
+  loginUrl?: string | null;
+  username?: string | null;
+}
+
 export class SecretsService {
   constructor(
     private readonly pool: DbPool,
@@ -70,6 +84,19 @@ export class SecretsService {
     return result.rows.map(r => r.name);
   }
 
+  /** Name, format and timestamps of every secret. Never selects ciphertext or IV. */
+  async listMetadata(): Promise<SecretMetadata[]> {
+    const result = await this.pool.query<{ name: string; value_format: ValueFormat; created_at: Date; updated_at: Date }>(
+      'SELECT name, value_format, created_at, updated_at FROM secrets ORDER BY name',
+    );
+    return result.rows.map(r => ({
+      name: r.name,
+      valueFormat: r.value_format,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
   /** Names of `user.*` secrets only — never values, never system/channel keys.
    *  Ordered oldest-first so capture dedup reuses the original key (#1497).
    *  Uses a prefix predicate (not list()+filter) so the full keyspace never
@@ -117,6 +144,32 @@ export class SecretsService {
          updated_at = now()`,
       [name, details.loginUrl ?? null, details.username ?? null],
     );
+  }
+
+  /** Edit sign-in details for a `user.*` key: an omitted field keeps its value, null clears it.
+   *  Inserts the row if none exists. Unlike upsertUserDetails, null is a real "clear". */
+  async patchUserDetails(name: string, patch: UserSecretDetailsPatch): Promise<void> {
+    if (!name.startsWith('user.')) {
+      throw new Error(`Sign-in details are only stored for user.* keys, not '${name}'`);
+    }
+    await this.pool.query(
+      `INSERT INTO user_secret_details (name, login_url, username)
+       VALUES ($1, $3, $5)
+       ON CONFLICT (name) DO UPDATE SET
+         login_url  = CASE WHEN $2::boolean THEN $3::text ELSE user_secret_details.login_url END,
+         username   = CASE WHEN $4::boolean THEN $5::text ELSE user_secret_details.username END,
+         updated_at = now()`,
+      [
+        name,
+        patch.loginUrl !== undefined, patch.loginUrl ?? null,
+        patch.username !== undefined, patch.username ?? null,
+      ],
+    );
+  }
+
+  /** Remove a key's sign-in details. No error if there are none. */
+  async deleteUserDetails(name: string): Promise<void> {
+    await this.pool.query('DELETE FROM user_secret_details WHERE name = $1', [name]);
   }
 
   /** Remove a secret. No error if it does not exist. */

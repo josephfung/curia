@@ -1,6 +1,6 @@
 // Integration tests — require a live Postgres with migrations applied.
 // Skips automatically when DATABASE_URL is unset (CI without Postgres).
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import pg from 'pg';
 import pino from 'pino';
 import { randomBytes } from 'node:crypto';
@@ -117,5 +117,64 @@ describeIf('SecretsService', () => {
     expect(names.every(n => n.startsWith('user.'))).toBe(true);
     expect(JSON.stringify(names)).not.toContain('user-secret-value');
     expect(JSON.stringify(names)).not.toContain('sys-secret-value');
+  });
+  describe('metadata and detail edits', () => {
+    const P = 'user.svc_meta_';
+    beforeEach(async () => {
+      await pool.query("DELETE FROM secrets WHERE name LIKE 'user.svc_meta_%'");
+      await pool.query("DELETE FROM user_secret_details WHERE name LIKE 'user.svc_meta_%'");
+    });
+    afterEach(async () => {
+      await pool.query("DELETE FROM secrets WHERE name LIKE 'user.svc_meta_%'");
+      await pool.query("DELETE FROM user_secret_details WHERE name LIKE 'user.svc_meta_%'");
+    });
+
+    it('listMetadata returns format and dates without values', async () => {
+      await service.set(`${P}a`, 'v1');
+      await service.setJSON(`${P}b`, { x: 1 });
+      const rows = (await service.listMetadata()).filter(r => r.name.startsWith(P));
+      const a = rows.find(r => r.name === `${P}a`)!;
+      const b = rows.find(r => r.name === `${P}b`)!;
+      expect(a.valueFormat).toBe('string');
+      expect(b.valueFormat).toBe('json');
+      expect(a.createdAt).toBeInstanceOf(Date);
+      expect(a.updatedAt).toBeInstanceOf(Date);
+      expect(JSON.stringify(rows)).not.toContain('v1');
+    });
+
+    it('updated_at moves on set, created_at does not', async () => {
+      const n = `${P}ts`;
+      await service.set(n, 'one');
+      const first = (await service.listMetadata()).find(r => r.name === n)!;
+      await new Promise(r => setTimeout(r, 10));
+      await service.set(n, 'two');
+      const second = (await service.listMetadata()).find(r => r.name === n)!;
+      expect(second.updatedAt.getTime()).toBeGreaterThan(first.updatedAt.getTime());
+      expect(second.createdAt.getTime()).toBe(first.createdAt.getTime());
+    });
+
+    it('patchUserDetails keeps omitted and clears null', async () => {
+      const n = `${P}patch`;
+      await service.upsertUserDetails(n, { loginUrl: 'https://a.com/', username: 'u' });
+      await service.patchUserDetails(n, { username: null });
+      expect((await service.listUserDetails()).get(n)).toEqual({ loginUrl: 'https://a.com/' });
+      await service.patchUserDetails(n, { loginUrl: 'https://b.com/' });
+      expect((await service.listUserDetails()).get(n)).toEqual({ loginUrl: 'https://b.com/' });
+    });
+
+    it('patchUserDetails inserts when no row exists and refuses a non-user key', async () => {
+      const n = `${P}fresh`;
+      await service.patchUserDetails(n, { username: 'newbie' });
+      expect((await service.listUserDetails()).get(n)).toEqual({ username: 'newbie' });
+      await expect(service.patchUserDetails('test_api_key', { username: 'x' })).rejects.toThrow(/user\.\*/);
+    });
+
+    it('deleteUserDetails removes the row and is idempotent', async () => {
+      const n = `${P}del`;
+      await service.upsertUserDetails(n, { username: 'u' });
+      await service.deleteUserDetails(n);
+      expect((await service.listUserDetails()).has(n)).toBe(false);
+      await expect(service.deleteUserDetails(n)).resolves.toBeUndefined();
+    });
   });
 });
