@@ -567,6 +567,8 @@ export class HttpAdapter implements Channel {
         secretsService: this.config.secretsService,
         registryService: this.config.registryService,
         mcpRegistryService: this.config.mcpRegistryService,
+        channelRegistryService: this.config.channelRegistryService,
+        bus,
         webAppBootstrapSecret,
         sessions,
       });

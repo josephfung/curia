@@ -204,6 +204,11 @@ are skipped, never cleared). You can pass several at once. Then restart Curia so
 the relevant channel or skill picks the secret up. The env-var snippets in the
 tiers below name the variables to seed.
 
+To **remove** a secret (for example a Tavily key that has been revoked, so web search
+goes back to running keyless), open **Memory → Secrets** in the console and choose
+**Remove** on its row. The seeder never clears a value, so the console is the way back.
+Optional secrets can also be removed from the tool's drawer under **Settings → Tools**.
+
 > Only the four vault-bootstrap values (`DB_USER`, `DB_PASSWORD`,
 > `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) plus non-secret config (`TIMEZONE`,
 > etc.) belong in `.env`. Everything else goes through the vault. The principal's

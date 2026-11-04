@@ -595,6 +595,17 @@ Nylas trio, Signal number, Tavily) lives only in the vault.
   loads `.env` too, so without `SEED_VAULT_ONLY` it re-upserts every other secret `.env`
   holds. It upserts present values; absent ones are skipped, never cleared.
 
+**Viewing, changing and removing secrets (console):** **Memory → Secrets** lists every
+secret Curia knows how to use — each tool's `requires_secrets` and `optional_secrets`, channel
+credentials, MCP server keys, per-account email grants and the principal-mailbox keys — with
+whether it is set, whether it is required, and what declares it. Values are never shown. From
+there you can **Set**, **Replace** or **Remove** a secret; an optional tool secret also has a
+**Remove** button in the tool's drawer under **Settings → Tools**. Removing a secret an enabled
+tool, MCP server or channel requires asks for confirmation first and names what will stop
+working. The same operations are `PUT` and `DELETE /api/vault/secrets/:name`; both accept only
+declared names, and a `DELETE` of a key that is not set returns `removed: false`. Every set and
+delete is audit-logged (`config.change`, `vault_secret`) by key name, never by value.
+
 **Missing secrets:** a missing *required* secret fails closed. Most fail at their consumer
 (e.g. a provider key, which fails the boot with the tier, model and provider named). `api_token` is special-cased with an explicit boot guard that
 refuses to start, because its HTTP-auth consumer fails *open* (no token configured = auth

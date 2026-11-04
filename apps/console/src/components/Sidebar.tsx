@@ -14,6 +14,7 @@ import {
   IconPerson,
   IconChecklist,
   IconClock,
+  IconKey,
   IconSettings,
   IconWand,
   IconAutonomy,
@@ -38,6 +39,7 @@ const ROUTES: Record<string, string> = {
   contacts: '/contacts',
   tasks:    '/tasks',
   jobs:     '/jobs',
+  secrets:  '/secrets',
   tools: '/tools',
   agents:   '/agents',
   channels:   '/channels',
@@ -202,6 +204,13 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
               >
                 <IconClock />
                 Scheduled Jobs
+              </button>
+              <button
+                className={`nav-sub-item${activeView === 'secrets' ? ' active' : ''}`}
+                onClick={() => go('secrets')}
+              >
+                <IconKey />
+                Secrets
               </button>
             </div>
           )}

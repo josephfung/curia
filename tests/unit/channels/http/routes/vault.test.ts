@@ -5,10 +5,14 @@
 // The scope guard on PUT /api/vault/secrets/:name accepts a name only if it is EITHER a
 // skill-declared secret OR a valid channel credential key from CHANNEL_CATALOG. These tests
 // prove both accept paths and the reject paths (arbitrary names and bogus channel keys).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { vaultRoutes, type VaultSecretsPort } from '../../../../../src/channels/http/routes/vault.js';
 import type { RegistryService } from '../../../../../src/registry/registry-service.js';
+import type { RegistryEntry } from '../../../../../src/registry/types.js';
+import type { McpRegistryService } from '../../../../../src/registry/mcp-registry-service.js';
+import type { ChannelRegistryService } from '../../../../../src/registry/channel-registry-service.js';
+import type { EventBus } from '../../../../../src/bus/bus.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 
@@ -18,23 +22,55 @@ const DECLARED_SECRET = 'some_skill_secret';
 /** Records set() calls so tests can assert the secret was actually written. */
 interface RecordingSecrets extends VaultSecretsPort {
   sets: Array<{ name: string; value: string }>;
+  deletes: string[];
 }
 
-function fakeSecrets(): RecordingSecrets {
+function fakeSecrets(preset: string[] = []): RecordingSecrets {
   const sets: Array<{ name: string; value: string }> = [];
+  const deletes: string[] = [];
+  const present = new Set(preset);
   return {
     sets,
-    list: async () => sets.map(s => s.name),
+    deletes,
+    list: async () => [...present],
     set: async (name: string, value: string) => {
       sets.push({ name, value });
+      present.add(name);
+    },
+    delete: async (name: string) => {
+      deletes.push(name);
+      present.delete(name);
+    },
+  };
+}
+
+/** Collects published audit events; `fail` makes publish reject (audit write failure). */
+function fakeBus(fail = false) {
+  const published: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const bus = {
+    publish: vi.fn(async (_layer: string, event: { type: string; payload: Record<string, unknown> }) => {
+      if (fail) throw new Error('audit down');
+      published.push(event);
+    }),
+  } as unknown as EventBus;
+  return { bus, published };
+}
+
+function toolEntry(name: string, state: RegistryEntry['state'], requires: string[], optional: string[] = []): RegistryEntry {
+  return {
+    name, kind: 'tool', state, installedAt: null, installedBy: null, enabledAt: null, enabledBy: null,
+    metadata: {
+      name, description: 'd', version: '1.0.0', requiresSecrets: requires,
+      optionalSecrets: optional.map(n => ({ name: n, purpose: 'adds a thing' })),
     },
   };
 }
 
 // Minimal RegistryService fake — only declaredSecretNames() is called by these routes.
-function fakeRegistry(declared: string[] = [DECLARED_SECRET]): RegistryService {
+function fakeRegistry(declared: string[] = [DECLARED_SECRET], tools: RegistryEntry[] = []): RegistryService {
   const base: Partial<RegistryService> = {
     declaredSecretNames: () => declared,
+    list: async () => tools,
   };
   return base as RegistryService;
 }
@@ -42,11 +78,15 @@ function fakeRegistry(declared: string[] = [DECLARED_SECRET]): RegistryService {
 async function build(
   secretsService: VaultSecretsPort,
   registryService: RegistryService,
+  extra: { bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify();
   await app.register(vaultRoutes, {
     secretsService,
     registryService,
+    mcpRegistryService: extra.mcp,
+    channelRegistryService: extra.channels,
+    bus: extra.bus ?? fakeBus().bus,
     webAppBootstrapSecret: BOOTSTRAP,
     sessions: new Map(),
   });
@@ -62,6 +102,10 @@ function put(app: FastifyInstance, name: string, body: unknown) {
     headers: auth,
     payload: body as object,
   });
+}
+
+function del(app: FastifyInstance, name: string, query = '') {
+  return app.inject({ method: 'DELETE', url: `/api/vault/secrets/${name}${query}`, headers: auth });
 }
 
 describe('vault routes', () => {
@@ -196,5 +240,109 @@ describe('vault routes', () => {
       expect(res.statusCode, name).toBe(400);
     }
     expect(secrets.sets).toEqual([]);
+  });
+
+  // --- delete + audit + list (#2453) ---
+
+  it('PUT and DELETE reject the same unknown names', async () => {
+    const secrets = fakeSecrets(['random_key', 'channel.email.not_a_field']);
+    app = await build(secrets, fakeRegistry());
+    for (const name of ['random_key', 'channel.email.not_a_field', 'channel.email.curia.nylas_api_key']) {
+      expect((await put(app, name, { value: 'x' })).statusCode, `PUT ${name}`).toBe(400);
+      expect((await del(app, name)).statusCode, `DELETE ${name}`).toBe(400);
+    }
+    expect(secrets.sets).toEqual([]);
+    expect(secrets.deletes).toEqual([]);
+  });
+
+  it('DELETE removes an allowlisted secret and repeating it is idempotent', async () => {
+    const secrets = fakeSecrets([DECLARED_SECRET]);
+    app = await build(secrets, fakeRegistry());
+    const first = await del(app, DECLARED_SECRET);
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toEqual({ ok: true, removed: true });
+    const second = await del(app, DECLARED_SECRET);
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual({ ok: true, removed: false });
+    expect(secrets.deletes).toEqual([DECLARED_SECRET]);
+  });
+
+  it('DELETE without auth returns 401 and removes nothing', async () => {
+    const secrets = fakeSecrets([DECLARED_SECRET]);
+    app = await build(secrets, fakeRegistry());
+    const res = await app.inject({ method: 'DELETE', url: `/api/vault/secrets/${DECLARED_SECRET}` });
+    expect(res.statusCode).toBe(401);
+    expect(secrets.deletes).toEqual([]);
+  });
+
+  it('refuses to delete a secret an enabled tool requires, naming the tool, unless forced', async () => {
+    const secrets = fakeSecrets(['k']);
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'])]));
+    const refused = await del(app, 'k');
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toContain("tool 'needs-k'");
+    expect(refused.json().affected).toEqual([{ kind: 'tool', name: 'needs-k' }]);
+    expect(secrets.deletes).toEqual([]);
+
+    const forced = await del(app, 'k', '?force=true');
+    expect(forced.statusCode).toBe(200);
+    expect(secrets.deletes).toEqual(['k']);
+  });
+
+  it('deletes freely when only a disabled tool requires it or the tool treats it as optional', async () => {
+    const secrets = fakeSecrets(['req', 'opt']);
+    app = await build(secrets, fakeRegistry(['req', 'opt'], [
+      toolEntry('off', 'installed', ['req']),
+      toolEntry('on', 'enabled', [], ['opt']),
+    ]));
+    expect((await del(app, 'req')).statusCode).toBe(200);
+    expect((await del(app, 'opt')).statusCode).toBe(200);
+  });
+
+  it('refuses to delete a credential an enabled channel requires', async () => {
+    const secrets = fakeSecrets(['channel.slack.bot_token']);
+    const channels = { list: async () => [{ name: 'slack', state: 'enabled' }] } as unknown as ChannelRegistryService;
+    app = await build(secrets, fakeRegistry(), { channels });
+    const res = await del(app, 'channel.slack.bot_token');
+    expect(res.statusCode).toBe(409);
+    expect(res.json().affected).toEqual([{ kind: 'channel', name: 'slack' }]);
+  });
+
+  it('audits set and delete by key name with no value', async () => {
+    const { bus, published } = fakeBus();
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry(), { bus });
+    await put(app, DECLARED_SECRET, { value: 'super-secret-value' });
+    await del(app, DECLARED_SECRET);
+    expect(published.map(e => e.type)).toEqual(['config.change', 'config.change']);
+    expect(published.map(e => e.payload['diff_summary'])).toEqual([
+      `Set vault secret '${DECLARED_SECRET}'`,
+      `Deleted vault secret '${DECLARED_SECRET}'`,
+    ]);
+    expect(JSON.stringify(published)).not.toContain('super-secret-value');
+  });
+
+  it('refuses a set or delete when the audit row cannot be written', async () => {
+    const secrets = fakeSecrets([DECLARED_SECRET]);
+    app = await build(secrets, fakeRegistry(), { bus: fakeBus(true).bus });
+    expect((await put(app, DECLARED_SECRET, { value: 'v' })).statusCode).toBe(500);
+    expect((await del(app, DECLARED_SECRET)).statusCode).toBe(500);
+    expect(secrets.sets).toEqual([]);
+    expect(secrets.deletes).toEqual([]);
+  });
+
+  it('lists allowlisted secrets with status and declarers, never values', async () => {
+    const secrets = fakeSecrets(['k', 'channel.email.curia.nylas_grant_id']);
+    app = await build(secrets, fakeRegistry(['k'], [toolEntry('needs-k', 'enabled', ['k'], ['opt'])]));
+    const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+    expect(res.statusCode).toBe(200);
+    const list = res.json().secrets as Array<{ name: string; configured: boolean; required: boolean; declaredBy: Array<{ kind: string; name: string }> }>;
+    const byName = new Map(list.map(s => [s.name, s]));
+    expect(byName.get('k')).toMatchObject({ configured: true, required: true, declaredBy: [{ kind: 'tool', name: 'needs-k' }] });
+    expect(byName.get('opt')).toMatchObject({ configured: false, required: false });
+    expect(byName.get('channel.slack.bot_token')).toMatchObject({ configured: false, required: true });
+    expect(byName.get('ceo_self_email')).toMatchObject({ configured: false, required: false });
+    expect(byName.get('channel.email.curia.nylas_grant_id')).toMatchObject({ configured: true });
+    expect(list.map(s => s.name)).toEqual([...list.map(s => s.name)].sort((a, b) => a.localeCompare(b)));
   });
 });

@@ -10,6 +10,7 @@ import { vaultRoutes } from '../../src/channels/http/routes/vault.js';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
 import { RegistryService } from '../../src/registry/registry-service.js';
 import { RegistryRepo } from '../../src/registry/registry-repo.js';
+import type { EventBus } from '../../src/bus/bus.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env['DATABASE_URL'];
@@ -47,7 +48,8 @@ describeIf('vault routes', () => {
     const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
     app = Fastify();
     await app.register(cookie);
-    await app.register(vaultRoutes, { secretsService, registryService, webAppBootstrapSecret: SECRET, sessions });
+    const bus = { publish: async () => {} } as unknown as EventBus;
+    await app.register(vaultRoutes, { secretsService, registryService, bus, webAppBootstrapSecret: SECRET, sessions });
     await app.ready();
   });
 
@@ -101,5 +103,30 @@ describeIf('vault routes', () => {
     const res = await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr, payload: { value: 'x'.repeat(8193) } });
     expect(res.statusCode).toBe(400);
     expect((res.json() as { error: string }).error).toMatch(/exceeds/);
+  });
+
+  // After a delete the vault returns null, which is what makes the next web-search run
+  // keyless: the execution layer re-reads declared secrets from the vault on every call.
+  it('deletes a secret from the real vault, idempotently', async () => {
+    const svc = new SecretsService(pool, KEY, logger);
+    await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr, payload: { value: 'tok-del' } });
+    expect(await svc.get(DECLARED_KEY)).toBe('tok-del');
+
+    // 'web-search' is not enabled in this registry (no row), so the delete is not blocked.
+    const res = await app.inject({ method: 'DELETE', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, removed: true });
+    expect(await svc.get(DECLARED_KEY)).toBeNull();
+
+    const again = await app.inject({ method: 'DELETE', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr });
+    expect(again.json()).toEqual({ ok: true, removed: false });
+  });
+
+  it('rejects deleting a name outside the allowlist and leaves it in place', async () => {
+    const svc = new SecretsService(pool, KEY, logger);
+    await svc.set('vault_rt_undeclared', 'keep-me');
+    const res = await app.inject({ method: 'DELETE', url: '/api/vault/secrets/vault_rt_undeclared', headers: hdr });
+    expect(res.statusCode).toBe(400);
+    expect(await svc.get('vault_rt_undeclared')).toBe('keep-me');
   });
 });
