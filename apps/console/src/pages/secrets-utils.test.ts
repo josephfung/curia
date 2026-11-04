@@ -220,6 +220,10 @@ describe('lastUsedText', () => {
   const now = new Date('2026-11-04T12:00:00Z');
   it('says At startup for startup reads', () => {
     expect(lastUsedText(row({ readAtStartup: true, configured: true }), now)).toBe('At startup');
+    expect(lastUsedText(row({ readAtStartup: true, configured: false, envFallback: 'TELEGRAM_BOT_TOKEN' }), now)).toBe('At startup');
+  });
+  it('says n/a for a startup key with nothing to read', () => {
+    expect(lastUsedText(row({ readAtStartup: true, configured: false, envFallback: null }), now)).toBe('n/a');
   });
   it('says n/a when not configured and never used, Never when configured', () => {
     expect(lastUsedText(row(), now)).toBe('n/a');

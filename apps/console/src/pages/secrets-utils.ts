@@ -222,7 +222,8 @@ export function readableLabel(name: string): string {
 /** Text for the "Last used" cell. "Used" means Curia read it. The short date past 30 days
  *  uses the viewer's zone; `timeZone` exists so tests can pin one. */
 export function lastUsedText(row: SecretRowData, now: Date, timeZone?: string): string {
-  if (row.readAtStartup) return 'At startup';
+  // A boot-read key with no vault value and no environment fallback is never read at all.
+  if (row.readAtStartup) return row.configured || row.envFallback ? 'At startup' : 'n/a';
   if (!row.lastUsedAt) return row.configured ? 'Never' : 'n/a';
   const then = new Date(row.lastUsedAt);
   if (Number.isNaN(then.getTime())) return 'Never';
