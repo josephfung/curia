@@ -28,6 +28,7 @@ import { registrableDomain, sameRegistrableDomain } from '../../../../src/verifi
 import type { VerificationRuntime } from '../../../../src/verification/index.js';
 import { registerCodes } from '../../../../src/verification/track-codes.js';
 import type { Verification } from '../../../../src/verification/types.js';
+import { isCardUseRefusal } from '../../../../src/secrets/structured-secret-schema.js';
 import { detectVerificationScreen } from './verification-detect.js';
 import { isBlockedFrameUrl, isPrivateHost } from './frame-url.js';
 import { focusedFrame } from './focus-frame.js';
@@ -874,14 +875,9 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
 
       let fillValue: string;
       if (hasSecretRef) {
-        if (!ctx.resolveSecretRef) {
-          // Capability not granted to this invocation — fail loud rather than
-          // silently falling back to typing the reference name as a literal.
-          return { ok: false, error: 'secret_ref requires the secretResolver capability, which is not available to this skill' };
-        }
-        // resolveSecretRef enforces the user.* namespace + audit; it throws on a bad
-        // ref or a missing secret. Any thrown message names the ref, never the value.
-        fillValue = await ctx.resolveSecretRef(secret_ref!);
+        const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
+        if (!resolved.ok) return resolved;
+        fillValue = resolved.value;
         session.registerInjectedSecret(fillValue);
         // Latch screenshot suppression NOW — before the fill below, which can throw mid-typing
         // after a char has landed. Deferring this to the return would leave the guard fail-open
@@ -924,20 +920,40 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       if (!selector || typeof selector !== 'string') {
         return { ok: false, error: 'select requires selector (string)' };
       }
-      if (!value || typeof value !== 'string') {
-        return { ok: false, error: 'select requires value (string)' };
+      // secret_ref (#1358): fill a saved-card field (an expiry month or year dropdown) by
+      // reference. Mutually exclusive with `value`, as for `type` with `text`.
+      const selectHasRef = typeof secret_ref === 'string' && secret_ref.length > 0;
+      const selectHasValue = value !== undefined && value !== null && value !== '';
+      if (selectHasRef && selectHasValue) {
+        return { ok: false, error: 'select accepts either value or secret_ref, not both' };
+      }
+      if (!selectHasRef && (!value || typeof value !== 'string')) {
+        return { ok: false, error: 'select requires value (string) or secret_ref (string)' };
       }
       // Use resolveLocator for consistency with click/type — the LLM can use
       // natural language ("Country dropdown") and it will resolve via role/label/text.
       const { locator: selectTarget, scope: selectScope } = await resolveLocatorWithScope(page, selector, ctx.log);
+      let selectValue: string;
+      if (selectHasRef) {
+        const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
+        if (!resolved.ok) return resolved;
+        selectValue = resolved.value;
+        // Same order as `type`: register for redaction and latch screenshot suppression
+        // before anything below can throw.
+        session.registerInjectedSecret(selectValue);
+        deps.markSecretInjected();
+      } else {
+        selectValue = value as string; // validated above
+      }
       // Destination guard (#2017), as for type: a tracked code is a select value only on
       // its verification's page domain, judged by the field's own document, in its session.
-      if (!trackedCodeAllowedOn(ctx, value, documentSiteUrl(page, selectScope), sessionId)) {
+      if (!trackedCodeAllowedOn(ctx, selectValue, documentSiteUrl(page, selectScope), sessionId)) {
         return { ok: false, error: TRACKED_CODE_REFUSAL };
       }
       // A select can navigate too (a country or language picker that reloads on change).
       const selectMark = activity.mark();
-      await selectTarget.selectOption(value);
+      // Playwright matches the string against option value or label.
+      await selectTarget.selectOption(selectValue);
       return { ok: true, navigated: await actionStartedNavigation(activity, selectMark, timing, deps.settleDeadline) };
     }
 
@@ -953,6 +969,32 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // Unreachable: execute() validated the verb against VALID_ACTIONS before dispatching,
       // and handles close_session and clear_site_data itself.
       return { ok: false, error: `Unknown action: "${String(action)}"` };
+  }
+}
+
+/**
+ * Dereference a secret_ref for a fill. resolveSecretRef enforces the user.* namespace, the
+ * card rules and the audit; it throws on a bad ref or a missing secret, and a thrown message
+ * names the ref, never the value. A card-use refusal comes back as the action error,
+ * unchanged. `siteUrl` is the top-level page's URL, not the frame's: a card may be filled
+ * into any frame of the approved page (a payment iframe from another origin).
+ */
+async function resolveSecretForFill(
+  ctx: ToolContext,
+  ref: string,
+  page: Page,
+): Promise<{ ok: true; value: string } | { ok: false; error: string }> {
+  if (!ctx.resolveSecretRef) {
+    // Capability not granted to this invocation — fail loud rather than
+    // silently falling back to using the reference name as a literal.
+    return { ok: false, error: 'secret_ref requires the secretResolver capability, which is not available to this skill' };
+  }
+  try {
+    return { ok: true, value: await ctx.resolveSecretRef(ref, { siteUrl: page.url() }) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (isCardUseRefusal(message)) return { ok: false, error: message };
+    throw err;
   }
 }
 
