@@ -44,6 +44,12 @@ channels:
     # Deepgram's 400 ms endpointing. Speech inside it joins the same turn (#2240).
     # Unset = the runtime default (350). Raise it if callers get cut off mid-thought.
     # turn_hold_ms: 350
+    # Interrupt Curia as soon as Deepgram hears the caller start speaking, before
+    # any words are transcribed (#2401). Guarded by the caller's level: Curia's own
+    # echo sits well below it. Raise the threshold (toward 0) if echo or noise cuts
+    # Curia off; set barge_in_on_speech_start: false to wait for words instead.
+    # barge_in_on_speech_start: true
+    # barge_in_speech_start_min_dbfs: -35
 
 # Rate limits for automatic contact creation from email participants.
 # Prevents spam campaigns from flooding the contacts table.

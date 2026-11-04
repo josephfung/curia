@@ -60,6 +60,16 @@
               "minimum": 0,
               "maximum": 5000,
               "description": "Wait (ms) after end-of-speech before a spoken turn starts. Absent: the runtime default. 0: no hold."
+            },
+            "barge_in_on_speech_start": {
+              "type": "boolean",
+              "description": "Interrupt Curia on the STT's speech-onset event, before any words. Absent: true."
+            },
+            "barge_in_speech_start_min_dbfs": {
+              "type": "number",
+              "minimum": -90,
+              "maximum": 0,
+              "description": "Caller level (dBFS) that speech-onset barge-in requires. Absent: the runtime default (-35)."
             }
           }
         },

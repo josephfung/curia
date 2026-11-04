@@ -10,6 +10,7 @@ export type {
   SpeechToTextProvider,
   SttSession,
   SttSessionOptions,
+  SttSpeechStartedEvent,
   SttTranscriptEvent,
   SynthesizeToFileOptions,
   SynthesizeToFileResult,

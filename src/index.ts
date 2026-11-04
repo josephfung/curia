@@ -2194,6 +2194,8 @@ async function main(): Promise<void> {
         workingMemory: memory,
         maxUtteranceBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
         turnHoldMs: yamlConfig.channels?.voice?.turn_hold_ms,
+        bargeInOnSpeechStart: yamlConfig.channels?.voice?.barge_in_on_speech_start,
+        bargeInSpeechStartMinDbfs: yamlConfig.channels?.voice?.barge_in_speech_start_min_dbfs,
         // Same per-turn date/timezone grounding the coordinator gets — without it
         // "tomorrow / next week" is un-anchored for every voice tool call (#1551).
         timezone: config.timezone,

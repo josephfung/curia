@@ -210,6 +210,8 @@ function makeRuntime(overrides: {
   pauseGraceMs?: number;
   maxUtteranceBytes?: number;
   logger?: Logger;
+  bargeInOnSpeechStart?: boolean;
+  bargeInSpeechStartMinDbfs?: number;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];
@@ -242,6 +244,8 @@ function makeRuntime(overrides: {
     turnHoldMs: overrides.turnHoldMs ?? 0,
     pauseGraceMs: overrides.pauseGraceMs,
     maxUtteranceBytes: overrides.maxUtteranceBytes,
+    bargeInOnSpeechStart: overrides.bargeInOnSpeechStart,
+    bargeInSpeechStartMinDbfs: overrides.bargeInSpeechStartMinDbfs,
   });
   if (overrides.bridge) runtime.configureTools(overrides.bridge);
   return { runtime, bus, events, stt, transport, tts, store };
@@ -3872,5 +3876,327 @@ describe('VoiceRuntime audio timing telemetry (#2379)', () => {
     await runtime.endSession('starve', 'test');
     const [summary] = infoFields(info, 'voice session audio summary');
     expect(summary).toMatchObject({ 'voice.tts_chunks': 1, 'voice.tts_starved_count': 4 });
+  });
+});
+
+describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
+  function spyLogger(): { logger: Logger; info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } {
+    const info = vi.fn();
+    const warn = vi.fn();
+    const logger = {
+      debug: vi.fn(),
+      info,
+      warn,
+      error: vi.fn(),
+      fatal: vi.fn(),
+      trace: vi.fn(),
+      child: () => logger,
+    } as unknown as Logger;
+    return { logger, info, warn };
+  }
+
+  const BARGE_IN_LOG = 'voice barge-in: cancelled assistant turn';
+  const UNCONFIRMED_LOG = 'voice barge-in on speech onset was not followed by speech';
+
+  /** 20 ms of 16 kHz inbound audio at a steady amplitude. 8000 ≈ -12 dBFS; 50 ≈ -56 dBFS. */
+  const inboundFrame = (amplitude: number): PcmFrame => ({
+    pcm: new Int16Array(320).fill(amplitude),
+    sampleRate: 16_000,
+    channels: 1,
+  });
+  const LOUD = 8000;
+  const ECHO = 50;
+  /**
+   * Deepgram reports an onset a few hundred ms after the audio it marks, so audio
+   * handed over right after the event mostly played after the onset. An onset at 0 ms
+   * would put a same-millisecond chunk wholly before it.
+   */
+  const ONSET_LAG_MS = 200;
+
+  function emitInbound(transport: FakeAudioTransport, amplitude: number, frames: number): void {
+    for (let i = 0; i < frames; i += 1) transport.emitRemoteAudio(inboundFrame(amplitude));
+  }
+
+  /** TTS whose frames hold a full second each, so Curia stays audible after publishing. */
+  class LongFrameTtsProvider extends SlowTtsProvider {
+    override async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
+      for await (const frame of super.synthesize(opts)) {
+        yield { ...frame, pcm: new Int16Array(frame.sampleRate) };
+      }
+    }
+  }
+
+  async function speakingSession(overrides: Partial<Parameters<typeof makeRuntime>[0]> = {}) {
+    const spy = spyLogger();
+    const llm = new FakeStreamProvider([replyScript('This is a fairly long spoken answer.'), replyScript('Okay.')], 3);
+    const tts = (overrides.tts ?? new SlowTtsProvider(50, 5)) as SlowTtsProvider;
+    const rig = makeRuntime({ llm, logger: spy.logger, ...overrides, tts });
+    await rig.runtime.startSession({
+      sessionId: 'onset',
+      conversationId: 'voice:onset',
+      roomName: 'voice-onset',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    rig.stt.emit({ text: 'tell me a long story', isFinal: true, speechFinal: true });
+    await waitForPublishedFrame(rig.transport);
+    expect(rig.transport.publishedFrames.length).toBeGreaterThan(0);
+    return { ...rig, ...spy, tts };
+  }
+
+  function bargeIns(info: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
+    return info.mock.calls.filter(([, msg]) => msg === BARGE_IN_LOG).map(([fields]) => fields as Record<string, unknown>);
+  }
+
+  it('barges in on speech onset backed by the caller\'s level, before any transcript', async () => {
+    const { runtime, stt, transport, tts, info } = await speakingSession();
+
+    stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
+    emitInbound(transport, LOUD, 5);
+
+    expect(tts.cancelled.size).toBeGreaterThan(0);
+    expect(transport.clearQueuedAudioCount).toBe(1);
+    const [line] = bargeIns(info);
+    expect(line).toMatchObject({ trigger: 'speech_start', turnActive: true, flushed: true, 'voice.barge_in_caller_dbfs': -12.2 });
+    expect(line!['voice.barge_in_detect_ms']).toEqual(expect.any(Number));
+    await runtime.endSession('onset', 'test');
+  });
+
+  it('counts voiced audio that arrived before the onset event did', async () => {
+    const { runtime, stt, transport, tts } = await speakingSession();
+
+    // Deepgram reports onset a few hundred ms late; the frames since then count.
+    emitInbound(transport, LOUD, 6);
+    stt.emitSpeechStarted({ startedAgoMs: 200 });
+
+    expect(tts.cancelled.size).toBeGreaterThan(0);
+    await runtime.endSession('onset', 'test');
+  });
+
+  it('ignores an onset when the caller\'s audio stays at echo level (echo guard)', async () => {
+    // Long frames keep Curia audible past the onset window, so the ignored onset is logged.
+    const { runtime, stt, transport, tts, info } = await speakingSession({ tts: new LongFrameTtsProvider(50, 5) });
+
+    stt.emitSpeechStarted({ startedAgoMs: 0 });
+    emitInbound(transport, ECHO, 40);
+    await delay(20);
+
+    expect(tts.cancelled.size).toBe(0);
+    expect(transport.clearQueuedAudioCount).toBe(0);
+    expect(bargeIns(info)).toEqual([]);
+    // The ignored onset logs the caller's level, for tuning the threshold.
+    await vi.waitFor(() => {
+      const ignored = info.mock.calls.filter(([, msg]) => msg === 'voice speech onset below barge-in level; Curia kept talking');
+      expect(ignored.map(([fields]) => fields)).toEqual([
+        expect.objectContaining({ 'voice.speech_start_caller_dbfs': -56.3, minDbfs: -35 }),
+      ]);
+    }, { timeout: 2_000 });
+    await runtime.awaitIdle('onset');
+    await runtime.endSession('onset', 'test');
+  });
+
+  it('ignores loud audio from before the onset', async () => {
+    const { runtime, stt, transport, tts } = await speakingSession();
+
+    emitInbound(transport, LOUD, 10);
+    await delay(50);
+    stt.emitSpeechStarted({ startedAgoMs: 0 });
+    emitInbound(transport, ECHO, 10);
+
+    expect(tts.cancelled.size).toBe(0);
+    await runtime.awaitIdle('onset');
+    await runtime.endSession('onset', 'test');
+  });
+
+  it('ignores a loud chunk that arrived just before the onset, though it shares the onset\'s millisecond', async () => {
+    const { runtime, stt, transport, tts } = await speakingSession();
+
+    // One transport chunk: ten frames (200 ms of audio) handed over together, all of
+    // it before the onset that follows at once. Each frame ends one frame before the next.
+    emitInbound(transport, LOUD, 10);
+    stt.emitSpeechStarted({ startedAgoMs: 0 });
+    emitInbound(transport, ECHO, 10);
+
+    expect(tts.cancelled.size).toBe(0);
+    await runtime.awaitIdle('onset');
+    await runtime.endSession('onset', 'test');
+  });
+
+  it('counts only the part of a chunk that played after the onset', async () => {
+    const { runtime, stt, transport, tts } = await speakingSession();
+
+    // Onset 60 ms ago, then one chunk of ten loud frames: only the last three (60 ms)
+    // are after it, short of the 100 ms needed.
+    stt.emitSpeechStarted({ startedAgoMs: 60 });
+    emitInbound(transport, LOUD, 10);
+    expect(tts.cancelled.size).toBe(0);
+
+    // Two more frames in a later chunk bring it to 100 ms.
+    await delay(40);
+    emitInbound(transport, LOUD, 2);
+    expect(tts.cancelled.size).toBeGreaterThan(0);
+    await runtime.endSession('onset', 'test');
+  });
+
+  it('honours a raised threshold', async () => {
+    const { runtime, stt, transport, tts } = await speakingSession({ bargeInSpeechStartMinDbfs: -6 });
+
+    stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
+    emitInbound(transport, LOUD, 20); // ≈ -12 dBFS, under -6
+
+    expect(tts.cancelled.size).toBe(0);
+    await runtime.awaitIdle('onset');
+    await runtime.endSession('onset', 'test');
+  });
+
+  it('does nothing on onset when disabled; the transcript gate still barges in', async () => {
+    const { runtime, stt, transport, tts, info } = await speakingSession({ bargeInOnSpeechStart: false });
+
+    stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
+    emitInbound(transport, LOUD, 20);
+    expect(tts.cancelled.size).toBe(0);
+
+    stt.emit({ text: 'actually wait', isFinal: false, confidence: 0.9 });
+    expect(tts.cancelled.size).toBeGreaterThan(0);
+    expect(bargeIns(info)[0]).toMatchObject({ trigger: 'transcript' });
+    await runtime.endSession('onset', 'test');
+  });
+
+  it('does not barge in on onset before any audio has played', async () => {
+    const spy = spyLogger();
+    let release: () => void = () => {};
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    // The model is still thinking: nothing is audible yet.
+    const llm: LLMProvider = {
+      id: 'held',
+      async chat() {
+        throw new Error('unused');
+      },
+      async *stream() {
+        await gate;
+        yield* replyScript('Done.');
+      },
+    };
+    const { runtime, stt, transport } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), logger: spy.logger });
+    await runtime.startSession({
+      sessionId: 'onset',
+      conversationId: 'voice:onset',
+      roomName: 'voice-onset',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'what is on today', isFinal: true, speechFinal: true });
+    await delay(20);
+
+    stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
+    emitInbound(transport, LOUD, 10);
+    expect(bargeIns(spy.info)).toEqual([]);
+
+    release();
+    await runtime.awaitIdle('onset');
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
+    await runtime.endSession('onset', 'test');
+  });
+
+  it('warns when an onset barge-in is not followed by words, and not when it is', async () => {
+    const unconfirmed = await speakingSession();
+    unconfirmed.stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
+    emitInbound(unconfirmed.transport, LOUD, 5);
+
+    const confirmed = await speakingSession();
+    confirmed.stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
+    emitInbound(confirmed.transport, LOUD, 5);
+    confirmed.stt.emit({ text: 'hold on a second', isFinal: false, confidence: 0.9 });
+
+    // A reply too short to start a barge-in still confirms one: it was the caller.
+    const shortReply = await speakingSession();
+    shortReply.stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
+    emitInbound(shortReply.transport, LOUD, 5);
+    shortReply.stt.emit({ text: 'no', isFinal: true, confidence: 0.9 });
+
+    // A low-confidence fragment does not: echo can produce one.
+    const echoFragment = await speakingSession();
+    echoFragment.stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
+    emitInbound(echoFragment.transport, LOUD, 5);
+    echoFragment.stt.emit({ text: 'no', isFinal: false, confidence: 0.1 });
+
+    await delay(2_100);
+    const unconfirmedWarnings = (rig: { warn: ReturnType<typeof vi.fn> }) =>
+      rig.warn.mock.calls.filter(([, msg]) => msg === UNCONFIRMED_LOG);
+    expect(unconfirmedWarnings(unconfirmed)).toHaveLength(1);
+    expect(unconfirmedWarnings(confirmed)).toHaveLength(0);
+    expect(unconfirmedWarnings(shortReply)).toHaveLength(0);
+    expect(unconfirmedWarnings(echoFragment)).toHaveLength(1);
+    for (const rig of [unconfirmed, confirmed, shortReply, echoFragment]) await rig.runtime.endSession('onset', 'test');
+  }, 15_000); // waits out the real 2 s confirm window
+
+  it('drops a finished reply\'s queued tail on barge-in', async () => {
+    const spy = spyLogger();
+    const llm = new FakeStreamProvider([replyScript('Sure.')]);
+    const { runtime, stt, transport, events } = makeRuntime({ llm, tts: new LongFrameTtsProvider(2, 1), logger: spy.logger });
+    await runtime.startSession({
+      sessionId: 'tail',
+      conversationId: 'voice:tail',
+      roomName: 'voice-tail',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'quick one', isFinal: true, speechFinal: true });
+    // The turn is over, but two seconds of its audio are still ahead of the clock.
+    await runtime.awaitIdle('tail');
+
+    stt.emit({ text: 'thanks that is all', isFinal: false, confidence: 0.9 });
+    expect(transport.clearQueuedAudioCount).toBe(1);
+    expect(bargeIns(spy.info)[0]).toMatchObject({ trigger: 'transcript', turnActive: false, flushed: true });
+
+    // Flushed once: later interims find nothing queued.
+    stt.emit({ text: 'thanks that is all really', isFinal: false, confidence: 0.9 });
+    expect(transport.clearQueuedAudioCount).toBe(1);
+    await runtime.endSession('tail', 'test');
+    // Not a cancelled turn: the reply had finished.
+    expect(endedTurnStats(events)).toMatchObject({ bargeInCancels: 0 });
+  });
+
+  it('counts the transport\'s playout latency as audible, then drops it once flushed', async () => {
+    async function finishedReply(latencyMs: number | undefined) {
+      const spy = spyLogger();
+      const llm = new FakeStreamProvider([replyScript('Sure.')]);
+      const rig = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), logger: spy.logger });
+      rig.transport.playoutLatencyMs = latencyMs;
+      await rig.runtime.startSession({
+        sessionId: 'tail',
+        conversationId: 'voice:tail',
+        roomName: 'voice-tail',
+        agentToken: 'tok',
+        caller: principalCaller(),
+        openingGreeting: false,
+      });
+      rig.stt.emit({ text: 'quick one', isFinal: true, speechFinal: true });
+      await rig.runtime.awaitIdle('tail');
+      // The reply's few ms of audio are past the real-time estimate.
+      await delay(50);
+      return { ...rig, ...spy };
+    }
+
+    // Signal-like: PulseAudio may still be playing the reply.
+    const signal = await finishedReply(2_000);
+    signal.stt.emit({ text: 'thanks that is all', isFinal: false, confidence: 0.9 });
+    expect(signal.transport.clearQueuedAudioCount).toBe(1);
+    expect(bargeIns(signal.info)[0]).toMatchObject({ trigger: 'transcript', turnActive: false, flushed: true });
+    // The flush emptied it, latency included.
+    signal.stt.emit({ text: 'thanks that is all really', isFinal: false, confidence: 0.9 });
+    expect(signal.transport.clearQueuedAudioCount).toBe(1);
+    await signal.runtime.endSession('tail', 'test');
+
+    // No declared latency: past the estimate, nothing is left to drop.
+    const plain = await finishedReply(undefined);
+    plain.stt.emit({ text: 'thanks that is all', isFinal: false, confidence: 0.9 });
+    expect(plain.transport.clearQueuedAudioCount).toBe(0);
+    await plain.runtime.endSession('tail', 'test');
   });
 });
