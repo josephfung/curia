@@ -633,9 +633,9 @@ export default function TasksPage() {
       }
       return [...prev, task];
     });
-    // A new task may not match the current status filter; show it. Outside the
-    // updater, which React requires to be pure (it navigates).
-    if (created) setFilters({ status: 'all' });
+    // A new task may not match the current filters; clear both so it shows.
+    // Outside the updater, which React requires to be pure (it navigates).
+    if (created) setFilters({ status: 'all', owner: 'all' });
     setEditing(task);
     setCreating(false);
   }
