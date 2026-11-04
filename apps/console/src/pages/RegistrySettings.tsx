@@ -40,6 +40,7 @@ async function errorMessage(res: Response): Promise<string> {
 // onSaved so the drawer re-reads vault status and re-evaluates the install gate.
 // An optional key (#2445) reads "not set" instead of "missing" and shows what it adds.
 // A configured key offers Replace, so a revoked or invalid key can be swapped in place.
+// A configured optional key also offers Remove, to go back to running without it (#2453).
 
 function SecretRow({ name, configured, onSaved, optionalPurpose }: {
   name: string;
@@ -72,6 +73,23 @@ function SecretRow({ name, configured, onSaved, optionalPurpose }: {
     }
   }, [name, value, onSaved]);
 
+  const remove = useCallback(async () => {
+    if (!window.confirm(`Remove ${name}? ${optionalPurpose ?? ''}`.trim())) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(await errorMessage(res));
+      setReplacing(false);
+      setValue('');
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to remove secret');
+    } finally {
+      setBusy(false);
+    }
+  }, [name, optionalPurpose, onSaved]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -83,6 +101,13 @@ function SecretRow({ name, configured, onSaved, optionalPurpose }: {
         {configured && !replacing && (
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReplacing(true)}>
             Replace
+          </button>
+        )}
+        {/* Only optional keys: removing a required one would break the tool, so that goes
+            through the Secrets page, which names what stops working. */}
+        {configured && optionalPurpose !== undefined && (
+          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void remove()}>
+            Remove
           </button>
         )}
       </div>

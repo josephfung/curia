@@ -40,6 +40,7 @@ const SecretCapturePage = lazy(() => import('./pages/SecretCapturePage'));
 const PairPage = lazy(() => import('./pages/PairPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
+const SecretsPage = lazy(() => import('./pages/SecretsPage'));
 const TasksPage = lazy(() => import('./pages/TasksPage'));
 const KgPage = lazy(() => import('./pages/KgPage'));
 const DocumentsPage = lazy(() => import('./pages/DocumentsPage'));
@@ -249,6 +250,12 @@ const jobsRoute = createRoute({
   component: JobsPage,
 });
 
+const secretsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/secrets',
+  component: SecretsPage,
+});
+
 const jobDetailRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/jobs/$jobId',
@@ -321,6 +328,7 @@ const routeTree = rootRoute.addChildren([
     contactsRoute,
     jobsRoute,
     jobDetailRoute,
+    secretsRoute,
     tasksRoute,
     skillsRoute,
     legacySkillsRedirect,

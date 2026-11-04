@@ -74,6 +74,34 @@ describe('extractStructuredFields', () => {
     });
   });
 
+  it.each([
+    ['requested', 'pending'],
+    ['completed', 'success'],
+  ])('maps a %s secret.changed to outcome %s, targeting the key name (#2453)', (stage, outcome) => {
+    expect(extractStructuredFields(
+      'secret.changed',
+      { stage, action: 'delete', secretName: 'tavily_api_key', initiatedBy: 'session', actorSessionId: 'actor-1' },
+      'evt-secret',
+      logger,
+    )).toEqual({
+      action: 'delete',
+      outcome,
+      target_type: 'secret',
+      target_id: 'tavily_api_key',
+      initiator_type: 'human',
+      initiator_id: 'actor-1',
+    });
+  });
+
+  it('records a header-only secret.changed as the bootstrap secret, not the principal', () => {
+    expect(extractStructuredFields(
+      'secret.changed',
+      { stage: 'completed', action: 'set', secretName: 'tavily_api_key', initiatedBy: 'bootstrap_secret' },
+      'evt-secret-hdr',
+      logger,
+    )).toMatchObject({ initiator_type: 'system', initiator_id: 'bootstrap_secret' });
+  });
+
   it('maps a requested document.console_action as pending (write-ahead)', () => {
     expect(extractStructuredFields(
       'document.console_action',
