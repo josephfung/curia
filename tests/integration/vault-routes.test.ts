@@ -12,6 +12,7 @@ import { RegistryService } from '../../src/registry/registry-service.js';
 import { RegistryRepo } from '../../src/registry/registry-repo.js';
 import { EventBus } from '../../src/bus/bus.js';
 import { AuditLogger } from '../../src/audit/logger.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env['DATABASE_URL'];
@@ -32,6 +33,8 @@ describeIf('vault routes', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    // Before any write: audit_log is append-only, so rows written to the wrong database stay.
+    await requireCuriaTestDatabase(pool);
     await pool.query('SELECT 1 FROM secrets LIMIT 0'); // sanity: migration applied
 
     const secretsService = new SecretsService(pool, KEY, logger);
