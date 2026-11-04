@@ -151,7 +151,8 @@ interface DrawerProps {
   task: Task | null;
   creating: boolean;
   onClose: () => void;
-  onSaved: (task: Task) => void;
+  /** `created` is true for a new task (POST), false for an edit (PATCH). */
+  onSaved: (task: Task, created: boolean) => void;
   onDeleted: (id: string) => void;
   /** Resolve a task ID to a summary for display in related-task links. */
   lookupTask: (id: string) => { id: string; title: string } | undefined;
@@ -256,7 +257,7 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
 
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { task: Task };
-      onSaved(data.task);
+      onSaved(data.task, creating);
     } catch (err) {
       console.error('[TaskEditDrawer] save failed:', err);
       setError(err instanceof Error ? err.message : 'Save failed');
@@ -477,6 +478,8 @@ type SortKey = 'title' | 'agentId' | 'owner' | 'priority' | 'status' | 'dueAt' |
 
 const STATUS_FILTERS = [
   'all',
+  // Every status a task is still open in; matches the backend's OPEN_TASK_STATUSES.
+  'all_open',
   // Primary task-lifecycle values
   'open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled',
   // Legacy scheduler values
@@ -486,17 +489,48 @@ type StatusFilter = typeof STATUS_FILTERS[number];
 
 type OwnerFilter = 'all' | TaskOwner;
 
+const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'in_progress', 'blocked', 'waiting']);
+const OWNER_FILTERS: readonly OwnerFilter[] = ['all', 'curia', 'ceo', 'external'];
+
+function statusFilterFrom(value: string | undefined): StatusFilter {
+  return (STATUS_FILTERS as readonly string[]).includes(value ?? '') ? value as StatusFilter : 'all';
+}
+
+function ownerFilterFrom(value: string | undefined): OwnerFilter {
+  return (OWNER_FILTERS as readonly string[]).includes(value ?? '') ? value as OwnerFilter : 'all';
+}
+
+function statusFilterLabel(value: StatusFilter): string {
+  if (value === 'all') return 'All';
+  if (value === 'all_open') return 'All open';
+  return value.replace('_', ' ');
+}
+
 export default function TasksPage() {
   const navigate = useNavigate();
-  const { task: taskIdFromUrl } = useSearch({ strict: false }) as { task?: string };
+  const { task: taskIdFromUrl, owner: ownerFromUrl, status: statusFromUrl } =
+    useSearch({ strict: false }) as { task?: string; owner?: string; status?: string };
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>('all');
+  // The URL holds the status and owner filters, so a reload, a shared link and
+  // back/forward all show what the controls show (#2350). 'all' leaves the key out.
+  const statusFilter = statusFilterFrom(statusFromUrl);
+  const ownerFilter = ownerFilterFrom(ownerFromUrl);
+  function setFilters(next: { status?: StatusFilter; owner?: OwnerFilter }) {
+    void navigate({
+      to: '/tasks',
+      search: (prev) => ({
+        ...prev,
+        ...(next.status !== undefined ? { status: next.status === 'all' ? undefined : next.status } : {}),
+        ...(next.owner !== undefined ? { owner: next.owner === 'all' ? undefined : next.owner } : {}),
+      }),
+      replace: true,
+    });
+  }
   // Default sort: priority DESC; due_at ASC is the tiebreaker in the sort comparator.
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'priority', dir: 'desc' });
   const [page, setPage] = useState(1);
@@ -541,13 +575,15 @@ export default function TasksPage() {
     for (const t of tasks) {
       const cur = c[t.status];
       if (cur !== undefined) c[t.status] = cur + 1;
+      if (OPEN_STATUSES.has(t.status)) c['all_open'] = (c['all_open'] ?? 0) + 1;
     }
     return c;
   }, [tasks]);
 
   const filtered = useMemo(() => {
     let rows = tasks;
-    if (statusFilter !== 'all') rows = rows.filter(t => t.status === statusFilter);
+    if (statusFilter === 'all_open') rows = rows.filter(t => OPEN_STATUSES.has(t.status));
+    else if (statusFilter !== 'all') rows = rows.filter(t => t.status === statusFilter);
     if (ownerFilter !== 'all') rows = rows.filter(t => t.owner === ownerFilter);
     if (search) {
       const q = search.toLowerCase();
@@ -587,7 +623,7 @@ export default function TasksPage() {
   const ariaSort = (key: SortKey): 'ascending' | 'descending' | 'none' =>
     sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
 
-  function handleSaved(task: Task) {
+  function handleSaved(task: Task, created: boolean) {
     setTasks(prev => {
       const idx = prev.findIndex(t => t.id === task.id);
       if (idx >= 0) {
@@ -595,9 +631,11 @@ export default function TasksPage() {
         next[idx] = task;
         return next;
       }
-      setStatusFilter('all');
       return [...prev, task];
     });
+    // A new task may not match the current filters; clear both so it shows.
+    // Outside the updater, which React requires to be pure (it navigates).
+    if (created) setFilters({ status: 'all', owner: 'all' });
     setEditing(task);
     setCreating(false);
   }
@@ -628,7 +666,8 @@ export default function TasksPage() {
     setCreating(false);
     if (taskIdFromUrl) {
       appliedUrlTaskRef.current = undefined;
-      void navigate({ to: '/tasks', search: { task: undefined }, replace: true });
+      // Keep owner/status: they are the page's filters (see setFilters).
+      void navigate({ to: '/tasks', search: (prev) => ({ ...prev, task: undefined }), replace: true });
     }
   }
 
@@ -679,9 +718,9 @@ export default function TasksPage() {
                     <button
                       key={v}
                       className={`records-filter-chip${statusFilter === v ? ' active' : ''}`}
-                      onClick={() => { setStatusFilter(v); setPage(1); }}
+                      onClick={() => { setFilters({ status: v }); setPage(1); }}
                     >
-                      {v === 'all' ? 'All' : v.replace('_', ' ')}
+                      {statusFilterLabel(v)}
                       <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, opacity: 0.7 }}>
                         {counts[v] ?? 0}
                       </span>
@@ -697,7 +736,7 @@ export default function TasksPage() {
                     id="tasks-owner-filter"
                     className="records-filter-select"
                     value={ownerFilter}
-                    onChange={e => { setOwnerFilter(e.target.value as OwnerFilter); setPage(1); }}
+                    onChange={e => { setFilters({ owner: e.target.value as OwnerFilter }); setPage(1); }}
                   >
                     <option value="all">All</option>
                     <option value="curia">curia</option>

@@ -265,8 +265,11 @@ const jobDetailRoute = createRoute({
 const tasksRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/tasks',
-  validateSearch: (search: Record<string, unknown>) => ({
+  // owner and status preset the page's filters, e.g. from the home's Open tasks tile (#2350).
+  validateSearch: (search: Record<string, unknown>): { task?: string; owner?: string; status?: string } => ({
     task: typeof search['task'] === 'string' ? search['task'] : undefined,
+    owner: typeof search['owner'] === 'string' ? search['owner'] : undefined,
+    status: typeof search['status'] === 'string' ? search['status'] : undefined,
   }),
   component: TasksPage,
 });

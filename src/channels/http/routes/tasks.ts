@@ -13,6 +13,7 @@ import { AGENT_NAME_RULE, isAgentName } from '../../../agents/agent-name.js';
 import { isUuid } from '../../../util/uuid.js';
 import { validateTaskErrorBudget } from '../../../tasks/task-error-budget.js';
 import { TaskTerminalStateError, type TaskRepo } from '../../../db/task-repo.js';
+import { OPEN_TASK_STATUSES } from '../../../agents/prompts/backlog-line.js';
 
 export interface TaskRouteOptions {
   pool: Pool;
@@ -78,6 +79,9 @@ export async function taskRoutes(
 
   // Full enriched query for the GET list: joins contacts for display name and
   // uses a correlated subquery to surface the next pending scheduled wake-up.
+  // Every open task is returned; the 500-row cap applies to closed tasks only.
+  // The home's Open tasks tile links to this list and must find every task it
+  // counts (#2350). The console filters and sorts the rows itself.
   const TASK_ENRICHED_QUERY = `
     SELECT
       t.id, t.agent_id, t.title, t.intent_anchor, t.description, t.status,
@@ -92,8 +96,14 @@ export async function taskRoutes(
        ORDER BY COALESCE(sj.deferred_wake_at, sj.next_run_at) ASC LIMIT 1) AS next_wake_at
     FROM tasks t
     LEFT JOIN contacts c ON c.id = t.waiting_on_contact_id
-    ORDER BY t.updated_at DESC
-    LIMIT 500`;
+    WHERE t.status = ANY($1::text[])
+       OR t.id IN (
+         SELECT closed.id FROM tasks closed
+         WHERE NOT (closed.status = ANY($1::text[]))
+         ORDER BY closed.updated_at DESC
+         LIMIT 500
+       )
+    ORDER BY (t.status = ANY($1::text[])) DESC, t.updated_at DESC`;
 
   function serializeTask(row: DbTaskRow) {
     return {
@@ -129,7 +139,7 @@ export async function taskRoutes(
   app.get('/api/tasks', CONSOLE_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     try {
-      const result = await pool.query(TASK_ENRICHED_QUERY);
+      const result = await pool.query(TASK_ENRICHED_QUERY, [OPEN_TASK_STATUSES]);
       return reply.send({
         tasks: result.rows.map((row) => serializeTask(row as DbTaskRow)),
       });

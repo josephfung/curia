@@ -4,6 +4,7 @@ import type {
   SpeechToTextProvider,
   SttSession,
   SttSessionOptions,
+  SttSpeechStartedEvent,
   SttTranscriptEvent,
   TranscribeFileOptions,
   TranscribeFileResult,
@@ -13,6 +14,7 @@ export class FakeSttSession implements SttSession {
   readonly audioFrames: PcmFrame[] = [];
 
   private readonly transcriptCallbacks: Array<(e: SttTranscriptEvent) => void> = [];
+  private readonly speechStartedCallbacks: Array<(e: SttSpeechStartedEvent) => void> = [];
   private ended = false;
   private cancelled = false;
 
@@ -29,8 +31,19 @@ export class FakeSttSession implements SttSession {
     this.transcriptCallbacks.push(cb);
   }
 
+  onSpeechStarted(cb: (e: SttSpeechStartedEvent) => void): void {
+    this.speechStartedCallbacks.push(cb);
+  }
+
   cancel(): void {
     this.cancelled = true;
+  }
+
+  emitSpeechStarted(event: SttSpeechStartedEvent = { startedAgoMs: 0 }): void {
+    if (this.cancelled) return;
+    for (const cb of this.speechStartedCallbacks) {
+      cb(event);
+    }
   }
 
   emit(event: SttTranscriptEvent): void {
@@ -78,6 +91,12 @@ export class FakeSttProvider implements SpeechToTextProvider, BatchSpeechToTextP
   emit(event: SttTranscriptEvent): void {
     for (const session of this.sessions) {
       session.emit(event);
+    }
+  }
+
+  emitSpeechStarted(event?: SttSpeechStartedEvent): void {
+    for (const session of this.sessions) {
+      session.emitSpeechStarted(event);
     }
   }
 

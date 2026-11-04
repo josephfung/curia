@@ -132,6 +132,104 @@ describe('SignalAudioTransport', () => {
     await transport.publishAudio({ pcm, sampleRate: 48_000, channels: 1 });
   });
 
+  describe('clearQueuedAudio (#2401)', () => {
+    it('kills pacat with SIGKILL and restarts it on the same sink', async () => {
+      const { transport, children } = setup();
+      await transport.connect();
+      const first = children.filter(c => c.cmd === 'pacat');
+      expect(first).toHaveLength(1);
+
+      transport.clearQueuedAudio();
+
+      const pacats = children.filter(c => c.cmd === 'pacat');
+      expect(pacats).toHaveLength(2);
+      expect(pacats[0]!.child.killed).toEqual(['SIGKILL']);
+      expect(pacats[1]!.args).toEqual(pacats[0]!.args);
+      expect(pacats[0]!.child.stdin.destroyed).toBe(true);
+      await transport.disconnect();
+    });
+
+    it('does not fire onClose when the retired pacat exits, even abnormally', async () => {
+      const { logger, warn, error } = stubLogger();
+      const { transport, children } = setup({ logger });
+      const reasons: string[] = [];
+      transport.onClose(r => reasons.push(r));
+      await transport.connect();
+      transport.clearQueuedAudio();
+      const old = children.filter(c => c.cmd === 'pacat')[0]!.child;
+      await new Promise(r => setImmediate(r)); // FakeChild's exit(0, SIGKILL)
+      old.emit('exit', null, 'SIGKILL');
+      old.emit('error', new Error('EPIPE'));
+      old.stdin.emit('error', new Error('EPIPE'));
+      expect(reasons).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      await transport.disconnect();
+    });
+
+    it('writes later frames to the new pacat', async () => {
+      const { transport, children } = setup();
+      await transport.connect();
+      transport.clearQueuedAudio();
+      const fresh = children.filter(c => c.cmd === 'pacat')[1]!.child;
+      const chunks: Buffer[] = [];
+      fresh.stdin.on('data', (c: Buffer) => chunks.push(c));
+      await transport.publishAudio({ pcm: new Int16Array(960).fill(42), sampleRate: 48_000, channels: 1 });
+      await vi.waitFor(() => expect(Buffer.concat(chunks).length).toBe(1920));
+      await transport.disconnect();
+    });
+
+    it('settles a publish parked on the old pipe\'s backpressure', async () => {
+      class BackpressureChild extends FakeChild {
+        override stdin = new PassThrough({ highWaterMark: 1 });
+      }
+      const children: { cmd: string; child: FakeChild }[] = [];
+      const spawnFn: SpawnFn = cmd => {
+        const child = new BackpressureChild();
+        children.push({ cmd, child });
+        return child;
+      };
+      const transport = new SignalAudioTransport({
+        pulseServer: '/run/pulse/native',
+        inputDeviceName: 'signal_input_42',
+        outputDeviceName: 'signal_output_42',
+        logger: createSilentLogger(),
+        spawnFn,
+      });
+      await transport.connect();
+      const pending = transport.publishAudio({ pcm: new Int16Array(960), sampleRate: 48_000, channels: 1 });
+      transport.clearQueuedAudio();
+      await pending; // hangs (test times out) if the flush leaves the waiter parked
+      await transport.disconnect();
+    });
+
+    it('still reports a transport error when the new pacat dies', async () => {
+      const { transport, children } = setup();
+      const reasons: string[] = [];
+      transport.onClose(r => reasons.push(r));
+      await transport.connect();
+      transport.clearQueuedAudio();
+      children.filter(c => c.cmd === 'pacat')[1]!.child.emit('exit', 1, null);
+      expect(reasons).toEqual(['transport_error']);
+    });
+
+    it('is a no-op after disconnect', async () => {
+      const { transport, children } = setup();
+      await transport.connect();
+      await transport.disconnect();
+      transport.clearQueuedAudio();
+      expect(children.filter(c => c.cmd === 'pacat')).toHaveLength(1);
+    });
+
+    it('disconnect terminates the restarted pacat', async () => {
+      const { transport, children } = setup();
+      await transport.connect();
+      transport.clearQueuedAudio();
+      await transport.disconnect();
+      expect(children.filter(c => c.cmd === 'pacat')[1]!.child.killed).toEqual(['SIGTERM']);
+    });
+  });
+
   it('disconnect escalates to SIGKILL when a child ignores SIGTERM past the grace period', async () => {
     // A child that ignores SIGTERM and only dies on SIGKILL, exercising the
     // 500 ms grace-timer escalation in disconnect().

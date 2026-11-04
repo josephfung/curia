@@ -14,10 +14,10 @@ import type { Logger } from '../logger.js';
 import { isUuid } from '../util/uuid.js';
 import { collectActivityRefs, projectActivity, type ActivityRows } from './projection.js';
 import { scrubContactDetails } from './scrub.js';
-import type { ActivityPage } from './types.js';
+import type { ActivityItem, ActivityPage } from './types.js';
 
 export interface ActivityServiceDeps {
-  auditLogRepo: Pick<AuditLogRepo, 'findActivityJobs'>;
+  auditLogRepo: Pick<AuditLogRepo, 'findActivityJobs' | 'findActivityJobsByIds'>;
   actionLogRepo?: Pick<ActionLogRepo, 'findTerminalBetween'>;
   contactService: Pick<ContactService, 'getContact' | 'findContactBySystemRole' | 'resolveByChannelIdentity'>;
   schedulerService?: Pick<SchedulerService, 'getJob'>;
@@ -69,9 +69,30 @@ export class ActivityService implements ActivityFeedSource {
   constructor(private readonly deps: ActivityServiceDeps) {}
 
   async list(query: { from: Date; to: Date; limit: number }): Promise<ActivityPage> {
-    const { deps } = this;
     const { rows, hasMore: rootsRemain } = await this.readRoots(query);
+    const { items, timezone } = await this.project(rows, query.from, query.to);
+    return {
+      items: items.slice(0, query.limit),
+      hasMore: items.length > query.limit || rootsRemain,
+      timezone,
+    };
+  }
 
+  /**
+   * The items for named root jobs, newest first (the console's hiccup list,
+   * #2350). A job with nothing to show is dropped, as in {@link list}.
+   */
+  async listByIds(ids: string[], to: Date = new Date()): Promise<ActivityItem[]> {
+    const rows = await this.deps.auditLogRepo.findActivityJobsByIds(ids, to);
+    const oldest = rows.roots[rows.roots.length - 1];
+    if (!oldest) return [];
+    const { items } = await this.project(rows, oldest.timestamp, to);
+    return items;
+  }
+
+  /** Resolve names, job labels and autonomy rows, then project. */
+  private async project(rows: ActivityRows, from: Date, to: Date): Promise<{ items: ActivityItem[]; timezone: string }> {
+    const { deps } = this;
     const principal = await this.lookup('principal contact', () => deps.contactService.findContactBySystemRole('principal'));
     const timezone = principal?.timezone ?? deps.officeTimezone;
 
@@ -79,7 +100,7 @@ export class ActivityService implements ActivityFeedSource {
     const [names, jobLabels, autonomyRows] = await Promise.all([
       this.resolveNames(refs.names, principal?.displayName ?? null),
       this.resolveJobLabels(refs.jobIds),
-      this.loadAutonomyRows(query.from, query.to),
+      this.loadAutonomyRows(from, to),
     ]);
 
     const items = projectActivity(rows, {
@@ -88,12 +109,7 @@ export class ActivityService implements ActivityFeedSource {
       jobLabel: (jobId) => jobLabels.get(jobId) ?? null,
       autonomyRows,
     });
-
-    return {
-      items: items.slice(0, query.limit),
-      hasMore: items.length > query.limit || rootsRemain,
-      timezone,
-    };
+    return { items, timezone };
   }
 
   /**

@@ -140,6 +140,27 @@ describe('DeepgramSttProvider', () => {
     ]);
   });
 
+  it('reports SpeechStarted as a speech-onset event, not a transcript (#2401)', async () => {
+    const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
+    const sessionPromise = provider.startSession({ sampleRate: 16000 });
+    const socket = MockWebSocket.instances[0]!;
+    socket.open();
+    const session = await sessionPromise;
+    const transcripts: SttTranscriptEvent[] = [];
+    const onsets: Array<{ startedAgoMs: number }> = [];
+    session.onTranscript(event => transcripts.push(event));
+    session.onSpeechStarted?.(event => onsets.push(event));
+
+    // 3 s of audio sent; speech began at 2.7 s of the stream.
+    session.sendAudio({ pcm: new Int16Array(48_000), sampleRate: 16000, channels: 1 });
+    socket.message(JSON.stringify({ type: 'SpeechStarted', channel: [0], timestamp: 2.7 }));
+    // A message with no timestamp counts as onset now.
+    socket.message(JSON.stringify({ type: 'SpeechStarted', channel: [0] }));
+
+    expect(onsets).toEqual([{ startedAgoMs: 300 }, { startedAgoMs: 0 }]);
+    expect(transcripts).toEqual([]);
+  });
+
   it('sends PCM bytes and closes cleanly on end', async () => {
     const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
     const sessionPromise = provider.startSession({ sampleRate: 16000 });

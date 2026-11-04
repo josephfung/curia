@@ -7,6 +7,7 @@ import {
   type SpeechToTextProvider,
   type SttSession,
   type SttSessionOptions,
+  type SttSpeechStartedEvent,
   type SttTranscriptEvent,
   type TranscribeFileOptions,
   type TranscribeFileResult,
@@ -146,6 +147,17 @@ function parseDeepgramTranscript(data: unknown, audioSentSeconds = 0): SttTransc
   };
 }
 
+/**
+ * Parse a `SpeechStarted` VAD message (`vad_events=true`). Its `timestamp` is the
+ * onset in stream seconds, so it converts to how long ago speech began (#2401).
+ */
+function parseDeepgramSpeechStarted(data: unknown, audioSentSeconds: number): SttSpeechStartedEvent | undefined {
+  const payload = asRecord(data);
+  if (payload?.type !== 'SpeechStarted') return undefined;
+  const onset = typeof payload.timestamp === 'number' ? payload.timestamp : audioSentSeconds;
+  return { startedAgoMs: Math.max(0, Math.round((audioSentSeconds - onset) * 1000)) };
+}
+
 function normalizeSocketError(event: unknown): Error {
   const record = asRecord(event);
   const message = typeof record?.message === 'string' ? record.message : 'Deepgram STT socket error';
@@ -195,6 +207,7 @@ function prerecordedResponseError(response: Response): SttHttpError {
 
 class DeepgramSttSession implements SttSession {
   private readonly transcriptCallbacks: Array<(e: SttTranscriptEvent) => void> = [];
+  private readonly speechStartedCallbacks: Array<(e: SttSpeechStartedEvent) => void> = [];
   private readonly closeWaiters: Array<() => void> = [];
   private ended = false;
   private cancelled = false;
@@ -269,6 +282,10 @@ class DeepgramSttSession implements SttSession {
     this.transcriptCallbacks.push(cb);
   }
 
+  onSpeechStarted(cb: (e: SttSpeechStartedEvent) => void): void {
+    this.speechStartedCallbacks.push(cb);
+  }
+
   cancel(): void {
     this.stopKeepAlive();
     if (this.closed) return;
@@ -289,6 +306,18 @@ class DeepgramSttSession implements SttSession {
         this.logger.warn({ err }, 'Deepgram STT returned non-JSON message');
         return;
       }
+    }
+
+    const speechStarted = parseDeepgramSpeechStarted(parsed, this.audioSentSeconds);
+    if (speechStarted) {
+      for (const cb of this.speechStartedCallbacks) {
+        try {
+          cb(speechStarted);
+        } catch (err) {
+          this.logger.warn({ err }, 'Deepgram STT speech-started callback failed');
+        }
+      }
+      return;
     }
 
     const event = parseDeepgramTranscript(parsed, this.audioSentSeconds);
