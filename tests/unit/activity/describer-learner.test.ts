@@ -127,6 +127,24 @@ describe('DescriberLearner', () => {
     expect(rows.get('ops|sheet-append')).toMatchObject({ verb: 'x', source: 'operator' });
   });
 
+  it('relearns a row when the deterministic signal changes without the description changing', async () => {
+    // Learned as a read while the server sent no hints; the server then adds readOnlyHint: false.
+    const unhinted: ToolFacts = { ...TOOLS['sheet-append']!, readOnlyHint: undefined };
+    const stale: LearnedDescriber = {
+      agentId: 'expenses', toolName: 'sheet-append', effect: 'read', verb: 'checked', one: 'the sheet', many: 'the sheet',
+      attempt: 'check the sheet', descriptionHash: describerHash(unhinted), source: 'learned',
+    };
+    TOOLS['sheet-append'] = { ...unhinted, readOnlyHint: false };
+    try {
+      const { chat, rows, learner } = setup([textResponse(GOOD)], [stale]);
+      await learner.handleResult(result('sheet-append', 'expenses', false));
+      expect(chat).toHaveBeenCalledOnce();
+      expect(rows.get('expenses|sheet-append')).toMatchObject({ effect: 'write', verb: 'logged', source: 'hint' });
+    } finally {
+      TOOLS['sheet-append'] = unhinted;
+    }
+  });
+
   it('writes no row when the call fails, and tries again only after the retry interval', async () => {
     const { chat, repo, learner, advance } = setup([new Error('fast tier down'), textResponse('not json'), textResponse(GOOD)]);
     await learner.handleResult(result('sheet-append'));

@@ -13,8 +13,11 @@
 --   learned  — effect and words both from the model
 --   operator — edited by hand; the learner never overwrites it
 --
--- description_hash is the tool's description and input schema when the row was
--- learned. A tool whose hash no longer matches is learned again (unless operator).
+-- description_hash fingerprints the tool's description, input schema and
+-- deterministic read/write signal when the row was learned. A tool whose
+-- fingerprint no longer matches is learned again (unless operator), so a server
+-- that adds a readOnlyHint, or an action_risk change that crosses a signal
+-- boundary, replaces a stale effect.
 
 -- Up Migration
 

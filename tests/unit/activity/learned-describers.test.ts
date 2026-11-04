@@ -54,6 +54,19 @@ describe('describerHash', () => {
     expect(describerHash(facts({ inputSchema: { a: 1, b: 3 } }))).not.toBe(base);
     expect(describerHash(facts({ description: 'Append two rows', inputSchema: { a: 1, b: 2 } }))).not.toBe(base);
   });
+
+  it('changes when the deterministic signal changes, and only then', () => {
+    const mcp = facts({ mcp: true, actionRisk: 'none' });
+    expect(describerHash({ ...mcp, readOnlyHint: false })).not.toBe(describerHash(mcp));
+    expect(describerHash({ ...mcp, destructiveHint: true })).not.toBe(describerHash(mcp));
+    // Server-wide action_risk does not change an MCP tool's signal.
+    expect(describerHash({ ...mcp, actionRisk: 'high' })).toBe(describerHash(mcp));
+    const local = facts({ actionRisk: 'low' });
+    expect(describerHash({ ...local, actionRisk: 'medium' })).not.toBe(describerHash(local));
+    expect(describerHash({ ...local, actionRisk: 'none' })).not.toBe(describerHash(local));
+    // low and 65 both leave it to the model: nothing to relearn.
+    expect(describerHash({ ...local, actionRisk: 65 })).toBe(describerHash(local));
+  });
 });
 
 describe('buildCatalog', () => {
