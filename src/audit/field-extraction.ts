@@ -160,6 +160,27 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     initiator_id: typeof p.agentId === 'string' ? p.agentId : str(p, 'toolName', fail),
   }),
 
+  // Saved-card use (#1358). The target is the vault key name; the payload never carries the
+  // number or CVV. The request has no agent in its payload, so it is attributed to the
+  // card-use service; the decision is the principal's (or the expiry sweep's).
+  'card_use.requested': (p, fail) => ({
+    action: 'card_use_requested',
+    outcome: 'pending',
+    target_type: 'secret',
+    target_id: str(p, 'secretName', fail),
+    initiator_type: 'system',
+    initiator_id: 'card-use',
+  }),
+
+  'card_use.decided': (p, fail) => ({
+    action: 'card_use_decided',
+    outcome: p.decision === 'approved' ? 'success' : p.decision === 'denied' || p.decision === 'expired' ? 'failure' : fail('decision'),
+    target_type: 'secret',
+    target_id: str(p, 'secretName', fail),
+    initiator_type: p.decision === 'expired' ? 'system' : 'human',
+    initiator_id: p.decision === 'expired' ? 'card-use' : typeof p.via === 'string' ? p.via : 'principal',
+  }),
+
   // Same-contact follow-up drained into a live turn (#2018). The host task id
   // is not a structured column here — the logger maps payload.hostTaskEventId
   // onto task_id, and the factory sets parent_event_id to the inbound. No

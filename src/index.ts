@@ -178,6 +178,7 @@ import { CardUseRepo } from './secrets/card-use-repo.js';
 import { CardUseService } from './secrets/card-use-service.js';
 import { SecretCaptureService } from './secrets/secret-capture-service.js';
 import { SecretCaptureResumeSubscriber } from './secrets/secret-capture-resume-subscriber.js';
+import { CardUseResumeSubscriber } from './secrets/card-use-resume-subscriber.js';
 import { channelCredentialKeys, principalMailboxKeys } from './channels/http/routes/vault.js';
 import { migrateLegacyTavilyKey } from './secrets/migrate-legacy-tavily-key.js';
 import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
@@ -3302,6 +3303,15 @@ async function main(): Promise<void> {
     (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
   );
   secretCaptureResumeSubscriber.start();
+
+  // Resume-after-card-decision (#1358): re-enters the agent parked mid-checkout when the
+  // principal answers a card-use confirmation outside the requesting conversation.
+  const cardUseResumeSubscriber = new CardUseResumeSubscriber(
+    bus,
+    logger,
+    (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
+  );
+  cardUseResumeSubscriber.start();
 
   // Late delegation delivery (#1799): a delegate wait that times out abandons a specialist that
   // keeps running. The subscriber opens a durable handle at timeout, and when the specialist
