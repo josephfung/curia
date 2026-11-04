@@ -606,9 +606,13 @@ working: tool secrets on their next call, channel credentials, MCP keys, email a
 calendar grant after the next restart (they are read at boot). Removal deletes the vault row only; an
 environment fallback (`TAVILY_API_KEY`, a channel's `envFallback`) keeps supplying the value,
 and the page marks such a row **from environment**. The same operations are `PUT` and
-`DELETE /api/vault/secrets/:name`; both accept only declared names, and a `DELETE` of a key that
-is not set returns `removed: false`. A delete an enabled component requires returns 409 unless
-`?force=true`. Every set and delete is audit-logged as a two-stage `secret.changed` event
+`DELETE /api/vault/secrets/:name`. `PUT` accepts only declared names; `DELETE` also removes
+personal (`user.*`) and orphaned keys already in the vault, and a `DELETE` of a declared key that
+is not set returns `removed: false`. Both refuse platform keys (the ones Curia reads at boot) with
+403. A delete an enabled component requires returns 409 unless `?force=true`. Personal secrets are
+created with `POST /api/vault/user-secrets` (named from the sign-in site or a label; `/preview`
+shows the name first) and edited with `PATCH /api/vault/user-secrets/:name`.
+Every set, delete and sign-in detail edit (`details`) is audit-logged as a two-stage `secret.changed` event
 (`requested`, then `completed`; a write that throws gets no outcome row, since it may have
 committed; a forced delete also records `force` and what it affected), with the actor (console
 session or bootstrap secret), by key name, never by value.

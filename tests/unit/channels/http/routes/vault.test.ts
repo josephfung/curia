@@ -16,7 +16,8 @@ import type { ChannelRegistryService } from '../../../../../src/registry/channel
 import type { EventBus } from '../../../../../src/bus/bus.js';
 import { hashToken } from '../../../../../src/channels/http/session-auth.js';
 import type { UserSecretDetails } from '../../../../../src/secrets/user-secret-details.js';
-import type { SecretUsagePort } from '../../../../../src/secrets/secret-usage-repo.js';
+import type { SecretUsagePort, SecretUse } from '../../../../../src/secrets/secret-usage-repo.js';
+import type { UserSecretDetailsPatch } from '../../../../../src/secrets/secrets-service.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 
@@ -27,25 +28,38 @@ const DECLARED_SECRET = 'some_skill_secret';
 interface RecordingSecrets extends VaultSecretsPort {
   sets: Array<{ name: string; value: string }>;
   deletes: string[];
+  upserts: Array<{ name: string; details: UserSecretDetails }>;
+  patches: Array<{ name: string; patch: UserSecretDetailsPatch }>;
+  detailDeletes: string[];
 }
 
 const CREATED = new Date('2026-09-01T00:00:00.000Z');
 const UPDATED = new Date('2026-10-02T00:00:00.000Z');
 
-function fakeSecrets(preset: string[] = [], details: Record<string, UserSecretDetails> = {}): RecordingSecrets {
+function fakeSecrets(
+  preset: string[] = [],
+  details: Record<string, UserSecretDetails> = {},
+  formats: Record<string, 'string' | 'json'> = {},
+): RecordingSecrets {
   const sets: Array<{ name: string; value: string }> = [];
   const deletes: string[] = [];
+  const upserts: Array<{ name: string; details: UserSecretDetails }> = [];
+  const patches: Array<{ name: string; patch: UserSecretDetailsPatch }> = [];
+  const detailDeletes: string[] = [];
   const present = new Set(preset);
   return {
     sets,
     deletes,
+    upserts,
+    patches,
+    detailDeletes,
     list: async () => [...present],
-    listMetadata: async () => [...present].map(name => ({ name, valueFormat: 'string' as const, createdAt: CREATED, updatedAt: UPDATED })),
+    listMetadata: async () => [...present].map(name => ({ name, valueFormat: formats[name] ?? 'string', createdAt: CREATED, updatedAt: UPDATED })),
     listUserNames: async () => [...present].filter(n => n.startsWith('user.')),
     listUserDetails: async () => new Map(Object.entries(details)),
-    upsertUserDetails: async () => {},
-    patchUserDetails: async () => {},
-    deleteUserDetails: async () => {},
+    upsertUserDetails: async (name: string, d: UserSecretDetails) => { upserts.push({ name, details: d }); },
+    patchUserDetails: async (name: string, patch: UserSecretDetailsPatch) => { patches.push({ name, patch }); },
+    deleteUserDetails: async (name: string) => { detailDeletes.push(name); },
     set: async (name: string, value: string) => {
       sets.push({ name, value });
       present.add(name);
@@ -182,6 +196,14 @@ describe('vault routes', () => {
     expect(secrets.sets).toEqual([]);
   });
 
+  it('rejects a whitespace-only value with 400', async () => {
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    const res = await put(app, DECLARED_SECRET, { value: '  \n ' });
+    expect(res.statusCode).toBe(400);
+    expect(secrets.sets).toEqual([]);
+  });
+
   it('rejects unauthenticated requests with 401', async () => {
     const secrets = fakeSecrets();
     app = await build(secrets, fakeRegistry());
@@ -261,8 +283,8 @@ describe('vault routes', () => {
 
   // --- delete + audit + list (#2453) ---
 
-  it('PUT and DELETE reject the same unknown names', async () => {
-    const secrets = fakeSecrets(['random_key', 'channel.email.not_a_field']);
+  it('PUT and DELETE reject the same unknown names when they are not in the vault', async () => {
+    const secrets = fakeSecrets();
     app = await build(secrets, fakeRegistry());
     for (const name of ['random_key', 'channel.email.not_a_field', 'channel.email.curia.nylas_api_key']) {
       expect((await put(app, name, { value: 'x' })).statusCode, `PUT ${name}`).toBe(400);
@@ -539,5 +561,325 @@ describe('vault routes', () => {
       expect(row.kind).toBe('platform');
       expect(row.declaredBy.map(d => d.kind).sort()).toEqual(['mcp', 'platform']);
     });
+  });
+
+  // --- platform guard, personal create/edit, wider delete, recent uses (Task 6) ---
+
+  const PLATFORM_REFUSAL = 'Managed by deployment — change it in the deploy environment, not here.';
+
+  function post(a: FastifyInstance, url: string, body: unknown) {
+    return a.inject({ method: 'POST', url, headers: auth, payload: body as object });
+  }
+  function patch(a: FastifyInstance, name: string, body: unknown) {
+    return a.inject({ method: 'PATCH', url: `/api/vault/user-secrets/${encodeURIComponent(name)}`, headers: auth, payload: body as object });
+  }
+  const changes = (published: Array<{ type: string; payload: Record<string, unknown> }>) =>
+    published.filter(e => e.type === 'secret.changed').map(e => `${String(e.payload['action'])}:${String(e.payload['stage'])}`);
+
+  describe('platform guard', () => {
+    it('PUT, DELETE and PATCH refuse a platform key with 403', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['openrouter_api_key']);
+      // Even a registry that declares the key does not make it writable here.
+      app = await build(secrets, fakeRegistry(['openrouter_api_key']), { bus });
+      for (const res of [
+        await put(app, 'openrouter_api_key', { value: 'sk-or-new' }),
+        await del(app, 'openrouter_api_key', '?force=true'),
+        await patch(app, 'openrouter_api_key', { value: 'sk-or-new' }),
+      ]) {
+        expect(res.statusCode).toBe(403);
+        expect(res.json()).toEqual({ error: PLATFORM_REFUSAL });
+      }
+      expect(published).toEqual([]);
+      expect(secrets.sets).toEqual([]);
+      expect(secrets.deletes).toEqual([]);
+      expect(secrets.patches).toEqual([]);
+    });
+  });
+
+  describe('POST /api/vault/user-secrets', () => {
+    it('POST user-secrets creates user.rogers_password with details', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets();
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await post(app, '/api/vault/user-secrets', {
+        type: 'website_login', loginUrl: 'https://www.rogers.com/signin', username: 'u@example.com', value: 'pw-123',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ name: 'user.rogers_password', replaced: false });
+      expect(res.body).not.toContain('pw-123');
+      expect(secrets.sets).toEqual([{ name: 'user.rogers_password', value: 'pw-123' }]);
+      expect(secrets.upserts).toEqual([{ name: 'user.rogers_password', details: { loginUrl: 'https://www.rogers.com/signin', username: 'u@example.com' } }]);
+      expect(changes(published)).toEqual(['set:requested', 'set:completed']);
+      expect(published.every(e => e.payload['secretName'] === 'user.rogers_password')).toBe(true);
+      expect(JSON.stringify(published)).not.toContain('pw-123');
+    });
+
+    it('POST replaces an existing key and keeps blank details', async () => {
+      const secrets = fakeSecrets(['user.rogers_password'], { 'user.rogers_password': { username: 'old' } });
+      app = await build(secrets, fakeRegistry());
+      const res = await post(app, '/api/vault/user-secrets', {
+        type: 'website_login', loginUrl: 'https://www.rogers.com/signin', value: 'pw-new',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ name: 'user.rogers_password', replaced: true });
+      expect(secrets.upserts).toHaveLength(1);
+      expect(secrets.upserts[0]!.details).not.toHaveProperty('username');
+    });
+
+    it('POST with no details writes no details row', async () => {
+      const secrets = fakeSecrets();
+      app = await build(secrets, fakeRegistry());
+      const res = await post(app, '/api/vault/user-secrets', { type: 'other', label: 'Garage code', value: '4321' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ name: 'user.garage_code', replaced: false });
+      expect(secrets.upserts).toEqual([]);
+    });
+
+    it('POST refuses to replace a JSON-valued key', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password'], {}, { 'user.rogers_password': 'json' });
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await post(app, '/api/vault/user-secrets', {
+        type: 'website_login', loginUrl: 'https://www.rogers.com/signin', value: 'pw-new',
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({
+        error: "'user.rogers_password' holds a structured value. Recapture through Curia to change a structured value.",
+      });
+      expect(secrets.sets).toEqual([]);
+      expect(published).toEqual([]);
+    });
+
+    it('POST and PATCH reject a whitespace-only value', async () => {
+      const secrets = fakeSecrets(['user.rogers_password']);
+      app = await build(secrets, fakeRegistry());
+      const created = await post(app, '/api/vault/user-secrets', { type: 'other', label: 'Garage code', value: '   ' });
+      expect(created.statusCode).toBe(400);
+      const edited = await patch(app, 'user.rogers_password', { value: ' \t ' });
+      expect(edited.statusCode).toBe(400);
+      expect(secrets.sets).toEqual([]);
+    });
+
+    it('POST rejects an oversized value, a bad type and bad details', async () => {
+      const secrets = fakeSecrets();
+      app = await build(secrets, fakeRegistry());
+      expect((await post(app, '/api/vault/user-secrets', { type: 'other', label: 'x', value: 'x'.repeat(8193) })).statusCode).toBe(400);
+      expect((await post(app, '/api/vault/user-secrets', { type: 'card', label: 'x', value: 'v' })).statusCode).toBe(400);
+      const creds = await post(app, '/api/vault/user-secrets', { type: 'website_login', loginUrl: 'https://me:pw@rogers.com/', value: 'v' });
+      expect(creds.statusCode).toBe(400);
+      expect(creds.json().error).toMatch(/credentials/);
+      expect(secrets.sets).toEqual([]);
+    });
+  });
+
+  describe('POST /api/vault/user-secrets/preview', () => {
+    it('preview reports the existing key', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password']);
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await post(app, '/api/vault/user-secrets/preview', { type: 'website_login', loginUrl: 'https://www.rogers.com/signin' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ name: 'user.rogers_password', existing: { updatedAt: UPDATED.toISOString(), valueFormat: 'string' } });
+      expect(published).toEqual([]);
+      expect(secrets.sets).toEqual([]);
+    });
+
+    it('preview names a new key with no existing entry', async () => {
+      app = await build(fakeSecrets(), fakeRegistry());
+      const res = await post(app, '/api/vault/user-secrets/preview', { type: 'other', label: 'Garage code' });
+      expect(res.json()).toEqual({ name: 'user.garage_code', existing: null });
+    });
+
+    it('preview 400s a bad URL', async () => {
+      app = await build(fakeSecrets(), fakeRegistry());
+      const res = await post(app, '/api/vault/user-secrets/preview', { type: 'website_login', loginUrl: 'ftp://x' });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('login URL must be http or https');
+    });
+  });
+
+  describe('PATCH /api/vault/user-secrets/:name', () => {
+    it('PATCH details-only never writes the value', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password']);
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await patch(app, 'user.rogers_password', { username: 'new@example.com' });
+      expect(res.statusCode).toBe(200);
+      expect(secrets.sets).toEqual([]);
+      expect(secrets.patches).toEqual([{ name: 'user.rogers_password', patch: { username: 'new@example.com' } }]);
+      expect(changes(published)).toEqual(['details:requested', 'details:completed']);
+    });
+
+    it('PATCH null clears a field', async () => {
+      const secrets = fakeSecrets(['user.rogers_password']);
+      app = await build(secrets, fakeRegistry());
+      expect((await patch(app, 'user.rogers_password', { username: null })).statusCode).toBe(200);
+      expect((await patch(app, 'user.rogers_password', { loginUrl: '' })).statusCode).toBe(200);
+      expect(secrets.patches).toEqual([
+        { name: 'user.rogers_password', patch: { username: null } },
+        { name: 'user.rogers_password', patch: { loginUrl: null } },
+      ]);
+    });
+
+    it('PATCH with value and details audits both actions', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password']);
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await patch(app, 'user.rogers_password', { value: 'pw-patched', loginUrl: 'https://rogers.com/login' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).not.toContain('pw-patched');
+      expect(secrets.sets).toEqual([{ name: 'user.rogers_password', value: 'pw-patched' }]);
+      expect(secrets.patches).toEqual([{ name: 'user.rogers_password', patch: { loginUrl: 'https://rogers.com/login' } }]);
+      expect(changes(published)).toEqual(['set:requested', 'details:requested', 'set:completed', 'details:completed']);
+      expect(JSON.stringify(published)).not.toContain('pw-patched');
+    });
+
+    it('PATCH with only a value never touches the details', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password']);
+      app = await build(secrets, fakeRegistry(), { bus });
+      expect((await patch(app, 'user.rogers_password', { value: 'pw-only' })).statusCode).toBe(200);
+      expect(secrets.patches).toEqual([]);
+      expect(changes(published)).toEqual(['set:requested', 'set:completed']);
+    });
+
+    it('PATCH with no fields is a 400 and writes nothing', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password']);
+      app = await build(secrets, fakeRegistry(), { bus });
+      expect((await patch(app, 'user.rogers_password', {})).statusCode).toBe(400);
+      expect(secrets.patches).toEqual([]);
+      expect(published).toEqual([]);
+    });
+
+    it('PATCH refuses a non-personal name and bad details', async () => {
+      const secrets = fakeSecrets([DECLARED_SECRET, 'user.rogers_password']);
+      app = await build(secrets, fakeRegistry());
+      expect((await patch(app, DECLARED_SECRET, { value: 'x' })).statusCode).toBe(400);
+      expect((await patch(app, 'user.rogers_password', { loginUrl: 'not a url' })).statusCode).toBe(400);
+      expect((await patch(app, 'user.rogers_password', { username: 42 })).statusCode).toBe(400);
+      expect(secrets.sets).toEqual([]);
+      expect(secrets.patches).toEqual([]);
+    });
+
+    it('PATCH on a removed key 404s and writes nothing', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets();
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await patch(app, 'user.rogers_password', { value: 'pw', username: 'u' });
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual({ error: "'user.rogers_password' no longer exists." });
+      expect(secrets.sets).toEqual([]);
+      expect(secrets.patches).toEqual([]);
+      expect(published).toEqual([]);
+    });
+
+    it('PATCH on a JSON-valued key with a value 409s; with details only succeeds', async () => {
+      const secrets = fakeSecrets(['user.aeroplan_login'], {}, { 'user.aeroplan_login': 'json' });
+      app = await build(secrets, fakeRegistry());
+      const refused = await patch(app, 'user.aeroplan_login', { value: 'pw', username: 'u' });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().error).toBe("'user.aeroplan_login' holds a structured value. Recapture through Curia to change a structured value.");
+      expect(secrets.patches).toEqual([]);
+      expect((await patch(app, 'user.aeroplan_login', { username: 'u' })).statusCode).toBe(200);
+      expect(secrets.sets).toEqual([]);
+      expect(secrets.patches).toEqual([{ name: 'user.aeroplan_login', patch: { username: 'u' } }]);
+    });
+  });
+
+  describe('wider DELETE', () => {
+    it('DELETE removes a user.* key and its details', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password'], { 'user.rogers_password': { username: 'u' } });
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await del(app, encodeURIComponent('user.rogers_password'));
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, removed: true });
+      expect(secrets.deletes).toEqual(['user.rogers_password']);
+      expect(secrets.detailDeletes).toEqual(['user.rogers_password']);
+      expect(changes(published)).toEqual(['delete:requested', 'delete:completed']);
+    });
+
+    it('DELETE removes an orphaned key', async () => {
+      const secrets = fakeSecrets(['old_tool_key']);
+      app = await build(secrets, fakeRegistry([]));
+      const res = await del(app, 'old_tool_key');
+      expect(res.statusCode).toBe(200);
+      expect(secrets.deletes).toEqual(['old_tool_key']);
+      expect(secrets.detailDeletes).toEqual([]);
+    });
+
+    it('DELETE still 400s a name that is neither declared nor in the vault', async () => {
+      const secrets = fakeSecrets();
+      app = await build(secrets, fakeRegistry([]));
+      expect((await del(app, 'old_tool_key')).statusCode).toBe(400);
+      expect((await del(app, 'user.nothing_here')).statusCode).toBe(400);
+      expect(secrets.deletes).toEqual([]);
+    });
+
+    it('DELETE a dotted email-grant name', async () => {
+      const name = 'channel.email.my-acct.nylas_grant_id';
+      const secrets = fakeSecrets([name]);
+      app = await build(secrets, fakeRegistry());
+      const res = await del(app, encodeURIComponent(name));
+      expect(res.statusCode).toBe(200);
+      expect(secrets.deletes).toEqual([name]);
+    });
+  });
+
+  describe('GET /api/vault/secrets/:name/uses', () => {
+    const USE: SecretUse = { at: new Date('2026-10-30T12:00:00.000Z'), agentId: 'coordinator', toolName: 'browser-login', source: 'vault', byReference: true };
+    function recordingUsage() {
+      const calls: Array<{ name: string; limit: number }> = [];
+      const usage: SecretUsagePort = {
+        lastUsedByName: async () => new Map(),
+        recentUses: async (name, limit) => { calls.push({ name, limit }); return [USE]; },
+      };
+      return { usage, calls };
+    }
+
+    it("GET uses returns the repo's rows, clamps limit", async () => {
+      const { usage, calls } = recordingUsage();
+      app = await build(fakeSecrets(), fakeRegistry(), { usage });
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets/tavily_api_key/uses?limit=500', headers: auth });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        uses: [{ at: '2026-10-30T12:00:00.000Z', agentId: 'coordinator', toolName: 'browser-login', source: 'vault', byReference: true }],
+      });
+      await app.inject({ method: 'GET', url: '/api/vault/secrets/tavily_api_key/uses', headers: auth });
+      await app.inject({ method: 'GET', url: '/api/vault/secrets/tavily_api_key/uses?limit=0', headers: auth });
+      await app.inject({ method: 'GET', url: '/api/vault/secrets/tavily_api_key/uses?limit=abc', headers: auth });
+      expect(calls.map(c => c.limit)).toEqual([20, 5, 1, 5]);
+    });
+
+    it('GET uses works for a dotted, encoded name', async () => {
+      const { usage, calls } = recordingUsage();
+      app = await build(fakeSecrets(), fakeRegistry(), { usage });
+      const name = 'channel.email.my-acct.nylas_grant_id';
+      const res = await app.inject({ method: 'GET', url: `/api/vault/secrets/${encodeURIComponent(name)}/uses?limit=3`, headers: auth });
+      expect(res.statusCode).toBe(200);
+      expect(calls).toEqual([{ name, limit: 3 }]);
+      const personal = await app.inject({ method: 'GET', url: `/api/vault/secrets/${encodeURIComponent('user.rogers_password')}/uses`, headers: auth });
+      expect(personal.statusCode).toBe(200);
+      expect(calls[1]).toEqual({ name: 'user.rogers_password', limit: 5 });
+    });
+
+    it('GET uses is empty when no usage source is wired, and needs auth', async () => {
+      app = await build(fakeSecrets(), fakeRegistry());
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets/k/uses', headers: auth });
+      expect(res.json()).toEqual({ uses: [] });
+      expect((await app.inject({ method: 'GET', url: '/api/vault/secrets/k/uses' })).statusCode).toBe(401);
+    });
+  });
+
+  it('new routes require auth', async () => {
+    const secrets = fakeSecrets(['user.rogers_password']);
+    app = await build(secrets, fakeRegistry());
+    const body = { type: 'other', label: 'x', value: 'v' };
+    expect((await app.inject({ method: 'POST', url: '/api/vault/user-secrets', payload: body })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'POST', url: '/api/vault/user-secrets/preview', payload: body })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'PATCH', url: '/api/vault/user-secrets/user.rogers_password', payload: { value: 'v' } })).statusCode).toBe(401);
+    expect(secrets.sets).toEqual([]);
   });
 });
