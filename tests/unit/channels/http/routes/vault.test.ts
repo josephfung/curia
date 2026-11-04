@@ -15,6 +15,8 @@ import type { McpRegistryService } from '../../../../../src/registry/mcp-registr
 import type { ChannelRegistryService } from '../../../../../src/registry/channel-registry-service.js';
 import type { EventBus } from '../../../../../src/bus/bus.js';
 import { hashToken } from '../../../../../src/channels/http/session-auth.js';
+import type { UserSecretDetails } from '../../../../../src/secrets/user-secret-details.js';
+import type { SecretUsagePort } from '../../../../../src/secrets/secret-usage-repo.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 
@@ -27,7 +29,10 @@ interface RecordingSecrets extends VaultSecretsPort {
   deletes: string[];
 }
 
-function fakeSecrets(preset: string[] = []): RecordingSecrets {
+const CREATED = new Date('2026-09-01T00:00:00.000Z');
+const UPDATED = new Date('2026-10-02T00:00:00.000Z');
+
+function fakeSecrets(preset: string[] = [], details: Record<string, UserSecretDetails> = {}): RecordingSecrets {
   const sets: Array<{ name: string; value: string }> = [];
   const deletes: string[] = [];
   const present = new Set(preset);
@@ -35,6 +40,12 @@ function fakeSecrets(preset: string[] = []): RecordingSecrets {
     sets,
     deletes,
     list: async () => [...present],
+    listMetadata: async () => [...present].map(name => ({ name, valueFormat: 'string' as const, createdAt: CREATED, updatedAt: UPDATED })),
+    listUserNames: async () => [...present].filter(n => n.startsWith('user.')),
+    listUserDetails: async () => new Map(Object.entries(details)),
+    upsertUserDetails: async () => {},
+    patchUserDetails: async () => {},
+    deleteUserDetails: async () => {},
     set: async (name: string, value: string) => {
       sets.push({ name, value });
       present.add(name);
@@ -80,12 +91,13 @@ function fakeRegistry(declared: string[] = [DECLARED_SECRET], tools: RegistryEnt
 async function build(
   secretsService: VaultSecretsPort,
   registryService: RegistryService,
-  extra: { bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }> } = {},
+  extra: { usage?: SecretUsagePort; bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }> } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify();
   await app.register(vaultRoutes, {
     secretsService,
     registryService,
+    usage: extra.usage,
     mcpRegistryService: extra.mcp,
     channelRegistryService: extra.channels,
     emailAccounts: extra.emailAccounts
@@ -444,10 +456,88 @@ describe('vault routes', () => {
     expect(byName.get('channel.slack.bot_token')).toMatchObject({ configured: false, required: false });
     expect(byName.get('ceo_self_email')).toMatchObject({ configured: false, required: false });
     expect(byName.get('ceo_nylas_grant_id')).toMatchObject({ configured: false, required: true });
-    // No email_accounts row for 'curia': listed as a leftover so it can still be removed.
+    // No email_accounts row for 'curia': an orphan, listed as a system row with no declarers.
     expect(byName.get('channel.email.curia.nylas_grant_id')).toMatchObject({
-      configured: true, required: false, declaredBy: [{ kind: 'email-account', name: 'curia (account removed)' }],
+      kind: 'system', configured: true, required: false, declaredBy: [],
     });
     expect(list.map(s => s.name)).toEqual([...list.map(s => s.name)].sort((a, b) => a.localeCompare(b)));
+  });
+
+  describe('GET /api/vault/secrets row assembly', () => {
+    const STORED = ['tavily_api_key', 'openrouter_api_key', 'user.rogers_password', 'old_tool_key'];
+    const details = { 'user.rogers_password': { loginUrl: 'https://rogers.example/login', username: 'joseph' } };
+    function mcpDeclaring(key: string): McpRegistryService {
+      return {
+        declaredSecretKeys: () => [key],
+        enabledServerNames: async () => new Set(['linear']),
+        secretDeclarations: () => [{ key, server: 'linear', required: true }],
+      } as unknown as McpRegistryService;
+    }
+    async function rows(a: FastifyInstance) {
+      const res = await a.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+      expect(res.statusCode).toBe(200);
+      const list = res.json().secrets as Array<Record<string, unknown>>;
+      return { res, byName: new Map(list.map(r => [r['name'] as string, r])) };
+    }
+
+    it('lists personal, system, platform and orphan rows', async () => {
+      app = await build(fakeSecrets(STORED, details), fakeRegistry(['tavily_api_key'], [toolEntry('web-search', 'enabled', ['tavily_api_key'])]), { mcp: mcpDeclaring('linear_api_key') });
+      const { byName } = await rows(app);
+      expect(byName.get('tavily_api_key')).toMatchObject({ kind: 'system', configured: true });
+      expect(byName.get('openrouter_api_key')).toMatchObject({
+        kind: 'platform', configured: true, required: true,
+        declaredBy: [{ kind: 'platform', name: 'LLM provider (OpenRouter)', required: true, enabled: true }],
+      });
+      expect(byName.get('user.rogers_password')).toMatchObject({ kind: 'personal', configured: true, required: false, declaredBy: [] });
+      expect(byName.get('old_tool_key')).toMatchObject({ kind: 'system', configured: true, declaredBy: [] });
+      expect(byName.get('linear_api_key')).toMatchObject({ kind: 'system', configured: false, valueFormat: null, createdAt: null, updatedAt: null });
+    });
+
+    it('personal rows carry sign-in details and no value', async () => {
+      const secrets = fakeSecrets(STORED, details);
+      await secrets.set('user.rogers_password', 'hunter2-stored-value');
+      app = await build(secrets, fakeRegistry([]));
+      const { res, byName } = await rows(app);
+      expect(byName.get('user.rogers_password')).toMatchObject({ loginUrl: 'https://rogers.example/login', username: 'joseph' });
+      expect(byName.get('tavily_api_key')).not.toHaveProperty('loginUrl');
+      expect(res.body).not.toContain('hunter2-stored-value');
+    });
+
+    it('dates and lastUsedAt come from metadata and usage', async () => {
+      const usage: SecretUsagePort = {
+        lastUsedByName: async () => new Map([['user.rogers_password', new Date('2026-10-01T00:00:00.000Z')]]),
+        recentUses: async () => [],
+      };
+      app = await build(fakeSecrets(STORED, details), fakeRegistry([]), { usage });
+      const { byName } = await rows(app);
+      expect(byName.get('user.rogers_password')).toMatchObject({
+        valueFormat: 'string', createdAt: CREATED.toISOString(), updatedAt: UPDATED.toISOString(), lastUsedAt: '2026-10-01T00:00:00.000Z',
+      });
+      expect(byName.get('tavily_api_key')).toMatchObject({ lastUsedAt: null });
+      await app.close();
+      app = await build(fakeSecrets(STORED, details), fakeRegistry([]));
+      expect((await rows(app)).byName.get('user.rogers_password')).toMatchObject({ lastUsedAt: null });
+    });
+
+    it('readAtStartup is true for platform and channel rows, false for tool-declared and personal rows', async () => {
+      app = await build(
+        fakeSecrets([...STORED, 'channel.slack.bot_token'], details),
+        fakeRegistry(['tavily_api_key'], [toolEntry('web-search', 'enabled', ['tavily_api_key'])]),
+      );
+      const { byName } = await rows(app);
+      expect(byName.get('openrouter_api_key')).toMatchObject({ readAtStartup: true });
+      expect(byName.get('channel.slack.bot_token')).toMatchObject({ readAtStartup: true });
+      expect(byName.get('tavily_api_key')).toMatchObject({ readAtStartup: false });
+      expect(byName.get('user.rogers_password')).toMatchObject({ readAtStartup: false });
+      expect(byName.get('old_tool_key')).toMatchObject({ readAtStartup: false });
+    });
+
+    it('a platform key that is also declared stays platform', async () => {
+      app = await build(fakeSecrets(['openrouter_api_key']), fakeRegistry([]), { mcp: mcpDeclaring('openrouter_api_key') });
+      const { byName } = await rows(app);
+      const row = byName.get('openrouter_api_key') as { kind: string; declaredBy: Array<{ kind: string }> };
+      expect(row.kind).toBe('platform');
+      expect(row.declaredBy.map(d => d.kind).sort()).toEqual(['mcp', 'platform']);
+    });
   });
 });

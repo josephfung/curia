@@ -3,8 +3,10 @@
 // Only mounted when webAppBootstrapSecret + secretsService + registryService are configured.
 //
 //   GET    /api/vault/status            — names of configured secrets (keys only, never values)
-//   GET    /api/vault/secrets          — every allowlisted secret: set or not, required or optional,
-//                                         and what declares it (#2453). Never values.
+//   GET    /api/vault/secrets          — every secret in the vault (personal user.*, platform keys,
+//                                         system/declared, and orphans) plus declared-but-unset ones:
+//                                         set or not, required or optional, what declares it, dates
+//                                         and last use (#2453). Never values.
 //   PUT    /api/vault/secrets/:name    — set a secret value (body: { value })
 //   DELETE /api/vault/secrets/:name    — remove a secret (idempotent; refused while an enabled
 //                                         component requires it, unless ?force=true)
@@ -26,6 +28,10 @@ import { CHANNEL_CATALOG } from '../../catalog.js';
 import { emailAccountGrantSecretName, isPerAccountEmailGrantKey } from '../../email/email-account-secrets.js';
 import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
 import { actorFromRequest } from './sessions.js';
+import { isPlatformVaultKey, platformKeyLabel } from '../../../secrets/platform-keys.js';
+import type { SecretMetadata, UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
+import type { UserSecretDetails } from '../../../secrets/user-secret-details.js';
+import type { SecretUsagePort } from '../../../secrets/secret-usage-repo.js';
 
 // Allow-set of valid channel credential vault keys, derived once from the static catalog.
 // A channel credential is stored as `channel.<channel>.<field.key>`; only the exact
@@ -70,17 +76,23 @@ function isChannelCredentialKey(name: string): boolean {
   return CHANNEL_CREDENTIAL_KEYS.has(name);
 }
 
-/** The narrow slice of SecretsService these routes need — list names, set a string value,
- *  remove a secret. */
+/** The narrow slice of SecretsService these routes need — list names and metadata, set a
+ *  string value, remove a secret, and manage a user.* key's sign-in details. */
 export interface VaultSecretsPort {
   list(): Promise<string[]>;
   set(name: string, value: string): Promise<void>;
   delete(name: string): Promise<void>;
+  listMetadata(): Promise<SecretMetadata[]>;
+  listUserNames(): Promise<string[]>;
+  listUserDetails(): Promise<Map<string, UserSecretDetails>>;
+  upsertUserDetails(name: string, d: UserSecretDetails): Promise<void>;
+  patchUserDetails(name: string, p: UserSecretDetailsPatch): Promise<void>;
+  deleteUserDetails(name: string): Promise<void>;
 }
 
 /** What declares a vault secret, as shown on the console Secrets page. */
 export interface VaultSecretDeclarer {
-  kind: 'tool' | 'mcp' | 'channel' | 'principal-mailbox' | 'email-account';
+  kind: 'tool' | 'mcp' | 'channel' | 'principal-mailbox' | 'email-account' | 'platform';
   /** Tool, MCP server or channel name; the kind's own label for the other kinds. */
   name: string;
   /** Whether this declarer needs the secret (true) or merely improves with it (false). */
@@ -92,8 +104,13 @@ export interface VaultSecretDeclarer {
   purpose?: string;
 }
 
+export type VaultSecretKind = 'personal' | 'system' | 'platform';
+
 export interface VaultSecretSummary {
   name: string;
+  /** personal: user.* keys the principal or an agent captured. platform: keys Curia reads
+   *  directly at boot (read-only here). system: everything else, declared or orphaned. */
+  kind: VaultSecretKind;
   /** Set in the vault. An environment fallback does not count. */
   configured: boolean;
   /** Some ENABLED declarer requires it. Each declarer's own `required` stays in declaredBy,
@@ -103,6 +120,18 @@ export interface VaultSecretSummary {
    *  null. Name only — never the value. Remove does not clear it. */
   envFallback: string | null;
   declaredBy: VaultSecretDeclarer[];
+  /** null when the secret is not in the vault. */
+  valueFormat: 'string' | 'json' | null;
+  /** ISO timestamps; null when not in the vault. */
+  createdAt: string | null;
+  updatedAt: string | null;
+  /** Latest recorded read by Curia; null when never read or no usage source is wired. */
+  lastUsedAt: string | null;
+  /** Read once when Curia starts, so individual reads are not recorded. */
+  readAtStartup: boolean;
+  /** Personal rows only: non-secret sign-in details. */
+  loginUrl?: string;
+  username?: string;
 }
 
 /** Generous ceiling for a string secret (API keys, tokens). Structured/JSON secrets use
@@ -121,6 +150,8 @@ export interface VaultRouteOptions {
   channelRegistryService?: ChannelRegistryService;
   /** Optional: when present, a delete is refused while an enabled email account needs its grant. */
   emailAccounts?: Pick<EmailAccountsRepo, 'list'>;
+  /** Optional: last-read times for the Secrets page. When absent, lastUsedAt is null. */
+  usage?: SecretUsagePort;
   /** Every set and delete is published here as a secret.changed audit event (#2453). */
   bus: EventBus;
 }
@@ -277,28 +308,60 @@ export async function vaultRoutes(
     return candidates.find(v => !!process.env[v]) ?? null;
   }
 
-  // -- GET /api/vault/secrets — the allowlisted secrets with status and declarer (no values) --
+  // -- GET /api/vault/secrets — every vault secret plus declared-but-unset ones (no values) --
+  // Each vault name lands in exactly one row; the first matching rule wins:
+  //   1. platform key in the vault -> platform (real declarations plus a platform declarer)
+  //   2. user.*                    -> personal (sign-in details from user_secret_details)
+  //   3. declared                  -> system (also covers declared names not in the vault)
+  //   4. anything else in the vault -> system orphan, declaredBy: []
   app.get('/api/vault/secrets', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     try {
-      const configured = new Set(await secretsService.list());
+      const metadata = new Map((await secretsService.listMetadata()).map(m => [m.name, m]));
       const declarations = await collectDeclarations();
-      // A grant left behind by a deleted email account is still listed, so it can be removed.
-      for (const name of configured) {
-        if (isPerAccountEmailGrantKey(name) && !declarations.has(name)) {
-          const account = name.slice('channel.email.'.length, -'.nylas_grant_id'.length);
-          declarations.set(name, [{ kind: 'email-account', name: `${account} (account removed)`, required: false, enabled: true }]);
+      const userDetails = await secretsService.listUserDetails();
+      const lastUsed = options.usage ? await options.usage.lastUsedByName() : new Map<string, Date>();
+
+      const row = (name: string, kind: VaultSecretKind, declaredBy: VaultSecretDeclarer[]): VaultSecretSummary => {
+        const meta = metadata.get(name);
+        const details = kind === 'personal' ? userDetails.get(name) : undefined;
+        return {
+          name,
+          kind,
+          configured: meta !== undefined,
+          required: kind === 'platform' || declaredBy.some(d => d.required && d.enabled),
+          envFallback: meta ? null : envFallbackFor(name, declaredBy),
+          declaredBy,
+          valueFormat: meta?.valueFormat ?? null,
+          createdAt: meta?.createdAt.toISOString() ?? null,
+          updatedAt: meta?.updatedAt.toISOString() ?? null,
+          lastUsedAt: lastUsed.get(name)?.toISOString() ?? null,
+          readAtStartup: kind === 'platform' ||
+            (kind === 'system' && declaredBy.length > 0 && !declaredBy.some(d => d.kind === 'tool')),
+          ...(details?.loginUrl ? { loginUrl: details.loginUrl } : {}),
+          ...(details?.username ? { username: details.username } : {}),
+        };
+      };
+
+      const secrets: VaultSecretSummary[] = [];
+      for (const name of metadata.keys()) {
+        const declared = declarations.get(name) ?? [];
+        if (isPlatformVaultKey(name)) {
+          secrets.push(row(name, 'platform', [
+            ...declared,
+            { kind: 'platform', name: platformKeyLabel(name) ?? name, required: true, enabled: true },
+          ]));
+        } else if (name.startsWith('user.')) {
+          secrets.push(row(name, 'personal', []));
+        } else {
+          secrets.push(row(name, 'system', declared));
         }
       }
-      const secrets: VaultSecretSummary[] = [...declarations.entries()]
-        .map(([name, declaredBy]) => ({
-          name,
-          configured: configured.has(name),
-          required: declaredBy.some(d => d.required && d.enabled),
-          envFallback: configured.has(name) ? null : envFallbackFor(name, declaredBy),
-          declaredBy,
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+      // Declared but not in the vault: still listed so the page can say what is missing.
+      for (const [name, declaredBy] of declarations) {
+        if (!metadata.has(name)) secrets.push(row(name, 'system', declaredBy));
+      }
+      secrets.sort((a, b) => a.name.localeCompare(b.name));
       return reply.send({ secrets });
     } catch (err) {
       request.log.error({ err }, 'GET /api/vault/secrets failed');
