@@ -2437,6 +2437,9 @@ describe('Dispatcher content-block relay (#1355)', () => {
     // #1892: Curia's brief to itself. Without this the row is stored as an
     // unattributed human turn and permanently closes the thread to contact recall.
     expect(agentTasks[0]!.payload.syntheticTurn).toBe(true);
+    // #2192: the rewrite's send review weighs the first turn's authority, but it is never live.
+    expect(agentTasks[0]!.payload.metadata?.originator).toMatchObject({ systemRole: 'principal', contactId: 'principal-1' });
+    expect(agentTasks[0]!.payload.liveTurn).toBeUndefined();
   });
 
   it('publishes a salvage outbound after retries are exhausted', async () => {

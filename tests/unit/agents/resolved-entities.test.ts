@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  collectResolvedContactIds,
-  describeUnresolvedIdentity,
-  emailLocalNameTokens,
-  formatResolvedEntitiesBlock,
-  parseResolvedContactIds,
-  type ResolvedEntityCard,
-} from '../../../src/agents/resolved-entities.js';
+import { blankExactPhrases, collectResolvedContactIds, describeUnresolvedIdentity, emailLocalNameTokens, formatResolvedEntitiesBlock, parseResolvedContactIds, type ResolvedEntityCard } from '../../../src/agents/resolved-entities.js';
 
 const XIAOPU = '11111111-1111-4111-8111-111111111111';
 const JOSEPH = '22222222-2222-4222-8222-222222222222';
@@ -189,6 +182,16 @@ describe('describeUnresolvedIdentity', () => {
     )).toBeNull();
   });
 
+  it('does not treat an imperative or a preposition opening a line as a person (#2192)', () => {
+    // Scheduling and RSVP replies: the cue ("invite", "behalf") sits beside an ordinary opener.
+    expect(describeUnresolvedIdentity('Tell me which works and I\'ll send the invite.', [])).toBeNull();
+    expect(describeUnresolvedIdentity('Send us a couple of windows and I\'ll send the invite.', [])).toBeNull();
+    expect(describeUnresolvedIdentity('Best,\nAlex Curia\nOn behalf of Joseph Fung', ['Joseph Fung', 'Alex Curia'])).toBeNull();
+    expect(describeUnresolvedIdentity('If neither works, I\'ll send a new invite.', [])).toBeNull();
+    // An uncommon word opening the sentence is still a name.
+    expect(describeUnresolvedIdentity('Xiaopu would like to attend.', [])).toContain('Xiaopu');
+  });
+
   it('flags a two-letter name when a person cue is nearby', () => {
     expect(describeUnresolvedIdentity('Al Li would like to attend.', [])).toContain('Al Li');
     expect(describeUnresolvedIdentity('Al Li would like to attend.', ['Al Li'])).toBeNull();
@@ -202,5 +205,24 @@ describe('describeUnresolvedIdentity', () => {
     expect(block).toContain(`${'A'.repeat(119)}&amp;`);
     expect(block).not.toContain('&more');
     expect(block).not.toMatch(/&(?!amp;|quot;|lt;|gt;)/);
+  });
+});
+
+describe('blankExactPhrases (#2192)', () => {
+  it('blanks whole, exact occurrences and keeps positions and line breaks', () => {
+    const text = 'Best,\nAlex Curia\nDigital EA';
+    const out = blankExactPhrases(text, ['Alex Curia', 'Digital EA']);
+    expect(out).toHaveLength(text.length);
+    expect(out).toBe('Best,\n          \n          ');
+  });
+
+  it('leaves a partial or embedded match alone', () => {
+    expect(blankExactPhrases('Alex will come. Alexandra Curia too.', ['Alex Curia'])).toBe('Alex will come. Alexandra Curia too.');
+    expect(blankExactPhrases('Alex Curiaz', ['Alex Curia'])).toBe('Alex Curiaz');
+  });
+
+  it('treats regex characters in a phrase literally', () => {
+    expect(blankExactPhrases('Ask A.I. Desk (EA) now', ['A.I. Desk (EA)'])).toBe(`Ask ${' '.repeat('A.I. Desk (EA)'.length)} now`);
+    expect(blankExactPhrases('Ask AxIx Desk', ['A.I. Desk'])).toBe('Ask AxIx Desk');
   });
 });

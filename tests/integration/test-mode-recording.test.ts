@@ -56,6 +56,10 @@ describeIf('test-mode stack with recordSends', () => {
       llm: 'offline',
       enablement: 'all',
       yamlConfig,
+      // A fixed score and gating, not the database's: a fresh database seeds 75, where band
+      // gating (the default since #2192) holds the principal's sends these tests expect to
+      // go through. Tests that need a hold enter their own fixture per call.
+      autonomy: { score: 80, gating: 'band' },
       recordSends: {
         record: (send) => { sends.push(send); },
         message: () => undefined,
