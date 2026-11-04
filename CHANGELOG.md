@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Personal secrets in the console** — create, edit and remove website logins; platform keys read-only.
+- **Personal secrets in the console** — create, edit and remove website logins; platform keys read-only. (#2478)
 - **Secrets page** — one searchable, sortable list of personal, system and platform secrets with drawers. (#2453)
 - **`DELETE /api/vault/secrets/:name`** — removes declared, personal and orphaned secrets; refused while required unless forced; platform keys get 403. (#2453)
 - **`secret.changed`** — **public API:** two-stage audit of secret set, delete and `details` edits; key names only. (#2453)
