@@ -264,6 +264,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Postgres host port** — loopback only; `POSTGRES_BIND` opts in. Existing installs: prefix its `ports:` entry with `127.0.0.1:`, recreate. (#2408)
+- **Curia port 3000** — local and HTTPS installs, existing HTTPS ones on re-run, bind it to 127.0.0.1 (`HTTP_BIND`). (#2408)
+- **LiveKit signaling** — 7880 loopback by default; recreate livekit (`--profile voice`); direct-7880 installs set `LIVEKIT_HTTP_BIND` first. (#2408)
+- **Installer exposure check** — asks before continuing while Postgres is published beyond loopback, whatever the compose file. (#2408)
 - **`@hono/node-server` override floor** — raised to 2.1.6 to exclude three medium advisories. (#2427)
 - **`hono` override floor** — raised to 4.13.16 to exclude five advisories. (#2427)
 - **`basic-ftp` override floor** — raised to 6.2.4 to exclude two medium advisories. (#2388)
