@@ -2836,6 +2836,9 @@ export class OutboundGateway {
    * The principal's contact ID comes from the hot-reloaded identity snapshot
    * (verified + active rows only), so the alias has no target when the
    * principal has no verified identity at all.
+   *
+   * A contact with no usable sms or signal row but a verified number on a sibling
+   * phone-family channel gets a derived row written here (#2447).
    */
   async resolveRecipientReference(
     channel: string,
@@ -2845,6 +2848,8 @@ export class OutboundGateway {
     const result = await resolveRecipientReference(value, channel, fields, {
       contactService: this.contactService,
       principalContactId: this.principalIdentities[0]?.contactId,
+      // A send resolves here, so a missing sms/signal row may be derived (#2447).
+      deriver: this.contactService,
     });
     if (!result.ok && result.cause !== undefined) {
       this.log.warn(
