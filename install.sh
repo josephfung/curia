@@ -202,20 +202,37 @@ install_is_complete() {
 }
 
 # Echo the value of KEY from an env file (last assignment wins), or nothing when
-# the key is absent or the file is missing. One layer of matching "..." or '...'
-# is stripped, as Compose's .env parser does, so HTTP_BIND="127.0.0.1" reads the
-# same as HTTP_BIND=127.0.0.1. Always returns 0: this script runs under
-# `set -euo pipefail`, where grep's no-match status would abort the installer
-# from inside `x="$(env_value ...)"`.
+# the key is absent or the file is missing. Follows Compose's .env value rules
+# for the shapes a *_BIND or COMPOSE_FILE value takes: a "..." or '...' value is
+# what the quotes hold, anything after the closing quote (e.g. `# note`) is
+# dropped; an unquoted value ends at a ` #` inline comment, blanks around it
+# trimmed. So HTTP_BIND="127.0.0.1" # note reads as 127.0.0.1. ${VAR}
+# interpolation inside .env is not resolved. Always returns 0: this script runs
+# under `set -euo pipefail`, where grep's no-match status would abort the
+# installer from inside `x="$(env_value ...)"`.
 env_value() {
-  local env="$1" key="$2" v
+  local env="$1" key="$2" v rest q
   v="$({ grep -E "^${key}=" "$env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-)"
-  if [[ ${#v} -ge 2 ]]; then
-    case "$v" in
-      \"*\"|\'*\') v="${v:1:${#v}-2}" ;;
-    esac
-  fi
+  case "$v" in
+    \"*|\'*)
+      q="${v:0:1}"; rest="${v:1}"
+      # Unterminated quote: keep the raw value, as before.
+      [[ "$rest" == *"$q"* ]] && v="${rest%%"$q"*}"
+      ;;
+    *)
+      v="${v%%[[:blank:]]#*}"
+      v="${v%"${v##*[![:blank:]]}"}"
+      v="${v#"${v%%[![:blank:]]*}"}"
+      ;;
+  esac
   printf '%s' "$v"
+}
+
+# Echo VAR as Compose resolves it: the shell's value when the shell sets it
+# (even to empty, which Compose also prefers over .env), else the .env value.
+compose_var() {
+  local env="$1" key="$2"
+  if [[ -n "${!key+set}" ]]; then printf '%s' "${!key}"; else env_value "$env" "$key"; fi
 }
 
 # Returns 0 when a *_BIND value ($1) names a loopback address. Empty is not
@@ -231,10 +248,15 @@ bind_value_is_loopback() {
 # direct signal that Caddy fronts curia:3000 (DOMAIN alone can be set by hand
 # behind an operator's own proxy).
 uses_tls_overlay() {
-  case "$1" in
-    *docker-compose.tls.yml*) return 0 ;;
-    *) return 1 ;;
-  esac
+  local entry entries=()
+  # Entries are separated by COMPOSE_PATH_SEPARATOR (':' by default). Only an
+  # entry whose file name IS the shipped overlay counts, not one that merely
+  # contains it (docker-compose.tls.yml.bak, my-docker-compose.tls.yml).
+  IFS="${COMPOSE_PATH_SEPARATOR:-:}" read -r -a entries <<< "$1"
+  for entry in "${entries[@]+"${entries[@]}"}"; do
+    [[ "${entry##*/}" == docker-compose.tls.yml ]] && return 0
+  done
+  return 1
 }
 
 # Returns 0 when every host binding in `docker port` output ($1, one
@@ -256,20 +278,22 @@ bindings_are_loopback() {
 }
 
 # Returns 0 when the live bindings ($2, `docker port` format) honour a
-# non-loopback *_BIND value ($1). 0.0.0.0 and :: ask for every interface, so any
-# binding honours them. A specific address is honoured only when every binding
-# is on that address (or loopback). Empty output (nothing published) honours
-# anything. An old compose file that ignores the variable publishes
-# 0.0.0.0/[::], which a specific address does not honour.
+# non-loopback *_BIND value ($1). :: asks for every interface, so any binding
+# honours it. 0.0.0.0 is every IPv4 interface, so it is honoured by any IPv4
+# binding but not by an IPv6 one ([::]). A specific address is honoured only
+# when every binding is on that address (or loopback). Empty output (nothing
+# published) honours anything. An old compose file that ignores the variable
+# publishes 0.0.0.0/[::], which neither 0.0.0.0 nor a specific address honours.
 bindings_honour_bind() {
   local want="$1" line host
-  case "$want" in 0.0.0.0|::|"[::]") return 0 ;; esac
+  case "$want" in ::|"[::]") return 0 ;; esac
   want="${want#[}"; want="${want%]}"
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     host="${line%:*}"; host="${host#[}"; host="${host%]}"
     [[ "$host" == "$want" ]] && continue
     bind_value_is_loopback "$host" && continue
+    [[ "$want" == 0.0.0.0 && "$host" != *:* ]] && continue
     return 1
   done <<< "$2"
   return 0
@@ -289,12 +313,15 @@ livekit_command_is_dev() {
 # per line (`docker port` format). Echoes nothing when the container is not
 # running or the port is not published: `docker port` exits 1 with "no public
 # port" for an unpublished port, which is the "nothing exposed" answer. Any
-# other failure is unknown, not unpublished, so it is warned about.
+# other failure is unknown, not unpublished: it is warned about and returns 2,
+# so a caller that must not guess (check_postgres_exposure) can ask instead.
+# Callers capture it with `|| rc=$?`, since `set -e` would abort on a bare
+# assignment.
 published_bindings() {
   local service="$1" port="$2" cid out
   if ! cid="$(docker compose --project-directory "$INSTALL_DIR" ps -q "$service")"; then
     warn "Could not look up the $service container; skipping its port exposure check."
-    return 0
+    return 2
   fi
   [[ -n "$cid" ]] || return 0
   if out="$(docker port "$cid" "${port}/tcp" 2>&1)"; then
@@ -305,7 +332,7 @@ published_bindings() {
     *"no public port"*|*"No public port"*) return 0 ;;
   esac
   warn "Could not read the $service container's published ports ($out); skipping its port exposure check."
-  return 0
+  return 2
 }
 
 # Echo the command a running compose service's container was created with, or
@@ -327,11 +354,15 @@ live_command() {
 # that address (an old compose file ignores the variable and publishes on
 # every interface instead).
 check_postgres_exposure() {
-  local env="$1" want bindings shown ans
-  want="${POSTGRES_BIND:-$(env_value "$env" POSTGRES_BIND)}"
-  bindings="$(published_bindings postgres 5432)"
+  local env="$1" want bindings shown ans rc=0
+  want="$(compose_var "$env" POSTGRES_BIND)"
+  bindings="$(published_bindings postgres 5432)" || rc=$?
   shown="$(echo "$bindings" | tr '\n' ' ')"
-  if [[ -n "$want" ]] && ! bind_value_is_loopback "$want"; then
+  if [[ $rc -ne 0 ]]; then
+    # Unknown is not loopback: ask rather than continue on a guess.
+    echo "" >&2
+    warn "Could not read which addresses Postgres is published on, so it may be exposed (#2408)."
+  elif [[ -n "$want" ]] && ! bind_value_is_loopback "$want"; then
     bindings_honour_bind "$want" "$bindings" && return 0
     echo "" >&2
     warn "POSTGRES_BIND=$want is set, but Postgres is published on: ${shown}(#2408)"
@@ -348,10 +379,14 @@ check_postgres_exposure() {
   hint "then re-run install.sh, which recreates the container."
   hint "Current file for reference: $(bundle_asset_url docker-compose.yml docker-compose.yml)"
   hint "To keep remote access on purpose, set a non-loopback POSTGRES_BIND in .env instead."
-  warn "Postgres is running and exposed now. Continuing keeps it exposed after this run."
+  if [[ $rc -eq 0 ]]; then
+    warn "Postgres is running and exposed now. Continuing keeps it exposed after this run."
+  else
+    hint "Check by hand: docker compose --project-directory \"$INSTALL_DIR\" port postgres 5432"
+  fi
   read -rp "Continue anyway? [y/N]: " ans || ans=""
   if [[ ! "$ans" =~ ^[Yy] ]]; then
-    info "Stopped. Postgres is still running and published as shown above."
+    info "Stopped. Postgres is still running, with its ports as they were."
     info "To stop it until you have made the change: docker compose --project-directory \"$INSTALL_DIR\" stop postgres"
     info "Then re-run install.sh."
     exit 1
@@ -365,9 +400,9 @@ check_postgres_exposure() {
 # than asks.
 check_http_exposure() {
   local env="$1" want bindings
-  want="${HTTP_BIND:-$(env_value "$env" HTTP_BIND)}"
+  want="$(compose_var "$env" HTTP_BIND)"
   bind_value_is_loopback "$want" || return 0
-  bindings="$(published_bindings curia 3000)"
+  bindings="$(published_bindings curia 3000)" || return 0   # unknown: already warned
   bindings_are_loopback "$bindings" && return 0
 
   echo "" >&2
@@ -383,13 +418,13 @@ check_http_exposure() {
 # credentials. The running container's command is checked, not .env: one that
 # was not recreated keeps its old command. Falls back to LIVEKIT_COMMAND
 # (shell, then .env) when the container cannot be inspected. Fresh and upgrade
-# paths both call this.
+# paths both call this, after check_livekit_bind.
 warn_public_livekit_dev() {
   local env="$1" bindings="$2" cmd
   [[ -n "$bindings" ]] || return 0
   bindings_are_loopback "$bindings" && return 0
   cmd="$(live_command livekit)"
-  [[ -n "$cmd" ]] || cmd="${LIVEKIT_COMMAND:-$(env_value "$env" LIVEKIT_COMMAND)}"
+  [[ -n "$cmd" ]] || cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
   livekit_command_is_dev "$cmd" || return 0
   echo "" >&2
   warn "LiveKit signaling is public ($(echo "$bindings" | tr '\n' ' ')) and runs --dev credentials (devkey/secret)."
@@ -399,54 +434,71 @@ warn_public_livekit_dev() {
   hint "or remove LIVEKIT_HTTP_BIND from .env to keep signaling on loopback."
 }
 
-# Run after an upgrade's stack starts. Since #2408 LiveKit signaling (7880) is
-# published on loopback unless LIVEKIT_HTTP_BIND says otherwise. The live
-# binding is checked against that intent, as check_postgres_exposure does:
-#   - Non-loopback LIVEKIT_HTTP_BIND is a deliberate public opt-in. Warn if
-#     it has not landed yet (signaling still on loopback, so remote browsers
-#     can't connect), or if it is public while the running container uses the
-#     --dev credentials (warn_public_livekit_dev).
-#   - Unset or loopback intent, but still beyond loopback: install.sh's `up -d`
-#     leaves a running livekit alone unless the voice profile is active (e.g.
-#     COMPOSE_PROFILES=voice), and an old compose file never moves it, so the
-#     change has not landed. Say how to apply it before the operator's next
-#     restart breaks browsers that use ws://<host>:7880 directly. A loopback
+# Since #2408 LiveKit signaling (7880) is published on loopback unless
+# LIVEKIT_HTTP_BIND says otherwise. Warn when the live binding ($2) disagrees
+# with that intent, as check_postgres_exposure does. Fresh and upgrade paths
+# both call this: a resumed install keeps a running livekit, because `up -d`
+# leaves a profiled service alone unless the voice profile is active.
+#   - Non-loopback LIVEKIT_HTTP_BIND, a deliberate public opt-in: warn while it
+#     has not landed (still on loopback, so remote browsers can't connect) or
+#     while the live address differs (an old compose file ignores the variable).
+#   - Unset or loopback intent, but still beyond loopback: the change has not
+#     landed. Say how to apply it before the operator's next restart breaks
+#     browsers that use ws://<host>:7880 directly. A loopback
 #     LIVEKIT_HTTP_BIND does not silence this.
-#   - Loopback live, intent unset: browsers that connected to ws://<host>:7880
-#     directly have lost signaling; say why, and that LIVEKIT_HTTP_BIND=127.0.0.1
-#     (proxied or local) silences it. Loopback intent and loopback live: quiet.
-note_livekit_signaling() {
-  local env="$1" want bindings
-  want="${LIVEKIT_HTTP_BIND:-$(env_value "$env" LIVEKIT_HTTP_BIND)}"
-  bindings="$(published_bindings livekit 7880)"
+check_livekit_bind() {
+  local env="$1" bindings="$2" want shown
   [[ -n "$bindings" ]] || return 0   # voice not running
+  want="$(compose_var "$env" LIVEKIT_HTTP_BIND)"
+  shown="$(echo "$bindings" | tr '\n' ' ')"
 
   if [[ -n "$want" ]] && ! bind_value_is_loopback "$want"; then
     if bindings_are_loopback "$bindings"; then
       echo "" >&2
-      warn "LIVEKIT_HTTP_BIND=$want is set, but LiveKit signaling (7880) is still on loopback: $(echo "$bindings" | tr '\n' ' ')(#2408)"
+      warn "LIVEKIT_HTTP_BIND=$want is set, but LiveKit signaling (7880) is still on loopback: ${shown}(#2408)"
       hint "Remote browsers can't reach it yet. Apply it:"
       hint "  docker compose --project-directory \"$INSTALL_DIR\" --profile voice up -d livekit"
-      return 0
+    elif ! bindings_honour_bind "$want" "$bindings"; then
+      echo "" >&2
+      warn "LIVEKIT_HTTP_BIND=$want is set, but LiveKit signaling (7880) is published on: ${shown}(#2408)"
+      hint "docker-compose.yml ignores LIVEKIT_HTTP_BIND, or an override (COMPOSE_FILE) publishes 7880."
+      hint "Make the livekit signaling ports: entry read"
+      hint "  - \"\${LIVEKIT_HTTP_BIND:-127.0.0.1}:\${LIVEKIT_HTTP_PORT:-7880}:7880\""
+      hint "then recreate it: docker compose --project-directory \"$INSTALL_DIR\" --profile voice up -d livekit"
     fi
-    warn_public_livekit_dev "$env" "$bindings"
     return 0
   fi
 
-  if ! bindings_are_loopback "$bindings"; then
-    echo "" >&2
-    warn "LiveKit signaling (7880) is still published beyond loopback: $(echo "$bindings" | tr '\n' ' ')(#2408)"
-    hint "This release binds it to 127.0.0.1. Check that docker-compose.yml's livekit"
-    hint "signaling entry reads - \"\${LIVEKIT_HTTP_BIND:-127.0.0.1}:\${LIVEKIT_HTTP_PORT:-7880}:7880\","
-    hint "then recreate it to apply:"
-    hint "  docker compose --project-directory \"$INSTALL_DIR\" --profile voice up -d livekit"
-    hint "If browsers use ws://<host>:7880 directly, first set LIVEKIT_HTTP_BIND in .env"
-    hint "(real keys only, never --dev) or front 127.0.0.1:7880 with a TLS proxy."
-    hint "See docs/dev/voice-setup.md."
-    return 0
-  fi
+  bindings_are_loopback "$bindings" && return 0
+  echo "" >&2
+  warn "LiveKit signaling (7880) is still published beyond loopback: ${shown}(#2408)"
+  hint "This release binds it to 127.0.0.1. Check that docker-compose.yml's livekit"
+  hint "signaling entry reads - \"\${LIVEKIT_HTTP_BIND:-127.0.0.1}:\${LIVEKIT_HTTP_PORT:-7880}:7880\","
+  hint "then recreate it to apply:"
+  hint "  docker compose --project-directory \"$INSTALL_DIR\" --profile voice up -d livekit"
+  hint "If browsers use ws://<host>:7880 directly, first set LIVEKIT_HTTP_BIND in .env"
+  hint "(real keys only, never --dev) or front 127.0.0.1:7880 with a TLS proxy."
+  hint "See docs/dev/voice-setup.md."
+}
 
-  [[ -z "$want" ]] || return 0   # loopback intent, loopback live: proxied or local
+# Run after either path's stack starts: the bind check, then the --dev check.
+check_livekit_exposure() {
+  local env="$1" bindings
+  bindings="$(published_bindings livekit 7880)" || return 0   # unknown: already warned
+  check_livekit_bind "$env" "$bindings"
+  warn_public_livekit_dev "$env" "$bindings"
+}
+
+# Upgrade path only, after check_livekit_exposure. Loopback live with the intent
+# unset: browsers that connected to ws://<host>:7880 directly have lost
+# signaling; say why, and that LIVEKIT_HTTP_BIND=127.0.0.1 (proxied or local)
+# silences it.
+note_livekit_signaling() {
+  local env="$1" bindings
+  bindings="$(published_bindings livekit 7880)" || return 0
+  [[ -n "$bindings" ]] || return 0   # voice not running
+  bindings_are_loopback "$bindings" || return 0
+  [[ -z "$(compose_var "$env" LIVEKIT_HTTP_BIND)" ]] || return 0
   echo "" >&2
   warn "LiveKit signaling (7880) is published on loopback only (#2408)."
   hint "Browsers can no longer reach ws://<host>:7880 directly. If your Voice"
@@ -467,7 +519,7 @@ ensure_https_http_bind() {
   # COMPOSE_FILE from the shell first, as Compose reads it. An HTTP_BIND set in
   # the shell (even empty) wins over .env for Compose, so it is respected too.
   [[ -z "${HTTP_BIND+set}" ]] || return 0
-  if uses_tls_overlay "${COMPOSE_FILE:-$(env_value "$env" COMPOSE_FILE)}" && ! grep -qE '^HTTP_BIND=' "$env" 2>/dev/null; then
+  if uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)" && ! grep -qE '^HTTP_BIND=' "$env" 2>/dev/null; then
     set_env_var "$env" HTTP_BIND 127.0.0.1
     echo "" >&2
     warn "HTTPS install: port 3000 is now published on 127.0.0.1 only (HTTP_BIND, #2408)."
@@ -689,7 +741,7 @@ fresh_install() {
     exit 1
   fi
   check_http_exposure "$env"
-  warn_public_livekit_dev "$env" "$(published_bindings livekit 7880)"
+  check_livekit_exposure "$env"
 
   # Mark setup as complete. On subsequent re-runs, install_is_complete() sees
   # this marker and takes the upgrade path instead of rotating secrets.
@@ -753,6 +805,7 @@ existing_install() {
     exit 1
   fi
   check_http_exposure "$env"
+  check_livekit_exposure "$env"
   note_livekit_signaling "$env"
 
   # Load the URL-shaping values from .env so print_summary shows the right

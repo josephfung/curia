@@ -34,10 +34,12 @@ Default ports are:
 | WebRTC UDP media | `7882/udp` | `LIVEKIT_RTC_UDP_PORT` | every interface |
 
 Signaling has been loopback-only by default since #2408, so `--dev` credentials
-are never reachable from outside the host. A browser on the same machine uses
-`ws://localhost:7880`. To serve browsers elsewhere, front `127.0.0.1:7880` with a
-TLS proxy on the host, or set `LIVEKIT_HTTP_BIND=0.0.0.0` (IPv4) or `::`
-(IPv4 + IPv6) in `.env` with real keys.
+are not reachable from outside the host by default. A browser on the same machine
+uses `ws://localhost:7880`. Before serving browsers elsewhere, replace `--dev` with
+a real config and keys (see the config-file deploy paragraph below): a proxy in
+front of `127.0.0.1:7880` exposes `--dev` just as a public bind does. Then either
+front `127.0.0.1:7880` with a TLS proxy on the host, or set
+`LIVEKIT_HTTP_BIND=0.0.0.0` (IPv4) or `::` (IPv4 + IPv6) in `.env`.
 
 Existing voice installs pick the change up only when LiveKit is recreated:
 `install.sh` runs `docker compose up -d` without the voice profile (unless

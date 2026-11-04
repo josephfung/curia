@@ -556,6 +556,14 @@ _assert_var "single-quoted value stripped"   "$(env_value "$_ev_env" B)" "::1"
 _assert_var "mismatched quotes kept"         "$(env_value "$_ev_env" C)" "\"mismatched'"
 _assert_var "lone quote kept"                "$(env_value "$_ev_env" D)" '"'
 _assert_var "empty quoted value is empty"    "$(env_value "$_ev_env" E)" ""
+_ev_env2=$(mktemp)
+printf '%s\n' 'A=127.0.0.1 # note' 'B="127.0.0.1" # note' "C='::1'   # note" 'D=  10.0.0.5  ' 'E=a#b' > "$_ev_env2"
+_assert_var "unquoted inline comment dropped"  "$(env_value "$_ev_env2" A)" "127.0.0.1"
+_assert_var "comment after quotes dropped"     "$(env_value "$_ev_env2" B)" "127.0.0.1"
+_assert_var "single quotes, comment dropped"   "$(env_value "$_ev_env2" C)" "::1"
+_assert_var "blanks around unquoted trimmed"   "$(env_value "$_ev_env2" D)" "10.0.0.5"
+_assert_var "# without a blank is part of it"  "$(env_value "$_ev_env2" E)" "a#b"
+rm -f "$_ev_env2"
 
 # install.sh runs under `set -euo pipefail`; an absent key must not abort it
 # from inside an assignment (it did, before env_value swallowed grep's status).
@@ -602,11 +610,16 @@ _assert_rc "base + TLS overlay"              0 uses_tls_overlay 'docker-compose.
 _assert_rc "TLS overlay plus a voice overlay" 0 uses_tls_overlay 'docker-compose.yml:docker-compose.tls.yml:docker-compose.voice.yml'
 _assert_rc "base only"                       1 uses_tls_overlay 'docker-compose.yml'
 _assert_rc "unset"                           1 uses_tls_overlay ''
+_assert_rc "overlay given by path"           0 uses_tls_overlay 'docker-compose.yml:./deploy/docker-compose.tls.yml'
+_assert_rc "similarly named file"            1 uses_tls_overlay 'docker-compose.yml:my-docker-compose.tls.yml'
+_assert_rc "backup copy of the overlay"      1 uses_tls_overlay 'docker-compose.yml:docker-compose.tls.yml.bak'
 
 echo ""
 echo "=== install.sh: bindings_honour_bind ==="
 
-_assert_rc "0.0.0.0 accepts every interface"        0 bindings_honour_bind 0.0.0.0 $'0.0.0.0:5432\n[::]:5432'
+_assert_rc "0.0.0.0 accepts IPv4 everywhere"        0 bindings_honour_bind 0.0.0.0 '0.0.0.0:5432'
+_assert_rc "0.0.0.0 accepts a specific IPv4"        0 bindings_honour_bind 0.0.0.0 '10.0.0.5:5432'
+_assert_rc "0.0.0.0 rejects IPv6 [::]"              1 bindings_honour_bind 0.0.0.0 $'0.0.0.0:5432\n[::]:5432'
 _assert_rc ":: accepts every interface"             0 bindings_honour_bind :: $'0.0.0.0:5432\n[::]:5432'
 _assert_rc "specific address honoured"              0 bindings_honour_bind 10.0.0.5 '10.0.0.5:5432'
 _assert_rc "specific address plus loopback"         0 bindings_honour_bind 10.0.0.5 $'10.0.0.5:5432\n127.0.0.1:5433'
@@ -632,11 +645,12 @@ echo "=== install.sh: check_postgres_exposure / check_http_exposure ==="
 
 _xp_env=$(mktemp)
 _STUB_BINDINGS=""
+_STUB_RC=0
 _STUB_CMD=""
 # Keep the real functions so they can be restored after the stubbed block.
 eval "_orig_$(declare -f published_bindings)"
 eval "_orig_$(declare -f live_command)"
-published_bindings() { printf '%s' "$_STUB_BINDINGS"; }
+published_bindings() { printf '%s' "$_STUB_BINDINGS"; return "$_STUB_RC"; }
 live_command() { printf '%s' "$_STUB_CMD"; }
 
 # $1 desc, $2 env file contents, $3 stub bindings, $4 want: ok | stopped
@@ -644,7 +658,11 @@ _assert_pg() {
     local desc="$1" envtxt="$2" want="$4" got
     printf '%b' "$envtxt" > "$_xp_env"
     _STUB_BINDINGS="$3"
-    if ( POSTGRES_BIND=""; check_postgres_exposure "$_xp_env" <<< "n" ) >/dev/null 2>&1; then got=ok; else got=stopped; fi
+    if (
+      unset POSTGRES_BIND
+      [[ -z "${_SHELL_PG_BIND_SET:-}" ]] || export POSTGRES_BIND="$_SHELL_PG_BIND"
+      check_postgres_exposure "$_xp_env" <<< "n"
+    ) >/dev/null 2>&1; then got=ok; else got=stopped; fi
     if [[ "$got" == "$want" ]]; then
         echo "  ✓ postgres: $desc → $want"; PASS=$((PASS+1))
     else
@@ -655,18 +673,34 @@ _exposed=$'0.0.0.0:5432\n[::]:5432'
 _assert_pg "unset, old file exposes"                ''                         "$_exposed"        stopped
 _assert_pg "loopback POSTGRES_BIND, old file ignores it" 'POSTGRES_BIND=127.0.0.1\n' "$_exposed"  stopped
 _assert_pg "quoted loopback, old file ignores it"   'POSTGRES_BIND="127.0.0.1"\n' "$_exposed"     stopped
-_assert_pg "non-loopback opt-in 0.0.0.0"           'POSTGRES_BIND=0.0.0.0\n'   "$_exposed"        ok
+_assert_pg "non-loopback opt-in 0.0.0.0, IPv4 only" 'POSTGRES_BIND=0.0.0.0\n'   '0.0.0.0:5432'     ok
+_assert_pg "0.0.0.0 opt-in, also published on IPv6" 'POSTGRES_BIND=0.0.0.0\n'   "$_exposed"        stopped
 _assert_pg "non-loopback opt-in ::"                'POSTGRES_BIND=::\n'        "$_exposed"        ok
 _assert_pg "specific opt-in, honoured"             'POSTGRES_BIND=10.0.0.5\n'  '10.0.0.5:5432'    ok
 _assert_pg "specific opt-in, old file ignores it"  'POSTGRES_BIND=10.0.0.5\n'  "$_exposed"        stopped
 _assert_pg "unset, new file binds loopback"        ''                          '127.0.0.1:5432'   ok
+_assert_pg "with a comment in .env"                'POSTGRES_BIND=127.0.0.1 # local\n' "$_exposed"  stopped
+# An exported empty POSTGRES_BIND wins over .env in Compose: loopback intent.
+_SHELL_PG_BIND_SET=1; _SHELL_PG_BIND=""
+_assert_pg "shell empty overrides a public .env"    'POSTGRES_BIND=0.0.0.0\n'   "$_exposed"        stopped
+_SHELL_PG_BIND=0.0.0.0
+_assert_pg "shell value overrides .env"             'POSTGRES_BIND=127.0.0.1\n' '0.0.0.0:5432'     ok
+_SHELL_PG_BIND_SET=""; _SHELL_PG_BIND=""
+# Bindings could not be read: ask rather than guess loopback.
+_STUB_RC=2
+_assert_pg "bindings unreadable"                   ''                          ''                 stopped
+_STUB_RC=0
 
 # check_http_exposure only warns; detect the warning on stderr.
 _assert_http() {
     local desc="$1" envtxt="$2" want="$4" out got
     printf '%b' "$envtxt" > "$_xp_env"
     _STUB_BINDINGS="$3"
-    out="$(HTTP_BIND="${_SHELL_HTTP_BIND:-}" check_http_exposure "$_xp_env" 2>&1)"
+    out="$(
+      unset HTTP_BIND
+      [[ -z "${_SHELL_HTTP_BIND:-}" ]] || export HTTP_BIND="$_SHELL_HTTP_BIND"
+      check_http_exposure "$_xp_env" 2>&1
+    )"
     if [[ "$out" == *"still published beyond loopback"* ]]; then got=warned; else got=quiet; fi
     if [[ "$got" == "$want" ]]; then
         echo "  ✓ http: $desc → $want"; PASS=$((PASS+1))
@@ -678,6 +712,7 @@ _assert_http "HTTP_BIND unset (proxy topology)"     ''                       '0.
 _assert_http "loopback asked, old file ignores it"  'HTTP_BIND=127.0.0.1\n'  '0.0.0.0:3000' warned
 _assert_http "quoted loopback, old file ignores it" 'HTTP_BIND="127.0.0.1"\n' '0.0.0.0:3000' warned
 _assert_http "loopback asked and honoured"          'HTTP_BIND=127.0.0.1\n'  '127.0.0.1:3000' quiet
+_assert_http "loopback with a comment, old file ignores it" 'HTTP_BIND=127.0.0.1 # https\n' '0.0.0.0:3000' warned
 _SHELL_HTTP_BIND=127.0.0.1
 _assert_http "loopback asked in the shell, old file ignores it" '' '0.0.0.0:3000' warned
 _SHELL_HTTP_BIND=""
@@ -717,9 +752,13 @@ _assert_lk() {
     local desc="$1" envtxt="$2" want="$4" out got
     printf '%b' "$envtxt" > "$_xp_env"
     _STUB_BINDINGS="$3"
-    out="$(LIVEKIT_HTTP_BIND="" LIVEKIT_COMMAND="" note_livekit_signaling "$_xp_env" 2>&1)"
+    out="$(
+      unset LIVEKIT_HTTP_BIND LIVEKIT_COMMAND
+      { check_livekit_exposure "$_xp_env"; note_livekit_signaling "$_xp_env"; } 2>&1
+    )"
     if [[ "$out" == *"still published beyond loopback"* ]]; then got=recreate
     elif [[ "$out" == *"is still on loopback"* ]]; then got=not-applied
+    elif [[ "$out" == *"is published on:"* ]]; then got=mismatch
     elif [[ "$out" == *"loopback only"* ]]; then got=loopback-note
     elif [[ "$out" == *"--dev credentials"* ]]; then got=dev-warning
     elif [[ -z "$out" ]]; then got=quiet
@@ -739,6 +778,8 @@ _assert_lk "quoted loopback intent, still public" 'LIVEKIT_HTTP_BIND="127.0.0.1"
 _assert_lk "public opt-in, real config"         'LIVEKIT_HTTP_BIND=0.0.0.0\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '0.0.0.0:7880' quiet
 _assert_lk "public opt-in, LIVEKIT_COMMAND unset (--dev default)" 'LIVEKIT_HTTP_BIND=0.0.0.0\n' '0.0.0.0:7880'   dev-warning
 _assert_lk "public opt-in, explicit --dev"      'LIVEKIT_HTTP_BIND=::\nLIVEKIT_COMMAND=--dev --bind 0.0.0.0\n' '[::]:7880' dev-warning
+_assert_lk "specific opt-in, old file ignores it" 'LIVEKIT_HTTP_BIND=10.0.0.5\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' $'0.0.0.0:7880\n[::]:7880' mismatch
+_assert_lk "specific opt-in, honoured"          'LIVEKIT_HTTP_BIND=10.0.0.5\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '10.0.0.5:7880' quiet
 _assert_lk "public opt-in, not yet recreated off loopback" 'LIVEKIT_HTTP_BIND=0.0.0.0\n' '127.0.0.1:7880' not-applied
 # The running container's command wins over .env: one not recreated keeps --dev.
 _STUB_CMD="--dev --bind 0.0.0.0"
@@ -747,12 +788,15 @@ _STUB_CMD="--config /etc/livekit.yaml"
 _assert_lk "public opt-in, live real config"    'LIVEKIT_HTTP_BIND=0.0.0.0\n'     '0.0.0.0:7880'              quiet
 _STUB_CMD=""
 
-# Fresh installs: warn_public_livekit_dev alone (no upgrade notes).
+# Fresh installs: check_livekit_exposure alone (no loopback-only note).
 _assert_lkdev() {
     local desc="$1" envtxt="$2" want="$4" out got
     printf '%b' "$envtxt" > "$_xp_env"
-    out="$(LIVEKIT_COMMAND="" warn_public_livekit_dev "$_xp_env" "$3" 2>&1)"
-    if [[ "$out" == *"--dev credentials"* ]]; then got=dev-warning; elif [[ -z "$out" ]]; then got=quiet; else got="unexpected: $out"; fi
+    _STUB_BINDINGS="$3"
+    out="$(unset LIVEKIT_HTTP_BIND LIVEKIT_COMMAND; check_livekit_exposure "$_xp_env" 2>&1)"
+    if [[ "$out" == *"still published beyond loopback"* ]]; then got=recreate
+    elif [[ "$out" == *"--dev credentials"* ]]; then got=dev-warning
+    elif [[ -z "$out" ]]; then got=quiet; else got="unexpected: $out"; fi
     if [[ "$got" == "$want" ]]; then
         echo "  ✓ livekit (fresh): $desc → $want"; PASS=$((PASS+1))
     else
@@ -762,7 +806,9 @@ _assert_lkdev() {
 _assert_lkdev "voice not running"         ''                                             ''             quiet
 _assert_lkdev "loopback"                  ''                                             '127.0.0.1:7880' quiet
 _assert_lkdev "public, --dev default"     'LIVEKIT_HTTP_BIND=0.0.0.0\n'                  '0.0.0.0:7880' dev-warning
-_assert_lkdev "public, real config"       'LIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '0.0.0.0:7880' quiet
+_assert_lkdev "public opt-in, real config" 'LIVEKIT_HTTP_BIND=0.0.0.0\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '0.0.0.0:7880' quiet
+_assert_lkdev "loopback intent, resumed install still public" 'LIVEKIT_HTTP_BIND=127.0.0.1\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '0.0.0.0:7880' recreate
+_assert_lkdev "unset intent, still public, --dev" ''                                        $'0.0.0.0:7880\n[::]:7880' recreate
 
 rm -f "$_xp_env"
 # Restore the real functions for anything below.
@@ -779,7 +825,7 @@ fi
 # published_bindings with `docker` stubbed: "no public port" is the nothing-
 # published answer; any other docker port failure is unknown and warned about.
 _assert_pb() {
-    local desc="$1" port_out="$2" port_rc="$3" want="$4" outf err got
+    local desc="$1" port_out="$2" port_rc="$3" want="$4" outf err rc got
     outf="$(mktemp)"; err="$(mktemp)"
     # A subshell, not $(...): bash 3.2 can't parse a case statement inside $(...).
     (
@@ -789,10 +835,23 @@ _assert_pb() {
           port) printf '%s\n' "$port_out" >&2; return "$port_rc" ;;
         esac
       }
-      published_bindings postgres 5432 >"$outf" 2>"$err"
+      pb_rc=0
+      published_bindings postgres 5432 >"$outf" 2>"$err" || pb_rc=$?
+      echo "$pb_rc" > "$outf.rc"
     )
-    if [[ -s "$outf" ]]; then got="bindings"; elif grep -q "Could not read" "$err"; then got=warned; else got=empty; fi
-    rm -f "$outf" "$err"
+    rc="$(cat "$outf.rc")"
+    if [[ -s "$outf" ]]; then
+      got="bindings"
+      # The exact address must pass through: a rewritten host would hide exposure.
+      [[ "$(cat "$outf")" == "$port_out" ]] || got="bindings-mismatch: $(cat "$outf")"
+    elif grep -q "Could not read" "$err"; then
+      got=warned
+      # Unknown must be reported as such (exit 2) so check_postgres_exposure can ask.
+      [[ "$rc" == 2 ]] || got="warned but exit $rc"
+    else
+      got=empty
+    fi
+    rm -f "$outf" "$outf.rc" "$err"
     if [[ "$got" == "$want" ]]; then
         echo "  ✓ published_bindings: $desc → $want"; PASS=$((PASS+1))
     else
@@ -833,6 +892,15 @@ for _entry in \
         FAIL=$((FAIL+1))
     fi
 done
+
+# postgres publishes one mapping only: a second, public entry beside the
+# loopback one must fail.
+_pg_ports=$(_service_ports postgres "$_compose" | wc -l | tr -d ' ')
+if [[ "$_pg_ports" -eq 1 ]]; then
+    echo "  ✓ postgres has one ports: entry"; PASS=$((PASS+1))
+else
+    echo "  ✗ postgres ports: has $_pg_ports entries, want 1"; FAIL=$((FAIL+1))
+fi
 
 # The parser itself: a commented-out entry, or the entry under another service, must not count.
 _sp_fixture=$(mktemp)
