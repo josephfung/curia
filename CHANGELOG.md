@@ -126,6 +126,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Voice barge-in** — Curia stops when the caller starts speaking, before words transcribe; Signal calls drop queued audio. (#2401)
 - **`@anthropic-ai/sdk` 1.x** — moves to API version 2026-10-21; Anthropic API requests no longer send `temperature`. (#2439)
 - **`web-search` keyless by default** — searches without a Tavily key; the key only raises limits. (#2445)
 - **Setup no longer asks for Tavily** — web research shows as done; the key is an optional upgrade. (#2445)

@@ -45,6 +45,9 @@ export class FakeAudioTransport implements AudioTransport {
     this.clearQueuedAudioCount += 1;
   }
 
+  /** Test knob for playoutLatencyMs. */
+  playoutLatencyMs: number | undefined = undefined;
+
   /** Test knob for queuedAudioMs(). */
   queuedMs = 0;
 
