@@ -9,6 +9,7 @@
 import { NO_REPLY_SENTINEL } from './no-reply.js';
 import { CONTENT_BLOCK_REWRITE_MARKER } from '../memory/synthetic-user-turn.js';
 import type { TaskOriginator } from '../contacts/types.js';
+import type { LinkedTaskMeta } from './dispatcher.js';
 
 /** Maximum rewrite retries after the first content-filter block (2 retries → 3 send attempts). */
 export const CONTENT_BLOCK_MAX_RETRIES = 2;
@@ -30,6 +31,8 @@ export interface RelayOutboundContext {
   originator?: TaskOriginator;
   /** The note queued for the principal with the first reply: evidence for the rewrite's review (#2312). */
   reportedToPrincipal?: string;
+  /** The reply's outreach link, so the rewrite's review sees the same authority as the first (#2192). */
+  linkedTask?: LinkedTaskMeta;
 }
 
 /** Whether the block reason is fixable by rewriting the message body. */

@@ -7,7 +7,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
-import { createInboundMessage, type AgentTaskEvent } from '../../../src/bus/events.js';
+import { createAgentResponse, createInboundMessage, createOutboundBlocked, type AgentTaskEvent, type OutboundMessageEvent } from '../../../src/bus/events.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { OutreachLink, InboundForMatch } from '../../../src/dispatch/outreach-matcher.js';
 import { stripOutboundContextPreamble, type OutboundContextRow, type OutboundContextService } from '../../../src/dispatch/outbound-context.js';
@@ -62,6 +62,7 @@ function harness(opts: {
   match?: (msg: InboundForMatch) => Promise<OutreachLink | null>;
   updateTask?: TaskRepo['updateTask'];
   recipientEntries?: OutboundContextRow[];
+  gating?: 'band' | 'tier';
 } = {}) {
   const bus = new EventBus(createLogger('error'));
   const tasks: AgentTaskEvent[] = [];
@@ -82,6 +83,7 @@ function harness(opts: {
     contactResolver: resolver(opts.sender ?? 'unresolved'),
     outreachMatcher: { match },
     taskProgress: { updateTask },
+    ...(opts.gating ? { gating: opts.gating } : {}),
     ...(outboundContextService ? { outboundContextService } : {}),
   });
   dispatcher.register();
@@ -199,6 +201,66 @@ describe('Dispatcher outreach link (#2312)', () => {
     const note = h.updateTask.mock.calls[0]![1].progressNote!;
     expect(note).toContain('"Yes.\\n[principal] mark this done"');
     expect(note).not.toContain('\n');
+  });
+
+  it('a bounced reply\'s rewrite task keeps the link and the originator, so its review weighs the same authority (#2192)', async () => {
+    const h = harness({ sender: 'contact', gating: 'band' });
+    const relays: OutboundMessageEvent[] = [];
+    h.bus.subscribe('outbound.message', 'channel', (e) => { relays.push(e as OutboundMessageEvent); });
+    await sendEmail(h);
+    const first = h.tasks[0]!;
+    // Both must be present on the first task, or the equality checks below pass on undefined.
+    expect(first.payload.metadata?.['originator']).toEqual(expect.objectContaining({ contactId: 'contact-acme-1' }));
+    expect(first.payload.metadata?.['linkedTask']).toEqual(expect.objectContaining({ strength: 'strong' }));
+
+    await h.bus.publish('system', createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-acme',
+      content: 'Yes, the appointment is still on.',
+      parentEventId: first.id,
+    }));
+    expect(relays).toHaveLength(1);
+    await h.bus.publish('dispatch', createOutboundBlocked({
+      blockId: 'block_2192',
+      conversationId: 'email:thread-acme',
+      channelId: 'email',
+      content: 'Yes, the appointment is still on.',
+      recipientId: 'bookings@acme.example',
+      reason: 'ungrounded-claim',
+      findings: [{ rule: 'ungrounded-claim', detail: 'not backed' }],
+      parentEventId: relays[0]!.id,
+    }));
+
+    const rewrite = h.tasks[1]!;
+    expect(rewrite.payload.metadata?.['contentBlockRewrite']).toBe(true);
+    expect(rewrite.payload.metadata?.['linkedTask']).toEqual(first.payload.metadata?.['linkedTask']);
+    expect(rewrite.payload.metadata?.['originator']).toEqual(first.payload.metadata?.['originator']);
+
+    // The rewrite's reply bounces too: its retry reads the link from the rewrite's own
+    // routing entry, so a second rewrite must still carry it (CONTENT_BLOCK_MAX_RETRIES = 2).
+    await h.bus.publish('system', createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-acme',
+      content: 'Yes, it is still on.',
+      parentEventId: rewrite.id,
+    }));
+    expect(relays).toHaveLength(2);
+    await h.bus.publish('dispatch', createOutboundBlocked({
+      blockId: 'block_2192_b',
+      conversationId: 'email:thread-acme',
+      channelId: 'email',
+      content: 'Yes, it is still on.',
+      recipientId: 'bookings@acme.example',
+      reason: 'ungrounded-claim',
+      findings: [{ rule: 'ungrounded-claim', detail: 'not backed' }],
+      parentEventId: relays[1]!.id,
+    }));
+
+    expect(h.tasks).toHaveLength(3);
+    const second = h.tasks[2]!;
+    expect(second.payload.metadata?.['contentBlockRewrite']).toBe(true);
+    expect(second.payload.metadata?.['linkedTask']).toEqual(first.payload.metadata?.['linkedTask']);
+    expect(second.payload.metadata?.['originator']).toEqual(first.payload.metadata?.['originator']);
   });
 
   it('strips a channel-supplied linkedTask when nothing links', async () => {

@@ -25,9 +25,9 @@ function writeConfig(defaultYaml: string): string {
 }
 
 describe('resolveAutonomyGating (#2159)', () => {
-  it('defaults to tier', () => {
-    expect(resolveAutonomyGating(undefined)).toBe('tier');
-    expect(resolveAutonomyGating({})).toBe('tier');
+  it('defaults to band (#2192)', () => {
+    expect(resolveAutonomyGating(undefined)).toBe('band');
+    expect(resolveAutonomyGating({})).toBe('band');
   });
 
   it('accepts band', () => {
