@@ -317,6 +317,12 @@ export class SecretCaptureService implements SecretCaptureMinter {
         if (args.labelDerived || label === undefined) label = card.label ?? undefined;
       }
     }
+    if (!args.template && reusedExisting && await this.secrets.getCardPublic(secretName) !== null) {
+      // A plain link would overwrite the saved card's encrypted document with a string.
+      throw new Error(
+        `\`${secretName}\` is a saved card — use template credit_card_renewal, or details_only for its details.`,
+      );
+    }
     // A card link is always json: the form posts card fields, never a free-form value.
     const valueFormat: CaptureValueFormat = args.template ? 'json' : (args.valueFormat ?? 'string');
     const { rawToken, expiresAt } = await this.mint(secretName, label, valueFormat, args.origin, args.template);

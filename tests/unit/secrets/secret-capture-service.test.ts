@@ -95,6 +95,24 @@ describe('resolveUserSecretName (re-export)', () => {
   });
 });
 
+describe('mintUserSecret over a saved card', () => {
+  it('refuses a template-less link for a key that is a saved card', async () => {
+    const { svc, secrets, queries } = makeService(undefined, ['user.visa_card']);
+    secrets.getCardPublic = async () => ({
+      label: 'Personal',
+      publicFields: { brand: 'visa', last4: '1111', expiry_month: '12', expiry_year: '2030', cardholder_name: 'Pat Doe' },
+    });
+    await expect(svc.mintUserSecret({ rawName: 'user.visa_card' }))
+      .rejects.toThrow('`user.visa_card` is a saved card — use template credit_card_renewal, or details_only for its details.');
+    expect(queries.some(q => q.sql.includes('INSERT INTO secret_capture_tokens'))).toBe(false);
+  });
+
+  it('still mints a template-less link for an existing plain secret', async () => {
+    const { svc } = makeService(undefined, ['user.flight']);
+    await expect(svc.mintUserSecret({ rawName: 'user.flight' })).resolves.toMatchObject({ secretName: 'user.flight' });
+  });
+});
+
 describe('resolveSystemSecretName', () => {
   it('accepts a declared / channel credential key verbatim', () => {
     expect(resolveSystemSecretName('anthropic_api_key', SYSTEM_ALLOWED)).toBe('anthropic_api_key');
