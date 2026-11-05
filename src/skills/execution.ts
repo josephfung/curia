@@ -53,6 +53,7 @@ import {
   isCardSecretField,
   parseSecretRef,
   projectCardField,
+  SecretRefRefusal,
 } from '../secrets/structured-secret-schema.js';
 /** True when a vault string is a saved-card document (JSON object tagged credit_card). */
 function looksLikeCardDoc(value: string): boolean {
@@ -2934,27 +2935,27 @@ export class ExecutionLayer {
           let value: string;
           if (field === null) {
             // A saved card is only ever addressed one field at a time (#1358).
-            if (schema !== null) throw new Error(BARE_CARD_REF_ERROR(name));
+            if (schema !== null) throw new SecretRefRefusal('bare_card_ref', BARE_CARD_REF_ERROR(name));
             const plain = await this.secretsService.get(name);
             if (plain === null) {
               throw new Error(`resolveSecretRef: secret '${name}' was not found in the vault`);
             }
             // Defense in depth: if the schema tag row is gone but the vault row still holds a
             // card, the bare ref must not hand out the whole card JSON.
-            if (looksLikeCardDoc(plain)) throw new Error(BARE_CARD_REF_ERROR(name));
+            if (looksLikeCardDoc(plain)) throw new SecretRefRefusal('bare_card_ref', BARE_CARD_REF_ERROR(name));
             value = plain;
           } else {
             if (schema !== 'credit_card') {
-              throw new Error(`\`#\` field addressing works only on saved cards; \`${name}\` isn't one`);
+              throw new SecretRefRefusal('not_a_card', `\`#\` field addressing works only on saved cards; \`${name}\` isn't one`);
             }
             const siteUrl = opts?.siteUrl;
             if (siteUrl === undefined || siteUrl === '') {
-              throw new Error('card fields can only be filled into a web page');
+              throw new SecretRefRefusal('no_site', 'card fields can only be filled into a web page');
             }
             // Validate the field name and load the public fields BEFORE the grant check, so a
             // typo or a row with missing public fields fails without consuming a fill.
             if (!CARD_FIELDS.includes(field)) {
-              throw new Error(`Unknown card field '${field}'. Fields: ${CARD_FIELDS.join(', ')}`);
+              throw new SecretRefRefusal('unknown_card_field', `Unknown card field '${field}'. Fields: ${CARD_FIELDS.join(', ')}`);
             }
             const card = await this.secretsService.getCardPublic(name);
             if (card === null) {
@@ -2973,14 +2974,14 @@ export class ExecutionLayer {
               })
               : 'no_grant';
             if (outcome === 'no_grant') {
-              throw new Error(CARD_USE_REQUIRED_ERROR(name, registrableDomain(siteUrl) ?? 'this site'));
+              throw new SecretRefRefusal('card_use_required', CARD_USE_REQUIRED_ERROR(name, registrableDomain(siteUrl) ?? 'this site'));
             }
-            if (outcome === 'fill_limit') throw new Error(CARD_FILL_LIMIT_ERROR);
+            if (outcome === 'fill_limit') throw new SecretRefRefusal('card_fill_limit', CARD_FILL_LIMIT_ERROR);
 
             const secretDoc = isCardSecretField(field) ? await this.secretsService.getCardSecret(name) : null;
             const projected = projectCardField(field, card.publicFields, secretDoc);
             if (projected === '') {
-              throw new Error(`\`${name}\` has no ${field} saved`);
+              throw new SecretRefRefusal('empty_field', `\`${name}\` has no ${field} saved`);
             }
             value = projected;
           }

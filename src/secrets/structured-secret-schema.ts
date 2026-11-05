@@ -322,13 +322,18 @@ export function CARD_USE_REQUIRED_ERROR(name: string, domain: string): string {
 export const CARD_FILL_LIMIT_ERROR =
   "This confirmation's card-number and CVV fills are used up. Ask the principal again with card-use-request for another checkout.";
 
+export type SecretRefRefusalCode =
+  | 'card_use_required' | 'card_fill_limit' | 'bare_card_ref' | 'not_a_card'
+  | 'unknown_card_field' | 'no_site' | 'empty_field';
+
 /**
- * True when `message` is one of the card refusals above. The browser skill returns these
- * to the model as the action error, unchanged, instead of wrapping them as a failed action
- * (a refusal is guidance, not a broken page, and must not count toward the click breaker).
+ * A structured-secret refusal from the resolver (#1358). Guidance for the model, not a
+ * broken page: the browser skill returns its message as the action error, unchanged, and
+ * does not count it toward the click breaker. The message never carries a secret value.
  */
-export function isCardUseRefusal(message: string): boolean {
-  if (message === CARD_FILL_LIMIT_ERROR) return true;
-  if (message.startsWith('Using `') && message.includes(" needs the principal's confirmation for this checkout.")) return true;
-  return message.includes(' is a saved card. Address one field, e.g. ');
+export class SecretRefRefusal extends Error {
+  constructor(readonly code: SecretRefRefusalCode, message: string) {
+    super(message);
+    this.name = 'SecretRefRefusal';
+  }
 }

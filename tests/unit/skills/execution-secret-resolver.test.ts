@@ -13,6 +13,7 @@ import {
   BARE_CARD_REF_ERROR,
   CARD_FILL_LIMIT_ERROR,
   CARD_USE_REQUIRED_ERROR,
+  SecretRefRefusal,
   type CreditCardPublicFields,
 } from '../../../src/secrets/structured-secret-schema.js';
 
@@ -44,7 +45,7 @@ const manifest: ToolManifest = {
 };
 
 interface Setup {
-  resolve: (ref: string, opts?: { siteUrl?: string }, invoke?: InvokeOptions) => Promise<{ value?: string; error?: string }>;
+  resolve: (ref: string, opts?: { siteUrl?: string }, invoke?: InvokeOptions) => Promise<{ value?: string; error?: string; code?: string; refusal?: boolean }>;
   secrets: Record<'get' | 'getJSON' | 'getStructuredSchema' | 'getCardPublic' | 'getCardSecret', ReturnType<typeof vi.fn>>;
   consumeFill: ReturnType<typeof vi.fn>;
   publish: ReturnType<typeof vi.fn>;
@@ -68,11 +69,11 @@ function setup(opts: {
   const publish = vi.fn().mockResolvedValue(undefined);
   const registry = new ToolRegistry();
   let current: { ref: string; opts?: { siteUrl?: string } } = { ref: '' };
-  let outcome: { value?: string; error?: string } = {};
+  let outcome: { value?: string; error?: string; code?: string; refusal?: boolean } = {};
   const handler: ToolHandler = {
     execute: vi.fn(async (ctx): Promise<ToolResult> => {
       try { outcome = { value: await ctx.resolveSecretRef!(current.ref, current.opts) }; }
-      catch (e) { outcome = { error: (e as Error).message }; }
+      catch (e) { outcome = { error: (e as Error).message, refusal: e instanceof SecretRefRefusal, code: e instanceof SecretRefRefusal ? e.code : undefined }; }
       return { success: true, data: 'ok' };
     }),
   };
@@ -100,6 +101,8 @@ describe('resolveSecretRef: saved cards', () => {
     const s = setup({ schema: 'credit_card' });
     const r = await s.resolve('user.visa', { siteUrl: SITE });
     expect(r.error).toBe(BARE_CARD_REF_ERROR('user.visa'));
+    expect(r.code).toBe('bare_card_ref');
+    expect(r.refusal).toBe(true);
     expect(r.error).toContain('user.visa#number');
     expect(r.error).toContain('expiry_mm_yy');
     expect(s.secrets.get).not.toHaveBeenCalled();
@@ -111,6 +114,7 @@ describe('resolveSecretRef: saved cards', () => {
     expect((await s.resolve('user.blob')).value).toBe('{"a":1}');
     const r = await s.resolve('user.blob#a', { siteUrl: SITE });
     expect(r.error).toMatch(/works only on saved cards/);
+    expect(r.code).toBe('not_a_card');
     expect(s.consumeFill).not.toHaveBeenCalled();
   });
 
@@ -159,17 +163,21 @@ describe('resolveSecretRef: saved cards', () => {
       liveTurn: true,
     });
     expect(principal.error).toBe(expected);
+    expect(principal.code).toBe('card_use_required');
     expect(s.secrets.getCardSecret).not.toHaveBeenCalled();
   });
 
   it('fill_limit -> CARD_FILL_LIMIT_ERROR', async () => {
     const s = setup({ schema: 'credit_card', grant: 'fill_limit' });
-    expect((await s.resolve('user.visa#cvv', { siteUrl: SITE })).error).toBe(CARD_FILL_LIMIT_ERROR);
+    const r = await s.resolve('user.visa#cvv', { siteUrl: SITE });
+    expect(r.error).toBe(CARD_FILL_LIMIT_ERROR);
+    expect(r.code).toBe('card_fill_limit');
     expect(s.secrets.getCardSecret).not.toHaveBeenCalled();
   });
 
   it('no siteUrl -> refused before any grant is consumed', async () => {
     const s = setup({ schema: 'credit_card' });
+    expect((await s.resolve('user.visa#number')).code).toBe('no_site');
     expect((await s.resolve('user.visa#number')).error).toMatch(/web page/);
     expect((await s.resolve('user.visa#number', { siteUrl: '' })).error).toMatch(/web page/);
     expect(s.consumeFill).not.toHaveBeenCalled();
@@ -191,13 +199,16 @@ describe('resolveSecretRef: saved cards', () => {
     const s = setup({ schema: null, plain: JSON.stringify({ _schema: 'credit_card', number: NUMBER, cvv: CVV }) });
     const r = await s.resolve('user.orphan');
     expect(r.error).toBe(BARE_CARD_REF_ERROR('user.orphan'));
+    expect(r.code).toBe('bare_card_ref');
     expect(r.value).toBeUndefined();
     expect(r.error).not.toContain('4111');
   });
 
   it('unknown field fails before the grant is consumed', async () => {
     const s = setup({ schema: 'credit_card' });
-    expect((await s.resolve('user.visa#pin', { siteUrl: SITE })).error).toMatch(/Unknown card field/);
+    const r = await s.resolve('user.visa#pin', { siteUrl: SITE });
+    expect(r.error).toMatch(/Unknown card field/);
+    expect(r.code).toBe('unknown_card_field');
     expect(s.consumeFill).not.toHaveBeenCalled();
   });
 
@@ -212,6 +223,7 @@ describe('resolveSecretRef: saved cards', () => {
     const s = setup({ schema: 'credit_card' });
     const r = await s.resolve('user.visa#billing_zip', { siteUrl: SITE });
     expect(r.error).toBe('`user.visa` has no billing_zip saved');
+    expect(r.code).toBe('empty_field');
     expect(r.value).toBeUndefined();
   });
 

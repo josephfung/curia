@@ -71,6 +71,7 @@ const FIXTURES: Record<string, string> = {
 };
 
 let tmpProfile: string;
+let savedDisplay: string | undefined;
 let context: BrowserContext;
 let service: BrowserService;
 const siteUrls: string[] = [];
@@ -119,6 +120,7 @@ beforeAll(async () => {
   tmpProfile = mkdtempSync(join(tmpdir(), 'curia-card-fill-'));
   // BrowserService.start() spawns Xvfb on Linux without a DISPLAY. This browser is headless,
   // so give it a placeholder display and skip that.
+  savedDisplay = process.env.DISPLAY;
   if (process.platform === 'linux') process.env.DISPLAY ??= ':99';
   service = new BrowserService({
     logger: createSilentLogger(),
@@ -153,6 +155,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await service?.stop();
+  if (savedDisplay === undefined) delete process.env.DISPLAY;
+  else process.env.DISPLAY = savedDisplay;
   if (tmpProfile) rmSync(tmpProfile, { recursive: true, force: true });
 });
 

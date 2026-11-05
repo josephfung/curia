@@ -41,7 +41,7 @@ import { BrowserSession } from '../../../../src/browser/browser-session.js';
 import type { BrowserService } from '../../../../src/browser/browser-service.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { BrowserContext, Page } from 'playwright';
-import { CARD_FILL_LIMIT_ERROR, CARD_USE_REQUIRED_ERROR } from '../../../../src/secrets/structured-secret-schema.js';
+import { CARD_FILL_LIMIT_ERROR, CARD_USE_REQUIRED_ERROR, SecretRefRefusal } from '../../../../src/secrets/structured-secret-schema.js';
 import { CodeTracker } from '../../../../src/verification/code-tracker.js';
 import type { VerificationRuntime } from '../../../../src/verification/index.js';
 import type { Verification } from '../../../../src/verification/types.js';
@@ -351,7 +351,7 @@ describe('web-browser select and card fills with secret_ref (#1358)', () => {
 
   it('card-use refusal surfaces as the action error', async () => {
     const refusal = CARD_USE_REQUIRED_ERROR('user.visa', 'example.test');
-    const resolveSecretRef = vi.fn().mockRejectedValue(new Error(refusal));
+    const resolveSecretRef = vi.fn().mockRejectedValue(new SecretRefRefusal('card_use_required', refusal));
     const { ctx, session } = makeToolContext({
       input: { action: 'type', selector: '#number', secret_ref: 'user.visa#number' },
       resolveSecretRef,
@@ -368,11 +368,42 @@ describe('web-browser select and card fills with secret_ref (#1358)', () => {
 
     const limit = makeToolContext({
       input: { action: 'select', selector: '#cvv', secret_ref: 'user.visa#cvv' },
-      resolveSecretRef: vi.fn().mockRejectedValue(new Error(CARD_FILL_LIMIT_ERROR)),
+      resolveSecretRef: vi.fn().mockRejectedValue(new SecretRefRefusal('card_fill_limit', CARD_FILL_LIMIT_ERROR)),
     });
     const limited = await new WebBrowserHandler().execute(limit.ctx);
-    if (!limited.success) expect(limited.error).toBe(CARD_FILL_LIMIT_ERROR);
-    expect(limited.success).toBe(false);
+    expect(limited).toEqual({ success: false, error: CARD_FILL_LIMIT_ERROR });
+  });
+
+  it('a refusal for an unknown field is returned unchanged; a plain resolver error is still wrapped', async () => {
+    const unknown = makeToolContext({
+      input: { action: 'type', selector: '#n', secret_ref: 'user.visa#pin' },
+      resolveSecretRef: vi.fn().mockRejectedValue(new SecretRefRefusal('unknown_card_field', "Unknown card field 'pin'. Fields: number")),
+    });
+    expect(await new WebBrowserHandler().execute(unknown.ctx)).toEqual({ success: false, error: "Unknown card field 'pin'. Fields: number" });
+    expect(unknown.session.consecutiveFailures).toBe(0);
+
+    const plain = makeToolContext({
+      input: { action: 'type', selector: '#n', secret_ref: 'user.visa#number' },
+      resolveSecretRef: vi.fn().mockRejectedValue(new Error('vault down')),
+    });
+    const r = await new WebBrowserHandler().execute(plain.ctx);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('vault down');
+    expect(plain.session.consecutiveFailures).toBe(1);
+  });
+
+  it('an error thrown by selectOption after injection cannot echo the resolved value', async () => {
+    const { ctx, page } = makeToolContext({
+      input: { action: 'select', selector: '#month', secret_ref: 'user.visa#expiry_month_name' },
+      resolveSecretRef: vi.fn().mockResolvedValue(MONTH_LABEL),
+    });
+    vi.mocked(page.locator('x').selectOption).mockRejectedValueOnce(new Error(`did not find option "${MONTH_LABEL}"`));
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(MONTH_LABEL);
+    expect(JSON.stringify(result)).toContain('[REDACTED]');
   });
 });
 

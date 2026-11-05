@@ -28,7 +28,7 @@ import { registrableDomain, sameRegistrableDomain } from '../../../../src/verifi
 import type { VerificationRuntime } from '../../../../src/verification/index.js';
 import { registerCodes } from '../../../../src/verification/track-codes.js';
 import type { Verification } from '../../../../src/verification/types.js';
-import { isCardUseRefusal } from '../../../../src/secrets/structured-secret-schema.js';
+import { SecretRefRefusal } from '../../../../src/secrets/structured-secret-schema.js';
 import { detectVerificationScreen } from './verification-detect.js';
 import { isBlockedFrameUrl, isPrivateHost } from './frame-url.js';
 import { focusedFrame } from './focus-frame.js';
@@ -975,8 +975,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
 /**
  * Dereference a secret_ref for a fill. resolveSecretRef enforces the user.* namespace, the
  * card rules and the audit; it throws on a bad ref or a missing secret, and a thrown message
- * names the ref, never the value. A card-use refusal comes back as the action error,
- * unchanged. `siteUrl` is the top-level page's URL, not the frame's: a card may be filled
+ * names the ref, never the value. A SecretRefRefusal (card-use, unknown field, not a card, ...)
+ * comes back as the action error, unchanged. `siteUrl` is the top-level page's URL, not the frame's: a card may be filled
  * into any frame of the approved page (a payment iframe from another origin).
  */
 async function resolveSecretForFill(
@@ -992,8 +992,7 @@ async function resolveSecretForFill(
   try {
     return { ok: true, value: await ctx.resolveSecretRef(ref, { siteUrl: page.url() }) };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (isCardUseRefusal(message)) return { ok: false, error: message };
+    if (err instanceof SecretRefRefusal) return { ok: false, error: err.message };
     throw err;
   }
 }
