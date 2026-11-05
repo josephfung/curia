@@ -10,6 +10,16 @@ export interface SecretDeclarer {
 
 export type SecretKind = 'personal' | 'system' | 'platform';
 
+/** Mirrors VaultCardSummary in src/channels/http/routes/vault.ts: a saved card's public fields. */
+export interface SecretCardSummary {
+  label: string | null;
+  brand: 'visa' | 'mastercard' | 'amex' | 'discover' | 'other';
+  last4: string;
+  /** "MM/YYYY". */
+  expiry: string;
+  expired: boolean;
+}
+
 /** Mirrors VaultSecretSummary in src/channels/http/routes/vault.ts (the console cannot import from src/). */
 export interface SecretRowData {
   name: string;
@@ -33,6 +43,8 @@ export interface SecretRowData {
   /** Personal rows only: non-secret sign-in details. */
   loginUrl?: string;
   username?: string;
+  /** Personal rows holding a saved card only. */
+  card?: SecretCardSummary;
 }
 
 const KIND_LABEL: Record<SecretDeclarer['kind'], string> = {
@@ -93,13 +105,14 @@ export async function removeSecretFlow(
 // List helpers: status, filter, sort, duplicates, labels
 // ---------------------------------------------------------------------------
 
-export type SecretStatus = 'configured' | 'env' | 'missing' | 'not_set' | 'not_declared';
+export type SecretStatus = 'configured' | 'expired' | 'env' | 'missing' | 'not_set' | 'not_declared';
 
-/** A system secret nothing declares is an orphan whatever its value; otherwise the vault wins,
+/** A system secret nothing declares is an orphan whatever its value; a saved card past its expiry
+ *  month is expired (the server sends no status, only `card.expired`); otherwise the vault wins,
  *  then the environment fallback, then whether an enabled declarer needs it. */
 export function secretStatus(row: SecretRowData): SecretStatus {
   if (row.kind === 'system' && row.declaredBy.length === 0) return 'not_declared';
-  if (row.configured) return 'configured';
+  if (row.configured) return row.card?.expired ? 'expired' : 'configured';
   if (row.envFallback) return 'env';
   if (row.required) return 'missing';
   return 'not_set';
@@ -109,6 +122,19 @@ export function secretStatus(row: SecretRowData): SecretStatus {
  *  deployment; an orphan (no declarer) can be removed but not set. */
 export function canEditValue(row: SecretRowData): boolean {
   return row.kind !== 'platform' && !(row.kind === 'system' && row.declaredBy.length === 0);
+}
+
+const BRAND_NAME: Record<SecretCardSummary['brand'], string> = {
+  visa: 'Visa', mastercard: 'Mastercard', amex: 'Amex', discover: 'Discover', other: 'Card',
+};
+
+export function cardBrandName(card: SecretCardSummary): string {
+  return BRAND_NAME[card.brand];
+}
+
+/** "Visa ••1111 · exp 12/2027" */
+export function cardSummaryText(card: SecretCardSummary): string {
+  return `${cardBrandName(card)} ••${card.last4} · exp ${card.expiry}`;
 }
 
 /** Hostname of a login URL: lower-cased, leading "www." stripped; null when absent or unparseable. */
@@ -136,6 +162,7 @@ function matchesSearch(row: SecretRowData, needle: string): boolean {
     siteHost(row.loginUrl) ?? '',
     row.loginUrl ?? '',
     row.username ?? '',
+    ...(row.card ? [row.card.label ?? '', cardBrandName(row.card), row.card.last4] : []),
   ];
   return haystack.some(h => h.toLowerCase().includes(needle));
 }
@@ -158,7 +185,7 @@ export function filterCounts(rows: SecretRowData[]): {
 } {
   const counts = {
     kind: { all: rows.length, personal: 0, system: 0, platform: 0 },
-    status: { configured: 0, env: 0, missing: 0, not_set: 0, not_declared: 0 },
+    status: { configured: 0, expired: 0, env: 0, missing: 0, not_set: 0, not_declared: 0 },
     required: { required: 0, optional: 0 },
   };
   for (const r of rows) {
@@ -172,7 +199,7 @@ export function filterCounts(rows: SecretRowData[]): {
 export type SecretSortKey = 'name' | 'kind' | 'status' | 'updatedAt' | 'lastUsedAt';
 
 const STATUS_ORDER: Record<SecretStatus, number> = {
-  missing: 0, not_set: 1, env: 2, not_declared: 3, configured: 4,
+  missing: 0, expired: 1, not_set: 2, env: 3, not_declared: 4, configured: 5,
 };
 
 function compareDates(a: string | null, b: string | null, dir: 1 | -1): number {
@@ -182,7 +209,7 @@ function compareDates(a: string | null, b: string | null, dir: 1 | -1): number {
   return (Date.parse(a) - Date.parse(b)) * dir;
 }
 
-/** null sort = the default: missing first, then by name. Returns a new array. */
+/** null sort = the default: missing and expired first, then by name. Returns a new array. */
 export function sortSecrets(
   rows: SecretRowData[],
   sort: { key: SecretSortKey; dir: 'asc' | 'desc' } | null,
@@ -243,4 +270,21 @@ export function lastUsedText(row: SecretRowData, now: Date, timeZone?: string): 
   const days = Math.floor(hours / 24);
   if (days <= 30) return `${days}d ago`;
   return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone });
+}
+
+/** For each saved card, the other cards with the same brand and last four (likely the same card
+ *  saved twice); cards of unknown brand are left out. */
+export function duplicateCardHints(rows: SecretRowData[]): Map<string, string[]> {
+  const byCard = new Map<string, string[]>();
+  for (const r of rows) {
+    if (!r.card || r.card.brand === 'other') continue;
+    const key = `${r.card.brand}:${r.card.last4}`;
+    byCard.set(key, [...(byCard.get(key) ?? []), r.name]);
+  }
+  const hints = new Map<string, string[]>();
+  for (const names of byCard.values()) {
+    if (names.length < 2) continue;
+    for (const n of names) hints.set(n, names.filter(o => o !== n));
+  }
+  return hints;
 }

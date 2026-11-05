@@ -63,10 +63,28 @@ export function detectBrandForDisplay(number: string): string {
   return '';
 }
 
+/** What an edit-public form started from, so it can leave unchanged fields out of the PATCH and
+ *  tell a cleared field ('' clears) from one the page never knew ("keep"). */
+export interface CardEditOriginal {
+  label: string;
+  expiryMonth: string;
+  expiryYear: string;
+  /** The billing postal code had a value, so a blank field clears it. The list summary does not
+   *  carry the postal code, so the Secrets page can only say false. */
+  hadBillingZip: boolean;
+}
+
+function expiryUnchanged(state: CardFormState, original: CardEditOriginal | undefined): boolean {
+  return original !== undefined
+    && state.expiryMonth.trim().padStart(2, '0') === original.expiryMonth
+    && state.expiryYear.trim() === original.expiryYear;
+}
+
 export function validateCardForm(
   state: CardFormState,
   mode: CardFormMode,
   now: Date = new Date(),
+  original?: CardEditOriginal,
 ): Partial<Record<keyof CardFormState, string>> {
   const errors: Partial<Record<keyof CardFormState, string>> = {};
 
@@ -88,12 +106,15 @@ export function validateCardForm(
 
   const month = /^\d{1,2}$/.test(state.expiryMonth.trim()) ? Number(state.expiryMonth) : NaN;
   const yearOk = /^\d{4}$/.test(state.expiryYear.trim());
-  if (!(month >= 1 && month <= 12)) {
+  // An edit that leaves the expiry as it was is not asked about it again: an expired card must
+  // still be able to take a new label.
+  const skipExpiry = mode === 'edit-public' && expiryUnchanged(state, original);
+  if (!skipExpiry && !(month >= 1 && month <= 12)) {
     errors.expiryMonth = 'Choose the expiry month.';
   }
-  if (!yearOk) {
+  if (!skipExpiry && !yearOk) {
     errors.expiryYear = 'Choose the expiry year.';
-  } else if (month >= 1 && month <= 12) {
+  } else if (!skipExpiry && month >= 1 && month <= 12) {
     // Expired means before the current UTC month; the expiry month itself is still valid.
     const expiry = Number(state.expiryYear) * 12 + month;
     const current = now.getUTCFullYear() * 12 + (now.getUTCMonth() + 1);
@@ -102,7 +123,8 @@ export function validateCardForm(
 
   if (mode === 'full' || mode === 'edit-public') {
     const name = state.cardholderName.trim();
-    if (name.length === 0 || name.length > CARDHOLDER_MAX) {
+    // The saved name is not shown back, so a blank name in an edit means "keep it".
+    if ((name.length === 0 && mode === 'full') || name.length > CARDHOLDER_MAX) {
       errors.cardholderName = 'Enter the name on the card (up to 100 characters).';
     }
     const zip = state.billingZip.trim();
@@ -111,25 +133,45 @@ export function validateCardForm(
     }
   }
 
-  if (mode === 'edit-public') {
-    const label = state.label.trim();
-    if (label.length === 0 || label.length > LABEL_MAX) errors.label = 'Enter a label (up to 100 characters).';
-  }
+  // The label is optional here: an edit may clear it, and the capture page has none. Create
+  // requires one itself, because the label names the secret.
+  if (state.label.trim().length > LABEL_MAX) errors.label = 'The label can be up to 100 characters.';
 
   return errors;
 }
 
-/** The request fields for a mode; fields the mode does not send are left out. */
-export function buildCardPayload(state: CardFormState, mode: CardFormMode): Record<string, string> {
+/** The request fields for a mode; fields the mode does not send are left out. `label` goes out in
+ *  full mode when filled (Create asks for one; the capture page has no label field). In
+ *  edit-public with `original`, only what changed goes out: a cleared label or postal code is ''. */
+export function buildCardPayload(
+  state: CardFormState,
+  mode: CardFormMode,
+  original?: CardEditOriginal,
+): Record<string, string> {
   const payload: Record<string, string> = {};
   if (mode === 'full') payload['number'] = digitsOf(state.number);
   if (mode === 'full' || mode === 'renewal') payload['cvv'] = state.cvv;
-  payload['expiry_month'] = state.expiryMonth.trim().padStart(2, '0');
-  payload['expiry_year'] = state.expiryYear.trim();
-  if (mode === 'full' || mode === 'edit-public') {
-    payload['cardholder_name'] = state.cardholderName.trim();
-    if (state.billingZip.trim() !== '') payload['billing_zip'] = state.billingZip.trim();
+  if (!(mode === 'edit-public' && expiryUnchanged(state, original))) {
+    payload['expiry_month'] = state.expiryMonth.trim().padStart(2, '0');
+    payload['expiry_year'] = state.expiryYear.trim();
   }
-  if (mode === 'edit-public') payload['label'] = state.label.trim();
+  const label = state.label.trim();
+  const zip = state.billingZip.trim();
+  if (mode === 'full') {
+    payload['cardholder_name'] = state.cardholderName.trim();
+    if (zip !== '') payload['billing_zip'] = zip;
+    if (label !== '') payload['label'] = label;
+  }
+  if (mode === 'edit-public') {
+    const name = state.cardholderName.trim();
+    if (name !== '') payload['cardholder_name'] = name;
+    if (zip !== '') payload['billing_zip'] = zip;
+    else if (original?.hadBillingZip) payload['billing_zip'] = '';
+    if (original === undefined) {
+      if (label !== '') payload['label'] = label;
+    } else if (label !== original.label) {
+      payload['label'] = label; // '' clears
+    }
+  }
   return payload;
 }

@@ -290,11 +290,11 @@ describe('SecretCreateDrawer', () => {
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
-  it('requires a label and value for Other, and offers Card only as a disabled option', async () => {
+  it('requires a label and value for Other, and offers Card as an enabled type', async () => {
     await render(<SecretCreateDrawer existingRows={[]} onClose={() => {}} onSaved={() => {}} />);
-    const card = button('Card (later)');
-    expect(card?.disabled).toBe(true);
-    expect(card?.closest('[title]')?.getAttribute('title')).toBe('Coming soon — ADR-027');
+    const card = button('Card');
+    expect(card?.disabled).toBe(false);
+    expect(card?.closest('[title]')).toBeNull();
     await click(button('Other'));
     expect(button('Save')?.disabled).toBe(true);
     await type(field('Label'), 'Bank PIN');
@@ -311,5 +311,196 @@ describe('SecretCreateDrawer', () => {
     await settle(400);
     expect(document.body.textContent).toContain('Recapture through Curia to change a structured value.');
     expect(button('Save')?.disabled).toBe(true);
+  });
+});
+
+// ── Saved cards (#1358) ───────────────────────────────────────────────────────
+
+const NUMBER = '4111 1111 1111 1111';
+const CVV = '737';
+
+const cardRow = (over: Partial<NonNullable<SecretRowData['card']>> = {}) => row({
+  name: 'user.personal_visa_card',
+  valueFormat: 'json',
+  card: { label: 'Personal', brand: 'visa', last4: '1111', expiry: '12/2037', expired: false, ...over },
+});
+
+function select(id: string): HTMLSelectElement {
+  return document.getElementById(id) as HTMLSelectElement;
+}
+
+async function choose(id: string, value: string): Promise<void> {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select(id), value);
+    select(id).dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+const patchCall = () => mocks.calls.find(c => c.init?.method === 'PATCH');
+
+describe('SecretCreateDrawer — card', () => {
+  it('posts the card payload with the label on top and shows the previewed name', async () => {
+    mocks.respond = path => path.endsWith('/preview')
+      ? json({ name: 'user.personal_visa_card', existing: null })
+      : json({ name: 'user.personal_visa_card', replaced: false });
+    const onSaved = vi.fn();
+    await render(<SecretCreateDrawer existingRows={[]} onClose={() => {}} onSaved={onSaved} />);
+    await click(button('Card'));
+    expect(button('Save')?.disabled).toBe(true);
+    await type(field('Label'), 'Personal');
+    await type(field('Card number'), NUMBER);
+    await settle(400);
+    const preview = mocks.calls.find(c => c.path === '/api/vault/user-secrets/preview');
+    expect(bodyOf(preview)).toEqual({ type: 'credit_card', label: 'Personal', card: { number: '4111111111111111' } });
+    expect(document.body.textContent).toContain('Saved as user.personal_visa_card.');
+
+    await choose('card-exp-month', '03');
+    await choose('card-exp-year', String(new Date().getFullYear() + 2));
+    await type(field('Security code (CVV)'), CVV);
+    await type(field('Name on card'), 'Ada Lovelace');
+    await click(button('Save'));
+    const post = mocks.calls.find(c => c.path === '/api/vault/user-secrets');
+    expect(bodyOf(post)).toEqual({
+      type: 'credit_card',
+      label: 'Personal',
+      card: {
+        number: '4111111111111111', cvv: CVV, expiry_month: '03', expiry_year: String(new Date().getFullYear() + 2),
+        cardholder_name: 'Ada Lovelace',
+      },
+    });
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns that saving replaces an existing card', async () => {
+    mocks.respond = () => json({ name: 'user.personal_visa_card', existing: { updatedAt: '2026-06-04T12:00:00.000Z', valueFormat: 'json' } });
+    await render(<SecretCreateDrawer existingRows={[]} onClose={() => {}} onSaved={() => {}} />);
+    await click(button('Card'));
+    await type(field('Label'), 'Personal');
+    await type(field('Card number'), NUMBER);
+    await settle(400);
+    expect(document.body.textContent).toContain('Saving replaces it instead of adding a duplicate.');
+    expect(document.body.textContent).not.toContain('Recapture through Curia');
+  });
+
+  it('shows validation messages and posts nothing for a bad card', async () => {
+    await render(<SecretCreateDrawer existingRows={[]} onClose={() => {}} onSaved={() => {}} />);
+    await click(button('Card'));
+    await type(field('Label'), 'Personal');
+    await type(field('Card number'), '1234');
+    await click(button('Save'));
+    expect(document.body.textContent).toContain('The card number should be 12 to 19 digits.');
+    expect(mocks.calls.some(c => c.path === '/api/vault/user-secrets')).toBe(false);
+  });
+});
+
+describe('SecretViewDrawer — card', () => {
+  it('view shows public fields only', async () => {
+    mocks.respond = () => json({ uses: [] });
+    await render(<SecretViewDrawer row={cardRow({ expired: true, expiry: '01/2020' })} onClose={() => {}} onEdit={() => {}} onRemoved={() => {}} />);
+    await settle();
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Personal');
+    expect(text).toContain('Visa');
+    expect(text).toContain('••1111');
+    expect(text).toContain('01/2020');
+    expect(text).toContain('Expired');
+    expect(text).not.toContain('Sign-in page');
+    expect(text).not.toContain('Structured value');
+    expect(text).not.toContain('4111');
+  });
+
+  it('shows the filled field and the principal\'s card-use decision', async () => {
+    mocks.respond = () => json({ uses: [
+      { kind: 'read', at: new Date().toISOString(), agentId: 'travel', toolName: 'web-browser', source: 'vault', byReference: false, secretField: 'expiry_mm' },
+      { kind: 'card_use', at: new Date().toISOString(), decision: 'approved', siteDomain: 'aircanada.com', amount: 'CA$412.30' },
+    ] });
+    await render(<SecretViewDrawer row={cardRow()} onClose={() => {}} onEdit={() => {}} onRemoved={() => {}} />);
+    await settle();
+    expect(document.body.textContent).toContain('travel · web-browser · Filled expiry_mm');
+    expect(document.body.textContent).toContain('You approved CA$412.30 at aircanada.com');
+  });
+});
+
+describe('SecretEditDrawer — card', () => {
+  it('edit public fields sends PATCH without cvv or number', async () => {
+    const onSaved = vi.fn();
+    await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={onSaved} />);
+    expect(button('Save')?.disabled).toBe(true);
+    await type(field('Label'), 'Work');
+    await type(field('Name on card'), 'Ada L');
+    await click(button('Save'));
+    const patch = patchCall();
+    expect(patch?.path).toBe('/api/vault/user-secrets/user.personal_visa_card');
+    expect(bodyOf(patch)).toEqual({ label: 'Work', cardholder_name: 'Ada L' });
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends '' to clear the label", async () => {
+    await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={() => {}} />);
+    await type(field('Label'), '');
+    await click(button('Save'));
+    expect(bodyOf(patchCall())).toEqual({ label: '' });
+  });
+
+  it('lets an expired card take a new label without touching the expiry', async () => {
+    await render(<SecretEditDrawer row={cardRow({ expired: true, expiry: '01/2020' })} onClose={() => {}} onSaved={() => {}} />);
+    await type(field('Label'), 'Old');
+    await click(button('Save'));
+    expect(bodyOf(patchCall())).toEqual({ label: 'Old' });
+  });
+
+  it('new cvv sends cvv only', async () => {
+    await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={() => {}} />);
+    await type(field('New CVV'), CVV);
+    await click(button('Save'));
+    expect(bodyOf(patchCall())).toEqual({ cvv: CVV });
+  });
+
+  it('refuses a malformed new cvv', async () => {
+    await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={() => {}} />);
+    await type(field('New CVV'), '12');
+    await click(button('Save'));
+    expect(document.body.textContent).toContain('The security code should be 3 or 4 digits.');
+    expect(patchCall()).toBeUndefined();
+  });
+
+  it('replace card sends replace object', async () => {
+    await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={() => {}} />);
+    await click(button('Replace card'));
+    await type(field('Card number'), NUMBER);
+    await choose('card-exp-month', '06');
+    await choose('card-exp-year', String(new Date().getFullYear() + 3));
+    await type(field('Security code (CVV)'), CVV);
+    await type(field('Name on card'), 'Ada Lovelace');
+    await click(button('Save'));
+    expect(bodyOf(patchCall())).toEqual({
+      replace: {
+        number: '4111111111111111', cvv: CVV, expiry_month: '06', expiry_year: String(new Date().getFullYear() + 3),
+        cardholder_name: 'Ada Lovelace',
+      },
+    });
+  });
+
+  it('no number or cvv in the DOM after save', async () => {
+    await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={() => {}} />);
+    await click(button('Replace card'));
+    await type(field('Card number'), NUMBER);
+    await choose('card-exp-month', '06');
+    await choose('card-exp-year', String(new Date().getFullYear() + 3));
+    await type(field('Security code (CVV)'), CVV);
+    await type(field('Name on card'), 'Ada Lovelace');
+    await click(button('Save'));
+    expect(patchCall()).toBeDefined();
+    const html = document.body.innerHTML;
+    expect(html).not.toContain('4111');
+    expect(html).not.toContain(CVV);
+  });
+
+  it('shows a server error inline and stays open', async () => {
+    mocks.respond = () => json({ error: 'That card number is not valid.' }, 400);
+    await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={() => {}} />);
+    await type(field('Label'), 'Work');
+    await click(button('Save'));
+    expect(document.body.textContent).toContain('That card number is not valid.');
   });
 });

@@ -19,20 +19,24 @@ export interface CardFieldsProps {
   errors: Partial<Record<keyof CardFormState, string>>;
   /** Overrides the brand detected from the number (a renewal knows the brand already). */
   brandHint?: string;
+  /** Show the Label field in full mode too (Create names the secret from it). Always shown in edit-public. */
+  showLabel?: boolean;
 }
 
 function FieldError({ id, message }: { id: string; message?: string }) {
   return message ? <p id={id} className="login-error" role="alert">{message}</p> : null;
 }
 
-export function CardFields({ mode, state, onChange, errors, brandHint }: CardFieldsProps) {
+export function CardFields({ mode, state, onChange, errors, brandHint, showLabel }: CardFieldsProps) {
   const thisYear = new Date().getFullYear();
   const years = Array.from({ length: 16 }, (_, i) => String(thisYear + i));
+  // A saved card's expiry may be a past year; keep it selectable so the field shows it.
+  if (state.expiryYear !== '' && !years.includes(state.expiryYear)) years.unshift(state.expiryYear);
   const brand = brandHint ?? detectBrandForDisplay(state.number);
 
   return (
     <>
-      {mode === 'edit-public' && (
+      {(mode === 'edit-public' || showLabel) && (
         <div className="form-field">
           <label htmlFor="card-label">Label</label>
           <input id="card-label" type="text" autoComplete="off" maxLength={100} value={state.label}

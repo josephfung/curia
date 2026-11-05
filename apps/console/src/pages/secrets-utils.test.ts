@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   declarerLabel, forceRemoveConfirmation, removeSecretFlow, secretStatus, filterSecrets, filterCounts,
-  sortSecrets, siteHost, duplicateSiteHints, readableLabel, lastUsedText, canEditValue,
+  sortSecrets, siteHost, cardSummaryText, duplicateCardHints, duplicateSiteHints, readableLabel, lastUsedText, canEditValue,
   type SecretRowData, type SecretDeclarer, type SecretFilters,
 } from './secrets-utils.js';
 
@@ -130,7 +130,7 @@ describe('filterCounts', () => {
     ];
     const c = filterCounts(rows);
     expect(c.kind).toEqual({ all: 3, personal: 1, system: 1, platform: 1 });
-    expect(c.status).toEqual({ configured: 2, env: 0, missing: 1, not_set: 0, not_declared: 0 });
+    expect(c.status).toEqual({ configured: 2, expired: 0, env: 0, missing: 1, not_set: 0, not_declared: 0 });
     expect(c.required).toEqual({ required: 2, optional: 1 });
   });
 });
@@ -256,5 +256,52 @@ describe('lastUsedText', () => {
     const r = row({ configured: true, lastUsedAt: '2026-09-01T03:00:00Z' });
     expect(lastUsedText(r, now, 'UTC')).toBe('Sep 1');
     expect(lastUsedText(r, now, 'America/Toronto')).toBe('Aug 31');
+  });
+});
+
+describe('saved cards', () => {
+  const card = (over: Partial<NonNullable<SecretRowData['card']>> = {}) =>
+    ({ label: 'Personal', brand: 'visa' as const, last4: '1111', expiry: '12/2027', expired: false, ...over });
+  const cardRow = (name: string, c = card()) =>
+    row({ name, kind: 'personal', declaredBy: [], configured: true, valueFormat: 'json', card: c });
+
+  it('card row shows brand, last four and expiry', () => {
+    expect(cardSummaryText(card())).toBe('Visa ••1111 · exp 12/2027');
+    expect(cardSummaryText(card({ brand: 'amex', last4: '0005' }))).toBe('Amex ••0005 · exp 12/2027');
+    expect(cardSummaryText(card({ brand: 'other' }))).toBe('Card ••1111 · exp 12/2027');
+  });
+
+  it('expired chip filters expired cards, and they sort to the top with Missing', () => {
+    const rows = [
+      cardRow('user.fresh'),
+      cardRow('user.old', card({ expired: true })),
+      row({ name: 'sys.z', required: true }),
+    ];
+    expect(secretStatus(rows[1]!)).toBe('expired');
+    expect(filterCounts(rows).status.expired).toBe(1);
+    expect(filterSecrets(rows, { ...noFilters, status: 'expired' }).map(r => r.name)).toEqual(['user.old']);
+    expect(sortSecrets(rows, null).map(r => r.name)).toEqual(['sys.z', 'user.old', 'user.fresh']);
+  });
+
+  it('two cards with same brand+last4 both show duplicate hint', () => {
+    const rows = [
+      cardRow('user.a'),
+      cardRow('user.b'),
+      cardRow('user.c', card({ last4: '4242' })),
+      cardRow('user.d', card({ brand: 'other' })),
+      cardRow('user.e', card({ brand: 'other' })),
+    ];
+    const hints = duplicateCardHints(rows);
+    expect(hints.get('user.a')).toEqual(['user.b']);
+    expect(hints.get('user.b')).toEqual(['user.a']);
+    expect(hints.has('user.c')).toBe(false);
+    expect(hints.has('user.d')).toBe(false);
+  });
+
+  it('search matches label, brand and last four', () => {
+    const rows = [cardRow('user.a', card({ label: 'Work travel' })), cardRow('user.b', card({ brand: 'mastercard', last4: '4444', label: null }))];
+    expect(filterSecrets(rows, { ...noFilters, search: 'travel' }).map(r => r.name)).toEqual(['user.a']);
+    expect(filterSecrets(rows, { ...noFilters, search: 'MasterCard' }).map(r => r.name)).toEqual(['user.b']);
+    expect(filterSecrets(rows, { ...noFilters, search: '4444' }).map(r => r.name)).toEqual(['user.b']);
   });
 });
