@@ -1,6 +1,6 @@
 // Integration tests — require a live Postgres with migrations applied.
 // Skips automatically when DATABASE_URL is unset (CI without Postgres).
-import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
+import { vi, describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import pg from 'pg';
 import pino from 'pino';
 import { randomBytes } from 'node:crypto';
@@ -167,6 +167,56 @@ describeIf('SecretsService', () => {
       await service.patchUserDetails(n, { username: 'newbie' });
       expect((await service.listUserDetails()).get(n)).toEqual({ username: 'newbie' });
       await expect(service.patchUserDetails('test_api_key', { username: 'x' })).rejects.toThrow(/user\.\*/);
+    });
+
+    it('delete removes a user.* key and its sign-in details together', async () => {
+      const n = `${P}gone`;
+      await service.setUserSecret(n, 'pw', { username: 'u' });
+      await service.delete(n);
+      expect(await service.get(n)).toBeNull();
+      expect((await service.listUserDetails()).has(n)).toBe(false);
+    });
+
+    it('setUserSecret writes the value and details, reports a replace, and never replaces JSON', async () => {
+      const n = `${P}set`;
+      expect(await service.setUserSecret(n, 'one', { loginUrl: 'https://a.com/' })).toEqual({ outcome: 'written', replaced: false });
+      expect(await service.setUserSecret(n, 'two', {})).toEqual({ outcome: 'written', replaced: true });
+      expect(await service.get(n)).toBe('two');
+      expect((await service.listUserDetails()).get(n)).toEqual({ loginUrl: 'https://a.com/' });
+
+      const j = `${P}json`;
+      await service.setJSON(j, { cookies: [] });
+      expect(await service.setUserSecret(j, 'plain', { username: 'u' })).toEqual({ outcome: 'structured' });
+      expect(await service.getJSON(j)).toEqual({ cookies: [] });
+      expect((await service.listUserDetails()).has(j)).toBe(false);
+    });
+
+    it('editUserSecret never recreates a deleted key or replaces JSON', async () => {
+      const n = `${P}edit_missing`;
+      expect(await service.editUserSecret(n, { value: 'x', details: { username: 'u' } })).toEqual({ outcome: 'missing' });
+      expect(await service.get(n)).toBeNull();
+      expect((await service.listUserDetails()).has(n)).toBe(false);
+
+      const j = `${P}edit_json`;
+      await service.setJSON(j, { a: 1 });
+      expect(await service.editUserSecret(j, { value: 'x' })).toEqual({ outcome: 'structured' });
+      expect(await service.getJSON(j)).toEqual({ a: 1 });
+    });
+
+    it('editUserSecret rolls the value back when the details write fails', async () => {
+      const n = `${P}edit_rollback`;
+      await service.set(n, 'before');
+      const spy = vi.spyOn(service, 'patchUserDetails').mockRejectedValueOnce(new Error('details down'));
+      try {
+        await expect(service.editUserSecret(n, { value: 'after', details: { username: 'u' } })).rejects.toThrow('details down');
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await service.get(n)).toBe('before');
+      // Both together on a later try.
+      expect(await service.editUserSecret(n, { value: 'after', details: { username: 'u' } })).toEqual({ outcome: 'written', replaced: true });
+      expect(await service.get(n)).toBe('after');
+      expect((await service.listUserDetails()).get(n)).toEqual({ username: 'u' });
     });
 
     it('deleteUserDetails removes the row and is idempotent', async () => {

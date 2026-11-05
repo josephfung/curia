@@ -92,6 +92,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   act(() => root?.unmount());
   root = null;
   document.body.innerHTML = '';
@@ -163,6 +164,16 @@ describe('SecretViewDrawer', () => {
     expect(mocks.calls[0]?.path).toBe('/api/vault/secrets/user.rogers_password/uses?limit=5');
     expect(document.body.textContent).toContain('travel · web-browser');
     expect(document.body.textContent).toContain('"Used" means Curia read it; whether the sign-in worked isn\'t recorded.');
+  });
+
+  it('labels a system-initiated read as System', async () => {
+    mocks.respond = path => path.includes('/uses')
+      ? json({ uses: [{ at: new Date().toISOString(), agentId: null, toolName: 'boot', source: 'vault', byReference: false }] })
+      : json({});
+    await render(<SecretViewDrawer row={row({})} onClose={() => {}} onEdit={() => {}} onRemoved={() => {}} />);
+    await settle();
+    expect(document.body.textContent).toContain('System · boot');
+    expect(document.body.textContent).not.toContain('Unknown agent');
   });
 
   it('shows the empty state when nothing has read it', async () => {
@@ -268,6 +279,9 @@ describe('SecretViewDrawer', () => {
 
 describe('SecretCreateDrawer', () => {
   it('previews the name once per pause in typing and warns about a replace', async () => {
+    // shortDate drops the year only within the current year: pin "now" to 2026.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-15T12:00:00.000Z'));
     mocks.respond = (path) => path.endsWith('/preview')
       ? json({ name: 'user.rogers_password', existing: { updatedAt: '2026-06-04T12:00:00.000Z', valueFormat: 'string' } })
       : json({ name: 'user.rogers_password', replaced: true });
@@ -300,6 +314,10 @@ describe('SecretCreateDrawer', () => {
     await type(field('Label'), 'Bank PIN');
     expect(button('Save')?.disabled).toBe(true);
     await type(field('Value'), 'fixture-value-4');
+    // Both filled, but the name preview is not back yet: a save now could replace a key
+    // without the replacement notice.
+    expect(button('Save')?.disabled).toBe(true);
+    await settle(400);
     expect(button('Save')?.disabled).toBe(false);
   });
 

@@ -5,10 +5,10 @@
 // never semantic — OAuth token sets and browser sessions are just 'json' secrets
 // whose shape is a convention owned by their consumer. The service does NOT fire
 // audit events; the execution-layer ctx.secret() closure remains the audit boundary.
-import type { DbPool } from '../db/connection.js';
+import type { DbPool, DbPoolClient } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import { encrypt, decrypt } from './crypto.js';
-import type { UserSecretDetails } from './user-secret-details.js';
+import { hasUserSecretDetails, type UserSecretDetails } from './user-secret-details.js';
 
 export type ValueFormat = 'string' | 'json';
 
@@ -25,6 +25,16 @@ export interface UserSecretDetailsPatch {
   loginUrl?: string | null;
   username?: string | null;
 }
+
+/** How a personal-secret write ended: written, or refused by the row's state at write time. */
+export type PersonalSecretWrite =
+  | { outcome: 'written'; replaced: boolean }
+  /** The key holds a structured (JSON) value, which a string write never replaces. */
+  | { outcome: 'structured' }
+  /** The key is not in the vault (an edit never recreates a deleted key). */
+  | { outcome: 'missing' };
+
+type Queryable = Pick<DbPool | DbPoolClient, 'query'>;
 
 export class SecretsService {
   constructor(
@@ -131,11 +141,11 @@ export class SecretsService {
   }
 
   /** Record sign-in details for a `user.*` key. Only the fields given are overwritten. */
-  async upsertUserDetails(name: string, details: UserSecretDetails): Promise<void> {
+  async upsertUserDetails(name: string, details: UserSecretDetails, db: Queryable = this.pool): Promise<void> {
     if (!name.startsWith('user.')) {
       throw new Error(`Sign-in details are only stored for user.* keys, not '${name}'`);
     }
-    await this.pool.query(
+    await db.query(
       `INSERT INTO user_secret_details (name, login_url, username)
        VALUES ($1, $2, $3)
        ON CONFLICT (name) DO UPDATE SET
@@ -148,11 +158,11 @@ export class SecretsService {
 
   /** Edit sign-in details for a `user.*` key: an omitted field keeps its value, null clears it.
    *  Inserts the row if none exists. Unlike upsertUserDetails, null is a real "clear". */
-  async patchUserDetails(name: string, patch: UserSecretDetailsPatch): Promise<void> {
+  async patchUserDetails(name: string, patch: UserSecretDetailsPatch, db: Queryable = this.pool): Promise<void> {
     if (!name.startsWith('user.')) {
       throw new Error(`Sign-in details are only stored for user.* keys, not '${name}'`);
     }
-    await this.pool.query(
+    await db.query(
       `INSERT INTO user_secret_details (name, login_url, username)
        VALUES ($1, $3, $5)
        ON CONFLICT (name) DO UPDATE SET
@@ -172,9 +182,93 @@ export class SecretsService {
     await this.pool.query('DELETE FROM user_secret_details WHERE name = $1', [name]);
   }
 
-  /** Remove a secret. No error if it does not exist. */
+  /** Remove a secret. No error if it does not exist. A `user.*` key's sign-in details go with
+   *  it, in the same transaction, so neither can outlive the other: stale details would show
+   *  under a later secret of the same name, and a failed delete keeps both. */
   async delete(name: string): Promise<void> {
-    await this.pool.query('DELETE FROM secrets WHERE name = $1', [name]);
+    if (!name.startsWith('user.')) {
+      await this.pool.query('DELETE FROM secrets WHERE name = $1', [name]);
+      return;
+    }
+    await this.transaction(async (db) => {
+      await db.query('DELETE FROM user_secret_details WHERE name = $1', [name]);
+      await db.query('DELETE FROM secrets WHERE name = $1', [name]);
+    });
+  }
+
+  /**
+   * Create or replace a personal string secret and record its sign-in details, in one
+   * transaction. The value write is conditional: a key that holds a JSON value (a capture's
+   * structure) is never replaced, even if it became JSON after the caller's check.
+   * Details are written only when some are given, merged as upsertUserDetails does.
+   */
+  async setUserSecret(name: string, value: string, details: UserSecretDetails): Promise<PersonalSecretWrite> {
+    if (!name.startsWith('user.')) throw new Error(`Not a personal secret: '${name}'`);
+    const { ciphertext, iv } = encrypt(value, this.key);
+    return this.transaction(async (db) => {
+      const existed = (await db.query('SELECT 1 FROM secrets WHERE name = $1 FOR UPDATE', [name])).rowCount ?? 0;
+      const written = await db.query(
+        `INSERT INTO secrets (name, value_format, encrypted_value, iv, updated_at)
+         VALUES ($1, 'string', $2, $3, now())
+         ON CONFLICT (name) DO UPDATE
+           SET encrypted_value = EXCLUDED.encrypted_value, iv = EXCLUDED.iv, updated_at = now()
+           WHERE secrets.value_format = 'string'`,
+        [name, ciphertext, iv],
+      );
+      if ((written.rowCount ?? 0) === 0) return { outcome: 'structured' as const };
+      if (hasUserSecretDetails(details)) await this.upsertUserDetails(name, details, db);
+      return { outcome: 'written' as const, replaced: existed > 0 };
+    });
+  }
+
+  /**
+   * Edit an existing personal secret: its string value, its sign-in details, or both, in one
+   * transaction. The row is locked first, so a delete or a capture can't land between the
+   * check and the write: a missing key is not recreated, and a JSON value is not replaced.
+   */
+  async editUserSecret(name: string, edit: { value?: string; details?: UserSecretDetailsPatch }): Promise<PersonalSecretWrite> {
+    if (!name.startsWith('user.')) throw new Error(`Not a personal secret: '${name}'`);
+    const sealed = edit.value !== undefined ? encrypt(edit.value, this.key) : undefined;
+    return this.transaction(async (db) => {
+      const row = (await db.query<{ value_format: ValueFormat }>(
+        'SELECT value_format FROM secrets WHERE name = $1 FOR UPDATE', [name],
+      )).rows[0];
+      if (!row) return { outcome: 'missing' as const };
+      if (sealed && row.value_format !== 'string') return { outcome: 'structured' as const };
+      if (sealed) {
+        await db.query(
+          'UPDATE secrets SET encrypted_value = $2, iv = $3, updated_at = now() WHERE name = $1',
+          [name, sealed.ciphertext, sealed.iv],
+        );
+      }
+      if (edit.details && (edit.details.loginUrl !== undefined || edit.details.username !== undefined)) {
+        await this.patchUserDetails(name, edit.details, db);
+      }
+      return { outcome: 'written' as const, replaced: true };
+    });
+  }
+
+  /** Run `fn` in one transaction on a dedicated client; rolled back if it throws. */
+  private async transaction<T>(fn: (db: DbPoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    let broken = false;
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // The connection is likely gone: the original error is the one to report, and the
+        // client is destroyed below rather than returned to the pool mid-transaction.
+        broken = true;
+      }
+      throw err;
+    } finally {
+      client.release(broken);
+    }
   }
 
   private async upsert(name: string, format: ValueFormat, ciphertext: string, iv: string): Promise<void> {

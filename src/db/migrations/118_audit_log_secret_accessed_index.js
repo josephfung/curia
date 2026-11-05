@@ -1,5 +1,5 @@
 /**
- * 117 — Partial index for per-secret usage (console Secrets page).
+ * 118 — Partial index for per-secret usage (console Secrets page).
  *
  * SecretUsageRepo reads secret.accessed rows grouped by payload->>'secretName' (last used) and
  * newest-first for one name (recent uses). idx_audit_log_secret_accessed holds exactly those rows,
