@@ -80,6 +80,8 @@ describe('parseBriefVerdict stakes (#2473)', () => {
     expect(buildBriefUserPrompt(input)).toContain('"stakes": "routine"|"commitment"|"financial_or_legal", "stakesReason"');
     expect(buildBriefUserPrompt({ ...input, questions: ['grounding'] })).not.toContain('"stakes"');
     expect(BRIEF_SYSTEM_PROMPT).toContain('"financial_or_legal": payments, purchase orders, pricing, contracts, signatures, or a legal position.');
+    // A holding reply about a purchase order commits nothing: rated by commitment, not topic (45b).
+    expect(BRIEF_SYSTEM_PROMPT).toContain('Rate what the message commits the principal to, not its topic');
   });
 });
 

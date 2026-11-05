@@ -292,15 +292,20 @@ export class BandSendReview {
         ? { ...steered, findings: [...steered.findings, speaksHeld] }
         : steered;
     }
-    if (speaksHeld) {
-      this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, score: input.score, stakes: verdict.stakes }, 'band review: held — speaks for the principal below what its stakes need');
-      return { kind: 'hold', reason: speaksHeld.detail, findings: [speaksHeld] };
-    }
 
     const claims = verdict.unsupportedClaims ?? [];
     // Detected items are ruled under disclosure only (#2312): an unneeded-disclosure quote that
     // overlaps one is dropped, or an authorized item would bounce here anyway.
     const unneeded = (verdict.unnecessaryItems ?? []).filter((q) => !detected.some((d) => overlaps(q, d.text)));
+    // Below 80 a hold for speaking as the principal comes first, as before #2473. At 80+ a stakes
+    // hold waits for the drafter's rewrite: the principal is asked about a draft the review would
+    // send, not one it would bounce. The bounce or block carries the hold (`heldBeside`), so a
+    // send nobody can rewrite still shows it.
+    if (speaksHeld && (!isSpotCheckOrAbove(input.score) || (claims.length === 0 && unneeded.length === 0))) {
+      this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, score: input.score, stakes: verdict.stakes }, 'band review: held — speaks for the principal below what its stakes need');
+      return { kind: 'hold', reason: speaksHeld.detail, findings: [speaksHeld] };
+    }
+    const beside = speaksHeld ? { heldBeside: [speaksHeld] } : {};
     if (claims.length === 0 && unneeded.length === 0) {
       return { kind: 'send', signals: { ...(verdict.speaksAsPrincipal === true ? { speaksAsPrincipal: true } : {}), ...(hasPrior ? { bounced: true } : {}) } };
     }
@@ -310,7 +315,7 @@ export class BandSendReview {
         { conversationId: input.conversationId, channel: input.channel, claims: claims.length, items: unneeded.length },
         'band review: bounced to the drafter',
       );
-      return { kind: 'bounce', findings: this.bounceFindings(input.content, claims, unneeded, detected) };
+      return { kind: 'bounce', findings: this.bounceFindings(input.content, claims, unneeded, detected), ...beside };
     }
 
     // The one bounce is spent. Below 80 the principal decides; at 80+ the message is not sent.
@@ -321,7 +326,7 @@ export class BandSendReview {
       { conversationId: input.conversationId, channel: input.channel, claims: claims.length, items: unneeded.length, outcome: 'blocked' },
       'band review: blocked — findings survived the rewrite',
     );
-    return { kind: 'block', reason: BLOCK_REASON, findings: this.bounceFindings(input.content, claims, unneeded, detected) };
+    return { kind: 'block', reason: BLOCK_REASON, findings: this.bounceFindings(input.content, claims, unneeded, detected), ...beside };
   }
 
   /**

@@ -383,9 +383,33 @@ describe('BandSendReview', () => {
       if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(['steered', 'speaks-as-principal']);
     });
 
-    it('holds rather than bouncing when a commitment below 90 also has an unsupported claim', async () => {
-      const { svc } = make([{ ...speaks('commitment'), unsupportedClaims: [CLAIM] }]);
-      expect((await svc.review({ ...base, score: 85 })).kind).toBe('hold');
+    // The drafter's one rewrite comes before the principal is asked: at 80+ a stakes hold does
+    // not cut the bounce short. It rides along, and a clean recheck holds for the stakes.
+    it('bounces a commitment below 90 with an unsupported claim first, then holds the clean rewrite', async () => {
+      const { svc } = make([{ ...speaks('commitment'), unsupportedClaims: [CLAIM] }, speaks('commitment')]);
+      const first = await svc.review({ ...base, score: 85 });
+      expect(first.kind).toBe('bounce');
+      if (first.kind === 'bounce') {
+        expect(first.findings.map((f) => f.rule)).toEqual(['ungrounded-claim']);
+        expect(first.heldBeside?.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+      }
+      const second = await svc.review({ ...base, score: 85, content: 'Hi Joel. Adam has the forms.' });
+      expect(second.kind).toBe('hold');
+      if (second.kind === 'hold') expect(second.reason).toContain('Stakes: commitment.');
+    });
+
+    it('blocks a financial send whose rewrite still has the claim, keeping the stakes hold beside it', async () => {
+      const flagged = { ...speaks('financial_or_legal'), unsupportedClaims: [CLAIM] };
+      const { svc } = make([flagged, flagged]);
+      expect((await svc.review({ ...base, score: 95 })).kind).toBe('bounce');
+      const d = await svc.review({ ...base, score: 95 });
+      expect(d.kind).toBe('block');
+      if (d.kind === 'block') expect(d.heldBeside?.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+    });
+
+    it('still holds first below 80, as before', async () => {
+      const { svc } = make([{ ...speaks('routine'), unsupportedClaims: [CLAIM] }]);
+      expect((await svc.review({ ...base, score: 74 })).kind).toBe('hold');
     });
 
     it('does not ask the stakes of a principal-directed send', async () => {
