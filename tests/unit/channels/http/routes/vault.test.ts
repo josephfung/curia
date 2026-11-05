@@ -865,6 +865,15 @@ describe('vault routes', () => {
       expect((await patch(app, DECLARED_SECRET, { value: 'x' })).statusCode).toBe(400);
       expect((await patch(app, 'user.rogers_password', { loginUrl: 'not a url' })).statusCode).toBe(400);
       expect((await patch(app, 'user.rogers_password', { username: 42 })).statusCode).toBe(400);
+      // A malformed URL with userinfo must not be echoed back in the error.
+      const leaky = await patch(app, 'user.rogers_password', { loginUrl: 'https://someone:hunter2@[bad' });
+      expect(leaky.statusCode).toBe(400);
+      expect(leaky.body).not.toContain('hunter2');
+      const leakyPost = await post(app, '/api/vault/user-secrets', {
+        type: 'other', label: 'x', value: 'v', loginUrl: 'https://someone:hunter2@[bad',
+      });
+      expect(leakyPost.statusCode).toBe(400);
+      expect(leakyPost.body).not.toContain('hunter2');
       expect(secrets.sets).toEqual([]);
       expect(secrets.patches).toEqual([]);
     });
