@@ -97,7 +97,7 @@ describeIf('SecretUsageRepo', () => {
   });
 
   it('recentUses returns the field filled and the card-use decision with its amount, newest first', async () => {
-    const items = await repo.recentUses(cardName, 5);
+    const items = await repo.recentUses(cardName, 5, true);
     expect(items).toEqual([
       { kind: 'card_use', at: expect.any(Date), decision: 'approved', siteDomain: 'aircanada.com', amount: 'CA$412.30' },
       {
@@ -107,6 +107,13 @@ describeIf('SecretUsageRepo', () => {
     ]);
     expect(items[0]!.at.getTime()).toBe(cardDecidedAt.getTime());
     expect(JSON.stringify(items)).not.toMatch(/\d{12,}/);
-    expect(await repo.recentUses(cardName, 1)).toHaveLength(1);
+    expect(await repo.recentUses(cardName, 1, true)).toHaveLength(1);
+  });
+
+  it('skips the card-use slice unless asked, so a non-card secret never lists decisions', async () => {
+    const without = await repo.recentUses(cardName, 5);
+    expect(without.map(i => i.kind)).toEqual(['read']);
+    const withCard = await repo.recentUses(cardName, 5, true);
+    expect(withCard.map(i => i.kind)).toEqual(['card_use', 'read']);
   });
 });

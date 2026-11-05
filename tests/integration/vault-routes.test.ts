@@ -226,6 +226,13 @@ describeIf('vault routes', () => {
       expect((await patch({ cvv: '456' })).statusCode).toBe(200);
       expect(await svc.getCardSecret(CARD_KEY)).toEqual({ _schema: 'credit_card', number: NUMBER, cvv: '456' });
 
+      // A renewal (new CVV with a new expiry) lands both together.
+      expect((await patch({ cvv: '789', expiry_month: 1, expiry_year: 2100 })).statusCode).toBe(200);
+      expect((await svc.getCardSecret(CARD_KEY)).cvv).toBe('789');
+      expect((await svc.getCardPublic(CARD_KEY))?.publicFields).toMatchObject({ expiry_month: '01', expiry_year: '2100' });
+      expect((await svc.getCardSecret(CARD_KEY)).number).toBe(NUMBER);
+      expect((await patch({ cvv: '456' })).statusCode).toBe(200);
+
       // Replace swaps the card and keeps the label.
       expect((await patch({ replace: { ...card, number: '5555555555554444' } })).statusCode).toBe(200);
       expect((await svc.getCardSecret(CARD_KEY)).number).toBe('5555555555554444');

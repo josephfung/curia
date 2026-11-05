@@ -36,6 +36,7 @@ interface RecordingSecrets extends VaultSecretsPort {
   order: string[];
   cardSets: Array<{ name: string; secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields; label: string | null }>;
   cardPatches: Array<{ name: string; patch: { label?: string | null; publicFields?: CreditCardPublicFields } }>;
+  cardRenewals: Array<{ name: string; change: { cvv: string; publicFields: CreditCardPublicFields } }>;
   cardReplaces: Array<{ name: string; change: { cvv: string } | { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields } }>;
   /** Anything that would decrypt a vault value. Listing a card must never call these. */
   decrypts: ReturnType<typeof vi.fn>;
@@ -61,12 +62,15 @@ function fakeSecrets(
   const cardSets: RecordingSecrets['cardSets'] = [];
   const cardPatches: RecordingSecrets['cardPatches'] = [];
   const cardReplaces: RecordingSecrets['cardReplaces'] = [];
+  const cardRenewals: RecordingSecrets['cardRenewals'] = [];
   const decrypts = vi.fn(async () => { throw new Error('a decrypt was attempted'); });
   const present = new Set(preset);
   return {
     cardSets,
     cardPatches,
     cardReplaces,
+    cardRenewals,
+    renewCard: async (name: string, change: { cvv: string; publicFields: CreditCardPublicFields }) => { cardRenewals.push({ name, change }); },
     decrypts,
     get: decrypts,
     getJSON: decrypts,
@@ -1098,6 +1102,25 @@ describe('vault routes', () => {
       expect((await patch(app, CARD_KEY, { cvv: '4567' })).json()).toEqual({ error: CARD_VALIDATION_MESSAGES.cvv_format });
     });
 
+    it('patch cvv with expiry is one atomic renewal audited as set; a label rides separately as details', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]), { bus });
+      const res = await patch(app, CARD_KEY, { cvv: '456', expiry_month: 3, expiry_year: 2100 });
+      expect(res.statusCode).toBe(200);
+      expect(secrets.cardRenewals).toEqual([{ name: CARD_KEY, change: { cvv: '456', publicFields: { ...PUB, expiry_month: '03', expiry_year: '2100' } } }]);
+      expect(secrets.cardReplaces).toEqual([]);
+      expect(secrets.cardPatches).toEqual([]);
+      expect(changes(published)).toEqual(['set:requested', 'set:completed']);
+      expect(JSON.stringify(published)).not.toContain('456');
+
+      published.length = 0;
+      await patch(app, CARD_KEY, { cvv: '456', expiry_year: 2100, label: 'Everyday' });
+      expect(secrets.cardRenewals).toHaveLength(2);
+      expect(secrets.cardPatches).toEqual([{ name: CARD_KEY, patch: { label: 'Everyday' } }]);
+      expect(changes(published)).toEqual(['set:requested', 'details:requested', 'set:completed', 'details:completed']);
+    });
+
     it('patch replace swaps the card', async () => {
       const { bus, published } = fakeBus();
       const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
@@ -1144,6 +1167,19 @@ describe('vault routes', () => {
       const secrets = fakeSecrets(['openrouter_api_key']);
       app = await build(secrets, fakeRegistry([]));
       expect((await patch(app, 'openrouter_api_key', { cvv: '123' })).statusCode).toBe(403);
+    });
+
+    it('asks for card-use decisions only for a saved card', async () => {
+      const flags: Array<boolean | undefined> = [];
+      const usage: SecretUsagePort = {
+        lastUsedByName: async () => new Map(),
+        recentUses: async (_n, _l, includeCardUses) => { flags.push(includeCardUses); return []; },
+      };
+      app = await build(fakeSecrets([CARD_KEY, 'user.rogers_password'], savedCard(), FORMATS), fakeRegistry([]), { usage });
+      for (const n of [CARD_KEY, 'user.rogers_password', 'tavily_api_key']) {
+        await app.inject({ method: 'GET', url: `/api/vault/secrets/${encodeURIComponent(n)}/uses`, headers: auth });
+      }
+      expect(flags).toEqual([true, false, false]);
     });
 
     it('uses include secretField and card_use items', async () => {

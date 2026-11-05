@@ -40,7 +40,7 @@ export interface SecretUsagePort {
   /** Newest secret.accessed timestamp per secret name; a never-read secret is absent. */
   lastUsedByName(): Promise<Map<string, Date>>;
   /** The newest `limit` reads of one secret, and card-use decisions for a saved card, newest first. */
-  recentUses(name: string, limit: number): Promise<SecretUseItem[]>;
+  recentUses(name: string, limit: number, includeCardUses?: boolean): Promise<SecretUseItem[]>;
 }
 
 export class SecretUsageRepo implements SecretUsagePort {
@@ -60,7 +60,7 @@ export class SecretUsageRepo implements SecretUsagePort {
     return byName;
   }
 
-  async recentUses(name: string, limit: number): Promise<SecretUseItem[]> {
+  async recentUses(name: string, limit: number, includeCardUses = false): Promise<SecretUseItem[]> {
     // Two bounded slices (each uses its own index path), merged and cut to `limit` in SQL.
     const result = await this.pool.query<{
       event_type: string;
@@ -92,13 +92,13 @@ export class SecretUsageRepo implements SecretUsagePort {
                  a.payload->>'decision', a.payload->>'siteDomain', r.amount
             FROM audit_log a
             LEFT JOIN card_use_requests r ON r.id::text = a.payload->>'requestId'
-           WHERE a.event_type = 'card_use.decided' AND a.payload->>'secretName' = $1
+           WHERE $3::boolean AND a.event_type = 'card_use.decided' AND a.payload->>'secretName' = $1
            ORDER BY a.timestamp DESC
            LIMIT $2)
        ) uses
        ORDER BY timestamp DESC
        LIMIT $2`,
-      [name, limit],
+      [name, limit, includeCardUses],
     );
     const items: SecretUseItem[] = [];
     for (const row of result.rows) {

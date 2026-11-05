@@ -122,6 +122,7 @@ export interface VaultSecretsPort {
     name: string,
     change: { cvv: string } | { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields },
   ): Promise<void>;
+  renewCard(name: string, change: { cvv: string; publicFields: CreditCardPublicFields }): Promise<void>;
 }
 
 /** What declares a vault secret, as shown on the console Secrets page. */
@@ -246,6 +247,16 @@ function cardInput(card: Record<string, unknown>) {
     expiry_year: card['expiry_year'],
     cardholder_name: card['cardholder_name'],
     billing_zip: card['billing_zip'],
+  };
+}
+
+/** Log fields for a failed card write: the message and driver code only, never the whole
+ *  error object (a driver error can carry query parameters). */
+function errFields(err: unknown): { errMessage: string; errCode?: string } {
+  const code = (err as { code?: unknown } | null)?.code;
+  return {
+    errMessage: err instanceof Error ? err.message : 'unknown error',
+    ...(typeof code === 'string' ? { errCode: code } : {}),
   };
 }
 
@@ -456,7 +467,7 @@ export async function vaultRoutes(
       return reply.send({ name, replaced: meta !== undefined });
     } catch (err) {
       // No outcome row: the write may have committed before it threw. Key name only.
-      request.log.error({ err, name }, 'vault card create failed');
+      request.log.error({ ...errFields(err), name }, 'vault card create failed');
       return reply.status(500).send({ error: 'Failed to save card. Check server logs.' });
     }
   }
@@ -521,9 +532,14 @@ export async function vaultRoutes(
         replacement = { secret: checked.secret, publicFields: checked.publicFields };
       }
 
+      // A new CVV with public fields (a renewal) is one atomic write, audited as `set`. A
+      // label is not part of that write, so it is its own `details` change.
+      const renewing = cvv !== undefined && publicFields !== undefined;
+      const writesSecret = cvv !== undefined || replacement !== undefined;
+      const writesDetails = label !== undefined || (publicFields !== undefined && !renewing);
       const changes: SecretChange[] = [
-        ...(cvv !== undefined || replacement ? [{ name, action: 'set' as const }] : []),
-        ...(label !== undefined || publicFields ? [{ name, action: 'details' as const }] : []),
+        ...(writesSecret ? [{ name, action: 'set' as const }] : []),
+        ...(writesDetails ? [{ name, action: 'details' as const }] : []),
       ];
       for (const change of changes) {
         if (!await auditRequested(request, reply, change)) return;
@@ -533,20 +549,23 @@ export async function vaultRoutes(
       if (replacement) {
         await secretsService.replaceCardSecret(name, replacement);
         await auditCompleted(request, { name, action: 'set' });
+      } else if (cvv !== undefined && publicFields !== undefined) {
+        await secretsService.renewCard(name, { cvv, publicFields });
+        await auditCompleted(request, { name, action: 'set' });
       } else if (cvv !== undefined) {
         await secretsService.replaceCardSecret(name, { cvv });
         await auditCompleted(request, { name, action: 'set' });
       }
-      if (label !== undefined || publicFields) {
+      if (writesDetails) {
         await secretsService.patchCardPublic(name, {
           ...(label !== undefined ? { label } : {}),
-          ...(publicFields ? { publicFields } : {}),
+          ...(publicFields && !renewing ? { publicFields } : {}),
         });
         await auditCompleted(request, { name, action: 'details' });
       }
       return reply.send({ ok: true });
     } catch (err) {
-      request.log.error({ err, name }, 'vault card edit failed');
+      request.log.error({ ...errFields(err), name }, 'vault card edit failed');
       return reply.status(500).send({ error: 'Failed to save card. Check server logs.' });
     }
   }
@@ -811,7 +830,9 @@ export async function vaultRoutes(
     const limit = usesLimit((request.query as { limit?: unknown } | undefined)?.limit);
     if (!options.usage) return reply.send({ uses: [] });
     try {
-      const uses = await options.usage.recentUses(name, limit);
+      // Card-use decisions are looked up only for a saved card, so other secrets don't scan for them.
+      const isCard = name.startsWith(USER_SECRET_PREFIX) && await secretsService.getStructuredSchema(name) === 'credit_card';
+      const uses = await options.usage.recentUses(name, limit, isCard);
       return reply.send({
         uses: uses.map(u => u.kind === 'card_use'
           ? { kind: u.kind, at: u.at.toISOString(), decision: u.decision, siteDomain: u.siteDomain, amount: u.amount }
