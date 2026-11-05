@@ -28,7 +28,7 @@ import { registrableDomain, sameRegistrableDomain } from '../../../../src/verifi
 import type { VerificationRuntime } from '../../../../src/verification/index.js';
 import { registerCodes } from '../../../../src/verification/track-codes.js';
 import type { Verification } from '../../../../src/verification/types.js';
-import { SecretRefRefusal } from '../../../../src/secrets/structured-secret-schema.js';
+import { SecretRefRefusal, isCardSecretField, parseSecretRef } from '../../../../src/secrets/structured-secret-schema.js';
 import { detectVerificationScreen } from './verification-detect.js';
 import { isBlockedFrameUrl, isPrivateHost } from './frame-url.js';
 import { focusedFrame } from './focus-frame.js';
@@ -878,11 +878,13 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
         const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
         if (!resolved.ok) return resolved;
         fillValue = resolved.value;
-        session.registerInjectedSecret(fillValue);
-        // Latch screenshot suppression NOW — before the fill below, which can throw mid-typing
-        // after a char has landed. Deferring this to the return would leave the guard fail-open
-        // in that window (a batch call falls through to the screenshot block on a step throw).
-        deps.markSecretInjected();
+        if (resolved.sensitive) {
+          session.registerInjectedSecret(fillValue);
+          // Latch screenshot suppression NOW — before the fill below, which can throw mid-typing
+          // after a char has landed. Deferring this to the return would leave the guard fail-open
+          // in that window (a batch call falls through to the screenshot block on a step throw).
+          deps.markSecretInjected();
+        }
       } else {
         // Checked before resolving; repeated so TypeScript narrows `text`.
         if (typeof text !== 'string') {
@@ -938,10 +940,12 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
         const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
         if (!resolved.ok) return resolved;
         selectValue = resolved.value;
-        // Same order as `type`: register for redaction and latch screenshot suppression
-        // before anything below can throw.
-        session.registerInjectedSecret(selectValue);
-        deps.markSecretInjected();
+        // Same order and rule as `type`: only a sensitive value is registered for redaction
+        // and latches screenshot suppression, before anything below can throw.
+        if (resolved.sensitive) {
+          session.registerInjectedSecret(selectValue);
+          deps.markSecretInjected();
+        }
       } else {
         selectValue = value as string; // validated above
       }
@@ -983,14 +987,19 @@ async function resolveSecretForFill(
   ctx: ToolContext,
   ref: string,
   page: Page,
-): Promise<{ ok: true; value: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; value: string; sensitive: boolean } | { ok: false; error: string }> {
   if (!ctx.resolveSecretRef) {
     // Capability not granted to this invocation — fail loud rather than
     // silently falling back to using the reference name as a literal.
     return { ok: false, error: 'secret_ref requires the secretResolver capability, which is not available to this skill' };
   }
   try {
-    return { ok: true, value: await ctx.resolveSecretRef(ref, { siteUrl: page.url() }) };
+    const value = await ctx.resolveSecretRef(ref, { siteUrl: page.url() });
+    // A saved card's public fields (expiry, name, ZIP, brand) are already shown to the agent, and
+    // redacting short values like "12" corrupts page text for the rest of the session. Only the
+    // card number, cvv and plain (non-card) secrets are sensitive.
+    const { field } = parseSecretRef(ref);
+    return { ok: true, value, sensitive: field === null || isCardSecretField(field) };
   } catch (err) {
     if (err instanceof SecretRefRefusal) return { ok: false, error: err.message };
     throw err;

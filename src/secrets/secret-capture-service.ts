@@ -507,7 +507,8 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const current = await this.secrets.getCardPublic(row.secret_name);
     if (!current) {
       this.options.logger?.warn('secret-capture: renewal link redeemed but the card no longer exists');
-      return { status: 'not_found' };
+      // Not 'not_found': the link is live, so the page must not say it was never valid.
+      return this.cardRefused('card_missing');
     }
     if (card.expiry_month === undefined || card.expiry_year === undefined) return this.cardRefused('expiry_format');
     const expiry = validateCardPublicPatch(
