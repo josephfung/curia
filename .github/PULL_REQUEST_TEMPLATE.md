@@ -19,4 +19,5 @@ Closes #
 - [ ] No empty `catch {}` blocks
 - [ ] No `console.log` in backend code (use pino; `apps/` is exempt)
 - [ ] Spec docs updated if behavior changes
+- [ ] Changelog fragment added at `changes/<branch-name>.md` (not `CHANGELOG.md`), unless ADR-only or comment-only
 - [ ] CI passes

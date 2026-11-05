@@ -114,6 +114,12 @@ export interface BriefingDeps {
   bus?: Pick<EventBus, 'publish'>;
   /** Renders the hiccup list. Without it, hiccups() throws and the route reports an error. */
   activity?: Pick<ActivityService, 'listByIds'>;
+  /**
+   * Tools with no code describer that a deterministic signal marks as writes
+   * (ADR-059). With no learned row yet, they count toward hiccups as the feed's
+   * "took N actions" does.
+   */
+  knownWriteTools?: () => Iterable<string>;
   officeTimezone: string;
   logger: Logger;
 }
@@ -390,7 +396,16 @@ export class BriefingService {
 
   private async loadModel(from: Date, to: Date, timezone: string): Promise<BriefingWindow> {
     const result = await this.queryModel(
-      [from, to, new Date(to.getTime() + DELEGATION_TAIL_MS), timezone, MAX_DELEGATION_DEPTH, visibleToolNames(), hiddenToolNames()],
+      [
+        from,
+        to,
+        new Date(to.getTime() + DELEGATION_TAIL_MS),
+        timezone,
+        MAX_DELEGATION_DEPTH,
+        visibleToolNames(),
+        hiddenToolNames(),
+        [...(this.deps.knownWriteTools?.() ?? [])],
+      ],
     );
     const row = result.rows[0];
     const model = shapeHistogramFromCounts(parseHistogramRows(row?.histogram), to, timezone);
@@ -521,6 +536,10 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
  * call cannot become a hiccup. $7 is the hidden set. Minutes keep every
  * successful named call outside it: visible calls one by one, undescribed
  * calls as a count per day. Hidden and unnamed calls are left out.
+ * The histogram also classifies undescribed writes the way the feed does
+ * (ADR-059): a call whose activity_describers row, for the agent that made it,
+ * says write, or with no row a tool in $8 (known writes). Undescribed reads stay
+ * out, so a retried lookup is never a hiccup.
  * Success is outcome 'success', or any other outcome except failure, error and
  * denied when the payload says success. Those three are failures even if the
  * payload says otherwise. A failed root reply with no successful visible call
@@ -547,6 +566,7 @@ WITH RECURSIVE chain AS (
     id AS root_id,
     timestamp AS root_ts,
     COALESCE(NULLIF(payload->>'agentId', ''), NULLIF(source_id, ''), 'agent') AS actor,
+    COALESCE(NULLIF(payload->>'agentId', ''), NULLIF(source_id, ''), 'agent') AS agent,
     0 AS depth
   FROM audit_log
   WHERE event_type = 'agent.task'
@@ -559,6 +579,7 @@ WITH RECURSIVE chain AS (
     chain.root_id,
     chain.root_ts,
     chain.actor,
+    COALESCE(NULLIF(child.payload->>'agentId', ''), NULLIF(child.source_id, ''), 'agent'),
     chain.depth + 1
   FROM audit_log child
   JOIN chain ON (child.payload->'metadata'->'delegationOrigin'->>'taskEventId') = chain.id::text
@@ -576,6 +597,7 @@ calls AS (
   SELECT
     c.root_id,
     c.root_ts,
+    c.agent,
     i.id AS invoke_id,
     r.id AS result_id,
     COALESCE(
@@ -641,9 +663,15 @@ saved AS (
     AND calls.tool_name = ANY($6::text[])
 ),
 results AS (
-  SELECT root_id, kind
+  SELECT calls.root_id, calls.kind
   FROM calls
-  WHERE tool_name = ANY($6::text[])
+  LEFT JOIN activity_describers d
+    ON d.agent_id = calls.agent AND d.tool_name = calls.tool_name
+  WHERE calls.tool_name = ANY($6::text[])
+    OR (
+      NOT (calls.tool_name = ANY($7::text[]))
+      AND (d.effect = 'write' OR (d.agent_id IS NULL AND calls.tool_name = ANY($8::text[])))
+    )
 ),
 responses AS (
   SELECT c.root_id, bool_or(COALESCE(a.payload->>'isError', '') = 'true') AS failed
