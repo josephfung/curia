@@ -118,6 +118,12 @@ Use the bump table in CLAUDE.md (*When to bump the version number*) to determine
 
 This is the **only** place the version is bumped. Day-to-day PRs never touch `package.json`'s version or the README badge — a feature branch that bumps it is wrong, and two unmerged branches that both bump it will conflict. The version moves once, here, in the release PR.
 
+- **Agent and skill versions** — PRs never bump `version` in `agents/*.yaml`, `tool.json` or a bundle's `SKILL.md`; this is where they move. For a **minor** bump on an agent or skill (new capability, new input/output field, new pinned skill), set that file's version by hand first. Then preview and apply the patch bumps for everything else that changed since the last `v*` tag:
+  ```bash
+  pnpm bump:versions           # dry run: lists each file and its old -> new version
+  pnpm bump:versions --write   # apply
+  ```
+  The script skips a file whose version already differs from the last tag's, so your hand-set bumps stay and re-running is safe. Commit the result with the release PR. These files change only on their `version` line; step 7 checks that.
 - `package.json` → `"version": "X.Y.Z"`
 - `README.md` → update the shields.io version badge: both the URL (`version-X.Y.Z`) and its `alt` attribute (`Version: X.Y.Z`). Find it rather than trusting a line number — `grep -n 'shields.io/badge/version' README.md`.
 - If this release changed a **runtime** requirement (Node, pnpm, Postgres), also update the matching README badge, `engines` in `package.json`, and any version named in CLAUDE.md.
@@ -131,7 +137,7 @@ Write a haiku thematically aligned with the release — drawn from the changes, 
 - Branch: `chore/release-X.Y.Z`
 - PR title: `chore: release vX.Y.Z — "Character Name"`
 - PR body: the character blockquote, followed by the new CHANGELOG section, followed by the haiku
-- No other code changes — this PR is the release commit only (`CHANGELOG.md`, `README.md`, `package.json`, and the deleted `changes/*.md` fragments)
+- No other code changes — this PR is the release commit only (`CHANGELOG.md`, `README.md`, `package.json`, the deleted `changes/*.md` fragments, and the `version` line of the agent YAMLs, `tool.json` files and bundle `SKILL.md` files that `pnpm bump:versions` touched)
 - Watch CI; wait for merge before proceeding
 
 **7. Tag and publish**
@@ -148,22 +154,26 @@ git -C /path/to/repo fetch origin main
 git -C /path/to/repo show origin/main:CHANGELOG.md | grep '^## \[X.Y.Z\]'
 git -C /path/to/repo show origin/main:package.json | grep '"version": "X.Y.Z"'
 
-# 2. The gate still applies: nothing but the three release files changed
-#    since the commit the scans ran against (plus the deleted fragments).
+# 2. The gate still applies: nothing but the release files changed since the
+#    commit the scans ran against (plus the deleted fragments, and the agent and
+#    skill files whose only change is their version line).
 #    <gate-sha> is the commit that was on main when pre-flights B and C cleared.
 git -C /path/to/repo diff --stat <gate-sha> origin/main
-#    expect exactly: CHANGELOG.md, README.md, package.json, and the deleted
-#    changes/*.md fragments
+#    expect exactly: CHANGELOG.md, README.md, package.json, the deleted
+#    changes/*.md fragments, and agents/*.yaml, tool.json and SKILL.md files
 git -C /path/to/repo diff --name-status --diff-filter=AMR <gate-sha> origin/main
 #    expect exactly (nothing added or renamed; fragments only ever show as D above):
-#    M CHANGELOG.md, M README.md, M package.json
+#    M CHANGELOG.md, M README.md, M package.json, and M for each version-bumped
+#    agents/*.yaml, **/tool.json, skills/*/SKILL.md
+#    The bumped files must differ only on their version line. Zero lines expected:
+git -C /path/to/repo diff -U0 <gate-sha> origin/main -- agents skills | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[+-][[:space:]]*"?version"?[[:space:]]*:'
 
 # Tag origin/main directly — no checkout or pull needed
 git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Character Name" origin/main
 git -C /path/to/repo push origin vX.Y.Z
 ```
 
-If that diff shows anything else, code landed after the gates cleared. Re-run pre-flights B and C against the new `main` before tagging — this check is what makes the no-code release PR worth the ceremony, so skipping it forfeits the guarantee the whole ordering exists to provide.
+If those diffs show anything else (a bumped file with a change beyond its version line counts), code landed after the gates cleared. Re-run pre-flights B and C against the new `main` before tagging — this check is what makes the no-code release PR worth the ceremony, so skipping it forfeits the guarantee the whole ordering exists to provide.
 
 Then write the release notes (open with the character blockquote; rewrite the CHANGELOG bullets into natural, friendly prose — past tense, as if narrating what changed; prioritize what a user of Curia would care about; close with a horizontal rule and the haiku) and create the GitHub release:
 
