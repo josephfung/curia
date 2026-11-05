@@ -86,7 +86,9 @@ export function filterOptions(
   const typeCounts = new Map<string, number>();
   const sensCounts = new Map<string, number>(SENSITIVITY_LEVELS.map(s => [s, 0]));
   for (const n of nodes) {
-    const inc = n.archived === true ? 0 : 1;
+    // Archived nodes are outside the whole-graph totals, so they are left out of the
+    // counts only when totals are shown; without totals the status counts every node.
+    const inc = totals && n.archived === true ? 0 : 1;
     typeCounts.set(n.type, (typeCounts.get(n.type) ?? 0) + inc);
     sensCounts.set(n.sensitivity, (sensCounts.get(n.sensitivity) ?? 0) + inc);
   }
