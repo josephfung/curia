@@ -172,7 +172,7 @@ and never the value.
 
 ## Status of implementation
 
-This ADR records the decision only. The implementation is tracked as future work in
+Implemented (#1358); see the amendment below. This ADR originally recorded the decision only. The implementation is tracked as future work in
 [#1358](https://github.com/josephfung/curia/issues/1358), which carries the file-level
 blueprint, and is expected to land in three independently shippable slices: the
 projection module + gated resolver + audit field; the `select` secret path + field

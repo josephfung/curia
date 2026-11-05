@@ -211,7 +211,7 @@ describeIf('vault routes', () => {
 
       const list = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: hdr });
       const row = (list.json().secrets as Array<Record<string, unknown>>).find(r => r['name'] === CARD_KEY)!;
-      expect(row['card']).toEqual({ label: 'vault_rt', brand: 'visa', last4: '1111', expiry: '12/2099', expired: false });
+      expect(row['card']).toEqual({ label: 'vault_rt', brand: 'visa', last4: '1111', expiry: '12/2099', expired: false, cardholder_name: 'Vault Rt', billing_zip: null });
       expect(list.body).not.toContain(NUMBER);
 
       // A label and expiry edit is a details change: the vault row is untouched.

@@ -27,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`web-browser` `select`** — fills a dropdown from a saved card's expiry fields; tool now 1.12.0. (#1358)
 - **`list-user-secrets` cards** — lists saved cards by label, brand and last four; tool now 0.3.0. (#1358)
 - **`card-use-request`** — **new tools** `card-use-request` and internal `card-use-confirm`, both 0.1.0. (#1358)
+- **Cards on the Secrets page** — create, view and edit cards, an Expired status, and a duplicate-card hint. (#1358)
 - **Personal secrets in the console** — create, edit and remove website logins; platform keys read-only. (#2478)
 - **Band grounding scenarios** — 35a (RSVP dietary details) and 35b (out-of-office claim) join the release gate. (#2192)
 - **Secrets page** — one searchable, sortable list of personal, system and platform secrets with drawers. (#2453)
