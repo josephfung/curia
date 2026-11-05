@@ -89,6 +89,44 @@ describe('filterOptions', () => {
     expect(opts.types).toContainEqual({ value: 'project', count: 0 });
     expect(opts.sensitivities.at(-1)).toEqual({ value: 'secret', count: 0 });
   });
+
+  it('lists an archived-only type with count 0 and does not count archived nodes when totals are present', () => {
+    const opts = filterOptions(
+      [...nodes, { type: 'project', sensitivity: 'internal', archived: true }],
+      emptyFilter(),
+      { byType: { person: 2, fact: 1 }, bySensitivity: { internal: 2, restricted: 1 } },
+    );
+    expect(opts.types).toContainEqual({ value: 'project', count: 0, total: 0 });
+    expect(opts.sensitivities).toContainEqual({ value: 'internal', count: 2, total: 2 });
+  });
+
+  it('counts archived nodes when totals are unavailable, matching the status line', () => {
+    const opts = filterOptions(
+      [...nodes, { type: 'project', sensitivity: 'internal', archived: true }],
+      emptyFilter(),
+    );
+    expect(opts.types).toContainEqual({ value: 'project', count: 1 });
+    expect(opts.sensitivities).toContainEqual({ value: 'internal', count: 3 });
+  });
+
+  it('carries whole-graph totals and lists graph types missing from the canvas (#2479)', () => {
+    const totals = {
+      byType: { person: 40, fact: 900, project: 12 },
+      bySensitivity: { internal: 930, restricted: 2, confidential: 20 },
+    };
+    const opts = filterOptions(nodes, emptyFilter(), totals);
+    expect(opts.types).toEqual([
+      { value: 'fact', count: 1, total: 900 },
+      { value: 'person', count: 2, total: 40 },
+      { value: 'project', count: 0, total: 12 },
+    ]);
+    expect(opts.sensitivities).toEqual([
+      { value: 'public', count: 0, total: 0 },
+      { value: 'internal', count: 2, total: 930 },
+      { value: 'confidential', count: 0, total: 20 },
+      { value: 'restricted', count: 1, total: 2 },
+    ]);
+  });
 });
 
 describe('normalizeSensitivity', () => {

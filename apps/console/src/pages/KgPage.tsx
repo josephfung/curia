@@ -10,7 +10,7 @@ import { useTheme } from '../hooks/useTheme.js';
 import {
   emptyFilter, filterOptions, isFilterActive, matchesFilter, normalizeSensitivity, toggleFilterValue,
 } from './kg-filters.js';
-import type { KgFilter, KgFilterAxis, KgFilterable } from './kg-filters.js';
+import type { KgFacetTotals, KgFilter, KgFilterAxis, KgFilterable } from './kg-filters.js';
 import { TYPE_BADGE, SENS_BADGE } from './kg-types.js';
 import type { ApiKgNode } from './kg-types.js';
 import { MergeNodesDialog } from './MergeNodesDialog.js';
@@ -30,6 +30,21 @@ interface ApiKgEdge {
   targetNodeId: string;
   type: string;
   confidence: number;
+  archived?: boolean;
+}
+
+/** Whole-graph live counts served with every GET /api/kg/graph response (#2479). */
+interface ApiKgGraphTotals extends KgFacetTotals {
+  nodes: number;
+  edges: number;
+}
+
+/** GET /api/kg/graph body. `truncated`: a limit cut nodes from this view. */
+interface ApiKgGraph {
+  nodes: ApiKgNode[];
+  edges: ApiKgEdge[];
+  truncated?: boolean;
+  totals?: ApiKgGraphTotals;
 }
 
 type ColorMode = 'type' | 'sensitivity' | 'decay';
@@ -235,6 +250,7 @@ function edgeToElement(e: ApiKgEdge): cytoscape.ElementDefinition {
       target: e.targetNodeId,
       label: e.type,
       confidence: e.confidence ?? 0.5,
+      archived: e.archived === true,
     },
   };
 }
@@ -281,16 +297,32 @@ function applyFilter(cy: cytoscape.Core, filter: KgFilter) {
 // the checklist options. Call after every add/remove of elements.
 function syncFilter(cy: cytoscape.Core, filter: KgFilter, setFacets: (f: KgFilterable[]) => void) {
   applyFilter(cy, filter);
+  // Archived nodes are flagged so filterOptions lists their types without counting them:
+  // the totals the counts are compared with exclude archived nodes.
   setFacets(cy.nodes().map(n => ({
     type: n.data('type') as string,
     sensitivity: n.data('sensitivity') as string,
+    archived: n.data('archived') === true,
   })));
 }
 
-function graphStatus(cy: cytoscape.Core): string {
+// "X of Y" when the server reported totals, so a capped canvas is never read as
+// the size of the graph (#2479).
+function graphStatus(cy: cytoscape.Core, totals: ApiKgGraphTotals | null): string {
   const hidden = cy.nodes('.filtered-out').length;
-  const base = `${cy.nodes().length} nodes · ${cy.edges().length} edges`;
-  return hidden > 0 ? `${base} · ${hidden} hidden by filters` : base;
+  const fmt = (n: number) => n.toLocaleString();
+  // The totals count live elements only, so the "X" side excludes the decayed archived
+  // nodes and archived edges a bounded view can still draw.
+  const liveNodes = cy.nodes().filter(n => n.data('archived') !== true).length;
+  const liveEdges = cy.edges().filter(e =>
+    e.data('archived') !== true &&
+    e.source().data('archived') !== true &&
+    e.target().data('archived') !== true,
+  ).length;
+  const base = totals
+    ? `${fmt(liveNodes)} of ${fmt(totals.nodes)} nodes · ${fmt(liveEdges)} of ${fmt(totals.edges)} edges`
+    : `${fmt(cy.nodes().length)} nodes · ${fmt(cy.edges().length)} edges`;
+  return hidden > 0 ? `${base} · ${fmt(hidden)} hidden by filters` : base;
 }
 
 async function errorMessage(res: Response): Promise<string> {
@@ -323,6 +355,17 @@ async function notFoundInfo(res: Response): Promise<{ message: string; merged: R
   }
   return { message: `HTTP ${res.status}`, merged: null };
 }
+
+// Canvas sizes. Measured on 2026-11-04 (#2479) with this page's fCoSE settings in
+// headless Chromium: 300 nodes lay out in ~0.2s and pan/zoom at 60fps; 1,000 drop to
+// ~23fps and 3,600 (the whole non-fact graph) to ~7fps with a ~7s layout. 300 is
+// also the API's cap. Drawing the whole graph is #2459's job.
+//
+// HERO_LIMIT: the default view when no node is focused — the most recently confirmed
+// entities, facts left out (they are half the graph and hang off one entity).
+// FOCAL_LIMIT: a node's two-hop neighbourhood, nearest nodes first.
+const HERO_LIMIT = 300;
+const FOCAL_LIMIT = 300;
 
 // How many merged-into redirects a single load follows before giving up — a
 // guard against a (corrupt) merged_into cycle.
@@ -461,6 +504,8 @@ export default function KgPage() {
   const [filter, setFilter] = useState<KgFilter>(emptyFilter);
   // type/sensitivity of every node on the canvas — feeds the filter checklists.
   const [canvasFacets, setCanvasFacets] = useState<KgFilterable[]>([]);
+  // Whole-graph counts from the latest graph response; null until one arrives.
+  const [graphTotals, setGraphTotals] = useState<ApiKgGraphTotals | null>(null);
   const [status, setStatus] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
   // Node merge (#2233): the node the dialog was opened from, and the page banner
@@ -474,6 +519,8 @@ export default function KgPage() {
   // Same reason for the filter: renderGraph/expandNeighborhood run from the
   // mount-time tap handler and must apply the current filter to new nodes.
   const filterRef = useRef<KgFilter>(emptyFilter());
+  // Same reason for the totals: graphStatus runs from the mount-time tap handler.
+  const totalsRef = useRef<ApiKgGraphTotals | null>(null);
 
   // Mirror search state in a ref so the single-mount Cytoscape tap handler
   // can always read the current value without a stale closure.
@@ -496,6 +543,12 @@ export default function KgPage() {
     }).catch(err => {
       console.error('[KgPage] URL sync failed:', err);
     });
+  }
+
+  function recordTotals(data: ApiKgGraph) {
+    if (!data.totals) return;
+    totalsRef.current = data.totals;
+    setGraphTotals(data.totals);
   }
 
   // ── Sidebar node search ────────────────────────────────────────────────────
@@ -526,12 +579,13 @@ export default function KgPage() {
     neighborhoodAbortRef.current = controller;
     setStatus('Loading…');
     try {
-      const res = await apiFetch('/api/kg/graph?limit=20', { signal: controller.signal });
+      const res = await apiFetch(`/api/kg/graph?limit=${HERO_LIMIT}&exclude_facts=true`, { signal: controller.signal });
       if (!res.ok) throw new Error(await errorMessage(res));
-      const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
+      const data = await res.json() as ApiKgGraph;
       if (cy.destroyed()) return;
+      recordTotals(data);
       renderGraph(cy, data);
-      setStatus(graphStatus(cy));
+      setStatus(graphStatus(cy, totalsRef.current));
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] hero graph load failed:', err);
@@ -579,7 +633,7 @@ export default function KgPage() {
     setStatus('Loading…');
     try {
       const res = await apiFetch(
-        `/api/kg/graph?node_id=${encodeURIComponent(nodeId)}&depth=2`,
+        `/api/kg/graph?node_id=${encodeURIComponent(nodeId)}&depth=2&limit=${FOCAL_LIMIT}`,
         { signal: controller.signal },
       );
       if (res.status === 404) {
@@ -602,8 +656,9 @@ export default function KgPage() {
         return { ok: false, notFoundMessage };
       }
       if (!res.ok) throw new Error(await errorMessage(res));
-      const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
+      const data = await res.json() as ApiKgGraph;
       if (cy.destroyed()) return { ok: false };
+      recordTotals(data);
       renderGraph(cy, data);
       // Animate the viewport to center on the focal node after the layout settles.
       const focalEl = cy.getElementById(nodeId);
@@ -619,7 +674,7 @@ export default function KgPage() {
       syncUrl(searchRef.current, focused?.id);
       cy.elements().removeClass('focal');
       if (focused) cy.getElementById(focused.id).addClass('focal');
-      setStatus(graphStatus(cy));
+      setStatus(graphStatus(cy, totalsRef.current));
       return { ok: true };
     } catch (err) {
       // Another load took over neighborhoodAbortRef — do not hero-fallback (#1881 review).
@@ -669,7 +724,8 @@ export default function KgPage() {
         return;
       }
       if (!res.ok) throw new Error(await errorMessage(res));
-      const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
+      const data = await res.json() as ApiKgGraph;
+      recordTotals(data);
 
       const newNodes = data.nodes.filter(n => !cy.getElementById(n.id).length);
       const newEdges = data.edges.filter(e => !cy.getElementById(e.id).length);
@@ -691,7 +747,7 @@ export default function KgPage() {
       cy.elements().removeClass('focal');
       cy.getElementById(nodeId).addClass('focal');
 
-      setStatus(graphStatus(cy));
+      setStatus(graphStatus(cy, totalsRef.current));
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] expand failed:', err);
@@ -813,11 +869,11 @@ export default function KgPage() {
     const cy = cyRef.current;
     if (cy) {
       applyFilter(cy, next);
-      setStatus(graphStatus(cy));
+      setStatus(graphStatus(cy, totalsRef.current));
     }
   }
 
-  const options = filterOptions(canvasFacets, filter);
+  const options = filterOptions(canvasFacets, filter, graphTotals);
   const filterActive = isFilterActive(filter);
   // Search results respect the filter too, so the list never offers a node
   // the canvas would hide.
@@ -836,7 +892,12 @@ export default function KgPage() {
               onChange={() => updateFilter(toggleFilterValue(filterRef.current, axis, opt.value))}
             />
             <span className="kg-filter-option-name">{opt.value}</span>
-            <span className="kg-filter-option-count">{opt.count}</span>
+            <span
+              className="kg-filter-option-count"
+              title={opt.total !== undefined ? `${opt.count} on the canvas of ${opt.total} in the graph` : undefined}
+            >
+              {opt.total !== undefined ? `${opt.count.toLocaleString()} / ${opt.total.toLocaleString()}` : opt.count}
+            </span>
           </label>
         ))}
       </fieldset>
@@ -870,7 +931,7 @@ export default function KgPage() {
       cy.getElementById(result.survivorId).data('label', result.node.label);
       updateDegrees(cy);
       syncFilter(cy, filterRef.current, setCanvasFacets);
-      setStatus(graphStatus(cy));
+      setStatus(graphStatus(cy, totalsRef.current));
     }
     // Re-render around the survivor; this also selects it and syncs ?node=.
     const loaded = await loadNeighborhood(result.survivorId);
