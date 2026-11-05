@@ -146,33 +146,43 @@ export function SecretsPage() {
     );
   }
 
-  function openView(row: SecretRowData) {
+  // Bumped on every drawer change. A drawer's save or remove carries the generation it was
+  // opened in, so one that finishes after the operator moved on (opened another drawer, or
+  // closed this one) only reloads the list: it never replaces or closes the drawer now open.
+  const drawerGen = useRef(0);
+
+  function showDrawer(row: SecretRowData | null, mode: DrawerMode) {
+    drawerGen.current += 1;
     setSelected(row);
-    setDrawerMode('view');
+    setDrawerMode(mode);
+  }
+
+  function openView(row: SecretRowData) {
+    showDrawer(row, 'view');
   }
 
   function openEdit(row: SecretRowData) {
-    setSelected(row);
-    setDrawerMode('edit');
+    showDrawer(row, 'edit');
   }
 
   function closeDrawer() {
-    setSelected(null);
-    setDrawerMode(null);
+    showDrawer(null, null);
   }
 
   // After an edit, return to View showing the reloaded row (it may now be configured).
-  async function handleEdited(name: string) {
+  async function handleEdited(name: string, gen: number) {
     const fresh = await load();
+    if (gen !== drawerGen.current) return;
     const row = fresh?.find(r => r.name === name) ?? null;
-    setSelected(row);
-    setDrawerMode(row ? 'view' : null);
+    showDrawer(row, row ? 'view' : null);
   }
 
-  function handleChanged() {
-    closeDrawer();
+  function handleChanged(gen: number) {
+    if (gen === drawerGen.current) closeDrawer();
     void load();
   }
+  // The generation of the drawer rendered below; its callbacks close over it.
+  const gen = drawerGen.current;
 
   const chip = (active: boolean, label: string, count: number, onClick: () => void, key: string) => (
     <button key={key} className={`records-filter-chip${active ? ' active' : ''}`} onClick={onClick}>
@@ -198,7 +208,7 @@ export function SecretsPage() {
             <TopbarDivider />
             <button
               className="btn btn-primary btn-sm"
-              onClick={() => { setSelected(null); setDrawerMode('create'); }}
+              onClick={() => showDrawer(null, 'create')}
             >
               + New secret
             </button>
@@ -278,6 +288,13 @@ export function SecretsPage() {
                             <td className={`secrets-nowrap ${r.lastUsedAt ? 'cell-mono' : 'cell-muted'}`}>{lastUsedText(r, now)}</td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>
+                                {/* The row's click opens View too, but a row can't take focus: this is the keyboard path
+                                    (and the only way to reach Remove, which lives in View). */}
+                                <button className="btn-icon" title="View" aria-label={`View ${r.name}`} onClick={() => openView(r)}>
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>
+                                  </svg>
+                                </button>
                                 {/* Platform keys belong to the deployment and orphans can only be removed: no edit affordance. */}
                                 {canEditValue(r) && (
                                   <button className="btn-icon" title="Edit" aria-label={`Edit ${r.name}`} onClick={() => openEdit(r)}>
@@ -306,8 +323,8 @@ export function SecretsPage() {
                     key={`view-${selected.name}`}
                     row={selected}
                     onClose={closeDrawer}
-                    onEdit={() => setDrawerMode('edit')}
-                    onRemoved={handleChanged}
+                    onEdit={() => showDrawer(selected, 'edit')}
+                    onRemoved={() => handleChanged(gen)}
                   />
                 )}
                 {drawerMode === 'edit' && selected && (
@@ -315,11 +332,11 @@ export function SecretsPage() {
                     key={`edit-${selected.name}`}
                     row={selected}
                     onClose={closeDrawer}
-                    onSaved={() => void handleEdited(selected.name)}
+                    onSaved={() => void handleEdited(selected.name, gen)}
                   />
                 )}
                 {drawerMode === 'create' && (
-                  <SecretCreateDrawer existingRows={all} onClose={closeDrawer} onSaved={handleChanged} />
+                  <SecretCreateDrawer existingRows={all} onClose={closeDrawer} onSaved={() => handleChanged(gen)} />
                 )}
               </div>
             </>

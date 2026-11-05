@@ -142,8 +142,10 @@ describe('sortSecrets', () => {
       row({ name: 'z', required: true }),
       row({ name: 'a', configured: true }),
       row({ name: 'c', required: true }),
+      // Unset and optional: not missing, so it sorts by name among the rest.
+      row({ name: 'y' }),
     ];
-    expect(sortSecrets(rows, null).map(r => r.name)).toEqual(['c', 'z', 'a', 'b']);
+    expect(sortSecrets(rows, null).map(r => r.name)).toEqual(['c', 'z', 'a', 'b', 'y']);
   });
   it('puts null dates last in both directions', () => {
     const rows = [
@@ -172,8 +174,8 @@ describe('sortSecrets by status', () => {
     mk('missing', { required: true }),
   ];
   const order = ['missing', 'not_set', 'env', 'orphan', 'configured'];
-  it('default order runs missing, not_set, env, not_declared, configured', () => {
-    expect(sortSecrets(rows, null).map(r => r.name)).toEqual(order);
+  it('default order puts missing first and the rest by name, whatever their status', () => {
+    expect(sortSecrets(rows, null).map(r => r.name)).toEqual(['missing', 'configured', 'env', 'not_set', 'orphan']);
   });
   it('sorts by status ascending and descending', () => {
     expect(sortSecrets(rows, { key: 'status', dir: 'asc' }).map(r => r.name)).toEqual(order);

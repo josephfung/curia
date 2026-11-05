@@ -14,6 +14,11 @@
 // test (tests/unit/activity/describers.test.ts) fails when a tool at `medium` or
 // above has no describer here.
 //
+// Tools this file can't know about (MCP servers, custom agents) get a describer
+// learned per agent and stored in the activity_describers table (ADR-059,
+// learned-describers.ts). Lookup order: a describer here, then a learned row, then
+// the feed's fallback. A describer here always wins, so keep shipped tools here.
+//
 // Content policy: describers use names, subjects, event titles and counts.
 // They never read a `body`, `message`, `content` or `prompt` field, because
 // console access is one shared secret and the operator may not be the principal.

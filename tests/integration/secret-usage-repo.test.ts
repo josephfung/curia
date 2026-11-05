@@ -20,6 +20,8 @@ describeIf('SecretUsageRepo', () => {
   const suffix = randomBytes(4).toString('hex');
   const nameA = `user.usage_rt_a_${suffix}`;
   const nameB = `user.usage_rt_b_${suffix}`;
+  const nameTie = `user.usage_rt_tie_${suffix}`;
+  const tied = new Date(Date.now() - 20_000);
   const older = new Date(Date.now() - 60_000);
   const newer = new Date(Date.now() - 30_000);
   const other = new Date(Date.now() - 45_000);
@@ -39,16 +41,28 @@ describeIf('SecretUsageRepo', () => {
     await write(nameA, older, 'web-browser', 'travel');
     await write(nameB, other, 'web-browser');
     await write(nameA, newer, 'http-fetch', 'travel');
+    // Same timestamp twice: the one written second (higher seq) is the newer read.
+    await write(nameTie, tied, 'web-browser');
+    await write(nameTie, tied, 'http-fetch');
   });
 
   afterAll(async () => {
     await pool.end();
   });
 
-  it('lastUsedByName returns the newest access per secret', async () => {
-    const last = await repo.lastUsedByName();
+  it('lastUsedByName returns the newest access for each name asked, and omits a never-read one', async () => {
+    const never = `user.usage_rt_never_${suffix}`;
+    const last = await repo.lastUsedByName([nameA, nameB, never]);
     expect(last.get(nameA)?.getTime()).toBe(newer.getTime());
     expect(last.get(nameB)?.getTime()).toBe(other.getTime());
+    expect(last.has(never)).toBe(false);
+    expect([...last.keys()].sort()).toEqual([nameA, nameB].sort());
+    expect((await repo.lastUsedByName([])).size).toBe(0);
+  });
+
+  it('recentUses breaks a timestamp tie by seq, newest write first', async () => {
+    const [first] = await repo.recentUses(nameTie, 1);
+    expect(first!.toolName).toBe('http-fetch');
   });
 
   it('recentUses honors the limit and orders newest first', async () => {

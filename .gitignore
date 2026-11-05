@@ -41,8 +41,10 @@ tests/smoke/reports/*.html
 tests/scenarios/results/
 tests/setup-wizard/results/
 
-# Claude Code local skills (managed by trimkit, not committed)
-.claude/skills/
+# Claude Code local skills (managed by trimkit, not committed). Project skills that
+# belong to the repo are re-included by name below.
+.claude/skills/*
+!.claude/skills/release/
 
 # Red team artifacts (rendered system prompt, generated test cases, and run
 # outputs — may contain production identity details and security test content)

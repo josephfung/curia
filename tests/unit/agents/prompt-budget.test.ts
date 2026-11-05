@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
+import { formatBudgetFailure } from '../../../src/agents/budget-report.js';
 import { CHARS_PER_TOKEN, mcpServerNames, measureAgentContext } from '../../../src/agents/prompt-budget.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
@@ -145,8 +146,9 @@ const AGENT_BUDGETS: AgentBudget[] = [
 
 describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
   const m = measureAgentContext(budget.agent, SOURCES);
-  const { yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount, rosterChars } = m;
-  const detail = JSON.stringify({ yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount, rosterChars });
+  // A failure names measured against limit, the overage, the largest contributors and
+  // this command (src/agents/budget-report.ts). The budgets above are the only limits.
+  const command = `pnpm report:budget --agent ${budget.agent}`;
 
   it('measures the whole local pin set', () => {
     // A pin that silently failed to load would shrink both numbers and pass the
@@ -164,20 +166,36 @@ describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
   it('always-on prompt (YAML system_prompt + pinned SKILL.md) is within budget', () => {
     expect(
       m.alwaysOnPromptTokens,
-      `${budget.agent} always-on prompt is ~${m.alwaysOnPromptTokens} tokens, over its budget of ` +
-      `${budget.alwaysOnPromptTokens} (${detail}). Before raising the budget, place the rule on the ` +
-      `highest rung that works — code enforcement, injection with its trigger, tool description, ` +
-      `lazy playbook — and only then the always-on prompt. See ${ADR}.`,
+      formatBudgetFailure({
+        agent: budget.agent,
+        what: 'the always-on prompt',
+        unit: 'tokens',
+        measured: m.alwaysOnPromptTokens,
+        limit: budget.alwaysOnPromptTokens,
+        contributors: m.contributors.prompt,
+        command,
+        advice:
+          'Before raising the budget, place the rule on the highest rung that works: code enforcement, ' +
+          `injection with its trigger, tool description, lazy playbook, and only then the always-on prompt. See ${ADR}.`,
+      }),
     ).toBeLessThanOrEqual(budget.alwaysOnPromptTokens);
   });
 
   it('local tool definitions are within budget', () => {
     expect(
       m.localToolDefinitionBytes,
-      `${budget.agent} local tool definitions are ${m.localToolDefinitionBytes} bytes, over its budget of ` +
-      `${budget.localToolDefinitionBytes} (${detail}). Every pinned tool's description and schema is sent ` +
-      `on every call. Unpin tools the agent does not call, move rare procedures to a lazy playbook, and ` +
-      `keep descriptions to how to call the tool. See ${ADR}.`,
+      formatBudgetFailure({
+        agent: budget.agent,
+        what: 'the local tool-definition size',
+        unit: 'bytes',
+        measured: m.localToolDefinitionBytes,
+        limit: budget.localToolDefinitionBytes,
+        contributors: m.contributors.tools,
+        command,
+        advice:
+          "Every pinned tool's description and schema is sent on every call. Unpin tools the agent does not call, " +
+          `move rare procedures to a lazy playbook, and keep descriptions to how to call the tool. See ${ADR}.`,
+      }),
     ).toBeLessThanOrEqual(budget.localToolDefinitionBytes);
   });
 
@@ -185,9 +203,18 @@ describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
     const rosterTokens = Math.ceil(m.rosterChars / CHARS_PER_TOKEN);
     expect(
       rosterTokens,
-      `${budget.agent}'s specialist roster is ~${rosterTokens} tokens, over its budget of ${budget.rosterTokens} ` +
-      `(${detail}). Each line is an agent's delegate_when: say when to delegate there, and leave how the ` +
-      `agent works to its own prompt. See ${ADR}.`,
+      formatBudgetFailure({
+        agent: budget.agent,
+        what: 'the specialist roster',
+        unit: 'tokens',
+        measured: rosterTokens,
+        limit: budget.rosterTokens ?? 0,
+        contributors: m.contributors.roster,
+        command,
+        advice:
+          "Each line is an agent's delegate_when: say when to delegate there, and leave how the agent works " +
+          `to its own prompt. See ${ADR}.`,
+      }),
     ).toBeLessThanOrEqual(budget.rosterTokens ?? 0);
   });
 });
