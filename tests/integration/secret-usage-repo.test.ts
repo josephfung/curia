@@ -57,7 +57,7 @@ describeIf('SecretUsageRepo', () => {
     fill.timestamp = cardReadAt;
     await auditLogger.log(fill);
     const request = await new CardUseRepo(pool).create({
-      secretName: cardName, siteUrl: 'https://www.aircanada.com/checkout', conversationId: `conv-${suffix}`,
+      secretName: cardName, last4: '1111', siteUrl: 'https://www.aircanada.com/checkout', conversationId: `conv-${suffix}`,
       taskId: `task-${suffix}`, amount: 'CA$412.30', purpose: 'flight', origin: { agentId: 'travel' },
     });
     const decided = createCardUseDecided({

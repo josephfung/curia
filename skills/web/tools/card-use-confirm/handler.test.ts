@@ -11,6 +11,7 @@ import { createSilentLogger } from '../../../../src/logger.js';
 const ROW: CardUseRequestRow = {
   id: 'req-1',
   secretName: 'user.visa',
+  last4: '1111',
   siteDomain: 'aircanada.com',
   conversationId: 'conv-1',
   taskId: 'task-1',

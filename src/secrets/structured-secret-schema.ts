@@ -1,4 +1,4 @@
-// Schema registry for structured secrets (#1358, ADR-027, ADR-059).
+// Schema registry for structured secrets (#1358, ADR-027, ADR-060).
 //
 // Pure module: no I/O, no logging. It defines the one schema that ships
 // (credit_card), validates input for it, splits it into the encrypted part
@@ -281,10 +281,10 @@ export function projectCardField(
 /** Split "user.visa_card#cvv" into the key name and optional field. */
 export function parseSecretRef(ref: string): { name: string; field: string | null } {
   const parts = ref.split('#');
-  if (parts.length > 2) throw new Error("A secret reference can contain only one '#'");
+  if (parts.length > 2) throw new SecretRefRefusal('bad_ref', "A secret reference can contain only one '#'");
   const [name, field] = parts as [string, string | undefined];
   if (field === undefined) return { name, field: null };
-  if (field === '') throw new Error("A secret reference's field after '#' can't be empty");
+  if (field === '') throw new SecretRefRefusal('bad_ref', "A secret reference's field after '#' can't be empty");
   return { name, field };
 }
 
@@ -360,7 +360,7 @@ export const CARD_FILL_LIMIT_ERROR =
 
 export type SecretRefRefusalCode =
   | 'card_use_required' | 'card_fill_limit' | 'bare_card_ref' | 'not_a_card'
-  | 'unknown_card_field' | 'no_site' | 'empty_field';
+  | 'unknown_card_field' | 'no_site' | 'empty_field' | 'bad_ref';
 
 /**
  * A structured-secret refusal from the resolver (#1358). Guidance for the model, not a

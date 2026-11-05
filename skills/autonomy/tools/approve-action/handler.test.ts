@@ -165,7 +165,7 @@ describe('ApproveActionHandler', () => {
   describe('a card-use confirmation (#1358)', () => {
     const cardRow = {
       ...PENDING_ROW, taskId: 'earlier-task', toolName: 'card-use-confirm', shortRef: 'card-1',
-      payload: { request_id: 'req-1' }, notificationSentAt: new Date(),
+      payload: { request_id: 'req-1' }, notificationSentAt: new Date(Date.now() - 60_000),
     };
 
     async function approve(row: Record<string, unknown>, ctx?: Partial<ToolContext>) {
@@ -188,6 +188,28 @@ describe('ApproveActionHandler', () => {
       const { result, repo, execLayer } = await approve({ ...cardRow, taskId: 'task-1' });
       expect(result).toEqual({ success: false, error: SAME_TURN_CARD_USE_ERROR });
       expect(repo.resolveRow).not.toHaveBeenCalled();
+      expect(execLayer.invoke).not.toHaveBeenCalled();
+    });
+
+    it('refuses a row delivered during the approving turn, after the principal message arrived', async () => {
+      const { result, repo, execLayer } = await approve({ ...cardRow, notificationSentAt: new Date(Date.now() + 1_000) });
+      expect(result).toEqual({ success: false, error: SAME_TURN_CARD_USE_ERROR });
+      expect(repo.resolveRow).not.toHaveBeenCalled();
+      expect(execLayer.invoke).not.toHaveBeenCalled();
+    });
+
+    it('allows a row delivered before the principal message arrived', async () => {
+      const initiatedAt = new Date().toISOString();
+      const { result } = await approve(
+        { ...cardRow, notificationSentAt: new Date(Date.parse(initiatedAt) - 1) },
+        { taskMetadata: { originator: { contactId: 'ceo-1', systemRole: 'principal', channel: 'email', initiatedAt } } },
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it('fails closed when the turn carries no message time', async () => {
+      const { result, execLayer } = await approve(cardRow, { taskMetadata: {} });
+      expect(result).toEqual({ success: false, error: SAME_TURN_CARD_USE_ERROR });
       expect(execLayer.invoke).not.toHaveBeenCalled();
     });
 

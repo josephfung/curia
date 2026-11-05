@@ -83,6 +83,20 @@ export class ApproveActionHandler implements ToolHandler {
           ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: card-use approval requested in this turn — refusing');
           return { success: false, error: SAME_TURN_CARD_USE_ERROR };
         }
+        // The principal's confirming message must arrive AFTER the approval was delivered. Delivered
+        // earlier in this very turn (deliver-approval then approve-action), the principal never saw
+        // the amount. The dispatcher stamps originator.initiatedAt when the inbound message is
+        // dispatched, so a delivery at or after it is not something this message could be answering.
+        // No usable timestamp fails closed.
+        const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
+        const messageAt = typeof originator?.initiatedAt === 'string' ? Date.parse(originator.initiatedAt) : Number.NaN;
+        if (Number.isNaN(messageAt) || row.notificationSentAt.getTime() >= messageAt) {
+          ctx.log.info(
+            { rowId: row.id, shortRef: row.shortRef, messageAtKnown: !Number.isNaN(messageAt) },
+            'approve-action: card-use approval was not delivered before the principal\'s message — refusing',
+          );
+          return { success: false, error: SAME_TURN_CARD_USE_ERROR };
+        }
       }
 
       const pins = row.sendResolution;

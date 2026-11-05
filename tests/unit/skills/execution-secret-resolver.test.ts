@@ -138,7 +138,7 @@ describe('resolveSecretRef: saved cards', () => {
     const r = await s.resolve('user.visa#expiry_month_name', { siteUrl: SITE });
     expect(r.value).toBe('December');
     expect(s.consumeFill).toHaveBeenCalledWith({
-      secretName: 'user.visa', siteUrl: SITE, conversationId: 'conv-1', field: null,
+      secretName: 'user.visa', last4: '1111', siteUrl: SITE, conversationId: 'conv-1', field: null,
     });
     expect(s.secrets.get).not.toHaveBeenCalled();
     expect(s.secrets.getJSON).not.toHaveBeenCalled();

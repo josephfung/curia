@@ -1,6 +1,6 @@
 -- 118_structured_secrets_and_card_use.sql
 --
--- Structured secrets (#1358, ADR-027, ADR-059). A saved credit card keeps its encrypted
+-- Structured secrets (#1358, ADR-027, ADR-060). A saved credit card keeps its encrypted
 -- number and CVV in `secrets` (json) and its non-secret facts (brand, last four, expiry,
 -- cardholder, billing postal code) beside it in `user_secret_details`, so viewing a card
 -- never decrypts anything. `schema` tags which structured type a key holds; `public_fields`
@@ -21,6 +21,9 @@ ALTER TABLE user_secret_details
 CREATE TABLE card_use_requests (
   id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   secret_name        TEXT NOT NULL CHECK (starts_with(secret_name, 'user.')),
+  -- The card's last four when the request was filed: a card replaced during the 30-minute
+  -- window no longer matches the grant.
+  last4              TEXT NOT NULL,
   site_domain        TEXT NOT NULL,
   conversation_id    TEXT NOT NULL,
   task_id            TEXT NOT NULL,

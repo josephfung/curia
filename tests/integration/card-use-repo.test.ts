@@ -30,10 +30,10 @@ describeIf('CardUseRepo', () => {
   // Each test gets its own secret name + conversation so grants never leak between tests.
   function fixture() {
     seq += 1;
-    return { secretName: `user.cu_${suffix}_${seq}`, conversationId: `conv-${suffix}-${seq}` };
+    return { secretName: `user.cu_${suffix}_${seq}`, last4: '1111', conversationId: `conv-${suffix}-${seq}` };
   }
 
-  async function createApproved(f: { secretName: string; conversationId: string }, siteUrl = 'https://www.aircanada.com/checkout') {
+  async function createApproved(f: { secretName: string; last4: string; conversationId: string }, siteUrl = 'https://www.aircanada.com/checkout') {
     const { id } = await repo.create({
       ...f,
       siteUrl,
@@ -62,6 +62,7 @@ describeIf('CardUseRepo', () => {
     expect(row).toMatchObject({
       id,
       secretName: f.secretName,
+      last4: '1111',
       siteDomain: 'aircanada.com',
       status: 'pending',
       approvalShortRef: 'ab12',
@@ -157,11 +158,20 @@ describeIf('CardUseRepo', () => {
     expect(
       await repo.consumeFill({
         secretName: f.secretName,
+        last4: f.last4,
         conversationId: `${f.conversationId}-other`,
         siteUrl: 'https://www.aircanada.com',
         field: 'number',
       }),
     ).toBe('no_grant');
+  });
+
+  it('a card replaced during the window (different last four) has no grant', async () => {
+    const f = fixture();
+    await createApproved(f);
+    const q = { ...f, siteUrl: 'https://www.aircanada.com', field: 'number' as const };
+    expect(await repo.consumeFill({ ...q, last4: '9999' })).toBe('no_grant');
+    expect(await repo.consumeFill(q)).toBe('ok');
   });
 
   it('concurrent number fills never exceed 2', async () => {

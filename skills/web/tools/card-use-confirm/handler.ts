@@ -1,4 +1,4 @@
-// handler.ts — card-use-confirm skill (#1358, ADR-059).
+// handler.ts — card-use-confirm skill (#1358, ADR-060).
 //
 // Writes the grant behind a card-use request. It runs only as an approval replay: the
 // principal's yes (reply, reaction or console) re-invokes it with humanApproved. Any other

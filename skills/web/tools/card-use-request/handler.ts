@@ -1,4 +1,4 @@
-// handler.ts — card-use-request skill (#1358, ADR-059).
+// handler.ts — card-use-request skill (#1358, ADR-060).
 //
 // Files the principal's per-checkout approval to pay with a saved card. It never writes a
 // grant: CardUseService.request records the request and files a pending approval for the

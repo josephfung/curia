@@ -20,6 +20,7 @@ export type CardUseStatus = 'pending' | 'approved' | 'denied' | 'expired';
 export interface CardUseRequestRow {
   id: string;
   secretName: string;
+  last4: string;
   siteDomain: string;
   conversationId: string;
   taskId: string;
@@ -35,6 +36,7 @@ export interface CardUseRequestRow {
 interface DbRow {
   id: string;
   secret_name: string;
+  last4: string;
   site_domain: string;
   conversation_id: string;
   task_id: string;
@@ -52,6 +54,8 @@ export class CardUseRepo {
 
   async create(r: {
     secretName: string;
+    /** The card's last four now; a grant only fills a card that still ends in them. */
+    last4: string;
     siteUrl: string;
     conversationId: string;
     taskId: string;
@@ -65,10 +69,10 @@ export class CardUseRepo {
     }
     const result = await this.pool.query<{ id: string }>(
       `INSERT INTO card_use_requests
-         (secret_name, site_domain, conversation_id, task_id, amount, purpose, origin)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (secret_name, last4, site_domain, conversation_id, task_id, amount, purpose, origin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
-      [r.secretName, siteDomain, r.conversationId, r.taskId, r.amount, r.purpose, JSON.stringify(r.origin)],
+      [r.secretName, r.last4, siteDomain, r.conversationId, r.taskId, r.amount, r.purpose, JSON.stringify(r.origin)],
     );
     return { id: result.rows[0]!.id, siteDomain };
   }
@@ -79,7 +83,7 @@ export class CardUseRepo {
 
   async get(id: string): Promise<CardUseRequestRow | null> {
     const result = await this.pool.query<DbRow>(
-      `SELECT id, secret_name, site_domain, conversation_id, task_id, amount, purpose, origin,
+      `SELECT id, secret_name, last4, site_domain, conversation_id, task_id, amount, purpose, origin,
               status, approval_short_ref, created_at, approved_at
          FROM card_use_requests WHERE id = $1`,
       [id],
@@ -89,6 +93,7 @@ export class CardUseRepo {
     return {
       id: row.id,
       secretName: row.secret_name,
+      last4: row.last4,
       siteDomain: row.site_domain,
       conversationId: row.conversation_id,
       taskId: row.task_id,
@@ -130,11 +135,13 @@ export class CardUseRepo {
   }
 
   /**
-   * Spend one fill against the newest live grant for this card, conversation and site.
+   * Spend one fill against the newest live grant for this card (name and last four),
+   * conversation and site.
    * `field` null is a public field (brand, expiry, ...): it needs a grant but isn't counted.
    */
   async consumeFill(q: {
     secretName: string;
+    last4: string;
     siteUrl: string;
     conversationId: string;
     field: 'number' | 'cvv' | null;
@@ -143,11 +150,11 @@ export class CardUseRepo {
     if (siteDomain === null) return 'no_grant';
     const grant = await this.pool.query<{ id: string }>(
       `SELECT id FROM card_use_requests
-        WHERE secret_name = $1 AND conversation_id = $2 AND site_domain = $3
+        WHERE secret_name = $1 AND last4 = $4 AND conversation_id = $2 AND site_domain = $3
           AND status = 'approved' AND approved_at > now() - interval '30 minutes'
         ORDER BY approved_at DESC
         LIMIT 1`,
-      [q.secretName, q.conversationId, siteDomain],
+      [q.secretName, q.conversationId, siteDomain, q.last4],
     );
     const grantId = grant.rows[0]?.id;
     if (grantId === undefined) return 'no_grant';

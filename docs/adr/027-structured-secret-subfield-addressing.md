@@ -172,9 +172,7 @@ and never the value.
 
 ## Status of implementation
 
-Implemented (#1358); see the amendment below. This ADR originally recorded the decision only. The implementation is tracked as future work in
-[#1358](https://github.com/josephfung/curia/issues/1358), which carries the file-level
-blueprint, and is expected to land in three independently shippable slices: the
+Implemented (#1358); see the amendment below. This ADR originally recorded the decision only. It landed in three slices: the
 projection module + gated resolver + audit field; the `select` secret path + field
 discovery; and the structured capture form.
 
@@ -182,7 +180,7 @@ discovery; and the structured capture form.
 
 The decision above stands. Implementation changed four things, and added one gate. The full design is in `docs/wip/2026-11-04-structured-secrets-design.md`.
 
-- **Storage split.** The vault row holds only the secret fields, `{ "_schema": "credit_card", "number", "cvv" }`. Expiry, cardholder name, billing ZIP, brand and last four are public fields on the key's `user_secret_details` row (`schema`, `label`, `public_fields`), so the console and the agent can show brand, last four and expiry without a decrypt path. Brand and last four are derived from the number at write time. Both halves are written in one transaction (`SecretsService.setStructured`). `_schema` stays in the encrypted document as the routing tag, and `#` addressing requires the details row and the document to name the same registered schema.
+- **Storage split.** The vault row holds only the secret fields, `{ "_schema": "credit_card", "number", "cvv" }`. Expiry, cardholder name, billing ZIP, brand and last four are public fields on the key's `user_secret_details` row (`schema`, `label`, `public_fields`), so the console and the agent can show brand, last four and expiry without a decrypt path. Brand and last four are derived from the number at write time. Both halves are written in one transaction (`SecretsService.setCard`). `_schema` stays in the encrypted document as the routing tag, and the details row gates `#` addressing; reads of the secret fields (`number`, `cvv`) also check that the decrypted document's `_schema` is `credit_card`.
 - **Bare-ref refusal.** A bare `user.x` ref to a card is refused, listing the addressable fields, since `secretsService.get()` would otherwise type the card's JSON. The resolver also refuses a bare ref whose decrypted value is card JSON when the details tag is missing. A bare ref to a non-structured key behaves as before.
 - **Discovery.** Card keys are found through `list-user-secrets`, which returns label, brand, last four and expiry from public fields, with no new browser action.
 - **Capture.** Cards are saved through `secret-capture-request` and the Secrets page, with no separate card-capture tool.

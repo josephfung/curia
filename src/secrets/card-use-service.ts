@@ -1,5 +1,5 @@
 /**
- * CardUseService — the "principal confirms every checkout" flow for saved cards (#1358, ADR-059).
+ * CardUseService — the "principal confirms every checkout" flow for saved cards (#1358, ADR-060).
  *
  * Wraps CardUseRepo, SecretsService.getCardPublic, ApprovalTriggerService and the bus:
  *  - request(): records a card-use request and files a critical approval for the internal
@@ -107,6 +107,7 @@ export class CardUseService implements CardUseCapability {
 
     const { id, siteDomain } = await repo.create({
       secretName: input.secretName,
+      last4: pub.publicFields.last4,
       siteUrl: input.siteUrl,
       conversationId: ctx.conversationId,
       taskId: ctx.taskEventId,
