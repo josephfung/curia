@@ -1,4 +1,4 @@
--- 119_secret_capture_template.sql
+-- 120_secret_capture_template.sql
 --
 -- Card capture links (#1358, ADR-060). A capture token can carry a template, so the public
 -- form renders card fields (a new card, or the expiry and security code of a saved one)
