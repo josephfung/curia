@@ -131,8 +131,18 @@ export class BrowserSession {
   registerInjectedSecret(value: string): void {
     if (typeof value === 'string' && value.trim().length > 0) {
       this.injectedSecretValues.add(value);
+      // A card number is often reflected grouped by the checkout ("4242 4242 4242 4242"), which
+      // a literal match misses. Register the common groupings too (#1358).
+      if (/^\d{13,19}$/.test(value)) {
+        const groups = value.match(/.{1,4}/g) ?? [];
+        this.injectedSecretValues.add(groups.join(' '));
+        this.injectedSecretValues.add(groups.join('-'));
+      }
     }
   }
+
+  /** True once a card number or CVV was filled in this session; a screenshot could show it (#1358). */
+  cardSecretInjected = false;
 
   /**
    * Scrub every injected secret value from `text`, replacing exact occurrences with

@@ -28,7 +28,7 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 }
 
 export function CardFields({ mode, state, onChange, errors, brandHint, showLabel }: CardFieldsProps) {
-  const thisYear = new Date().getFullYear();
+  const thisYear = new Date().getUTCFullYear();
   const years = Array.from({ length: 16 }, (_, i) => String(thisYear + i));
   // A saved card's expiry may be a past year; keep it selectable so the field shows it.
   if (state.expiryYear !== '' && !years.includes(state.expiryYear)) years.unshift(state.expiryYear);

@@ -103,7 +103,7 @@ describe('mintUserSecret over a saved card', () => {
       publicFields: { brand: 'visa', last4: '1111', expiry_month: '12', expiry_year: '2030', cardholder_name: 'Pat Doe' },
     });
     await expect(svc.mintUserSecret({ rawName: 'user.visa_card' }))
-      .rejects.toThrow('`user.visa_card` is a saved card — use template credit_card_renewal, or details_only for its details.');
+      .rejects.toThrow("'user.visa_card' is a saved card. Use template credit_card to re-capture it, or credit_card_renewal for a new expiry and security code.");
     expect(queries.some(q => q.sql.includes('INSERT INTO secret_capture_tokens'))).toBe(false);
   });
 

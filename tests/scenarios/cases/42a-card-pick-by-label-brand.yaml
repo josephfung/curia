@@ -38,7 +38,7 @@ tool_stubs:
           user.personal_visa_card: { label: Personal, brand: visa, last4: "1111", expiry: "09/2030", expired: false }
           user.work_visa_card: { label: Work, brand: visa, last4: "4242", expiry: "03/2029", expired: false }
           user.amex_card: { label: Amex, brand: amex, last4: "0005", expiry: "11/2029", expired: false }
-        card_fields: [number, cvv, expiry_month_name, expiry_month_short, expiry_mm, expiry_yyyy, expiry_yy, name, zip]
+        card_fields: [number, cvv, expiry_month_name, expiry_month_short, expiry_mm, expiry_yyyy, expiry_yy, cardholder_name, billing_zip]
         summary: >
           These are vault key names only, never values. Saved cards are listed under `cards`. Match the
           principal's words to a card's label and brand ("personal Visa", "the Amex"). Exactly one match:

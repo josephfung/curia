@@ -337,7 +337,7 @@ export function deriveCardLabel(secretName: string): string | null {
     .toLowerCase()
     .replace(/['\u2018\u2019]s\b/g, '')
     .replace(/american[^a-z0-9]+express/g, ' ')
-    .split(/[^a-z0-9]+/)
+    .split(/[^\p{L}\p{N}]+/u)
     .filter(w => w.length > 0 && !LABEL_DROP_WORDS.has(w));
   if (words.length === 0) return null;
   const label = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
