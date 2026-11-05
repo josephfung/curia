@@ -351,7 +351,9 @@ describe('SecretCreateDrawer — card', () => {
     await type(field('Card number'), NUMBER);
     await settle(400);
     const preview = mocks.calls.find(c => c.path === '/api/vault/user-secrets/preview');
-    expect(bodyOf(preview)).toEqual({ type: 'credit_card', label: 'Personal', card: { number: '4111111111111111' } });
+    // Only the first six digits are sent for naming, never the whole number.
+    expect(bodyOf(preview)).toEqual({ type: 'credit_card', label: 'Personal', card: { number: '411111' } });
+    expect(JSON.stringify(mocks.calls.filter(c => c.path === '/api/vault/user-secrets/preview').map(bodyOf))).not.toContain('4111111111');
     expect(document.body.textContent).toContain('Saved as user.personal_visa_card.');
 
     await choose('card-exp-month', '03');

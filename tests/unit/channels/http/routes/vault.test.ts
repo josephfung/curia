@@ -1063,6 +1063,10 @@ describe('vault routes', () => {
 
       const amex = await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', label: 'Work', card: { number: '378282246310005' } });
       expect(amex.json().name).toBe('user.work_amex_card');
+      // A short prefix is enough to name the card: it need not be a valid number.
+      const prefix = await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', label: 'Work', card: { number: '37' } });
+      expect(prefix.statusCode).toBe(200);
+      expect(prefix.json().name).toBe('user.work_amex_card');
       expect((await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', label: 'Work', card: {} })).statusCode).toBe(400);
       expect((await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', card: { number: NUMBER } })).statusCode).toBe(400);
     });

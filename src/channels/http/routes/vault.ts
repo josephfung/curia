@@ -408,12 +408,13 @@ export async function vaultRoutes(
       return { error: err instanceof Error ? err.message : 'The secret could not be named.' };
     };
 
-    // Only the number's leading digits pick the brand word. It is never logged or returned.
+    // Only the number's leading digits pick the brand word, so only the first six are kept; a
+    // preview may send just that prefix, which need not be a valid number. Never logged or returned.
     let number: string | undefined;
     if (type === 'credit_card') {
       const rawNumber = asObject(body?.card)?.['number'];
       if (typeof rawNumber !== 'string') return { error: '"card.number" must be a string.' };
-      number = rawNumber;
+      number = rawNumber.replace(/[\s-]/g, '').slice(0, 6);
     }
     let input: string;
     try {

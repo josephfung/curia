@@ -637,19 +637,21 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
 
   // The name comes from the server's naming policy, so the console and capture links can never
   // disagree. Asked again 300ms after the type, label or URL last changed.
+  // Only the first six digits leave the browser for naming: enough to tell the brand, and typing
+  // the rest of the number does not ask again.
+  const cardPrefix = card.number.replace(/[\s-]/g, '').slice(0, 6);
   useEffect(() => {
-    const cardDigits = card.number.replace(/[\s-]/g, '');
     const cardLabel = card.label.trim();
     const namingInput = type === 'website_login' ? loginUrl.trim() : type === 'other' ? label.trim() : cardLabel;
     setPreview(null);
     setPreviewError(null);
-    if (namingInput === '' || (type === 'credit_card' && cardDigits === '')) return;
+    if (namingInput === '' || (type === 'credit_card' && cardPrefix === '')) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       // A card's name is the label plus the brand word, which the server reads off the number.
       const body = type === 'website_login' ? { type, loginUrl: namingInput }
         : type === 'other' ? { type, label: namingInput }
-          : { type, label: namingInput, card: { number: cardDigits } };
+          : { type, label: namingInput, card: { number: cardPrefix } };
       apiFetch('/api/vault/user-secrets/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -666,7 +668,7 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
         });
     }, PREVIEW_DEBOUNCE_MS);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [type, label, loginUrl, card.label, card.number]);
+  }, [type, label, loginUrl, card.label, cardPrefix]);
 
   // A saved card may be replaced from here; any other structured value may not.
   const structuredExisting = type !== 'credit_card' && preview?.existing?.valueFormat === 'json';

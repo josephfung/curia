@@ -1,6 +1,6 @@
 # Structured secrets: saved credit cards — design
 
-Status: implemented on branch `structured-secrets-1358` (PRs pending) · 2026-11-04 · implements #1358 (ADR-027), builds on the Secrets
+Status: implemented (#1358) · 2026-11-04 · implements #1358 (ADR-027), builds on the Secrets
 page redesign (PR #2478, `docs/wip/2026-11-04-secrets-page-redesign-design.md`)
 
 ## Why
