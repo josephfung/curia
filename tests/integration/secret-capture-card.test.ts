@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
 import { SecretCaptureService } from '../../src/secrets/secret-capture-service.js';
 import type { CreditCardPublicFields, CreditCardSecretDoc } from '../../src/secrets/structured-secret-schema.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
@@ -38,6 +39,7 @@ describeIf('card capture links', () => {
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
     await pool.query('SELECT capture_template FROM secret_capture_tokens LIMIT 0'); // sanity: migration 119 applied
     secrets = new SecretsService(pool, KEY, logger);
     capture = new SecretCaptureService(pool, secrets, { getAllowedSystemNames: () => new Set(), logger });

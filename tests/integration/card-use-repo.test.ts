@@ -1,4 +1,4 @@
-// CardUseRepo over a real card_use_requests table (migration 118). Windows use the DB clock, so
+// CardUseRepo over a real card_use_requests table (migration 119). Windows use the DB clock, so
 // back-dating created_at / approved_at via SQL exercises the 30-minute bounds.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import pg from 'pg';

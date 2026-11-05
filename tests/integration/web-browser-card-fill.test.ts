@@ -181,8 +181,9 @@ describe('saved-card fills in a real browser (#1358)', () => {
     expect(result.success).toBe(true);
     expect(await livePage('/month-mm').$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('v12');
     // Expiry is a public field: it must not be scrubbed from the page text, or a total like
-    // "CA$412.30" would read back corrupted.
-    expect((result as { data: { content: string } }).data.content).toMatch(/\b12\b/);
+    // "CA$412.30" would read back corrupted. The page text renders the options run together
+    // ("...101112"), so there is no word boundary to match on.
+    expect((result as { data: { content: string } }).data.content).toContain('101112');
   }, 60_000);
 
   it('year select, 2027 labels with two-digit values', async () => {

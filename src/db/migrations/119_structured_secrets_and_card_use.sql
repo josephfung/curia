@@ -1,4 +1,4 @@
--- 118_structured_secrets_and_card_use.sql
+-- 119_structured_secrets_and_card_use.sql
 --
 -- Structured secrets (#1358, ADR-027, ADR-060). A saved credit card keeps its encrypted
 -- number and CVV in `secrets` (json) and its non-secret facts (brand, last four, expiry,
