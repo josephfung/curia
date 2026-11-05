@@ -376,6 +376,7 @@ asked to prepare or cut a release, run pre-release checks, or tag a version.
 
 ## Scope Discipline
 
+- Read `docs/dev/principles.md` before planning: decide what it covers, and park what it doesn't (its last section lists what always goes to the maintainer).
 - Fix what was asked. Don't refactor surrounding code.
 - If you spot issues nearby, mention them — don't touch them.
 - No drive-by type annotations on code you didn't change.
