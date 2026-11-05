@@ -2095,6 +2095,57 @@ table.records-table tbody tr.active td { background: transparent; }
 .job-task-link:hover { text-decoration: underline; }
 [data-theme="dark"] .job-task-link { color: var(--app-fg); }
 
+/* Labelled chip groups in the records toolbar (Secrets: Kind / Status / Required). They wrap
+   on narrow screens instead of pushing the toolbar wider than the page. */
+.records-toolbar-left.records-chip-groups { flex-wrap: wrap; row-gap: 6px; column-gap: 14px; }
+.records-chip-group { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.records-chip-group-label {
+  font-size: 11px; font-weight: 600; color: var(--app-fg-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.records-chip-count { font-family: 'JetBrains Mono', monospace; font-size: 11px; opacity: 0.7; }
+.records-chip-groups + .records-toolbar-right { flex: none; white-space: nowrap; }
+
+/* Secrets page (#2453) */
+.secrets-table tbody td { vertical-align: top; }
+.secrets-name { font-size: 12px; white-space: nowrap; }
+.secrets-nowrap { white-space: nowrap; }
+/* Status labels are written in sentence case ("From env"); keep them that way. */
+.status-pill.secrets-status { text-transform: none; white-space: nowrap; }
+.secrets-cell-sub { display: block; margin-top: 2px; font-size: 11.5px; color: var(--app-fg-muted); }
+.secrets-cell-sub.secrets-warn { color: var(--app-fg); }
+.secrets-cell-sub.secrets-warn::first-letter { color: var(--app-amber); }
+.secrets-empty { text-align: center; padding: 40px; color: var(--app-fg-muted); }
+.secrets-section-label {
+  margin: 0 0 6px;
+  font-size: 11px; font-weight: 600; color: var(--app-fg-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.secrets-field-label {
+  font-size: 11px; color: var(--app-fg-muted);
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+}
+.secrets-facts {
+  display: grid; grid-template-columns: minmax(96px, max-content) 1fr;
+  gap: 6px 16px; margin: 0; font-size: 13px;
+}
+.secrets-facts dt { color: var(--app-fg-muted); }
+.secrets-facts dd { margin: 0; word-break: break-word; }
+.secrets-hint { margin: 0; font-size: 12px; color: var(--app-fg-muted); line-height: 1.45; }
+.secrets-block { display: block; }
+.secrets-declarers, .secrets-uses {
+  list-style: none; margin: 0 0 6px; padding: 0;
+  display: flex; flex-direction: column; gap: 6px; font-size: 13px;
+}
+.secrets-uses li { display: flex; justify-content: space-between; gap: 8px; }
+.secrets-uses li .secrets-hint { white-space: nowrap; }
+.secrets-callout { margin-top: 0; }
+.secrets-seg { display: flex; }
+.secrets-seg > button, .secrets-seg > span { flex: 1; }
+.secrets-seg button { width: 100%; padding: 6px 8px; font-size: 12px; }
+.secrets-seg > * + * { border-left: 1px solid var(--app-border); }
+.secrets-seg button:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* Responsive adjustments for records views */
 @media (max-width: 768px) {
   .drawer {

@@ -983,8 +983,9 @@ interface SecretAccessedPayload {
 }
 
 // SecretChangedPayload — the principal set or removed a vault secret from the console
-// Secrets page (#2453). Audit-only: nothing subscribes to act on it. Carries the key NAME
-// and what happened — NEVER a value.
+// Secrets page (#2453), or edited the sign-in details (login URL / username) of a `user.*`
+// secret (`details`). Audit-only:
+// nothing subscribes to act on it. Carries the key NAME and what happened — NEVER a value.
 //
 // Two-stage, like document.console_action and operator.session. `requested` is published
 // BEFORE the vault is touched, and the console refuses the change if it cannot be recorded.
@@ -993,7 +994,7 @@ interface SecretAccessedPayload {
 // not happen or whose outcome is unknown — never one known to have happened.
 interface SecretChangedPayload {
   secretName: string;
-  action: 'set' | 'delete';
+  action: 'set' | 'delete' | 'details';
   stage: 'requested' | 'completed';
   /** A console session, or the bootstrap-secret header with no cookie. */
   initiatedBy: 'session' | 'bootstrap_secret';

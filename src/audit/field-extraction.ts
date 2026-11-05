@@ -149,6 +149,17 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
       : p.initiatedBy === 'bootstrap_secret' ? 'bootstrap_secret' : str(p, 'initiatedBy', fail),
   }),
 
+  // A skill read a secret via ctx.secret() / ctx.resolveSecretRef(). The target is the key
+  // name, never a value. Agent-less reads (startup, system skills) are attributed to the tool.
+  'secret.accessed': (p, fail) => ({
+    action: 'accessed',
+    outcome: 'success',
+    target_type: 'secret',
+    target_id: str(p, 'secretName', fail),
+    initiator_type: typeof p.agentId === 'string' ? 'agent' : 'system',
+    initiator_id: typeof p.agentId === 'string' ? p.agentId : str(p, 'toolName', fail),
+  }),
+
   // Same-contact follow-up drained into a live turn (#2018). The host task id
   // is not a structured column here — the logger maps payload.hostTaskEventId
   // onto task_id, and the factory sets parent_event_id to the inbound. No

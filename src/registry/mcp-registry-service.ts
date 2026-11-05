@@ -3,6 +3,7 @@
 // All MCP servers are toggleable; there is no non-toggleable equivalent.
 import { normalizeSecretValue } from '../channels/credential-resolver.js';
 import type { Logger } from '../logger.js';
+import { isPlatformVaultKey } from '../secrets/platform-keys.js';
 import type { McpServerEntry } from '../skills/mcp-config-types.js';
 import {
   McpGuardError,
@@ -136,6 +137,11 @@ export class McpRegistryService {
       ownKeys.delete(key);
     }
     for (const key of ownKeys) {
+      // A platform key is read at boot (a provider key, the bootstrap secret): an MCP server
+      // that also declares it doesn't own it, and deleting it can stop the next start. The
+      // vault write routes refuse these keys for the same reason.
+      if (isPlatformVaultKey(key)) continue;
+      // SecretsService.delete removes a user.* key's sign-in details with it.
       await this.secrets.delete(key);
     }
     await this.repo.uninstall(name);
