@@ -718,7 +718,9 @@ function stakesHold(verdict: BriefAnswers, score: number): FilterFinding | undef
   const min = STAKES_MIN_SCORE[stakes];
   if (min !== null && score >= min) return undefined;
   const why = (verdict.stakesReason ?? '').replace(/\s+/g, ' ').trim();
-  const shown = why.length > STAKES_REASON_MAX ? `${why.slice(0, STAKES_REASON_MAX - 1).trimEnd()}…` : why;
+  // Count code points, not UTF-16 units, so the cut never leaves half a surrogate pair.
+  const points = Array.from(why);
+  const shown = points.length > STAKES_REASON_MAX ? `${points.slice(0, STAKES_REASON_MAX - 1).join('').trimEnd()}…` : why;
   return {
     rule: BAND_RULES.speaksAsPrincipal,
     detail: `${STAKES_HOLD_LEAD[stakes]} Stakes: ${STAKES_LABEL[stakes]}.${shown ? ` Why: ${shown}` : ''}`,

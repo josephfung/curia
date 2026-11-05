@@ -366,6 +366,11 @@ describe('BandSendReview', () => {
         expect(l.reason).toContain('90');
         expect(l.reason.length).toBeLessThan(500);
       }
+      // An astral character straddling the cut must not leave a lone surrogate (UTF-16 slicing would).
+      const astral = make([speaks('commitment', '😀'.repeat(300))]);
+      const a = await astral.svc.review({ ...base, score: 85 });
+      expect(a.kind).toBe('hold');
+      if (a.kind === 'hold') expect(a.reason).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
       const routine = make([speaks('routine')]);
       const r = await routine.svc.review({ ...base, score: 79 });
       if (r.kind === 'hold') expect(r.reason).toContain('Stakes: routine.');
