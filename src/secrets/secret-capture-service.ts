@@ -20,10 +20,34 @@ import { hashToken } from '../channels/http/session-auth.js';
 import { randomBytes } from 'node:crypto';
 import { resolveUserSecretName } from './user-secret-name.js';
 import { hasUserSecretDetails, type UserSecretDetails } from './user-secret-details.js';
+import {
+  CARD_VALIDATION_MESSAGES,
+  normalizeCardLabel,
+  validateCardPublicPatch,
+  validateCreditCard,
+  validateCvv,
+  type CardBrand,
+  type CardValidationReason,
+  type CreditCardPublicFields,
+  type CreditCardSecretDoc,
+} from './structured-secret-schema.js';
 
 export { resolveUserSecretName } from './user-secret-name.js';
 
 export type CaptureValueFormat = 'string' | 'json';
+
+/** Form templates a capture link can carry (#1358). `credit_card` saves a new card;
+ *  `credit_card_renewal` swaps the expiry and security code of a saved one. */
+export type CaptureTemplate = 'credit_card' | 'credit_card_renewal';
+
+/** Edit to a saved card's non-secret fields. Values are unvalidated input; the service validates. */
+export interface CardPublicEdit {
+  label?: unknown;
+  expiry_month?: unknown;
+  expiry_year?: unknown;
+  cardholder_name?: unknown;
+  billing_zip?: unknown;
+}
 
 /** Default link lifetime — short by design (single-use + 30 min, per #971). */
 export const DEFAULT_CAPTURE_TTL_MINUTES = 30;
@@ -56,6 +80,11 @@ export interface CaptureSecretsPort {
   listUserNames(): Promise<string[]>;
   /** Non-secret sign-in details for a `user.*` key (#2201). */
   upsertUserDetails(name: string, details: UserSecretDetails): Promise<void>;
+  /** Saved cards (#1358). Public fields only on the read side; the writes take already-validated values. */
+  getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields } | null>;
+  setCard(name: string, secret: CreditCardSecretDoc, publicFields: CreditCardPublicFields, label: string | null): Promise<void>;
+  renewCard(name: string, change: { cvv: string; publicFields: CreditCardPublicFields }): Promise<void>;
+  patchCardPublic(name: string, patch: { label?: string | null; publicFields?: CreditCardPublicFields }): Promise<void>;
 }
 
 /** The mint-only surface injected into skills as the `secretCapture` capability.
@@ -65,6 +94,9 @@ export interface SecretCaptureMinter {
   mintSystemSecret(args: MintNameArgs): Promise<MintResult>;
   /** Record sign-in details on an already-stored `user.*` key without minting a link (#2201). */
   setUserSecretDetails(rawName: string, details: UserSecretDetails): Promise<{ secretName: string }>;
+  /** Edit a saved card's label, expiry, cardholder name or billing postal code without a link (#1358).
+   *  Validates; never takes a number or security code. */
+  setUserCardPublic(rawName: string, edit: CardPublicEdit): Promise<{ secretName: string }>;
 }
 
 /**
@@ -100,6 +132,8 @@ export interface MintNameArgs {
   origin?: CaptureOrigin;
   /** Non-secret sign-in details stored with a user.* key (#2201). Ignored for system secrets. */
   details?: UserSecretDetails;
+  /** Card form template (#1358). Forces json; user.* keys only. */
+  template?: CaptureTemplate;
   // NOTE: TTL is intentionally NOT caller-controlled. The lifetime is a fixed security
   // property of the feature (single-use + 30 min, per #971), so callers cannot mint links
   // that are already dead, absurdly long-lived, or NaN. See DEFAULT_CAPTURE_TTL_MINUTES.
@@ -125,7 +159,7 @@ export interface SecretCaptureServiceOptions {
 
 /** Status of a redeem attempt. Vault-write failures are not in this union — they rethrow
  *  (after clearing consumed_at) so the route surfaces a 500 and the user can retry. */
-export type RedeemStatus = 'ok' | 'expired' | 'not_found' | 'invalid_json';
+export type RedeemStatus = 'ok' | 'expired' | 'not_found' | 'invalid_json' | 'invalid_shape';
 
 /**
  * Routing context returned on a successful redeem (#972). Carries the secret NAME/label and
@@ -153,12 +187,42 @@ export interface CapturedContext {
  */
 export type RedeemOutcome =
   | { status: 'ok'; captured: CapturedContext }
-  | { status: 'expired' | 'not_found' | 'invalid_json' };
+  | { status: 'expired' | 'not_found' | 'invalid_json' }
+  // The submission did not fit the link: a card that failed validation (reason set), or a value
+  // posted to a card link or a card posted to a plain one (no reason). The token is left unspent.
+  | { status: 'invalid_shape'; reason?: CardValidationReason };
+
+/** Non-secret summary of the card a renewal link is for. */
+export interface CaptureCardSummary {
+  brand: CardBrand;
+  last4: string;
+  label: string | null;
+}
 
 export type CaptureMetadata =
-  | { label: string | null; valueFormat: CaptureValueFormat }
+  | {
+      label: string | null;
+      valueFormat: CaptureValueFormat;
+      captureTemplate?: CaptureTemplate | null;
+      /** Present for a renewal link whose card still exists. */
+      card?: CaptureCardSummary;
+    }
   | 'expired'
   | 'not_found';
+
+/** The row a winning claim returns. */
+interface ClaimedToken {
+  secret_name: string;
+  value_format: CaptureValueFormat;
+  label: string | null;
+  conversation_id: string | null;
+  channel_id: string | null;
+  agent_id: string | null;
+  task_event_id: string | null;
+  originator: Record<string, unknown> | null;
+  resume_intent: string | null;
+  resume_token: string | null;
+}
 
 export class SecretCaptureService implements SecretCaptureMinter {
   constructor(
@@ -173,7 +237,13 @@ export class SecretCaptureService implements SecretCaptureMinter {
    * of a SecretCaptureService can bypass the `user.` namespace sandbox or the system allowlist
    * by passing an arbitrary secretName. TTL is fixed (not a parameter) for the same reason.
    */
-  private async mint(secretName: string, label: string | undefined, valueFormat: CaptureValueFormat, origin?: CaptureOrigin): Promise<{ rawToken: string; expiresAt: Date }> {
+  private async mint(
+    secretName: string,
+    label: string | undefined,
+    valueFormat: CaptureValueFormat,
+    origin?: CaptureOrigin,
+    template?: CaptureTemplate,
+  ): Promise<{ rawToken: string; expiresAt: Date }> {
     // 128-bit raw token, base64url-encoded → a short (~22 char) mixed-case slug that reads
     // like an ordinary magic-link id, NOT a 64-char hex hash. Two reasons for this shape:
     //   1. The relaying LLM was self-redacting the old hex token (it pattern-matched a long
@@ -194,8 +264,9 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const result = await this.pool.query<{ expires_at: Date }>(
       `INSERT INTO secret_capture_tokens
          (token_hash, secret_name, label, value_format, expires_at,
-          conversation_id, channel_id, agent_id, task_event_id, originator, resume_intent, resume_token)
-       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5), $6, $7, $8, $9, $10, $11, $12)
+          conversation_id, channel_id, agent_id, task_event_id, originator, resume_intent, resume_token,
+          capture_template)
+       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5), $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING expires_at`,
       [
         tokenHash, secretName, label ?? null, valueFormat, DEFAULT_CAPTURE_TTL_MINUTES,
@@ -206,6 +277,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
         origin?.originator ?? null,
         origin?.resumeIntent ?? null,
         origin?.resumeToken ?? null,
+        template ?? null,
       ],
     );
     return { rawToken, expiresAt: result.rows[0]!.expires_at };
@@ -215,7 +287,26 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const existing = await this.secrets.listUserNames();
     const secretName = resolveUserSecretName(args.rawName, existing);
     const reusedExisting = existing.includes(secretName);
-    const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string', args.origin);
+
+    let label = args.label;
+    if (args.template) {
+      if (label !== undefined && normalizeCardLabel(label) === null) {
+        throw new Error('The card label must be 1 to 100 characters.');
+      }
+      if (args.template === 'credit_card_renewal') {
+        const card = await this.secrets.getCardPublic(secretName);
+        if (!card) {
+          throw new Error(
+            `No saved card named '${args.rawName}'. Call list-user-secrets for the exact key, ` +
+            'or use template credit_card to save a new card.',
+          );
+        }
+        label = card.label ?? undefined;
+      }
+    }
+    // A card link is always json: the form posts card fields, never a free-form value.
+    const valueFormat: CaptureValueFormat = args.template ? 'json' : (args.valueFormat ?? 'string');
+    const { rawToken, expiresAt } = await this.mint(secretName, label, valueFormat, args.origin, args.template);
     if (args.details && hasUserSecretDetails(args.details)) {
       await this.secrets.upsertUserDetails(secretName, args.details);
     }
@@ -236,6 +327,39 @@ export class SecretCaptureService implements SecretCaptureMinter {
     return { secretName };
   }
 
+  async setUserCardPublic(rawName: string, edit: CardPublicEdit): Promise<{ secretName: string }> {
+    const existing = await this.secrets.listUserNames();
+    const secretName = resolveUserSecretName(rawName, existing);
+    const current = existing.includes(secretName) ? await this.secrets.getCardPublic(secretName) : null;
+    if (!current) {
+      throw new Error(`No saved card named '${rawName}'. Call list-user-secrets for the exact key.`);
+    }
+
+    let label: string | undefined;
+    if (edit.label !== undefined) {
+      const normalized = normalizeCardLabel(edit.label);
+      if (normalized === null) throw new Error('The card label must be 1 to 100 characters.');
+      label = normalized;
+    }
+    const touchesPublic = edit.expiry_month !== undefined || edit.expiry_year !== undefined
+      || edit.cardholder_name !== undefined || edit.billing_zip !== undefined;
+    if (label === undefined && !touchesPublic) {
+      throw new Error('Give a card_label, expiry_month, expiry_year, cardholder_name, or billing_zip to change.');
+    }
+
+    let publicFields: CreditCardPublicFields | undefined;
+    if (touchesPublic) {
+      const checked = validateCardPublicPatch(edit, current.publicFields);
+      if (!checked.ok) throw new Error(CARD_VALIDATION_MESSAGES[checked.reason]);
+      publicFields = checked.publicFields;
+    }
+    await this.secrets.patchCardPublic(secretName, {
+      ...(label !== undefined ? { label } : {}),
+      ...(publicFields ? { publicFields } : {}),
+    });
+    return { secretName };
+  }
+
   async mintSystemSecret(args: MintNameArgs): Promise<MintResult> {
     const secretName = resolveSystemSecretName(args.rawName, this.options.getAllowedSystemNames());
     const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string', args.origin);
@@ -249,9 +373,11 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const res = await this.pool.query<{
       label: string | null;
       value_format: CaptureValueFormat;
+      capture_template: CaptureTemplate | null;
+      secret_name: string;
       spent: boolean;
     }>(
-      `SELECT label, value_format,
+      `SELECT label, value_format, capture_template, secret_name,
               (consumed_at IS NOT NULL OR expires_at <= now()) AS spent
          FROM secret_capture_tokens WHERE token_hash = $1`,
       [hashToken(rawToken)],
@@ -259,7 +385,17 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const row = res.rows[0];
     if (!row) return 'not_found';
     if (row.spent) return 'expired';
-    return { label: row.label, valueFormat: row.value_format };
+    if (!row.capture_template) return { label: row.label, valueFormat: row.value_format };
+    // The summary is public fields only, and the vault key itself is never returned.
+    const card = row.capture_template === 'credit_card_renewal'
+      ? await this.secrets.getCardPublic(row.secret_name)
+      : null;
+    return {
+      label: row.label,
+      valueFormat: row.value_format,
+      captureTemplate: row.capture_template,
+      ...(card ? { card: { brand: card.publicFields.brand, last4: card.publicFields.last4, label: card.label } } : {}),
+    };
   }
 
   /**
@@ -277,9 +413,10 @@ export class SecretCaptureService implements SecretCaptureMinter {
     // pre-check and the claim agree on validity regardless of app/DB clock skew.
     const peek = await this.pool.query<{
       value_format: CaptureValueFormat;
+      capture_template: CaptureTemplate | null;
       spent: boolean;
     }>(
-      `SELECT value_format,
+      `SELECT value_format, capture_template,
               (consumed_at IS NOT NULL OR expires_at <= now()) AS spent
          FROM secret_capture_tokens WHERE token_hash = $1`,
       [tokenHash],
@@ -287,6 +424,9 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const row = peek.rows[0];
     if (!row) return { status: 'not_found' };
     if (row.spent) return { status: 'expired' };
+    // A card link takes card fields through redeemCard, which validates them. A raw value
+    // here would bypass that and store arbitrary JSON as a card.
+    if (row.capture_template) return { status: 'invalid_shape' };
 
     let parsed: unknown;
     if (row.value_format === 'json') {
@@ -300,6 +440,88 @@ export class SecretCaptureService implements SecretCaptureMinter {
       }
     }
 
+    return this.claimAndWrite(tokenHash, async claimed => {
+      if (claimed.value_format === 'json') {
+        await this.secrets.setJSON(claimed.secret_name, parsed);
+      } else {
+        await this.secrets.set(claimed.secret_name, value);
+      }
+    });
+  }
+
+  /**
+   * Redeem a card link (#1358): validate the submitted card fields, then claim the token and
+   * write. Validation runs BEFORE the claim, so a typo does not burn the single-use token.
+   *
+   *  - `credit_card` takes the full card (number, security code, expiry, name, optional ZIP).
+   *  - `credit_card_renewal` takes `cvv`, `expiry_month` and `expiry_year`, checks them against
+   *    the stored brand and current expiry, and writes the new code and expiry in one transaction.
+   * A token without a card template refuses a card (`invalid_shape`, no reason).
+   */
+  async redeemCard(rawToken: string, card: Record<string, unknown>): Promise<RedeemOutcome> {
+    const tokenHash = hashToken(rawToken);
+    const peek = await this.pool.query<{
+      capture_template: CaptureTemplate | null;
+      secret_name: string;
+      spent: boolean;
+    }>(
+      `SELECT capture_template, secret_name,
+              (consumed_at IS NOT NULL OR expires_at <= now()) AS spent
+         FROM secret_capture_tokens WHERE token_hash = $1`,
+      [tokenHash],
+    );
+    const row = peek.rows[0];
+    if (!row) return { status: 'not_found' };
+    if (row.spent) return { status: 'expired' };
+    if (!row.capture_template) return { status: 'invalid_shape' };
+
+    if (row.capture_template === 'credit_card') {
+      const checked = validateCreditCard({
+        number: card.number,
+        cvv: card.cvv,
+        expiry_month: card.expiry_month,
+        expiry_year: card.expiry_year,
+        cardholder_name: card.cardholder_name,
+        billing_zip: card.billing_zip,
+      });
+      if (!checked.ok) return this.cardRefused(checked.reason);
+      return this.claimAndWrite(tokenHash, claimed =>
+        this.secrets.setCard(claimed.secret_name, checked.secret, checked.publicFields, claimed.label));
+    }
+
+    // Renewal. Both expiry parts are required: the form always sends them, and a missing one
+    // would otherwise validate as "no change" and renew nothing.
+    const current = await this.secrets.getCardPublic(row.secret_name);
+    if (!current) {
+      this.options.logger?.warn('secret-capture: renewal link redeemed but the card no longer exists');
+      return { status: 'not_found' };
+    }
+    if (card.expiry_month === undefined || card.expiry_year === undefined) return this.cardRefused('expiry_format');
+    const expiry = validateCardPublicPatch(
+      { expiry_month: card.expiry_month, expiry_year: card.expiry_year },
+      current.publicFields,
+    );
+    if (!expiry.ok) return this.cardRefused(expiry.reason);
+    if (!validateCvv(card.cvv, current.publicFields.brand)) return this.cardRefused('cvv_format');
+    const cvv = card.cvv as string; // validateCvv confirmed it is a string
+    return this.claimAndWrite(tokenHash, claimed =>
+      this.secrets.renewCard(claimed.secret_name, { cvv, publicFields: expiry.publicFields }));
+  }
+
+  private cardRefused(reason: CardValidationReason): RedeemOutcome {
+    // The reason is a category, never the offending value.
+    this.options.logger?.warn({ reason }, 'secret-capture: card submission refused — token left unspent for retry');
+    return { status: 'invalid_shape', reason };
+  }
+
+  /**
+   * Atomically claim a token and run the vault write for it. The claim is the single-use
+   * guard; `write` runs only for the winner. Shared by redeem and redeemCard.
+   */
+  private async claimAndWrite(
+    tokenHash: string,
+    write: (claimed: ClaimedToken) => Promise<void>,
+  ): Promise<RedeemOutcome> {
     // Atomic single-use claim. RETURNING is empty if another request already consumed it
     // or it expired in the gap since the peek — both map to 'expired'.
     //
@@ -311,18 +533,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
     // without a second read. Only the winning claim returns a row, so a replayed redeem of an
     // already-consumed token falls through to 'expired' and yields no captured context — the
     // route then publishes nothing, giving exactly one event per real capture.
-    const claim = await this.pool.query<{
-      secret_name: string;
-      value_format: CaptureValueFormat;
-      label: string | null;
-      conversation_id: string | null;
-      channel_id: string | null;
-      agent_id: string | null;
-      task_event_id: string | null;
-      originator: Record<string, unknown> | null;
-      resume_intent: string | null;
-      resume_token: string | null;
-    }>(
+    const claim = await this.pool.query<ClaimedToken>(
       `UPDATE secret_capture_tokens
           SET consumed_at = now()
         WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
@@ -334,11 +545,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
     if (!claimed) return { status: 'expired' };
 
     try {
-      if (claimed.value_format === 'json') {
-        await this.secrets.setJSON(claimed.secret_name, parsed);
-      } else {
-        await this.secrets.set(claimed.secret_name, value);
-      }
+      await write(claimed);
     } catch (err) {
       // Roll the token back to unconsumed so the user can retry — but only if it is still live
       // (the `expires_at > now()` guard avoids resurrecting consumed_at on an already-dead row).

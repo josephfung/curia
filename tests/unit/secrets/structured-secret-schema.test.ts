@@ -3,11 +3,13 @@ import {
   CARD_FIELDS,
   CARD_SECRET_FIELDS,
   CARD_VALIDATION_MESSAGES,
+  deriveCardLabel,
   describeCard,
   detectCardBrand,
   isCardExpired,
   isCardSecretField,
   isStructuredSchemaTag,
+  normalizeCardLabel,
   parseSecretRef,
   projectCardField,
   validateCardPublicPatch,
@@ -188,3 +190,31 @@ it.each([['4111111111111111', 'visa'], ['5555555555554444', 'mastercard'], ['222
   ['2221000000000009', 'mastercard'], ['2720999999999996', 'mastercard'], ['2721000000000000', 'other'],
   ['6450000000000000', 'discover'], ['6500000000000002', 'discover'], ['3400000000000000', 'amex']])('brand %s', (n, b) =>
   expect(detectCardBrand(n)).toBe(b));
+
+describe('deriveCardLabel', () => {
+  it.each([
+    ['personal visa card', 'Personal'],
+    ['my Work Mastercard', 'Work'],
+    ['Amex card', null],
+    ['american express card', null],
+    ['company american express card', 'Company'],
+    ['user.personal_visa_card', 'Personal'],
+    ['my credit card', null],
+    ['visa', null],
+    ['Aeroplan Visa Infinite cards', 'Aeroplan Infinite'],
+    ["Joseph's discover card", 'Joseph'],
+    ['TRAVEL   visa-card', 'Travel'],
+  ])('%s -> %s', (name, expected) => {
+    expect(deriveCardLabel(name)).toBe(expected);
+  });
+});
+
+describe('normalizeCardLabel', () => {
+  it('trims, and refuses empty, non-string and over-long labels', () => {
+    expect(normalizeCardLabel('  Work ')).toBe('Work');
+    expect(normalizeCardLabel('   ')).toBeNull();
+    expect(normalizeCardLabel(5)).toBeNull();
+    expect(normalizeCardLabel('x'.repeat(101))).toBeNull();
+    expect(normalizeCardLabel('x'.repeat(100))).toBe('x'.repeat(100));
+  });
+});

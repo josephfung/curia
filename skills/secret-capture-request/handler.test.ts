@@ -6,11 +6,13 @@ import { SecretCaptureRequestHandler } from './handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import type { SecretCaptureMinter, MintResult } from '../../src/secrets/secret-capture-service.js';
 
-function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { userCalls: unknown[]; systemCalls: unknown[]; detailCalls: unknown[] } {
+function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { userCalls: unknown[]; systemCalls: unknown[]; detailCalls: unknown[]; cardCalls: unknown[] } {
   const userCalls: unknown[] = [];
   const systemCalls: unknown[] = [];
   const detailCalls: unknown[] = [];
+  const cardCalls: unknown[] = [];
   return {
+    cardCalls,
     userCalls,
     systemCalls,
     detailCalls,
@@ -25,6 +27,11 @@ function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { use
     async setUserSecretDetails(rawName, details) {
       detailCalls.push({ rawName, details });
       return { secretName: 'user.flight' };
+    },
+    async setUserCardPublic(rawName, edit) {
+      cardCalls.push({ rawName, edit });
+      if (rawName === 'user.refused') throw new Error('This card has expired.');
+      return { secretName: 'user.personal_visa_card' };
     },
   };
 }
@@ -236,6 +243,82 @@ describe('SecretCaptureRequestHandler sign-in details (#2201)', () => {
     const ctx = makeCtx({ secret_name: 'user.flight', details_only: true }, { secretCapture: minter });
     const result = await new SecretCaptureRequestHandler().execute(ctx);
     expect(result.success).toBe(false);
+    expect(minter.detailCalls).toHaveLength(0);
+  });
+});
+
+describe('SecretCaptureRequestHandler card templates (#1358)', () => {
+  const run = (input: Record<string, unknown>, minter = fakeMinter()) =>
+    new SecretCaptureRequestHandler().execute(makeCtx(input, { secretCapture: minter }));
+
+  it('credit_card forces json and derives the label from secret_name', async () => {
+    const minter = fakeMinter();
+    const result = await run({ secret_name: 'personal visa card', template: 'credit_card', value_format: 'string' }, minter);
+    expect(result.success).toBe(true);
+    expect(minter.userCalls[0]).toMatchObject({ rawName: 'personal visa card', template: 'credit_card', valueFormat: 'json', label: 'Personal' });
+  });
+
+  it('credit_card uses card_label when given, and sends no label when nothing is left to derive', async () => {
+    const minter = fakeMinter();
+    await run({ secret_name: 'personal visa card', template: 'credit_card', card_label: ' Travel ' }, minter);
+    expect(minter.userCalls[0]).toMatchObject({ label: 'Travel' });
+
+    await run({ secret_name: 'visa card', template: 'credit_card' }, minter);
+    expect(minter.userCalls[1]).not.toHaveProperty('label');
+  });
+
+  it('credit_card_renewal passes the template without a label of its own', async () => {
+    const minter = fakeMinter();
+    const result = await run({ secret_name: 'user.personal_visa_card', template: 'credit_card_renewal' }, minter);
+    expect(result.success).toBe(true);
+    const call = minter.userCalls[0] as Record<string, unknown>;
+    expect(call).toMatchObject({ rawName: 'user.personal_visa_card', template: 'credit_card_renewal', valueFormat: 'json' });
+    expect(call).not.toHaveProperty('label');
+  });
+
+  it('surfaces a mint failure such as a renewal of a card that is not saved', async () => {
+    const minter = fakeMinter();
+    minter.mintUserSecret = async () => { throw new Error("No saved card named 'x'."); };
+    const result = await run({ secret_name: 'x', template: 'credit_card_renewal' }, minter);
+    expect(result).toEqual({ success: false, error: "No saved card named 'x'." });
+  });
+
+  it('rejects an unknown template and card fields that a link cannot take', async () => {
+    const minter = fakeMinter();
+    expect((await run({ secret_name: 'x', template: 'passport' }, minter)).success).toBe(false);
+    expect((await run({ secret_name: 'x', template: 'credit_card', expiry_month: '3' }, minter)).success).toBe(false);
+    expect((await run({ secret_name: 'x', card_label: 'Work' }, minter)).success).toBe(false);
+    expect(minter.userCalls).toHaveLength(0);
+  });
+
+  it('details_only with card fields edits the card and mints no link', async () => {
+    const minter = fakeMinter();
+    const result = await run({
+      secret_name: 'user.personal_visa_card', details_only: true,
+      card_label: 'Work', expiry_month: 6, expiry_year: '2031', cardholder_name: 'A B',
+    }, minter);
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data).toMatchObject({ secret_name: 'user.personal_visa_card', details_saved: true });
+    expect(data).not.toHaveProperty('capture_url');
+    expect(minter.userCalls).toHaveLength(0);
+    expect(minter.detailCalls).toHaveLength(0);
+    expect(minter.cardCalls).toEqual([{
+      rawName: 'user.personal_visa_card',
+      edit: { label: 'Work', expiry_month: 6, expiry_year: '2031', cardholder_name: 'A B' },
+    }]);
+  });
+
+  it('details_only returns the validation error from the card edit', async () => {
+    const result = await run({ secret_name: 'user.refused', details_only: true, expiry_month: '1', expiry_year: '2001' });
+    expect(result).toEqual({ success: false, error: 'This card has expired.' });
+  });
+
+  it('details_only refuses card fields mixed with sign-in details', async () => {
+    const minter = fakeMinter();
+    const result = await run({ secret_name: 'user.x', details_only: true, card_label: 'Work', username: 'someone' }, minter);
+    expect(result.success).toBe(false);
+    expect(minter.cardCalls).toHaveLength(0);
     expect(minter.detailCalls).toHaveLength(0);
   });
 });

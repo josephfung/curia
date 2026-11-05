@@ -290,6 +290,25 @@ describeIf('SecretsService', () => {
       }
     });
 
+    it('renewCard writes the new cvv and the public fields together', async () => {
+      const n = `${P}renew`;
+      await service.setCard(n, SECRET, PUB, 'Personal');
+      await service.renewCard(n, { cvv: '555', publicFields: { ...PUB, expiry_month: '01', expiry_year: '2041' } });
+      expect(await service.getCardSecret(n)).toEqual({ ...SECRET, cvv: '555' });
+      const pub = await service.getCardPublic(n);
+      expect(pub?.publicFields).toMatchObject({ expiry_month: '01', expiry_year: '2041' });
+      expect(pub?.label).toBe('Personal');
+    });
+
+    it('renewCard lands neither write when the second one fails', async () => {
+      // A card doc in the vault with no card details row: the CVV write succeeds inside the
+      // transaction, the public-fields update then matches nothing and throws, so the CVV rolls back.
+      const n = `${P}renewfail`;
+      await service.setJSON(n, SECRET);
+      await expect(service.renewCard(n, { cvv: '555', publicFields: PUB })).rejects.toThrow(/not a saved card/);
+      expect((await service.getCardSecret(n)).cvv).toBe(SECRET.cvv);
+    });
+
     it('getCardSecret refuses a non-card secret', async () => {
       const n = `${P}notcard`;
       await service.setJSON(n, { hello: 'world' });

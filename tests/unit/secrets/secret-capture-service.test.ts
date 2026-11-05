@@ -60,6 +60,11 @@ function makeSecretsPort(existingUserNames: string[] = []): CaptureSecretsPort &
     async upsertUserDetails(name: string, details: UserSecretDetails) {
       detailCalls.push({ name, details });
     },
+    // Card writes are exercised against a real database in tests/integration/secret-capture-card.test.ts.
+    async getCardPublic() { return null; },
+    async setCard() { throw new Error('setCard not expected in this unit test'); },
+    async renewCard() { throw new Error('renewCard not expected in this unit test'); },
+    async patchCardPublic() { throw new Error('patchCardPublic not expected in this unit test'); },
   };
 }
 

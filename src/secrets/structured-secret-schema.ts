@@ -307,6 +307,42 @@ export function describeCard(pub: CreditCardPublicFields, label: string | null):
 }
 
 // ---------------------------------------------------------------------------
+// Card labels (#1358)
+// ---------------------------------------------------------------------------
+
+export const CARD_LABEL_MAX = 100;
+
+/** A label the principal or agent typed: trimmed, 1 to 100 characters. Null when unusable. */
+export function normalizeCardLabel(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  return s.length > 0 && s.length <= CARD_LABEL_MAX ? s : null;
+}
+
+// Words that describe the card rather than name it. Dropped when a label is derived from the
+// description the agent gave ("personal visa card" -> "Personal").
+const LABEL_DROP_WORDS = new Set([
+  'visa', 'mastercard', 'amex', 'discover', 'card', 'cards', 'credit', 'debit',
+  'a', 'an', 'the', 'my', 'mine', 'our', 'your', 'for', 'of', 'and', 'user', 's',
+]);
+
+/**
+ * A default label for a card captured without `card_label`: the description minus brand
+ * words, "card"/"cards" and filler, title-cased. Null when nothing is left.
+ */
+export function deriveCardLabel(secretName: string): string | null {
+  const words = secretName
+    .toLowerCase()
+    .replace(/['\u2018\u2019]s\b/g, '')
+    .replace(/american[^a-z0-9]+express/g, ' ')
+    .split(/[^a-z0-9]+/)
+    .filter(w => w.length > 0 && !LABEL_DROP_WORDS.has(w));
+  if (words.length === 0) return null;
+  const label = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  return label.slice(0, CARD_LABEL_MAX).trim();
+}
+
+// ---------------------------------------------------------------------------
 // Resolver error copy (#1358). Shared by the resolver and the browser/chat surfaces
 // so the model sees one wording. None of these include a secret value.
 // ---------------------------------------------------------------------------

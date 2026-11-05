@@ -120,8 +120,11 @@ interface AgentBudget {
 // web-browser fills saved-card fields into selects and text boxes (#1358): the secret_ref sentence
 // names the field to pick per option label and says a card needs card-use-request: +255 bytes,
 // 85,538 over 77 local tools. The budget rises by exactly that delta.
+// secret-capture-request takes the card templates and the card details_only fields (#1358):
+// one description sentence and six inputs, +742 bytes, 86,280 over 77 local tools. The budget
+// rises by exactly that delta.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 85_538, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 86_280, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   // Standing rules moved to a pinned document (#2339): the config-store JSON-array steps came
