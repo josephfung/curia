@@ -118,7 +118,8 @@ the maintainer settles a parked question in a way that will recur, add it here.
   Because the automation holds the timing and policy rules a manual run forgets.
 - **Write an ADR for a deliberate trade-off or a rejected obvious approach.**
   Because ADRs stop settled decisions being relitigated (CLAUDE.md "Architecture Decision Records").
-- **Commit and PR mechanics live elsewhere:** DCO sign-off on every commit, no AI-attribution trailers in commits or PR bodies, changelog fragments, no `version:` bumps in feature PRs (CLAUDE.md "Changelog & Versioning", "Versioning skills and agents").
+- **Commit and PR mechanics live elsewhere:** DCO sign-off on every commit (AGENTS.md "Git commits (DCO)"), changelog fragments, no `version:` bumps in feature PRs (CLAUDE.md "Changelog & Versioning", "Versioning skills and agents").
+- **No AI-attribution trailers** (`Co-Authored-By`, "Generated with") in commits or PR bodies, because the maintainer is the author of record and answers for every change.
 
 ## Park, don't decide
 
