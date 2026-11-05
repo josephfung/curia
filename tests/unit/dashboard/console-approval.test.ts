@@ -118,12 +118,23 @@ describe('card-use confirmations from the console (#1358)', () => {
     expect(d.executionLayer!.invoke).not.toHaveBeenCalled();
   });
 
-  it('settles the request as expired when the replay fails', async () => {
+  it('settles the request as failed when the replay fails', async () => {
     const decline = vi.fn(async () => undefined);
     const d = deps({ cardUse: { decline } });
     (d.executionLayer!.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ success: false, error: 'boom' });
     await approveFromConsole(cardRow(), d);
-    expect(decline).toHaveBeenCalledWith('req-1', 'expired');
+    expect(decline).toHaveBeenCalledWith('req-1', 'failed');
+  });
+
+  it('reports sent only when the confirmation outcome is approved', async () => {
+    const invoke = (d: ReturnType<typeof deps>) => d.executionLayer!.invoke as ReturnType<typeof vi.fn>;
+    const expired = deps();
+    invoke(expired).mockResolvedValue({ success: true, data: { outcome: 'expired' } });
+    expect(await approveFromConsole(cardRow(), expired)).toEqual({ ok: true, sent: false });
+
+    const approved = deps();
+    invoke(approved).mockResolvedValue({ success: true, data: { outcome: 'approved' } });
+    expect(await approveFromConsole(cardRow(), approved)).toEqual({ ok: true, sent: true });
   });
 
   it('declines the card-use request when the principal denies it', async () => {

@@ -174,7 +174,7 @@ async function rememberDisclosure(
 }
 
 /** A denied card checkout: no grant, and the agent is resumed with "declined" (#1358). */
-async function declineCardUse(deps: ConsoleApprovalDeps, row: ActionLogRow, status: 'denied' | 'expired' = 'denied'): Promise<void> {
+async function declineCardUse(deps: ConsoleApprovalDeps, row: ActionLogRow, status: 'denied' | 'expired' | 'failed' = 'denied'): Promise<void> {
   const requestId = cardUseRequestIdOf(row);
   if (requestId === null) return;
   if (!deps.cardUse) {
@@ -263,7 +263,14 @@ export async function approveFromConsole(
     },
   );
 
-  if (!reResult.success) await declineCardUse(deps, row, 'expired');
+  if (!reResult.success) await declineCardUse(deps, row, 'failed');
+
+  // card-use-confirm succeeds even when the request had already expired or been resolved, and
+  // writes no grant then. Only an 'approved' outcome counts as sent.
+  const sent = reResult.success && (
+    cardUseRequestIdOf(row) === null
+    || (reResult.data as { outcome?: unknown } | undefined)?.outcome === 'approved'
+  );
 
   try {
     await deps.actionLogRepo.insert({
@@ -271,7 +278,7 @@ export async function approveFromConsole(
       conversationId: row.conversationId ?? undefined,
       toolName: row.toolName,
       actionRisk: row.actionRisk,
-      outcome: reResult.success ? 'success' : 'failure',
+      outcome: sent ? 'success' : 'failure',
       taskSummary: reResult.success ? undefined : reResult.error,
       parentActionId: row.id,
     });
@@ -280,8 +287,8 @@ export async function approveFromConsole(
   }
 
   await publishDecision(deps, row, 'approve');
-  deps.logger.info({ rowId: row.id, sent: reResult.success }, 'console-approval: approved');
-  return { ok: true, sent: reResult.success };
+  deps.logger.info({ rowId: row.id, sent }, 'console-approval: approved');
+  return { ok: true, sent };
 }
 
 /**

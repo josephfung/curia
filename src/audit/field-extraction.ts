@@ -174,11 +174,11 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
 
   'card_use.decided': (p, fail) => ({
     action: 'card_use_decided',
-    outcome: p.decision === 'approved' ? 'success' : p.decision === 'denied' || p.decision === 'expired' ? 'failure' : fail('decision'),
+    outcome: p.decision === 'approved' ? 'success' : p.decision === 'denied' || p.decision === 'expired' || p.decision === 'failed' ? 'failure' : fail('decision'),
     target_type: 'secret',
     target_id: str(p, 'secretName', fail),
-    initiator_type: p.decision === 'expired' ? 'system' : 'human',
-    initiator_id: p.decision === 'expired' ? 'card-use' : typeof p.via === 'string' ? p.via : 'principal',
+    initiator_type: p.decision === 'expired' || p.decision === 'failed' ? 'system' : 'human',
+    initiator_id: p.decision === 'expired' || p.decision === 'failed' ? 'card-use' : typeof p.via === 'string' ? p.via : 'principal',
   }),
 
   // Same-contact follow-up drained into a live turn (#2018). The host task id

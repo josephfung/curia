@@ -17,7 +17,7 @@ import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipi
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 import { hasPersonalDetails, UNSHOWN_PERSONAL_DETAILS_ERROR } from '../../../../src/autonomy/approval-notification.js';
-import { cardUseRequestIdOf, CARD_USE_CONFIRM_TOOL, SAME_TURN_CARD_USE_ERROR, UNSHOWN_CARD_USE_ERROR } from '../../../../src/secrets/card-use-service.js';
+import { cardUseRequestIdOf, CARD_USE_CONFIRM_TOOL, PREDATING_CARD_USE_ERROR, SAME_TURN_CARD_USE_ERROR, UNSHOWN_CARD_USE_ERROR } from '../../../../src/secrets/card-use-service.js';
 
 export { UNSHOWN_PERSONAL_DETAILS_ERROR };
 
@@ -83,6 +83,14 @@ export class ApproveActionHandler implements ToolHandler {
           ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: card-use approval requested in this turn — refusing');
           return { success: false, error: SAME_TURN_CARD_USE_ERROR };
         }
+        // A message sent before the confirmation was shown cannot answer it. A turn whose start
+        // time is missing or unreadable fails closed.
+        const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
+        const answeredAt = Date.parse(originator?.initiatedAt ?? '');
+        if (Number.isNaN(answeredAt) || answeredAt < row.notificationSentAt.getTime()) {
+          ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: card-use approval message predates the confirmation — refusing');
+          return { success: false, error: PREDATING_CARD_USE_ERROR };
+        }
       }
 
       const pins = row.sendResolution;
@@ -147,12 +155,12 @@ export class ApproveActionHandler implements ToolHandler {
       );
 
       // A card checkout whose replay failed would leave the request pending and the agent waiting:
-      // settle it as expired so the conversation is resumed (#1358).
+      // settle it as failed so the conversation is resumed (#1358).
       const failedCardRequestId = reResult.success ? null : cardUseRequestIdOf(row);
       if (failedCardRequestId !== null) {
         if (ctx.cardUse) {
           try {
-            await ctx.cardUse.decline(failedCardRequestId, 'expired');
+            await ctx.cardUse.decline(failedCardRequestId, 'failed');
           } catch (err) {
             ctx.log.error({ err, rowId: row.id, failedCardRequestId }, 'approve-action: failed to settle the card-use request after a failed replay');
           }

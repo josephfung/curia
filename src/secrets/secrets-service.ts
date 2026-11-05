@@ -83,12 +83,24 @@ export class SecretsService {
 
   /** Encrypt and upsert a string secret. */
   async set(name: string, value: string): Promise<void> {
+    await this.assertNotSavedCard(name);
     const { ciphertext, iv } = encrypt(value, this.key);
     await this.upsert(name, 'string', ciphertext, iv);
   }
 
+  /** A generic write (a capture redeem) must not replace a saved card's encrypted document
+   *  and leave its schema tag and public fields behind. Cards go through setCard /
+   *  replaceCardSecret. */
+  private async assertNotSavedCard(name: string): Promise<void> {
+    if (!name.startsWith('user.')) return;
+    if ((await this.getStructuredSchema(name)) !== null) {
+      throw new Error(`'${name}' is a saved card; replace it from the Secrets page, not by a generic write`);
+    }
+  }
+
   /** JSON-serialize, encrypt, and upsert a structured secret. */
   async setJSON(name: string, obj: unknown): Promise<void> {
+    await this.assertNotSavedCard(name);
     const { ciphertext, iv } = encrypt(JSON.stringify(obj), this.key);
     await this.upsert(name, 'json', ciphertext, iv);
   }
@@ -442,6 +454,7 @@ export class SecretsService {
 
   private async inTransaction<T>(fn: (client: DbPoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
+    let broken = false;
     try {
       await client.query('BEGIN');
       const out = await fn(client);
@@ -449,10 +462,11 @@ export class SecretsService {
       return out;
     } catch (err) {
       // Roll back, then rethrow the original failure; a failed rollback must not mask it.
-      await client.query('ROLLBACK').catch(() => undefined);
+      // A failed rollback means the connection is likely dead: destroy it rather than pool it.
+      await client.query('ROLLBACK').catch(() => { broken = true; });
       throw err;
     } finally {
-      client.release();
+      client.release(broken);
     }
   }
 }

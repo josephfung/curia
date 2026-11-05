@@ -141,6 +141,11 @@ export class CardUseRepo {
   }): Promise<'ok' | 'no_grant' | 'fill_limit'> {
     const siteDomain = registrableDomain(q.siteUrl);
     if (siteDomain === null) return 'no_grant';
+    // The grant scope is deliberately card + conversation + domain for 30 minutes: not bound to
+    // one checkout, and not revoked when the card is edited or replaced. The owner's retry flow
+    // depends on it: a merchant rejects the card (say, a wrong expiry), the owner fixes the card,
+    // and the retry must go through on the grant already given. Narrowing it forces a needless
+    // re-approval with no safety gain. Decided by the owner on #2481; don't tighten it.
     const grant = await this.pool.query<{ id: string }>(
       `SELECT id FROM card_use_requests
         WHERE secret_name = $1 AND conversation_id = $2 AND site_domain = $3
