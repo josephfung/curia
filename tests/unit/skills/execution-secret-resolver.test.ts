@@ -48,6 +48,7 @@ interface Setup {
   resolve: (ref: string, opts?: { siteUrl?: string }, invoke?: InvokeOptions) => Promise<{ value?: string; error?: string; code?: string; refusal?: boolean }>;
   secrets: Record<'get' | 'getJSON' | 'getStructuredSchema' | 'getCardPublic' | 'getCardSecret', ReturnType<typeof vi.fn>>;
   consumeFill: ReturnType<typeof vi.fn>;
+  hasLiveGrant: ReturnType<typeof vi.fn>;
   publish: ReturnType<typeof vi.fn>;
 }
 
@@ -66,6 +67,7 @@ function setup(opts: {
     getCardSecret: vi.fn().mockResolvedValue({ _schema: 'credit_card', number: NUMBER, cvv: CVV }),
   };
   const consumeFill = vi.fn().mockResolvedValue(opts.grant ?? 'ok');
+  const hasLiveGrant = vi.fn().mockResolvedValue(true);
   const publish = vi.fn().mockResolvedValue(undefined);
   const registry = new ToolRegistry();
   let current: { ref: string; opts?: { siteUrl?: string } } = { ref: '' };
@@ -81,11 +83,12 @@ function setup(opts: {
   const layer = new ExecutionLayer(registry, logger, {
     bus: { publish } as unknown as EventBus,
     secretsService: secrets as unknown as SecretsService,
-    ...(opts.wireRepo === false ? {} : { cardUseRepo: { consumeFill } as unknown as CardUseRepo }),
+    ...(opts.wireRepo === false ? {} : { cardUseRepo: { consumeFill, hasLiveGrant } as unknown as CardUseRepo }),
   });
   return {
     secrets,
     consumeFill,
+    hasLiveGrant,
     publish,
     resolve: async (ref, o, invoke) => {
       current = { ref, opts: o };
@@ -202,6 +205,14 @@ describe('resolveSecretRef: saved cards', () => {
     expect(r.code).toBe('bare_card_ref');
     expect(r.value).toBeUndefined();
     expect(r.error).not.toContain('4111');
+  });
+
+  it('withholds the secret when the grant expired while the vault was read', async () => {
+    const s = setup({ schema: 'credit_card' });
+    s.hasLiveGrant.mockResolvedValue(false);
+    const r = await s.resolve('user.visa#number', { siteUrl: SITE }, { conversationId: 'conv-1' });
+    expect(r.value).toBeUndefined();
+    expect(r.error).toBeDefined();
   });
 
   it('unknown field fails before the grant is consumed', async () => {

@@ -88,7 +88,7 @@ describe('DenyActionHandler', () => {
       actionLogRepo: repo, bus: makeMockBus(), cardUse: { decline } as unknown as ToolContext['cardUse'],
     }));
     expect(result.success).toBe(true);
-    expect(decline).toHaveBeenCalledWith('req-1');
+    expect(decline).toHaveBeenCalledWith('req-1', 'denied', 'coordinator');
   });
 
   it('denies a pending row and publishes human.decision', async () => {
