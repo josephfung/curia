@@ -3,9 +3,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   canonicalizeUserSecretName,
+  consoleSecretNameInput,
   fingerprintKey,
   fingerprintUserSecret,
   resolveUserSecretName,
+  siteIdentityFromUrl,
   USER_SECRET_PREFIX,
 } from '../../../src/secrets/user-secret-name.js';
 
@@ -197,5 +199,70 @@ describe('fingerprintUserSecret', () => {
     expect(fingerprintKey(fingerprintUserSecret('user.x_twitter_password_for_josephfung'))).toBe(
       'josephfung_twitter|password',
     );
+  });
+});
+
+describe('siteIdentityFromUrl', () => {
+  it.each([
+    ['https://www.rogers.com/signin', 'rogers'],
+    ['https://secure.rbc.com/x', 'rbc'],
+    ['https://aircanada.com/aeroplan', 'aircanada'],
+    ['https://www.amazon.co.uk/', 'amazon'],
+    ['http://localhost:8080', 'localhost'],
+    ['https://192.168.1.10/login', '192.168.1.10'],
+    // Short registrable names under a ccTLD are the site, not a second-level suffix.
+    ['https://login.ing.de/', 'ing'],
+    ['https://login.dkb.de/', 'dkb'],
+    ['https://my.example.com.au/', 'example'],
+    // A trailing dot is the same site.
+    ['https://rogers.com./', 'rogers'],
+    ['https://www.rogers.com./signin', 'rogers'],
+  ])('%s -> %s', (url, expected) => {
+    expect(siteIdentityFromUrl(url)).toBe(expected);
+  });
+
+  it.each(['ftp://x.com', 'not a url'])('throws on %s', (url) => {
+    expect(() => siteIdentityFromUrl(url)).toThrow();
+  });
+
+  it('never quotes the URL in its error, which can hold a password', () => {
+    const url = 'https://someone:hunter2@[bad';
+    expect(() => siteIdentityFromUrl(url)).toThrow('login URL is not a valid URL');
+    try { siteIdentityFromUrl(url); } catch (err) { expect(String(err)).not.toContain('hunter2'); }
+  });
+
+  it('gives two banks under the same ccTLD different names', () => {
+    expect(siteIdentityFromUrl('https://login.ing.de/')).not.toBe(siteIdentityFromUrl('https://login.dkb.de/'));
+  });
+});
+
+describe('consoleSecretNameInput + resolveUserSecretName', () => {
+  const rogers = { type: 'website_login' as const, loginUrl: 'https://www.rogers.com/signin' };
+
+  it('names a website login from the site', () => {
+    expect(resolveUserSecretName(consoleSecretNameInput(rogers), [])).toBe('user.rogers_password');
+  });
+
+  it('reuses the existing key for the same site', () => {
+    expect(resolveUserSecretName(consoleSecretNameInput(rogers), ['user.rogers_password'])).toBe('user.rogers_password');
+  });
+
+  it('does not collapse an IP login to a type-only key', () => {
+    const name = resolveUserSecretName(
+      consoleSecretNameInput({ type: 'website_login', loginUrl: 'https://192.168.1.10/login' }),
+      [],
+    );
+    expect(name).not.toBe('user.password');
+    expect(name.startsWith('user.192')).toBe(true);
+  });
+
+  it('names an other secret from its label', () => {
+    expect(resolveUserSecretName(consoleSecretNameInput({ type: 'other', label: 'Bank PIN' }), [])).toBe('user.bank_pin');
+  });
+
+  it('throws when the required field is missing or blank', () => {
+    expect(() => consoleSecretNameInput({ type: 'website_login' })).toThrow();
+    expect(() => consoleSecretNameInput({ type: 'other', label: '   ' })).toThrow();
+    expect(() => consoleSecretNameInput({ type: 'other' })).toThrow();
   });
 });

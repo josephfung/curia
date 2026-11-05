@@ -61,6 +61,7 @@ import { mcpRegistryRoutes } from './routes/mcp-registry.js';
 import { vaultRoutes } from './routes/vault.js';
 import { emailAccountsRoutes } from './routes/email-accounts.js';
 import { EmailAccountsRepo } from '../email/email-accounts-repo.js';
+import { SecretUsageRepo } from '../../secrets/secret-usage-repo.js';
 import { secretCaptureRoutes } from './routes/secret-capture.js';
 import { setupRoutes } from './routes/setup.js';
 import { smsWebhookRoutes } from '../sms/webhook-route.js';
@@ -570,6 +571,7 @@ export class HttpAdapter implements Channel {
         mcpRegistryService: this.config.mcpRegistryService,
         channelRegistryService: this.config.channelRegistryService,
         emailAccounts: new EmailAccountsRepo(pool),
+        usage: new SecretUsageRepo(pool),
         bus,
         webAppBootstrapSecret,
         sessions,

@@ -1,111 +1,81 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
-import { Topbar } from '../components/Topbar.js';
+import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
-import { declarerLabel, errorMessage, removeSecretFlow, type SecretRowData } from './secrets-utils.js';
+import {
+  declarerLabel,
+  duplicateSiteHints,
+  errorMessage,
+  filterCounts,
+  filterSecrets,
+  lastUsedText,
+  canEditValue,
+  siteHost,
+  sortSecrets,
+  type SecretFilters,
+  type SecretKind,
+  type SecretRowData,
+  type SecretSortKey,
+  type SecretStatus,
+} from './secrets-utils.js';
+import {
+  KIND_LABEL,
+  STATUS_LABEL,
+  SecretCreateDrawer,
+  SecretEditDrawer,
+  SecretViewDrawer,
+  StatusPill,
+  shortDate,
+} from './SecretsDrawers.js';
 
-// One vault secret. The page never receives a value: it shows set / not set, and the
-// entry field is write-only and cleared after a save (#2453).
-function SecretRow({ row, onChanged }: { row: SecretRowData; onChanged: () => void }) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+// Every credential Curia holds, as one records table (#2453): personal sign-ins, system keys
+// declared by tools/channels/MCP servers, and platform keys managed by the deployment. The page
+// never receives a value; the drawers write values but never read them back.
 
-  const save = useCallback(async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(row.name)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value }),
-      });
-      if (!res.ok) throw new Error(await errorMessage(res));
-      setValue('');
-      setEditing(false);
-      onChanged();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to save secret');
-    } finally {
-      setBusy(false);
-    }
-  }, [row.name, value, onChanged]);
+// Which drawer (if any) is open. `view` is read-only; `edit`/`create` show a form.
+type DrawerMode = 'view' | 'edit' | 'create' | null;
 
-  // Two confirmations, the second only when the server says something enabled needs the
-  // key (removeSecretFlow).
-  const remove = useCallback(async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const outcome = await removeSecretFlow(row.name, {
-        confirm: message => window.confirm(message),
-        del: force => apiFetch(`/api/vault/secrets/${encodeURIComponent(row.name)}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
-      });
-      if (outcome === 'removed') onChanged();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to remove secret');
-    } finally {
-      setBusy(false);
-    }
-  }, [row.name, onChanged]);
+type Sort = { key: SecretSortKey; dir: 'asc' | 'desc' } | null;
 
+const KIND_CHIPS: ReadonlyArray<[SecretKind | 'all', string]> = [
+  ['all', 'All'], ['personal', 'Personal'], ['system', 'System'], ['platform', 'Platform'],
+];
+const STATUS_CHIPS: ReadonlyArray<SecretStatus> = ['configured', 'env', 'missing', 'not_set', 'not_declared'];
+const REQUIRED_CHIPS: ReadonlyArray<['required' | 'optional', string]> = [['required', 'Required'], ['optional', 'Optional']];
+
+const SEARCH_PLACEHOLDER = 'Search name, site, username…';
+
+function UsedFor({ row, sameSite }: { row: SecretRowData; sameSite: string[] | undefined }) {
+  if (row.kind === 'personal') {
+    const host = siteHost(row.loginUrl);
+    return (
+      <>
+        {host ?? (row.loginUrl || <span className="cell-muted">No sign-in site saved</span>)}
+        {row.username && <span className="secrets-cell-sub">{row.username}</span>}
+        {sameSite?.map(other => (
+          <span key={other} className="secrets-cell-sub secrets-warn">⚠ same site as {other}</span>
+        ))}
+      </>
+    );
+  }
+  if (row.declaredBy.length === 0) return <span className="cell-muted">Nothing declares it</span>;
+  return <>{row.declaredBy.map(declarerLabel).join(', ')}</>;
+}
+
+function NameCell({ row }: { row: SecretRowData }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 20px', borderTop: '1px solid var(--app-border)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <code style={{ fontSize: 13 }}>{row.name}</code>
-        {/* Red only when something enabled is missing the key and nothing else supplies it. */}
-        <span className={`status-pill ${row.configured ? 'confirmed' : row.envFallback ? 'provisional' : row.required ? 'blocked' : ''}`}>
-          {row.configured ? 'configured' : row.envFallback ? 'from environment' : row.required ? 'missing' : 'not set'}
-        </span>
-        <span className="settings-muted-hint">{row.required ? 'required' : 'optional'}</span>
-        <span style={{ flex: 1 }} />
-        {!editing && (
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setEditing(true)}>
-            {row.configured ? 'Replace' : 'Set'}
-          </button>
-        )}
-        {row.configured && (
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void remove()}>
-            Remove
-          </button>
-        )}
-      </div>
-      <p className="settings-page-sub" style={{ margin: 0, fontSize: 12 }}>
-        {row.declaredBy.map(declarerLabel).join(', ')}
-      </p>
-      {row.envFallback && (
-        <p className="settings-page-sub" style={{ margin: 0, fontSize: 12 }}>
-          Supplied by the {row.envFallback} environment variable. Setting a value here takes precedence;
-          removing it here does not clear the variable.
-        </p>
+    <>
+      <code className="secrets-name">
+        {row.kind === 'platform' && <span aria-hidden="true">🔒 </span>}
+        {row.name}
+      </code>
+      {row.kind === 'system' && row.declaredBy.length > 0 && (
+        <span className="secrets-cell-sub">{row.required ? 'Required' : 'Optional'}</span>
       )}
-      {row.declaredBy.filter(d => d.purpose).map(d => (
-        <p key={d.name} className="settings-page-sub" style={{ margin: 0, fontSize: 12 }}>{d.purpose}</p>
-      ))}
-      {editing && (
-        <div style={{ display: 'flex', gap: 6 }}>
-          <input
-            type="password"
-            autoComplete="off"
-            value={value}
-            placeholder={`Enter ${row.name}`}
-            aria-label={`Secret value for ${row.name}`}
-            onChange={e => setValue(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy || value.length === 0} onClick={() => void save()}>
-            Save
-          </button>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { setEditing(false); setValue(''); }}>
-            Cancel
-          </button>
-        </div>
-      )}
-      {err && <p className="autonomy-error" style={{ margin: 0 }}>{err}</p>}
-    </div>
+      {row.kind === 'platform' && <span className="secrets-cell-sub">Managed by deployment</span>}
+    </>
   );
 }
 
@@ -114,22 +84,30 @@ export function SecretsPage() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [rows, setRows] = useState<SecretRowData[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [filters, setFilters] = useState<SecretFilters>({ kind: 'all', status: 'all', required: 'all', search: '' });
+  const [sort, setSort] = useState<Sort>(null);
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
+  const [selected, setSelected] = useState<SecretRowData | null>(null);
 
-  // Two refreshes can overlap (a second Remove while the first reload is pending); only the
-  // newest request's response is applied, so an older list can't land last.
+  // Two refreshes can overlap (a save while the previous reload is pending); only the newest
+  // request's response is applied, so an older list can't land last. Resolves to the fresh list.
   const latestLoad = useRef(0);
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<SecretRowData[] | null> => {
     const id = ++latestLoad.current;
     try {
       const res = await apiFetch('/api/vault/secrets');
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { secrets?: SecretRowData[] };
-      if (id !== latestLoad.current) return;
-      setRows(data.secrets ?? []);
+      if (id !== latestLoad.current) return null;
+      const fresh = data.secrets ?? [];
+      setRows(fresh);
       setLoadError(null);
+      return fresh;
     } catch (e) {
-      if (id !== latestLoad.current) return;
+      console.error('[SecretsPage] load failed:', e);
+      if (id !== latestLoad.current) return null;
       setLoadError(e instanceof Error ? e.message : 'Failed to load secrets');
+      return null;
     }
   }, []);
 
@@ -139,10 +117,78 @@ export function SecretsPage() {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
   }, [mobileOpen]);
 
-  // Needed first, then optional; alphabetical within each (the API already sorts by name).
-  const sorted = useMemo(
-    () => [...(rows ?? [])].sort((a, b) => Number(b.required) - Number(a.required) || a.name.localeCompare(b.name)),
-    [rows],
+  const all = useMemo(() => rows ?? [], [rows]);
+  const counts = useMemo(() => filterCounts(all), [all]);
+  const hints = useMemo(() => duplicateSiteHints(all), [all]);
+  const visible = useMemo(() => sortSecrets(filterSecrets(all, filters), sort), [all, filters, sort]);
+  const now = new Date();
+
+  // Single-select chips; clicking the active one clears that group.
+  function setFilter<K extends 'kind' | 'status' | 'required'>(key: K, value: SecretFilters[K]) {
+    setFilters(f => ({ ...f, [key]: f[key] === value ? 'all' : value }));
+  }
+
+  function toggleSort(key: SecretSortKey) {
+    setSort(s => s?.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: 'asc' });
+  }
+  const ariaSort = (key: SecretSortKey) => sort?.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
+  const sortArrow = (key: SecretSortKey) => sort?.key === key ? (sort.dir === 'asc' ? '↑' : '↓') : '';
+
+  function sortHeader(key: SecretSortKey, label: string, className = '') {
+    return (
+      <th className={`sortable ${className}`.trim()} aria-sort={ariaSort(key)}>
+        <button className="sort-btn" onClick={() => toggleSort(key)}>
+          {label} <span className="sort-arrow">{sortArrow(key)}</span>
+        </button>
+      </th>
+    );
+  }
+
+  // Bumped on every drawer change. A drawer's save or remove carries the generation it was
+  // opened in, so one that finishes after the operator moved on (opened another drawer, or
+  // closed this one) only reloads the list: it never replaces or closes the drawer now open.
+  const drawerGen = useRef(0);
+
+  function showDrawer(row: SecretRowData | null, mode: DrawerMode) {
+    drawerGen.current += 1;
+    setSelected(row);
+    setDrawerMode(mode);
+  }
+
+  function openView(row: SecretRowData) {
+    showDrawer(row, 'view');
+  }
+
+  function openEdit(row: SecretRowData) {
+    showDrawer(row, 'edit');
+  }
+
+  function closeDrawer() {
+    showDrawer(null, null);
+  }
+
+  // After an edit, return to View showing the reloaded row (it may now be configured).
+  async function handleEdited(name: string, gen: number) {
+    const fresh = await load();
+    if (gen !== drawerGen.current) return;
+    const row = fresh?.find(r => r.name === name) ?? null;
+    showDrawer(row, row ? 'view' : null);
+  }
+
+  function handleChanged(gen: number) {
+    if (gen === drawerGen.current) closeDrawer();
+    void load();
+  }
+  // The generation of the drawer rendered below; its callbacks close over it.
+  const gen = drawerGen.current;
+
+  const chip = (active: boolean, label: string, count: number, onClick: () => void, key: string) => (
+    <button key={key} className={`records-filter-chip${active ? ' active' : ''}`} onClick={onClick}>
+      {label}
+      <span className="records-chip-count">{count}</span>
+    </button>
   );
 
   return (
@@ -153,29 +199,147 @@ export function SecretsPage() {
           <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} aria-hidden="true" />
         )}
         <main className="main">
-          <Topbar crumb="Memory" title="Secrets" />
+          <Topbar crumb="Memory" title="Secrets">
+            <TopbarSearch
+              placeholder={SEARCH_PLACEHOLDER}
+              value={filters.search}
+              onChange={v => setFilters(f => ({ ...f, search: v }))}
+            />
+            <TopbarDivider />
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => showDrawer(null, 'create')}
+            >
+              + New secret
+            </button>
+          </Topbar>
+
           {loadError ? (
             <div style={{ padding: 32, color: 'var(--app-destructive)', fontSize: 13 }}>
               <p style={{ margin: '0 0 12px' }}>{loadError}</p>
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()}>Retry</button>
             </div>
-          ) : rows === null ? (
-            <div style={{ padding: 32 }}><p className="settings-muted-hint">Loading…</p></div>
           ) : (
-            <div style={{ padding: '24px 32px' }}>
-              <p className="settings-page-sub" style={{ marginBottom: 16 }}>
-                Credentials Curia uses. Values are write-only: they are stored encrypted and never shown here.
-              </p>
-              <section className="settings-section" style={{ maxWidth: 900 }}>
-                <div className="settings-section-head">
-                  <h3 className="settings-section-title">Secrets</h3>
-                  <p className="settings-section-sub">
-                    {sorted.filter(r => r.configured).length} of {sorted.length} set
-                  </p>
+            <>
+              {/* Mobile search — TopbarSearch is hidden below 768px by the shared stylesheet */}
+              <div className="contacts-mobile-search">
+                <input
+                  type="text"
+                  placeholder={SEARCH_PLACEHOLDER}
+                  value={filters.search}
+                  onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
+                />
+              </div>
+
+              <div className="records-toolbar">
+                <div className="records-toolbar-left records-chip-groups">
+                  <div className="records-chip-group" role="group" aria-label="Kind">
+                    <span className="records-chip-group-label">Kind</span>
+                    {KIND_CHIPS.map(([v, label]) => chip(
+                      filters.kind === v, label, counts.kind[v],
+                      () => setFilters(f => ({ ...f, kind: v })), v,
+                    ))}
+                  </div>
+                  <div className="records-chip-group" role="group" aria-label="Status">
+                    <span className="records-chip-group-label">Status</span>
+                    {STATUS_CHIPS.map(v => chip(
+                      filters.status === v, STATUS_LABEL[v], counts.status[v], () => setFilter('status', v), v,
+                    ))}
+                  </div>
+                  <div className="records-chip-group" role="group" aria-label="Required">
+                    <span className="records-chip-group-label">Required</span>
+                    {REQUIRED_CHIPS.map(([v, label]) => chip(
+                      filters.required === v, label, counts.required[v], () => setFilter('required', v), v,
+                    ))}
+                  </div>
                 </div>
-                {sorted.map(row => <SecretRow key={row.name} row={row} onChanged={() => void load()} />)}
-              </section>
-            </div>
+                <div className="records-toolbar-right">
+                  <span className="topbar-meta">{visible.length} of {all.length}</span>
+                </div>
+              </div>
+
+              <div className="records-layout">
+                <div className="records-main">
+                  <div className="records-table-wrap">
+                    <table className="records-table secrets-table">
+                      <thead>
+                        <tr>
+                          {sortHeader('name', 'Name')}
+                          {sortHeader('kind', 'Kind')}
+                          {sortHeader('status', 'Status')}
+                          <th>Used for</th>
+                          {sortHeader('updatedAt', 'Updated')}
+                          {sortHeader('lastUsedAt', 'Last used')}
+                          <th aria-label="Actions" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visible.map(r => (
+                          <tr
+                            key={r.name}
+                            className={selected?.name === r.name ? 'active' : ''}
+                            onClick={() => openView(r)}
+                          >
+                            <td><NameCell row={r} /></td>
+                            <td className="cell-muted">{KIND_LABEL[r.kind]}</td>
+                            <td><StatusPill row={r} /></td>
+                            <td><UsedFor row={r} sameSite={hints.get(r.name)} /></td>
+                            <td className={`secrets-nowrap ${r.updatedAt ? 'cell-mono' : 'cell-muted'}`}>{shortDate(r.updatedAt, now)}</td>
+                            <td className={`secrets-nowrap ${r.lastUsedAt ? 'cell-mono' : 'cell-muted'}`}>{lastUsedText(r, now)}</td>
+                            <td>
+                              <div className="cell-actions" onClick={e => e.stopPropagation()}>
+                                {/* The row's click opens View too, but a row can't take focus: this is the keyboard path
+                                    (and the only way to reach Remove, which lives in View). */}
+                                <button className="btn-icon" title="View" aria-label={`View ${r.name}`} onClick={() => openView(r)}>
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>
+                                  </svg>
+                                </button>
+                                {/* Platform keys belong to the deployment and orphans can only be removed: no edit affordance. */}
+                                {canEditValue(r) && (
+                                  <button className="btn-icon" title="Edit" aria-label={`Edit ${r.name}`} onClick={() => openEdit(r)}>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+                                    </svg>
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {rows === null && (
+                          <tr><td colSpan={7} className="secrets-empty">Loading…</td></tr>
+                        )}
+                        {rows !== null && visible.length === 0 && (
+                          <tr><td colSpan={7} className="secrets-empty">No secrets match.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {drawerMode === 'view' && selected && (
+                  <SecretViewDrawer
+                    key={`view-${selected.name}`}
+                    row={selected}
+                    onClose={closeDrawer}
+                    onEdit={() => showDrawer(selected, 'edit')}
+                    onRemoved={() => handleChanged(gen)}
+                  />
+                )}
+                {drawerMode === 'edit' && selected && (
+                  <SecretEditDrawer
+                    key={`edit-${selected.name}`}
+                    row={selected}
+                    onClose={closeDrawer}
+                    onSaved={() => void handleEdited(selected.name, gen)}
+                  />
+                )}
+                {drawerMode === 'create' && (
+                  <SecretCreateDrawer existingRows={all} onClose={closeDrawer} onSaved={() => handleChanged(gen)} />
+                )}
+              </div>
+            </>
           )}
         </main>
       </div>

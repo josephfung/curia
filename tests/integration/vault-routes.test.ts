@@ -26,6 +26,9 @@ const hdr = { 'x-web-bootstrap-secret': SECRET };
 // cleanup only ever touches this suite's own rows (no race with other integration suites
 // that use a 'test_%' prefix).
 const DECLARED_KEY = 'vault_rt_declared_key';
+// Personal keys live under user.*; the suite's own are user.vault_rt_*.
+const PERSONAL_LABEL = 'vault_rt personal code';
+const PERSONAL_KEY = 'user.vault_rt_personal_code';
 
 describeIf('vault routes', () => {
   let pool: pg.Pool;
@@ -67,7 +70,8 @@ describeIf('vault routes', () => {
 
   beforeEach(async () => {
     // Scope cleanup to this suite's own namespace only — never the shared 'test_%' prefix.
-    await pool.query("DELETE FROM secrets WHERE name LIKE 'vault_rt_%'");
+    await pool.query("DELETE FROM secrets WHERE name LIKE 'vault_rt_%' OR name LIKE 'user.vault_rt_%'");
+    await pool.query("DELETE FROM user_secret_details WHERE name LIKE 'user.vault_rt_%'");
   });
 
   it('requires auth', async () => {
@@ -145,11 +149,47 @@ describeIf('vault routes', () => {
     expect(again.json()).toEqual({ ok: true, removed: false });
   });
 
-  it('rejects deleting a name outside the allowlist and leaves it in place', async () => {
-    const svc = new SecretsService(pool, KEY, logger);
-    await svc.set('vault_rt_undeclared', 'keep-me');
+  it('rejects deleting a name neither declared nor in the vault', async () => {
     const res = await app.inject({ method: 'DELETE', url: '/api/vault/secrets/vault_rt_undeclared', headers: hdr });
     expect(res.statusCode).toBe(400);
-    expect(await svc.get('vault_rt_undeclared')).toBe('keep-me');
+  });
+
+  it('deletes an orphaned key that no skill declares', async () => {
+    const svc = new SecretsService(pool, KEY, logger);
+    await svc.set('vault_rt_orphan', 'stale');
+    const res = await app.inject({ method: 'DELETE', url: '/api/vault/secrets/vault_rt_orphan', headers: hdr });
+    expect(res.statusCode).toBe(200);
+    expect(await svc.get('vault_rt_orphan')).toBeNull();
+  });
+
+  it('creates a personal secret with details, audited as a two-stage set, and deletes both', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/vault/user-secrets', headers: hdr,
+      payload: { type: 'other', label: PERSONAL_LABEL, username: 'vault-rt-user', value: 'pw-personal-rt' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ name: PERSONAL_KEY, replaced: false });
+    expect(res.body).not.toContain('pw-personal-rt');
+
+    const svc = new SecretsService(pool, KEY, logger);
+    expect(await svc.get(PERSONAL_KEY)).toBe('pw-personal-rt');
+    expect((await svc.listUserDetails()).get(PERSONAL_KEY)).toEqual({ username: 'vault-rt-user' });
+
+    // audit_log is append-only, so earlier runs' rows for this name stay: read the newest two.
+    const { rows } = await pool.query<{ event_type: string; action: string; stage: string; payload: string }>(
+      `SELECT event_type, payload->>'action' AS action, payload->>'stage' AS stage, payload::text AS payload
+         FROM audit_log WHERE payload->>'secretName' = $1
+        ORDER BY timestamp DESC, seq DESC LIMIT 2`,
+      [PERSONAL_KEY],
+    );
+    expect(rows.reverse().map(r => `${r.event_type}:${r.action}:${r.stage}`)).toEqual([
+      'secret.changed:set:requested', 'secret.changed:set:completed',
+    ]);
+    expect(rows.map(r => r.payload).join()).not.toContain('pw-personal-rt');
+
+    const del = await app.inject({ method: 'DELETE', url: `/api/vault/secrets/${encodeURIComponent(PERSONAL_KEY)}`, headers: hdr });
+    expect(del.statusCode).toBe(200);
+    expect(await svc.get(PERSONAL_KEY)).toBeNull();
+    expect((await svc.listUserDetails()).has(PERSONAL_KEY)).toBe(false);
   });
 });
