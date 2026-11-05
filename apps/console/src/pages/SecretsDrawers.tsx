@@ -309,6 +309,8 @@ export function SecretViewDrawer({ row, onClose, onEdit, onRemoved }: {
             <Fact label="Label">{row.card.label ?? <span className="secrets-hint">None saved</span>}</Fact>
             <Fact label="Brand">{cardBrandName(row.card)}</Fact>
             <Fact label="Last four">••{row.card.last4}</Fact>
+            <Fact label="Name on card">{row.card.cardholder_name}</Fact>
+            <Fact label="Postal code">{row.card.billing_zip ?? <span className="secrets-hint">None saved</span>}</Fact>
             <Fact label="Expiry">
               {row.card.expiry}
               {row.card.expired && <> <span className="status-pill secrets-status blocked">Expired</span></>}
@@ -389,10 +391,17 @@ function CardEditDrawer({ row, card, onClose, onSaved }: EditDrawerProps & { car
     label: card.label ?? '',
     expiryMonth,
     expiryYear,
-    // The list summary carries no postal code, so a blank field can only mean "keep it".
-    hadBillingZip: false,
+    cardholderName: card.cardholder_name,
+    billingZip: card.billing_zip ?? '',
   };
-  const [form, setForm] = useState<CardFormState>({ ...EMPTY_CARD_FORM, label: original.label, expiryMonth, expiryYear });
+  const [form, setForm] = useState<CardFormState>({
+    ...EMPTY_CARD_FORM,
+    label: original.label,
+    expiryMonth,
+    expiryYear,
+    cardholderName: original.cardholderName,
+    billingZip: original.billingZip,
+  });
   const [newCvv, setNewCvv] = useState('');
   const [replacing, setReplacing] = useState(false);
   const [replacement, setReplacement] = useState<CardFormState>(EMPTY_CARD_FORM);
@@ -466,9 +475,6 @@ function CardEditDrawer({ row, card, onClose, onSaved }: EditDrawerProps & { car
         <>
           <CardFields mode="edit-public" state={form} errors={showErrors ? errors : {}}
             onChange={patch => setForm(f => ({ ...f, ...patch }))} />
-          <p className="secrets-hint">
-            Name and postal code stay as saved unless you fill them in; the number isn't needed to change them.
-          </p>
           <div className="form-field">
             <label htmlFor="se-cvv">New CVV</label>
             <input id="se-cvv" type="password" inputMode="numeric" autoComplete="off" maxLength={4}

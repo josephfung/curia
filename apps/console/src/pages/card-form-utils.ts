@@ -69,9 +69,9 @@ export interface CardEditOriginal {
   label: string;
   expiryMonth: string;
   expiryYear: string;
-  /** The billing postal code had a value, so a blank field clears it. The list summary does not
-   *  carry the postal code, so the Secrets page can only say false. */
-  hadBillingZip: boolean;
+  cardholderName: string;
+  /** A blank field against a saved postal code sends '' (clear). */
+  billingZip: string;
 }
 
 function expiryUnchanged(state: CardFormState, original: CardEditOriginal | undefined): boolean {
@@ -123,8 +123,7 @@ export function validateCardForm(
 
   if (mode === 'full' || mode === 'edit-public') {
     const name = state.cardholderName.trim();
-    // The saved name is not shown back, so a blank name in an edit means "keep it".
-    if ((name.length === 0 && mode === 'full') || name.length > CARDHOLDER_MAX) {
+    if (name.length === 0 || name.length > CARDHOLDER_MAX) {
       errors.cardholderName = 'Enter the name on the card (up to 100 characters).';
     }
     const zip = state.billingZip.trim();
@@ -164,9 +163,12 @@ export function buildCardPayload(
   }
   if (mode === 'edit-public') {
     const name = state.cardholderName.trim();
-    if (name !== '') payload['cardholder_name'] = name;
-    if (zip !== '') payload['billing_zip'] = zip;
-    else if (original?.hadBillingZip) payload['billing_zip'] = '';
+    if (original === undefined || name !== original.cardholderName) payload['cardholder_name'] = name;
+    if (original === undefined) {
+      if (zip !== '') payload['billing_zip'] = zip;
+    } else if (zip !== original.billingZip) {
+      payload['billing_zip'] = zip; // '' clears
+    }
     if (original === undefined) {
       if (label !== '') payload['label'] = label;
     } else if (label !== original.label) {

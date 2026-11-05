@@ -17,6 +17,9 @@ export interface SecretCardSummary {
   last4: string;
   /** "MM/YYYY". */
   expiry: string;
+  cardholder_name: string;
+  /** null when none was saved. */
+  billing_zip: string | null;
   expired: boolean;
 }
 

@@ -261,7 +261,7 @@ describe('lastUsedText', () => {
 
 describe('saved cards', () => {
   const card = (over: Partial<NonNullable<SecretRowData['card']>> = {}) =>
-    ({ label: 'Personal', brand: 'visa' as const, last4: '1111', expiry: '12/2027', expired: false, ...over });
+    ({ label: 'Personal', brand: 'visa' as const, last4: '1111', expiry: '12/2027', cardholder_name: 'Ada', billing_zip: null, expired: false, ...over });
   const cardRow = (name: string, c = card()) =>
     row({ name, kind: 'personal', declaredBy: [], configured: true, valueFormat: 'json', card: c });
 

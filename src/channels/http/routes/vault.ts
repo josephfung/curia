@@ -148,6 +148,9 @@ export interface VaultCardSummary {
   last4: string;
   /** "MM/YYYY". */
   expiry: string;
+  cardholder_name: string;
+  /** null when none was saved. */
+  billing_zip: string | null;
   /** Past its expiry month. The page shows an Expired status for it. */
   expired: boolean;
 }
@@ -376,6 +379,8 @@ export async function vaultRoutes(
       brand: pub.brand,
       last4: pub.last4,
       expiry: `${pub.expiry_month}/${pub.expiry_year}`,
+      cardholder_name: pub.cardholder_name,
+      billing_zip: pub.billing_zip ?? null,
       expired: isCardExpired(pub),
     };
   }

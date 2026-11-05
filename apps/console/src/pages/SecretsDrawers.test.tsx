@@ -322,7 +322,7 @@ const CVV = '737';
 const cardRow = (over: Partial<NonNullable<SecretRowData['card']>> = {}) => row({
   name: 'user.personal_visa_card',
   valueFormat: 'json',
-  card: { label: 'Personal', brand: 'visa', last4: '1111', expiry: '12/2037', expired: false, ...over },
+  card: { label: 'Personal', brand: 'visa', last4: '1111', expiry: '12/2037', cardholder_name: 'Ada Lovelace', billing_zip: 'N2L 3G1', expired: false, ...over },
 });
 
 function select(id: string): HTMLSelectElement {
@@ -402,6 +402,8 @@ describe('SecretViewDrawer — card', () => {
     expect(text).toContain('Personal');
     expect(text).toContain('Visa');
     expect(text).toContain('••1111');
+    expect(text).toContain('Ada Lovelace');
+    expect(text).toContain('N2L 3G1');
     expect(text).toContain('01/2020');
     expect(text).toContain('Expired');
     expect(text).not.toContain('Sign-in page');
@@ -426,6 +428,8 @@ describe('SecretEditDrawer — card', () => {
     const onSaved = vi.fn();
     await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={onSaved} />);
     expect(button('Save')?.disabled).toBe(true);
+    expect(field('Name on card').value).toBe('Ada Lovelace');
+    expect(field('Billing postal code (optional)').value).toBe('N2L 3G1');
     await type(field('Label'), 'Work');
     await type(field('Name on card'), 'Ada L');
     await click(button('Save'));
@@ -433,6 +437,13 @@ describe('SecretEditDrawer — card', () => {
     expect(patch?.path).toBe('/api/vault/user-secrets/user.personal_visa_card');
     expect(bodyOf(patch)).toEqual({ label: 'Work', cardholder_name: 'Ada L' });
     expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends billing_zip '' when the postal code is cleared", async () => {
+    await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={() => {}} />);
+    await type(field('Billing postal code (optional)'), '');
+    await click(button('Save'));
+    expect(bodyOf(patchCall())).toEqual({ billing_zip: '' });
   });
 
   it("sends '' to clear the label", async () => {
@@ -489,6 +500,9 @@ describe('SecretEditDrawer — card', () => {
     await choose('card-exp-year', String(new Date().getFullYear() + 3));
     await type(field('Security code (CVV)'), CVV);
     await type(field('Name on card'), 'Ada Lovelace');
+    // Positive precheck: the secrets really are in the inputs before the save.
+    expect(field('Card number').value).toBe(NUMBER);
+    expect(field('Security code (CVV)').value).toBe(CVV);
     await click(button('Save'));
     expect(patchCall()).toBeDefined();
     const html = document.body.innerHTML;

@@ -955,10 +955,19 @@ describe('vault routes', () => {
       const row = (res.json().secrets as Array<Record<string, unknown>>).find(r => r['name'] === CARD_KEY)!;
       expect(row).toMatchObject({
         kind: 'personal', configured: true,
-        card: { label: 'Personal', brand: 'visa', last4: '1111', expiry: '12/2099', expired: false },
+        card: { label: 'Personal', brand: 'visa', last4: '1111', expiry: '12/2099', cardholder_name: 'Joseph Fung', billing_zip: null, expired: false },
       });
       expect(secrets.decrypts).not.toHaveBeenCalled();
       expect(res.body).not.toContain(NUMBER);
+    });
+
+    it('list carries the cardholder name and billing postal code, still without decrypting', async () => {
+      const secrets = fakeSecrets([CARD_KEY], savedCard({ publicFields: { ...PUB, billing_zip: 'N2L 3G1' } }), FORMATS);
+      app = await build(secrets, fakeRegistry([]));
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+      const row = (res.json().secrets as Array<Record<string, unknown>>).find(r => r['name'] === CARD_KEY)!;
+      expect(row['card']).toMatchObject({ cardholder_name: 'Joseph Fung', billing_zip: 'N2L 3G1' });
+      expect(secrets.decrypts).not.toHaveBeenCalled();
     });
 
     it('expired card status is expired', async () => {
@@ -966,7 +975,7 @@ describe('vault routes', () => {
       app = await build(fakeSecrets([CARD_KEY], savedCard({ publicFields: expiredPub, label: undefined }), FORMATS), fakeRegistry([]));
       const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
       const row = (res.json().secrets as Array<Record<string, unknown>>).find(r => r['name'] === CARD_KEY)!;
-      expect(row['card']).toEqual({ label: null, brand: 'visa', last4: '1111', expiry: '01/2020', expired: true });
+      expect(row['card']).toEqual({ label: null, brand: 'visa', last4: '1111', expiry: '01/2020', cardholder_name: 'Joseph Fung', billing_zip: null, expired: true });
       expect(row['configured']).toBe(true);
     });
 
