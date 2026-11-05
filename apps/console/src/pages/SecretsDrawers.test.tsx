@@ -117,6 +117,7 @@ describe('SecretEditDrawer — personal', () => {
     await type(field('New password'), 'fixture-value-1');
     await click(button('Save'));
     expect(bodyOf(mocks.calls.find(c => c.init?.method === 'PATCH'))).toEqual({ value: 'fixture-value-1' });
+    expect(field('New password').value).toBe('');
   });
 
   it('hides the value field for a JSON-valued secret and says why', async () => {

@@ -137,6 +137,8 @@ describeIf('SecretsService', () => {
       const b = rows.find(r => r.name === `${P}b`)!;
       expect(a.valueFormat).toBe('string');
       expect(b.valueFormat).toBe('json');
+      expect(Object.keys(a).sort()).toEqual(['createdAt', 'name', 'updatedAt', 'valueFormat']);
+      expect(Object.keys(b).sort()).toEqual(['createdAt', 'name', 'updatedAt', 'valueFormat']);
       expect(a.createdAt).toBeInstanceOf(Date);
       expect(a.updatedAt).toBeInstanceOf(Date);
       expect(JSON.stringify(rows)).not.toContain('v1');
