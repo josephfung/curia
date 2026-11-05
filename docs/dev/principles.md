@@ -20,6 +20,8 @@ the maintainer settles a parked question in a way that will recur, add it here.
   Because every new rules model or config adds to a list the maintainer has to keep in his head ([ADR-029](../adr/029-passive-email-observation-and-counterfactual-competence.md) made the same call: existing stores, no new memory types).
 - **Ship a capability whole: its setup-wizard entry and docs page are part of it.**
   Because a capability nobody can configure is not shipped (CLAUDE.md "Setup wizard").
+- **When a change breaks a sibling repo's contract, plan the paired PR in the same piece of work.**
+  Because a break left for later fails the other repo's tests until someone notices.
 
 ## Where behavior lives
 
@@ -48,6 +50,8 @@ the maintainer settles a parked question in a way that will recur, add it here.
   Because leaning on an assumed guarantee (e.g. treating the advisory, fail-open instance lock in `src/db/instance-lock.ts` as a single-writer guarantee) has had to be retracted in review.
 - **Push back on race conditions that need two concurrent actions by the one principal; don't add locks for them.**
   Because Curia serves a single principal and such races are not feasible in practice. Real single-user bugs still get fixed.
+- **Accept a risk a human assistant would also carry; don't build heavy defenses against it.**
+  Because Curia is held to a human assistant's standard, not a stricter one.
 - **Make fail-open versus fail-closed an explicit, commented choice; authorization gates fail closed.**
   Because an unstated default becomes a silent hole ([ADR-034](../adr/034-channel-contributed-principal-carveout-registry.md), review checklist "Best-effort steps").
 - **Before working around a design decision, find out why it was made (`git log -S`).**
@@ -103,6 +107,8 @@ the maintainer settles a parked question in a way that will recur, add it here.
   Because the approval band exists for the second case, not the first ([ADR-049](../adr/049-band-driven-autonomy.md)).
 - **Leave a production switch that changes how Curia sounds (speech providers, voices) until the maintainer has heard it.**
   Because pass rates and benchmarks don't capture how it sounds.
+- **Prefer defaults that work without extra API keys; make a key an optional upgrade.**
+  Because a new install should work out of the box.
 
 ## Process
 
@@ -122,6 +128,7 @@ as a question with its options, answerable in one line, and finish the rest of t
 - Raising a budget: always-on prompt, tool definitions, model or API spend, a paid test run, or the minimum host spec.
 - New or changed public API surface (the list in CLAUDE.md "When to bump the version number").
 - Reversing a deliberate earlier decision: an ADR, an accepted limitation, or a pushback the maintainer already made.
+- Choosing a new external service, or a dependency that shapes the system.
 - Product scope: a new capability, widening an issue beyond its gap, or dropping something the issue promised.
 - Autonomy and privacy gating: `action_risk` classes, band thresholds, trust tiers, PII disclosure rules, secret handling.
 - Switching a production provider or model whose quality the maintainer judges by ear.
