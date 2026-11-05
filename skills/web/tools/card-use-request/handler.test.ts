@@ -103,7 +103,7 @@ describe('card-use-request', () => {
     expect(layer).toBe('execution');
     expect(event.type).toBe('card_use.requested');
     expect(event.payload).toEqual({
-      requestId: 'req-1', secretName: 'user.visa', siteDomain: 'aircanada.com', amount: 'CA$412.30',
+      requestId: 'req-1', secretName: 'user.visa', siteDomain: 'aircanada.com', conversationId: 'conv-1', amount: 'CA$412.30',
       brand: 'visa', last4: '1111', label: 'Personal',
     });
   });

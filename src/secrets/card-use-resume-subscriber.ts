@@ -26,7 +26,7 @@ import {
 /** Bound on the dedup set; FIFO eviction, same reasoning as the secret-capture subscriber. */
 const MAX_DISPATCHED_IDS = 10_000;
 
-function resumeCopy(decision: 'approved' | 'denied' | 'expired', purpose: string, site: string): string {
+function resumeCopy(decision: CardUseDecidedEvent['payload']['decision'], purpose: string, site: string): string {
   switch (decision) {
     case 'approved':
       return `The principal approved the card payment for ${purpose} on ${site}. Continue the checkout in the same browser session.`;
@@ -34,6 +34,8 @@ function resumeCopy(decision: 'approved' | 'denied' | 'expired', purpose: string
       return `The principal declined the card payment for ${purpose}. Don't fill the card; tell them you stopped.`;
     case 'expired':
       return `The card confirmation for ${purpose} expired without an answer. Ask again only if they still want it.`;
+    case 'failed':
+      return `The principal approved the card payment for ${purpose}, but a technical failure stopped the approval from taking effect, so no card was filled. Tell them what happened and ask whether to retry.`;
   }
 }
 
@@ -129,15 +131,31 @@ export class CardUseResumeSubscriber {
       parentEventId: taskEventId ?? event.id,
     });
 
+    // Deny and dismiss run inside the requesting turn, which holds the conversation lane, so
+    // awaiting delivery would wait on that lane until the turn ends. Persist the task first
+    // (awaited, so a process stop cannot lose the continuation), then start delivery detached.
+    // A failure is logged and the dedup mark released.
     try {
       this.registerRouting?.(task.id, { channelId, conversationId, senderId, originator: routingOriginator });
-      await this.bus.publish('system', task);
-      this.logger.info({ eventId: event.id, agentId, conversationId, secretName, decision }, 'Resumed agent after card-use decision');
     } catch (err) {
       this.dispatched.delete(event.id);
-      this.logger.error({ err, eventId: event.id, agentId, conversationId }, 'Failed to dispatch resume agent.task after card-use decision');
+      this.logger.error({ err, eventId: event.id, agentId, conversationId }, 'Failed to register routing for the card-use resume agent.task');
       throw err;
     }
+    let staged;
+    try {
+      staged = await this.bus.stagePublish('system', task);
+    } catch (err) {
+      this.dispatched.delete(event.id);
+      this.logger.error({ err, eventId: event.id, agentId, conversationId }, 'Failed to persist resume agent.task after card-use decision');
+      throw err;
+    }
+    void staged.deliver().then(
+      () => this.logger.info({ eventId: event.id, agentId, conversationId, secretName, decision }, 'Resumed agent after card-use decision'),
+      (err: unknown) => {
+        this.logger.error({ err, eventId: event.id, agentId, conversationId }, 'Failed to deliver resume agent.task after card-use decision');
+      },
+    );
   }
 
   private markDispatched(eventId: string): void {

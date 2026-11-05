@@ -102,7 +102,7 @@ renewal edits them with no decrypt, and "is this card expired?" is a plain read.
 `brand` are derived from the number at write time and are never editable on their own.
 
 The vault row and the details row are written in **one transaction** (a new
-`SecretsService.setStructured(name, schema, secretDoc, publicFields, label)`); a card must
+`SecretsService.setCard(name, secretDoc, publicFields, label)`); a card must
 never exist with one half. Removing the key deletes both, as PR #2478 already does for
 details.
 
@@ -262,14 +262,14 @@ validation is the authority.
   CVV, cardholder name, billing postal code. Live brand display; name preview
   (`user.personal_visa_card`) and replace warning through the existing `/preview`.
   `POST /api/vault/user-secrets` accepts `type: 'credit_card'` with a `card` object and writes
-  through `setStructured`. Replacing an existing card from Create is allowed (today's
+  through `setCard`. Replacing an existing card from Create is allowed (today's
   "JSON-valued key can't be replaced" refusal stays for untagged JSON).
 - **View.** Label, brand, last four, expiry (with Expired pill), cardholder name, billing
   postal code — all from public fields. Recent uses shows the field filled ("filled
   `expiry_mm`") and card-use confirmations ("You approved CA$412.30 at aircanada.com").
 - **Edit.** Label, expiry, cardholder name and billing postal code save without touching the
   vault (a `details` change). "New CVV" optional; blank keeps the current one. "Replace card"
-  opens the full card fields for a new number. Both go through `setStructured` and validate
+  opens the full card fields for a new number. Both go through `setCard` and validate
   server-side.
 - **Remove.** Unchanged flow.
 
@@ -291,7 +291,7 @@ A stack on PR #2478, each PR shippable. No path can create a card until PR 2, an
 confirmation gate lands in PR 1, so there's never a window where a card can be filled without
 a confirmation.
 
-1. **Core.** Registry, migration 118, `setStructured`, resolver `#` and bare-ref refusal,
+1. **Core.** Registry, migration 118, `setCard`, resolver `#` and bare-ref refusal,
    `secretField`, card-use grants, `card-use-request` / `card-use-confirm` and the
    resume, ADRs.
 2. **Agent surface.** `select` + `secret_ref`, `list-user-secrets` card output and selection
@@ -358,7 +358,7 @@ a confirmation.
 - Where grants live (new table vs. a row kind) and how the resume is published, as long as
   the approval UX is the existing one and every answer path resumes.
 - The exact IIN ranges for brand detection.
-- Whether `setStructured` takes a client or opens its own transaction.
+- Whether `setCard` takes a client or opens its own transaction.
 - Component structure on the Secrets page, following PR #2478's patterns.
 
 ## My calls (not decided by the principal)

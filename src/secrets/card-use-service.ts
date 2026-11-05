@@ -70,7 +70,7 @@ export interface CardUseRequestResult {
 export interface CardUseCapability {
   request(input: CardUseRequestInput, ctx: CardUseRequestContext): Promise<CardUseRequestResult>;
   confirm(requestId: string, via?: ApprovalVia, approvingConversationId?: string): Promise<CardUseConfirmResult>;
-  decline(requestId: string, status?: 'denied' | 'expired'): Promise<void>;
+  decline(requestId: string, status?: 'denied' | 'expired' | 'failed'): Promise<void>;
 }
 
 /** approve-action refuses a card-use row the principal was never shown (#1358). */
@@ -80,6 +80,10 @@ export const UNSHOWN_CARD_USE_ERROR =
 /** approve-action refuses a card-use row filed in the same turn (#1358). */
 export const SAME_TURN_CARD_USE_ERROR =
   'The principal has to answer this confirmation themselves in a later message — ask them to reply "approve N" again or react 👍.';
+
+/** approve-action refuses a card-use row when the message it answers predates the confirmation (#1358). */
+export const PREDATING_CARD_USE_ERROR =
+  'That message was sent before the confirmation reached the principal. Ask them to reply "approve N" again or react 👍.';
 
 export const CARD_USE_CONTINUE_MESSAGE = 'Approved. Continue the checkout now in the same browser session.';
 export const CARD_USE_EXPIRED_MESSAGE =
@@ -147,6 +151,7 @@ export class CardUseService implements CardUseCapability {
       requestId: id,
       secretName: input.secretName,
       siteDomain,
+      conversationId: ctx.conversationId,
       amount: input.amount,
       brand: pub.publicFields.brand,
       last4: pub.publicFields.last4,
@@ -195,15 +200,16 @@ export class CardUseService implements CardUseCapability {
     };
   }
 
-  /** Resolve a pending request as denied (default) or expired, and resume the conversation. */
-  async decline(requestId: string, status: 'denied' | 'expired' = 'denied'): Promise<void> {
+  /** Resolve a pending request as denied (default), expired, or failed (the principal approved
+   *  but the replay broke), and resume the conversation. A failed request is stored as expired. */
+  async decline(requestId: string, status: 'denied' | 'expired' | 'failed' = 'denied'): Promise<void> {
     const { repo, logger } = this.deps;
     const row = await repo.get(requestId);
     if (!row) {
       logger.warn({ requestId }, 'card-use: decline for an unknown request');
       return;
     }
-    const changed = await repo.decide(requestId, status);
+    const changed = await repo.decide(requestId, status === 'failed' ? 'expired' : status);
     if (!changed) return;
     await this.publishDecided(row, status, undefined, true);
     logger.info({ requestId, status }, 'card-use: request declined');
@@ -211,8 +217,8 @@ export class CardUseService implements CardUseCapability {
 
   private async publishDecided(
     row: NonNullable<Awaited<ReturnType<CardUseRepo['get']>>>,
-    decision: 'approved' | 'denied' | 'expired',
-    via: ApprovalVia | undefined,
+    decision: 'approved' | 'denied' | 'expired' | 'failed',
+    via:ApprovalVia | undefined,
     resume: boolean,
   ): Promise<boolean> {
     // The resolution is already committed, so a failed publish can't undo it. Log it loudly:
@@ -222,6 +228,7 @@ export class CardUseService implements CardUseCapability {
         requestId: row.id,
         secretName: row.secretName,
         siteDomain: row.siteDomain,
+        conversationId: row.conversationId,
         decision,
         ...(via ? { via } : {}),
         resume,

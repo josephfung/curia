@@ -99,6 +99,7 @@ describe('card-use-confirm', () => {
       requestId: 'req-1',
       secretName: 'user.visa',
       siteDomain: 'aircanada.com',
+      conversationId: 'conv-1',
       decision: 'approved',
       via: 'reaction',
       resume: true,
