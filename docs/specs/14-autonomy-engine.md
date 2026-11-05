@@ -294,7 +294,7 @@ Effective standing is also what handlers see: `ctx.taskMetadata` carries the pos
 
 ## Band gating (#2159)
 
-`autonomy.gating: band | tier` (`config/default.yaml`) chooses who decides when Curia asks first. It ships as `tier`, the contact-tier policy described above (Gate C's tier veto and the outbound filter's Stage 2.5). Under `band` the score decides, and contact tier only matters when an outsider is steering Curia. See [ADR-049](../adr/049-band-driven-autonomy.md).
+`autonomy.gating: band | tier` (`config/default.yaml`) chooses who decides when Curia asks first. It defaults to `band` (#2192). `tier` is the contact-tier policy described above (Gate C's tier veto and the outbound filter's Stage 2.5), kept selectable for one release before it is removed (#2194). Under `band` the score decides, and contact tier only matters when an outsider is steering Curia. See [ADR-049](../adr/049-band-driven-autonomy.md).
 
 ### Behavior by band
 

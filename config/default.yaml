@@ -635,8 +635,9 @@ autonomy:
   #   tier — contact tier gates consequential actions (Gate C) and disclosures (Stage 2.5).
   #   band — the autonomy band decides; the escalation judge reviews sends for an
   #          outsider steering Curia, claims in the principal's voice, and grounding.
-  # Ships as tier. Flip to band in local.yaml; the default changes after a clean week.
-  gating: tier
+  # Defaults to band since #2192. To keep the contact-tier gates, set `gating: tier` in
+  # local.yaml; tier is removed in a later release (#2194).
+  gating: band
 
   bypass_ladder:
     same_task: 70      # posture B floor — must not drop below 60
