@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Review checks** — tests fail on over-long changelog bullets, unguarded test-database writes and table-wide test wipes.
+- **Pre-PR review checklist** — `docs/dev/review-checklist.md` lists recurring review findings to check before opening a PR.
 - **Band grounding scenarios** — 35a (RSVP dietary details) and 35b (out-of-office claim) join the release gate. (#2192)
 - **Secrets page** — Memory → Secrets lists, sets, replaces and removes vault secrets; values never shown. (#2453)
 - **`DELETE /api/vault/secrets/:name`** — removes a declared secret; refused while an enabled component needs it, unless forced. (#2453)
@@ -277,7 +279,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Principal-addressed email** — autonomy and identity gates still run when anyone besides the principal receives it. (#2273)
 - **workspace-mcp dependencies** — cutoff moved to 2026-10-29 for pyasn1 0.6.5 and pypdf 6.21.4, clearing eleven HIGH advisories. (curia-deploy#366)
 - **workspace-mcp dependencies** — cutoff moved to 2026-10-22 for pypdf 6.21.2, clearing three HIGH advisories (CVE-2026-115572, CVE-2026-115580, CVE-2026-115585). (curia-deploy#335)
-- **workspace-mcp dependencies** — cutoff moved to 2026-10-21, picking up certifi 2026.10.19 and pypdf 6.21.1 in the image; clears a CRITICAL, four MEDIUM and a LOW advisory (GHSA-6q48-6c7w-9gw2, CVE-2026-113792–113795, CVE-2026-113786). (curia-deploy#324)
+- **workspace-mcp dependencies** — cutoff moved to 2026-10-21 for certifi and pypdf 6.21.1, clearing six advisories, one CRITICAL. (curia-deploy#324)
 - **fastify** — bumped to 5.12.6, clearing a LOW advisory (CVE-2026-107832).
 - **sanitize-html** — bumped to 2.18.1, clearing a MEDIUM advisory (CVE-2026-113650).
 - **markdown-it** — bumped to 15.0.3, clearing a HIGH and a LOW advisory (CVE-2026-111758, CVE-2026-111766).
@@ -293,6 +295,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **zod** — override floor set to 4.6.6, clearing a HIGH DoS advisory (CVE-2023-54404).
 - **Principal redaction bypass** — a third party CC'd on a message to the principal no longer bypasses redaction. (#2312)
 - **Saved drafts** — `send-draft` checks drafts for PII; unallowed details hold, or refuse unless principal-directed. (#2312)
+- **Approval reactions** — a 👍 binds only to the principal's own notification, matching that approval's number and expiry. (#2159)
+- **Approval references** — an unreadable or mis-keyed `short_ref` fails closed instead of picking the sole pending approval. (#2159)
 
 ### Fixed
 
@@ -422,11 +426,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Approval attribution** — resolve tools record `coordinator`; only reaction decisions count as principal feedback. (#2159)
 - **Contact merge** — keeps calendars, grant recommendations and task or message references instead of dropping them. (#2233)
 - **`web-browser` redirect settle** — waits out JavaScript sign-in redirect chains before reading; reports `settled` and `redirect_chain`. (#2244)
-
-### Security
-
-- **Approval reactions** — a 👍 binds only to the principal's own notification, matching that approval's number and expiry. (#2159)
-- **Approval references** — an unreadable or mis-keyed `short_ref` fails closed instead of picking the sole pending approval. (#2159)
 
 ## [0.44.0] — 2026-10-16 — "WALL-E"
 

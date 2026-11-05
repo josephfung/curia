@@ -275,6 +275,8 @@ When creating a new GitHub issue:
 
 ## Creating Pull Requests
 
+Before opening a PR, review the diff against `docs/dev/review-checklist.md`.
+
 Every PR that resolves a tracked issue must include `Closes #N` (or `Fixes #N`) in the PR body. GitHub uses this to auto-close the linked issue on merge. Include it in the Summary section.
 
 ## Architecture Decision Records (ADRs)
