@@ -131,9 +131,10 @@ export class CardUseResumeSubscriber {
       parentEventId: taskEventId ?? event.id,
     });
 
-    // Deny and dismiss run inside the requesting turn, which holds the conversation lane, so an
-    // awaited publish would wait on that lane until the turn ends. Publish detached; a failure
-    // is logged and the dedup mark released.
+    // Deny and dismiss run inside the requesting turn, which holds the conversation lane, so
+    // awaiting delivery would wait on that lane until the turn ends. Persist the task first
+    // (awaited, so a process stop cannot lose the continuation), then start delivery detached.
+    // A failure is logged and the dedup mark released.
     try {
       this.registerRouting?.(task.id, { channelId, conversationId, senderId, originator: routingOriginator });
     } catch (err) {
@@ -141,11 +142,18 @@ export class CardUseResumeSubscriber {
       this.logger.error({ err, eventId: event.id, agentId, conversationId }, 'Failed to register routing for the card-use resume agent.task');
       throw err;
     }
-    void this.bus.publish('system', task).then(
+    let staged;
+    try {
+      staged = await this.bus.stagePublish('system', task);
+    } catch (err) {
+      this.dispatched.delete(event.id);
+      this.logger.error({ err, eventId: event.id, agentId, conversationId }, 'Failed to persist resume agent.task after card-use decision');
+      throw err;
+    }
+    void staged.deliver().then(
       () => this.logger.info({ eventId: event.id, agentId, conversationId, secretName, decision }, 'Resumed agent after card-use decision'),
       (err: unknown) => {
-        this.dispatched.delete(event.id);
-        this.logger.error({ err, eventId: event.id, agentId, conversationId }, 'Failed to dispatch resume agent.task after card-use decision');
+        this.logger.error({ err, eventId: event.id, agentId, conversationId }, 'Failed to deliver resume agent.task after card-use decision');
       },
     );
   }

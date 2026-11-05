@@ -12,20 +12,24 @@ import { encodeResumeToken } from '../../../src/agents/resume-token.js';
 function makeFakeBus() {
   const handlers = new Map<EventType, Array<(e: BusEvent) => unknown>>();
   const published: Array<{ layer: Layer; event: BusEvent }> = [];
+  const delivered: BusEvent[] = [];
+  let failStage = false;
   const bus = {
     subscribe(type: EventType, _layer: Layer, handler: (e: BusEvent) => unknown) {
       const list = handlers.get(type) ?? [];
       list.push(handler);
       handlers.set(type, list);
     },
-    async publish(layer: Layer, event: BusEvent) {
+    async stagePublish(layer: Layer, event: BusEvent) {
+      if (failStage) throw new Error('write-ahead failed');
       published.push({ layer, event });
+      return { deliver: async () => { delivered.push(event); } };
     },
   } as unknown as EventBus;
   async function emit(event: BusEvent) {
     for (const h of handlers.get(event.type) ?? []) await h(event);
   }
-  return { bus, published, emit };
+  return { bus, published, delivered, emit, setFailStage: (v: boolean) => { failStage = v; } };
 }
 
 const ORIGINATOR = {
@@ -60,11 +64,11 @@ function makeDecided(overrides: Partial<CardUseDecidedPayload> = {}) {
 }
 
 function setup() {
-  const { bus, published, emit } = makeFakeBus();
+  const { bus, published, delivered, emit, setFailStage } = makeFakeBus();
   const registerRouting = vi.fn<ResumeRoutingRegistrar>();
   new CardUseResumeSubscriber(bus, createSilentLogger(), registerRouting).start();
   const tasks = () => published.filter((p) => p.event.type === 'agent.task').map((p) => p.event as AgentTaskEvent);
-  return { published, emit, registerRouting, tasks };
+  return { published, delivered, emit, registerRouting, tasks, setFailStage };
 }
 
 describe('CardUseResumeSubscriber', () => {
@@ -80,6 +84,23 @@ describe('CardUseResumeSubscriber', () => {
     expect(task.payload.senderId).toBe('ceo');
     expect(task.parentEventId).toBe('task-evt-9');
     expect(registerRouting).toHaveBeenCalledWith(task.id, expect.objectContaining({ channelId: 'email', conversationId: 'conv-1' }));
+  });
+
+  it('persists the task before the handler returns, then delivers it', async () => {
+    const { emit, tasks, delivered } = setup();
+    await emit(makeDecided());
+    expect(tasks()).toHaveLength(1);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('propagates a persist failure and lets the event be replayed', async () => {
+    const { emit, tasks, setFailStage } = setup();
+    const event = makeDecided();
+    setFailStage(true);
+    await expect(emit(event)).rejects.toThrow('write-ahead failed');
+    setFailStage(false);
+    await emit(event);
+    expect(tasks()).toHaveLength(1);
   });
 
   it('resumes with denied copy', async () => {
