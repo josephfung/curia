@@ -172,6 +172,22 @@ describe('McpRegistryService', () => {
     expect(secrets.delete).not.toHaveBeenCalledWith('google_oauth_client_id');
   });
 
+  it('uninstall(): never deletes a platform key a server also declares', async () => {
+    const WITH_PROVIDER: McpStdioServerEntry = {
+      name: 'llm-bridge', transport: 'stdio', command: './cmd', action_risk: 'low',
+      secrets: [
+        { key: 'openrouter_api_key', label: 'Key', required: false, secret: true, inject: { env: 'OPENROUTER_API_KEY' } },
+        { key: 'bridge_token', label: 'Token', required: false, secret: true, inject: { env: 'BRIDGE_TOKEN' } },
+      ],
+    };
+    const secrets = makeSecrets({});
+    const svc = new McpRegistryService(makeRepo(), [WITH_PROVIDER], secrets);
+    await svc.install('llm-bridge', 'actor');
+    await svc.uninstall('llm-bridge', 'actor');
+    expect(secrets.delete).not.toHaveBeenCalledWith('openrouter_api_key');
+    expect(secrets.delete).toHaveBeenCalledWith('bridge_token');
+  });
+
   it('declaredSecretKeys(): returns union of all declared keys across servers', () => {
     const svc = new McpRegistryService(makeRepo(), [ATPROTO, GOOGLE], makeSecrets({}));
     const keys = svc.declaredSecretKeys();

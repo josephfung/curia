@@ -166,7 +166,6 @@ describe('saved-card fills in a real browser (#1358)', () => {
     const result = await run({ session_id: sessionId, action: 'select', selector: '#m', secret_ref: 'user.visa#expiry_month_name' });
     expect(result.success).toBe(true);
     expect(await livePage('/month-name').$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('m12');
-    expectNoValue(result, 'December');
   }, 60_000);
 
   it('month select, short-name labels', async () => {
@@ -174,7 +173,6 @@ describe('saved-card fills in a real browser (#1358)', () => {
     const result = await run({ session_id: sessionId, action: 'select', selector: '#m', secret_ref: 'user.visa#expiry_month_short' });
     expect(result.success).toBe(true);
     expect(await livePage('/month-short').$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('s12');
-    expectNoValue(result, 'Dec');
   }, 60_000);
 
   it('month select, 01-12 labels', async () => {
@@ -182,8 +180,9 @@ describe('saved-card fills in a real browser (#1358)', () => {
     const result = await run({ session_id: sessionId, action: 'select', selector: '#m', secret_ref: 'user.visa#expiry_mm' });
     expect(result.success).toBe(true);
     expect(await livePage('/month-mm').$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('v12');
-    // "12" is too short to grep a whole JSON for; the page text read back must have it scrubbed.
-    expect((result as { data: { content: string } }).data.content).not.toMatch(/\b12\b/);
+    // Expiry is a public field: it must not be scrubbed from the page text, or a total like
+    // "CA$412.30" would read back corrupted.
+    expect((result as { data: { content: string } }).data.content).toMatch(/\b12\b/);
   }, 60_000);
 
   it('year select, 2027 labels with two-digit values', async () => {
@@ -191,7 +190,6 @@ describe('saved-card fills in a real browser (#1358)', () => {
     const result = await run({ session_id: sessionId, action: 'select', selector: '#y', secret_ref: 'user.visa#expiry_yyyy' });
     expect(result.success).toBe(true);
     expect(await livePage('/year-yyyy').$eval('#y', (el) => (el as HTMLSelectElement).value)).toBe('27');
-    expectNoValue(result, '2027');
   }, 60_000);
 
   it('MM/YY text box', async () => {
@@ -199,7 +197,6 @@ describe('saved-card fills in a real browser (#1358)', () => {
     const result = await run({ session_id: sessionId, action: 'type', selector: '#e', secret_ref: 'user.visa#expiry_mm_yy' });
     expect(result.success).toBe(true);
     expect(await livePage('/mm-yy').$eval('#e', (el) => (el as HTMLInputElement).value)).toBe('12/27');
-    expectNoValue(result, '12/27');
   }, 60_000);
 
   it('separate MM and YYYY boxes, filled as one batch', async () => {
@@ -216,9 +213,7 @@ describe('saved-card fills in a real browser (#1358)', () => {
     const shop = livePage('/split-boxes');
     expect(await shop.$eval('#em', (el) => (el as HTMLInputElement).value)).toBe('12');
     expect(await shop.$eval('#ey', (el) => (el as HTMLInputElement).value)).toBe('2027');
-    // A batch that filled a secret takes no screenshot.
-    expect((result as { data: { screenshot_base64?: string } }).data.screenshot_base64).toBeUndefined();
-    expectNoValue(result, '2027');
+    // Public fields only: the batch screenshot is not suppressed (that latch is for number/cvv).
   }, 60_000);
 
   it('dropdowns in one batch, via select steps', async () => {
@@ -229,7 +224,6 @@ describe('saved-card fills in a real browser (#1358)', () => {
     });
     expect(result.success).toBe(true);
     expect(await livePage('/month-name').$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('m12');
-    expectNoValue(result, 'December');
   }, 60_000);
 
   it('card number inside a cross-origin iframe on the page', async () => {

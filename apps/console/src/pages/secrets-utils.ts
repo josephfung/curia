@@ -219,7 +219,10 @@ export function sortSecrets(
 ): SecretRowData[] {
   const byName = (a: SecretRowData, b: SecretRowData) => a.name.localeCompare(b.name);
   const byStatus = (a: SecretRowData, b: SecretRowData) => STATUS_ORDER[secretStatus(a)] - STATUS_ORDER[secretStatus(b)];
-  if (sort === null) return [...rows].sort((a, b) => byStatus(a, b) || byName(a, b));
+  // Default: missing rows first, then every other row by name. Status ranks are only for the
+  // explicit `status` sort, so an unset optional `z` does not jump ahead of a configured `a`.
+  const isMissing = (r: SecretRowData) => (secretStatus(r) === 'missing' ? 0 : 1);
+  if (sort === null) return [...rows].sort((a, b) => isMissing(a) - isMissing(b) || byName(a, b));
   const dir = sort.dir === 'asc' ? 1 : -1;
   return [...rows].sort((a, b) => {
     switch (sort.key) {

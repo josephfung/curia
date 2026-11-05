@@ -88,6 +88,7 @@ function notMergeTombstone(alias: string): string {
 }
 
 interface KgEdgeRow {
+  archived_at?: string | null;
   id: string;
   source_node_id: string;
   target_node_id: string;
@@ -98,6 +99,80 @@ interface KgEdgeRow {
   source: string;
   created_at: string;
   last_confirmed_at: string;
+}
+
+/** Live node and edge counts for the whole graph, sent with every /api/kg/graph response (#2479). */
+interface KgGraphTotals {
+  nodes: number;
+  edges: number;
+  byType: Record<string, number>;
+  bySensitivity: Record<string, number>;
+}
+
+/**
+ * Counts the live graph — nodes and edges that are not archived — so the console can
+ * say "X of Y shown" instead of presenting a capped canvas as the whole graph. Merge
+ * tombstones are archived, so they are never counted.
+ */
+async function loadGraphTotals(pool: Pool): Promise<KgGraphTotals> {
+  const groups = await pool.query<{ type: string; sensitivity: string; count: string }>(
+    `SELECT type, COALESCE(sensitivity, 'internal') AS sensitivity, count(*)::text AS count
+     FROM kg_nodes
+     WHERE archived_at IS NULL
+     GROUP BY type, COALESCE(sensitivity, 'internal')`,
+  );
+  const edges = await pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+     FROM kg_edges e
+     JOIN kg_nodes s ON s.id = e.source_node_id AND s.archived_at IS NULL
+     JOIN kg_nodes t ON t.id = e.target_node_id AND t.archived_at IS NULL
+     WHERE e.archived_at IS NULL`,
+  );
+  const totals: KgGraphTotals = { nodes: 0, edges: Number(edges.rows[0]?.count ?? 0), byType: Object.create(null) as Record<string, number>, bySensitivity: Object.create(null) as Record<string, number> };
+  for (const row of groups.rows) {
+    const n = Number(row.count);
+    totals.nodes += n;
+    totals.byType[row.type] = (totals.byType[row.type] ?? 0) + n;
+    totals.bySensitivity[row.sensitivity] = (totals.bySensitivity[row.sensitivity] ?? 0) + n;
+  }
+  return totals;
+}
+
+/**
+ * The GET /api/kg/graph body. `truncated` is true when a limit cut nodes from the view;
+ * `totals` describes the whole live graph, not this response.
+ */
+function graphPayload(nodes: KgGraphNodeRow[], edges: KgEdgeRow[], truncated: boolean, totals: KgGraphTotals) {
+  return {
+    nodes: nodes.map((row) => ({
+      id: row.id,
+      type: row.type,
+      label: row.label,
+      properties: row.properties,
+      confidence: row.confidence,
+      decayClass: row.decay_class,
+      source: row.source,
+      createdAt: row.created_at,
+      lastConfirmedAt: row.last_confirmed_at,
+      sensitivity: row.sensitivity,
+      aliases: row.aliases ?? [],
+      archived: row.archived_at !== null && row.archived_at !== undefined,
+    })),
+    edges: edges.map((row) => ({
+      id: row.id,
+      sourceNodeId: row.source_node_id,
+      targetNodeId: row.target_node_id,
+      type: row.type,
+      confidence: row.confidence,
+      decayClass: row.decay_class,
+      source: row.source,
+      createdAt: row.created_at,
+      lastConfirmedAt: row.last_confirmed_at,
+      archived: row.archived_at !== null && row.archived_at !== undefined,
+    })),
+    truncated,
+    totals,
+  };
 }
 
 function normalizeLimit(raw: string | undefined, fallback: number, max: number): number {
@@ -240,60 +315,109 @@ export async function knowledgeGraphRoutes(
       node_id?: string;
       depth?: string;
       limit?: string;
+      scope?: string;
+      include_facts?: string;
+      exclude_facts?: string;
     };
 
     const nodeId = query.node_id?.trim();
     const depth = normalizeLimit(query.depth, 2, 4);
     const limit = normalizeLimit(query.limit, 100, 300);
+    const isTrue = (raw: string | undefined): boolean => raw === 'true' || raw === '1';
 
     // Reject malformed UUIDs before they reach SQL — Postgres would throw a cast error
     // and surface as a 500 rather than a useful 400 for the caller.
     if (nodeId && !isUuid(nodeId)) {
       return reply.status(400).send({ error: 'Invalid node_id: must be a valid UUID.' });
     }
+    if (query.scope !== undefined && query.scope !== 'all') {
+      return reply.status(400).send({ error: "Invalid scope: the only supported value is 'all'." });
+    }
+    if (query.scope === 'all' && nodeId) {
+      return reply.status(400).send({ error: 'scope=all cannot be combined with node_id.' });
+    }
 
+    // scope=all (#2479): the whole live graph — every unarchived node and every
+    // unarchived edge between two of them, with no limit. Facts are left out unless
+    // include_facts=true: they are about half the graph and hang off a single entity.
+    if (query.scope === 'all') {
+      const includeFacts = isTrue(query.include_facts);
+      const nodes = await pool.query<KgGraphNodeRow>(
+        `SELECT id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity,
+                aliases, archived_at
+         FROM kg_nodes
+         WHERE archived_at IS NULL
+           AND ($1::boolean OR type <> 'fact')`,
+        [includeFacts],
+      );
+      // Restricted to the returned node ids: the two queries are separate snapshots, so an
+      // edge committed between them must not reference a node missing from `nodes`.
+      const nodeIds = nodes.rows.map((row) => row.id);
+      const edges = await pool.query<KgEdgeRow>(
+        `SELECT e.id, e.source_node_id, e.target_node_id, e.type, e.properties, e.confidence, e.decay_class, e.source,
+                e.created_at, e.last_confirmed_at, e.archived_at
+         FROM kg_edges e
+         WHERE e.archived_at IS NULL
+           AND e.source_node_id = ANY($1::uuid[])
+           AND e.target_node_id = ANY($1::uuid[])`,
+        [nodeIds],
+      );
+      const totals = await loadGraphTotals(pool);
+      logger.debug({ nodes: nodes.rowCount, edges: edges.rowCount, includeFacts }, 'kg: full graph served');
+      return reply.send(graphPayload(nodes.rows, edges.rows, false, totals));
+    }
+
+    // Both bounded views fetch one row past the limit so the response can say whether
+    // the limit cut anything (`truncated`), rather than passing a slice off as the whole.
+    //
     // Merge tombstones (#2233) are never drawn or traversed through; only the focal node
     // itself (the CTE anchor) may be one, so the 404 node_merged below can name the survivor.
+    //
+    // The focal view ranks by hop distance first, then recency (#2479). Ranking on
+    // recency alone let newer two-hop nodes push the focal node itself and its direct
+    // neighbours out of a well-connected node's view. The anchor is depth 0, so it is
+    // always kept. UNION (not UNION ALL) dedupes (id, depth) pairs, which bounds the walk
+    // to nodes × depth rows instead of enumerating every path.
     const nodeResult = nodeId
       ? await pool.query<KgGraphNodeRow>(
-          // visited tracks the set of node IDs already expanded, preventing the same
-          // node from being re-expanded when reached at a different depth (which UNION
-          // alone can't prevent because depth is part of each row's identity).
-          `WITH RECURSIVE traversal AS (
-             SELECT id, 0 AS depth, ARRAY[id] AS visited
+          `WITH RECURSIVE traversal(id, depth) AS (
+             SELECT id, 0
              FROM kg_nodes
              WHERE id = $1::uuid
-             UNION ALL
-             SELECT
-               o.id,
-               t.depth + 1,
-               t.visited || o.id
+             UNION
+             SELECT o.id, t.depth + 1
              FROM traversal t
              JOIN kg_edges e ON e.source_node_id = t.id OR e.target_node_id = t.id
              JOIN kg_nodes o ON o.id = CASE WHEN e.source_node_id = t.id THEN e.target_node_id ELSE e.source_node_id END
              WHERE t.depth < $2
-               AND NOT (o.id = ANY(t.visited))
                AND ${notMergeTombstone('o')}
+           ),
+           reached AS (
+             SELECT id, min(depth) AS depth FROM traversal GROUP BY id
            )
-           SELECT DISTINCT n.id, n.type, n.label, n.properties, n.confidence, n.decay_class, n.source, n.created_at, n.last_confirmed_at, n.sensitivity,
+           SELECT n.id, n.type, n.label, n.properties, n.confidence, n.decay_class, n.source, n.created_at, n.last_confirmed_at, n.sensitivity,
                   n.aliases, n.archived_at
-           FROM traversal t
-           JOIN kg_nodes n ON n.id = t.id
-           ORDER BY n.last_confirmed_at DESC
+           FROM reached r
+           JOIN kg_nodes n ON n.id = r.id
+           ORDER BY r.depth, n.last_confirmed_at DESC
            LIMIT $3`,
-          [nodeId, depth, limit],
+          [nodeId, depth, limit + 1],
         )
       : await pool.query<KgGraphNodeRow>(
           `SELECT id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity,
                   aliases, archived_at
            FROM kg_nodes n
            WHERE ${notMergeTombstone('n')}
+             AND (NOT $2::boolean OR type <> 'fact')
            ORDER BY last_confirmed_at DESC
            LIMIT $1`,
-          [limit],
+          [limit + 1, isTrue(query.exclude_facts)],
         );
 
-    if (nodeResult.rows.length === 0) {
+    const truncated = nodeResult.rows.length > limit;
+    const nodeRows = truncated ? nodeResult.rows.slice(0, limit) : nodeResult.rows;
+
+    if (nodeRows.length === 0) {
       // With a focal node_id the CTE anchor is that node itself: zero rows means no
       // kg_nodes row (including archived — the anchor is never filtered). An
       // isolated node still yields exactly one row (itself) and an empty edge list
@@ -302,14 +426,14 @@ export async function knowledgeGraphRoutes(
         logger.debug({ nodeId }, 'kg: graph node not found');
         return reply.status(404).send({ error: `Node not found: ${nodeId}` });
       }
-      return reply.send({ nodes: [], edges: [] });
+      return reply.send(graphPayload([], [], false, await loadGraphTotals(pool)));
     }
 
     // A deep link to a node that was merged away (#2233): send the console to the
     // survivor instead of drawing the tombstone. An archived node without merged_into
     // (decayed) keeps the behaviour above — it is still drawn.
     if (nodeId) {
-      const focal = nodeResult.rows.find((row) => row.id === nodeId);
+      const focal = nodeRows.find((row) => row.id === nodeId);
       const mergedInto = focal?.properties?.merged_into;
       if (focal?.archived_at && typeof mergedInto === 'string' && mergedInto.length > 0) {
         logger.debug({ nodeId, mergedInto }, 'kg: graph node was merged away');
@@ -322,46 +446,22 @@ export async function knowledgeGraphRoutes(
       }
     }
 
-    const nodeIds = nodeResult.rows.map((row) => row.id);
+    // Every edge between the returned nodes. The node set is capped (at most `limit`),
+    // so this is bounded without a LIMIT of its own — a cap here silently dropped edges.
+    const nodeIds = nodeRows.map((row) => row.id);
     const edgeResult = await pool.query<KgEdgeRow>(
-      `SELECT id, source_node_id, target_node_id, type, properties, confidence, decay_class, source, created_at, last_confirmed_at
+      `SELECT id, source_node_id, target_node_id, type, properties, confidence, decay_class, source, created_at, last_confirmed_at,
+              archived_at
        FROM kg_edges
        WHERE source_node_id = ANY($1::uuid[])
-         AND target_node_id = ANY($1::uuid[])
-       ORDER BY last_confirmed_at DESC
-       LIMIT 1000`,
+         AND target_node_id = ANY($1::uuid[])`,
       [nodeIds],
     );
+    const totals = await loadGraphTotals(pool);
 
-    logger.debug({ nodes: nodeResult.rowCount, edges: edgeResult.rowCount }, 'kg: graph query served');
+    logger.debug({ nodes: nodeRows.length, edges: edgeResult.rowCount, truncated }, 'kg: graph query served');
 
-    return reply.send({
-      nodes: nodeResult.rows.map((row) => ({
-        id: row.id,
-        type: row.type,
-        label: row.label,
-        properties: row.properties,
-        confidence: row.confidence,
-        decayClass: row.decay_class,
-        source: row.source,
-        createdAt: row.created_at,
-        lastConfirmedAt: row.last_confirmed_at,
-        sensitivity: row.sensitivity,
-        aliases: row.aliases ?? [],
-        archived: row.archived_at !== null && row.archived_at !== undefined,
-      })),
-      edges: edgeResult.rows.map((row) => ({
-        id: row.id,
-        sourceNodeId: row.source_node_id,
-        targetNodeId: row.target_node_id,
-        type: row.type,
-        confidence: row.confidence,
-        decayClass: row.decay_class,
-        source: row.source,
-        createdAt: row.created_at,
-        lastConfirmedAt: row.last_confirmed_at,
-      })),
-    });
+    return reply.send(graphPayload(nodeRows, edgeResult.rows, truncated, totals));
   });
 
   // ── Node merge (#2233, docs/wip/2026-10-21-kg-node-merge-design.md §8) ──────────

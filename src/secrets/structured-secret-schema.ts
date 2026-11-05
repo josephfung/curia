@@ -44,7 +44,8 @@ export type CardValidationReason =
   | 'expiry_format'
   | 'expired'
   | 'cardholder_missing'
-  | 'billing_zip_format';
+  | 'billing_zip_format'
+  | 'card_missing';
 
 // User-facing copy. Never include the offending value: it may be a card number.
 export const CARD_VALIDATION_MESSAGES: Record<CardValidationReason, string> = {
@@ -55,6 +56,7 @@ export const CARD_VALIDATION_MESSAGES: Record<CardValidationReason, string> = {
   expired: 'This card has expired.',
   cardholder_missing: 'Enter the name on the card (up to 100 characters).',
   billing_zip_format: 'The billing postal code can use letters, digits, spaces and dashes (up to 12 characters).',
+  card_missing: 'The card this link renews has been removed. Ask for a new card link.',
 };
 
 type ValidationFailure = { ok: false; reason: CardValidationReason };

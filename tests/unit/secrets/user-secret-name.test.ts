@@ -210,12 +210,29 @@ describe('siteIdentityFromUrl', () => {
     ['https://www.amazon.co.uk/', 'amazon'],
     ['http://localhost:8080', 'localhost'],
     ['https://192.168.1.10/login', '192.168.1.10'],
+    // Short registrable names under a ccTLD are the site, not a second-level suffix.
+    ['https://login.ing.de/', 'ing'],
+    ['https://login.dkb.de/', 'dkb'],
+    ['https://my.example.com.au/', 'example'],
+    // A trailing dot is the same site.
+    ['https://rogers.com./', 'rogers'],
+    ['https://www.rogers.com./signin', 'rogers'],
   ])('%s -> %s', (url, expected) => {
     expect(siteIdentityFromUrl(url)).toBe(expected);
   });
 
   it.each(['ftp://x.com', 'not a url'])('throws on %s', (url) => {
     expect(() => siteIdentityFromUrl(url)).toThrow();
+  });
+
+  it('never quotes the URL in its error, which can hold a password', () => {
+    const url = 'https://someone:hunter2@[bad';
+    expect(() => siteIdentityFromUrl(url)).toThrow('login URL is not a valid URL');
+    try { siteIdentityFromUrl(url); } catch (err) { expect(String(err)).not.toContain('hunter2'); }
+  });
+
+  it('gives two banks under the same ccTLD different names', () => {
+    expect(siteIdentityFromUrl('https://login.ing.de/')).not.toBe(siteIdentityFromUrl('https://login.dkb.de/'));
   });
 });
 

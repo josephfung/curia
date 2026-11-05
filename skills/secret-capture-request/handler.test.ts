@@ -258,6 +258,13 @@ describe('SecretCaptureRequestHandler card templates (#1358)', () => {
     expect(minter.userCalls[0]).toMatchObject({ rawName: 'personal visa card', template: 'credit_card', valueFormat: 'json', label: 'Personal', labelDerived: true });
   });
 
+  it('a card template refuses sign-in details and mints nothing', async () => {
+    const minter = fakeMinter();
+    const result = await run({ secret_name: 'personal visa card', template: 'credit_card', username: 'pat' }, minter);
+    expect(result.success).toBe(false);
+    expect(minter.userCalls).toHaveLength(0);
+  });
+
   it('credit_card uses card_label when given, and sends no label when nothing is left to derive', async () => {
     const minter = fakeMinter();
     await run({ secret_name: 'personal visa card', template: 'credit_card', card_label: ' Travel ' }, minter);

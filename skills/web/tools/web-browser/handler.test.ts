@@ -289,17 +289,32 @@ describe('web-browser select and card fills with secret_ref (#1358)', () => {
     expect(page.locator('x').selectOption).not.toHaveBeenCalled();
   });
 
+  it('a public card field is neither redacted nor does it suppress the screenshot', async () => {
+    const { ctx, session } = makeToolContext({
+      input: { action: 'select', selector: '#month', secret_ref: 'user.visa#expiry_mm', screenshot: true },
+      resolveSecretRef: vi.fn().mockResolvedValue('12'),
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(session.redactInjectedSecrets('Pay CA$412.30')).toBe('Pay CA$412.30');
+    if (result.success) {
+      expect((result.data as { screenshot_skipped?: string }).screenshot_skipped).toBeUndefined();
+    }
+  });
+
   it('select with secret_ref registers the value for redaction and suppresses the screenshot', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(MONTH_LABEL);
     const { ctx, session, page } = makeToolContext({
-      input: { action: 'select', selector: '#month', secret_ref: 'user.visa#expiry_month_name', screenshot: true },
+      input: { action: 'select', selector: '#month', secret_ref: 'user.visa#cvv', screenshot: true },
       resolveSecretRef,
     });
 
     const result = await new WebBrowserHandler().execute(ctx);
 
     expect(result.success).toBe(true);
-    expect(resolveSecretRef).toHaveBeenCalledWith('user.visa#expiry_month_name', { siteUrl: 'https://aeroplan.com/account' });
+    expect(resolveSecretRef).toHaveBeenCalledWith('user.visa#cvv', { siteUrl: 'https://aeroplan.com/account' });
     expect(page.locator('x').selectOption).toHaveBeenCalledWith(MONTH_LABEL);
     expect(session.redactInjectedSecrets(`exp ${MONTH_LABEL}`)).toBe('exp [REDACTED]');
     if (result.success) {
@@ -315,7 +330,7 @@ describe('web-browser select and card fills with secret_ref (#1358)', () => {
       input: {
         screenshot: true,
         actions: [
-          { action: 'select', selector: '#month', secret_ref: 'user.visa#expiry_month_name' },
+          { action: 'select', selector: '#month', secret_ref: 'user.visa#cvv' },
           { action: 'select', selector: '#year', value: '2030' },
         ],
       },
@@ -326,7 +341,7 @@ describe('web-browser select and card fills with secret_ref (#1358)', () => {
 
     expect(result.success).toBe(true);
     expect(resolveSecretRef).toHaveBeenCalledTimes(1);
-    expect(resolveSecretRef).toHaveBeenCalledWith('user.visa#expiry_month_name', { siteUrl: 'https://aeroplan.com/account' });
+    expect(resolveSecretRef).toHaveBeenCalledWith('user.visa#cvv', { siteUrl: 'https://aeroplan.com/account' });
     expect(page.locator('x').selectOption).toHaveBeenNthCalledWith(1, MONTH_LABEL);
     expect(page.locator('x').selectOption).toHaveBeenNthCalledWith(2, '2030');
     if (result.success) {
@@ -394,7 +409,7 @@ describe('web-browser select and card fills with secret_ref (#1358)', () => {
 
   it('an error thrown by selectOption after injection cannot echo the resolved value', async () => {
     const { ctx, page } = makeToolContext({
-      input: { action: 'select', selector: '#month', secret_ref: 'user.visa#expiry_month_name' },
+      input: { action: 'select', selector: '#month', secret_ref: 'user.visa#cvv' },
       resolveSecretRef: vi.fn().mockResolvedValue(MONTH_LABEL),
     });
     vi.mocked(page.locator('x').selectOption).mockRejectedValueOnce(new Error(`did not find option "${MONTH_LABEL}"`));

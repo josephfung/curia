@@ -196,7 +196,8 @@ function UseText({ u }: { u: SecretUse }) {
   }
   return (
     <span>
-      {u.agentId ?? 'Unknown agent'} · {u.toolName || u.source || 'unknown'}
+      {/* A null agentId is a system-initiated read, not missing data. */}
+      {u.agentId ?? 'System'} · {u.toolName || u.source || 'unknown'}
       {u.secretField && <> · Filled <code>{u.secretField}</code></>}
     </span>
   );
@@ -741,7 +742,9 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
     <DrawerShell
       title="New secret"
       onClose={onClose}
-      footer={<SaveFooter onClose={onClose} onSave={() => void handleSave()} saving={saving} disabled={!ready || structuredExisting} />}
+      // No Save until the name preview is back: a save before it could replace an existing
+      // secret without the replacement notice.
+      footer={<SaveFooter onClose={onClose} onSave={() => void handleSave()} saving={saving} disabled={!ready || preview === null || structuredExisting} />}
     >
       {error && <p className="autonomy-error">{error}</p>}
       <div className="form-field">

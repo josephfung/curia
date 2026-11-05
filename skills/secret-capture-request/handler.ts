@@ -144,6 +144,11 @@ export class SecretCaptureRequestHandler implements ToolHandler {
       return { success: false, error: 'The card form collects the expiry, name and postal code itself. Only card_label can be set on a link.' };
     }
 
+    // Sign-in details would be upserted onto the card's key, beside its card fields.
+    if (captureTemplate && hasUserSecretDetails(details)) {
+      return { success: false, error: 'A card link takes either sign-in details or card fields: login_url and username are not allowed with template.' };
+    }
+
     // Card links carry the card label; a renewal uses the saved card's own label (the minter fills it).
     let cardLabel: string | undefined;
     let labelDerived = false;

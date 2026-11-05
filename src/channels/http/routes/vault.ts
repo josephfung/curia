@@ -40,10 +40,10 @@ import { emailAccountGrantSecretName, isPerAccountEmailGrantKey } from '../../em
 import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
 import { actorFromRequest } from './sessions.js';
 import { isPlatformVaultKey, platformKeyLabel } from '../../../secrets/platform-keys.js';
-import type { SecretMetadata, UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
+import type { PersonalSecretWrite, SecretMetadata, UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
 import type { SecretUsagePort } from '../../../secrets/secret-usage-repo.js';
 import { consoleSecretNameInput, resolveUserSecretName, USER_SECRET_PREFIX } from '../../../secrets/user-secret-name.js';
-import { hasUserSecretDetails, parseUserSecretDetails, type UserSecretDetails } from '../../../secrets/user-secret-details.js';
+import { parseUserSecretDetails, type UserSecretDetails } from '../../../secrets/user-secret-details.js';
 import {
   CARD_LABEL_MAX,
   CARD_VALIDATION_MESSAGES,
@@ -123,6 +123,10 @@ export interface VaultSecretsPort {
     change: { cvv: string } | { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields },
   ): Promise<void>;
   renewCard(name: string, change: { cvv: string; publicFields: CreditCardPublicFields }): Promise<void>;
+  /** Value and sign-in details in one transaction; never replaces a JSON value. */
+  setUserSecret(name: string, value: string, details: UserSecretDetails): Promise<PersonalSecretWrite>;
+  /** Edit an existing personal key in one transaction; never recreates or replaces JSON. */
+  editUserSecret(name: string, edit: { value?: string; details?: UserSecretDetailsPatch }): Promise<PersonalSecretWrite>;
 }
 
 /** What declares a vault secret, as shown on the console Secrets page. */
@@ -654,8 +658,10 @@ export async function vaultRoutes(
 
   // -- GET /api/vault/secrets — every vault secret plus declared-but-unset ones (no values) --
   // Each vault name lands in exactly one row; the first matching rule wins:
-  //   1. platform key in the vault -> platform (real declarations plus a platform declarer)
-  //   2. user.*                    -> personal (sign-in details from user_secret_details)
+  //   1. platform key              -> platform (real declarations plus a platform declarer),
+  //                                   in the vault or only declared
+  //   2. user.*                    -> personal (sign-in details from user_secret_details, and
+  //                                   any declarers, which make it required)
   //   3. declared                  -> system (also covers declared names not in the vault)
   //   4. anything else in the vault -> system orphan, declaredBy: []
   app.get('/api/vault/secrets', AUTH_RATE, async (request, reply) => {
@@ -664,7 +670,9 @@ export async function vaultRoutes(
       const metadata = new Map((await secretsService.listMetadata()).map(m => [m.name, m]));
       const declarations = await collectDeclarations();
       const userDetails = await secretsService.listUserDetails();
-      const lastUsed = options.usage ? await options.usage.lastUsedByName() : new Map<string, Date>();
+      // Every name a row can carry: vault rows and declared-only ones (an env fallback is read too).
+      const listed = [...new Set([...metadata.keys(), ...declarations.keys()])];
+      const lastUsed = options.usage ? await options.usage.lastUsedByName(listed) : new Map<string, Date>();
 
       const row = (name: string, kind: VaultSecretKind, declaredBy: VaultSecretDeclarer[]): VaultSecretSummary => {
         const meta = metadata.get(name);
@@ -699,14 +707,19 @@ export async function vaultRoutes(
             { kind: 'platform', name: platformKeyLabel(name) ?? name, required: true, enabled: true },
           ]));
         } else if (name.startsWith('user.')) {
-          secrets.push(row(name, 'personal', []));
+          // Its declarers too, so `required` (the Required filter) agrees with the delete guard.
+          secrets.push(row(name, 'personal', declared));
         } else {
           secrets.push(row(name, 'system', declared));
         }
       }
-      // Declared but not in the vault: still listed so the page can say what is missing.
+      // Declared but not in the vault: still listed so the page can say what is missing. A
+      // platform key stays platform, so the page offers no Set the write routes would refuse.
       for (const [name, declaredBy] of declarations) {
-        if (!metadata.has(name)) secrets.push(row(name, 'system', declaredBy));
+        if (metadata.has(name)) continue;
+        secrets.push(isPlatformVaultKey(name)
+          ? row(name, 'platform', [...declaredBy, { kind: 'platform', name: platformKeyLabel(name) ?? name, required: true, enabled: true }])
+          : row(name, 'system', declaredBy));
       }
       secrets.sort((a, b) => a.name.localeCompare(b.name));
       return reply.send({ secrets });
@@ -773,9 +786,9 @@ export async function vaultRoutes(
   // Accepts an allowlisted name, or any name already in the vault (user.* keys and orphans);
   // a platform key is refused first. Refused with 409 while an enabled tool, MCP server,
   // channel or email account requires the key, naming what would stop working; the console
-  // confirms and retries with ?force=true. Personal keys and orphans have no declarers, so the
-  // 409 never fires for them. Deleting an allowlisted key that isn't set is a no-op: 200 with
-  // removed:false.
+  // confirms and retries with ?force=true. Orphans have no declarers, so the 409 never fires for
+  // them; a personal key fires it only when an enabled component declares it. Deleting an
+  // allowlisted key that isn't set is a no-op: 200 with removed:false.
   app.delete('/api/vault/secrets/:name', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const { name } = request.params as { name: string };
@@ -813,10 +826,8 @@ export async function vaultRoutes(
         ...(force ? { force: true, affected: affected.map(d => ({ kind: d.kind, name: d.name })) } : {}),
       };
       if (!await auditRequested(request, reply, change)) return;
-      // A delete that throws gets no outcome row: it may have committed first.
-      // A personal key's sign-in details go first, so a failure between the two can't leave
-      // stale details for a later create of the same name to inherit.
-      if (name.startsWith(USER_SECRET_PREFIX)) await secretsService.deleteUserDetails(name);
+      // A delete that throws gets no outcome row: it may have committed first. A personal
+      // key's sign-in details go in the same transaction (SecretsService.delete).
       await secretsService.delete(name);
       await auditCompleted(request, change);
       return reply.send({ ok: true, removed: true });
@@ -912,11 +923,15 @@ export async function vaultRoutes(
 
       const change: SecretChange = { name, action: 'set' };
       if (!await auditRequested(request, reply, change)) return;
-      await secretsService.set(name, checked.value);
-      // No details given: write no row (an empty one would only bump updated_at).
-      if (hasUserSecretDetails(details)) await secretsService.upsertUserDetails(name, details);
+      // Value and details in one transaction, so a failure keeps neither; no details given
+      // writes no details row. The write itself re-checks the format: a capture can have
+      // turned the key into JSON since the check above.
+      const written = await secretsService.setUserSecret(name, checked.value, details);
+      if (written.outcome !== 'written') {
+        return reply.status(409).send({ error: structuredValueRefusal(name) });
+      }
       await auditCompleted(request, change);
-      return reply.send({ name, replaced: meta !== undefined });
+      return reply.send({ name, replaced: written.replaced });
     } catch (err) {
       // No outcome row: the write may have committed before it threw. Key name only.
       request.log.error({ err, name }, 'vault personal secret create failed');
@@ -985,16 +1000,15 @@ export async function vaultRoutes(
       for (const change of changes) {
         if (!await auditRequested(request, reply, change)) return;
       }
-      // Each outcome row follows its own write, so a details failure doesn't drop the
-      // completed row for a value that was set.
-      if (value !== undefined) {
-        await secretsService.set(name, value);
-        await auditCompleted(request, { name, action: 'set' });
-      }
-      if (hasDetails) {
-        await secretsService.patchUserDetails(name, patch);
-        await auditCompleted(request, { name, action: 'details' });
-      }
+      // Value and details in one transaction, on a locked row: a delete or capture that landed
+      // since the checks above is not overwritten, and a failure keeps neither change.
+      const written = await secretsService.editUserSecret(name, {
+        ...(value !== undefined ? { value } : {}),
+        ...(hasDetails ? { details: patch } : {}),
+      });
+      if (written.outcome === 'missing') return reply.status(404).send({ error: `'${name}' no longer exists.` });
+      if (written.outcome === 'structured') return reply.status(409).send({ error: structuredValueRefusal(name) });
+      for (const change of changes) await auditCompleted(request, change);
       return reply.send({ ok: true });
     } catch (err) {
       // No outcome row: the write may have committed before it threw. Key name only.

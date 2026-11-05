@@ -139,7 +139,7 @@ Labels (exact):
 **Files:**
 - Modify: `src/bus/events.ts:996`. Change `SecretChangedPayload.action` to `'set' | 'delete' | 'details'` and extend its doc comment.
 - Modify: `src/audit/field-extraction.ts`. Add a `'secret.accessed'` extractor next to `'secret.changed'` (`:142`).
-- Create: `src/db/migrations/117_audit_log_secret_accessed_index.js`
+- Create: `src/db/migrations/118_audit_log_secret_accessed_index.js`
 - Create: `src/secrets/secret-usage-repo.ts`
 - Test: `tests/unit/audit/field-extraction.test.ts`, `tests/integration/secret-usage-repo.test.ts`
 

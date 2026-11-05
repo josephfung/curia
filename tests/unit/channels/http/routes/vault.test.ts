@@ -108,6 +108,22 @@ function fakeSecrets(
       order.push(`delete:${name}`);
       present.delete(name);
     },
+    // Mirror SecretsService: one call for value and details, refusing JSON and (edit) a missing key.
+    setUserSecret: async (name: string, value: string, d: UserSecretDetails) => {
+      if (formats[name] === 'json') return { outcome: 'structured' as const };
+      const replaced = present.has(name);
+      sets.push({ name, value });
+      present.add(name);
+      if (d.loginUrl !== undefined || d.username !== undefined) upserts.push({ name, details: d });
+      return { outcome: 'written' as const, replaced };
+    },
+    editUserSecret: async (name: string, edit: { value?: string; details?: UserSecretDetailsPatch }) => {
+      if (!present.has(name)) return { outcome: 'missing' as const };
+      if (edit.value !== undefined && formats[name] === 'json') return { outcome: 'structured' as const };
+      if (edit.value !== undefined) sets.push({ name, value: edit.value });
+      if (edit.details) patches.push({ name, patch: edit.details });
+      return { outcome: 'written' as const, replaced: true };
+    },
   };
 }
 
@@ -555,6 +571,24 @@ describe('vault routes', () => {
       expect(byName.get('linear_api_key')).toMatchObject({ kind: 'system', configured: false, valueFormat: null, createdAt: null, updatedAt: null });
     });
 
+    it('marks a personal key required while an enabled tool requires it, as the delete guard does', async () => {
+      app = await build(fakeSecrets(STORED, details), fakeRegistry(['user.rogers_password'], [toolEntry('bank-sync', 'enabled', ['user.rogers_password'])]));
+      const { byName } = await rows(app);
+      expect(byName.get('user.rogers_password')).toMatchObject({
+        kind: 'personal', required: true, declaredBy: [{ kind: 'tool', name: 'bank-sync', required: true, enabled: true }],
+      });
+      // And DELETE agrees: it is refused without force.
+      expect((await del(app, encodeURIComponent('user.rogers_password'))).statusCode).toBe(409);
+    });
+
+    it('lists a declared platform key that is not in the vault as platform, not system', async () => {
+      app = await build(fakeSecrets([]), fakeRegistry(['anthropic_api_key'], [toolEntry('t', 'enabled', ['anthropic_api_key'])]));
+      const { byName } = await rows(app);
+      expect(byName.get('anthropic_api_key')).toMatchObject({ kind: 'platform', configured: false, required: true });
+      // The write route refuses it, so the page must not offer Set.
+      expect((await put(app, 'anthropic_api_key', { value: 'k' })).statusCode).toBe(403);
+    });
+
     it('personal rows carry sign-in details and no value', async () => {
       const secrets = fakeSecrets(STORED, details);
       await secrets.set('user.rogers_password', 'hunter2-stored-value');
@@ -567,7 +601,7 @@ describe('vault routes', () => {
 
     it('dates and lastUsedAt come from metadata and usage', async () => {
       const usage: SecretUsagePort = {
-        lastUsedByName: async () => new Map([['user.rogers_password', new Date('2026-10-01T00:00:00.000Z')]]),
+        lastUsedByName: async (names: readonly string[]) => new Map(names.includes('user.rogers_password') ? [['user.rogers_password', new Date('2026-10-01T00:00:00.000Z')]] : []),
         recentUses: async () => [],
       };
       app = await build(fakeSecrets(STORED, details), fakeRegistry([]), { usage });
@@ -691,6 +725,32 @@ describe('vault routes', () => {
       expect(published).toEqual([]);
     });
 
+    // A capture can turn the key into JSON between the check and the write; the write itself
+    // refuses then, and the change gets no completed row.
+    it('POST refuses when the key became structured after its check', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets([]);
+      secrets.setUserSecret = async () => ({ outcome: 'structured' as const });
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await post(app, '/api/vault/user-secrets', {
+        type: 'website_login', loginUrl: 'https://www.rogers.com/signin', value: 'pw-new',
+      });
+      expect(res.statusCode).toBe(409);
+      expect(changes(published)).toEqual(['set:requested']);
+    });
+
+    it('POST writes no completed row when the combined write fails', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets([]);
+      secrets.setUserSecret = async () => { throw new Error('db down'); };
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await post(app, '/api/vault/user-secrets', {
+        type: 'website_login', loginUrl: 'https://www.rogers.com/signin', username: 'u', value: 'pw-new',
+      });
+      expect(res.statusCode).toBe(500);
+      expect(changes(published)).toEqual(['set:requested']);
+    });
+
     it('POST and PATCH reject a whitespace-only value', async () => {
       const secrets = fakeSecrets(['user.rogers_password']);
       app = await build(secrets, fakeRegistry());
@@ -785,15 +845,35 @@ describe('vault routes', () => {
       expect(JSON.stringify(published)).not.toContain('pw-patched');
     });
 
-    it('PATCH keeps the set:completed row when the details write fails', async () => {
+    // Value and details are one transaction (SecretsService.editUserSecret): a failure keeps
+    // neither, so neither change gets a completed row.
+    it('PATCH writes no completed row when the combined write fails', async () => {
       const { bus, published } = fakeBus();
       const secrets = fakeSecrets(['user.rogers_password']);
-      secrets.patchUserDetails = async () => { throw new Error('db down'); };
+      secrets.editUserSecret = async () => { throw new Error('db down'); };
       app = await build(secrets, fakeRegistry(), { bus });
       const res = await patch(app, 'user.rogers_password', { value: 'pw-patched', username: 'u' });
       expect(res.statusCode).toBe(500);
-      expect(secrets.sets).toHaveLength(1);
-      expect(changes(published)).toEqual(['set:requested', 'details:requested', 'set:completed']);
+      expect(changes(published)).toEqual(['set:requested', 'details:requested']);
+    });
+
+    it('PATCH reports a key deleted since its check as gone, and recreates nothing', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password']);
+      secrets.editUserSecret = async () => ({ outcome: 'missing' as const });
+      app = await build(secrets, fakeRegistry(), { bus });
+      const res = await patch(app, 'user.rogers_password', { value: 'pw' });
+      expect(res.statusCode).toBe(404);
+      expect(changes(published)).toEqual(['set:requested']);
+    });
+
+    it('PATCH refuses a key that became structured since its check', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets(['user.rogers_password']);
+      secrets.editUserSecret = async () => ({ outcome: 'structured' as const });
+      app = await build(secrets, fakeRegistry(), { bus });
+      expect((await patch(app, 'user.rogers_password', { value: 'pw' })).statusCode).toBe(409);
+      expect(changes(published)).toEqual(['set:requested']);
     });
 
     it('PATCH with only a value never touches the details', async () => {
@@ -820,6 +900,15 @@ describe('vault routes', () => {
       expect((await patch(app, DECLARED_SECRET, { value: 'x' })).statusCode).toBe(400);
       expect((await patch(app, 'user.rogers_password', { loginUrl: 'not a url' })).statusCode).toBe(400);
       expect((await patch(app, 'user.rogers_password', { username: 42 })).statusCode).toBe(400);
+      // A malformed URL with userinfo must not be echoed back in the error.
+      const leaky = await patch(app, 'user.rogers_password', { loginUrl: 'https://someone:hunter2@[bad' });
+      expect(leaky.statusCode).toBe(400);
+      expect(leaky.body).not.toContain('hunter2');
+      const leakyPost = await post(app, '/api/vault/user-secrets', {
+        type: 'other', label: 'x', value: 'v', loginUrl: 'https://someone:hunter2@[bad',
+      });
+      expect(leakyPost.statusCode).toBe(400);
+      expect(leakyPost.body).not.toContain('hunter2');
       expect(secrets.sets).toEqual([]);
       expect(secrets.patches).toEqual([]);
     });
@@ -857,10 +946,9 @@ describe('vault routes', () => {
       const res = await del(app, encodeURIComponent('user.rogers_password'));
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ ok: true, removed: true });
+      // One call: SecretsService.delete removes the details in the same transaction.
       expect(secrets.deletes).toEqual(['user.rogers_password']);
-      expect(secrets.detailDeletes).toEqual(['user.rogers_password']);
-      // Details go first so a failure cannot leave stale details for a later create to inherit.
-      expect(secrets.order).toEqual(['details-delete:user.rogers_password', 'delete:user.rogers_password']);
+      expect(secrets.detailDeletes).toEqual([]);
       expect(changes(published)).toEqual(['delete:requested', 'delete:completed']);
     });
 

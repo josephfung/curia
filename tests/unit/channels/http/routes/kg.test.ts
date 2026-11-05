@@ -900,6 +900,9 @@ describe('GET /api/kg/nodes and /api/kg/graph — merge-aware (#2233)', () => {
     vi.mocked(pool.query)
       .mockResolvedValueOnce({ rows: [{ ...nodeRow, aliases: null, archived_at: null }], rowCount: 1 } as never)
       .mockResolvedValueOnce({ rows: [], rowCount: 0 } as never)
+      // The two graph-totals queries (#2479).
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as never)
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as never)
       .mockResolvedValueOnce({ rows: [{ ...nodeRow, aliases: ['jd'], archived_at: null }], rowCount: 1 } as never)
       .mockResolvedValueOnce({ rows: [], rowCount: 0 } as never);
     app = await buildWithMerge(fakeMergeService(), pool);
@@ -916,11 +919,11 @@ describe('GET /api/kg/nodes and /api/kg/graph — merge-aware (#2233)', () => {
     const topN = await app.inject({ method: 'GET', url: '/api/kg/graph', headers: auth });
     expect(topN.statusCode).toBe(200);
     expect(topN.json().nodes[0]).toMatchObject({ aliases: ['jd'], archived: false });
-    const topNSql = String(vi.mocked(pool.query).mock.calls[2]![0]);
+    const topNSql = String(vi.mocked(pool.query).mock.calls[4]![0]);
     expect(topNSql).toContain("NOT (n.archived_at IS NOT NULL AND n.properties->>'merged_into' IS NOT NULL)");
     // Decayed archived nodes are not filtered out — only tombstones are.
     expect(topNSql).not.toMatch(/WHERE\s+archived_at IS NULL/);
-    const edgeSql = String(vi.mocked(pool.query).mock.calls[3]![0]);
+    const edgeSql = String(vi.mocked(pool.query).mock.calls[5]![0]);
     expect(edgeSql).toMatch(/source_node_id = ANY\(\$1::uuid\[\]\)\s+AND target_node_id = ANY\(\$1::uuid\[\]\)/);
   });
 });

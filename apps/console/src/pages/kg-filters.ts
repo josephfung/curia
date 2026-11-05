@@ -15,11 +15,22 @@ export interface KgFilter {
 export interface KgFilterable {
   type: string;
   sensitivity: string;
+  /** Archived nodes stay listed as options but are not counted (totals are live-only). */
+  archived?: boolean;
 }
 
 export interface KgFilterOption {
   value: string;
+  /** Nodes with this value on the canvas. */
   count: number;
+  /** Live nodes with this value in the whole graph, when the server reported totals (#2479). */
+  total?: number;
+}
+
+/** Whole-graph counts by facet, as served in GET /api/kg/graph's `totals`. */
+export interface KgFacetTotals {
+  byType: Readonly<Record<string, number>>;
+  bySensitivity: Readonly<Record<string, number>>;
 }
 
 // Canonical order for sensitivity levels, least to most sensitive.
@@ -62,25 +73,40 @@ export function toggleFilterValue(filter: KgFilter, axis: KgFilterAxis, value: s
  * carries them, so an active filter can always be unchecked. All four
  * sensitivity levels are always listed, in canonical order, followed by any
  * unexpected values; types are listed alphabetically.
+ *
+ * With `totals`, every option also carries its whole-graph count, and types that
+ * exist in the graph but not on the canvas are listed with count 0 — so the panel
+ * never presents the canvas's mix as the graph's (#2479).
  */
 export function filterOptions(
   nodes: readonly KgFilterable[],
   filter: KgFilter,
+  totals?: KgFacetTotals | null,
 ): { types: KgFilterOption[]; sensitivities: KgFilterOption[] } {
   const typeCounts = new Map<string, number>();
   const sensCounts = new Map<string, number>(SENSITIVITY_LEVELS.map(s => [s, 0]));
   for (const n of nodes) {
-    typeCounts.set(n.type, (typeCounts.get(n.type) ?? 0) + 1);
-    sensCounts.set(n.sensitivity, (sensCounts.get(n.sensitivity) ?? 0) + 1);
+    // Archived nodes are outside the whole-graph totals, so they are left out of the
+    // counts only when totals are shown; without totals the status counts every node.
+    const inc = totals && n.archived === true ? 0 : 1;
+    typeCounts.set(n.type, (typeCounts.get(n.type) ?? 0) + inc);
+    sensCounts.set(n.sensitivity, (sensCounts.get(n.sensitivity) ?? 0) + inc);
   }
   for (const t of filter.types) if (!typeCounts.has(t)) typeCounts.set(t, 0);
   for (const s of filter.sensitivities) if (!sensCounts.has(s)) sensCounts.set(s, 0);
+  if (totals) {
+    for (const t of Object.keys(totals.byType)) if (!typeCounts.has(t)) typeCounts.set(t, 0);
+    for (const s of Object.keys(totals.bySensitivity)) if (!sensCounts.has(s)) sensCounts.set(s, 0);
+  }
 
   const canonical = new Set<string>(SENSITIVITY_LEVELS);
   const extraSens = [...sensCounts.keys()].filter(s => !canonical.has(s)).sort();
+  const option = (value: string, count: number, all: Readonly<Record<string, number>> | undefined): KgFilterOption =>
+    all ? { value, count, total: all[value] ?? 0 } : { value, count };
 
   return {
-    types: [...typeCounts.keys()].sort().map(value => ({ value, count: typeCounts.get(value)! })),
-    sensitivities: [...SENSITIVITY_LEVELS, ...extraSens].map(value => ({ value, count: sensCounts.get(value)! })),
+    types: [...typeCounts.keys()].sort().map(value => option(value, typeCounts.get(value)!, totals?.byType)),
+    sensitivities: [...SENSITIVITY_LEVELS, ...extraSens].map(value =>
+      option(value, sensCounts.get(value)!, totals?.bySensitivity)),
   };
 }

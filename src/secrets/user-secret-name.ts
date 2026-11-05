@@ -16,6 +16,7 @@
 // The `user.` prefix is still a structural sandbox: nothing in this file can emit a
 // dot-free system key or a `channel.*` credential key.
 
+import { getDomainWithoutSuffix } from 'tldts';
 import { detectCardBrand } from './structured-secret-schema.js';
 
 /** Trust-boundary prefix for agent-captured personal secrets (#971 / #1497). */
@@ -214,31 +215,26 @@ export function resolveUserSecretName(input: string, existingUserKeys: readonly 
 const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 /**
- * The registrable site name from a sign-in URL: `www.rogers.com` -> `rogers`,
- * `www.amazon.co.uk` -> `amazon`. IPv4 hosts and dot-free hosts (`localhost`) are
- * returned as-is. Throws on an unparseable or non-http(s) URL.
+ * The registrable site name from a sign-in URL, by the public suffix list:
+ * `www.rogers.com` -> `rogers`, `www.amazon.co.uk` -> `amazon`, `login.ing.de` -> `ing`.
+ * A trailing dot (`rogers.com.`) names the same site. IPv4 hosts and dot-free hosts
+ * (`localhost`) are returned as-is. Throws on an unparseable or non-http(s) URL, with a
+ * fixed message: the URL itself can carry a password (`https://user:pass@…`).
  */
 export function siteIdentityFromUrl(url: string): string {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`'${url}' is not a valid URL`);
+    throw new Error('login URL is not a valid URL');
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('login URL must be http or https');
   }
-  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const host = parsed.hostname.toLowerCase().replace(/\.+$/, '').replace(/^www\./, '');
   if (IPV4_RE.test(host) || !host.includes('.')) return host;
-
-  const labels = host.split('.');
-  const last = labels[labels.length - 1]!;
-  const prev = labels[labels.length - 2]!;
-  // Two-letter country TLD under a short second-level label (co.uk, com.au): the site is one label further left.
-  if (last.length === 2 && prev.length <= 3 && labels.length >= 3) {
-    return labels[labels.length - 3]!;
-  }
-  return prev;
+  // null when the host is itself a public suffix (`co.uk`): name it by its first label.
+  return getDomainWithoutSuffix(host) ?? host.split('.')[0]!;
 }
 
 /**

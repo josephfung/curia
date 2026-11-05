@@ -149,6 +149,14 @@ describeIf('card capture links', () => {
     expect((await secrets.getCardSecret(minted.secretName)).cvv).toBe('123');
   });
 
+  it('renewal whose card was removed is refused as card_missing, not not_found', async () => {
+    await saveCard('user.cardcap10_visa_card');
+    const minted = await capture.mintUserSecret({ rawName: 'user.cardcap10_visa_card', template: 'credit_card_renewal' });
+    await secrets.delete('user.cardcap10_visa_card');
+    expect(await capture.redeemCard(minted.rawToken, { cvv: '123', expiry_month: '1', expiry_year: LATER_YEAR }))
+      .toEqual({ status: 'invalid_shape', reason: 'card_missing' });
+  });
+
   it('renewal on a non-card key errors at mint', async () => {
     await secrets.set('user.cardcap9_other_password', 'hunter2');
     await expect(capture.mintUserSecret({ rawName: 'user.cardcap9_other_password', template: 'credit_card_renewal' }))
