@@ -34,6 +34,8 @@ export interface PinResolution {
   toolNames: string[];
   /** Instruction bodies to append to the system prompt (non-empty only). */
   instructionBlocks: string[];
+  /** The skill each entry of `instructionBlocks` came from, index for index. */
+  instructionBlockSkills: string[];
   /** True when any pinned skill sets heartbeat: true. */
   heartbeatEligible: boolean;
   /** True when any pinned skill sets document_workspace: true. */
@@ -65,6 +67,7 @@ export function resolvePinnedSkills(
   const toolNames: string[] = [];
   const seenTools = new Set<string>();
   const instructionBlocks: string[] = [];
+  const instructionBlockSkills: string[] = [];
   const resolvedSkills: string[] = [];
   const resolvedPins: Array<{ pin: string; kind: PinReferentKind }> = [];
   const unresolvedPins: UnresolvedPin[] = [];
@@ -108,10 +111,16 @@ export function resolvePinnedSkills(
           skill.manifest.instructions,
           { references: refs, assets },
         );
-        if (block) instructionBlocks.push(block);
+        if (block) {
+          instructionBlocks.push(block);
+          instructionBlockSkills.push(pin);
+        }
       } else {
         const body = skill.manifest.instructions.trim();
-        if (body) instructionBlocks.push(body);
+        if (body) {
+          instructionBlocks.push(body);
+          instructionBlockSkills.push(pin);
+        }
       }
       if (skill.manifest.heartbeat) heartbeatEligible = true;
       if (skill.manifest.document_workspace) documentWorkspaceEnabled = true;
@@ -152,6 +161,7 @@ export function resolvePinnedSkills(
   return {
     toolNames,
     instructionBlocks,
+    instructionBlockSkills,
     heartbeatEligible,
     documentWorkspaceEnabled,
     resolvedSkills,
