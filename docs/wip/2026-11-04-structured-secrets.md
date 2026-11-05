@@ -36,7 +36,7 @@
   - `list-user-secrets` 0.2.0 → 0.3.0
   - `secret-capture-request` 0.4.0 → 0.5.0
   - new `card-use-request` and `card-use-confirm` start at 0.1.0
-- Migrations: 118 (PR 1), 119 (PR 2). Before every push, run `ls src/db/migrations | sort` and check every prefix is unique.
+- Migrations: 119 (PR 1), 120 (PR 2). Before every push, run `ls src/db/migrations | sort` and check every prefix is unique.
 - New ADR: next free number (expected 059); check `ls docs/adr` and open branches first. Add a row to `docs/adr/README.md`.
 - Commit with `git commit -s`, and no `Co-Authored-By` trailer. Run `pnpm -C <worktree> run typecheck` before every commit touching `.ts`.
 - CHANGELOG: one bullet per logical change, ≤15 words after the em-dash, public-API changes called out.
@@ -125,17 +125,17 @@ it.each([['4111111111111111','visa'],['5555555555554444','mastercard'],['2223003
 - [ ] **Step 4: Run** the same command. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(secrets): credit card schema registry and projections (#1358)`.
 
-### Task 2: Storage — migration 118 and `SecretsService` card methods
+### Task 2: Storage — migration 119 and `SecretsService` card methods
 
 **Files:**
-- Create: `src/db/migrations/118_structured_secrets_and_card_use.sql`
+- Create: `src/db/migrations/119_structured_secrets_and_card_use.sql`
 - Modify: `src/secrets/secrets-service.ts`, `src/secrets/user-secret-details.ts`, `src/secrets/user-secret-name.ts` (`card` type token)
 - Test: `tests/integration/secrets-service.test.ts`, `tests/unit/secrets/user-secret-name.test.ts`
 
 **Interfaces:**
 - Consumes: Task 1 types.
 - Produces:
-  - Migration 118, which:
+  - Migration 119, which:
     - adds to `user_secret_details`: `schema TEXT CHECK (schema IN ('credit_card'))`, `label TEXT`, `public_fields JSONB`, with CHECK `(schema IS NULL) = (public_fields IS NULL)`;
     - creates `card_use_requests`:
       - `id UUID PK DEFAULT gen_random_uuid()`, `secret_name TEXT NOT NULL CHECK (starts_with(secret_name,'user.'))`
@@ -173,7 +173,7 @@ it.each([['4111111111111111','visa'],['5555555555554444','mastercard'],['2223003
 - Test: `tests/integration/card-use-repo.test.ts`
 
 **Interfaces:**
-- Consumes: the migration-118 table; `registrableDomain` from `src/verification/domain.ts`; `CaptureOrigin` from `src/secrets/secret-capture-service.ts`.
+- Consumes: the migration-119 table; `registrableDomain` from `src/verification/domain.ts`; `CaptureOrigin` from `src/secrets/secret-capture-service.ts`.
 - Produces `class CardUseRepo` (constructor `(pool: Pool)`):
   - `create(r: { secretName: string; siteUrl: string; conversationId: string; taskId: string; amount: string; purpose: string; origin: CaptureOrigin }): Promise<{ id: string; siteDomain: string }>`. It throws when `registrableDomain(siteUrl)` is null.
   - `setShortRef(id: string, shortRef: string): Promise<void>`
