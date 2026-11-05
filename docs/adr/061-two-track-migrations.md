@@ -38,15 +38,18 @@ helpers. It runs:
 
 1. **Upstream:** `src/db/migrations/` into `pgmigrations`.
 2. **Local:** `src/db/migrations-local/` (or `CURIA_LOCAL_MIGRATIONS_DIR`) into
-   `pgmigrations_local`, only when that directory holds a migration.
+   `pgmigrations_local`, when the local track is in use: the directory holds a migration,
+   or `pgmigrations_local` has a row. The second half matters: a local directory that goes
+   missing must stop the boot, not turn the track off. An explicitly set
+   `CURIA_LOCAL_MIGRATIONS_DIR` must exist.
 
 The order check stays on within each track; the tracks are never compared with each other.
 Upstream never ships a migration in `migrations-local/`, only its README, so pulling upstream
 can't put a migration behind one a fork already ran. Local migrations may depend on upstream
 tables; upstream migrations never depend on local ones, and upstream always runs first.
 
-With no local migrations, the helper is one node-pg-migrate run over `src/db/migrations/`,
-exactly as before: no reconciliation, and no `pgmigrations_local` table.
+With the local track not in use, the helper is one node-pg-migrate run over
+`src/db/migrations/`, exactly as before: nothing is moved, checked or created.
 
 **2. Reconciliation.** A fork that applied its own migrations under upstream-style numbers
 moves those files into `migrations-local/` once (a git step; see
@@ -64,12 +67,15 @@ than guesses, writing nothing, when:
 A second run finds nothing to move. `pnpm migrate --dry-run` prints the planned moves, the
 order check on each track, any refusals, renames that would fix an out-of-order local track,
 and the tables, columns and indexes created on both tracks — a fork that reimplemented an
-upstream migration under its own name, which matching by name can't detect.
+upstream migration under its own name, which matching by name can't detect. It decides
+whether the local track is in use exactly as boot does, so the two never disagree, and it
+exits 0 (go ahead), 1 (boot would stop), 2 (warnings only) or 3 (the dry run failed).
 
 **3. Guarded, shape-checked upstream migrations.** From migration 118 on, every upstream
 DDL change must be safe on a database that already has the object, and must check its shape:
 
-- `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `DROP … IF EXISTS`.
+- `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `DROP … IF EXISTS`, inside a
+  `DO` block or not.
 - `ADD COLUMN` and `ADD CONSTRAINT` go in a `DO $$ … $$` block that, when the object exists,
   compares it with what upstream expects (type, nullability and default; for a constraint,
   an equivalent definition) and `RAISE EXCEPTION`s with an actionable message on a mismatch,
@@ -94,7 +100,8 @@ END $$;
 ```
 
 `tests/unit/db/migration-guards.test.ts` enforces this in CI from 118 on, along with unique
-numeric prefixes across all upstream files and an empty `migrations-local/` upstream.
+numeric prefixes across all upstream files and an empty `migrations-local/` upstream (that
+last check runs only in upstream's CI, since a fork's directory is meant to hold files).
 Migrations 001–117 are exempt and are not rewritten. The lint matches text, not SQL
 semantics: it checks that a `DO` block adding a column or constraint can raise, not that its
 comparison is right. Reviewers check that.

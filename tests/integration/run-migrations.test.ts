@@ -52,6 +52,12 @@ describeIf('runMigrations: upstream and local tracks', () => {
     return runMigrations({ databaseUrl: scratch.url, dirs, log: () => {} });
   }
 
+  /** What a run applied and moved, without the directory details. */
+  async function applied(): Promise<{ upstream: string[]; local: string[]; moved: string[] }> {
+    const { upstream, local, moved } = await migrate();
+    return { upstream, local, moved };
+  }
+
   async function names(table: 'pgmigrations' | 'pgmigrations_local'): Promise<string[]> {
     const exists = await pool.query<{ ok: boolean }>('SELECT to_regclass($1) IS NOT NULL AS ok', [table]);
     if (!exists.rows[0]!.ok) return [];
@@ -88,9 +94,9 @@ describeIf('runMigrations: upstream and local tracks', () => {
 
   it('runs upstream alone, as before, when the local directory is missing or holds no migrations', async () => {
     fill(dirs.upstream, ['001_core', '002_core']);
-    expect(await migrate()).toEqual({ upstream: ['001_core', '002_core'], local: [], moved: [] });
+    expect(await applied()).toEqual({ upstream: ['001_core', '002_core'], local: [], moved: [] });
     fill(dirs.local, []);
-    expect(await migrate()).toEqual({ upstream: [], local: [], moved: [] });
+    expect(await applied()).toEqual({ upstream: [], local: [], moved: [] });
     expect(await names('pgmigrations_local')).toEqual([]);
     const { rows } = await pool.query("SELECT to_regclass('pgmigrations_local') AS t");
     expect(rows[0].t).toBeNull();
@@ -104,22 +110,22 @@ describeIf('runMigrations: upstream and local tracks', () => {
 
     fill(dirs.upstream, ['001_core', '002_core', '003_core_new']);
     fill(dirs.local, ['003_fork_a', '004_fork_b']);
-    expect(await migrate()).toEqual({ upstream: ['003_core_new'], local: [], moved: ['003_fork_a', '004_fork_b'] });
+    expect(await applied()).toEqual({ upstream: ['003_core_new'], local: [], moved: ['003_fork_a', '004_fork_b'] });
     expect(await snapshot()).toEqual({ upstream: ['001_core', '002_core', '003_core_new'], local: ['003_fork_a', '004_fork_b'] });
 
     // id, name and run_on survive the move.
     const after = await pool.query('SELECT id, name, run_on FROM pgmigrations_local ORDER BY id');
     expect(after.rows).toEqual(before.rows);
 
-    expect(await migrate()).toEqual({ upstream: [], local: [], moved: [] });
+    expect(await applied()).toEqual({ upstream: [], local: [], moved: [] });
 
     // A new local migration takes an id past the moved rows.
     fill(dirs.local, ['003_fork_a', '004_fork_b', '005_fork_c']);
-    expect(await migrate()).toEqual({ upstream: [], local: ['005_fork_c'], moved: [] });
+    expect(await applied()).toEqual({ upstream: [], local: ['005_fork_c'], moved: [] });
 
     // An upstream migration added after local ones have run applies cleanly.
     fill(dirs.upstream, ['001_core', '002_core', '003_core_new', '004_core_later']);
-    expect(await migrate()).toEqual({ upstream: ['004_core_later'], local: [], moved: [] });
+    expect(await applied()).toEqual({ upstream: ['004_core_later'], local: [], moved: [] });
     expect(await snapshot()).toEqual({
       upstream: ['001_core', '002_core', '003_core_new', '004_core_later'],
       local: ['003_fork_a', '004_fork_b', '005_fork_c'],
@@ -141,6 +147,32 @@ describeIf('runMigrations: upstream and local tracks', () => {
     // With no local track at all, node-pg-migrate's own check still applies upstream.
     rmSync(dirs.local, { recursive: true });
     await expect(migrate()).rejects.toThrow('Not run migration 000_core_early is preceding already run migration 001_core');
+  });
+
+  it('fails on an explicitly named local directory that does not exist, before touching the database', async () => {
+    fill(dirs.upstream, ['001_core']);
+    dirs = { ...dirs, local: path.join(root, 'typo'), localRequired: true };
+    await expect(migrate()).rejects.toThrow(/CURIA_LOCAL_MIGRATIONS_DIR names .*typo, which does not exist/);
+    expect(await names('pgmigrations')).toEqual([]);
+  });
+
+  it('stops when local history exists but the local directory is gone', async () => {
+    fill(dirs.upstream, ['001_core', '002_core']);
+    fill(dirs.local, ['003_fork_a']);
+    await migrate();
+    rmSync(dirs.local, { recursive: true });
+    const err = await migrate().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MigrationReconciliationError);
+    expect((err as Error).message).toContain('pgmigrations_local records 003_fork_a, which matches no file');
+  });
+
+  it('stops, naming the table, when pgmigrations_local is not a history table', async () => {
+    fill(dirs.upstream, ['001_core']);
+    fill(dirs.local, ['003_fork_a']);
+    await pool.query('CREATE TABLE pgmigrations_local (id int, label text)');
+    await pool.query("INSERT INTO pgmigrations_local VALUES (1, 'x')");
+    await expect(migrate()).rejects.toThrow(/pgmigrations_local exists but is not a node-pg-migrate history table/);
+    expect(await names('pgmigrations')).toEqual([]);
   });
 
   describe('refuses, writing nothing', () => {
@@ -192,7 +224,7 @@ describeIf('runMigrations: upstream and local tracks', () => {
     expect(rows[0].t).toBeNull();
 
     expect(report.plan.moves.map(r => r.name)).toEqual(['003_fork_a', '004_fork_b']);
-    expect(report.plan.orderCheck).toEqual({ upstream: { ok: true }, local: { ok: true } });
+    expect(report.plan.orderCheck).toEqual({ upstream: { status: 'ok' }, local: { status: 'ok' } });
     expect(report.plan.refusals).toEqual([]);
     expect(report.localObjects).toEqual([
       { file: '003_fork_a', objects: [{ kind: 'table', name: 'fork_a' }] },
@@ -201,6 +233,21 @@ describeIf('runMigrations: upstream and local tracks', () => {
     expect(report.overlaps).toEqual([
       { object: { kind: 'table', name: 'fork_a' }, upstreamFiles: ['003_core_new'], localFiles: ['003_fork_a'] },
     ]);
+  });
+
+  it('dry run shows a fork that has not moved its migrations why boot will fail', async () => {
+    await applyForkHistory();
+    // Upstream's new migration sorts before the fork's, and nothing is in the local directory yet.
+    fill(dirs.upstream, ['001_core', '002_core', '003_core_new', '003_fork_a', '004_fork_b']);
+    const report = await dryRunReconciliation(scratch.url, dirs);
+    expect(report.localTrackInUse).toBe(false);
+    expect(report.plan.orderCheck.upstream).toEqual({
+      status: 'failed',
+      message: 'Not run migration 003_core_new is preceding already run migration 003_fork_a',
+    });
+    expect(report.plan.refusals).toEqual([expect.stringContaining('move them to the local track first')]);
+    // And boot does fail, with node-pg-migrate's own check.
+    await expect(migrate()).rejects.toThrow('Not run migration 003_core_new is preceding already run migration 003_fork_a');
   });
 
   it('dry run proposes renames that let an out-of-order local track pass', async () => {
@@ -219,6 +266,6 @@ describeIf('runMigrations: upstream and local tracks', () => {
     // Applying the proposal: rename the file and the row together, then boot reconciles.
     renameSync(path.join(dirs.local, '003_fork_a.sql'), path.join(dirs.local, '001_fork_a.sql'));
     await pool.query("UPDATE pgmigrations SET name = '001_fork_a' WHERE name = '003_fork_a'");
-    expect(await migrate()).toEqual({ upstream: [], local: [], moved: ['001_fork_a', '002_fork_b'] });
+    expect(await applied()).toEqual({ upstream: [], local: [], moved: ['001_fork_a', '002_fork_b'] });
   });
 });

@@ -19,7 +19,9 @@ already applied *on the same track* still stops the boot. The two tracks never c
 against each other, so new upstream migrations can't land behind yours.
 
 To keep local migrations somewhere else (for example, per deployment), set
-`CURIA_LOCAL_MIGRATIONS_DIR`. A relative path is resolved from the project root.
+`CURIA_LOCAL_MIGRATIONS_DIR`. A relative path is resolved from the project root, and the
+directory must exist: a set but missing directory stops the boot rather than skipping your
+migrations.
 
 ## Rules
 

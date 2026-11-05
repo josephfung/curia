@@ -404,6 +404,13 @@ async function main(): Promise<void> {
       dirs: resolveMigrationDirs(path.resolve(import.meta.dirname, '..')),
       log: (msg: string) => logger.debug({ migration: true }, msg),
     });
+    // A fork should see which directory its track came from on every boot; upstream installs
+    // without one get the line at debug only.
+    if (result.localTrackInUse) {
+      logger.info({ localDir: result.localDir, localMigrationFiles: result.localFileCount }, 'Local migration track in use');
+    } else {
+      logger.debug({ localDir: result.localDir }, 'No local migration track');
+    }
     if (result.moved.length > 0) {
       logger.info({ migrations: result.moved }, 'Moved fork migrations from pgmigrations to pgmigrations_local');
     }

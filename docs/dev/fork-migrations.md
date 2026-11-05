@@ -10,6 +10,17 @@ Curia runs two migration tracks ([ADR-061](../adr/061-two-track-migrations.md)):
 Upstream runs first, then local. Each track keeps node-pg-migrate's order check on its own,
 so new upstream migrations never land behind yours.
 
+The local track is in use once the local directory holds a migration or `pgmigrations_local`
+has a row. From then on boot checks that every recorded migration still has its file, so a
+local directory that goes missing (a typo in `CURIA_LOCAL_MIGRATIONS_DIR`, a volume that
+isn't mounted) stops the boot instead of quietly skipping your migrations. If you set
+`CURIA_LOCAL_MIGRATIONS_DIR`, the directory must exist even before you have any migrations.
+Boot logs `Local migration track in use` with the directory and file count.
+
+Upstream's test `tests/unit/db/migration-guards.test.ts` has one check that only upstream
+can pass (its `migrations-local/` holds nothing but the README). It runs only when
+`GITHUB_REPOSITORY` is `josephfung/curia`, so your fork's CI skips it.
+
 **From now on, every schema change of your own goes in `src/db/migrations-local/`.** Number
 it however you like, never reuse an upstream filename, and prefix your own tables and
 columns (`fork_…`) so a future upstream object is unlikely to collide with yours. See the
@@ -62,14 +73,23 @@ DATABASE_URL=postgres://…/copy_of_prod pnpm migrate --dry-run
 
 It prints:
 
+- A note if `pgmigrations` doesn't exist: the database has never been migrated, so check
+  `DATABASE_URL`.
 - **Planned moves:** the `pgmigrations` rows that will move to `pgmigrations_local`, keeping
   their `id`, `name` and `run_on`.
 - **Order check after the moves**, on each track.
 - **Objects the local migrations create**, and any **created on both tracks**. A warning
   here means your fork may have built something upstream also built under its own name;
   check each one by hand.
-- Whether boot **would reconcile cleanly** or **refuse**, and why. It exits non-zero on a
-  refusal.
+- Whether boot **would go ahead** or **stop**, and why.
+
+Before step 1, with nothing in the local directory yet, it shows the order check
+node-pg-migrate will run at boot. A fork that has merged new upstream migrations sees here
+the failure this guide fixes.
+
+Exit codes, for scripting: `0` boot would go ahead; `1` boot would stop; `2` boot would go
+ahead but the report has warnings (objects created on both tracks); `3` the dry run itself
+failed (no `DATABASE_URL`, can't connect).
 
 When the dry run is clean, deploy and boot as usual (or run `pnpm migrate`). The move
 happens in one transaction before the upstream migrations run, then any pending upstream and
@@ -82,7 +102,8 @@ Nothing is written when it refuses. The cases:
 - **A name in both directories.** You copied a migration instead of moving it. Delete one copy.
 - **A history row with no file.** A row in `pgmigrations` matches no file on either track,
   or a row in `pgmigrations_local` matches no local file. Restore the file; if it is your
-  fork's, put it in the local directory.
+  fork's, put it in the local directory. If every local file is missing, check that the
+  local directory is where boot is looking.
 - **The local track is out of order.** Your migrations were applied in a different order
   from their filenames (for example, you renumbered one after it ran). The dry run proposes
   renames: `git mv` lines for the files and `UPDATE` statements for their rows. Apply both
@@ -90,8 +111,15 @@ Nothing is written when it refuses. The cases:
 - **The upstream track is out of order.** An upstream migration sorts before one already
   applied. This is the old `checkOrder` error, now caught before anything moves; usually a
   file is missing from step 1.
-- **A name recorded on both tracks, or an id already taken in `pgmigrations_local`.** Someone
-  edited the history tables by hand. Delete the wrong row.
+- **A name recorded on both tracks.** Someone edited the history tables by hand. Delete the
+  wrong row.
+- **An id already taken in `pgmigrations_local`.** The two tables number their rows
+  independently, so moving a migration you applied from `src/db/migrations` after local
+  migrations have run can collide. Give the `pgmigrations` row an unused id by hand, keeping
+  its `run_on`, then boot.
+- **`pgmigrations_local` is not a history table.** A table by that name exists without
+  node-pg-migrate's columns (`id` with a sequence, `name`, `run_on`). Curia didn't create
+  it; rename or drop it.
 
 Two cases the tool cannot detect by name, so check them yourself:
 

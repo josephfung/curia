@@ -42,8 +42,13 @@ describe('upstream migration files', () => {
   });
 });
 
+// A fork keeps its own migrations in this directory, so this only holds upstream. It runs in
+// upstream's CI (GITHUB_REPOSITORY is the base repository there, for pull requests from forks
+// too) and is skipped everywhere else, so a fork's CI never fails on its own migrations.
+const UPSTREAM_REPOSITORY = 'josephfung/curia';
+
 describe('src/db/migrations-local', () => {
-  it('ships no migrations upstream, only its README', () => {
+  it.runIf(process.env.GITHUB_REPOSITORY === UPSTREAM_REPOSITORY)('ships no migrations upstream, only its README', () => {
     expect(readdirSync(LOCAL_DIR)).toEqual(['README.md']);
   });
 });
@@ -101,6 +106,38 @@ describe('findUnguardedDdl', () => {
       END $$;
     `;
     expect(findUnguardedDdl(sql).map(v => v.statement)).toEqual(['ADD CONSTRAINT', 'ADD CONSTRAINT']);
+  });
+
+  it('checks CREATE TABLE and CREATE INDEX inside a DO block too', () => {
+    const sql = `
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'things') THEN
+          CREATE TABLE things (id int);
+          CREATE INDEX things_idx ON things (id);
+          CREATE INDEX IF NOT EXISTS things_ok ON things (id);
+        END IF;
+      END $$;
+    `;
+    expect(findUnguardedDdl(sql).map(v => v.statement)).toEqual(['CREATE TABLE', 'CREATE INDEX']);
+  });
+
+  it('reads dollar-quote tags with digits as one DO block', () => {
+    const sql = `
+      DO $do1$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 't' AND column_name = 'c') THEN
+          RAISE EXCEPTION 't.c has an incompatible shape';
+        ELSE
+          ALTER TABLE t ADD COLUMN c text;
+        END IF;
+      END $do1$;
+    `;
+    expect(findUnguardedDdl(sql)).toEqual([]);
+  });
+
+  it('does not read ALTER COLUMN … ADD GENERATED as adding a column', () => {
+    expect(findUnguardedDdl('ALTER TABLE things ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY;')).toEqual([]);
   });
 
   it('ignores DDL in comments and leaves other ALTERs alone', () => {

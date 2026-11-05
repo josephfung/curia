@@ -25,8 +25,14 @@ export interface UnguardedDdl {
 
 const IDENT = String.raw`(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)`;
 const QUALIFIED = String.raw`${IDENT}(?:\s*\.\s*${IDENT})?`;
-// Keywords that may follow ADD in ALTER TABLE without naming a column.
-const ADD_NON_COLUMN = /^(?:CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK|EXCLUDE)\b/i;
+// Keywords that may follow ADD in ALTER TABLE without naming a column. GENERATED is
+// `ALTER COLUMN c ADD GENERATED … AS IDENTITY`, which changes an existing column.
+const ADD_NON_COLUMN = /^(?:CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK|EXCLUDE|GENERATED)\b/i;
+// A dollar-quote delimiter: `$$` or `$tag$`, where a tag may hold digits after its first character.
+const DOLLAR_TAG = String.raw`\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$`;
+// Permanent tables only: temporary ones don't outlive the migration, so need no guard.
+const UNGUARDED_CREATE_TABLE = /\bCREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?!IF\s+NOT\s+EXISTS\b)/gi;
+const UNGUARDED_CREATE_INDEX = /\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?!(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS\b)/gi;
 
 /**
  * Removes `--` and `/* *\/` comments, leaving string literals and dollar-quoted bodies in
@@ -88,7 +94,7 @@ function splitStatements(sql: string): string[] {
       continue;
     }
     if (ch === '$') {
-      const tag = /^\$[A-Za-z_]*\$/.exec(sql.slice(i));
+      const tag = new RegExp(`^${DOLLAR_TAG}`).exec(sql.slice(i));
       if (tag) {
         const end = sql.indexOf(tag[0], i + tag[0].length);
         i = end === -1 ? sql.length : end + tag[0].length;
@@ -167,33 +173,39 @@ function excerpt(statement: string): string {
   return statement.split('\n')[0]!.trim().slice(0, 120);
 }
 
+/** Every CREATE TABLE / CREATE INDEX in `text` without IF NOT EXISTS, a DO block's body included. */
+function unguardedCreates(text: string): UnguardedDdl[] {
+  const found: UnguardedDdl[] = [];
+  for (const [re, statement] of [[UNGUARDED_CREATE_TABLE, 'CREATE TABLE'], [UNGUARDED_CREATE_INDEX, 'CREATE INDEX']] as const) {
+    for (const m of text.matchAll(re)) found.push({ statement, excerpt: excerpt(text.slice(m.index)) });
+  }
+  return found;
+}
+
 /**
  * DDL in an upstream migration that is not safe on a fork that already has the object.
  *
- * Outside a `DO` block, `CREATE TABLE` and `CREATE INDEX` need `IF NOT EXISTS`, and
- * `ADD COLUMN` and `ADD CONSTRAINT` are not allowed at all: a bare `ADD COLUMN IF NOT
- * EXISTS` would accept a fork's column of a different type without a word. They belong in
- * a `DO` block that compares the existing shape and raises on a mismatch, so a `DO` block
- * that adds a column or constraint must contain `RAISE EXCEPTION`.
+ * `CREATE TABLE` and `CREATE INDEX` need `IF NOT EXISTS`, inside a `DO` block or not.
+ * Outside a `DO` block, `ADD COLUMN` and `ADD CONSTRAINT` are not allowed at all: a bare
+ * `ADD COLUMN IF NOT EXISTS` would accept a fork's column of a different type without a
+ * word. They belong in a `DO` block that compares the existing shape and raises on a
+ * mismatch, so a `DO` block that adds a column or constraint must contain `RAISE EXCEPTION`.
+ *
+ * This matches text, so it can't tell whether the comparison is right, or whether the add
+ * is on the path the comparison guards. Reviewers check that (ADR-061).
  */
 export function findUnguardedDdl(sql: string): UnguardedDdl[] {
   const found: UnguardedDdl[] = [];
   for (const statement of splitStatements(stripSqlComments(sql))) {
-    if (/\bDO\s+\$[A-Za-z_]*\$/i.test(statement)) {
+    found.push(...unguardedCreates(statement));
+    if (new RegExp(String.raw`\bDO\s+${DOLLAR_TAG}`, 'i').test(statement)) {
       const addsColumn = /\bALTER\s+TABLE\b/i.test(statement)
-        && /\bADD\s+(?!CONSTRAINT\b|PRIMARY\b|UNIQUE\b|FOREIGN\b|CHECK\b|EXCLUDE\b)/i.test(statement);
+        && /\bADD\s+(?!CONSTRAINT\b|PRIMARY\b|UNIQUE\b|FOREIGN\b|CHECK\b|EXCLUDE\b|GENERATED\b)/i.test(statement);
       const addsConstraint = /\bADD\s+CONSTRAINT\b/i.test(statement);
       if ((addsColumn || addsConstraint) && !/\bRAISE\s+EXCEPTION\b/i.test(statement)) {
         found.push({ statement: addsColumn ? 'ADD COLUMN' : 'ADD CONSTRAINT', excerpt: excerpt(statement) });
       }
       continue;
-    }
-    // Temporary tables do not outlive the migration, so only permanent ones need a guard.
-    if (/\bCREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?!IF\s+NOT\s+EXISTS\b)/i.test(statement)) {
-      found.push({ statement: 'CREATE TABLE', excerpt: excerpt(statement) });
-    }
-    if (/\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?!(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS\b)/i.test(statement)) {
-      found.push({ statement: 'CREATE INDEX', excerpt: excerpt(statement) });
     }
     const alter = new RegExp(String.raw`\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?${QUALIFIED}([\s\S]*)$`, 'i').exec(statement);
     if (alter) {

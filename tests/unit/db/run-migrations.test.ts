@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   checkTrackOrder,
+  dryRunExitCode,
   formatDryRunReport,
   listMigrationFiles,
   planReconciliation,
   resolveMigrationDirs,
+  shellQuote,
   type DryRunReport,
   type HistoryRow,
 } from '../../../src/db/run-migrations.js';
@@ -22,11 +24,15 @@ describe('resolveMigrationDirs', () => {
     expect(resolveMigrationDirs('/app', {})).toEqual({
       upstream: '/app/src/db/migrations',
       local: '/app/src/db/migrations-local',
+      localRequired: false,
     });
   });
 
   it('takes the local directory from CURIA_LOCAL_MIGRATIONS_DIR, relative to the root', () => {
-    expect(resolveMigrationDirs('/app', { CURIA_LOCAL_MIGRATIONS_DIR: 'deploy/migrations' }).local).toBe('/app/deploy/migrations');
+    expect(resolveMigrationDirs('/app', { CURIA_LOCAL_MIGRATIONS_DIR: 'deploy/migrations' })).toMatchObject({
+      local: '/app/deploy/migrations',
+      localRequired: true,
+    });
     expect(resolveMigrationDirs('/app', { CURIA_LOCAL_MIGRATIONS_DIR: '/srv/m' }).local).toBe('/srv/m');
     expect(resolveMigrationDirs('/app', { CURIA_LOCAL_MIGRATIONS_DIR: '  ' }).local).toBe('/app/src/db/migrations-local');
   });
@@ -52,6 +58,16 @@ describe('listMigrationFiles', () => {
     expect(await listMigrationFiles(path.join(dir, 'absent'), 'local')).toEqual([]);
   });
 
+  it('fails on a missing local directory that was named explicitly', async () => {
+    await expect(listMigrationFiles(path.join(dir, 'absent'), 'local', { required: true }))
+      .rejects.toThrow(/CURIA_LOCAL_MIGRATIONS_DIR names .*absent, which does not exist/);
+  });
+
+  it('fails on a local path that is a file', async () => {
+    await expect(listMigrationFiles(path.join(dir, 'local', 'README.md'), 'local'))
+      .rejects.toThrow(/is not a directory/);
+  });
+
   it('still fails on a missing upstream directory', async () => {
     await expect(listMigrationFiles(path.join(dir, 'absent'), 'upstream')).rejects.toThrow();
   });
@@ -59,9 +75,9 @@ describe('listMigrationFiles', () => {
 
 describe('checkTrackOrder', () => {
   it("matches node-pg-migrate's check and message", () => {
-    expect(checkTrackOrder(['001_a', '002_b'], ['001_a', '002_b', '003_c'])).toEqual({ ok: true });
+    expect(checkTrackOrder(['001_a', '002_b'], ['001_a', '002_b', '003_c'])).toEqual({ status: 'ok' });
     expect(checkTrackOrder(['001_a', '003_c'], ['001_a', '002_b', '003_c'])).toEqual({
-      ok: false,
+      status: 'failed',
       message: 'Not run migration 002_b is preceding already run migration 003_c',
     });
   });
@@ -79,7 +95,7 @@ describe('planReconciliation', () => {
     });
     expect(plan.refusals).toEqual([]);
     expect(plan.moves.map(r => r.name)).toEqual(['003_fork_a', '004_fork_b']);
-    expect(plan.orderCheck).toEqual({ upstream: { ok: true }, local: { ok: true } });
+    expect(plan.orderCheck).toEqual({ upstream: { status: 'ok' }, local: { status: 'ok' } });
   });
 
   it('has nothing to move once moved', () => {
@@ -102,6 +118,7 @@ describe('planReconciliation', () => {
     });
     expect(plan.moves).toEqual([]);
     expect(plan.refusals).toEqual([expect.stringContaining('002_core is in both')]);
+    expect(plan.orderCheck).toEqual({ upstream: { status: 'not-run' }, local: { status: 'not-run' } });
   });
 
   it('refuses a history row with no file on either track', () => {
@@ -146,7 +163,7 @@ describe('planReconciliation', () => {
       localHistory: [],
     });
     expect(plan.orderCheck.local).toEqual({
-      ok: false,
+      status: 'failed',
       message: 'Not run migration 004_fork_a is preceding already run migration 005_fork_b',
     });
     expect(plan.refusals).toEqual([expect.stringContaining('local track would fail its order check')]);
@@ -165,7 +182,7 @@ describe('planReconciliation', () => {
       localHistory: [{ id: 50, name: '010_fork_x', runOnMicros: 9n }],
     });
     expect(plan.orderCheck.local).toEqual({
-      ok: false,
+      status: 'failed',
       message: 'Not run migration 010_fork_x is preceding already run migration 020_fork_y',
     });
   });
@@ -184,17 +201,19 @@ describe('planReconciliation', () => {
 
 describe('formatDryRunReport', () => {
   const base: DryRunReport = {
-    dirs: { upstream: '/app/src/db/migrations', local: '/app/src/db/migrations-local' },
+    dirs: { upstream: '/app/src/db/migrations', local: "/app/my fork's/migrations-local" },
     upstreamFiles: ['001_core'],
     localFiles: [
-      { name: '005_fork_b', path: '/app/src/db/migrations-local/005_fork_b.sql' },
-      { name: '004_fork_a', path: '/app/src/db/migrations-local/004_fork_a.sql' },
+      { name: '005_fork_b', path: "/app/my fork's/migrations-local/005_fork_b.sql" },
+      { name: '004_fork_a', path: "/app/my fork's/migrations-local/004_fork_a.sql" },
     ],
     localHistory: [],
+    historyTables: { upstream: true, local: false },
+    localTrackInUse: true,
     plan: {
       moves: history(['005_fork_b', '004_fork_a']),
       refusals: ['The local track would fail its order check: …'],
-      orderCheck: { upstream: { ok: true }, local: { ok: false, message: 'Not run migration 004_fork_a is preceding already run migration 005_fork_b' } },
+      orderCheck: { upstream: { status: 'ok' }, local: { status: 'failed', message: 'Not run migration 004_fork_a is preceding already run migration 005_fork_b' } },
       proposedRenames: [{ from: '005_fork_b', to: '001_fork_b' }, { from: '004_fork_a', to: '002_fork_a' }],
     },
     localObjects: [{ file: '004_fork_a', objects: [{ kind: 'column', name: 'scheduled_jobs.name' }] }, { file: '005_fork_b', objects: [] }],
@@ -207,18 +226,69 @@ describe('formatDryRunReport', () => {
     expect(text).toContain('nothing has been written');
     expect(text).toContain('  - 005_fork_b (id 1)');
     expect(text).toContain('  local: FAILS — Not run migration 004_fork_a');
-    expect(text).toContain('git mv /app/src/db/migrations-local/005_fork_b.sql /app/src/db/migrations-local/005_fork_b.sql.renaming');
-    expect(text).toContain('git mv /app/src/db/migrations-local/005_fork_b.sql.renaming /app/src/db/migrations-local/001_fork_b.sql');
+    // Quoted for the shell: the path holds a space and a single quote.
+    expect(text).toContain(String.raw`git mv '/app/my fork'\''s/migrations-local/005_fork_b.sql' '/app/my fork'\''s/migrations-local/005_fork_b.sql.renaming'`);
+    expect(text).toContain(String.raw`git mv '/app/my fork'\''s/migrations-local/005_fork_b.sql.renaming' '/app/my fork'\''s/migrations-local/001_fork_b.sql'`);
     // Not moved yet, so the rows are renamed where they are.
     expect(text).toContain("UPDATE pgmigrations SET name = '001_fork_b' WHERE name = 'renaming:005_fork_b';");
     expect(text).toContain('004_fork_a: column scheduled_jobs.name');
     expect(text).toContain('WARNING column scheduled_jobs.name: upstream 001_core; local 004_fork_a');
-    expect(text).toContain('Boot would REFUSE to reconcile');
+    expect(text).toContain('Boot would STOP:');
+    expect(text).toContain('  - The local track would fail its order check');
   });
 
-  it('says there is nothing to do without local migrations', () => {
-    const text = formatDryRunReport({ ...base, localFiles: [], plan: { ...base.plan, moves: [], refusals: [], proposedRenames: [] } });
-    expect(text).toContain('No local migrations');
-    expect(text).not.toContain('REFUSE');
+  it('marks order checks it did not run', () => {
+    const text = formatDryRunReport({
+      ...base,
+      plan: { ...base.plan, orderCheck: { upstream: { status: 'not-run' }, local: { status: 'not-run' } } },
+    });
+    expect(text).toContain('  upstream: not run');
+    expect(text).toContain('  local: not run');
+  });
+
+  it('without a local track, still prints the upstream order check and why boot would stop', () => {
+    const noLocal: DryRunReport = {
+      ...base,
+      localFiles: [],
+      localTrackInUse: false,
+      localObjects: [],
+      overlaps: [],
+      plan: {
+        moves: [],
+        refusals: ["Boot will fail node-pg-migrate's order check: Not run migration 112_web_push is preceding already run migration 112_fork."],
+        orderCheck: { upstream: { status: 'failed', message: 'Not run migration 112_web_push is preceding already run migration 112_fork' }, local: { status: 'not-run' } },
+        proposedRenames: [],
+      },
+    };
+    const text = formatDryRunReport(noLocal);
+    expect(text).toContain('No local migrations and no pgmigrations_local history');
+    expect(text).toContain('Order check (upstream, as node-pg-migrate runs it at boot): FAILS — Not run migration 112_web_push');
+    expect(text).toContain('Boot would STOP:');
+    expect(dryRunExitCode(noLocal)).toBe(1);
+
+    const clean = { ...noLocal, plan: { ...noLocal.plan, refusals: [], orderCheck: { upstream: { status: 'ok' as const }, local: { status: 'not-run' as const } } } };
+    expect(formatDryRunReport(clean)).toContain('Boot would go ahead.');
+    expect(dryRunExitCode(clean)).toBe(0);
+  });
+
+  it('says when the database has never been migrated', () => {
+    const text = formatDryRunReport({ ...base, historyTables: { upstream: false, local: false } });
+    expect(text).toContain('pgmigrations not found: this database has never been migrated');
+  });
+
+  it('says a clean overlap search is not proof, and exits 2 on warnings alone', () => {
+    const noRefusals = { ...base, plan: { ...base.plan, refusals: [], proposedRenames: [] } };
+    expect(formatDryRunReport({ ...noRefusals, overlaps: [] })).toContain('(none detected — this is a text match over the SQL, not proof)');
+    expect(formatDryRunReport(noRefusals)).toContain('Boot would go ahead, but check the warnings above.');
+    expect(dryRunExitCode(noRefusals)).toBe(2);
+    expect(dryRunExitCode({ ...noRefusals, overlaps: [] })).toBe(0);
+    expect(dryRunExitCode(base)).toBe(1);
+  });
+});
+
+describe('shellQuote', () => {
+  it('single-quotes, escaping embedded single quotes', () => {
+    expect(shellQuote('/a b/c')).toBe("'/a b/c'");
+    expect(shellQuote("it's $(x)")).toBe(String.raw`'it'\''s $(x)'`);
   });
 });
