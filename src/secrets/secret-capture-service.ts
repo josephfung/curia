@@ -134,6 +134,9 @@ export interface MintNameArgs {
   details?: UserSecretDetails;
   /** Card form template (#1358). Forces json; user.* keys only. */
   template?: CaptureTemplate;
+  /** True when `label` was derived from the name, not given by the caller. A derived label
+   *  never replaces the label of a card that is already saved. */
+  labelDerived?: boolean;
   // NOTE: TTL is intentionally NOT caller-controlled. The lifetime is a fixed security
   // property of the feature (single-use + 30 min, per #971), so callers cannot mint links
   // that are already dead, absurdly long-lived, or NaN. See DEFAULT_CAPTURE_TTL_MINUTES.
@@ -302,6 +305,16 @@ export class SecretCaptureService implements SecretCaptureMinter {
           );
         }
         label = card.label ?? undefined;
+      } else if (reusedExisting) {
+        const card = await this.secrets.getCardPublic(secretName);
+        if (!card) {
+          throw new Error(
+            `'${secretName}' is already stored and is not a saved card, so a card cannot be captured over it. ` +
+            'Use a different secret_name for the card.',
+          );
+        }
+        // Re-capturing a saved card keeps the principal's label unless one was given explicitly.
+        if (args.labelDerived || label === undefined) label = card.label ?? undefined;
       }
     }
     // A card link is always json: the form posts card fields, never a free-form value.

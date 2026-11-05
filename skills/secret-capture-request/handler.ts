@@ -145,6 +145,7 @@ export class SecretCaptureRequestHandler implements ToolHandler {
 
     // Card links carry the card label; a renewal uses the saved card's own label (the minter fills it).
     let cardLabel: string | undefined;
+    let labelDerived = false;
     if (captureTemplate === 'credit_card') {
       if (cardEdit.label !== undefined) {
         const given = normalizeCardLabel(cardEdit.label);
@@ -152,6 +153,7 @@ export class SecretCaptureRequestHandler implements ToolHandler {
         cardLabel = given;
       } else {
         cardLabel = deriveCardLabel(secret_name) ?? undefined;
+        labelDerived = true;
       }
     }
     const labelStr = captureTemplate
@@ -183,6 +185,7 @@ export class SecretCaptureRequestHandler implements ToolHandler {
         valueFormat,
         origin,
         ...(captureTemplate ? { template: captureTemplate } : {}),
+        ...(labelDerived ? { labelDerived } : {}),
         ...(hasUserSecretDetails(details) ? { details } : {}),
       });
       const captureUrl = buildCaptureUrl(ctx, rawToken);

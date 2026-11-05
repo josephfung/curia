@@ -255,7 +255,7 @@ describe('SecretCaptureRequestHandler card templates (#1358)', () => {
     const minter = fakeMinter();
     const result = await run({ secret_name: 'personal visa card', template: 'credit_card', value_format: 'string' }, minter);
     expect(result.success).toBe(true);
-    expect(minter.userCalls[0]).toMatchObject({ rawName: 'personal visa card', template: 'credit_card', valueFormat: 'json', label: 'Personal' });
+    expect(minter.userCalls[0]).toMatchObject({ rawName: 'personal visa card', template: 'credit_card', valueFormat: 'json', label: 'Personal', labelDerived: true });
   });
 
   it('credit_card uses card_label when given, and sends no label when nothing is left to derive', async () => {
@@ -295,7 +295,7 @@ describe('SecretCaptureRequestHandler card templates (#1358)', () => {
     const minter = fakeMinter();
     const result = await run({
       secret_name: 'user.personal_visa_card', details_only: true,
-      card_label: 'Work', expiry_month: 6, expiry_year: '2031', cardholder_name: 'A B',
+      card_label: 'Work', expiry_month: '6', expiry_year: '2031', cardholder_name: 'A B',
     }, minter);
     expect(result.success).toBe(true);
     const data = (result as { success: true; data: Record<string, unknown> }).data;
@@ -305,7 +305,7 @@ describe('SecretCaptureRequestHandler card templates (#1358)', () => {
     expect(minter.detailCalls).toHaveLength(0);
     expect(minter.cardCalls).toEqual([{
       rawName: 'user.personal_visa_card',
-      edit: { label: 'Work', expiry_month: 6, expiry_year: '2031', cardholder_name: 'A B' },
+      edit: { label: 'Work', expiry_month: '6', expiry_year: '2031', cardholder_name: 'A B' },
     }]);
   });
 

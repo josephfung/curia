@@ -184,4 +184,28 @@ describeIf('card capture links', () => {
     await secrets.set('user.cardcap12_other_password', 'hunter2');
     await expect(capture.setUserCardPublic('user.cardcap12_other_password', { label: 'x' })).rejects.toThrow(/No saved card named/);
   });
+
+  it('re-capturing a saved card keeps its label unless card_label is explicit', async () => {
+    await secrets.setCard('user.cardcap13_visa_card', storedSecret, storedPublic, 'Work');
+    const derived = await capture.mintUserSecret({ rawName: 'cardcap13 visa card', template: 'credit_card', label: 'Cardcap13', labelDerived: true });
+    expect(derived.secretName).toBe('user.cardcap13_visa_card');
+    expect((await capture.redeemCard(derived.rawToken, validCard)).status).toBe('ok');
+    expect((await secrets.getCardPublic(derived.secretName))?.label).toBe('Work');
+
+    const unlabelled = await capture.mintUserSecret({ rawName: 'cardcap13 visa card', template: 'credit_card' });
+    expect((await capture.redeemCard(unlabelled.rawToken, validCard)).status).toBe('ok');
+    expect((await secrets.getCardPublic(derived.secretName))?.label).toBe('Work');
+
+    const explicit = await capture.mintUserSecret({ rawName: 'cardcap13 visa card', template: 'credit_card', label: 'Travel' });
+    expect((await capture.redeemCard(explicit.rawToken, validCard)).status).toBe('ok');
+    expect((await secrets.getCardPublic(derived.secretName))?.label).toBe('Travel');
+  });
+
+  it('refuses a card capture over a stored secret that is not a card', async () => {
+    await secrets.set('user.cardcap14_visa_card', 'hunter2');
+    await expect(capture.mintUserSecret({ rawName: 'user.cardcap14_visa_card', template: 'credit_card' }))
+      .rejects.toThrow(/user\.cardcap14_visa_card.*not a saved card/);
+    expect(await tokenRow('user.cardcap14_visa_card')).toHaveLength(0);
+    expect(await secrets.get('user.cardcap14_visa_card')).toBe('hunter2');
+  });
 });
