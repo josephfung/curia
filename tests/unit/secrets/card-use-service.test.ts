@@ -63,6 +63,56 @@ describe('CardUseService.decline', () => {
     const { service, publish } = setup();
     publish.mockRejectedValue(new Error('bus down'));
     await expect(service.decline('req-1')).resolves.toBeUndefined();
+    expect(publish).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries a failed card_use.decided publish and succeeds', async () => {
+    const { service, publish } = setup();
+    publish.mockRejectedValueOnce(new Error('blip')).mockResolvedValue(undefined);
+    await service.decline('req-1');
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it('carries the settling actor into the decided event', async () => {
+    const { service, publish } = setup();
+    await service.decline('req-1', 'denied', 'coordinator');
+    expect(publish.mock.calls[0]![1].payload.via).toBe('coordinator');
+  });
+});
+
+describe('CardUseService.confirm', () => {
+  it('reports a failed resume instead of claiming the conversation is being resumed', async () => {
+    const approve = vi.fn().mockResolvedValue('approved');
+    const get = vi.fn().mockResolvedValue(ROW);
+    const publish = vi.fn().mockRejectedValue(new Error('bus down'));
+    const service = new CardUseService({
+      repo: { approve, get } as unknown as CardUseRepo,
+      secrets: { getCardPublic: vi.fn() },
+      approvalTrigger: { request: vi.fn() },
+      bus: { publish },
+      logger: createSilentLogger(),
+    });
+    const result = await service.confirm('req-1', 'console');
+    expect(result.resumed).toBe(false);
+    expect(result.message).toMatch(/could not be resumed/);
+  });
+});
+
+describe('CardUseService.reconcileExpired', () => {
+  it('settles each request the sweep stranded and keeps going past a failure', async () => {
+    const findStrandedByExpiry = vi.fn().mockResolvedValue(['req-1', 'req-2']);
+    const get = vi.fn().mockRejectedValueOnce(new Error('db blip')).mockResolvedValue(ROW);
+    const decide = vi.fn().mockResolvedValue(true);
+    const publish = vi.fn().mockResolvedValue(undefined);
+    const service = new CardUseService({
+      repo: { findStrandedByExpiry, get, decide } as unknown as CardUseRepo,
+      secrets: { getCardPublic: vi.fn() },
+      approvalTrigger: { request: vi.fn() },
+      bus: { publish },
+      logger: createSilentLogger(),
+    });
+    await expect(service.reconcileExpired()).resolves.toBe(1);
+    expect(decide).toHaveBeenCalledWith('req-2', 'expired');
   });
 });
 

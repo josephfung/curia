@@ -99,7 +99,7 @@ describe('DismissActionHandler', () => {
     }));
 
     expect(result.success).toBe(true);
-    expect(decline).toHaveBeenCalledWith('req-1');
+    expect(decline).toHaveBeenCalledWith('req-1', 'denied', 'coordinator');
   });
 
   it('does not touch card use when a different row is dismissed', async () => {

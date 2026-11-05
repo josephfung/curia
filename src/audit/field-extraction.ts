@@ -177,7 +177,11 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     outcome: p.decision === 'approved' ? 'success' : p.decision === 'denied' || p.decision === 'expired' || p.decision === 'failed' ? 'failure' : fail('decision'),
     target_type: 'secret',
     target_id: str(p, 'secretName', fail),
-    initiator_type: p.decision === 'expired' || p.decision === 'failed' ? 'system' : 'human',
+    // A coordinator settlement (deny-action, dismiss-action) is the agent acting, not the
+    // principal refusing: audit it as an agent so the row doesn't read as the principal's no.
+    initiator_type: p.decision === 'expired' || p.decision === 'failed'
+      ? 'system'
+      : p.decision === 'denied' && p.via === 'coordinator' ? 'agent' : 'human',
     initiator_id: p.decision === 'expired' || p.decision === 'failed' ? 'card-use' : typeof p.via === 'string' ? p.via : 'principal',
   }),
 

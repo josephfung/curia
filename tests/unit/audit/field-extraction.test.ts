@@ -153,6 +153,13 @@ describe('extractStructuredFields', () => {
       'evt-cu-e',
       logger,
     )).toMatchObject({ outcome: 'failure', initiator_type: 'system', initiator_id: 'card-use' });
+    // A coordinator deny/dismiss is the agent acting, not the principal refusing.
+    expect(extractStructuredFields(
+      'card_use.decided',
+      { requestId: 'r1', secretName: 'user.visa_card', siteDomain: 'x.com', decision: 'denied', via: 'coordinator', resume: true, purpose: 'flight' },
+      'evt-cu-c',
+      logger,
+    )).toMatchObject({ outcome: 'failure', initiator_type: 'agent', initiator_id: 'coordinator' });
   });
 
   it('extractor maps card_use.requested to a pending secret target', () => {

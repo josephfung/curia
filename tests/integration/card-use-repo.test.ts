@@ -114,6 +114,16 @@ describeIf('CardUseRepo', () => {
     ).toBe('no_grant');
   });
 
+  it('hasLiveGrant is true inside the window and false once it closes', async () => {
+    const f = fixture();
+    const q = { ...f, siteUrl: 'https://www.aircanada.com' };
+    expect(await repo.hasLiveGrant(q)).toBe(false);
+    const id = await createApproved(f);
+    expect(await repo.hasLiveGrant(q)).toBe(true);
+    await pool.query(`UPDATE card_use_requests SET approved_at = now() - interval '31 minutes' WHERE id = $1`, [id]);
+    expect(await repo.hasLiveGrant(q)).toBe(false);
+  });
+
   it('approve after 30 minutes expires the row', async () => {
     const f = fixture();
     const { id } = await repo.create({
