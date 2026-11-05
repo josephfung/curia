@@ -1,7 +1,7 @@
 {
   "name": "card-use-request",
   "description": "Ask the principal to approve paying with a saved card at one checkout. Call it on the checkout page before filling a card: `user.*#number` and `#cvv` fills are refused until the principal approves. It grants nothing itself; it files an approval. Then call deliver-approval with approval_ref and STOP: the principal answers in a later message, reaction or the console, and you are brought back here to continue. Never approve it yourself. One approval covers one card, one site, this conversation, 30 minutes, two fills each of number and CVV. site_url is the checkout page's top-level URL, amount exactly as the page shows it, purpose one line.",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

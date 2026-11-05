@@ -382,7 +382,8 @@ export function SecretEditDrawer(props: EditDrawerProps) {
   return props.row.card ? <CardEditDrawer {...props} card={props.row.card} /> : <ValueEditDrawer {...props} />;
 }
 
-const CVV_PATTERN = /^\d{3,4}$/;
+// Mirrors validateCvv in src/secrets/structured-secret-schema.ts: 4 digits for amex, 3 for every other brand.
+const cvvLength = (brand: SecretCardSummary['brand']): number => (brand === 'amex' ? 4 : 3);
 
 /** A saved card: the public fields save without the vault and without the number. A new CVV is
  *  optional (blank keeps the current one); "Replace card" swaps in a whole new card instead. */
@@ -413,8 +414,8 @@ function CardEditDrawer({ row, card, onClose, onSaved }: EditDrawerProps & { car
   const errors = replacing
     ? validateCardForm(replacement, 'full')
     : validateCardForm(form, 'edit-public', new Date(), original);
-  const cvvError = !replacing && newCvv !== '' && !CVV_PATTERN.test(newCvv)
-    ? 'The security code should be 3 or 4 digits.' : undefined;
+  const cvvError = !replacing && newCvv !== '' && !new RegExp(`^\\d{${cvvLength(card.brand)}}$`).test(newCvv)
+    ? `The security code should be ${cvvLength(card.brand)} digits.` : undefined;
   const hasErrors = Object.keys(errors).length > 0 || cvvError !== undefined;
 
   // Only what changed goes out. The server takes `replace` alone, without the other fields.

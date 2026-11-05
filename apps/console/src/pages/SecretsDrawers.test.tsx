@@ -494,8 +494,23 @@ describe('SecretEditDrawer — card', () => {
     await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={() => {}} />);
     await type(field('New CVV'), '12');
     await click(button('Save'));
-    expect(document.body.textContent).toContain('The security code should be 3 or 4 digits.');
+    expect(document.body.textContent).toContain('The security code should be 3 digits.');
     expect(patchCall()).toBeUndefined();
+  });
+
+  it('refuses a 4-digit cvv on a visa, accepts it on an amex', async () => {
+    await render(<SecretEditDrawer row={cardRow()} onClose={() => {}} onSaved={() => {}} />);
+    await type(field('New CVV'), '4567');
+    await click(button('Save'));
+    expect(document.body.textContent).toContain('The security code should be 3 digits.');
+    expect(patchCall()).toBeUndefined();
+  });
+
+  it('requires 4 digits for an amex cvv', async () => {
+    await render(<SecretEditDrawer row={cardRow({ brand: 'amex' })} onClose={() => {}} onSaved={() => {}} />);
+    await type(field('New CVV'), '4567');
+    await click(button('Save'));
+    expect(bodyOf(patchCall())).toEqual({ cvv: '4567' });
   });
 
   it('replace card sends replace object', async () => {
