@@ -55,6 +55,14 @@ import {
   projectCardField,
   SecretRefRefusal,
 } from '../secrets/structured-secret-schema.js';
+import { registrableDomain } from '../verification/domain.js';
+import { createSecretAccessed, createAutonomySkillBlocked, createAuthorizationDecision, createPrincipalReport } from '../bus/events.js';
+import type { Logger } from '../logger.js';
+import type { EventBus } from '../bus/bus.js';
+import type { AgentRegistry } from '../agents/agent-registry.js';
+import type { ContactService } from '../contacts/contact-service.js';
+import { UnknownEmailAccountError, type OutboundGateway } from './outbound-gateway.js';
+
 /** True when a vault string is a saved-card document (JSON object tagged credit_card). */
 function looksLikeCardDoc(value: string): boolean {
   try {
@@ -66,14 +74,6 @@ function looksLikeCardDoc(value: string): boolean {
     return false;
   }
 }
-
-import { registrableDomain } from '../verification/domain.js';
-import { createSecretAccessed, createAutonomySkillBlocked, createAuthorizationDecision, createPrincipalReport } from '../bus/events.js';
-import type { Logger } from '../logger.js';
-import type { EventBus } from '../bus/bus.js';
-import type { AgentRegistry } from '../agents/agent-registry.js';
-import type { ContactService } from '../contacts/contact-service.js';
-import { UnknownEmailAccountError, type OutboundGateway } from './outbound-gateway.js';
 
 /**
  * Per-invoke wrapper so Gate C and the handler share one `getEmailMessage`
