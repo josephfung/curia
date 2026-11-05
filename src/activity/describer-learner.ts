@@ -12,7 +12,9 @@
 // comes from its tool.result.
 //
 // A failed call writes no row and is logged; the pair is tried again on a later
-// sighting, no sooner than RETRY_AFTER_MS.
+// sighting, no sooner than RETRY_AFTER_MS. A stored row the tool's deterministic
+// signal now contradicts is deleted first, so a failed relearn leaves the
+// fallback, not a stale read or write.
 //
 // System layer: it subscribes to tool.result.
 
@@ -34,7 +36,7 @@ export interface DescriberLearnerConfig {
   llm: LLMProvider;
   /** Model id resolved from the fast tier. */
   model: string;
-  repo: Pick<LearnedDescriberRepo, 'get' | 'upsert'>;
+  repo: Pick<LearnedDescriberRepo, 'get' | 'upsert' | 'delete'>;
   /** What the registry knows about a tool, or null when it is not registered. */
   toolFacts(toolName: string): ToolFacts | null;
   /** The agent's description and the start of its prompt, or null when unknown. */
@@ -168,21 +170,31 @@ export class DescriberLearner {
     const facts = this.config.toolFacts(toolName);
     if (!facts) return;
     const signal = signalEffect(facts);
-    // A read the feed already names by family ("checked the inbox") would never show a learned phrase.
-    if (signal === 'read' && lookupPrefixPhrase(toolName)) {
-      this.settled.add(key);
-      return;
-    }
 
     this.learning.add(key);
     try {
-      const hash = describerHash(facts);
-      const existing = await this.config.repo.get(agentId, toolName);
+      let existing = await this.config.repo.get(agentId, toolName);
+      // The signal decides read or write, so a row it contradicts is wrong whatever happens
+      // next: a write row would turn a family-named read's failures into hiccups, a read row
+      // would hide a write's. Removed before the shortcut and the learn, so either leaves the
+      // fallback. An operator's row is theirs.
+      if (existing && existing.source !== 'operator' && signal !== null && existing.effect !== signal) {
+        await this.config.repo.delete(agentId, toolName);
+        this.log.info({ agentId, toolName, was: existing.effect, now: signal }, 'DescriberLearner: removed a row its signal contradicts');
+        existing = null;
+      }
+      // A read the feed already names by family ("checked the inbox") would never show a learned phrase.
+      if (signal === 'read' && lookupPrefixPhrase(toolName)) {
+        this.settled.add(key);
+        return;
+      }
+      const agent = this.config.agentContext(agentId) ?? agentId;
+      const hash = describerHash(facts, agent);
       if (existing && (existing.source === 'operator' || existing.descriptionHash === hash)) {
         this.settled.add(key);
         return;
       }
-      const words = await this.withSlot(agentId, toolName, () => this.learn(facts, agentId, signal));
+      const words = await this.withSlot(agentId, toolName, () => this.learn(facts, agent, agentId, signal));
       if (!words) {
         this.failedAt.set(key, this.now());
         return;
@@ -230,8 +242,7 @@ export class DescriberLearner {
     }
   }
 
-  private async learn(facts: ToolFacts, agentId: string, signal: ToolEffect | null): Promise<LearnedWords | null> {
-    const agent = this.config.agentContext(agentId) ?? agentId;
+  private async learn(facts: ToolFacts, agent: string, agentId: string, signal: ToolEffect | null): Promise<LearnedWords | null> {
     const known = signal
       ? `\n<effect>${signal === 'read' ? 'This tool only reads.' : 'This tool changes something.'}</effect>`
       : '';

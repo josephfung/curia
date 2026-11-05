@@ -48,6 +48,13 @@ describeIf('LearnedDescriberRepo against Postgres', () => {
       const mine = (await repo.list()).filter((row) => row.agentId === agentId).map((row) => row.toolName).sort();
       expect(mine).toEqual(['sheet-append', 'sheet-read']);
 
+      // delete removes a learned or hint row, never an operator's.
+      expect(await repo.delete(agentId, 'sheet-read')).toBe(false);
+      expect(await repo.get(agentId, 'sheet-read')).toMatchObject({ source: 'operator' });
+      expect(await repo.delete(agentId, 'sheet-append')).toBe(true);
+      expect(await repo.get(agentId, 'sheet-append')).toBeNull();
+      expect(await repo.delete(agentId, 'sheet-append')).toBe(false);
+
       await expect(client.query(
         `INSERT INTO activity_describers (agent_id, tool_name, effect, verb, one, many, attempt, description_hash, source)
          VALUES ($1, 'bad', 'delete', 'x', 'y', 'z', 'w', 'h', 'learned')`,

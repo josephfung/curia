@@ -48,24 +48,32 @@ describe('signalEffect', () => {
 });
 
 describe('describerHash', () => {
+  const AGENT = 'Tracks the principal\'s expenses in a sheet';
+
+  it('changes with the agent text the words are named in', () => {
+    const f = facts({});
+    expect(describerHash(f, AGENT)).toBe(describerHash(f, AGENT));
+    expect(describerHash(f, 'Books the principal\'s travel')).not.toBe(describerHash(f, AGENT));
+  });
+
   it('is stable across key order and changes with the description or schema', () => {
-    const base = describerHash(facts({ inputSchema: { a: 1, b: 2 } }));
-    expect(describerHash(facts({ inputSchema: { b: 2, a: 1 } }))).toBe(base);
-    expect(describerHash(facts({ inputSchema: { a: 1, b: 3 } }))).not.toBe(base);
-    expect(describerHash(facts({ description: 'Append two rows', inputSchema: { a: 1, b: 2 } }))).not.toBe(base);
+    const base = describerHash(facts({ inputSchema: { a: 1, b: 2 } }), AGENT);
+    expect(describerHash(facts({ inputSchema: { b: 2, a: 1 } }), AGENT)).toBe(base);
+    expect(describerHash(facts({ inputSchema: { a: 1, b: 3 } }), AGENT)).not.toBe(base);
+    expect(describerHash(facts({ description: 'Append two rows', inputSchema: { a: 1, b: 2 } }), AGENT)).not.toBe(base);
   });
 
   it('changes when the deterministic signal changes, and only then', () => {
     const mcp = facts({ mcp: true, actionRisk: 'none' });
-    expect(describerHash({ ...mcp, readOnlyHint: false })).not.toBe(describerHash(mcp));
-    expect(describerHash({ ...mcp, destructiveHint: true })).not.toBe(describerHash(mcp));
+    expect(describerHash({ ...mcp, readOnlyHint: false }, AGENT)).not.toBe(describerHash(mcp, AGENT));
+    expect(describerHash({ ...mcp, destructiveHint: true }, AGENT)).not.toBe(describerHash(mcp, AGENT));
     // Server-wide action_risk does not change an MCP tool's signal.
-    expect(describerHash({ ...mcp, actionRisk: 'high' })).toBe(describerHash(mcp));
+    expect(describerHash({ ...mcp, actionRisk: 'high' }, AGENT)).toBe(describerHash(mcp, AGENT));
     const local = facts({ actionRisk: 'low' });
-    expect(describerHash({ ...local, actionRisk: 'medium' })).not.toBe(describerHash(local));
-    expect(describerHash({ ...local, actionRisk: 'none' })).not.toBe(describerHash(local));
+    expect(describerHash({ ...local, actionRisk: 'medium' }, AGENT)).not.toBe(describerHash(local, AGENT));
+    expect(describerHash({ ...local, actionRisk: 'none' }, AGENT)).not.toBe(describerHash(local, AGENT));
     // low and 65 both leave it to the model: nothing to relearn.
-    expect(describerHash({ ...local, actionRisk: 65 })).toBe(describerHash(local));
+    expect(describerHash({ ...local, actionRisk: 65 }, AGENT)).toBe(describerHash(local, AGENT));
   });
 });
 

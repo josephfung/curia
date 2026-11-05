@@ -52,6 +52,18 @@ export class LearnedDescriberRepo {
   }
 
   /**
+   * Remove a learned or hint row; an operator row is left alone. Returns false
+   * when nothing was removed.
+   */
+  async delete(agentId: string, toolName: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `DELETE FROM activity_describers WHERE agent_id = $1 AND tool_name = $2 AND source <> 'operator'`,
+      [agentId, toolName],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
    * Insert or replace a learned row. An operator row is left alone, whatever
    * the caller checked first, so a hand edit survives a race with the learner.
    * Returns false when an operator row kept its place.

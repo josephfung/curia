@@ -15,6 +15,9 @@ function textResponse(content: string): LLMResponse {
   } as unknown as LLMResponse;
 }
 
+/** The expenses agent's context, as the learner hashes it. */
+const EXPENSES = 'Tracks the principal\'s expenses in a sheet';
+
 const GOOD = JSON.stringify({ effect: 'write', verb: 'Logged', one: 'an expense', many: 'expenses', attempt: 'log an expense' });
 
 const TOOLS: Record<string, ToolFacts> = {
@@ -22,9 +25,12 @@ const TOOLS: Record<string, ToolFacts> = {
   'sheet-read': { name: 'sheet-read', description: 'Read rows', inputSchema: {}, actionRisk: 'high', mcp: true, readOnlyHint: true },
   'custom-payment': { name: 'custom-payment', description: 'Pay a vendor', inputSchema: {}, actionRisk: 'critical', mcp: false },
   'calendar-free-busy': { name: 'calendar-free-busy', description: 'Free/busy', inputSchema: {}, actionRisk: 'none', mcp: false },
+  'tool-a': { name: 'tool-a', description: 'Append a row', inputSchema: {}, actionRisk: 'none', mcp: true },
+  'tool-b': { name: 'tool-b', description: 'Append a row', inputSchema: {}, actionRisk: 'none', mcp: true },
+  'tool-c': { name: 'tool-c', description: 'Append a row', inputSchema: {}, actionRisk: 'none', mcp: true },
 };
 
-function setup(llmResults: Array<LLMResponse | Error>, existing: LearnedDescriber[] = []) {
+function setup(llmResults: Array<LLMResponse | Error>, existing: LearnedDescriber[] = [], agentContext?: (agentId: string) => string | null) {
   const logger = createSilentLogger();
   const bus = new EventBus(logger);
   const chat = vi.fn();
@@ -37,6 +43,11 @@ function setup(llmResults: Array<LLMResponse | Error>, existing: LearnedDescribe
   const repo = {
     get: vi.fn(async (agentId: string, toolName: string) => rows.get(`${agentId}|${toolName}`) ?? null),
     upsert: vi.fn(async (row: LearnedDescriber) => { rows.set(`${row.agentId}|${row.toolName}`, row); return true; }),
+    delete: vi.fn(async (agentId: string, toolName: string) => {
+      const row = rows.get(`${agentId}|${toolName}`);
+      if (!row || row.source === 'operator') return false;
+      return rows.delete(`${agentId}|${toolName}`);
+    }),
   };
   let clock = 1_000_000;
   const learner = new DescriberLearner({
@@ -45,7 +56,7 @@ function setup(llmResults: Array<LLMResponse | Error>, existing: LearnedDescribe
     model: 'fast-model',
     repo,
     toolFacts: (name) => TOOLS[name] ?? null,
-    agentContext: (agentId) => (agentId === 'expenses' ? 'Tracks the principal\'s expenses in a sheet' : null),
+    agentContext: agentContext ?? ((agentId) => (agentId === 'expenses' ? EXPENSES : null)),
     logger,
     now: () => clock,
   });
@@ -72,7 +83,7 @@ describe('DescriberLearner', () => {
     expect(repo.upsert).toHaveBeenCalledOnce();
     expect(rows.get('expenses|sheet-append')).toMatchObject({
       effect: 'write', verb: 'logged', one: 'an expense', many: 'expenses', attempt: 'log an expense',
-      source: 'learned', descriptionHash: describerHash(TOOLS['sheet-append']!),
+      source: 'learned', descriptionHash: describerHash(TOOLS['sheet-append']!, EXPENSES),
     });
   });
 
@@ -115,7 +126,7 @@ describe('DescriberLearner', () => {
     const base = { verb: 'x', one: 'y', many: 'z', attempt: 'w', effect: 'write' as const };
     const { chat, rows, learner } = setup([textResponse(GOOD)], [
       { agentId: 'ops', toolName: 'sheet-append', descriptionHash: 'stale', source: 'operator', ...base },
-      { agentId: 'expenses', toolName: 'custom-payment', descriptionHash: describerHash(TOOLS['custom-payment']!), source: 'hint', ...base },
+      { agentId: 'expenses', toolName: 'custom-payment', descriptionHash: describerHash(TOOLS['custom-payment']!, EXPENSES), source: 'hint', ...base },
       { agentId: 'expenses', toolName: 'sheet-append', descriptionHash: 'stale', source: 'learned', ...base },
     ]);
     await learner.handleResult(result('sheet-append', 'ops'));
@@ -132,7 +143,7 @@ describe('DescriberLearner', () => {
     const unhinted: ToolFacts = { ...TOOLS['sheet-append']!, readOnlyHint: undefined };
     const stale: LearnedDescriber = {
       agentId: 'expenses', toolName: 'sheet-append', effect: 'read', verb: 'checked', one: 'the sheet', many: 'the sheet',
-      attempt: 'check the sheet', descriptionHash: describerHash(unhinted), source: 'learned',
+      attempt: 'check the sheet', descriptionHash: describerHash(unhinted, EXPENSES), source: 'learned',
     };
     TOOLS['sheet-append'] = { ...unhinted, readOnlyHint: false };
     try {
@@ -158,6 +169,112 @@ describe('DescriberLearner', () => {
     await learner.handleResult(result('sheet-append'));
     expect(chat).toHaveBeenCalledTimes(3);
     expect(repo.upsert).toHaveBeenCalledOnce();
+  });
+  it('deletes a write row when the tool becomes a family-named read, and learns nothing', async () => {
+    // calendar-free-busy is a read the feed names by family; it was once learned as a write.
+    const wasWrite: LearnedDescriber = {
+      agentId: 'expenses', toolName: 'calendar-free-busy', effect: 'write', verb: 'booked', one: 'a slot', many: 'slots',
+      attempt: 'book a slot', descriptionHash: 'old', source: 'learned',
+    };
+    const { chat, repo, rows, learner } = setup([], [wasWrite]);
+    await learner.handleResult(result('calendar-free-busy'));
+    expect(repo.delete).toHaveBeenCalledWith('expenses', 'calendar-free-busy');
+    expect(rows.has('expenses|calendar-free-busy')).toBe(false);
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it('removes a row its signal contradicts before relearning, so a failed relearn leaves the fallback', async () => {
+    const unhinted: ToolFacts = { ...TOOLS['sheet-append']!, readOnlyHint: undefined };
+    const staleRead: LearnedDescriber = {
+      agentId: 'expenses', toolName: 'sheet-append', effect: 'read', verb: 'checked', one: 'the sheet', many: 'the sheet',
+      attempt: 'check the sheet', descriptionHash: describerHash(unhinted, EXPENSES), source: 'learned',
+    };
+    TOOLS['sheet-append'] = { ...unhinted, readOnlyHint: false };
+    try {
+      const { repo, rows, learner } = setup([new Error('fast tier down')], [staleRead]);
+      await learner.handleResult(result('sheet-append', 'expenses', false));
+      expect(repo.upsert).not.toHaveBeenCalled();
+      expect(rows.has('expenses|sheet-append')).toBe(false);
+    } finally {
+      TOOLS['sheet-append'] = unhinted;
+    }
+  });
+
+  it('keeps an operator row its signal contradicts', async () => {
+    const operatorWrite: LearnedDescriber = {
+      agentId: 'expenses', toolName: 'calendar-free-busy', effect: 'write', verb: 'booked', one: 'a slot', many: 'slots',
+      attempt: 'book a slot', descriptionHash: 'old', source: 'operator',
+    };
+    const { repo, rows, learner } = setup([], [operatorWrite]);
+    await learner.handleResult(result('calendar-free-busy'));
+    expect(repo.delete).not.toHaveBeenCalled();
+    expect(rows.get('expenses|calendar-free-busy')).toMatchObject({ source: 'operator' });
+  });
+
+  it('relearns when the agent is repurposed, with the same tool', async () => {
+    let context = EXPENSES;
+    const current: LearnedDescriber = {
+      agentId: 'expenses', toolName: 'sheet-append', effect: 'write', verb: 'logged', one: 'an expense', many: 'expenses',
+      attempt: 'log an expense', descriptionHash: describerHash(TOOLS['sheet-append']!, EXPENSES), source: 'learned',
+    };
+    const { chat, learner } = setup([textResponse(GOOD)], [current], () => context);
+    await learner.handleResult(result('sheet-append'));
+    expect(chat).not.toHaveBeenCalled();
+    context = 'Books the principal\'s travel';
+    // A new process (restart): the pair is not settled in memory.
+    const again = setup([textResponse(GOOD)], [current], () => context);
+    await again.learner.handleResult(result('sheet-append'));
+    expect(again.chat).toHaveBeenCalledOnce();
+  });
+
+  it('runs at most two learns at once; a third waits for a slot', async () => {
+    const releases: Array<() => void> = [];
+    const { chat, learner } = setup([]);
+    chat.mockImplementation(() => new Promise((resolve) => { releases.push(() => resolve(textResponse(GOOD))); }));
+    const runs = ['tool-a', 'tool-b', 'tool-c'].map((t) => learner.handleResult(result(t)));
+    await vi.waitFor(() => expect(chat).toHaveBeenCalledTimes(2));
+    // Give the third every chance to start early.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(chat).toHaveBeenCalledTimes(2);
+    releases.shift()!();
+    await vi.waitFor(() => expect(chat).toHaveBeenCalledTimes(3));
+    while (releases.length) releases.shift()!();
+    await Promise.all(runs);
+  });
+
+  it('drops a learn past the queue cap, writes no row for it, and retries it only after the interval', async () => {
+    const MAX_IN_FLIGHT = 2;
+    const MAX_QUEUED = 50;
+    const names = Array.from({ length: MAX_IN_FLIGHT + MAX_QUEUED + 1 }, (_, i) => `bulk-${i}`);
+    for (const name of names) TOOLS[name] = { name, description: 'Append a row', inputSchema: {}, actionRisk: 'none', mcp: true };
+    try {
+      const releases: Array<() => void> = [];
+      const { chat, rows, learner, advance } = setup([]);
+      chat.mockImplementation(() => new Promise((resolve) => { releases.push(() => resolve(textResponse(GOOD))); }));
+      const runs = names.map((n) => learner.handleResult(result(n)));
+      const overflow = names[names.length - 1]!;
+      // The overflow call settles on its own (dropped), while the others are still held.
+      await runs[runs.length - 1];
+      expect(chat).toHaveBeenCalledTimes(MAX_IN_FLIGHT);
+      // Drain everything else.
+      while (chat.mock.calls.length < names.length - 1 || releases.length) {
+        if (releases.length) releases.shift()!();
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      await Promise.all(runs);
+      expect(rows.has(`expenses|${overflow}`)).toBe(false);
+      expect(chat).toHaveBeenCalledTimes(names.length - 1);
+      // Not retried inside the interval; retried after it.
+      await learner.handleResult(result(overflow));
+      expect(chat).toHaveBeenCalledTimes(names.length - 1);
+      advance(RETRY_AFTER_MS);
+      chat.mockResolvedValueOnce(textResponse(GOOD));
+      await learner.handleResult(result(overflow));
+      expect(chat).toHaveBeenCalledTimes(names.length);
+      expect(rows.has(`expenses|${overflow}`)).toBe(true);
+    } finally {
+      for (const name of names) delete TOOLS[name];
+    }
   });
 });
 

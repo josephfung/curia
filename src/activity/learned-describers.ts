@@ -87,18 +87,21 @@ export function signalEffect(facts: ToolFacts): ToolEffect | null {
 
 /**
  * Fingerprint of everything a row depends on: what the model saw (description,
- * schema) and the deterministic signal. A tool whose server adds a hint, or whose
- * action_risk crosses a signal boundary, is learned again even with the same
- * description; otherwise a stored "read" would outrank the known-write fallback
- * and hide its failures. The signal, not the raw risk, goes in, so a change that
- * leaves read/write as it was costs no model call.
+ * schema, and the agent text it names the object in) and the deterministic
+ * signal. A repurposed agent is learned again, so the feed's words follow it. A
+ * tool whose server adds a hint, or whose action_risk crosses a signal boundary,
+ * is learned again even with the same description; otherwise a stored "read"
+ * would outrank the known-write fallback and hide its failures. The signal, not
+ * the raw risk, goes in, so a change that leaves read/write as it was costs no
+ * model call.
  */
-export function describerHash(facts: ToolFacts): string {
+export function describerHash(facts: ToolFacts, agentContext: string): string {
   return createHash('sha256')
     .update(canonicalJson({
       description: facts.description,
       inputSchema: facts.inputSchema ?? null,
       signal: signalEffect(facts),
+      agent: agentContext,
     }))
     .digest('hex');
 }
