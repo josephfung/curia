@@ -20,8 +20,8 @@ the maintainer settles a parked question in a way that will recur, add it here.
   Because every new rules model or config adds to a list the maintainer has to keep in his head ([ADR-029](../adr/029-passive-email-observation-and-counterfactual-competence.md) made the same call: existing stores, no new memory types).
 - **Ship a capability whole: its setup-wizard entry and docs page are part of it.**
   Because a capability nobody can configure is not shipped (CLAUDE.md "Setup wizard").
-- **When a change breaks a sibling repo's contract, plan the paired PR in the same piece of work.**
-  Because a break left for later fails the other repo's tests until someone notices.
+- **When a change breaks a sibling repo's contract, plan the paired PR and its landing and deployment sequence in the same piece of work. The maintainer approves that sequence before the breaking change merges.**
+  Because a break left for later fails the other repo's tests until someone notices, and the safe order depends on the change. [ADR-028](../adr/028-shared-unbound-agent-memory.md) requires instance configs to be cleaned and deployed before an instance adopts a core build.
 
 ## Where behavior lives
 
@@ -87,7 +87,7 @@ the maintainer settles a parked question in a way that will recur, add it here.
 ## Security and privacy
 
 - **curia is public: describe production records generically, quoting only counts, dates, agent and tool names, error strings and ids.**
-  Because data from a running instance is the principal's personal data; check issue and PR bodies for names before posting.
+  Because data from a running instance is the principal's personal data; check issue and PR bodies, and any quoted error strings, for names, email addresses, phone numbers and message text before posting.
 - **If personal data reaches a public issue or comment, delete and refile; never edit.**
   Because GitHub shows edit history to every reader.
 - **Never let a secret value reach tool output, logs or a transcript; compare key names or hashes instead.**
