@@ -16,6 +16,8 @@
 // The `user.` prefix is still a structural sandbox: nothing in this file can emit a
 // dot-free system key or a `channel.*` credential key.
 
+import { getDomainWithoutSuffix } from 'tldts';
+
 /** Trust-boundary prefix for agent-captured personal secrets (#971 / #1497). */
 export const USER_SECRET_PREFIX = 'user.';
 
@@ -204,4 +206,47 @@ export function resolveUserSecretName(input: string, existingUserKeys: readonly 
   }
 
   return proposed;
+}
+
+const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/**
+ * The registrable site name from a sign-in URL, by the public suffix list:
+ * `www.rogers.com` -> `rogers`, `www.amazon.co.uk` -> `amazon`, `login.ing.de` -> `ing`.
+ * A trailing dot (`rogers.com.`) names the same site. IPv4 hosts and dot-free hosts
+ * (`localhost`) are returned as-is. Throws on an unparseable or non-http(s) URL, with a
+ * fixed message: the URL itself can carry a password (`https://user:pass@…`).
+ */
+export function siteIdentityFromUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('login URL is not a valid URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('login URL must be http or https');
+  }
+  const host = parsed.hostname.toLowerCase().replace(/\.+$/, '').replace(/^www\./, '');
+  if (IPV4_RE.test(host) || !host.includes('.')) return host;
+  // null when the host is itself a public suffix (`co.uk`): name it by its first label.
+  return getDomainWithoutSuffix(host) ?? host.split('.')[0]!;
+}
+
+/**
+ * The free-text name the console feeds to `resolveUserSecretName`: the site for a
+ * website login, the user's own label otherwise.
+ */
+export function consoleSecretNameInput(input: {
+  type: 'website_login' | 'other';
+  label?: string;
+  loginUrl?: string;
+}): string {
+  if (input.type === 'website_login') {
+    if (!input.loginUrl) throw new Error('loginUrl is required for a website login');
+    return `${siteIdentityFromUrl(input.loginUrl)} password`;
+  }
+  const label = input.label?.trim() ?? '';
+  if (label.length === 0) throw new Error('label is required');
+  return label;
 }

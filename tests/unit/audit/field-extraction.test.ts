@@ -102,6 +102,37 @@ describe('extractStructuredFields', () => {
     )).toMatchObject({ initiator_type: 'system', initiator_id: 'bootstrap_secret' });
   });
 
+  it('secret.changed accepts the details action', () => {
+    expect(extractStructuredFields(
+      'secret.changed',
+      { secretName: 'user.x_password', action: 'details', stage: 'completed', initiatedBy: 'session', actorSessionId: 's1' },
+      'evt-secret-details',
+      logger,
+    )).toMatchObject({ action: 'details', outcome: 'success', target_id: 'user.x_password' });
+  });
+
+  it('secret.accessed maps to a secret target', () => {
+    expect(extractStructuredFields(
+      'secret.accessed',
+      { toolName: 'web-browser', secretName: 'user.x_password', agentId: 'travel' },
+      'evt-acc-1',
+      logger,
+    )).toEqual({
+      action: 'accessed',
+      outcome: 'success',
+      target_type: 'secret',
+      target_id: 'user.x_password',
+      initiator_type: 'agent',
+      initiator_id: 'travel',
+    });
+    expect(extractStructuredFields(
+      'secret.accessed',
+      { toolName: 'web-browser', secretName: 'user.x_password' },
+      'evt-acc-2',
+      logger,
+    )).toMatchObject({ initiator_type: 'system', initiator_id: 'web-browser' });
+  });
+
   it('maps a requested document.console_action as pending (write-ahead)', () => {
     expect(extractStructuredFields(
       'document.console_action',

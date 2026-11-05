@@ -16,7 +16,7 @@ import type { PushSender, PushSendOptions, PushSubscriptionRow } from './push-se
 import { vapidSubject } from './push-service.js';
 import { retryAfterMs } from './push-preview.js';
 
-const SECRET_NAME = 'web_push_vapid';
+export const VAPID_SECRET_NAME = 'web_push_vapid';
 const PUSH_TTL_SECONDS = 86_400;
 
 /** One in-process generation at a time, so two boots do not each mint a key. */
@@ -84,7 +84,7 @@ export async function loadVapidSetup(
 }
 
 async function loadOrCreateKeys(secrets: SecretsService, logger: Logger): Promise<VapidKeys> {
-  const existing = await secrets.getJSON<VapidKeys>(SECRET_NAME);
+  const existing = await secrets.getJSON<VapidKeys>(VAPID_SECRET_NAME);
   if (existing?.publicKey && existing.privateKey) return existing;
   if (!generation) {
     generation = createKeys(secrets, logger).finally(() => {
@@ -95,13 +95,13 @@ async function loadOrCreateKeys(secrets: SecretsService, logger: Logger): Promis
 }
 
 async function createKeys(secrets: SecretsService, logger: Logger): Promise<VapidKeys> {
-  const again = await secrets.getJSON<VapidKeys>(SECRET_NAME);
+  const again = await secrets.getJSON<VapidKeys>(VAPID_SECRET_NAME);
   if (again?.publicKey && again.privateKey) return again;
   const generated = generateVAPIDKeys();
   const keys = { publicKey: generated.publicKey, privateKey: generated.privateKey };
-  await secrets.setJSON(SECRET_NAME, keys);
+  await secrets.setJSON(VAPID_SECRET_NAME, keys);
   // Another process may have written first. Use whatever the vault holds now.
-  const stored = await secrets.getJSON<VapidKeys>(SECRET_NAME);
+  const stored = await secrets.getJSON<VapidKeys>(VAPID_SECRET_NAME);
   if (stored?.publicKey && stored.privateKey) {
     logger.info(stored.publicKey === keys.publicKey
       ? 'web push: generated VAPID keys'
