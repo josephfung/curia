@@ -166,7 +166,7 @@ git -C /path/to/repo diff --name-status --diff-filter=AMR <gate-sha> origin/main
 #    M CHANGELOG.md, M README.md, M package.json, and M for each version-bumped
 #    agents/*.yaml, **/tool.json, skills/*/SKILL.md
 #    The bumped files must differ only on their version line. Zero lines expected:
-git -C /path/to/repo diff -U0 <gate-sha> origin/main -- agents skills | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[+-][[:space:]]*"?version"?[[:space:]]*:'
+git -C /path/to/repo diff -U0 <gate-sha> origin/main -- agents skills | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[+-](version:[[:space:]]*"?[^"[:space:]]+"?|  "version":[[:space:]]*"[^"]+",?)[[:space:]]*$'
 
 # Tag origin/main directly — no checkout or pull needed
 git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Character Name" origin/main
