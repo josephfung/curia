@@ -40,15 +40,14 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import pg from 'pg';
 import pino from 'pino';
-import { runner } from 'node-pg-migrate';
 import { chromium, type Browser, type Page } from 'playwright';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
+import { resolveMigrationDirs, runMigrations } from '../../src/db/run-migrations.js';
 import { seedVault, verifyRequiredSecrets } from '../../scripts/seed-vault.js';
 import { databaseName, isLocalDatabase, likePrefix } from '../smoke/clone-db.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const RESULTS_DIR = path.resolve(import.meta.dirname, 'results');
-const MIGRATIONS_DIR = path.join(REPO_ROOT, 'src', 'db', 'migrations');
 const TSX_BIN = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
 
 /** Must match the wizard: a run that sees a different count is testing a different wizard. */
@@ -202,11 +201,9 @@ interface Secrets {
 }
 
 async function prepareDatabase(databaseUrl: string, secrets: Secrets): Promise<void> {
-  await runner({
+  await runMigrations({
     databaseUrl,
-    dir: MIGRATIONS_DIR,
-    migrationsTable: 'pgmigrations',
-    direction: 'up',
+    dirs: resolveMigrationDirs(REPO_ROOT),
     log: () => { /* the count is reported below; per-migration lines are noise here */ },
   });
   const pool = new pg.Pool({ connectionString: databaseUrl });

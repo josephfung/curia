@@ -77,7 +77,10 @@ Two patterns that pass local checks but fail CI regularly:
 ### Database
 - PostgreSQL 16+ with pgvector
 - Parameterized queries only — never interpolate variables into SQL strings
-- Migrations in `src/db/migrations/` using node-pg-migrate (plain SQL)
+- Migrations in `src/db/migrations/` using node-pg-migrate (plain SQL), run by `src/db/run-migrations.ts` everywhere (boot, `pnpm migrate`, install.sh, CI). Never call node-pg-migrate's `runner` or CLI directly for a full migration.
+- `src/db/migrations-local/` is the **forks' local track** (`pgmigrations_local`). Upstream never adds a migration there — only its README ([ADR-061](docs/adr/061-two-track-migrations.md)).
+
+**Guarded, shape-checked DDL (migration 118 on):** every upstream migration must be safe on a fork that already has the object. `CREATE TABLE` / `CREATE INDEX` use `IF NOT EXISTS`; `ADD COLUMN` / `ADD CONSTRAINT` go in a `DO $$ … $$` block that compares the existing object's shape and `RAISE EXCEPTION`s on a mismatch (a bare `ADD COLUMN IF NOT EXISTS` is not enough). See ADR-061 for the pattern; `tests/unit/db/migration-guards.test.ts` enforces it.
 
 **Migration numbering — rebase hazard:** Two branches landing at the same time will often pick the same next number (e.g. both create `019_*`). `node-pg-migrate` sorts alphabetically within a prefix, so a duplicate prefix causes a `checkOrder` error on startup and takes down prod. **After every rebase and before every merge, `ls src/db/migrations/ | sort` and verify every prefix is unique.** If there's a collision, renumber the newer migration to the next available slot — do not rename the one that prod has already applied.
 

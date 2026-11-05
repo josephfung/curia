@@ -7,10 +7,10 @@
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { runner } from 'node-pg-migrate';
+import { resolveMigrationDirs, runMigrations } from '../../src/db/run-migrations.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
-const MIGRATIONS_DIR = path.resolve(import.meta.dirname, '../../src/db/migrations');
+const PROJECT_ROOT = path.resolve(import.meta.dirname, '../..');
 
 export interface ScratchDatabase {
   url: string;
@@ -36,7 +36,9 @@ async function withAdmin<T>(databaseUrl: string, fn: (client: pg.Client) => Prom
 
 /**
  * `label` is letters, digits and underscores; it names the database, so it is quoted safely.
- * `migrations` applies only that many, oldest first, for a test of one migration.
+ * `migrations` applies only that many upstream migrations, oldest first, for a test of one
+ * migration; the local track is then skipped. `0` leaves the database empty apart from
+ * node-pg-migrate's history table.
  */
 export async function createScratchDatabase(
   sourceUrl: string,
@@ -64,11 +66,9 @@ export async function createScratchDatabase(
 
   const url = withDatabase(sourceUrl, name);
   try {
-    await runner({
+    await runMigrations({
       databaseUrl: url,
-      dir: MIGRATIONS_DIR,
-      migrationsTable: 'pgmigrations',
-      direction: 'up',
+      dirs: resolveMigrationDirs(PROJECT_ROOT),
       count: options.migrations,
       log: () => { /* per-migration lines are noise in test output */ },
     });

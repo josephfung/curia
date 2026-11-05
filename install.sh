@@ -742,8 +742,7 @@ fresh_install() {
   # Run migrations inside the pulled image (tsx direct — no host pnpm needed).
   info "Applying database migrations (in-container)..."
   if ! docker compose --project-directory "$INSTALL_DIR" run --rm curia \
-    ./node_modules/.bin/tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up \
-    --migrations-dir src/db/migrations --migration-file-language sql; then
+    ./node_modules/.bin/tsx scripts/migrate.ts; then
     error "Database migration failed."
     hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
     exit 1
@@ -799,7 +798,7 @@ existing_install() {
   ensure_https_http_bind "$env"
 
   # Re-apply migrations idempotently. node-pg-migrate skips already-applied
-  # migrations, so this is safe on every re-run.
+  # migrations on both tracks (upstream and local), so this is safe on every re-run.
   info "Applying database migrations (in-container)..."
   if ! docker compose --project-directory "$INSTALL_DIR" up -d postgres; then
     error "Failed to start the Postgres container."
@@ -810,8 +809,7 @@ existing_install() {
   check_postgres_exposure "$env"
 
   if ! docker compose --project-directory "$INSTALL_DIR" run --rm curia \
-    ./node_modules/.bin/tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up \
-    --migrations-dir src/db/migrations --migration-file-language sql; then
+    ./node_modules/.bin/tsx scripts/migrate.ts; then
     error "Database migration failed."
     hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
     exit 1
