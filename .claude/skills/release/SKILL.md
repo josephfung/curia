@@ -165,8 +165,10 @@ git -C /path/to/repo diff --name-status --diff-filter=AMR <gate-sha> origin/main
 #    expect exactly (nothing added or renamed; fragments only ever show as D above):
 #    M CHANGELOG.md, M README.md, M package.json, and M for each version-bumped
 #    agents/*.yaml, **/tool.json, skills/*/SKILL.md
-#    The bumped files must differ only on their version line. Zero lines expected:
-git -C /path/to/repo diff -U0 <gate-sha> origin/main -- agents skills | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[+-](version:[[:space:]]*"?[^"[:space:]]+"?|  "version":[[:space:]]*"[^"]+",?)[[:space:]]*$'
+#    The bumped files must differ only on their version line. Zero lines expected.
+#    The output indicators mark content lines with < and >, so the file headers
+#    (---/+++) never need filtering and a content line starting "-- " still shows:
+git -C /path/to/repo diff -U0 --output-indicator-new='>' --output-indicator-old='<' <gate-sha> origin/main -- agents skills | grep -E '^[<>]' | grep -vE '^[<>](version:[[:space:]]*"?[^"[:space:]]+"?|  "version":[[:space:]]*"[^"]+",?)[[:space:]]*$'
 
 # Tag origin/main directly — no checkout or pull needed
 git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Character Name" origin/main
