@@ -30,6 +30,7 @@ interface ApiKgEdge {
   targetNodeId: string;
   type: string;
   confidence: number;
+  archived?: boolean;
 }
 
 /** Whole-graph live counts served with every GET /api/kg/graph response (#2479). */
@@ -249,6 +250,7 @@ function edgeToElement(e: ApiKgEdge): cytoscape.ElementDefinition {
       target: e.targetNodeId,
       label: e.type,
       confidence: e.confidence ?? 0.5,
+      archived: e.archived === true,
     },
   };
 }
@@ -295,7 +297,8 @@ function applyFilter(cy: cytoscape.Core, filter: KgFilter) {
 // the checklist options. Call after every add/remove of elements.
 function syncFilter(cy: cytoscape.Core, filter: KgFilter, setFacets: (f: KgFilterable[]) => void) {
   applyFilter(cy, filter);
-  setFacets(cy.nodes().map(n => ({
+  // Live nodes only: the totals the facets are compared with exclude archived ones.
+  setFacets(cy.nodes().filter(n => n.data('archived') !== true).map(n => ({
     type: n.data('type') as string,
     sensitivity: n.data('sensitivity') as string,
   })));
@@ -306,8 +309,12 @@ function syncFilter(cy: cytoscape.Core, filter: KgFilter, setFacets: (f: KgFilte
 function graphStatus(cy: cytoscape.Core, totals: ApiKgGraphTotals | null): string {
   const hidden = cy.nodes('.filtered-out').length;
   const fmt = (n: number) => n.toLocaleString();
+  // The totals count live elements only, so the "X" side excludes the decayed archived
+  // nodes and archived edges a bounded view can still draw.
+  const liveNodes = cy.nodes().filter(n => n.data('archived') !== true).length;
+  const liveEdges = cy.edges().filter(e => e.data('archived') !== true).length;
   const base = totals
-    ? `${fmt(cy.nodes().length)} of ${fmt(totals.nodes)} nodes · ${fmt(cy.edges().length)} of ${fmt(totals.edges)} edges`
+    ? `${fmt(liveNodes)} of ${fmt(totals.nodes)} nodes · ${fmt(liveEdges)} of ${fmt(totals.edges)} edges`
     : `${fmt(cy.nodes().length)} nodes · ${fmt(cy.edges().length)} edges`;
   return hidden > 0 ? `${base} · ${fmt(hidden)} hidden by filters` : base;
 }

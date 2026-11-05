@@ -88,6 +88,7 @@ function notMergeTombstone(alias: string): string {
 }
 
 interface KgEdgeRow {
+  archived_at?: string | null;
   id: string;
   source_node_id: string;
   target_node_id: string;
@@ -127,7 +128,7 @@ async function loadGraphTotals(pool: Pool): Promise<KgGraphTotals> {
      JOIN kg_nodes t ON t.id = e.target_node_id AND t.archived_at IS NULL
      WHERE e.archived_at IS NULL`,
   );
-  const totals: KgGraphTotals = { nodes: 0, edges: Number(edges.rows[0]?.count ?? 0), byType: {}, bySensitivity: {} };
+  const totals: KgGraphTotals = { nodes: 0, edges: Number(edges.rows[0]?.count ?? 0), byType: Object.create(null) as Record<string, number>, bySensitivity: Object.create(null) as Record<string, number> };
   for (const row of groups.rows) {
     const n = Number(row.count);
     totals.nodes += n;
@@ -167,6 +168,7 @@ function graphPayload(nodes: KgGraphNodeRow[], edges: KgEdgeRow[], truncated: bo
       source: row.source,
       createdAt: row.created_at,
       lastConfirmedAt: row.last_confirmed_at,
+      archived: row.archived_at !== null && row.archived_at !== undefined,
     })),
     truncated,
     totals,
@@ -348,15 +350,17 @@ export async function knowledgeGraphRoutes(
            AND ($1::boolean OR type <> 'fact')`,
         [includeFacts],
       );
+      // Restricted to the returned node ids: the two queries are separate snapshots, so an
+      // edge committed between them must not reference a node missing from `nodes`.
+      const nodeIds = nodes.rows.map((row) => row.id);
       const edges = await pool.query<KgEdgeRow>(
         `SELECT e.id, e.source_node_id, e.target_node_id, e.type, e.properties, e.confidence, e.decay_class, e.source,
-                e.created_at, e.last_confirmed_at
+                e.created_at, e.last_confirmed_at, e.archived_at
          FROM kg_edges e
-         JOIN kg_nodes s ON s.id = e.source_node_id AND s.archived_at IS NULL
-         JOIN kg_nodes t ON t.id = e.target_node_id AND t.archived_at IS NULL
          WHERE e.archived_at IS NULL
-           AND ($1::boolean OR (s.type <> 'fact' AND t.type <> 'fact'))`,
-        [includeFacts],
+           AND e.source_node_id = ANY($1::uuid[])
+           AND e.target_node_id = ANY($1::uuid[])`,
+        [nodeIds],
       );
       const totals = await loadGraphTotals(pool);
       logger.debug({ nodes: nodes.rowCount, edges: edges.rowCount, includeFacts }, 'kg: full graph served');
@@ -446,7 +450,8 @@ export async function knowledgeGraphRoutes(
     // so this is bounded without a LIMIT of its own — a cap here silently dropped edges.
     const nodeIds = nodeRows.map((row) => row.id);
     const edgeResult = await pool.query<KgEdgeRow>(
-      `SELECT id, source_node_id, target_node_id, type, properties, confidence, decay_class, source, created_at, last_confirmed_at
+      `SELECT id, source_node_id, target_node_id, type, properties, confidence, decay_class, source, created_at, last_confirmed_at,
+              archived_at
        FROM kg_edges
        WHERE source_node_id = ANY($1::uuid[])
          AND target_node_id = ANY($1::uuid[])`,
