@@ -192,4 +192,66 @@ describeIf('vault routes', () => {
     expect(await svc.get(PERSONAL_KEY)).toBeNull();
     expect((await svc.listUserDetails()).has(PERSONAL_KEY)).toBe(false);
   });
+
+  describe('saved cards', () => {
+    const CARD_KEY = 'user.vault_rt_visa_card';
+    const NUMBER = '4111111111111111';
+    const card = { number: NUMBER, cvv: '123', expiry_month: 12, expiry_year: 2099, cardholder_name: 'Vault Rt' };
+    const post = (payload: object) => app.inject({ method: 'POST', url: '/api/vault/user-secrets', headers: hdr, payload });
+    const patch = (payload: object) => app.inject({ method: 'PATCH', url: `/api/vault/user-secrets/${encodeURIComponent(CARD_KEY)}`, headers: hdr, payload });
+    const vaultRow = async () => (await pool.query<{ updated_at: Date }>('SELECT updated_at FROM secrets WHERE name = $1', [CARD_KEY])).rows[0]!;
+
+    it('creates, lists, edits and replaces a card; the number never leaves the vault', async () => {
+      const svc = new SecretsService(pool, KEY, logger);
+      const created = await post({ type: 'credit_card', label: 'vault_rt', card });
+      expect(created.statusCode).toBe(200);
+      expect(created.json()).toEqual({ name: CARD_KEY, replaced: false });
+      expect(created.body).not.toContain(NUMBER);
+      expect(await svc.getCardSecret(CARD_KEY)).toEqual({ _schema: 'credit_card', number: NUMBER, cvv: '123' });
+
+      const list = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: hdr });
+      const row = (list.json().secrets as Array<Record<string, unknown>>).find(r => r['name'] === CARD_KEY)!;
+      expect(row['card']).toEqual({ label: 'vault_rt', brand: 'visa', last4: '1111', expiry: '12/2099', expired: false });
+      expect(list.body).not.toContain(NUMBER);
+
+      // A label and expiry edit is a details change: the vault row is untouched.
+      const before = await vaultRow();
+      expect((await patch({ label: 'Everyday', expiry_month: 6 })).statusCode).toBe(200);
+      expect((await vaultRow()).updated_at.getTime()).toBe(before.updated_at.getTime());
+      const edited = await svc.getCardPublic(CARD_KEY);
+      expect(edited?.label).toBe('Everyday');
+      expect(edited?.publicFields.expiry_month).toBe('06');
+
+      // A new CVV keeps the number.
+      expect((await patch({ cvv: '456' })).statusCode).toBe(200);
+      expect(await svc.getCardSecret(CARD_KEY)).toEqual({ _schema: 'credit_card', number: NUMBER, cvv: '456' });
+
+      // Replace swaps the card and keeps the label.
+      expect((await patch({ replace: { ...card, number: '5555555555554444' } })).statusCode).toBe(200);
+      expect((await svc.getCardSecret(CARD_KEY)).number).toBe('5555555555554444');
+      expect((await svc.getCardPublic(CARD_KEY))).toMatchObject({ label: 'Everyday', publicFields: { brand: 'mastercard', last4: '4444' } });
+
+      expect((await patch({ value: 'x' })).statusCode).toBe(409);
+    });
+
+    it('audits card writes by key name only', async () => {
+      const since = new Date();
+      await post({ type: 'credit_card', label: 'vault_rt', card });
+      await patch({ label: 'Renamed' });
+      const { rows } = await pool.query<{ action: string; outcome: string; payload: string }>(
+        `SELECT action, outcome, payload::text AS payload FROM audit_log
+          WHERE event_type = 'secret.changed' AND target_id = $1 AND timestamp >= $2
+          ORDER BY timestamp, seq`,
+        [CARD_KEY, since],
+      );
+      expect(rows.map(r => `${r.action}:${r.outcome}`)).toEqual(['set:pending', 'set:success', 'details:pending', 'details:success']);
+      expect(rows.map(r => r.payload).join()).not.toContain(NUMBER);
+    });
+
+    it('rejects an invalid card with a 400 and writes nothing', async () => {
+      const res = await post({ type: 'credit_card', label: 'vault_rt', card: { ...card, number: '4111111111111112' } });
+      expect(res.statusCode).toBe(400);
+      expect((await pool.query('SELECT 1 FROM secrets WHERE name = $1', [CARD_KEY])).rowCount).toBe(0);
+    });
+  });
 });

@@ -16,6 +16,8 @@
 // The `user.` prefix is still a structural sandbox: nothing in this file can emit a
 // dot-free system key or a `channel.*` credential key.
 
+import { detectCardBrand } from './structured-secret-schema.js';
+
 /** Trust-boundary prefix for agent-captured personal secrets (#971 / #1497). */
 export const USER_SECRET_PREFIX = 'user.';
 
@@ -241,13 +243,24 @@ export function siteIdentityFromUrl(url: string): string {
 
 /**
  * The free-text name the console feeds to `resolveUserSecretName`: the site for a
- * website login, the user's own label otherwise.
+ * website login, "<label> <brand> card" for a card, the user's own label otherwise.
  */
 export function consoleSecretNameInput(input: {
-  type: 'website_login' | 'other';
+  type: 'website_login' | 'other' | 'credit_card';
   label?: string;
   loginUrl?: string;
+  /** credit_card only: the card number as typed. Used for the brand word alone. */
+  number?: string;
 }): string {
+  if (input.type === 'credit_card') {
+    const label = input.label?.trim() ?? '';
+    if (label.length === 0) throw new Error('label is required');
+    const digits = (input.number ?? '').replace(/[\s-]/g, '');
+    if (digits.length === 0) throw new Error('number is required');
+    // "other" says nothing about the card, so it is left out of the name.
+    const brand = detectCardBrand(digits);
+    return brand === 'other' ? `${label} card` : `${label} ${brand} card`;
+  }
   if (input.type === 'website_login') {
     if (!input.loginUrl) throw new Error('loginUrl is required for a website login');
     return `${siteIdentityFromUrl(input.loginUrl)} password`;

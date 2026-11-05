@@ -14,7 +14,8 @@
 //                                             ?force=true)
 //   POST   /api/vault/user-secrets/preview — the user.* name a create would use, and whether it exists
 //   POST   /api/vault/user-secrets         — create or replace a personal user.* secret with sign-in details
-//   PATCH  /api/vault/user-secrets/:name   — edit a personal secret's value and/or sign-in details
+//   PATCH  /api/vault/user-secrets/:name   — edit a personal secret's value and/or sign-in details,
+//                                             or a saved card's label, public fields, CVV or whole card
 //
 // Platform keys (platform-keys.ts) are read-only here: PUT, DELETE and PATCH refuse them with 403
 // before anything else runs. They are a deployment concern, not a console one.
@@ -43,6 +44,19 @@ import type { SecretMetadata, UserSecretDetailsPatch } from '../../../secrets/se
 import type { SecretUsagePort } from '../../../secrets/secret-usage-repo.js';
 import { consoleSecretNameInput, resolveUserSecretName, USER_SECRET_PREFIX } from '../../../secrets/user-secret-name.js';
 import { hasUserSecretDetails, parseUserSecretDetails, type UserSecretDetails } from '../../../secrets/user-secret-details.js';
+import {
+  CARD_LABEL_MAX,
+  CARD_VALIDATION_MESSAGES,
+  isCardExpired,
+  normalizeCardLabel,
+  validateCardPublicPatch,
+  validateCreditCard,
+  validateCvv,
+  type CardBrand,
+  type CreditCardPublicFields,
+  type CreditCardSecretDoc,
+  type StructuredSchemaTag,
+} from '../../../secrets/structured-secret-schema.js';
 
 // Allow-set of valid channel credential vault keys, derived once from the static catalog.
 // A channel credential is stored as `channel.<channel>.<field.key>`; only the exact
@@ -99,6 +113,15 @@ export interface VaultSecretsPort {
   upsertUserDetails(name: string, d: UserSecretDetails): Promise<void>;
   patchUserDetails(name: string, p: UserSecretDetailsPatch): Promise<void>;
   deleteUserDetails(name: string): Promise<void>;
+  // Saved cards (#1358). None of these decrypt except the writes' own transactions.
+  setCard(name: string, secret: CreditCardSecretDoc, publicFields: CreditCardPublicFields, label: string | null): Promise<void>;
+  getStructuredSchema(name: string): Promise<StructuredSchemaTag | null>;
+  getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields } | null>;
+  patchCardPublic(name: string, patch: { label?: string | null; publicFields?: CreditCardPublicFields }): Promise<void>;
+  replaceCardSecret(
+    name: string,
+    change: { cvv: string } | { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields },
+  ): Promise<void>;
 }
 
 /** What declares a vault secret, as shown on the console Secrets page. */
@@ -116,6 +139,17 @@ export interface VaultSecretDeclarer {
 }
 
 export type VaultSecretKind = 'personal' | 'system' | 'platform';
+
+/** A saved card's non-secret summary, from its public fields only (never a decrypt). */
+export interface VaultCardSummary {
+  label: string | null;
+  brand: CardBrand;
+  last4: string;
+  /** "MM/YYYY". */
+  expiry: string;
+  /** Past its expiry month. The page shows an Expired status for it. */
+  expired: boolean;
+}
 
 export interface VaultSecretSummary {
   name: string;
@@ -143,6 +177,8 @@ export interface VaultSecretSummary {
   /** Personal rows only: non-secret sign-in details. */
   loginUrl?: string;
   username?: string;
+  /** Personal rows holding a saved card only. */
+  card?: VaultCardSummary;
 }
 
 /** Generous ceiling for a string secret (API keys, tokens). Structured/JSON secrets use
@@ -192,7 +228,28 @@ function usesLimit(raw: unknown): number {
 }
 
 /** The console's naming fields for a personal secret (see consoleSecretNameInput). */
-type NamingBody = { type?: unknown; label?: unknown; loginUrl?: unknown };
+type NamingBody = { type?: unknown; label?: unknown; loginUrl?: unknown; card?: unknown };
+
+const CARD_STRUCTURED_REFUSAL = 'Use the card fields to change a saved card.';
+
+/** A request body's `card` / `replace` member as a plain object, or null when it is not one. */
+function asObject(v: unknown): Record<string, unknown> | null {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : null;
+}
+
+/** The card fields of a create or replace body, in the shape validateCreditCard takes. */
+function cardInput(card: Record<string, unknown>) {
+  return {
+    number: card['number'],
+    cvv: card['cvv'],
+    expiry_month: card['expiry_month'],
+    expiry_year: card['expiry_year'],
+    cardholder_name: card['cardholder_name'],
+    billing_zip: card['billing_zip'],
+  };
+}
+
+const CARD_LABEL_MESSAGE = `The label can be up to ${CARD_LABEL_MAX} characters.`;
 
 export interface VaultRouteOptions {
   secretsService: VaultSecretsPort;
@@ -302,6 +359,16 @@ export async function vaultRoutes(
     return true;
   }
 
+  function cardSummary(pub: CreditCardPublicFields, label: string | null): VaultCardSummary {
+    return {
+      label,
+      brand: pub.brand,
+      last4: pub.last4,
+      expiry: `${pub.expiry_month}/${pub.expiry_year}`,
+      expired: isCardExpired(pub),
+    };
+  }
+
   async function metadataFor(name: string): Promise<SecretMetadata | undefined> {
     return (await secretsService.listMetadata()).find(m => m.name === name);
   }
@@ -312,8 +379,8 @@ export async function vaultRoutes(
   // logged — never the input or the thrown message, since a URL may carry userinfo.
   async function resolveConsoleName(request: FastifyRequest, body: NamingBody | undefined): Promise<{ name: string } | { error: string }> {
     const type = body?.type;
-    if (type !== 'website_login' && type !== 'other') {
-      return { error: '"type" must be "website_login" or "other".' };
+    if (type !== 'website_login' && type !== 'other' && type !== 'credit_card') {
+      return { error: '"type" must be "website_login", "other" or "credit_card".' };
     }
     const label = body?.label ?? undefined;
     const loginUrl = body?.loginUrl ?? undefined;
@@ -325,9 +392,16 @@ export async function vaultRoutes(
       return { error: err instanceof Error ? err.message : 'The secret could not be named.' };
     };
 
+    // Only the number's leading digits pick the brand word. It is never logged or returned.
+    let number: string | undefined;
+    if (type === 'credit_card') {
+      const rawNumber = asObject(body?.card)?.['number'];
+      if (typeof rawNumber !== 'string') return { error: '"card.number" must be a string.' };
+      number = rawNumber;
+    }
     let input: string;
     try {
-      input = consoleSecretNameInput({ type, label, loginUrl });
+      input = consoleSecretNameInput({ type, label, loginUrl, number });
     } catch (err) {
       return namingFailed(err);
     }
@@ -341,6 +415,140 @@ export async function vaultRoutes(
     // resolveUserSecretName only ever emits user.* names; this keeps the sandbox explicit.
     if (!name.startsWith(USER_SECRET_PREFIX)) throw new Error('personal secret name escaped the user.* prefix');
     return { name };
+  }
+
+  // -- Saved cards (#1358). Every card write is validated here with the schema validators
+  // before SecretsService is called (it stores what it is given). Responses and audit rows
+  // carry the key name only: never a number, CVV or any other card field.
+
+  /** Create or replace a card from POST { type: 'credit_card', label, card }. */
+  async function createCard(request: FastifyRequest, reply: FastifyReply, body: NamingBody) {
+    const card = asObject(body.card);
+    if (!card) return reply.status(400).send({ error: 'Body must include a "card" object.' });
+
+    let name: string | undefined;
+    try {
+      const named = await resolveConsoleName(request, body);
+      if ('error' in named) return reply.status(400).send({ error: named.error });
+      name = named.name;
+      const label = normalizeCardLabel(body.label);
+      if (label === null) return reply.status(400).send({ error: CARD_LABEL_MESSAGE });
+      const checked = validateCreditCard(cardInput(card));
+      if (!checked.ok) {
+        request.log.info({ reason: checked.reason }, 'vault card rejected');
+        return reply.status(400).send({ error: CARD_VALIDATION_MESSAGES[checked.reason] });
+      }
+
+      // Replacing a saved card is fine. Anything else under this name is not a card to replace.
+      const meta = await metadataFor(name);
+      if (meta && await secretsService.getStructuredSchema(name) !== 'credit_card') {
+        return reply.status(409).send({
+          error: meta.valueFormat === 'json'
+            ? structuredValueRefusal(name)
+            : `'${name}' already holds a different secret. Use another label for this card.`,
+        });
+      }
+
+      const change: SecretChange = { name, action: 'set' };
+      if (!await auditRequested(request, reply, change)) return;
+      await secretsService.setCard(name, checked.secret, checked.publicFields, label);
+      await auditCompleted(request, change);
+      return reply.send({ name, replaced: meta !== undefined });
+    } catch (err) {
+      // No outcome row: the write may have committed before it threw. Key name only.
+      request.log.error({ err, name }, 'vault card create failed');
+      return reply.status(500).send({ error: 'Failed to save card. Check server logs.' });
+    }
+  }
+
+  /** PATCH on a saved card. Body: label?, expiry_month?, expiry_year?, cardholder_name?,
+   *  billing_zip? (details: no vault write), cvv? (set: the number is kept), or replace
+   *  (set: a whole new card). '' clears the label and the billing postal code. */
+  async function patchCard(request: FastifyRequest, reply: FastifyReply, name: string, body: Record<string, unknown>) {
+    if (body['value'] !== undefined) return reply.status(409).send({ error: CARD_STRUCTURED_REFUSAL });
+
+    const PUBLIC_KEYS = ['expiry_month', 'expiry_year', 'cardholder_name', 'billing_zip'] as const;
+    const hasPublic = PUBLIC_KEYS.some(k => body[k] !== undefined);
+    const hasLabel = body['label'] !== undefined;
+    const hasCvv = body['cvv'] !== undefined;
+    const hasReplace = body['replace'] !== undefined;
+    if (!hasPublic && !hasLabel && !hasCvv && !hasReplace) {
+      return reply.status(400).send({ error: 'Body must include a card field to change.' });
+    }
+    if (hasReplace && (hasPublic || hasLabel || hasCvv)) {
+      return reply.status(400).send({ error: 'Send "replace" on its own, without other card fields.' });
+    }
+
+    try {
+      const meta = await metadataFor(name);
+      const current = await secretsService.getCardPublic(name);
+      if (!meta || !current) return reply.status(404).send({ error: `'${name}' no longer exists.` });
+
+      let label: string | null | undefined;
+      if (hasLabel) {
+        const raw = body['label'];
+        label = raw === null || raw === '' ? null : normalizeCardLabel(raw);
+        if (label === null && raw !== null && raw !== '') return reply.status(400).send({ error: CARD_LABEL_MESSAGE });
+      }
+
+      let publicFields: CreditCardPublicFields | undefined;
+      if (hasPublic) {
+        const zip = body['billing_zip'] === '' ? null : body['billing_zip'];
+        const checked = validateCardPublicPatch({
+          expiry_month: body['expiry_month'],
+          expiry_year: body['expiry_year'],
+          cardholder_name: body['cardholder_name'],
+          billing_zip: zip,
+        }, current.publicFields);
+        if (!checked.ok) return reply.status(400).send({ error: CARD_VALIDATION_MESSAGES[checked.reason] });
+        publicFields = checked.publicFields;
+      }
+
+      let cvv: string | undefined;
+      if (hasCvv) {
+        if (!validateCvv(body['cvv'], current.publicFields.brand)) {
+          return reply.status(400).send({ error: CARD_VALIDATION_MESSAGES.cvv_format });
+        }
+        cvv = body['cvv'] as string; // validateCvv confirmed it is a string
+      }
+
+      let replacement: { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields } | undefined;
+      if (hasReplace) {
+        const replace = asObject(body['replace']);
+        if (!replace) return reply.status(400).send({ error: '"replace" must be an object.' });
+        const checked = validateCreditCard(cardInput(replace));
+        if (!checked.ok) return reply.status(400).send({ error: CARD_VALIDATION_MESSAGES[checked.reason] });
+        replacement = { secret: checked.secret, publicFields: checked.publicFields };
+      }
+
+      const changes: SecretChange[] = [
+        ...(cvv !== undefined || replacement ? [{ name, action: 'set' as const }] : []),
+        ...(label !== undefined || publicFields ? [{ name, action: 'details' as const }] : []),
+      ];
+      for (const change of changes) {
+        if (!await auditRequested(request, reply, change)) return;
+      }
+      // Each outcome row follows its own write, so a details failure doesn't drop the
+      // completed row for a CVV that was set.
+      if (replacement) {
+        await secretsService.replaceCardSecret(name, replacement);
+        await auditCompleted(request, { name, action: 'set' });
+      } else if (cvv !== undefined) {
+        await secretsService.replaceCardSecret(name, { cvv });
+        await auditCompleted(request, { name, action: 'set' });
+      }
+      if (label !== undefined || publicFields) {
+        await secretsService.patchCardPublic(name, {
+          ...(label !== undefined ? { label } : {}),
+          ...(publicFields ? { publicFields } : {}),
+        });
+        await auditCompleted(request, { name, action: 'details' });
+      }
+      return reply.send({ ok: true });
+    } catch (err) {
+      request.log.error({ err, name }, 'vault card edit failed');
+      return reply.status(500).send({ error: 'Failed to save card. Check server logs.' });
+    }
   }
 
   // Every declaration of a vault key across tools, MCP servers, channels, email accounts and
@@ -451,6 +659,9 @@ export async function vaultRoutes(
             (kind === 'system' && declaredBy.length > 0 && !declaredBy.some(d => d.kind === 'tool')),
           ...(details?.loginUrl ? { loginUrl: details.loginUrl } : {}),
           ...(details?.username ? { username: details.username } : {}),
+          ...(details?.schema === 'credit_card' && details.publicFields
+            ? { card: cardSummary(details.publicFields, details.label ?? null) }
+            : {}),
         };
       };
 
@@ -591,8 +802,9 @@ export async function vaultRoutes(
   });
 
   // -- GET /api/vault/secrets/:name/uses — newest recorded reads of one secret (no values) --
-  // "Used" means Curia read it (a secret.accessed audit row); whether a sign-in worked isn't
-  // recorded. Empty when no usage source is wired.
+  // "Used" means Curia read it (a secret.accessed audit row; a saved card's carries the field
+  // filled); whether a sign-in worked isn't recorded. A saved card also lists the principal's
+  // card-use decisions (kind 'card_use'). Empty when no usage source is wired.
   app.get('/api/vault/secrets/:name/uses', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const { name } = request.params as { name: string };
@@ -601,13 +813,17 @@ export async function vaultRoutes(
     try {
       const uses = await options.usage.recentUses(name, limit);
       return reply.send({
-        uses: uses.map(u => ({
-          at: u.at.toISOString(),
-          agentId: u.agentId,
-          toolName: u.toolName,
-          source: u.source,
-          byReference: u.byReference,
-        })),
+        uses: uses.map(u => u.kind === 'card_use'
+          ? { kind: u.kind, at: u.at.toISOString(), decision: u.decision, siteDomain: u.siteDomain, amount: u.amount }
+          : {
+            kind: u.kind,
+            at: u.at.toISOString(),
+            agentId: u.agentId,
+            toolName: u.toolName,
+            source: u.source,
+            byReference: u.byReference,
+            ...(u.secretField ? { secretField: u.secretField } : {}),
+          }),
       });
     } catch (err) {
       request.log.error({ err, name }, 'GET /api/vault/secrets/:name/uses failed');
@@ -616,8 +832,10 @@ export async function vaultRoutes(
   });
 
   // -- POST /api/vault/user-secrets/preview — the name a create would use (no writes, no audit) --
-  // Body { type, label?, loginUrl? }. existing is set when that name is already in the vault,
-  // so the console can warn that saving replaces it.
+  // Body { type, label?, loginUrl? }, or { type: 'credit_card', label, card: { number } } (the
+  // brand word of the name comes from the number; the number and any CVV are never echoed).
+  // existing is set when that name is already in the vault, so the console can warn that
+  // saving replaces it.
   app.post('/api/vault/user-secrets/preview', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     try {
@@ -641,6 +859,7 @@ export async function vaultRoutes(
   app.post('/api/vault/user-secrets', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const body = request.body as (NamingBody & { username?: unknown; value?: unknown }) | undefined;
+    if (body?.type === 'credit_card') return createCard(request, reply, body);
 
     const checked = checkValue(body?.value);
     if ('error' in checked) return reply.status(400).send({ error: checked.error });
@@ -691,6 +910,16 @@ export async function vaultRoutes(
     }
     const body = (typeof request.body === 'object' && request.body !== null ? request.body : {}) as
       { value?: unknown; loginUrl?: unknown; username?: unknown };
+
+    // A saved card is edited through its own fields; the schema tag lives on the details row.
+    let schema: StructuredSchemaTag | null;
+    try {
+      schema = await secretsService.getStructuredSchema(name);
+    } catch (err) {
+      request.log.error({ err, name }, 'vault personal secret edit failed');
+      return reply.status(500).send({ error: 'Failed to save secret. Check server logs.' });
+    }
+    if (schema === 'credit_card') return patchCard(request, reply, name, body as Record<string, unknown>);
 
     let value: string | undefined;
     if (body.value !== undefined) {
