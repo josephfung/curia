@@ -297,10 +297,12 @@ function applyFilter(cy: cytoscape.Core, filter: KgFilter) {
 // the checklist options. Call after every add/remove of elements.
 function syncFilter(cy: cytoscape.Core, filter: KgFilter, setFacets: (f: KgFilterable[]) => void) {
   applyFilter(cy, filter);
-  // Live nodes only: the totals the facets are compared with exclude archived ones.
-  setFacets(cy.nodes().filter(n => n.data('archived') !== true).map(n => ({
+  // Archived nodes are flagged so filterOptions lists their types without counting them:
+  // the totals the counts are compared with exclude archived nodes.
+  setFacets(cy.nodes().map(n => ({
     type: n.data('type') as string,
     sensitivity: n.data('sensitivity') as string,
+    archived: n.data('archived') === true,
   })));
 }
 
@@ -312,7 +314,11 @@ function graphStatus(cy: cytoscape.Core, totals: ApiKgGraphTotals | null): strin
   // The totals count live elements only, so the "X" side excludes the decayed archived
   // nodes and archived edges a bounded view can still draw.
   const liveNodes = cy.nodes().filter(n => n.data('archived') !== true).length;
-  const liveEdges = cy.edges().filter(e => e.data('archived') !== true).length;
+  const liveEdges = cy.edges().filter(e =>
+    e.data('archived') !== true &&
+    e.source().data('archived') !== true &&
+    e.target().data('archived') !== true,
+  ).length;
   const base = totals
     ? `${fmt(liveNodes)} of ${fmt(totals.nodes)} nodes · ${fmt(liveEdges)} of ${fmt(totals.edges)} edges`
     : `${fmt(cy.nodes().length)} nodes · ${fmt(cy.edges().length)} edges`;

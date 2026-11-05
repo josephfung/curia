@@ -90,6 +90,15 @@ describe('filterOptions', () => {
     expect(opts.sensitivities.at(-1)).toEqual({ value: 'secret', count: 0 });
   });
 
+  it('lists an archived-only type with count 0 and does not count archived nodes', () => {
+    const opts = filterOptions(
+      [...nodes, { type: 'project', sensitivity: 'internal', archived: true }],
+      emptyFilter(),
+    );
+    expect(opts.types).toContainEqual({ value: 'project', count: 0 });
+    expect(opts.sensitivities).toContainEqual({ value: 'internal', count: 2 });
+  });
+
   it('carries whole-graph totals and lists graph types missing from the canvas (#2479)', () => {
     const totals = {
       byType: { person: 40, fact: 900, project: 12 },

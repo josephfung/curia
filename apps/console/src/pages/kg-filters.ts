@@ -15,6 +15,8 @@ export interface KgFilter {
 export interface KgFilterable {
   type: string;
   sensitivity: string;
+  /** Archived nodes stay listed as options but are not counted (totals are live-only). */
+  archived?: boolean;
 }
 
 export interface KgFilterOption {
@@ -84,8 +86,9 @@ export function filterOptions(
   const typeCounts = new Map<string, number>();
   const sensCounts = new Map<string, number>(SENSITIVITY_LEVELS.map(s => [s, 0]));
   for (const n of nodes) {
-    typeCounts.set(n.type, (typeCounts.get(n.type) ?? 0) + 1);
-    sensCounts.set(n.sensitivity, (sensCounts.get(n.sensitivity) ?? 0) + 1);
+    const inc = n.archived === true ? 0 : 1;
+    typeCounts.set(n.type, (typeCounts.get(n.type) ?? 0) + inc);
+    sensCounts.set(n.sensitivity, (sensCounts.get(n.sensitivity) ?? 0) + inc);
   }
   for (const t of filter.types) if (!typeCounts.has(t)) typeCounts.set(t, 0);
   for (const s of filter.sensitivities) if (!sensCounts.has(s)) sensCounts.set(s, 0);
