@@ -11,6 +11,7 @@ import pino from 'pino';
 import { knowledgeGraphRoutes } from '../../src/channels/http/routes/kg.js';
 import type { ContactService } from '../../src/contacts/contact-service.js';
 import type { EventBus } from '../../src/bus/bus.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
 const describeIf = DATABASE_URL ? describe : describe.skip;
@@ -64,6 +65,8 @@ describeIf('GET /api/kg/graph (#2479)', () => {
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
+    // Before the first write (cleanup deletes too): never touch a database that isn't curia_test.
+    await requireCuriaTestDatabase(pool);
     await cleanup();
     app = Fastify();
     await app.register(knowledgeGraphRoutes, {
