@@ -45,6 +45,44 @@ describe('parseBriefVerdict', () => {
   });
 });
 
+describe('parseBriefVerdict stakes (#2473)', () => {
+  const parse = (o: Record<string, unknown>) => parseBriefVerdict(JSON.stringify({ reason: 'x', ...o }), ['stakes']);
+
+  it('reads each rating and its reason', () => {
+    for (const stakes of ['routine', 'commitment', 'financial_or_legal']) {
+      expect(parse({ stakes, stakesReason: 'why' })).toEqual({ stakes, stakesReason: 'why', reason: 'x' });
+    }
+  });
+
+  it('is malformed on a missing, unknown or ill-typed rating: the review then holds', () => {
+    expect(parse({})).toBeNull();
+    expect(parse({ stakes: 'high' })).toBeNull();
+    expect(parse({ stakes: 'Commitment' })).toBeNull();
+    expect(parse({ stakes: 2 })).toBeNull();
+    expect(parse({ stakes: null })).toBeNull();
+  });
+
+  it('defaults a missing or ill-typed reason: it decides nothing', () => {
+    expect(parse({ stakes: 'commitment' })).toEqual({ stakes: 'commitment', stakesReason: '', reason: 'x' });
+    expect(parse({ stakes: 'commitment', stakesReason: 3 })).toEqual({ stakes: 'commitment', stakesReason: '', reason: 'x' });
+  });
+
+  it('drops a rating the caller did not ask for', () => {
+    const raw = JSON.stringify({ unsupportedClaims: [], stakes: 'routine', reason: 'x' });
+    expect(parseBriefVerdict(raw, ['grounding'])).toEqual({ unsupportedClaims: [], reason: 'x' });
+  });
+
+  it('asks for the rating and its reason only when the question is asked, and defines each rating', () => {
+    const input: BriefInput = {
+      questions: ['speaks-as-principal', 'stakes'], message: 'Confirmed.', recipients: ['sam@example.com'],
+      band: 'spot-check', evidence: { toolResults: [] }, conversationId: 'c1',
+    };
+    expect(buildBriefUserPrompt(input)).toContain('"stakes": "routine"|"commitment"|"financial_or_legal", "stakesReason"');
+    expect(buildBriefUserPrompt({ ...input, questions: ['grounding'] })).not.toContain('"stakes"');
+    expect(BRIEF_SYSTEM_PROMPT).toContain('"financial_or_legal": payments, purchase orders, pricing, contracts, signatures, or a legal position.');
+  });
+});
+
 describe('parseBriefVerdict disclosure (#2312)', () => {
   const ids = ['P1', 'P2'];
   const ruling = (id: string, extra: Record<string, unknown> = {}) => ({ id, basis: 'directed', requested: true, reason: 'asked', ...extra });
