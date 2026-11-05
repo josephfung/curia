@@ -206,7 +206,8 @@ function RecentUses({ row }: { row: SecretRowData }) {
         <ul className="secrets-uses">
           {uses.map((u, i) => (
             <li key={`${u.at}-${i}`}>
-              <span>{u.agentId ?? 'Unknown agent'} · {u.toolName || u.source || 'unknown'}</span>
+              {/* A null agentId is a system-initiated read (SecretUse), not missing data. */}
+              <span>{u.agentId ?? 'System'} · {u.toolName || u.source || 'unknown'}</span>
               {/* Same relative wording as the Last used column. */}
               <span className="secrets-hint">{lastUsedText({ ...row, readAtStartup: false, configured: true, lastUsedAt: u.at }, now)}</span>
             </li>
@@ -554,7 +555,9 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
     <DrawerShell
       title="New secret"
       onClose={onClose}
-      footer={<SaveFooter onClose={onClose} onSave={() => void handleSave()} saving={saving} disabled={!ready || structuredExisting} />}
+      // No Save until the name preview is back: a save before it could replace an existing
+      // secret without the replacement notice.
+      footer={<SaveFooter onClose={onClose} onSave={() => void handleSave()} saving={saving} disabled={!ready || preview === null || structuredExisting} />}
     >
       {error && <p className="autonomy-error">{error}</p>}
       <div className="form-field">

@@ -3,7 +3,7 @@
  *
  * Every ctx.secret() / ctx.resolveSecretRef() call publishes a secret.accessed event, so the
  * audit_log is the record of when a secret was read and by whom. This repo only reads it, via
- * idx_audit_log_secret_accessed (migration 117). Names and metadata only — a value is never in
+ * idx_audit_log_secret_accessed (migration 118). Names and metadata only — a value is never in
  * the payload. "Used" means Curia read the secret; whether the sign-in worked isn't recorded.
  */
 
@@ -21,8 +21,8 @@ export interface SecretUse {
 }
 
 export interface SecretUsagePort {
-  /** Newest secret.accessed timestamp per secret name; a never-read secret is absent. */
-  lastUsedByName(): Promise<Map<string, Date>>;
+  /** Newest secret.accessed timestamp for each of `names`; a never-read secret is absent. */
+  lastUsedByName(names: readonly string[]): Promise<Map<string, Date>>;
   /** The newest `limit` reads of one secret, newest first. */
   recentUses(name: string, limit: number): Promise<SecretUse[]>;
 }
@@ -30,16 +30,23 @@ export interface SecretUsagePort {
 export class SecretUsageRepo implements SecretUsagePort {
   constructor(private readonly pool: DbPool) {}
 
-  async lastUsedByName(): Promise<Map<string, Date>> {
-    const result = await this.pool.query<{ name: string; last_used: Date }>(
-      `SELECT payload->>'secretName' AS name, max(timestamp) AS last_used
-         FROM audit_log
-        WHERE event_type = 'secret.accessed'
-        GROUP BY 1`,
+  // One index lookup per listed name (the newest entry of idx_audit_log_secret_accessed for
+  // it), not a group over every secret.accessed row: audit_log is append-only, so that would
+  // grow with the log. The cost follows the number of secrets the page lists.
+  async lastUsedByName(names: readonly string[]): Promise<Map<string, Date>> {
+    if (names.length === 0) return new Map();
+    const result = await this.pool.query<{ name: string; last_used: Date | null }>(
+      `SELECT n.name,
+              (SELECT a.timestamp FROM audit_log a
+                WHERE a.event_type = 'secret.accessed' AND a.payload->>'secretName' = n.name
+                ORDER BY a.timestamp DESC
+                LIMIT 1) AS last_used
+         FROM unnest($1::text[]) AS n(name)`,
+      [names],
     );
     const byName = new Map<string, Date>();
     for (const row of result.rows) {
-      if (row.name) byName.set(row.name, row.last_used);
+      if (row.name && row.last_used) byName.set(row.name, row.last_used);
     }
     return byName;
   }
@@ -59,7 +66,7 @@ export class SecretUsageRepo implements SecretUsagePort {
               payload->>'byReference' AS by_reference
          FROM audit_log
         WHERE event_type = 'secret.accessed' AND payload->>'secretName' = $1
-        ORDER BY timestamp DESC
+        ORDER BY timestamp DESC, seq DESC NULLS LAST
         LIMIT $2`,
       [name, limit],
     );

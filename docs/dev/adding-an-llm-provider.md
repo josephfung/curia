@@ -131,7 +131,7 @@ Also add the models to the checks in `model-registry.test.ts` and `provider-rout
 - [ ] Reasoning blocks are returned and passed back verbatim, filtered with `sendableReasoningBlocks`
 - [ ] Registered in `src/index.ts` (and the test-mode stack) wrapped with `watchProvider`
 - [ ] Tests follow `openrouter.test.ts` and `anthropic.test.ts`
-- [ ] Spec 02's provider list and `CHANGELOG.md` are updated
+- [ ] Spec 02's provider list is updated and a `changes/<branch>.md` fragment is added
 
 ---
 

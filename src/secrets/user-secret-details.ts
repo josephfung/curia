@@ -32,7 +32,8 @@ export function parseUserSecretDetails(input: { login_url?: unknown; username?: 
     try {
       url = new URL(raw);
     } catch {
-      throw new Error(`login_url must be a full http(s) URL, got '${raw.slice(0, 100)}'`);
+      // Fixed text: the URL can carry userinfo (a password), and this message reaches responses.
+      throw new Error('login_url must be a full http(s) URL');
     }
     if (url.protocol !== 'https:' && url.protocol !== 'http:') {
       throw new Error('login_url must be an http(s) URL');

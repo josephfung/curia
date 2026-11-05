@@ -30,8 +30,11 @@ If `WEB_APP_BOOTSTRAP_SECRET` is missing, the KG API routes are not registered a
   - Purpose: label, alias and property text search and browsing. Merge tombstones are excluded; decayed archived nodes still appear, as they do in `/graph`; `exclude_facts=true` also drops `fact` nodes. Each node carries `aliases` and `identitySource`.
 
 - `GET /api/kg/graph`
-  - Query params: `node_id`, `depth`, `limit`
-  - Purpose: neighborhood traversal for a selected node; falls back to recent nodes when no `node_id` is provided.
+  - Query params: `node_id`, `depth` (default 2, max 4), `limit` (default 100, max 300), `exclude_facts`, `scope`, `include_facts`
+  - Purpose: neighborhood traversal for a selected node; falls back to the most recently confirmed nodes when no `node_id` is provided (`exclude_facts=true` leaves facts out).
+  - Traversal ranks nodes by hop distance, then recency, so the focal node is always returned and direct neighbours fill the limit before farther nodes (#2479). Every edge between the returned nodes is included.
+  - `scope=all` returns the whole live graph with no limit: every unarchived non-fact node and every unarchived edge between two of them; `include_facts=true` adds facts. It cannot be combined with `node_id`.
+  - Every response carries `truncated` (a limit cut nodes from this view) and `totals`: live node and edge counts for the whole graph, with nodes broken down `byType` and `bySensitivity`.
   - A well-formed `node_id` that names no `kg_nodes` row → `404 { error: "Node not found: <id>" }`. An isolated node (exists, no edges) → `200` with that node in `nodes` and `edges: []` (#1881).
   - A `node_id` that is an archived merge tombstone → `404 { error, code: "node_merged", mergedInto, label }` (#2233). Merge tombstones and their edges never appear in graph results or traversal. Each graph node carries `aliases` and `archived`.
 
@@ -58,12 +61,14 @@ The graph view uses a **physics-aware layout** so the structure of the graph is 
 
 The left sidebar has a **filter panel** with two checklist axes, populated from the nodes on the canvas (#351):
 
-- **Type** — every node type present, with counts.
+- **Type** — every node type present on the canvas or in the graph.
 - **Sensitivity** — `public`, `internal`, `confidential`, `restricted`, always listed.
+
+Each option shows `canvas / graph` counts: nodes on the canvas, then live nodes in the whole graph (from the response's `totals`). The status line likewise reads "X of Y nodes · X of Y edges" (#2479).
 
 Values are OR'd within an axis and AND'd across axes; an axis with nothing checked is unconstrained. Filtering is client-side: non-matching nodes and their edges are hidden without re-fetching, nodes added by neighborhood expansion are filtered immediately, and the sidebar search results only list matching nodes. **Clear filters** resets to show-all.
 
-On default mount, the explorer loads the **principal's 2-hop neighborhood** so the most relevant subgraph is visible without a manual search.
+On default mount, the explorer loads the **principal's 2-hop neighborhood** (up to 300 nodes, nearest first) so the most relevant subgraph is visible without a manual search. Without a principal node it shows the 300 most recently confirmed non-fact nodes. 300 is what the Cytoscape canvas pans and zooms at 60fps with the current layout; drawing the whole graph from `scope=all` is #2459.
 
 ## Merging nodes
 

@@ -450,6 +450,8 @@ Pass `--since` / `--until` for a window other than the 30 days ending now. What 
 - **Pinned tools with zero calls** — expanded pins plus MCP tools offered in the window, minus that agent's `tool.invoke` / `skill.invoke` rows.
 - **Modal tool count** — the most common tool-list size; later calls in a task grow when `skill-activate` adds tools.
 
+To see what a budgeted agent's fixed context is made of before it reaches production, run `pnpm report:budget --agent <name>` in a checkout. It lists the always-on prompt by section (system_prompt headings, then each pinned SKILL.md), every local tool definition, and the specialist roster, each with its size and share. A failing `prompt-budget.test.ts` prints the same numbers for its five largest contributors, with the overage, and points here.
+
 ---
 
 ## Testing Your Agent

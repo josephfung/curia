@@ -345,6 +345,9 @@ describe('console routes (kg / tasks / contacts / chat)', () => {
     };
     (pool.query as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ rows: [nodeRow], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      // The two graph-totals queries (#2479).
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
     const response = await app.inject({
@@ -448,6 +451,9 @@ describe('console routes (kg / tasks / contacts / chat)', () => {
     };
     (pool.query as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ rows: [isolatedNode], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      // The two graph-totals queries (#2479).
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
     const response = await app.inject({
@@ -461,7 +467,8 @@ describe('console routes (kg / tasks / contacts / chat)', () => {
     expect(body.nodes).toHaveLength(1);
     expect(body.nodes[0]!.id).toBe(isolatedId);
     expect(body.edges).toEqual([]);
-    expect(pool.query).toHaveBeenCalledTimes(2);
+    // Traversal, edges, then the two graph-totals queries (#2479).
+    expect(pool.query).toHaveBeenCalledTimes(4);
 
     await app.close();
   });
@@ -487,7 +494,12 @@ describe('console routes (kg / tasks / contacts / chat)', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ nodes: [], edges: [] });
+    expect(response.json()).toEqual({
+      nodes: [],
+      edges: [],
+      truncated: false,
+      totals: { nodes: 0, edges: 0, byType: {}, bySensitivity: {} },
+    });
 
     await app.close();
   });

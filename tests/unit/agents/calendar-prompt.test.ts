@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { loadAgentConfig } from '../../../src/agents/loader.js';
 import * as path from 'node:path';
+import semver from 'semver';
 
 const agentsDir = path.resolve(import.meta.dirname, '../../../agents');
 
@@ -268,18 +269,13 @@ describe('calendar agent — standing scheduling rules (pinned document, #2339)'
     expect(hierarchySection).toMatch(/Standing principal-wide preferences belong in the rules\s+document/);
   });
 
-  it('bumps calendar agent version for scheduling-rules capability', async () => {
+  it('carries a valid semver version at or past the standing-rules release', () => {
     const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
-    // Exact-version tripwire: bump this alongside `agents/calendar.yaml`'s version on any
-    // meaningful prompt/capability change. 0.8.2 = delegate-wait hint sized to the
-    // pre-2026-09-20 p99 (#1857).
-    // 0.9.0 = answers a generic PEER REQUEST, a new capability, so minor.
-    // 0.9.1 = principal vocabulary in the prompt (#1950).
-    // 0.9.2 = composed email is always a draft block, never reported as sent (#2055).
-    // 0.10.0 = the bullpen tool is split into bullpen-post/-reply/-read/-close (#2126).
-    // 0.10.1 = ADR-046 trim (#2025): restated code rules and duplicates cut.
-    // 0.11.0 = standing rules move to a pinned /shared/ document edited with doc-write (#2339).
-    expect(config.version).toBe('0.11.0');
+    // A floor, not an exact match: PRs do not bump agent versions (the release PR runs
+    // `pnpm bump:versions`), so an exact pin here would force every calendar PR to edit
+    // this test too. 0.11.0 = standing rules moved to a pinned /shared/ document (#2339).
+    expect(semver.valid(config.version)).not.toBeNull();
+    expect(semver.gte(config.version as string, '0.11.0')).toBe(true);
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {
