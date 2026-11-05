@@ -104,9 +104,9 @@ async function open(path: string): Promise<string> {
   return (result as { success: true; data: { session_id: string } }).data.session_id;
 }
 
-function livePage(path: string): Page {
-  const found = context.pages().find((p) => p.url().startsWith(`${SHOP}${path}`));
-  if (!found) throw new Error(`no open page for ${path}`);
+function livePage(sessionId: string): Page {
+  const found = service.getSession(sessionId)?.page;
+  if (!found) throw new Error(`no open page for session ${sessionId}`);
   return found;
 }
 
@@ -165,21 +165,21 @@ describe('saved-card fills in a real browser (#1358)', () => {
     const sessionId = await open('/month-name');
     const result = await run({ session_id: sessionId, action: 'select', selector: '#m', secret_ref: 'user.visa#expiry_month_name' });
     expect(result.success).toBe(true);
-    expect(await livePage('/month-name').$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('m12');
+    expect(await livePage(sessionId).$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('m12');
   }, 60_000);
 
   it('month select, short-name labels', async () => {
     const sessionId = await open('/month-short');
     const result = await run({ session_id: sessionId, action: 'select', selector: '#m', secret_ref: 'user.visa#expiry_month_short' });
     expect(result.success).toBe(true);
-    expect(await livePage('/month-short').$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('s12');
+    expect(await livePage(sessionId).$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('s12');
   }, 60_000);
 
   it('month select, 01-12 labels', async () => {
     const sessionId = await open('/month-mm');
     const result = await run({ session_id: sessionId, action: 'select', selector: '#m', secret_ref: 'user.visa#expiry_mm' });
     expect(result.success).toBe(true);
-    expect(await livePage('/month-mm').$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('v12');
+    expect(await livePage(sessionId).$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('v12');
     // Expiry is a public field: it must not be scrubbed from the page text, or a total like
     // "CA$412.30" would read back corrupted. The page text renders the options run together
     // ("...101112"), so there is no word boundary to match on.
@@ -190,14 +190,14 @@ describe('saved-card fills in a real browser (#1358)', () => {
     const sessionId = await open('/year-yyyy');
     const result = await run({ session_id: sessionId, action: 'select', selector: '#y', secret_ref: 'user.visa#expiry_yyyy' });
     expect(result.success).toBe(true);
-    expect(await livePage('/year-yyyy').$eval('#y', (el) => (el as HTMLSelectElement).value)).toBe('27');
+    expect(await livePage(sessionId).$eval('#y', (el) => (el as HTMLSelectElement).value)).toBe('27');
   }, 60_000);
 
   it('MM/YY text box', async () => {
     const sessionId = await open('/mm-yy');
     const result = await run({ session_id: sessionId, action: 'type', selector: '#e', secret_ref: 'user.visa#expiry_mm_yy' });
     expect(result.success).toBe(true);
-    expect(await livePage('/mm-yy').$eval('#e', (el) => (el as HTMLInputElement).value)).toBe('12/27');
+    expect(await livePage(sessionId).$eval('#e', (el) => (el as HTMLInputElement).value)).toBe('12/27');
   }, 60_000);
 
   it('separate MM and YYYY boxes, filled as one batch', async () => {
@@ -211,7 +211,7 @@ describe('saved-card fills in a real browser (#1358)', () => {
       ],
     });
     expect(result.success).toBe(true);
-    const shop = livePage('/split-boxes');
+    const shop = livePage(sessionId);
     expect(await shop.$eval('#em', (el) => (el as HTMLInputElement).value)).toBe('12');
     expect(await shop.$eval('#ey', (el) => (el as HTMLInputElement).value)).toBe('2027');
     // Public fields only: the batch screenshot is not suppressed (that latch is for number/cvv).
@@ -224,7 +224,7 @@ describe('saved-card fills in a real browser (#1358)', () => {
       actions: [{ action: 'select', selector: '#m', secret_ref: 'user.visa#expiry_month_name' }],
     });
     expect(result.success).toBe(true);
-    expect(await livePage('/month-name').$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('m12');
+    expect(await livePage(sessionId).$eval('#m', (el) => (el as HTMLSelectElement).value)).toBe('m12');
   }, 60_000);
 
   it('card number inside a cross-origin iframe on the page', async () => {
@@ -232,7 +232,7 @@ describe('saved-card fills in a real browser (#1358)', () => {
     siteUrls.length = 0;
     const result = await run({ session_id: sessionId, action: 'type', selector: '#number', secret_ref: 'user.visa#number' });
     expect(result.success).toBe(true);
-    const frame = livePage('/iframe').frames().find((f) => f.url().startsWith(PAY_FRAME));
+    const frame = livePage(sessionId).frames().find((f) => f.url().startsWith(PAY_FRAME));
     expect(frame).toBeDefined();
     expect(await frame!.$eval('#number', (el) => (el as HTMLInputElement).value)).toBe(SECRET_DOC.number);
     // The resolver was asked on behalf of the top-level shop page, not the payment frame.

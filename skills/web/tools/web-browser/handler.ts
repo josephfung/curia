@@ -603,7 +603,8 @@ export class WebBrowserHandler implements ToolHandler {
     // closed.) A standalone screenshot on a later call is still allowed — by then the
     // secret-bearing input is typically gone or masked.
     const wantScreenshot = screenshot === true || screenshotOnly || screenshotStepReached;
-    if (injectedSecretThisCall && wantScreenshot) {
+    // A card number or CVV stays in the form across calls, so its latch lasts the whole session.
+    if ((injectedSecretThisCall || session.cardSecretInjected) && wantScreenshot) {
       ctx.log.debug({ sessionId }, 'Screenshot suppressed: a secret was injected this call (#973)');
       result.screenshot_skipped = 'A secret was filled in this call; screenshot suppressed to avoid capturing the value (#973).';
     } else if (wantScreenshot) {
@@ -874,16 +875,19 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       const typedOnUrl = documentSiteUrl(page, typeScope);
 
       let fillValue: string;
+      let cardApprovedOn: string | null = null;
       if (hasSecretRef) {
         const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
         if (!resolved.ok) return resolved;
         fillValue = resolved.value;
+        if (resolved.card) cardApprovedOn = resolved.siteUrl;
         if (resolved.sensitive) {
           session.registerInjectedSecret(fillValue);
           // Latch screenshot suppression NOW — before the fill below, which can throw mid-typing
           // after a char has landed. Deferring this to the return would leave the guard fail-open
           // in that window (a batch call falls through to the screenshot block on a step throw).
           deps.markSecretInjected();
+          if (resolved.card) session.cardSecretInjected = true;
         }
       } else {
         // Checked before resolving; repeated so TypeScript narrows `text`.
@@ -905,6 +909,11 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // not keystrokes. ControlOrMeta = Cmd on macOS (dev), Ctrl on Linux (prod). (#1053)
       // humanFocusField focuses the field directly when an overlay such as a floating label
       // takes the click (#2201).
+      // The grant was judged on the page URL at resolution; refuse if the page moved since, so a
+      // card is never typed into a replacement document.
+      if (cardApprovedOn !== null && page.url() !== cardApprovedOn) {
+        return { ok: false, error: CARD_NAVIGATED_REFUSAL };
+      }
       await humanFocusField(page, typeTarget, { log: ctx.log });
       await page.keyboard.press('ControlOrMeta+a');
       await page.keyboard.press('Delete');
@@ -925,7 +934,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // secret_ref (#1358): fill a saved-card field (an expiry month or year dropdown) by
       // reference. Mutually exclusive with `value`, as for `type` with `text`.
       const selectHasRef = typeof secret_ref === 'string' && secret_ref.length > 0;
-      const selectHasValue = value !== undefined && value !== null && value !== '';
+      const selectHasValue = value !== undefined && value !== null;
       if (selectHasRef && selectHasValue) {
         return { ok: false, error: 'select accepts either value or secret_ref, not both' };
       }
@@ -936,27 +945,34 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // natural language ("Country dropdown") and it will resolve via role/label/text.
       const { locator: selectTarget, scope: selectScope } = await resolveLocatorWithScope(page, selector, ctx.log);
       let selectValue: string;
+      let selectCardApprovedOn: string | null = null;
       if (selectHasRef) {
         const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
         if (!resolved.ok) return resolved;
         selectValue = resolved.value;
+        if (resolved.card) selectCardApprovedOn = resolved.siteUrl;
         // Same order and rule as `type`: only a sensitive value is registered for redaction
         // and latches screenshot suppression, before anything below can throw.
         if (resolved.sensitive) {
           session.registerInjectedSecret(selectValue);
           deps.markSecretInjected();
+          if (resolved.card) session.cardSecretInjected = true;
         }
       } else {
         selectValue = value as string; // validated above
       }
       // Destination guard (#2017), as for type: a tracked code is a select value only on
       // its verification's page domain, judged by the field's own document, in its session.
-      if (!trackedCodeAllowedOn(ctx, selectValue, documentSiteUrl(page, selectScope), sessionId)) {
+      // A resolved reference is a vault value, not a typed code, so the guard covers a literal value only.
+      if (!selectHasRef && !trackedCodeAllowedOn(ctx, selectValue,documentSiteUrl(page, selectScope), sessionId)) {
         return { ok: false, error: TRACKED_CODE_REFUSAL };
       }
       // A select can navigate too (a country or language picker that reloads on change).
       const selectMark = activity.mark();
       // Playwright matches the string against option value or label.
+      if (selectCardApprovedOn !== null && page.url() !== selectCardApprovedOn) {
+        return { ok: false, error: CARD_NAVIGATED_REFUSAL };
+      }
       await selectTarget.selectOption(selectValue);
       return { ok: true, navigated: await actionStartedNavigation(activity, selectMark, timing, deps.settleDeadline) };
     }
@@ -976,6 +992,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
   }
 }
 
+const CARD_NAVIGATED_REFUSAL = 'The page changed while the card was being resolved; nothing was typed. Read the page again and retry.';
+
 /**
  * Dereference a secret_ref for a fill. resolveSecretRef enforces the user.* namespace, the
  * card rules and the audit; it throws on a bad ref or a missing secret, and a thrown message
@@ -987,21 +1005,28 @@ async function resolveSecretForFill(
   ctx: ToolContext,
   ref: string,
   page: Page,
-): Promise<{ ok: true; value: string; sensitive: boolean } | { ok: false; error: string }> {
+): Promise<{ ok: true; value: string; sensitive: boolean; card: boolean; siteUrl: string } | { ok: false; error: string }> {
   if (!ctx.resolveSecretRef) {
     // Capability not granted to this invocation — fail loud rather than
     // silently falling back to using the reference name as a literal.
     return { ok: false, error: 'secret_ref requires the secretResolver capability, which is not available to this skill' };
   }
   try {
-    const value = await ctx.resolveSecretRef(ref, { siteUrl: page.url() });
+    const { field } = parseSecretRef(ref);
+    const siteUrl = page.url();
+    // A grant matches the registrable domain, not the scheme, so card data would go over plain HTTP.
+    if (field !== null && !siteUrl.startsWith('https://')) {
+      return { ok: false, error: 'Card fields require an HTTPS page' };
+    }
+    const value = await ctx.resolveSecretRef(ref, { siteUrl });
     // A saved card's public fields (expiry, name, ZIP, brand) are already shown to the agent, and
     // redacting short values like "12" corrupts page text for the rest of the session. Only the
     // card number, cvv and plain (non-card) secrets are sensitive.
-    const { field } = parseSecretRef(ref);
-    return { ok: true, value, sensitive: field === null || isCardSecretField(field) };
+    const card = field !== null && isCardSecretField(field);
+    return { ok: true, value, sensitive: field === null || card, card, siteUrl };
   } catch (err) {
-    if (err instanceof SecretRefRefusal) return { ok: false, error: err.message };
+    // Structural too: tsup bundles its own copy of the class, so instanceof can miss across modules.
+    if (err instanceof SecretRefRefusal || (err instanceof Error && err.name === 'SecretRefRefusal')) return { ok: false, error: err.message };
     throw err;
   }
 }

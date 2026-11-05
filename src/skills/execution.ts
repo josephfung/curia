@@ -2982,7 +2982,7 @@ export class ExecutionLayer {
             // Expiry was checked at consumeFill; a slow vault read can outlast the window, so
             // check again before the number or CVV leaves this closure.
             if (secretDoc !== null && !(await this.cardUseRepo!.hasLiveGrant({ secretName: name, siteUrl, conversationId: conversationId! }))) {
-              throw new Error(CARD_USE_REQUIRED_ERROR(name, registrableDomain(siteUrl) ?? 'this site'));
+              throw new SecretRefRefusal('card_use_required', CARD_USE_REQUIRED_ERROR(name, registrableDomain(siteUrl) ?? 'this site'));
             }
             const projected = projectCardField(field, card.publicFields, secretDoc);
             if (projected === '') {

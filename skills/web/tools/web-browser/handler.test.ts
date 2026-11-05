@@ -364,6 +364,44 @@ describe('web-browser select and card fills with secret_ref (#1358)', () => {
     expect(resolveSecretRef).toHaveBeenCalledWith('user.visa#number', { siteUrl: 'https://shop.example.test/checkout?step=pay' });
   });
 
+  it('refuses a card field on a plain HTTP page without resolving it', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue('4242424242424242');
+    const { ctx } = makeToolContext({
+      input: { action: 'type', selector: '#number', secret_ref: 'user.visa#number' },
+      pageUrl: 'http://shop.example.test/checkout',
+      resolveSecretRef,
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(resolveSecretRef).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+  });
+
+  it('redacts a card number the page reflects grouped by spaces or dashes', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue('4242424242424242');
+    const { ctx, session } = makeToolContext({
+      input: { action: 'type', selector: '#number', secret_ref: 'user.visa#number' },
+      pageUrl: 'https://shop.example.test/checkout',
+      resolveSecretRef,
+    });
+
+    await new WebBrowserHandler().execute(ctx);
+
+    expect(session.redactInjectedSecrets('4242 4242 4242 4242 / 4242-4242-4242-4242')).toBe('[REDACTED] / [REDACTED]');
+  });
+
+  it('keeps suppressing screenshots on later calls after a card number was filled', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue('4242424242424242');
+    const { ctx, session } = makeToolContext({
+      input: { action: 'type', selector: '#number', secret_ref: 'user.visa#number' },
+      pageUrl: 'https://shop.example.test/checkout',
+      resolveSecretRef,
+    });
+    await new WebBrowserHandler().execute(ctx);
+    expect(session.cardSecretInjected).toBe(true);
+  });
+
   it('card-use refusal surfaces as the action error', async () => {
     const refusal = CARD_USE_REQUIRED_ERROR('user.visa', 'example.test');
     const resolveSecretRef = vi.fn().mockRejectedValue(new SecretRefRefusal('card_use_required', refusal));

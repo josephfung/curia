@@ -83,8 +83,11 @@ export interface CaptureSecretsPort {
   /** Saved cards (#1358). Public fields only on the read side; the writes take already-validated values. */
   getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields } | null>;
   setCard(name: string, secret: CreditCardSecretDoc, publicFields: CreditCardPublicFields, label: string | null): Promise<void>;
-  renewCard(name: string, change: { cvv: string; publicFields: CreditCardPublicFields }): Promise<void>;
-  patchCardPublic(name: string, patch: { label?: string | null; publicFields?: CreditCardPublicFields }): Promise<void>;
+  renewCard(name: string, change: { cvv: string; publicFields: CreditCardPublicFields; basedOn?: CreditCardPublicFields }): Promise<void>;
+  patchCardPublic(
+    name: string,
+    patch: { label?: string | null; publicFields?: CreditCardPublicFields; basedOn?: CreditCardPublicFields },
+  ): Promise<void>;
 }
 
 /** The mint-only surface injected into skills as the `secretCapture` capability.
@@ -214,6 +217,11 @@ export type CaptureMetadata =
   | 'not_found';
 
 /** The row a winning claim returns. */
+/** Which card a renewal link was minted for: brand and last four, both public. */
+function cardFingerprintOf(fields: { brand: string; last4: string }): string {
+  return `${fields.brand}:${fields.last4}`;
+}
+
 interface ClaimedToken {
   secret_name: string;
   value_format: CaptureValueFormat;
@@ -246,6 +254,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
     valueFormat: CaptureValueFormat,
     origin?: CaptureOrigin,
     template?: CaptureTemplate,
+    cardFingerprint?: string,
   ): Promise<{ rawToken: string; expiresAt: Date }> {
     // 128-bit raw token, base64url-encoded → a short (~22 char) mixed-case slug that reads
     // like an ordinary magic-link id, NOT a 64-char hex hash. Two reasons for this shape:
@@ -268,8 +277,8 @@ export class SecretCaptureService implements SecretCaptureMinter {
       `INSERT INTO secret_capture_tokens
          (token_hash, secret_name, label, value_format, expires_at,
           conversation_id, channel_id, agent_id, task_event_id, originator, resume_intent, resume_token,
-          capture_template)
-       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5), $6, $7, $8, $9, $10, $11, $12, $13)
+          capture_template, card_fingerprint)
+       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5), $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING expires_at`,
       [
         tokenHash, secretName, label ?? null, valueFormat, DEFAULT_CAPTURE_TTL_MINUTES,
@@ -281,6 +290,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
         origin?.resumeIntent ?? null,
         origin?.resumeToken ?? null,
         template ?? null,
+        cardFingerprint ?? null,
       ],
     );
     return { rawToken, expiresAt: result.rows[0]!.expires_at };
@@ -292,6 +302,14 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const reusedExisting = existing.includes(secretName);
 
     let label = args.label;
+    let cardFingerprint: string | undefined;
+    if (!args.template && reusedExisting && await this.secrets.getCardPublic(secretName)) {
+      // A plain link would write a string over the card and the form's value would be refused later.
+      throw new Error(
+        `'${secretName}' is a saved card. Use template credit_card to re-capture it, ` +
+        'or credit_card_renewal for a new expiry and security code.',
+      );
+    }
     if (args.template) {
       if (label !== undefined && normalizeCardLabel(label) === null) {
         throw new Error('The card label must be 1 to 100 characters.');
@@ -305,6 +323,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
           );
         }
         label = card.label ?? undefined;
+        cardFingerprint = cardFingerprintOf(card.publicFields);
       } else if (reusedExisting) {
         const card = await this.secrets.getCardPublic(secretName);
         if (!card) {
@@ -319,7 +338,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
     }
     // A card link is always json: the form posts card fields, never a free-form value.
     const valueFormat: CaptureValueFormat = args.template ? 'json' : (args.valueFormat ?? 'string');
-    const { rawToken, expiresAt } = await this.mint(secretName, label, valueFormat, args.origin, args.template);
+    const { rawToken, expiresAt } = await this.mint(secretName, label, valueFormat, args.origin, args.template, cardFingerprint);
     if (args.details && hasUserSecretDetails(args.details)) {
       await this.secrets.upsertUserDetails(secretName, args.details);
     }
@@ -368,7 +387,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
     }
     await this.secrets.patchCardPublic(secretName, {
       ...(label !== undefined ? { label } : {}),
-      ...(publicFields ? { publicFields } : {}),
+      ...(publicFields ? { publicFields, basedOn: current.publicFields } : {}),
     });
     return { secretName };
   }
@@ -476,9 +495,10 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const peek = await this.pool.query<{
       capture_template: CaptureTemplate | null;
       secret_name: string;
+      card_fingerprint: string | null;
       spent: boolean;
     }>(
-      `SELECT capture_template, secret_name,
+      `SELECT capture_template, secret_name, card_fingerprint,
               (consumed_at IS NOT NULL OR expires_at <= now()) AS spent
          FROM secret_capture_tokens WHERE token_hash = $1`,
       [tokenHash],
@@ -510,7 +530,13 @@ export class SecretCaptureService implements SecretCaptureMinter {
       // Not 'not_found': the link is live, so the page must not say it was never valid.
       return this.cardRefused('card_missing');
     }
-    if (card.expiry_month === undefined || card.expiry_year === undefined) return this.cardRefused('expiry_format');
+    // The link was minted for one card. If the name now holds another, renewing would write
+    // this link's expiry and code onto it.
+    if (row.card_fingerprint !== cardFingerprintOf(current.publicFields)) {
+      this.options.logger?.warn('secret-capture: renewal link redeemed after its card was replaced');
+      return this.cardRefused('card_missing');
+    }
+    if (card.expiry_month == null || card.expiry_year == null) return this.cardRefused('expiry_format');
     const expiry = validateCardPublicPatch(
       { expiry_month: card.expiry_month, expiry_year: card.expiry_year },
       current.publicFields,
@@ -519,7 +545,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
     if (!validateCvv(card.cvv, current.publicFields.brand)) return this.cardRefused('cvv_format');
     const cvv = card.cvv as string; // validateCvv confirmed it is a string
     return this.claimAndWrite(tokenHash, claimed =>
-      this.secrets.renewCard(claimed.secret_name, { cvv, publicFields: expiry.publicFields }));
+      this.secrets.renewCard(claimed.secret_name, { cvv, publicFields: expiry.publicFields, basedOn: current.publicFields }));
   }
 
   private cardRefused(reason: CardValidationReason): RedeemOutcome {

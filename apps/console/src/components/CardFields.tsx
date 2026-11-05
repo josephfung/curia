@@ -26,7 +26,7 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 }
 
 export function CardFields({ mode, state, onChange, errors, brandHint }: CardFieldsProps) {
-  const thisYear = new Date().getFullYear();
+  const thisYear = new Date().getUTCFullYear();
   const years = Array.from({ length: 16 }, (_, i) => String(thisYear + i));
   const brand = brandHint ?? detectBrandForDisplay(state.number);
 
