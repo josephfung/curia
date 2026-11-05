@@ -324,6 +324,7 @@ describe('reportScheduledPinGaps (#1501)', () => {
     return {
       toolNames: [],
       instructionBlocks: [],
+      instructionBlockSkills: [],
       heartbeatEligible: false,
       documentWorkspaceEnabled: false,
       resolvedSkills: [],

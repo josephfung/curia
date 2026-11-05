@@ -32,6 +32,7 @@ import type { LLMProvider } from './llm/provider.js';
 import { ModelRegistry } from './llm/model-registry.js';
 import { ModelRouter } from './llm/model-router.js';
 import { discoverAgentManifests, loadAgentConfig, type AgentYamlConfig } from './loader.js';
+import { splitMarkdownSections, type Contributor } from './budget-report.js';
 
 /** Same ratio the epic (#1954) uses for its ≤ 4k-token target. */
 export const CHARS_PER_TOKEN = 4;
@@ -58,6 +59,27 @@ export interface AgentContextMeasurement {
   localToolNames: string[];
   /** The `## Available Specialists` roster this agent is given, in chars (0 when it gets none). */
   rosterChars: number;
+  /**
+   * What each total is made of, in the unit its budget counts (tokens, bytes, tokens), for
+   * a failure message and the breakdown command. Approximate where noted: the prompt
+   * entries sum to the always-on total within a few tokens of rounding.
+   */
+  contributors: {
+    /** system_prompt and pinned SKILL.md bodies, split by heading. Tokens. */
+    prompt: Contributor[];
+    /** One entry per local tool definition. Bytes. */
+    tools: Contributor[];
+    /** One entry per specialist line. Tokens. */
+    roster: Contributor[];
+  };
+}
+
+function tokensOf(chars: number): number {
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
+function sectionContributors(source: string, markdown: string): Contributor[] {
+  return splitMarkdownSections(markdown).map(s => ({ name: `${source} § ${s.heading}`, size: tokensOf(s.chars) }));
 }
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };
@@ -143,5 +165,17 @@ export function measureAgentContext(agentName: string, sources: AgentSources): A
     allowDiscovery: agentConfig.allow_discovery === true,
     localToolNames: assembled.toolDefs.map(d => d.name),
     rosterChars: assembled.runtimeConfig.availableSpecialists?.length ?? 0,
+    contributors: {
+      prompt: [
+        ...sectionContributors(`${agentName}.yaml system_prompt`, agentConfig.system_prompt),
+        ...assembled.pinResolution.instructionBlocks.flatMap((block, i) =>
+          sectionContributors(`${assembled.pinResolution.instructionBlockSkills[i] ?? `pinned skill ${i + 1}`} SKILL.md`, block)),
+      ],
+      tools: assembled.toolDefs.map(def => ({ name: def.name, size: Buffer.byteLength(JSON.stringify(def), 'utf8') })),
+      roster: (assembled.runtimeConfig.availableSpecialists ?? '')
+        .split('\n')
+        .filter(line => line.trim().length > 0)
+        .map(line => ({ name: /^- (@[^:]+):/.exec(line)?.[1] ?? line.slice(0, 40), size: tokensOf(line.length + 1) })),
+    },
   };
 }
