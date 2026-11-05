@@ -15,7 +15,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Personal secrets in the console** — create, edit and remove website logins; platform keys read-only. (#2478)
 - **`pnpm bump:versions`** — release PR bumps agent and skill versions changed since the last tag; PRs no longer do. (#2485)
 - **`pnpm report:budget`** — prints an agent's always-on prompt, tool definitions and roster by contributor. (#2485)
 - **Learned activity describers** — Recent Activity names custom agents' undescribed writes and counts their failures as hiccups. (#2455)
