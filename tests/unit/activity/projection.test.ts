@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AuditLogRow } from '../../../src/audit/audit-log-repo.js';
 import type { ActionLogRow } from '../../../src/autonomy/action-log-types.js';
 import { collectActivityRefs, projectActivity, type ActivityRows, type ProjectionContext } from '../../../src/activity/projection.js';
+import { buildCatalog, type LearnedDescriber } from '../../../src/activity/learned-describers.js';
 
 const T0 = new Date('2026-10-24T13:00:00.000Z');
 let seq = 0;
@@ -324,5 +325,127 @@ describe('projectActivity', () => {
     const items = projectActivity(rows([root, conversational], [...children, response('t2', BODY)]), ctx());
     expect(items).toHaveLength(2);
     expect(JSON.stringify(items)).not.toContain(BODY);
+  });
+});
+
+describe('projectActivity with learned describers (ADR-059)', () => {
+  function learned(overrides: Partial<LearnedDescriber> = {}): LearnedDescriber {
+    return {
+      agentId: 'expenses', toolName: 'sheet-append', effect: 'write', verb: 'logged', one: 'an expense', many: 'expenses',
+      attempt: 'log an expense', descriptionHash: 'h', source: 'learned', ...overrides,
+    };
+  }
+  const sheetRead = learned({ toolName: 'sheet-read', effect: 'read', verb: 'checked', one: 'the expense sheet', many: 'the expense sheet', attempt: 'check the expense sheet' });
+  const catalog = buildCatalog([learned(), sheetRead], ['custom-payment']);
+  const UNDESCRIBED_NAMES = /sheet-append|sheet-read|custom-payment/;
+
+  /** An internal job run by the expenses agent, with no reply. */
+  function expensesTask(id: string): AuditLogRow {
+    return task(id, { agentId: 'expenses', channelId: 'internal' });
+  }
+
+  it('shows a job whose only work is learned writes as a tally, not "looked into a request"', () => {
+    const root = expensesTask('t1');
+    const children = [
+      ...toolCall('t1', 'sheet-read', {}, { success: true, data: {} }),
+      ...toolCall('t1', 'sheet-append', { row: [1] }, { success: true, data: {} }),
+      ...toolCall('t1', 'sheet-append', { row: [2] }, { success: true, data: {} }),
+      ...toolCall('t1', 'sheet-append', { row: [3] }, { success: true, data: {} }),
+    ];
+    const [item] = projectActivity(rows([root], children), ctx({ catalog }));
+    expect(item).toMatchObject({ headline: 'logged 3 expenses', outcome: 'success' });
+    expect(JSON.stringify(item)).not.toMatch(UNDESCRIBED_NAMES);
+  });
+
+  it('keeps today\'s fallback without a catalog', () => {
+    const root = expensesTask('t1');
+    const children = [...toolCall('t1', 'sheet-append', {}, { success: true, data: {} })];
+    expect(projectActivity(rows([root], children), ctx())[0]!.headline).toBe('looked into a request');
+  });
+
+  it('marks a failed learned write partial beside successes and failed alone', () => {
+    const mixed = expensesTask('t1');
+    const alone = expensesTask('t2');
+    const children = [
+      ...toolCall('t1', 'sheet-append', {}, { success: true, data: {} }),
+      ...toolCall('t1', 'sheet-append', {}, { success: false, error: 'quota' }),
+      ...toolCall('t2', 'sheet-append', {}, { success: false, error: 'quota' }),
+    ];
+    const items = projectActivity(rows([mixed, alone], children), ctx({ catalog }));
+    expect(items.map((i) => [i.headline, i.outcome])).toEqual([
+      ['logged an expense', 'partial'],
+      ["couldn't log an expense", 'failed'],
+    ]);
+    expect(items[0]!.details).toContain("couldn't log an expense");
+  });
+
+  it('never makes a failed learned read a hiccup, and names a lookup-only job by its learned read', () => {
+    const failedRead = expensesTask('t1');
+    const lookup = expensesTask('t2');
+    const children = [
+      ...toolCall('t1', 'sheet-read', {}, { success: false, error: 'timeout' }),
+      ...toolCall('t1', 'sheet-read', {}, { success: true, data: {} }),
+      ...toolCall('t2', 'sheet-read', {}, { success: true, data: {} }),
+    ];
+    const items = projectActivity(rows([failedRead, lookup], children), ctx({ catalog }));
+    expect(items.map((i) => [i.headline, i.outcome])).toEqual([
+      ['checked the expense sheet', 'success'],
+      ['checked the expense sheet', 'success'],
+    ]);
+  });
+
+  it('keeps the inbox, calendar and contacts lines ahead of a learned read', () => {
+    const root = expensesTask('t1');
+    const children = [
+      ...toolCall('t1', 'sheet-read', {}, { success: true, data: {} }),
+      ...toolCall('t1', 'calendar-list-events', {}, { success: true, data: {} }),
+    ];
+    expect(projectActivity(rows([root], children), ctx({ catalog }))[0]!.headline).toBe('checked the calendar');
+  });
+
+  it('counts a known write with no row as "took N actions", and its failure', () => {
+    const root = expensesTask('t1');
+    const children = [
+      ...toolCall('t1', 'custom-payment', {}, { success: true, data: {} }),
+      ...toolCall('t1', 'custom-payment', {}, { success: true, data: {} }),
+      ...toolCall('t1', 'custom-payment', {}, { success: false, error: 'declined' }),
+    ];
+    const [item] = projectActivity(rows([root], children), ctx({ catalog }));
+    expect(item).toMatchObject({ headline: 'took 2 actions', outcome: 'partial' });
+    expect(item!.details).toContain("couldn't finish an action");
+    expect(JSON.stringify(item)).not.toMatch(UNDESCRIBED_NAMES);
+  });
+
+  it('leaves an undescribed tool with no row and no signal unnamed', () => {
+    const root = expensesTask('t1');
+    const children = [...toolCall('t1', 'mystery-tool', {}, { success: false, error: 'x' }), ...toolCall('t1', 'mystery-tool', {}, { success: true, data: {} })];
+    expect(projectActivity(rows([root], children), ctx({ catalog }))[0]).toMatchObject({ headline: 'looked into a request', outcome: 'success' });
+  });
+
+  it('keys a delegated specialist\'s calls by the specialist, not the root agent', () => {
+    const root = task('t1', { agentId: 'coordinator' });
+    const delegated = task('t2', { agentId: 'expenses', metadata: { delegationOrigin: { taskEventId: 't1' } } });
+    const children = [
+      ...toolCall('t2', 'sheet-append', {}, { success: true, data: {} }),
+      // The same tool from the coordinator has no row for that agent.
+      ...toolCall('t1', 'sheet-append', {}, { success: true, data: {} }),
+      response('t1', 'Done.'),
+    ];
+    const [item] = projectActivity(rows([root], children, [delegated]), ctx({ catalog }));
+    expect(item!.headline).toBe('logged an expense');
+  });
+
+  it('lets a code describer win over a learned row for the same tool', () => {
+    const codeTool = buildCatalog([learned({ toolName: 'email-archive', verb: 'binned', one: 'a thing', many: 'things' })], []);
+    const root = expensesTask('t1');
+    const children = [...toolCall('t1', 'email-archive', { messageId: 'm1' }, { success: true, data: {} })];
+    expect(projectActivity(rows([root], children), ctx({ catalog: codeTool }))[0]!.headline).toBe('archived an email');
+  });
+
+  it('folds learned writes into a scheduled job\'s line', () => {
+    const root = task('t1', { agentId: 'expenses', channelId: 'scheduler' }, { conversationId: 'scheduler:2b9f7c1e-4d3a-4f6b-9c8e-1a2b3c4d5e6f:run-1' });
+    const children = [...toolCall('t1', 'sheet-append', {}, { success: true, data: {} })];
+    const [item] = projectActivity(rows([root], children), ctx({ catalog, jobLabel: () => 'Weekly expenses' }));
+    expect(item!.headline).toBe('Weekly expenses: logged an expense');
   });
 });

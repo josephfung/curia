@@ -7,7 +7,7 @@
 // The registry also converts tool manifests to LLM tool definitions so
 // the agent runtime can pass them to the LLM's tool-use API.
 
-import type { ToolManifest, ToolHandler, RegisteredTool, ToolDefinition } from './types.js';
+import type { ToolManifest, ToolHandler, RegisteredTool, ToolDefinition, McpToolAnnotations } from './types.js';
 import { describeTimestampInput } from '../time/timestamp.js';
 
 // Valid named action_risk labels — used for runtime validation since manifests
@@ -148,8 +148,14 @@ export class ToolRegistry {
    * @param mcpInputSchema - Optional raw MCP JSON Schema for the tool's inputs.
    *   When provided, toToolDefinitions() passes it directly to the LLM instead of
    *   parsing the shorthand manifest.inputs notation. Only set for MCP-sourced tools.
+   * @param mcpAnnotations - The MCP server's read-only/destructive hints, if any.
    */
-  register(manifest: ToolManifest, handler: ToolHandler, mcpInputSchema?: ToolDefinition['input_schema']): void {
+  register(
+    manifest: ToolManifest,
+    handler: ToolHandler,
+    mcpInputSchema?: ToolDefinition['input_schema'],
+    mcpAnnotations?: McpToolAnnotations,
+  ): void {
     if (this.tools.has(manifest.name)) {
       throw new Error(`Tool '${manifest.name}' is already registered`);
     }
@@ -184,7 +190,7 @@ export class ToolRegistry {
         `restricted to secret-capture tools — remove the flag or add the capability.`,
       );
     }
-    this.tools.set(manifest.name, { manifest, handler, mcpInputSchema });
+    this.tools.set(manifest.name, { manifest, handler, mcpInputSchema, ...(mcpAnnotations ? { mcpAnnotations } : {}) });
   }
 
   /** Look up a skill by exact name. Returns undefined if not found. */

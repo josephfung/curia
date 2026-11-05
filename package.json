@@ -51,7 +51,8 @@
     "reembed:kg": "tsx --env-file=.env scripts/reembed-kg.ts",
     "seed-vault": "tsx --env-file=.env scripts/seed-vault.ts",
     "audit:verify": "tsx --env-file=.env scripts/audit-verify.ts",
-    "audit:override-floors": "tsx scripts/audit-override-floors.ts"
+    "audit:override-floors": "tsx scripts/audit-override-floors.ts",
+    "changelog:assemble": "tsx scripts/changelog-assemble.ts"
   },
   "license": "MIT",
   "dependencies": {
