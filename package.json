@@ -30,6 +30,8 @@
     "scenarios": "tsx --env-file=.env tests/scenarios/cli.ts",
     "e2e:setup-wizard": "node --env-file-if-exists=.env --import tsx tests/setup-wizard/cli.ts",
     "rejudge": "tsx --env-file=.env tests/shared/rejudge-cli.ts",
+    "bump:versions": "tsx scripts/bump-content-versions.ts",
+    "report:budget": "tsx scripts/report-prompt-budget.ts",
     "inspect-prompts": "tsx --env-file=.env scripts/inspect-prompts.ts",
     "render-coordinator-prompt": "tsx --env-file=.env scripts/render-coordinator-prompt.ts",
     "redteam": "promptfoo redteam run --config tests/redteam/promptfooconfig.yaml --env-file .env",

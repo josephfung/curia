@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`pnpm bump:versions`** — release PR bumps agent and skill versions changed since the last tag; PRs no longer do. (#2485)
+- **`pnpm report:budget`** — prints an agent's always-on prompt, tool definitions and roster by contributor. (#2485)
 - **Learned activity describers** — Recent Activity names custom agents' undescribed writes and counts their failures as hiccups. (#2455)
 - **ADR-059** — tools with no describer get one learned per agent; display only, never autonomy. (#2455)
 - **Band grounding scenarios** — 35a (RSVP dietary details) and 35b (out-of-office claim) join the release gate. (#2192)
@@ -133,6 +135,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Prompt budget failures** — name measured against limit, the overage, the five largest contributors and the breakdown command. (#2485)
 - **`autonomy.gating` defaults to `band`** — the score decides when Curia asks; set `gating: tier` in `local.yaml` to keep tier. (#2192, spec 14)
 - **Open tasks tile** — replaces People known; counts open principal tasks and opens them on Tasks. (#2350)
 - **Voice barge-in** — Curia stops when the caller starts speaking, before words transcribe; Signal calls drop queued audio. (#2401)
