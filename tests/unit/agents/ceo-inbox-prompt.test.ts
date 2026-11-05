@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { loadAgentConfig } from '../../../src/agents/loader.js';
 import { CEO_INBOX_CONSULT_TIMEOUT_LINES } from '../../../src/agents/prompts/ceo-inbox-wake-guidance.js';
 import * as path from 'node:path';
+import semver from 'semver';
 
 const agentsDir = path.resolve(import.meta.dirname, '../../../agents');
 
@@ -397,32 +398,13 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     expect(prompt).toMatch(/Always pass `filename`/);
   });
 
-  it('bumps the ceo-inbox version for the peer-request capability', () => {
-    // Exact-version tripwire, matching calendar-prompt.test.ts's convention.
-    // 0.17.0 = answers a generic PEER REQUEST, a new capability, so minor.
-    // 0.17.1 = principal vocabulary in the prompt (#1950).
-    // 0.18.0 = context-bridge-keep-open joins its pinned bundle; the platform
-    //          releases delegated exchange entries (#1972).
-    // 0.19.0 = resolves a compose recipient's address from mail history (#2014).
-    // 0.19.1 = memory/contact-update how-to moved into the tool descriptions (#1960).
-    // 0.20.0 = drafts address recipients by contact ID; raw addresses and one-at-a-time
-    //          recipient edits use the new draft-tool inputs (#2053).
-    // 0.21.0 = the bullpen tool is split into bullpen-post/-reply/-read/-close (#2126).
-    // 0.21.1 = ADR-046 trim: restatements of payloads, tool descriptions and other
-    //          sections removed from the always-on prompt (#2025).
-    // 0.22.0 = the consult-timeout, inbox-drain and inbox-follow-up steps ride on the task
-    //          wake by tag (#2025).
-    // 0.23.0 = archive-extract joins the pinned tools so standing rules can read
-    //          zip and gzip attachments (#2208).
-    // 0.23.1 = hourly triage cron and a 450s delegate-wait hint (#1915).
-    // 0.24.0 = standing rules and decision tagging arrive through pinned_context, and
-    //          rules are edited as sections of a /shared/ document (#2339).
-    // 0.24.1 = decision tagging reads `enabled` from a richer value, and toggling it keeps
-    //          the other fields (#2339 follow-up: prod's value carries needs_decision).
-    // 0.24.2 = the hourly cron leaves a running drain cycle alone, and a drained run
-    //          completes only its own drain task (#2378).
+  it('carries a valid semver version at or past the drain-cycle fix', () => {
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.24.2');
+    // A floor, not an exact match: PRs do not bump agent versions (the release PR runs
+    // `pnpm bump:versions`), so an exact pin here would force every ceo-inbox PR to edit
+    // this test too. 0.24.2 = the hourly cron leaves a running drain cycle alone (#2378).
+    expect(semver.valid(config.version)).not.toBeNull();
+    expect(semver.gte(config.version as string, '0.24.2')).toBe(true);
   });
 });
 

@@ -13,7 +13,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
-import type { ToolManifest, ToolHandler, ToolContext, ToolResult } from './types.js';
+import type { ToolManifest, ToolHandler, ToolContext, ToolResult, McpToolAnnotations } from './types.js';
 import type { ToolRegistry } from './registry.js';
 import type { SkillRegistry } from './skill-registry.js';
 import { connectStdio, connectSse } from './mcp-client.js';
@@ -693,6 +693,21 @@ export interface McpListedTool {
   name: string;
   description?: string;
   inputSchema: unknown;
+  /** Behaviour hints from the server. The SDK types them loosely, so they are checked here. */
+  annotations?: Record<string, unknown>;
+}
+
+/**
+ * The read-only and destructive hints, kept only when they are booleans. Undefined
+ * when the server sent neither. The activity feed reads them (ADR-059); the
+ * manifest's action_risk still comes from the server entry.
+ */
+function readAnnotations(annotations: Record<string, unknown> | undefined): McpToolAnnotations | undefined {
+  if (!annotations) return undefined;
+  const hints: McpToolAnnotations = {};
+  if (typeof annotations.readOnlyHint === 'boolean') hints.readOnlyHint = annotations.readOnlyHint;
+  if (typeof annotations.destructiveHint === 'boolean') hints.destructiveHint = annotations.destructiveHint;
+  return Object.keys(hints).length > 0 ? hints : undefined;
 }
 
 /**
@@ -778,7 +793,7 @@ export function registerMcpServerTools(params: {
     }
 
     try {
-      registry.register(manifest, handler, mcpInputSchema);
+      registry.register(manifest, handler, mcpInputSchema, readAnnotations(tool.annotations));
       registeredNames.push(tool.name);
       logger.debug(
         { server: serverEntry.name, tool: tool.name },

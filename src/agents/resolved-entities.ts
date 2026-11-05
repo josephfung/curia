@@ -6,6 +6,14 @@
 // vanish. Callers persist the IDs (not the snapshot text) and re-render a
 // fresh block from the current contact row.
 
+// TODO(#2476): the person detection below is a known stopgap. It is English-only
+// heuristics: a Title-Case regex, a short cue-word list, and hand-written
+// stopword, place and org lists. Recall is limited to English sentences that
+// contain a cue word. Lowercase names, particle surnames, most non-Latin scripts
+// and non-English hedges pass unchecked. Do not treat a pass as "no unresolved
+// people", and do not extend the lists to fix a miss. #2476 replaces this with
+// contact-name matching plus judge-based extraction.
+
 import { isUuid } from '../util/uuid.js';
 
 /** How many most-recent contacts a turn will re-inject. */
@@ -33,6 +41,9 @@ const NAME_RE = new RegExp(
 const CJK_NAME_RE = /(?<![\p{L}\p{N}])\p{Lo}{2,4}(?![\p{L}\p{N}])/gu;
 
 /**
+ * TODO(#2476): every list from here to EMAIL_LOCAL_STOP is non-exhaustive and
+ * English-only. See the file header.
+ *
  * A capitalized span is a person only when one of these sits nearby. Bare
  * Title Case ("Quarterly Planning Session", "Google Drive", "Zoom") is not.
  */
@@ -64,6 +75,9 @@ const STOPWORDS = new Set([
   // "attend" flags the sentence opener.
   'will', 'would', 'like', 'wants', 'want',
   'he', 'she', 'we', 'they', 'him', 'her', 'his', 'our', 'who', 'you', 'your', 'it', 'its',
+  // What is left of "I'll" / "I've" once the one-letter "I" is dropped: "I'll send the
+  // invite" is not a person (#2192). ("re" for "I're" is already above.)
+  'll', 've',
 ]);
 
 /**
@@ -94,7 +108,16 @@ const SENTENCE_OPENERS = new Set([
   'quick', 'wanted', 'can', 'could', 'would', 'should', 'here', 'there', 'this',
   'that', 'yes', 'good', 'great', 'happy', 'glad', 'sorry', 'unfortunately',
   'confirming', 'confirmed', 'updating', 'update', 'note', 'fyi', 'also',
+  // Prepositions and conjunctions that open a line: "On behalf of", "If neither works" (#2192).
+  'on', 'in', 'at', 'for', 'with', 'as', 'if', 'once', 'when', 'after', 'before', 'either',
+  'both', 'any', 'welcome', 'feel', 'reply',
 ]);
+
+/**
+ * Object pronouns that follow an imperative verb ("Tell me", "Send us", "Let them"). A
+ * sentence-initial word followed by one is a verb, not a name: "Xiaopu me" is not English.
+ */
+const OBJECT_PRONOUNS = new Set(['me', 'us', 'them', 'him', 'her', 'it', 'you']);
 
 const EMAIL_LOCAL_STOP = new Set([
   'info', 'hello', 'team', 'support', 'noreply', 'admin', 'office', 'contact',
@@ -209,6 +232,22 @@ export function formatResolvedEntitiesBlock(
   return assemble(header, lines);
 }
 
+/**
+ * `text` with each exact, whole-word occurrence of `phrases` blanked (same length, so
+ * positions and line breaks are kept). For names that are exempt only in full, such as
+ * Curia's own signature: "Alex Curia" is blanked, a lone "Alex" is still scanned (#2192).
+ */
+export function blankExactPhrases(text: string, phrases: readonly string[]): string {
+  let out = text;
+  for (const phrase of phrases) {
+    const p = phrase.trim();
+    if (p === '') continue;
+    const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'gu'), m => m.replace(/\S/g, ' '));
+  }
+  return out;
+}
+
 export interface IdentityScan {
   /** Message body. Person-shaped mentions are taken from here only. */
   body: string;
@@ -295,7 +334,7 @@ function uncoveredMentions(text: string, coveredNames: readonly string[]): strin
       tokens.length === 1 &&
       isSentenceInitial(stripped, index) &&
       !isListItem(stripped, index) &&
-      SENTENCE_OPENERS.has(tokens[0]!)
+      (SENTENCE_OPENERS.has(tokens[0]!) || OBJECT_PRONOUNS.has(nextWord(stripped, index + raw.length)))
     ) continue;
     if (isCovered(tokens, sets)) continue;
     const key = tokens.join(' ');
@@ -354,6 +393,12 @@ function isSentenceInitial(text: string, index: number): boolean {
   if (i < 0) return true;
   const last = text[i];
   return last === '.' || last === '!' || last === '?' || last === '\n' || last === '\r';
+}
+
+/** The lowercased word after `from`, on the same line; '' when there is none. */
+function nextWord(text: string, from: number): string {
+  const match = /^[ \t]+(\p{L}+)/u.exec(text.slice(from));
+  return match ? match[1]!.toLowerCase() : '';
 }
 
 function isListItem(text: string, index: number): boolean {

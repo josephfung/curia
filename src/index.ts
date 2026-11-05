@@ -168,6 +168,9 @@ import { AutonomyScoringPass } from './autonomy/scoring-pass.js';
 import { ActivityService } from './activity/activity-service.js';
 import { BriefingService } from './dashboard/briefing-service.js';
 import { ActivitySummarizer } from './activity/summarizer.js';
+import { DescriberLearner } from './activity/describer-learner.js';
+import { LearnedDescriberRepo } from './activity/learned-describer-repo.js';
+import { knownWriteToolNames, toolFactsFrom } from './activity/learned-describers.js';
 import type { ScoringPassConfig } from './autonomy/scoring-pass.js';
 import { BrowserService } from './browser/browser-service.js';
 import { OfficeIdentityService } from './identity/service.js';
@@ -379,7 +382,7 @@ async function main(): Promise<void> {
 
   // Autonomy service — manages the global autonomy score (0–100).
   // Instantiated early (right after DB connect) so it's ready before agents start.
-  // Which policy decides when Curia asks first (#2159, ADR-049). Ships as 'tier'. Resolved here
+  // Which policy decides when Curia asks first (#2159, ADR-049). Defaults to 'band' (#2192). Resolved here
   // because the autonomy service stamps it on the config the prompt block reads.
   const autonomyGating = resolveAutonomyGating(yamlConfig.autonomy);
   const autonomyService = new AutonomyService(pool, logger, { gating: autonomyGating });
@@ -2370,11 +2373,36 @@ async function main(): Promise<void> {
     logger,
   });
   activitySummarizer.register();
+  // Learned describers (#2455, ADR-059): one fast-tier call per agent and tool with no
+  // describer in code, the first time the agent uses it. The feed and the histogram
+  // read the rows. Known writes are read from the registry on each request, since MCP
+  // servers register their tools after this point.
+  const learnedDescriberRepo = new LearnedDescriberRepo(pool);
+  const knownWriteTools = () => knownWriteToolNames(toolRegistry.list());
+  const describerLearner = new DescriberLearner({
+    bus,
+    llm: new TelemetryLlmProvider(resolveProviderForModel(activitySummaryModel, 'DescriberLearner'), bus, logger, 'describer-learner', modelRegistry),
+    model: activitySummaryModel,
+    repo: learnedDescriberRepo,
+    toolFacts: (toolName) => {
+      const tool = toolRegistry.get(toolName);
+      return tool ? toolFactsFrom(tool) : null;
+    },
+    agentContext: (agentId) => {
+      const agent = agentConfigs.find((c) => c.name === agentId);
+      if (!agent) return null;
+      return [agent.description, agent.system_prompt].filter((part) => typeof part === 'string' && part.trim().length > 0).join('\n\n');
+    },
+    logger,
+  });
+  describerLearner.register();
   const activityService = new ActivityService({
     auditLogRepo,
     actionLogRepo,
     contactService,
     schedulerService,
+    describers: learnedDescriberRepo,
+    knownWriteTools,
     officeTimezone: config.timezone,
     logger,
   });
@@ -3465,6 +3493,7 @@ async function main(): Promise<void> {
       : undefined,
     bus,
     activity: activityService,
+    knownWriteTools,
     officeTimezone: config.timezone,
     logger,
   });

@@ -12,6 +12,8 @@ import type { ContactService } from '../contacts/contact-service.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { Logger } from '../logger.js';
 import { isUuid } from '../util/uuid.js';
+import type { LearnedDescriberRepo } from './learned-describer-repo.js';
+import { buildCatalog, EMPTY_CATALOG, type DescriberCatalog } from './learned-describers.js';
 import { collectActivityRefs, projectActivity, type ActivityRows } from './projection.js';
 import { scrubContactDetails } from './scrub.js';
 import type { ActivityItem, ActivityPage } from './types.js';
@@ -21,6 +23,10 @@ export interface ActivityServiceDeps {
   actionLogRepo?: Pick<ActionLogRepo, 'findTerminalBetween'>;
   contactService: Pick<ContactService, 'getContact' | 'findContactBySystemRole' | 'resolveByChannelIdentity'>;
   schedulerService?: Pick<SchedulerService, 'getJob'>;
+  /** Learned describers (ADR-059). Without it, undescribed tools stay unnamed. */
+  describers?: Pick<LearnedDescriberRepo, 'list'>;
+  /** Tools with no code describer that a deterministic signal marks as writes. */
+  knownWriteTools?: () => Iterable<string>;
   /** Office timezone (config.timezone), used when the principal has none. */
   officeTimezone: string;
   logger: Logger;
@@ -69,8 +75,9 @@ export class ActivityService implements ActivityFeedSource {
   constructor(private readonly deps: ActivityServiceDeps) {}
 
   async list(query: { from: Date; to: Date; limit: number }): Promise<ActivityPage> {
-    const { rows, hasMore: rootsRemain } = await this.readRoots(query);
-    const { items, timezone } = await this.project(rows, query.from, query.to);
+    const catalog = await this.loadCatalog();
+    const { rows, hasMore: rootsRemain } = await this.readRoots(query, catalog);
+    const { items, timezone } = await this.project(rows, query.from, query.to, catalog);
     return {
       items: items.slice(0, query.limit),
       hasMore: items.length > query.limit || rootsRemain,
@@ -86,12 +93,28 @@ export class ActivityService implements ActivityFeedSource {
     const rows = await this.deps.auditLogRepo.findActivityJobsByIds(ids, to);
     const oldest = rows.roots[rows.roots.length - 1];
     if (!oldest) return [];
-    const { items } = await this.project(rows, oldest.timestamp, to);
+    const { items } = await this.project(rows, oldest.timestamp, to, await this.loadCatalog());
     return items;
   }
 
+  /**
+   * Learned rows plus known writes. A failed read is logged and the feed falls
+   * back to code describers only, as before ADR-059.
+   */
+  private async loadCatalog(): Promise<DescriberCatalog> {
+    const { describers, knownWriteTools } = this.deps;
+    if (!describers && !knownWriteTools) return EMPTY_CATALOG;
+    const rows = describers ? await this.lookup('learned describers', () => describers.list()) : [];
+    return buildCatalog(rows ?? [], knownWriteTools?.() ?? []);
+  }
+
   /** Resolve names, job labels and autonomy rows, then project. */
-  private async project(rows: ActivityRows, from: Date, to: Date): Promise<{ items: ActivityItem[]; timezone: string }> {
+  private async project(
+    rows: ActivityRows,
+    from: Date,
+    to: Date,
+    catalog: DescriberCatalog,
+  ): Promise<{ items: ActivityItem[]; timezone: string }> {
     const { deps } = this;
     const principal = await this.lookup('principal contact', () => deps.contactService.findContactBySystemRole('principal'));
     const timezone = principal?.timezone ?? deps.officeTimezone;
@@ -108,6 +131,7 @@ export class ActivityService implements ActivityFeedSource {
       name: (ref) => names.get(ref) ?? null,
       jobLabel: (jobId) => jobLabels.get(jobId) ?? null,
       autonomyRows,
+      catalog,
     });
     return { items, timezone };
   }
@@ -119,10 +143,13 @@ export class ActivityService implements ActivityFeedSource {
    * projection before anything is resolved. `hasMore` is true when roots remain
    * unread: the window was not exhausted.
    */
-  private async readRoots(query: { from: Date; to: Date; limit: number }): Promise<{ rows: ActivityRows; hasMore: boolean }> {
+  private async readRoots(
+    query: { from: Date; to: Date; limit: number },
+    catalog: DescriberCatalog,
+  ): Promise<{ rows: ActivityRows; hasMore: boolean }> {
     const pageSize = Math.min(Math.max(query.limit * ROOTS_PER_ITEM, MIN_ROOTS_PER_PAGE), MAX_ROOTS_PER_PAGE);
     const rows: ActivityRows = { roots: [], delegated: [], children: [] };
-    const countCtx = { timezone: 'UTC', name: () => null, jobLabel: () => null, autonomyRows: [] };
+    const countCtx = { timezone: 'UTC', name: () => null, jobLabel: () => null, autonomyRows: [], catalog };
     let visible = 0;
     let before: { timestamp: Date; id: string } | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {

@@ -81,7 +81,7 @@ import {
 import { OutboundQueueFullError, type OutboundQueueRepo } from './outbound-queue-repo.js';
 import type { ExportItem } from '../security/export-controls.js';
 import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
-import { describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/resolved-entities.js';
+import { blankExactPhrases, describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/resolved-entities.js';
 import type { IdentityGateMode } from '../config.js';
 import type { ErrorType } from '../errors/types.js';
 import type { CallBudget } from '../util/call-budget.js';
@@ -3046,9 +3046,11 @@ export class OutboundGateway {
         content: scrubPii(args.messageBody),
         recipientId: args.recipientId,
         reason: 'unresolved_identity',
+        // The reason names the words and how to fix them: a relayed reply's rewrite brief shows
+        // only the findings, and without the words every rewrite repeated them (#2192).
         findings: [{
           rule: 'unresolved-identity',
-          detail: 'Outbound message names a person who is not resolved to a contact ID in this turn',
+          detail: identityReason,
         }],
         parentEventId: args.options?.parentEventId ?? '',
       }));
@@ -3125,11 +3127,15 @@ export class OutboundGateway {
       );
     }
 
+    // Curia's own name and title, as it signs a reply ("Alex Curia, Digital EA"), are not a
+    // person to resolve (#2192). Exempt only in full: as covered names they would also cover a
+    // guest who shares the first name ("Alex"). Live: index.ts updates it on hot-reload.
+    const own = this.agentPersona ? [this.agentPersona.displayName, this.agentPersona.title] : [];
     // Subject is hedges-only. A Title Case subject must not block a clean body.
     return describeUnresolvedIdentity(
       request.channel === 'email'
-        ? { body: request.body, subject: request.subject }
-        : { body: request.message },
+        ? { body: blankExactPhrases(request.body, own), subject: request.subject }
+        : { body: blankExactPhrases(request.message, own) },
       covered,
     );
   }
