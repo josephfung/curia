@@ -5,7 +5,7 @@
 //   2. A send on the review layer runs production's handler and gateway and reaches only the
 //      recorder: no real client, no fetch, no outbound_queue row.
 //   3. A gated send writes production's approval row (Gate A through the approval trigger).
-// The content-filter judge is off (offline LLM); the relay test stubs the band-review judge. Rows it writes are removed by their conversation and id.
+// The content-filter judge is off (offline LLM); the relay test stubs the band review. Rows it writes are removed by their conversation and id.
 // Skips without DATABASE_URL; refuses any database but curia_test.
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import { loadYamlConfig } from '../../src/config.js';
 import { createOutboundMessage } from '../../src/bus/events.js';
 import { EscalationJudge } from '../../src/autonomy/escalation-judge.js';
+import { SendEvidenceCollector } from '../../src/autonomy/send-evidence.js';
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import { createTestModeStack, runWithAutonomyFixture, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import type { RecordedSend } from '../../src/startup/test-mode-sends.js';
@@ -149,9 +150,13 @@ describeIf('test-mode stack with recordSends', () => {
   it('relays a dispatcher reply through the real Signal adapter path only while the recorder accepts it', async () => {
     const before = sends.length;
     const relayConversation = `signal:+1555${String(Date.now()).slice(-7)}`;
-    // Band review holds a send that isn't principal-directed when its judge fails (#2473), and the
-    // offline stack's judge always fails. This test is about the relay path, not gating, so the
-    // judge answers "routine" here and nowhere else.
+    // Band review holds a send that isn't principal-directed when it can't be reviewed (#2473).
+    // This test is about the relay path, not gating, so here and nowhere else the review answers:
+    // the evidence read finds a drafting turn (the reply below has none in audit_log, which counts
+    // as a failed review before the judge is asked), and the judge, offline here, says "routine".
+    const evidenceStub = vi.spyOn(SendEvidenceCollector.prototype, 'collect').mockResolvedValue({
+      unavailable: false, toolResults: [], principalBlock: null, authority: { originator: null, liveTurn: false },
+    });
     const judgeStub = vi.spyOn(EscalationJudge.prototype, 'review').mockResolvedValue({
       ok: true, purpose: 'serving', speaksAsPrincipal: false, stakes: 'routine', stakesReason: 'Routine reply.',
       unsupportedClaims: [], unnecessaryItems: [], disclosures: [], reason: 'stub',
@@ -168,6 +173,7 @@ describeIf('test-mode stack with recordSends', () => {
     } finally {
       relaysOn = false;
       judgeStub.mockRestore();
+      evidenceStub.mockRestore();
       await stack!.pool.query('DELETE FROM autonomy_action_log WHERE conversation_id = $1', [relayConversation]);
     }
   });
