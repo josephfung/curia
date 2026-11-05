@@ -144,18 +144,28 @@ export class CardUseService implements CardUseCapability {
     if (filed.approvalNumber === null) {
       logger.warn({ requestId: id }, 'card-use: approval has no number; the principal answers by reference');
     }
-    await repo.setShortRef(id, filed.shortRef);
+    try {
+      await repo.setShortRef(id, filed.shortRef);
 
-    await bus.publish('execution', createCardUseRequested({
-      requestId: id,
-      secretName: input.secretName,
-      siteDomain,
-      conversationId: ctx.conversationId,
-      amount: input.amount,
-      brand: pub.publicFields.brand,
-      last4: pub.publicFields.last4,
-      ...(pub.label ? { label: pub.label } : {}),
-    }, ctx.taskEventId));
+      await bus.publish('execution', createCardUseRequested({
+        requestId: id,
+        secretName: input.secretName,
+        siteDomain,
+        conversationId: ctx.conversationId,
+        amount: input.amount,
+        brand: pub.publicFields.brand,
+        last4: pub.publicFields.last4,
+        ...(pub.label ? { label: pub.label } : {}),
+      }, ctx.taskEventId));
+    } catch (err) {
+      // Settle the request so approving the orphaned approval later returns already_resolved and writes no grant.
+      try {
+        await repo.decide(id, 'expired');
+      } catch (settleErr) {
+        logger.error({ err: settleErr, requestId: id }, 'card-use: could not settle a request whose filing failed');
+      }
+      throw err;
+    }
 
     logger.info({ requestId: id, siteDomain, shortRef: filed.shortRef }, 'card-use: request filed');
     return {

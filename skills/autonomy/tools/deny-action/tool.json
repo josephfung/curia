@@ -1,7 +1,7 @@
 {
   "name": "deny-action",
   "description": "Deny a pending approval request. The blocked action will not be executed. Specify short_ref to target a specific request, or omit when only one is pending. Approvals ('Approval N') only, not learning items ('task N').",
-  "version": "1.2.0",
+  "version": "1.1.0",
   "sensitivity": "elevated",
   "action_risk": "none",
   "inputs": {
@@ -14,6 +14,5 @@
   "secrets": [],
   "timeout": 15000,
   "capabilities": ["bus", "actionLogRepo", "disclosureDecisions"],
-  "optional_capabilities": ["cardUse"],
   "allowed_callers": ["coordinator"]
 }
