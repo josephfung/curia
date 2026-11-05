@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ApproveActionHandler, UNSHOWN_PERSONAL_DETAILS_ERROR } from './handler.js';
-import { SAME_TURN_CARD_USE_ERROR, UNSHOWN_CARD_USE_ERROR } from '../../../../src/secrets/card-use-service.js';
+import { PREDATING_CARD_USE_ERROR, SAME_TURN_CARD_USE_ERROR,UNSHOWN_CARD_USE_ERROR } from '../../../../src/secrets/card-use-service.js';
 import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipient-reference.js';
 import type { ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { ActionLogRepo } from '../../../../src/autonomy/action-log-repo.js';
@@ -191,7 +191,15 @@ describe('ApproveActionHandler', () => {
       expect(execLayer.invoke).not.toHaveBeenCalled();
     });
 
-    it('settles the request as expired when the replay fails', async () => {
+    it('refuses an approval whose message predates the confirmation', async () => {
+      const sentAt = new Date(Date.now() + 60_000);
+      const { result, repo, execLayer } = await approve({ ...cardRow, notificationSentAt: sentAt });
+      expect(result).toEqual({ success: false, error: PREDATING_CARD_USE_ERROR });
+      expect(repo.resolveRow).not.toHaveBeenCalled();
+      expect(execLayer.invoke).not.toHaveBeenCalled();
+    });
+
+    it('settles the request as failed when the replay fails', async () => {
       const decline = vi.fn().mockResolvedValue(undefined);
       const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: cardRow }) });
       const execLayer = makeMockExecutionLayer({ success: false, error: 'boom' });
@@ -199,7 +207,7 @@ describe('ApproveActionHandler', () => {
         actionLogRepo: repo, bus: makeMockBus(), executionLayer: execLayer, conversationId: 'conv-now',
         cardUse: { decline } as unknown as ToolContext['cardUse'],
       }));
-      expect(decline).toHaveBeenCalledWith('req-1', 'expired');
+      expect(decline).toHaveBeenCalledWith('req-1', 'failed');
     });
 
     it('does not settle the request when the replay succeeds', async () => {

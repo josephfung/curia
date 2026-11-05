@@ -150,7 +150,7 @@ export function resolvePinnedSkills(
 
     // First-class tool pin (ADR-032 polymorphic pins). Resolves to exactly this
     // tool — never the owning bundle's siblings.
-    if (toolRegistry.get(pin)) {
+    if (toolRegistry.get(pin) && !isSystemOnlyTool(toolRegistry, pin)) {
       resolvedPins.push({ pin, kind: 'tool' });
       pushTool(pin, pin);
       logger?.debug?.(

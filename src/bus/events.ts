@@ -1045,6 +1045,8 @@ export interface CardUseRequestedPayload {
   requestId: string;
   secretName: string;
   siteDomain: string;
+  /** Top level so the audit logger indexes the row by conversation. */
+  conversationId?: string;
   amount: string;
   brand: CardBrand;
   last4: string;
@@ -1055,7 +1057,9 @@ export interface CardUseDecidedPayload {
   requestId: string;
   secretName: string;
   siteDomain: string;
-  decision: 'approved' | 'denied' | 'expired';
+  conversationId?: string;
+  /** 'failed': the principal approved but the replay failed before a grant was written. */
+  decision: 'approved' | 'denied' | 'expired' | 'failed';
   via?: ApprovalVia;
   resume: boolean;
   origin: CaptureOrigin;

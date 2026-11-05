@@ -262,6 +262,14 @@ describeIf('SecretsService', () => {
       });
     });
 
+    it('generic string and JSON writes refuse to overwrite a saved card', async () => {
+      const n = `${P}guard`;
+      await service.setCard(n, SECRET, PUB, null);
+      await expect(service.set(n, 'oops')).rejects.toThrow('saved card');
+      await expect(service.setJSON(n, { a: 1 })).rejects.toThrow('saved card');
+      expect(await service.getCardSecret(n)).toEqual(SECRET);
+    });
+
     it('setCard is atomic', async () => {
       const n = `${P}atomic`;
       const realConnect = pool.connect.bind(pool) as () => Promise<pg.PoolClient>;
