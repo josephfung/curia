@@ -50,7 +50,7 @@ Rows are keyed by agent, not just tool, because the same tool means different th
 
 - Custom agents' work shows in Recent Activity and the Hiccups tile without anyone writing a describer.
 - The feed is projected from `audit_log` at read time, so once a row exists, earlier jobs using that tool re-render with it.
-- Cost is one fast-tier call per new agent and tool pair, not per job. A failed call writes no row and is retried on a later sighting, no sooner than ten minutes.
+- A successful learn costs one fast-tier call per new agent and tool pair, not per job, and one more when the tool, its signal or the agent changes. A failed call writes no row and can be retried on a later sighting, no sooner than ten minutes, so a pair whose learn keeps failing costs a call per retry.
 - The learner skips reads the feed already names by family (inbox, calendar, contacts), since their learned phrase would never show.
 - Wording quality depends on the model. Learned phrases are validated (plain words only, no digits, no tool name, no contact details); a phrase that fails validation leaves the generic line.
 - Time saved is unchanged. Learned rows carry no minutes; undescribed successes still count `UNDESCRIBED_CALL_MINUTES` (ADR-058).
