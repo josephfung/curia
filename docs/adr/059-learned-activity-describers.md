@@ -21,7 +21,7 @@ Alternatives considered:
 
 ## Decision
 
-A fast-tier model writes a describer once per agent and undescribed tool, the first time that agent uses the tool, and Curia stores it in the `activity_describers` table. A row holds `effect` (`read` or `write`), a tally (`verb`, `one`, `many`, e.g. "logged" / "an expense" / "expenses"), an `attempt` for failures ("log an expense"), a fingerprint of the tool's description, schema and deterministic signal it was learned from, and a `source`.
+A fast-tier model writes a describer once per agent and undescribed tool, the first time that agent uses the tool, and Curia stores it in the `activity_describers` table. A row holds `effect` (`read` or `write`), a tally (`verb`, `one`, `many`, e.g. "logged" / "an expense" / "expenses"), an `attempt` for failures ("log an expense"), a fingerprint of the tool's description, schema and deterministic signal and the agent text it was learned from, and a `source`.
 
 **Lookup order:** code describer, then learned row, then fallback. A row for a tool that has a code describer is ignored.
 
@@ -36,7 +36,7 @@ A fast-tier model writes a describer once per agent and undescribed tool, the fi
 | MCP, `readOnlyHint: false` or `destructiveHint: true` | write |
 | MCP, no hints | none: the model decides |
 
-`source` records where the row came from: `hint` (effect from a signal, words learned), `learned` (both from the model), or `operator` (edited by hand). The learner never overwrites an operator row; the upsert enforces this in SQL. A row is learned again when that fingerprint changes: a new description or schema, or a signal change such as a server adding `readOnlyHint` or an `action_risk` crossing a boundary. Without the signal in the fingerprint, a stored `read` would outrank the known-write fallback and hide that tool's failures. There is no principal UI; an operator edits the table when needed.
+`source` records where the row came from: `hint` (effect from a signal, words learned), `learned` (both from the model), or `operator` (edited by hand). The learner never overwrites an operator row; the upsert enforces this in SQL. A row is learned again when that fingerprint changes: a new description or schema, a repurposed agent, or a signal change such as a server adding `readOnlyHint` or an `action_risk` crossing a boundary. Without the signal in the fingerprint, a stored `read` would outrank the known-write fallback and hide that tool's failures. A learned or hint row whose `effect` the signal now contradicts is deleted on the tool's next use, before the relearn, so a failed relearn leaves the fallback rather than the stale effect. There is no principal UI; an operator edits the table when needed.
 
 **What the feed shows.** A learned write is a tally ("logged 3 expenses"); a failed one marks the row partial beside successes, or failed alone. A learned read never counts toward the outcome; for a lookup-only job it replaces only the final "looked into a request" line, after the inbox, calendar and contacts rules. A known write with no row yet (pending or failed learning) counts as "took N actions". A tool with no row and no signal keeps the old behaviour: unnamed, never a hiccup.
 
