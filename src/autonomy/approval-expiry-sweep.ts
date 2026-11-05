@@ -37,7 +37,7 @@ export interface ApprovalExpirySweepOptions {
   /** Absent without an outbound stack: the safety-net pass is skipped. */
   approvalDelivery?: Pick<ApprovalDelivery, 'deliver' | 'availableChannels'>;
   /** Settles an expired card-use request and resumes its conversation (#1358). */
-  cardUse?: Pick<CardUseCapability, 'decline'>;
+  cardUse?: Pick<CardUseCapability, 'decline'> & { reconcileExpired?: () => Promise<number> };
   logger: Logger;
   intervalMinutes: number;
   /** How long an approval may wait undelivered before the safety net sends it. Default 15. */
@@ -122,6 +122,16 @@ export class ApprovalExpirySweep {
   async tick(): Promise<ApprovalExpirySweepResult> {
     // Before expiry, so an approval close to its deadline still gets its one ping.
     const safetyNetDelivered = await this.deliverUndelivered();
+
+    // Card-use requests an earlier tick expired the approval for but failed to settle.
+    if (this.opts.cardUse?.reconcileExpired) {
+      try {
+        const settled = await this.opts.cardUse.reconcileExpired();
+        if (settled > 0) this.opts.logger.warn({ settled }, 'ApprovalExpirySweep: settled card-use requests stranded by an earlier tick');
+      } catch (err) {
+        this.opts.logger.error({ err }, 'ApprovalExpirySweep: card-use reconcile failed — will retry next tick');
+      }
+    }
 
     const expired: ActionLogRow[] = await this.opts.actionLogRepo.findExpired();
     if (expired.length === 0) {

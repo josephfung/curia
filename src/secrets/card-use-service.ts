@@ -24,6 +24,9 @@ import { describeCard } from './structured-secret-schema.js';
 /** A card-use approval is good for 30 minutes, not the usual 24 hours. */
 export const CARD_USE_APPROVAL_TTL_MS = 30 * 60_000;
 
+const PUBLISH_ATTEMPTS = 3;
+const PUBLISH_RETRY_DELAY_MS = 200;
+
 /** The name of the internal tool a card-use approval replays. */
 export const CARD_USE_CONFIRM_TOOL = 'card-use-confirm';
 
@@ -70,7 +73,7 @@ export interface CardUseRequestResult {
 export interface CardUseCapability {
   request(input: CardUseRequestInput, ctx: CardUseRequestContext): Promise<CardUseRequestResult>;
   confirm(requestId: string, via?: ApprovalVia, approvingConversationId?: string): Promise<CardUseConfirmResult>;
-  decline(requestId: string, status?: 'denied' | 'expired' | 'failed'): Promise<void>;
+  decline(requestId: string, status?: 'denied' | 'expired' | 'failed', via?: ApprovalVia): Promise<void>;
 }
 
 /** approve-action refuses a card-use row the principal was never shown (#1358). */
@@ -89,6 +92,8 @@ export const CARD_USE_CONTINUE_MESSAGE = 'Approved. Continue the checkout now in
 export const CARD_USE_EXPIRED_MESSAGE =
   'The approval came after the 30 minutes ran out, so no grant was written. Ask again with card-use-request if the principal still wants this purchase.';
 export const CARD_USE_ALREADY_RESOLVED_MESSAGE = 'This card-use request was already resolved; nothing changed.';
+export const CARD_USE_RESUME_FAILED_MESSAGE =
+  'Approved and the grant is written, but the originating conversation could not be resumed. Tell the principal the card is approved and ask them to message you to continue the checkout.';
 export const CARD_USE_APPROVED_RESUMING_MESSAGE =
   'Approved. The conversation that asked is being resumed to continue the checkout.';
 
@@ -145,18 +150,28 @@ export class CardUseService implements CardUseCapability {
     if (filed.approvalNumber === null) {
       logger.warn({ requestId: id }, 'card-use: approval has no number; the principal answers by reference');
     }
-    await repo.setShortRef(id, filed.shortRef);
+    try {
+      await repo.setShortRef(id, filed.shortRef);
 
-    await bus.publish('execution', createCardUseRequested({
-      requestId: id,
-      secretName: input.secretName,
-      siteDomain,
-      conversationId: ctx.conversationId,
-      amount: input.amount,
-      brand: pub.publicFields.brand,
-      last4: pub.publicFields.last4,
-      ...(pub.label ? { label: pub.label } : {}),
-    }, ctx.taskEventId));
+      await bus.publish('execution', createCardUseRequested({
+        requestId: id,
+        secretName: input.secretName,
+        siteDomain,
+        conversationId: ctx.conversationId,
+        amount: input.amount,
+        brand: pub.publicFields.brand,
+        last4: pub.publicFields.last4,
+        ...(pub.label ? { label: pub.label } : {}),
+      }, ctx.taskEventId));
+    } catch (err) {
+      // Settle the request so approving the orphaned approval later returns already_resolved and writes no grant.
+      try {
+        await repo.decide(id, 'expired');
+      } catch (settleErr) {
+        logger.error({ err: settleErr, requestId: id }, 'card-use: could not settle a request whose filing failed');
+      }
+      throw err;
+    }
 
     logger.info({ requestId: id, siteDomain, shortRef: filed.shortRef }, 'card-use: request filed');
     return {
@@ -193,6 +208,9 @@ export class CardUseService implements CardUseCapability {
     if (outcome === 'expired') {
       return { outcome, resumed, message: CARD_USE_EXPIRED_MESSAGE };
     }
+    if (resume && !published) {
+      return { outcome, resumed, message: CARD_USE_RESUME_FAILED_MESSAGE };
+    }
     return {
       outcome,
       resumed,
@@ -202,7 +220,11 @@ export class CardUseService implements CardUseCapability {
 
   /** Resolve a pending request as denied (default), expired, or failed (the principal approved
    *  but the replay broke), and resume the conversation. A failed request is stored as expired. */
-  async decline(requestId: string, status: 'denied' | 'expired' | 'failed' = 'denied'): Promise<void> {
+  async decline(
+    requestId: string,
+    status: 'denied' | 'expired' | 'failed' = 'denied',
+    via?: ApprovalVia,
+  ): Promise<void> {
     const { repo, logger } = this.deps;
     const row = await repo.get(requestId);
     if (!row) {
@@ -211,34 +233,62 @@ export class CardUseService implements CardUseCapability {
     }
     const changed = await repo.decide(requestId, status === 'failed' ? 'expired' : status);
     if (!changed) return;
-    await this.publishDecided(row, status, undefined, true);
+    await this.publishDecided(row, status, via, true);
     logger.info({ requestId, status }, 'card-use: request declined');
+  }
+
+  /**
+   * Settle requests the expiry sweep stranded: it expires the approval row first, so a failed
+   * decline() there is never retried by the sweep itself. Returns how many were settled.
+   */
+  async reconcileExpired(): Promise<number> {
+    const { repo, logger } = this.deps;
+    let settled = 0;
+    for (const requestId of await repo.findStrandedByExpiry()) {
+      try {
+        await this.decline(requestId, 'expired');
+        settled += 1;
+      } catch (err) {
+        logger.error({ err, requestId }, 'card-use: could not settle a request stranded by expiry; will retry next sweep');
+      }
+    }
+    return settled;
   }
 
   private async publishDecided(
     row: NonNullable<Awaited<ReturnType<CardUseRepo['get']>>>,
     decision: 'approved' | 'denied' | 'expired' | 'failed',
-    via:ApprovalVia | undefined,
+    via: ApprovalVia | undefined,
     resume: boolean,
   ): Promise<boolean> {
-    // The resolution is already committed, so a failed publish can't undo it. Log it loudly:
-    // the conversation will not be resumed.
-    try {
-      await this.deps.bus.publish('execution', createCardUseDecided({
-        requestId: row.id,
-        secretName: row.secretName,
-        siteDomain: row.siteDomain,
-        conversationId: row.conversationId,
-        decision,
-        ...(via ? { via } : {}),
-        resume,
-        origin: row.origin,
-        purpose: row.purpose,
-      }, row.taskId));
-      return true;
-    } catch (err) {
-      this.deps.logger.error({ err, requestId: row.id, decision }, 'card-use: failed to publish card_use.decided; the conversation is not resumed');
-      return false;
+    // The resolution is already committed, so a failed publish can't undo it. Retry a few
+    // times (a transient bus or database error is the likely cause), then log loudly: the
+    // conversation will not be resumed.
+    for (let attempt = 1; attempt <= PUBLISH_ATTEMPTS; attempt++) {
+      try {
+        await this.deps.bus.publish('execution', createCardUseDecided({
+          requestId: row.id,
+          secretName: row.secretName,
+          siteDomain: row.siteDomain,
+          conversationId: row.conversationId,
+          decision,
+          ...(via ? { via } : {}),
+          resume,
+          origin: row.origin,
+          purpose: row.purpose,
+        }, row.taskId));
+        return true;
+      } catch (err) {
+        const last = attempt === PUBLISH_ATTEMPTS;
+        this.deps.logger[last ? 'error' : 'warn'](
+          { err, requestId: row.id, decision, attempt },
+          last
+            ? 'card-use: failed to publish card_use.decided; the conversation is not resumed'
+            : 'card-use: card_use.decided publish failed; retrying',
+        );
+        if (!last) await new Promise((resolve) => setTimeout(resolve, PUBLISH_RETRY_DELAY_MS * attempt));
+      }
     }
+    return false;
   }
 }

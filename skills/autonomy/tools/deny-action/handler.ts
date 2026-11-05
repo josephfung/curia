@@ -66,7 +66,7 @@ export class DenyActionHandler implements ToolHandler {
       if (cardRequestId !== null) {
         if (ctx.cardUse) {
           try {
-            await ctx.cardUse.decline(cardRequestId);
+            await ctx.cardUse.decline(cardRequestId, 'denied', 'coordinator');
           } catch (err) {
             ctx.log.error({ err, rowId: row.id, cardRequestId }, 'deny-action: failed to settle the denied card-use request');
           }

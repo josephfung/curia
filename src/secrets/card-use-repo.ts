@@ -135,6 +135,42 @@ export class CardUseRepo {
   }
 
   /**
+   * Requests still pending whose approval row the expiry sweep has already expired: the sweep
+   * commits the approval row before it settles the request, so a failure in between strands the
+   * request. A request whose approval row is still pending_approval is never returned. The
+   * one-minute floor keeps this off the sweep's own in-flight settlement.
+   */
+  async findStrandedByExpiry(): Promise<string[]> {
+    const result = await this.pool.query<{ id: string }>(
+      `SELECT c.id FROM card_use_requests c
+         JOIN autonomy_action_log a ON a.short_ref = c.approval_short_ref
+        WHERE c.status = 'pending'
+          AND a.outcome = 'expired'
+          AND c.created_at < now() - interval '1 minute'
+        ORDER BY c.created_at ASC
+        LIMIT 50`,
+    );
+    return result.rows.map((r) => r.id);
+  }
+
+  /**
+   * True while the newest grant for this card (name and last four), conversation and site is
+   * inside its window. Checked again at the point a card value is released, on the database clock.
+   */
+  async hasLiveGrant(q: { secretName: string; last4: string; siteUrl: string; conversationId: string }): Promise<boolean> {
+    const siteDomain = registrableDomain(q.siteUrl);
+    if (siteDomain === null) return false;
+    const result = await this.pool.query(
+      `SELECT 1 FROM card_use_requests
+        WHERE secret_name = $1 AND last4 = $4 AND conversation_id = $2 AND site_domain = $3
+          AND status = 'approved' AND approved_at > now() - interval '30 minutes'
+        LIMIT 1`,
+      [q.secretName, q.conversationId, siteDomain, q.last4],
+    );
+    return result.rowCount === 1;
+  }
+
+  /**
    * Spend one fill against the newest live grant for this card (name and last four),
    * conversation and site.
    * `field` null is a public field (brand, expiry, ...): it needs a grant but isn't counted.
@@ -170,9 +206,12 @@ export class CardUseRepo {
     const bumped = await this.pool.query(
       `UPDATE card_use_requests SET ${column} = ${column} + 1
         WHERE id = $1 AND ${column} < ${MAX_FILLS}
+          AND approved_at > now() - interval '30 minutes'
         RETURNING id`,
       [grantId],
     );
-    return bumped.rowCount === 1 ? 'ok' : 'fill_limit';
+    if (bumped.rowCount === 1) return 'ok';
+    // The bump also fails when the window closed since the SELECT; that is no grant, not a limit.
+    return (await this.hasLiveGrant(q)) ? 'fill_limit' : 'no_grant';
   }
 }

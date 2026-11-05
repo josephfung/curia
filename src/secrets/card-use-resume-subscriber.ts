@@ -26,7 +26,16 @@ import {
 /** Bound on the dedup set; FIFO eviction, same reasoning as the secret-capture subscriber. */
 const MAX_DISPATCHED_IDS = 10_000;
 
-function resumeCopy(decision: CardUseDecidedEvent['payload']['decision'], purpose: string, site: string): string {
+function resumeCopy(
+  decision: CardUseDecidedEvent['payload']['decision'],
+  purpose: string,
+  site: string,
+  via?: CardUseDecidedEvent['payload']['via'],
+): string {
+  // A coordinator deny or dismiss is not the principal's own answer; don't tell the user it was.
+  if (decision === 'denied' && via === 'coordinator') {
+    return `The card confirmation for ${purpose} was dismissed by the coordinator, not answered by the principal. Don't fill the card; don't say the principal declined.`;
+  }
   switch (decision) {
     case 'approved':
       return `The principal approved the card payment for ${purpose} on ${site}. Continue the checkout in the same browser session.`;
@@ -86,7 +95,7 @@ export class CardUseResumeSubscriber {
       return;
     }
 
-    let content = resumeCopy(decision, purpose, siteDomain);
+    let content = resumeCopy(decision, purpose, siteDomain, event.payload.via);
     if (resumeToken) {
       // Delegated specialist (#995): the coordinator must re-delegate with the token so the
       // specialist (which holds the browser session) is the one that continues.
