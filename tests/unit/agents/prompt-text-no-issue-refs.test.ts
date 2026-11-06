@@ -18,7 +18,7 @@
 // Log messages may cite issues; they are read by operators, not the model.
 
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import * as yaml from 'js-yaml';
@@ -114,13 +114,15 @@ describe('model-facing text carries no issue references', () => {
   });
 
   it('finds a reference inside a multi-line template literal', () => {
-    const file = join(tmpdir(), `prompt-text-probe-${process.pid}.ts`);
-    writeFileSync(file, "export const P = `Start\nDiscuss #2428 here\n`;\nconst q = \"don't (#1234)\";\nlog.info('skip (#5555)');\n");
+    // A private mkdtemp directory, not a predictable name in the shared temp dir.
+    const dir = mkdtempSync(join(tmpdir(), 'prompt-text-probe-'));
+    const file = join(dir, 'probe.ts');
     const hits: string[] = [];
     try {
+      writeFileSync(file, "export const P = `Start\nDiscuss #2428 here\n`;\nconst q = \"don't (#1234)\";\nlog.info('skip (#5555)');\n");
       literalHits(file, hits);
     } finally {
-      rmSync(file);
+      rmSync(dir, { recursive: true, force: true });
     }
     expect(hits).toHaveLength(2);
     expect(hits.join()).toContain('#2428');
