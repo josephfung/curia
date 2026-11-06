@@ -8,6 +8,7 @@
  */
 
 import type { DbPool } from '../db/connection.js';
+import { UUID_PATTERN } from '../util/uuid.js';
 
 export interface SecretUse {
   kind: 'read';
@@ -102,7 +103,7 @@ export class SecretUsageRepo implements SecretUsagePort {
             -- Join on the UUID so the primary key is used; the CASE keeps a missing or malformed
             -- id from failing the cast and keeps its row (with no amount).
             LEFT JOIN card_use_requests r ON r.id = CASE
-              WHEN a.payload->>'requestId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+              WHEN a.payload->>'requestId' ~* '^' || $4::text || '$'
               THEN (a.payload->>'requestId')::uuid END
            WHERE $3::boolean AND a.event_type = 'card_use.decided' AND a.payload->>'secretName' = $1
            ORDER BY a.timestamp DESC, a.seq DESC NULLS LAST
@@ -110,7 +111,7 @@ export class SecretUsageRepo implements SecretUsagePort {
        ) uses
        ORDER BY timestamp DESC, seq DESC NULLS LAST
        LIMIT $2`,
-      [name, limit, includeCardUses],
+      [name, limit, includeCardUses, UUID_PATTERN],
     );
     const items: SecretUseItem[] = [];
     for (const row of result.rows) {
