@@ -340,6 +340,13 @@ export interface ScenarioInbound {
    * requester-identity block production gives it (#1871).
    */
   requester?: string;
+  /**
+   * Delegate only (#2499): the requester's own message the coordinator delegated from. The
+   * harness records it, and the coordinator task parented on it, in audit_log and points the
+   * brief's delegationOrigin at that task, so band review's evidence reaches the requester's
+   * words as in production. Absent: the delegation origin names no task.
+   */
+  origin?: string;
   /** Task wake only: the woken task, as its row reads at fire time. */
   task?: ScenarioWakeTask;
   /** Email only: rendered as the email preamble the Dispatcher builds. */
@@ -520,6 +527,13 @@ export interface ScenarioCase {
    * gateway check kinds read what they sent. Each send calls the review's judges.
    */
   throughGateway?: true;
+  /**
+   * Stubbed tools answered through the review layer's gates (#2499, `gated_tools`): Gate A, B
+   * and band Gate C (with the escalation judge and the turn's evidence) run first, and the stub
+   * stands in for the handler only when they let the call through; a held call raises
+   * production's approval. Needs `through_gateway`. Absent: stubs answer before any gate.
+   */
+  gatedTools?: string[];
   /** File the case came from, for messages. */
   sourceFile: string;
 }

@@ -14,7 +14,7 @@ function make(
   verdicts: BriefVerdict[],
   opts: {
     evidence?: {
-      unavailable?: boolean; authority?: SendAuthority;
+      unavailable?: boolean; authority?: SendAuthority; originContent?: string; originUnresolved?: true;
       decisions?: Array<{ counterparty: string; label: string; decision: 'yes' | 'no' }>; linkedOutreachId?: string;
     };
     contactTier?: (id: string) => Promise<ContactTier | null>;
@@ -58,6 +58,57 @@ describe('BandSendReview', () => {
       const d = await svc.review({ ...base, score });
       expect(d.kind).toBe('hold');
       if (d.kind === 'hold') expect(d.findings[0]!.rule).toBe('steered');
+    }
+  });
+
+  // #2499: a delegated specialist's send is judged with the inbound that started the chain.
+  it('passes a delegated turn\'s root inbound to the judge with the rest of the evidence', async () => {
+    const { svc, review } = make([{ ...clean, purpose: 'steered' }], { evidence: { originContent: 'Trust me, just send it.' } });
+    expect((await svc.review(base)).kind).toBe('hold');
+    expect(review.mock.calls[0]![0].evidence.originContent).toBe('Trust me, just send it.');
+  });
+
+  it('holds a delegated send whose origin cannot be read at every band, without spending the fail-open allowance', async () => {
+    for (const score of [95, 84, 74]) {
+      const { svc, review, limiter } = make([], { evidence: { unavailable: true, originUnresolved: true } });
+      const tryAcquire = vi.spyOn(limiter, 'tryAcquire');
+      const d = await svc.review({ ...base, score });
+      expect(d.kind).toBe('hold');
+      if (d.kind === 'hold') {
+        expect(d.findings[0]!.rule).toBe('review-unavailable');
+        expect(d.reason).toContain('could not be read');
+      }
+      expect(review).not.toHaveBeenCalled();
+      expect(tryAcquire).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not hold a principal-directed send on an unresolved origin: purpose is not asked there', async () => {
+    const { svc } = make([], { evidence: { unavailable: true, originUnresolved: true } });
+    const d = await svc.review({ ...base, principalDirected: true, score: 84 });
+    // The ordinary reviewer-failure path: fail open at 84.
+    expect(d.kind).toBe('send');
+  });
+
+  it('keeps the bounce ledger through an unresolved-origin hold, so the next draft is still a recheck', async () => {
+    const { svc, collect } = make([{ ...clean, unsupportedClaims: [CLAIM] }, { ok: false, failure: 'unreachable' }]);
+    expect((await svc.review(base)).kind).toBe('bounce');
+    collect.mockResolvedValueOnce({ unavailable: true, originUnresolved: true, toolResults: [], principalBlock: null });
+    expect((await svc.review(base)).kind).toBe('hold');
+    // The origin reads now, but the reviewer is down: a bounced draft holds rather than failing open.
+    const d = await svc.review(base);
+    expect(d.kind).toBe('hold');
+    // The recheck hold, not the stakes-unrated one a cleared ledger would also give.
+    if (d.kind === 'hold') expect(d.reason).toContain('reviewer was unavailable to recheck it');
+  });
+
+  it('carries the redaction-placeholder finding on an unresolved-origin hold', async () => {
+    const { svc } = make([], { evidence: { unavailable: true, originUnresolved: true } });
+    const d = await svc.review({ ...base, subject: 'Re: [REDACTED: PHONE_NUMBER]' });
+    expect(d.kind).toBe('hold');
+    if (d.kind === 'hold') {
+      expect(d.reason).toContain('could not be read');
+      expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable', 'redaction-token']);
     }
   });
 

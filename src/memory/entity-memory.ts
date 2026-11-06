@@ -1,4 +1,10 @@
-import type { KnowledgeGraphStore, DecayWarningRow, DecayWarningActionResult } from './knowledge-graph.js';
+import type {
+  KnowledgeGraphStore,
+  DecayWarningRow,
+  DecayWarningActionResult,
+  FactOwnerOptions,
+  FactOwnership,
+} from './knowledge-graph.js';
 // EmbeddingService is part of the public constructor signature so callers don't need
 // to know whether it's used directly here or delegated to the store. Currently the store
 // owns all embedding calls (createNode embeds labels, semanticSearch embeds queries),
@@ -1138,6 +1144,16 @@ export class EntityMemory {
     }
 
     return merged.slice(0, limit);
+  }
+
+  /**
+   * The entities each fact is attached to (#2502), batched in one query. Search results
+   * carry no owner, so a fact that only matched the query's wording reads as belonging to
+   * whoever the query named; memory-query labels each fact with these instead. Facts with
+   * no live owner are absent from the map.
+   */
+  async getFactOwners(factIds: string[], options: FactOwnerOptions): Promise<Map<string, FactOwnership>> {
+    return this.store.getFactOwners(factIds, options);
   }
 
   /** List KG nodes flagged for principal re-confirmation by the decay warning pass. */
