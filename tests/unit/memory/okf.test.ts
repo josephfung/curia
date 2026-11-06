@@ -71,6 +71,14 @@ Also [[/playbooks/sales.md]].
     ]);
   });
 
+  it('handles a long run of unclosed wikilink openers in linear time', () => {
+    const body = `${'[[\\'.repeat(50_000)}[[notes]]`;
+    const started = performance.now();
+    const links = extractLinks('/a/b.md', body);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(links).toEqual([{ targetPath: '/a/notes.md', linkKind: 'wikilink' }]);
+  });
+
   it('tolerates broken / external links', () => {
     const links = extractLinks('/a/b.md', 'Visit [site](https://example.com) and [frag](#section).');
     expect(links).toHaveLength(0);
