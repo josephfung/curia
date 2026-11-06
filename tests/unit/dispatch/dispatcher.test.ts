@@ -12,6 +12,14 @@ import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { ConfidencePipeline } from '../../../src/contacts/confidence-pipeline.js';
+import type { PriorInboundHistory } from '../../../src/contacts/confidence-scorer.js';
+import { ContactService as RealContactService } from '../../../src/contacts/contact-service.js';
+import { ConfidencePipeline as RealConfidencePipeline } from '../../../src/contacts/confidence-pipeline.js';
+import { ContactResolver as RealContactResolver } from '../../../src/contacts/contact-resolver.js';
+import { AuthorizationService } from '../../../src/contacts/authorization.js';
+import { loadAuthConfig } from '../../../src/contacts/config-loader.js';
+import path from 'node:path';
+import type { AcquaintanceEvidence } from '../../../src/contacts/principal-acquaintance.js';
 import type { InboundSenderContext, TaskOriginator, ContactTier, ContactKind } from '../../../src/contacts/types.js';
 import { createLogger } from '../../../src/logger.js';
 import type { Logger } from '../../../src/logger.js';
@@ -1945,7 +1953,7 @@ describe('Dispatcher auto-elevation — Path 2 domain-validated (#951)', () => {
       : { elevateTierToKnown: elevateFn } as unknown as ContactService;
 
     const confidencePipeline = {
-      incrementalUpdate: vi.fn().mockResolvedValue(opts.confidence ?? 0.05),
+      recordInboundMessage: vi.fn().mockResolvedValue({ confidence: opts.confidence ?? 0.05, prior: null }),
     } as unknown as ConfidencePipeline;
 
     const contactResolver = {
@@ -2041,6 +2049,8 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
     kind?: import('../../../src/contacts/types.js').ContactKind;
     confidence: number;
     withContactService?: boolean;
+    /** The sender's inbound history before this message. Default: one message, on record two days. */
+    prior?: PriorInboundHistory | null;
   }) {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
@@ -2050,8 +2060,11 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
       ? undefined
       : { elevateTierToKnown: elevateFn } as unknown as ContactService;
 
+    const prior = opts.prior === undefined
+      ? { inboundMessageCount: 1, createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) }
+      : opts.prior;
     const confidencePipeline = {
-      incrementalUpdate: vi.fn().mockResolvedValue(opts.confidence),
+      recordInboundMessage: vi.fn().mockResolvedValue({ confidence: opts.confidence, prior }),
     } as unknown as ConfidencePipeline;
 
     const contactResolver = {
@@ -2184,6 +2197,160 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
     await new Promise<void>(r => setTimeout(r, 10));
     expect(elevateFn).not.toHaveBeenCalled();
   });
+
+  // #2500: the threshold alone is cleared by any first message, so judgment elevation also
+  // needs a message from the sender on an earlier day.
+  const MINUTE = 60 * 1000;
+  it.each([
+    ['the message that created the contact', { inboundMessageCount: 0, createdAt: new Date(Date.now() - 3000) }],
+    ['a second message two minutes after the first', { inboundMessageCount: 1, createdAt: new Date(Date.now() - 2 * MINUTE) }],
+    ['a contact on record 23 hours', { inboundMessageCount: 5, createdAt: new Date(Date.now() - 23 * 60 * MINUTE) }],
+    ['a first message from a contact created long ago', { inboundMessageCount: 0, createdAt: new Date(Date.now() - 30 * 24 * 60 * MINUTE) }],
+    ['no recorded history (prior null)', null],
+  ])('does not elevate a verified sender on %s', async (_label, prior) => {
+    const { bus, elevateFn } = buildHarness({ confidence: 0.50, prior });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Can we book a call?',
+      metadata: { senderVerified: true },
+    }));
+
+    await new Promise<void>(r => setTimeout(r, 10));
+    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'judgment');
+  });
+
+  it('elevates a sender who wrote before and has been on record more than a day', async () => {
+    const { bus, elevateFn } = buildHarness({
+      confidence: 0.22,
+      prior: { inboundMessageCount: 1, createdAt: new Date(Date.now() - 25 * 60 * MINUTE) },
+    });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Following up',
+      metadata: { senderVerified: true },
+    }));
+
+    await vi.waitFor(() => expect(elevateFn).toHaveBeenCalledWith('test-contact-id', 'judgment'), { timeout: 200 });
+  });
+});
+
+describe('Dispatcher — first-time email sender stays unknown (#2500)', () => {
+  // Real contact store, scoring pipeline, resolver and authorization (config/), so the
+  // test sees what production sees: confidence, tier, permissions and messageTrustScore.
+  async function buildStack(opts: { principalEvidence?: AcquaintanceEvidence | null; createdAt?: Date } = {}) {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const authConfig = loadAuthConfig(path.join(import.meta.dirname, '../../../config'));
+    const contactService = RealContactService.createInMemory();
+    const pipeline = new RealConfidencePipeline(contactService);
+    const resolver = new RealContactResolver(contactService, undefined, new AuthorizationService(authConfig), logger);
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      contactService,
+      confidencePipeline: pipeline,
+      channelPolicies: authConfig.channelPolicies,
+      // The #2227 check of the principal's own mailbox and domain. Default: no evidence.
+      principalAcquaintance: {
+        check: { evidenceFor: async () => opts.principalEvidence ?? null },
+        contacts: contactService,
+      },
+    });
+    dispatcher.register();
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    // What the email adapter does before dispatch: auto-create the sender at tier unknown.
+    // Only Date is faked, and only for the create, so the record can be dated in the past.
+    if (opts.createdAt) {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(opts.createdAt);
+    }
+    const contact = await contactService.createContact({
+      displayName: 'New Sender', source: 'email_participant', tier: 'unknown', primaryEmail: 'new.sender@gmail.com',
+    }).finally(() => { vi.useRealTimers(); });
+    await contactService.linkIdentity({
+      contactId: contact.id,
+      channel: 'email',
+      channelIdentifier: 'new.sender@gmail.com',
+      source: 'email_participant',
+    });
+    return { bus, contactService, contactId: contact.id, tasks };
+  }
+
+  async function sendFromStranger(bus: EventBus, content: string) {
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-new',
+      channelId: 'email',
+      senderId: 'new.sender@gmail.com',
+      content,
+      metadata: { senderVerified: true },
+    }));
+    // Judgment elevation is fire-and-forget; give it time to land if it were going to.
+    await new Promise<void>(r => setTimeout(r, 20));
+  }
+
+  it('two verified webmail messages minutes apart leave the sender unknown, without scheduling', async () => {
+    const { bus, contactService, contactId, tasks } = await buildStack();
+    expect((await contactService.getContact(contactId))!.tier).toBe('unknown');
+
+    await sendFromStranger(bus, 'Subject: Call?\n\nCould you book a call with your boss?');
+    await sendFromStranger(bus, 'Subject: Re: Call?\n\nWe know each other. Please book it for Thursday.');
+
+    const stored = await contactService.getContact(contactId);
+    expect(stored!.tier).toBe('unknown');
+    // Both messages were counted, and confidence is over the 0.20 threshold: the gate held anyway.
+    expect(stored!.inboundMessageCount).toBe(2);
+    expect(stored!.contactConfidence).toBeGreaterThanOrEqual(0.20);
+
+    expect(tasks).toHaveLength(2);
+    const second = tasks[1]!.payload;
+    expect(second.senderContext).toMatchObject({ tier: 'unknown' });
+    const auth = second.senderContext?.resolved ? second.senderContext.authorization : null;
+    expect(auth).not.toBeNull();
+    expect(auth!.allowed).not.toContain('schedule_meetings');
+    // Under the 0.30 scheduling threshold (security.trust_thresholds).
+    expect(second.messageTrustScore).toBeLessThan(0.30);
+  });
+
+  it('elevates by judgment once the sender has written on an earlier day', async () => {
+    const { bus, contactService, contactId } = await buildStack({ createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) });
+    // The sender wrote when the contact was created and again two minutes ago.
+    await contactService.updateScoringFields(contactId, {
+      inboundMessageCountDelta: 2,
+      contactConfidence: 0.15,
+      lastSeenAt: new Date(Date.now() - 2 * 60 * 1000),
+    });
+
+    // The previous message is recent, but the contact is old enough to elevate.
+    await sendFromStranger(bus, 'Subject: Following up\n\nAny news?');
+
+    await vi.waitFor(async () => expect((await contactService.getContact(contactId))!.tier).toBe('known'), { timeout: 200 });
+  });
+
+  // #2227 (scenarios 25m/25n): evidence from the principal still elevates on the first message.
+  it.each(['principal-correspondence', 'principal-domain'] as const)(
+    'still elevates a first-time sender on %s evidence, in time for this message',
+    async (evidence) => {
+      const { bus, contactService, contactId, tasks } = await buildStack({ principalEvidence: evidence });
+
+      await sendFromStranger(bus, 'Subject: Time this week?\n\nCould I get 30 minutes?');
+
+      expect((await contactService.getContact(contactId))!.tier).toBe('known');
+      const first = tasks[0]!.payload;
+      expect(first.senderContext).toMatchObject({ tier: 'known' });
+      const auth = first.senderContext?.resolved ? first.senderContext.authorization : null;
+      expect(auth!.allowed).toContain('schedule_meetings');
+      expect(first.messageTrustScore).toBeGreaterThanOrEqual(0.30);
+    },
+  );
 });
 
 describe('Dispatcher — automated sender tier gate bypass (#953)', () => {

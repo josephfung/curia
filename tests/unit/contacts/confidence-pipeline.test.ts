@@ -50,6 +50,27 @@ describe('ConfidencePipeline', () => {
     });
   });
 
+  describe('recordInboundMessage (#2500)', () => {
+    it('returns the history from before this message, then counts it', async () => {
+      const contact = await createTestContact();
+
+      const first = await pipeline.recordInboundMessage(contact.id);
+      expect(first.prior).toEqual({ inboundMessageCount: 0, createdAt: contact.createdAt });
+      const afterFirst = await service.getContact(contact.id);
+      expect(afterFirst!.inboundMessageCount).toBe(1);
+      expect(first.confidence).toBeCloseTo(afterFirst!.contactConfidence);
+
+      const second = await pipeline.recordInboundMessage(contact.id);
+      expect(second.prior).toEqual({ inboundMessageCount: 1, createdAt: contact.createdAt });
+      expect((await service.getContact(contact.id))!.inboundMessageCount).toBe(2);
+    });
+
+    it('returns no history for a missing contact', async () => {
+      expect(await pipeline.recordInboundMessage('00000000-0000-0000-0000-000000000000'))
+        .toEqual({ confidence: 0, prior: null });
+    });
+  });
+
   describe('incrementalUpdate — message_sent', () => {
     it('increments outbound count but does not update lastSeenAt', async () => {
       const contact = await createTestContact();
