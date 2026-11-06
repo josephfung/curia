@@ -103,7 +103,7 @@ export class SecretUsageRepo implements SecretUsagePort {
             -- Join on the UUID so the primary key is used; the CASE keeps a missing or malformed
             -- id from failing the cast and keeps its row (with no amount).
             LEFT JOIN card_use_requests r ON r.id = CASE
-              WHEN a.payload->>'requestId' ~* '^' || $4::text || '$'
+              WHEN a.payload->>'requestId' ~* ('^' || $4::text || '$')
               THEN (a.payload->>'requestId')::uuid END
            WHERE $3::boolean AND a.event_type = 'card_use.decided' AND a.payload->>'secretName' = $1
            ORDER BY a.timestamp DESC, a.seq DESC NULLS LAST
