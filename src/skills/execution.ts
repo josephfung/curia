@@ -3131,6 +3131,35 @@ export class ExecutionLayer {
       }
     }
 
+    // The entry check can go stale: gates, enrichment and approval writes above take time, and
+    // the call can end meanwhile (#2495). Recheck right before an elevated handler starts, and
+    // take the same lapsed-grant path as at entry.
+    if (
+      manifest.sensitivity === 'elevated'
+      && options?.liveTurn === true
+      && options.liveTurnGrantId !== undefined
+      && !isLiveTurnGrantActive(options.liveTurnGrantId)
+    ) {
+      skillLogger.info(
+        { toolName, taskEventId: options.taskEventId },
+        'live-turn grant lapsed before the elevated handler started (#2495)',
+      );
+      if (
+        isPrincipalOriginated(effectiveTaskMetadata)
+        && !APPROVAL_RESOLUTION_TOOLS.has(toolName)
+        && (!manifest.allowed_callers?.length || manifest.allowed_callers.includes(options.agentId ?? 'system'))
+      ) {
+        const confirmError = await this.buildElevatedConfirmationError(
+          toolName, input, manifest.action_risk, autonomyConfig?.score ?? 0, options, skillLogger,
+        );
+        return { success: false, error: this.wrapSkillError(confirmError) };
+      }
+      return {
+        success: false,
+        error: this.wrapSkillError(`Tool '${toolName}' requires a live principal turn — it can only be invoked directly by the principal, not by a system job, an agent, or a woken/scheduled task`),
+      };
+    }
+
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');
 
     // Losing the race does not stop the handler. The abort signal cancels its

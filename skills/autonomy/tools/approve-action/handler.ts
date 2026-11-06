@@ -14,6 +14,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { RESOLVED_BY, approvalLabel } from '../../../../src/autonomy/action-log-types.js';
 import { parseApprovalRefInput } from '../../../_shared/approval-ref.js';
 import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipient-reference.js';
+import { isLiveTurnGrantActive } from '../../../../src/autonomy/live-turn-grants.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 import { hasPersonalDetails, UNSHOWN_PERSONAL_DETAILS_ERROR } from '../../../../src/autonomy/approval-notification.js';
@@ -82,6 +83,13 @@ export class ApproveActionHandler implements ToolHandler {
         }
       }
 
+      // A grant that lapsed since this turn began (#2495): leave the row pending rather than
+      // approve and then replay without a live call. The principal can approve again.
+      if (ctx.liveTurnGrantId !== undefined && !isLiveTurnGrantActive(ctx.liveTurnGrantId)) {
+        ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: live-turn grant lapsed — approval left pending');
+        return { success: false, error: `${approvalLabel(row)} is still pending: the voice call this approval came from has ended. Ask the principal to approve it again.` };
+      }
+
       // Step 1: Transition to approved — returns false if another actor resolved first.
       // We MUST check this before re-executing to prevent running a skill that was
       // concurrently denied or dismissed.
@@ -121,6 +129,9 @@ export class ApproveActionHandler implements ToolHandler {
         {
           humanApproved: true,
           liveTurn: ctx.liveTurn,
+          // Keeps the replay bound to the voice grant: invoke() rechecks it and drops liveTurn
+          // if the call ended meanwhile.
+          ...(ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
           sendResolution: pins ?? undefined,
           taskEventId: ctx.taskEventId,
           conversationId: row.conversationId ?? undefined,

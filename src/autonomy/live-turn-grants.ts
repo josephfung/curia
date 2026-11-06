@@ -26,7 +26,13 @@ interface GrantEntry {
   expiresAt: number;
 }
 
-const activeGrants = new Map<string, GrantEntry>();
+// One registry per process, not per module instance. Skill handlers are loaded from their
+// own files, so in the built image `skills/async-offramp` can import a different copy of this
+// module than the bundled execution layer and voice runtime. A module-level Map would give
+// each copy its own grants, and the execution layer would read every live grant as lapsed.
+const REGISTRY_KEY = Symbol.for('curia.liveTurnGrants');
+const registryHolder = globalThis as typeof globalThis & { [REGISTRY_KEY]?: Map<string, GrantEntry> };
+const activeGrants: Map<string, GrantEntry> = (registryHolder[REGISTRY_KEY] ??= new Map<string, GrantEntry>());
 
 /** A grant the off-ramp holds while the principal is still on the call. */
 export interface LiveTurnGrant {

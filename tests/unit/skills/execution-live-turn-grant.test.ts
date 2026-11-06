@@ -242,4 +242,25 @@ describe('elevated gate under a live-turn grant (#2495)', () => {
     await layer.invoke('delegate', {}, undefined, { liveTurn: true, liveTurnGrantId: grant.id, taskMetadata: principalMetadata });
     expect(seen).toEqual({ liveTurn: false, liveTurnGrantId: grant.id });
   });
+
+  it('files a confirmation when the grant lapses between the entry check and the handler', async () => {
+    const registry = new ToolRegistry();
+    const execute = vi.fn<ToolHandler['execute']>(async () => ({ success: true, data: 'tier set' }));
+    registry.register(makeManifest(), { execute });
+    const request = vi.fn(async (_opts: Record<string, unknown>) => ({ created: true as const, rowId: 8, shortRef: 'efgh5678', approvalNumber: 4 }));
+    const grant = issueLiveTurnGrant({ voiceSessionId: 's1', ttlMs: 60_000 });
+    // The autonomy read happens after the entry check; the call ends while it is in flight.
+    const autonomyService = { getConfig: vi.fn(async () => { grant.revoke(); return null; }) };
+    const layer = new ExecutionLayer(registry, logger, { approvalTrigger: { request } as never, autonomyService: autonomyService as never });
+    const result = await layer.invoke('contact-set-tier', { tier: 'blocked' }, undefined, {
+      taskEventId: 'task-4',
+      agentId: 'coordinator',
+      liveTurn: true,
+      liveTurnGrantId: grant.id,
+      taskMetadata: principalMetadata,
+    });
+    expect(result.success).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
+  });
 });

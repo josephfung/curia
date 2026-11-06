@@ -1,5 +1,5 @@
 // live-turn-grants.test.ts — voice live-turn grants (#2495).
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   activeLiveTurnGrantCountForTests,
   isLiveTurnGrantActive,
@@ -45,5 +45,14 @@ describe('live-turn grants', () => {
     expect(isLiveTurnGrantActive(lapsedLiveTurnGrantId())).toBe(false);
     expect(isLiveTurnGrantActive('ltg-made-up')).toBe(false);
     expect(isLiveTurnGrantActive(undefined)).toBe(false);
+  });
+
+  it('keeps one registry per process, so a second copy of the module sees the same grants', async () => {
+    const grant = issueLiveTurnGrant({ voiceSessionId: 's1', ttlMs: 60_000 });
+    vi.resetModules();
+    const copy = await import('../../../src/autonomy/live-turn-grants.js');
+    expect(copy.isLiveTurnGrantActive(grant.id)).toBe(true);
+    expect(copy.revokeLiveTurnGrantsForVoiceSession('s1')).toBe(1);
+    expect(isLiveTurnGrantActive(grant.id)).toBe(false);
   });
 });

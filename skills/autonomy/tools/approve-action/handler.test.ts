@@ -7,6 +7,7 @@ import type { ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { ActionLogRepo } from '../../../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { ExecutionLayer } from '../../../../src/skills/execution.js';
+import { issueLiveTurnGrant } from '../../../../src/autonomy/live-turn-grants.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import type { Logger } from '../../../../src/logger.js';
 
@@ -97,6 +98,30 @@ describe('ApproveActionHandler', () => {
     }));
     const options = (execLayer.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![3];
     expect(options).toMatchObject({ humanApproved: true, liveTurn: true });
+  });
+
+  it('keeps the replay bound to the voice grant while it is active', async () => {
+    const grant = issueLiveTurnGrant({ voiceSessionId: 's1', ttlMs: 60_000 });
+    const execLayer = makeMockExecutionLayer();
+    await new ApproveActionHandler().execute(makeCtx({
+      actionLogRepo: makeMockRepo(), bus: makeMockBus(), executionLayer: execLayer, liveTurn: true, liveTurnGrantId: grant.id,
+    }));
+    const options = (execLayer.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![3];
+    expect(options).toMatchObject({ humanApproved: true, liveTurn: true, liveTurnGrantId: grant.id });
+    grant.revoke();
+  });
+
+  it('leaves the row pending and replays nothing once the voice grant has lapsed', async () => {
+    const grant = issueLiveTurnGrant({ voiceSessionId: 's1', ttlMs: 60_000 });
+    grant.revoke();
+    const repo = makeMockRepo();
+    const execLayer = makeMockExecutionLayer();
+    const result = await new ApproveActionHandler().execute(makeCtx({
+      actionLogRepo: repo, bus: makeMockBus(), executionLayer: execLayer, liveTurn: true, liveTurnGrantId: grant.id,
+    }));
+    expect(result.success).toBe(false);
+    expect(repo.resolveRow).not.toHaveBeenCalled();
+    expect(execLayer.invoke).not.toHaveBeenCalled();
   });
 
   it('approves, re-executes, writes child row, publishes audit event', async () => {
