@@ -2214,6 +2214,18 @@ export class AgentRuntime {
               : {}),
           };
 
+          // What the agent hands an echo-prone source tool (web-fetch, web-browser) is
+          // recorded before the call, so a page repeating it cannot verify it (#2498).
+          // Fail closed: if it could not be recorded, this call's result is not a source.
+          let agentInputUnrecorded = false;
+          try {
+            const agentInputText = executionLayer.provenanceAgentInputText(toolCall.name, skillInput);
+            if (agentInputText) sourceIndex.recordAgentInput(sourceConversation, agentInputText);
+          } catch (err) {
+            agentInputUnrecorded = true;
+            logger.warn({ err, agentId, toolName: toolCall.name }, 'identifier provenance: could not record agent input — result will not count as a source');
+          }
+
           const startTime = Date.now();
           let delegateBlocked = false;
           let result: Awaited<ReturnType<ExecutionLayer['invoke']>>;
@@ -2720,8 +2732,14 @@ export class AgentRuntime {
             // Best effort: a recording failure only means a later contact write is refused
             // and the agent asks again. It must not turn this successful call into an error.
             try {
-              const sourceText = executionLayer.provenanceSourceText(toolCall.name, skillInput, result.data);
-              if (sourceText) sourceIndex.record(sourceConversation, sourceText);
+              const sourceText = agentInputUnrecorded
+                ? null
+                : executionLayer.provenanceSourceText(toolCall.name, skillInput, result.data);
+              if (sourceText) {
+                sourceIndex.record(sourceConversation, sourceText, {
+                  excludeAgentInput: executionLayer.isAgentEchoSource(toolCall.name),
+                });
+              }
             } catch (err) {
               logger.warn({ err, agentId, toolName: toolCall.name }, 'identifier provenance: could not record a source-tool result');
             }

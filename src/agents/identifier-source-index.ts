@@ -7,6 +7,10 @@
 // from, so a page a specialist read counts when the coordinator then creates the
 // contact, and the reverse. Contact skills look identifiers up here before verifying.
 //
+// What the agent supplies to web-fetch and web-browser is recorded too (#2498), so a page
+// that repeats it (a search page showing its query, a form showing what was typed) cannot
+// verify it: such a result never contributes a key the agent supplied first.
+//
 // Process memory only. Tool results are not persisted anywhere an agent could write,
 // and losing the index (restart, TTL) only means a later write is refused and the
 // agent asks again — it never verifies anything.
@@ -23,6 +27,14 @@ export interface IdentifierSourceIndexOptions {
   now?: () => number;
 }
 
+interface ConversationEntry {
+  recordedAt: number;
+  /** Identifiers found in source-tool results, with when each was last seen. */
+  keys: Map<string, number>;
+  /** Identifiers the agent supplied to echo-prone source tools (#2498). */
+  agentKeys: Map<string, number>;
+}
+
 export class IdentifierSourceIndex {
   private readonly ttlMs: number;
   private readonly maxKeys: number;
@@ -31,7 +43,10 @@ export class IdentifierSourceIndex {
   // Map iteration order is insertion order: re-inserting moves an entry to the end,
   // so the first entry is always the oldest — for conversations (by last record) and
   // for the keys inside each.
-  private readonly conversations = new Map<string, { recordedAt: number; keys: Map<string, number> }>();
+  // `agentKeys` holds what the agent supplied to echo-prone tools (#2498): those keys are
+  // never taken from such a tool's result. Both maps share the conversation's lifetime,
+  // so evicting a conversation drops its sources and its agent input together.
+  private readonly conversations = new Map<string, ConversationEntry>();
 
   constructor(options: IdentifierSourceIndexOptions = {}) {
     this.ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
@@ -40,29 +55,63 @@ export class IdentifierSourceIndex {
     this.now = options.now ?? Date.now;
   }
 
-  record(conversationKey: string, text: string): void {
+  /**
+   * Record the identifiers in a source-tool result. With `excludeAgentInput` (an
+   * echo-prone tool, #2498), an identifier the agent supplied to such a tool earlier in
+   * this conversation is left out: the result may only be repeating it.
+   */
+  record(conversationKey: string, text: string, options: { excludeAgentInput?: boolean } = {}): void {
     const found = sourceKeysInText(text);
     if (found.size === 0) return;
 
     const now = this.now();
+    if (options.excludeAgentInput) {
+      const agentKeys = this.live(conversationKey, now)?.agentKeys;
+      if (agentKeys) {
+        for (const key of found) if (agentKeys.has(key)) found.delete(key);
+      }
+      if (found.size === 0) return;
+    }
+    this.add(conversationKey, found, now, 'keys');
+  }
+
+  /**
+   * Record what the agent supplied to an echo-prone source tool, before the call runs
+   * (#2498). Later results of such tools in this conversation cannot verify these keys.
+   */
+  recordAgentInput(conversationKey: string, text: string): void {
+    const found = sourceKeysInText(text);
+    if (found.size === 0) return;
+    this.add(conversationKey, found, this.now(), 'agentKeys');
+  }
+
+  /** The conversation's entry, when it has not expired. */
+  private live(conversationKey: string, now: number): ConversationEntry | undefined {
+    const conversation = this.conversations.get(conversationKey);
+    return conversation && now - conversation.recordedAt <= this.ttlMs ? conversation : undefined;
+  }
+
+  private add(conversationKey: string, found: ReadonlySet<string>, now: number, into: 'keys' | 'agentKeys'): void {
     // Conversations are ordered by last record, so expired ones sit at the front.
     for (const [key, conversation] of this.conversations) {
       if (now - conversation.recordedAt <= this.ttlMs) break;
       this.conversations.delete(key);
     }
 
-    const conversation = this.conversations.get(conversationKey) ?? { recordedAt: now, keys: new Map<string, number>() };
+    const conversation = this.conversations.get(conversationKey)
+      ?? { recordedAt: now, keys: new Map<string, number>(), agentKeys: new Map<string, number>() };
     conversation.recordedAt = now;
     this.conversations.delete(conversationKey);
     this.conversations.set(conversationKey, conversation);
 
+    const keys = conversation[into];
     for (const key of found) {
-      conversation.keys.delete(key);
-      conversation.keys.set(key, now);
+      keys.delete(key);
+      keys.set(key, now);
     }
-    for (const oldest of conversation.keys.keys()) {
-      if (conversation.keys.size <= this.maxKeys) break;
-      conversation.keys.delete(oldest);
+    for (const oldest of keys.keys()) {
+      if (keys.size <= this.maxKeys) break;
+      keys.delete(oldest);
     }
     for (const oldest of this.conversations.keys()) {
       if (this.conversations.size <= this.maxConversations) break;

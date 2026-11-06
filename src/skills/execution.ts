@@ -31,6 +31,10 @@ import {
 } from '../channels/email/nylas-message-id.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import { provenanceSourceText } from '../contacts/identifier-provenance.js';
+import { mainFrameProse } from './_shared/web-page-content.js';
+
+/** Source tools whose results can echo the agent's own input (#2498). See isAgentEchoSource. */
+const AGENT_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web-fetch', 'web-browser']);
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -644,7 +648,36 @@ export class ExecutionLayer {
     // An object result collapsed to a truncated string has lost the structure that tells
     // Curia's own messages and drafts apart, so none of it counts.
     if (typeof data === 'string' && data.endsWith(OBJECT_OUTPUT_TRUNCATED_MARKER)) return null;
+    // web-browser: only the top frame's prose (#2498). Its other fields (url, redirects,
+    // errors) repeat what the agent passed, and frames hold other origins' text.
+    if (toolName === 'web-browser') {
+      const content = data !== null && typeof data === 'object' ? (data as Record<string, unknown>)['content'] : undefined;
+      return typeof content === 'string' ? mainFrameProse(content) : null;
+    }
     return provenanceSourceText(data, this.selfEmails);
+  }
+
+  /**
+   * Whether `toolName`'s results can repeat text the agent supplied, so an identifier the
+   * agent wrote in an earlier call of these tools must not count as sourced by a later
+   * result (#2498): a page that echoes its URL ("results for …"), a form that shows back
+   * what was typed into it, a session's later page that shows an earlier entry. The web
+   * tools render pages the agent chose and drove. Mail and file reads return stored data,
+   * and web-search returns other sites' pages for a query, so neither is listed.
+   */
+  isAgentEchoSource(toolName: string): boolean {
+    return AGENT_ECHO_SOURCE_TOOLS.has(toolName) && this.registry.get(toolName)?.manifest.provenance_source === true;
+  }
+
+  /**
+   * The text the agent supplied to an echo-prone source tool (every string in its input:
+   * URLs, typed text, selected values, selectors), to record before the call runs so its
+   * result, and any later echo-prone result in the conversation, cannot verify it. Null
+   * for any other tool.
+   */
+  provenanceAgentInputText(toolName: string, input: Record<string, unknown>): string | null {
+    if (!this.isAgentEchoSource(toolName)) return null;
+    return provenanceSourceText(input, []);
   }
 
   /**

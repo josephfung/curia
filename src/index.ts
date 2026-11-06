@@ -3014,6 +3014,15 @@ async function main(): Promise<void> {
             memory,
             logger,
           });
+          // Before the call, as a text turn does (#2498): fail closed when unrecorded.
+          let agentInputUnrecorded = false;
+          try {
+            const agentInputText = executionLayer.provenanceAgentInputText(call.name, call.input);
+            if (agentInputText) sharedIdentifierSourceIndex.recordAgentInput(ctx.conversationId, agentInputText);
+          } catch (err) {
+            agentInputUnrecorded = true;
+            logger.warn({ err, toolName: call.name }, 'identifier provenance: could not record voice agent input — result will not count as a source');
+          }
           // tool.invoke / tool.result around the call, as a text turn records them (#1968).
           const result = await invokeVoiceToolAudited({
             bus,
@@ -3042,8 +3051,12 @@ async function main(): Promise<void> {
           if (result.success) {
             const data = result.data;
             try {
-              const sourceText = executionLayer.provenanceSourceText(call.name, call.input, data);
-              if (sourceText) sharedIdentifierSourceIndex.record(ctx.conversationId, sourceText);
+              const sourceText = agentInputUnrecorded ? null : executionLayer.provenanceSourceText(call.name, call.input, data);
+              if (sourceText) {
+                sharedIdentifierSourceIndex.record(ctx.conversationId, sourceText, {
+                  excludeAgentInput: executionLayer.isAgentEchoSource(call.name),
+                });
+              }
             } catch (err) {
               logger.warn({ err, toolName: call.name }, 'identifier provenance: could not record a voice source-tool result');
             }

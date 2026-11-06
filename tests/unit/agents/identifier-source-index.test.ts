@@ -52,4 +52,36 @@ describe('IdentifierSourceIndex', () => {
     expect(index.has('conv-a', 'email:a@one.example')).toBe(true);
     expect(index.has('conv-c', 'email:c@one.example')).toBe(true);
   });
+
+  describe('agent input (#2498)', () => {
+    it('leaves out keys the agent supplied when the result is from an echo-prone tool', () => {
+      const index = new IdentifierSourceIndex();
+      index.recordAgentInput('conv-a', 'https://search.example/?q=evnts@venue.example');
+      index.record('conv-a', 'Results for evnts@venue.example; write events@venue.example', { excludeAgentInput: true });
+      expect(index.has('conv-a', 'email:evnts@venue.example')).toBe(false);
+      expect(index.has('conv-a', 'email:events@venue.example')).toBe(true);
+    });
+
+    it('keeps them for other sources, and agent input is never a source itself', () => {
+      const index = new IdentifierSourceIndex();
+      index.recordAgentInput('conv-a', 'sam@venue.example');
+      expect(index.has('conv-a', 'email:sam@venue.example')).toBe(false);
+      index.record('conv-a', 'From: sam@venue.example');
+      expect(index.has('conv-a', 'email:sam@venue.example')).toBe(true);
+    });
+
+    it('keeps a key sourced before the agent typed it', () => {
+      const index = new IdentifierSourceIndex();
+      index.record('conv-a', 'events@venue.example', { excludeAgentInput: true });
+      index.recordAgentInput('conv-a', 'events@venue.example');
+      expect(index.has('conv-a', 'email:events@venue.example')).toBe(true);
+    });
+
+    it('scopes agent input to its conversation', () => {
+      const index = new IdentifierSourceIndex();
+      index.recordAgentInput('conv-a', 'evnts@venue.example');
+      index.record('conv-b', 'evnts@venue.example', { excludeAgentInput: true });
+      expect(index.has('conv-b', 'email:evnts@venue.example')).toBe(true);
+    });
+  });
 });
