@@ -66,6 +66,34 @@ export interface SemanticSearchFilters {
   maxSensitivity?: Sensitivity;
 }
 
+/** An entity a fact node is attached to (#2502): the non-fact node at the other end of one
+ *  of the fact's live edges. */
+export interface FactOwner {
+  id: string;
+  type: NodeType;
+  label: string;
+}
+
+/** The owners of one fact, as getFactOwners reports them. A fact with no live non-fact
+ *  neighbour has no entry at all, which is how a caller tells it is unattached. */
+export interface FactOwnership {
+  /** Owners at or below the sensitivity ceiling, at most `perFactLimit` of them. Owners on
+   *  an entity → fact edge (the direction storeFact writes) come first, then by label. */
+  owners: FactOwner[];
+  /** Owners at or below the ceiling in total, including any past `perFactLimit`. */
+  visibleCount: number;
+  /** Owners above the ceiling. Counted so the fact is not mistaken for unattached, but never
+   *  named: the caller asked not to see nodes at that level. */
+  withheldCount: number;
+}
+
+export interface FactOwnerOptions {
+  /** Most owners to return per fact (the counts still cover all of them). */
+  perFactLimit: number;
+  /** Same ceiling as semanticSearch: owners above it are withheld, not named. */
+  maxSensitivity?: Sensitivity;
+}
+
 /** Returned by listDecayWarnings — one entry per warned node. */
 export interface DecayWarningRow {
   nodeId: string;
@@ -116,6 +144,16 @@ interface KnowledgeGraphBackend {
    * the database so unrelated facts and their embeddings are never loaded.
    */
   getConnectedFactsByKey(nodeId: string, key: string): Promise<KgNode[]>;
+  /**
+   * Owners of each fact in `factIds` (#2502): live non-fact nodes joined to the fact by a
+   * live edge of any type, in either direction. One round trip on Postgres. `allowedLevels`
+   * is the sensitivity set an owner must be in to be named; undefined means any.
+   */
+  getFactOwners(
+    factIds: string[],
+    perFactLimit: number,
+    allowedLevels: readonly string[] | undefined,
+  ): Promise<Map<string, FactOwnership>>;
   /**
    * Run `fn` while holding a database-wide mutex named `lockKey`, so callers in
    * other processes serialize on the same name. `fn` may use any connection.
@@ -302,6 +340,25 @@ export class KnowledgeGraphStore {
    */
   async getConnectedFactsByKey(nodeId: string, key: string): Promise<KgNode[]> {
     return this.backend.getConnectedFactsByKey(nodeId, key);
+  }
+
+  /**
+   * The entities each fact is attached to (#2502), for search results that would otherwise
+   * read as belonging to whoever the query named. Facts with no owner are absent from the
+   * map. One query for the whole batch, never one per fact.
+   */
+  async getFactOwners(factIds: string[], options: FactOwnerOptions): Promise<Map<string, FactOwnership>> {
+    if (factIds.length === 0) return new Map();
+    let allowedLevels: readonly string[] | undefined;
+    if (options.maxSensitivity !== undefined) {
+      const maxRank = SENSITIVITY_LEVELS.indexOf(options.maxSensitivity);
+      // Same as semanticSearch: an unknown ceiling is a caller bug, not "show nothing".
+      if (maxRank === -1) {
+        throw new Error(`getFactOwners: unknown maxSensitivity value "${options.maxSensitivity}"`);
+      }
+      allowedLevels = SENSITIVITY_LEVELS.slice(0, maxRank + 1);
+    }
+    return this.backend.getFactOwners(factIds, Math.max(1, Math.floor(options.perFactLimit)), allowedLevels);
   }
 
   /**
@@ -768,6 +825,73 @@ class PostgresBackend implements KnowledgeGraphBackend {
       [nodeId, key],
     );
     return result.rows.map(pgRowToNode);
+  }
+
+  async getFactOwners(
+    factIds: string[],
+    perFactLimit: number,
+    allowedLevels: readonly string[] | undefined,
+  ): Promise<Map<string, FactOwnership>> {
+    // One round trip for the batch. `links` walks both edge directions (each arm uses
+    // idx_kg_edges_target / _source) because getConnectedFacts treats either as ownership;
+    // `dir` 0 marks the entity → fact direction storeFact writes, which sorts first. GROUP BY
+    // folds an owner linked by two edges into one. Rows come back bounded: at most
+    // perFactLimit named owners per fact, plus one withheld row that carries only the counts.
+    // Only id, type and label are read, so no embedding or properties leave the database.
+    const result = await this.pool.query<{
+      fact_id: string;
+      id: string;
+      type: NodeType;
+      label: string;
+      visible: boolean;
+      visible_count: string;
+      withheld_count: string;
+    }>(
+      `WITH links AS (
+         SELECT target_node_id AS fact_id, source_node_id AS owner_id, 0 AS dir
+           FROM kg_edges
+          WHERE target_node_id = ANY($1::uuid[]) AND archived_at IS NULL
+         UNION ALL
+         SELECT source_node_id AS fact_id, target_node_id AS owner_id, 1 AS dir
+           FROM kg_edges
+          WHERE source_node_id = ANY($1::uuid[]) AND archived_at IS NULL
+       ),
+       owners AS (
+         SELECT l.fact_id, n.id, n.type, n.label, MIN(l.dir) AS dir,
+                ($2::text[] IS NULL OR n.sensitivity = ANY($2::text[])) AS visible
+           FROM links l
+           JOIN kg_nodes n ON n.id = l.owner_id
+          WHERE n.archived_at IS NULL AND n.type <> 'fact'
+          GROUP BY l.fact_id, n.id, n.type, n.label, n.sensitivity
+       ),
+       ranked AS (
+         SELECT o.*,
+                COUNT(*) FILTER (WHERE o.visible) OVER (PARTITION BY o.fact_id) AS visible_count,
+                COUNT(*) FILTER (WHERE NOT o.visible) OVER (PARTITION BY o.fact_id) AS withheld_count,
+                ROW_NUMBER() OVER (PARTITION BY o.fact_id, o.visible ORDER BY o.dir, o.label, o.id) AS rn
+           FROM owners o
+       )
+       SELECT fact_id, id, type, label, visible, visible_count, withheld_count
+         FROM ranked
+        WHERE (visible AND rn <= $3) OR (NOT visible AND rn = 1)
+        ORDER BY fact_id, dir, label, id`,
+      [factIds, allowedLevels ?? null, perFactLimit],
+    );
+
+    const byFact = new Map<string, FactOwnership>();
+    for (const row of result.rows) {
+      let entry = byFact.get(row.fact_id);
+      if (!entry) {
+        entry = {
+          owners: [],
+          visibleCount: Number(row.visible_count),
+          withheldCount: Number(row.withheld_count),
+        };
+        byFact.set(row.fact_id, entry);
+      }
+      if (row.visible) entry.owners.push({ id: row.id, type: row.type, label: row.label });
+    }
+    return byFact;
   }
 
   async withAdvisoryLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
@@ -1390,6 +1514,50 @@ class InMemoryBackend implements KnowledgeGraphBackend {
       if (props.key === undefined) return f.label === key;
       return props.key !== null && String(props.key) === key;
     });
+  }
+
+  async getFactOwners(
+    factIds: string[],
+    perFactLimit: number,
+    allowedLevels: readonly string[] | undefined,
+  ): Promise<Map<string, FactOwnership>> {
+    // Mirrors the Postgres query: live edges either way, live non-fact neighbours, an
+    // owner linked twice counted once, entity → fact owners first, then label, then id.
+    const wanted = new Set(factIds);
+    const found = new Map<string, Map<string, { node: KgNode; dir: number }>>();
+    for (const edge of this.edges.values()) {
+      if (this.archivedEdges.has(edge.id)) continue;
+      const pairs: Array<[string, string, number]> = [];
+      if (wanted.has(edge.targetNodeId)) pairs.push([edge.targetNodeId, edge.sourceNodeId, 0]);
+      if (wanted.has(edge.sourceNodeId)) pairs.push([edge.sourceNodeId, edge.targetNodeId, 1]);
+      for (const [factId, ownerId, dir] of pairs) {
+        if (this.archivedNodes.has(ownerId)) continue;
+        const node = this.nodes.get(ownerId);
+        if (!node || node.type === 'fact') continue;
+        let owners = found.get(factId);
+        if (!owners) {
+          owners = new Map();
+          found.set(factId, owners);
+        }
+        const prior = owners.get(ownerId);
+        if (!prior || dir < prior.dir) owners.set(ownerId, { node, dir });
+      }
+    }
+
+    const byFact = new Map<string, FactOwnership>();
+    for (const [factId, owners] of found) {
+      const all = [...owners.values()].sort((a, b) =>
+        a.dir - b.dir
+        || (a.node.label < b.node.label ? -1 : a.node.label > b.node.label ? 1 : 0)
+        || (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0));
+      const visible = all.filter((o) => allowedLevels === undefined || allowedLevels.includes(o.node.sensitivity));
+      byFact.set(factId, {
+        owners: visible.slice(0, perFactLimit).map(({ node }) => ({ id: node.id, type: node.type, label: node.label })),
+        visibleCount: visible.length,
+        withheldCount: all.length - visible.length,
+      });
+    }
+    return byFact;
   }
 
   async withAdvisoryLock<T>(_lockKey: string, fn: () => Promise<T>): Promise<T> {

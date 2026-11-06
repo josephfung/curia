@@ -276,6 +276,68 @@ describeIf('Knowledge Graph Integration', () => {
     expect(facts.filter((f) => f.id === doubled.id)).toHaveLength(1);
   });
 
+  it('getFactOwners names live non-fact owners across directions, bounded and ceiling-aware', async () => {
+    // Postgres side of memory-query's fact owners (#2502): both edge directions, the
+    // entity → fact direction first, one owner linked twice counted once, archived owners
+    // and edges and fact neighbours ignored, the per-fact bound, the sensitivity ceiling,
+    // and a fact with no owner absent from the map.
+    const stamp = Date.now();
+    const mk = (type: 'person' | 'organization' | 'fact', label: string, sensitivity: 'internal' | 'restricted' = 'internal') =>
+      store.createNode({ type, label: `${label} ${stamp}`, properties: {}, source: 'integration-test', sensitivity });
+    const link = (sourceNodeId: string, targetNodeId: string, type: 'relates_to' | 'mentioned_in' = 'relates_to') =>
+      store.createEdge({ sourceNodeId, targetNodeId, type, properties: {}, source: 'integration-test' });
+
+    const fact = await mk('fact', 'owned fact');
+    const orphan = await mk('fact', 'orphan fact');
+    const ownerB = await mk('person', 'B forward owner');
+    const ownerC = await mk('person', 'C forward owner');
+    const ownerA = await mk('organization', 'A reverse owner');
+    const archivedOwner = await mk('person', 'archived owner');
+    const viaArchivedEdge = await mk('person', 'owner via archived edge');
+    const factNeighbour = await mk('fact', 'neighbour fact');
+    const restricted = await mk('person', 'restricted owner', 'restricted');
+    createdKgNodeIds.push(
+      fact.id, orphan.id, ownerB.id, ownerC.id, ownerA.id,
+      archivedOwner.id, viaArchivedEdge.id, factNeighbour.id, restricted.id,
+    );
+
+    await link(ownerC.id, fact.id);
+    await link(ownerB.id, fact.id);
+    await link(ownerB.id, fact.id, 'mentioned_in');
+    await link(fact.id, ownerA.id, 'mentioned_in');
+    await link(archivedOwner.id, fact.id);
+    const archivedEdge = await link(viaArchivedEdge.id, fact.id);
+    await link(factNeighbour.id, fact.id);
+    await link(restricted.id, fact.id);
+    await store.archiveNode(archivedOwner.id);
+    await store.archiveEdge(archivedEdge.id);
+
+    const all = await store.getFactOwners([fact.id, orphan.id], { perFactLimit: 5 });
+    expect(all.has(orphan.id)).toBe(false);
+    const entry = all.get(fact.id)!;
+    // Forward owners by label, then the reverse-direction owner.
+    expect(entry.owners.map((o) => o.id)).toEqual([ownerB.id, ownerC.id, restricted.id, ownerA.id]);
+    expect(entry.owners[0]).toEqual({ id: ownerB.id, type: 'person', label: ownerB.label });
+    expect(entry.visibleCount).toBe(4);
+    expect(entry.withheldCount).toBe(0);
+
+    const bounded = (await store.getFactOwners([fact.id], { perFactLimit: 2 })).get(fact.id)!;
+    expect(bounded.owners.map((o) => o.id)).toEqual([ownerB.id, ownerC.id]);
+    expect(bounded.visibleCount).toBe(4);
+
+    const ceiling = (await store.getFactOwners([fact.id], { perFactLimit: 5, maxSensitivity: 'internal' })).get(fact.id)!;
+    expect(ceiling.owners.map((o) => o.id)).toEqual([ownerB.id, ownerC.id, ownerA.id]);
+    expect(ceiling.visibleCount).toBe(3);
+    expect(ceiling.withheldCount).toBe(1);
+
+    // Only a withheld owner: the fact still has an entry, with no names in it.
+    const lone = await mk('fact', 'lone fact');
+    createdKgNodeIds.push(lone.id);
+    await link(restricted.id, lone.id);
+    const withheldOnly = (await store.getFactOwners([lone.id], { perFactLimit: 5, maxSensitivity: 'public' })).get(lone.id)!;
+    expect(withheldOnly).toEqual({ owners: [], visibleCount: 0, withheldCount: 1 });
+  });
+
   it('getConnectedFactsByKey returns keyed and legacy label matches only', async () => {
     // Postgres side of the exact-key lookup (#2252): properties.key match (even with
     // a diverged label), legacy label match with no key, and nothing else.
