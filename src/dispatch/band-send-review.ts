@@ -583,6 +583,8 @@ export class BandSendReview {
     }
     // Decisions and the outreach id stay with code: the judge reads the decisions as sentences.
     const { decisions, linkedOutreachId, originUnresolved, ...evidence } = collected;
+    // Destructured only to keep it out of `evidence`; the failure path above is the one that carries it.
+    // The repo's no-unused-vars rule has no underscore exemption, so discard it explicitly.
     void originUnresolved;
     const principalDecisions = describeDecisions(decisions, nonPrincipalRecipients(input));
     // Newest first, so the note leads. The relay's principal note is not under the drafting
