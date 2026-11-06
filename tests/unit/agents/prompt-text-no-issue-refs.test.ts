@@ -117,9 +117,9 @@ describe('model-facing text carries no issue references', () => {
     // A private mkdtemp directory, not a predictable name in the shared temp dir.
     const dir = mkdtempSync(join(tmpdir(), 'prompt-text-probe-'));
     const file = join(dir, 'probe.ts');
-    writeFileSync(file, "export const P = `Start\nDiscuss #2428 here\n`;\nconst q = \"don't (#1234)\";\nlog.info('skip (#5555)');\n");
     const hits: string[] = [];
     try {
+      writeFileSync(file, "export const P = `Start\nDiscuss #2428 here\n`;\nconst q = \"don't (#1234)\";\nlog.info('skip (#5555)');\n");
       literalHits(file, hits);
     } finally {
       rmSync(dir, { recursive: true, force: true });
