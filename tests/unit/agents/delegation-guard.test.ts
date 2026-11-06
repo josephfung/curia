@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { addPrincipalNoteToReviewTask, ALREADY_DELIVERED_REASON, DelegationGuard, escalateDelegationFailure, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, parseDelegateInProgressData, parseDelegateSuccessAgent, recordUnresolvedDecline, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
+import { addPrincipalNoteToReviewTask, ALREADY_DELIVERED_REASON, DelegationGuard, escalateDelegationFailure, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, parseDelegateInProgressData, countDeclineNotes, parseDelegateSuccessAgent, recordUnresolvedDecline, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
 import { encodeResumeToken, MAX_RESUME_TASK_LENGTH } from '../../../src/agents/resume-token.js';
 import pino from 'pino';
 import { escalationRequester } from '../../../src/agents/task-escalation.js';
@@ -527,9 +527,9 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
     return { layer: { invoke } as unknown as ExecutionLayer, invoke };
   }
 
-  it('files a decline as owner curia, with the fallbacks and no re-scope-or-cancel choice', async () => {
+  it('files a decline follow-up as owner curia, with the fallbacks and no re-scope-or-cancel choice', async () => {
     const { layer, invoke } = execution();
-    const result = await escalateDelegationFailure(layer, undefined, {}, decline, logger);
+    const result = await escalateDelegationFailure(layer, undefined, {}, { ...decline, declineFollowUp: true }, logger);
     expect(result.escalated).toBe(true);
     const [tool, input] = invoke.mock.calls[0] as unknown as [string, Record<string, unknown>];
     expect(tool).toBe('task-create');
@@ -540,6 +540,16 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
     // The specialist's prose is for the agent that picks it up, not the digest line.
     expect(String(input['progress_note'])).not.toContain('I only save drafts');
     expect(String(input['description'])).toContain('I only save drafts');
+    expect(String(input['description'])).toContain('quoted as data');
+  });
+
+  it('keeps a decline on an outside sender\'s turn as a principal review task, without the prose', async () => {
+    const { layer, invoke } = execution();
+    await escalateDelegationFailure(layer, undefined, {}, decline, logger);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(input['owner']).toBe('ceo');
+    expect(input['tags']).not.toContain('specialist-decline');
+    expect(String(input['description'])).not.toContain('I only save drafts');
   });
 
   it('keeps other failures on the principal', async () => {
@@ -571,6 +581,27 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
     expect(String(input['progress_note'])).toContain('ceo-inbox declined delegated work in this run.');
     expect(String(input['progress_note'])).toContain('Nothing else was called after the decline.');
     expect(String(input['progress_note']).length).toBeLessThanOrEqual(2000);
+  });
+
+  it('flags a woken task that a decline already stopped once, so the heartbeat stops reviving it', async () => {
+    const { layer, invoke } = execution();
+    const ok = await recordUnresolvedDecline(layer, undefined, {}, decline, {
+      boundTaskId: 'task-9',
+      boundTaskTags: ['outreach'],
+      priorDeclineNotes: 1,
+    }, logger);
+    expect(ok).toBe(true);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(input['tags']).toEqual(['outreach', 'needs-disposition']);
+    expect(String(input['progress_note'])).toContain('stopped retrying');
+  });
+
+  it('counts only the runtime\'s decline notes', () => {
+    expect(countDeclineNotes({ notes: [
+      { note: 'ceo-inbox declined delegated work in this run. Nothing else was called after the decline.' },
+      { note: 'Checked the thread.' },
+    ] })).toBe(1);
+    expect(countDeclineNotes(undefined)).toBe(0);
   });
 
   it('reports a failed write as not recorded', async () => {

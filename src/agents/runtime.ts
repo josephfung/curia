@@ -103,6 +103,7 @@ import {
   delegationKey,
   escalateDelegationFailure,
   findAlreadyDeliveredKey,
+  countDeclineNotes,
   isSpecialistDecline,
   parseDelegateFailureData,
   parseDelegateInFlightData,
@@ -943,10 +944,13 @@ export class AgentRuntime {
     const recordFailedSkill = (name: string, error: string): void => {
       // Redact credential shapes first (shared secret patterns), then flatten
       // newlines and cap length for last_run_context / diagnostics (#1830).
-      const sanitized = sanitizeOutput(error)
-        .replace(/[\r\n]+/g, ' ')
-        .trim()
-        .slice(0, 500);
+      // Cut by code point: a split surrogate pair makes the jsonb write of
+      // last_run_context fail (decline prose is free model text, #2496).
+      const sanitized = Array.from(
+        sanitizeOutput(error)
+          .replace(/[\r\n]+/g, ' ')
+          .trim(),
+      ).slice(0, 500).join('');
       const already = failedSkills.some((f) => f.name === name);
       if (!already && failedSkills.length < MAX_DISTINCT_FAILED_SKILLS) {
         failedSkills.push({ name, error: sanitized });
@@ -1628,7 +1632,13 @@ export class AgentRuntime {
           entry.caller,
           entry.invokeOptions,
           { ...entry.decline, laterTools: skillsCalled.slice(entry.skillsCalledAt) },
-          { ...(boundTaskCtx && { boundTaskId: boundTaskCtx.taskId }) },
+          {
+            ...(boundTaskCtx && {
+              boundTaskId: boundTaskCtx.taskId,
+              ...(boundTaskCtx.tags && { boundTaskTags: boundTaskCtx.tags }),
+              priorDeclineNotes: countDeclineNotes(boundTaskCtx.progress),
+            }),
+          },
           logger,
         );
       }
@@ -2336,10 +2346,17 @@ export class AgentRuntime {
                 };
               } else {
                 // A specialist that declined earlier reaches here only through the retry an
-                // unblock opened (#2496). This call spends it, whatever it returns.
-                const spendsDeclineRetry = delegationGuard.hasDeclined(delegateAgent);
+                // unblock opened (#2496). The call spends it only when the specialist ran: a
+                // refused brief, an in-flight refusal, a queued follow-up or a pause did not.
+                const holdsDeclineRetry = delegationGuard.hasDeclined(delegateAgent);
                 result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
-                if (spendsDeclineRetry) delegationGuard.consumeDeclineRetry(delegateAgent);
+                if (holdsDeclineRetry && result.success) {
+                  const ranFailure = parseDelegateFailureData(result.data);
+                  const ran = parseDelegateSuccessAgent(result.data) !== null
+                    || (ranFailure !== null && ranFailure.blocked !== true
+                      && parseDelegateInFlightData(result.data) === null);
+                  if (ran) delegationGuard.consumeDeclineRetry(delegateAgent);
+                }
               }
             } else {
               result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
@@ -2682,6 +2699,9 @@ export class AgentRuntime {
                 } else if (delegateFailure) {
                   // A decline on an outside sender's turn still ends the turn with the
                   // narrated reply: the specialist's prose must not reach them (#1976).
+                  // Any other failure escalates on its own, so an earlier decline from the
+                  // same specialist is not filed a second time at turn end.
+                  if (!declined) turnDeclines.delete(delegateFailure.agent);
                   const dKey = delegationKey(delegateFailure.agent, delegateTask);
                   delegationGuard.recordFailure(dKey, delegateFailure);
                   if (delegationGuard.shouldEscalate(dKey)) {
@@ -3087,8 +3107,9 @@ export class AgentRuntime {
       : prepareAgentResponseContent(responseContent);
 
     // A decline still open is relayed only by a real reply that its reader sees (#2496).
-    // A scheduler, Bullpen or internal turn's reply is not read by the principal, and a
-    // delegated turn's goes back to the agent that asked, which handles the result.
+    // A scheduler, Bullpen or internal turn's reply is not read by the principal. A
+    // delegated turn's reply is read by the agent that asked, which handles the result,
+    // so it counts as relayed.
     await settleTurnDeclines(
       !isResponseError && !prepared.suppressDelivery && failureAudience.basis !== 'non_sender_channel',
     );

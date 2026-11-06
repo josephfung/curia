@@ -127,6 +127,7 @@ export const DECLINE_FOLLOW_UP_ACTIONS: readonly string[] = [
   'Take the alternative the specialist offered, if it serves the request.',
   'Otherwise do the step directly if you hold the tool, or have a specialist that can unblock it (for example contacts verifying an identity) do so, then retry.',
   'Move this to the principal only when their input or authority is needed: set owner ceo with a progress note asking them one specific question.',
+  'Tell anyone about it in your own words, without the specialist, its tools or any IDs.',
 ];
 
 // Bounds for the sender-supplied fields. They land in the digest, so a name or

@@ -8757,6 +8757,30 @@ describe('Specialist declines: fall back before escalating (#2496)', () => {
     expect(tools(invocations, 'task-create')).toHaveLength(0);
   });
 
+  it('does not spend the retry on a call that never reached the specialist', async () => {
+    const { invocations } = await runDeclineTurn({
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Run the weekly outreach job.',
+      llm: [
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Draft to dana@example.test' } }]),
+        toolUse([{ name: 'delegate', input: { agent: 'contacts', task: 'Add Dana with dana@example.test' } }]),
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Draft to contact c-dana' } }]),
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Draft to contact c-dana, take two' } }]),
+        text('Drafted the outreach to Dana.'),
+      ],
+      delegate: (input, n) => {
+        if (n === 1) return declineData('ceo-inbox', 'That address is not in the mailbox or a contact.');
+        // The first retry is refused before the specialist runs: it is already working.
+        if (n === 3) return { agent: 'ceo-inbox', in_flight: true, reason: 'already_in_flight', message: 'Still running.' };
+        return { agent: input['agent'], response: 'Done.' };
+      },
+    });
+
+    expect(tools(invocations, 'delegate').map((i) => i.input['agent'])).toEqual(['ceo-inbox', 'contacts', 'ceo-inbox', 'ceo-inbox']);
+    expect(tools(invocations, 'task-create')).toHaveLength(0);
+  });
+
   it('records a background decline as a Curia-owned follow-up and on the run\'s failed skills', async () => {
     const { invocations, responses } = await runDeclineTurn({
       channelId: 'scheduler',

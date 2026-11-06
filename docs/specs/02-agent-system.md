@@ -74,13 +74,17 @@ The routing decision a decline raises is Curia's, not the principal's.
   the budget), the decline is recorded: on a task wake as a progress note on the
   woken task, otherwise as a follow-up task owned by `curia`, tagged
   `specialist-decline`, which the backlog heartbeat wakes. Either record names
-  the tools the run called after the decline, so the work is not done twice. A
-  scheduled job also keeps the decline in `last_run_context.failedSkills`.
+  the tools the run called after the decline, so the work is not done twice, and
+  stores the specialist's reply sanitized, bounded and labelled as quoted data. A
+  second decline on the same woken task flags it `needs-disposition` (#1951)
+  instead of noting it again, so the heartbeat does not re-wake it every few
+  hours. A scheduled job also keeps the decline in `last_run_context.failedSkills`.
 - **Ownership.** `task-update` moves a `specialist-decline` task to owner `ceo`
   only with a progress note that asks the principal a question.
 - **An outside sender's turn** still ends at the decline with the narrated reply
   (`delegation-failure-reply.ts`), since the specialist's prose must not reach
-  them (#1976). Its follow-up task is owned by `curia` too.
+  them (#1976). Its review task stays with the principal, without the prose: a
+  refusal made on someone else's behalf keeps the principal's review.
 
 ### Late delegation delivery (#1799)
 
