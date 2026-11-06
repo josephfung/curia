@@ -165,6 +165,38 @@ describe('elevated gate under a live-turn grant (#2495)', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it('files nothing for a caller outside allowed_callers (bare refusal, nothing queued)', async () => {
+    const { registry, layer, execute, request } = setup();
+    registry.register(
+      makeManifest({ name: 'coordinator-only', allowed_callers: ['coordinator'] }),
+      { execute },
+    );
+    const result = await layer.invoke('coordinator-only', {}, undefined, {
+      taskEventId: 'task-c',
+      agentId: 'calendar',
+      liveTurnGrantId: lapsedLiveTurnGrantId(),
+      taskMetadata: principalMetadata,
+    });
+    expect(result.success).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('still files a confirmation for a caller that is in allowed_callers', async () => {
+    const { registry, layer, request, execute } = setup();
+    registry.register(
+      makeManifest({ name: 'coordinator-only', allowed_callers: ['coordinator'] }),
+      { execute },
+    );
+    await layer.invoke('coordinator-only', {}, undefined, {
+      taskEventId: 'task-d',
+      agentId: 'coordinator',
+      liveTurnGrantId: lapsedLiveTurnGrantId(),
+      taskMetadata: principalMetadata,
+    });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it('never files a confirmation for a tool that resolves approvals', async () => {
     const { registry, layer, request } = setup();
     registry.register(makeManifest({ name: 'approve-action' }), { execute: async () => ({ success: true, data: 'x' }) });

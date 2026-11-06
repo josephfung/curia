@@ -1989,6 +1989,9 @@ export class ExecutionLayer {
           && liveTurnGrantLapsed
           && isPrincipalOriginated(effectiveTaskMetadata)
           && !APPROVAL_RESOLUTION_TOOLS.has(toolName)
+          // The caller gate below runs after this branch and is skipped on an approved replay,
+          // so a disallowed caller must not get a request filed at all.
+          && (!manifest.allowed_callers?.length || manifest.allowed_callers.includes(options?.agentId ?? 'system'))
         ) {
           this.logger.info(
             { toolName, agentId: options?.agentId, taskEventId: options?.taskEventId },
