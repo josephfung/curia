@@ -154,6 +154,16 @@ describe('ExecutionLayer', () => {
         expect(execution.provenanceSourceText('web-browser', {}, { url: 'x' })).toBeNull();
       });
 
+      it('grounds an address on any domain from the page: there is no domain binding', () => {
+        registry.register(makeManifest({ name: 'web-browser', provenance_source: true }), noop);
+        const text = execution.provenanceSourceText('web-browser', { url: 'https://www.example.org/contact' }, {
+          url: 'https://www.example.org/contact',
+          content: page('Email someone@other.example or bookings.example@gmail.com'),
+        });
+        expect(text).toContain('someone@other.example');
+        expect(text).toContain('bookings.example@gmail.com');
+      });
+
       it('marks only web-fetch and web-browser as echo sources, and only when they are sources', () => {
         registry.register(makeManifest({ name: 'web-fetch', provenance_source: true }), noop);
         registry.register(makeManifest({ name: 'web-browser' }), noop);
@@ -173,6 +183,20 @@ describe('ExecutionLayer', () => {
         expect(text).toContain('one@typo.example');
         expect(text).toContain('two@typo.example');
         expect(execution.provenanceAgentInputText('reader', { query: 'three@typo.example' })).toBeNull();
+      });
+
+      it('also returns percent-decoded input and typed values joined across steps', () => {
+        registry.register(makeManifest({ name: 'web-browser', provenance_source: true }), noop);
+        const text = execution.provenanceAgentInputText('web-browser', {
+          actions: [
+            { action: 'navigate', url: 'https://search.example/?q=dana%40typo.example&r=lee%2540typo.example' },
+            { action: 'type', selector: 'Local part', text: 'sam' },
+            { action: 'select', selector: 'Domain', value: '@typo.example' },
+          ],
+        }) ?? '';
+        expect(text).toContain('dana@typo.example');
+        expect(text).toContain('lee@typo.example');
+        expect(text).toContain('sam@typo.example');
       });
     });
   });

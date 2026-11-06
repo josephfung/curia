@@ -1034,6 +1034,8 @@ const EXECUTION_LAYER_METHODS = [
   'getToolDefinitions',
   'resolveSkillActivationForAgent',
   'provenanceSourceText',
+  'provenanceAgentInputText',
+  'isAgentEchoSource',
 ] as const;
 
 /**

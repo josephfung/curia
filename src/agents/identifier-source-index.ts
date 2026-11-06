@@ -56,33 +56,37 @@ export class IdentifierSourceIndex {
   }
 
   /**
-   * Record the identifiers in a source-tool result. With `excludeAgentInput` (an
-   * echo-prone tool, #2498), an identifier the agent supplied to such a tool earlier in
-   * this conversation is left out: the result may only be repeating it.
+   * Record the identifiers in a source-tool result under `conversationKey`. For an
+   * echo-prone tool (#2498), `excludeAgentInputOf` names the scopes (the conversation, a
+   * browser session) whose recorded agent input is left out: the result may only be
+   * repeating it.
    */
-  record(conversationKey: string, text: string, options: { excludeAgentInput?: boolean } = {}): void {
+  record(conversationKey: string, text: string, options: { excludeAgentInputOf?: readonly string[] } = {}): void {
     const found = sourceKeysInText(text);
     if (found.size === 0) return;
 
     const now = this.now();
-    if (options.excludeAgentInput) {
-      const agentKeys = this.live(conversationKey, now)?.agentKeys;
+    for (const scope of options.excludeAgentInputOf ?? []) {
+      const agentKeys = this.live(scope, now)?.agentKeys;
       if (agentKeys) {
         for (const key of found) if (agentKeys.has(key)) found.delete(key);
       }
-      if (found.size === 0) return;
     }
+    if (found.size === 0) return;
     this.add(conversationKey, found, now, 'keys');
   }
 
   /**
-   * Record what the agent supplied to an echo-prone source tool, before the call runs
-   * (#2498). Later results of such tools in this conversation cannot verify these keys.
+   * Record what the agent supplied to an echo-prone source tool under `scopeKey` (a
+   * conversation, or a browser session's scope), before the call runs (#2498). Only email
+   * and phone keys are kept: those are what a web page can verify for a send, and opaque
+   * tokens (element refs, typed codes, passwords) would crowd them out of the cap and keep
+   * typed secrets in memory for no gain.
    */
-  recordAgentInput(conversationKey: string, text: string): void {
-    const found = sourceKeysInText(text);
+  recordAgentInput(scopeKey: string, text: string): void {
+    const found = new Set([...sourceKeysInText(text)].filter((key) => key.startsWith('email:') || key.startsWith('phone:')));
     if (found.size === 0) return;
-    this.add(conversationKey, found, this.now(), 'agentKeys');
+    this.add(scopeKey, found, this.now(), 'agentKeys');
   }
 
   /** The conversation's entry, when it has not expired. */

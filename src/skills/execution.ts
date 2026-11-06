@@ -32,9 +32,6 @@ import {
 import type { ChannelIdentity } from '../contacts/types.js';
 import { provenanceSourceText } from '../contacts/identifier-provenance.js';
 import { mainFrameProse } from './_shared/web-page-content.js';
-
-/** Source tools whose results can echo the agent's own input (#2498). See isAgentEchoSource. */
-const AGENT_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web-fetch', 'web-browser']);
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -55,6 +52,18 @@ import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import { UnknownEmailAccountError, type OutboundGateway } from './outbound-gateway.js';
+
+/** Source tools whose results can echo the agent's own input (#2498). See isAgentEchoSource. */
+const AGENT_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web-fetch', 'web-browser']);
+
+/**
+ * `%XX` escapes decoded byte by byte, and `+` read as a space. Lenient on purpose: a
+ * malformed escape is left as it is rather than failing (decodeURIComponent throws), and
+ * the result is only used to find identifiers, never shown or sent.
+ */
+function percentDecode(text: string): string {
+  return text.replace(/\+/g, ' ').replace(/%([0-9a-f]{2})/gi, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+}
 
 /**
  * Per-invoke wrapper so Gate C and the handler share one `getEmailMessage`
@@ -670,14 +679,33 @@ export class ExecutionLayer {
   }
 
   /**
-   * The text the agent supplied to an echo-prone source tool (every string in its input:
-   * URLs, typed text, selected values, selectors), to record before the call runs so its
-   * result, and any later echo-prone result in the conversation, cannot verify it. Null
-   * for any other tool.
+   * The text the agent supplied to an echo-prone source tool, to record before the call
+   * runs so its result, and any later echo-prone result in the conversation or browser
+   * session, cannot verify it. Null for any other tool. Over-collecting only refuses more,
+   * so it covers the forms a page can show back that the raw strings miss:
+   * - every string in the input (URLs, typed text, selected values, selectors);
+   * - each of them percent-decoded, twice (`sam%40x.com`, `sam%2540x.com`; `+` as a space);
+   * - typed and selected values (`text`, `value`) joined in order, for runs of up to three
+   *   (`sam` typed into one field and `@x.com` picked in the next show up as one address).
    */
   provenanceAgentInputText(toolName: string, input: Record<string, unknown>): string | null {
     if (!this.isAgentEchoSource(toolName)) return null;
-    return provenanceSourceText(input, []);
+    const raw = provenanceSourceText(input, []);
+    const decoded = percentDecode(percentDecode(raw));
+    const steps = Array.isArray(input['actions']) ? input['actions'] : [input];
+    const values: string[] = [];
+    for (const step of steps) {
+      if (step === null || typeof step !== 'object') continue;
+      for (const field of ['text', 'value']) {
+        const value = (step as Record<string, unknown>)[field];
+        if (typeof value === 'string' && value !== '') values.push(value);
+      }
+    }
+    const joined: string[] = [];
+    for (let i = 0; i < values.length; i++) {
+      for (let run = 2; run <= 3 && i + run <= values.length; run++) joined.push(values.slice(i, i + run).join(''));
+    }
+    return [raw, decoded, ...joined].join('\n');
   }
 
   /**

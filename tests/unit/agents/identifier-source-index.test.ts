@@ -57,7 +57,7 @@ describe('IdentifierSourceIndex', () => {
     it('leaves out keys the agent supplied when the result is from an echo-prone tool', () => {
       const index = new IdentifierSourceIndex();
       index.recordAgentInput('conv-a', 'https://search.example/?q=evnts@venue.example');
-      index.record('conv-a', 'Results for evnts@venue.example; write events@venue.example', { excludeAgentInput: true });
+      index.record('conv-a', 'Results for evnts@venue.example; write events@venue.example', { excludeAgentInputOf: ['conv-a'] });
       expect(index.has('conv-a', 'email:evnts@venue.example')).toBe(false);
       expect(index.has('conv-a', 'email:events@venue.example')).toBe(true);
     });
@@ -72,7 +72,7 @@ describe('IdentifierSourceIndex', () => {
 
     it('keeps a key sourced before the agent typed it', () => {
       const index = new IdentifierSourceIndex();
-      index.record('conv-a', 'events@venue.example', { excludeAgentInput: true });
+      index.record('conv-a', 'events@venue.example', { excludeAgentInputOf: ['conv-a'] });
       index.recordAgentInput('conv-a', 'events@venue.example');
       expect(index.has('conv-a', 'email:events@venue.example')).toBe(true);
     });
@@ -80,8 +80,24 @@ describe('IdentifierSourceIndex', () => {
     it('scopes agent input to its conversation', () => {
       const index = new IdentifierSourceIndex();
       index.recordAgentInput('conv-a', 'evnts@venue.example');
-      index.record('conv-b', 'evnts@venue.example', { excludeAgentInput: true });
+      index.record('conv-b', 'evnts@venue.example', { excludeAgentInputOf: ['conv-b'] });
       expect(index.has('conv-b', 'email:evnts@venue.example')).toBe(true);
+    });
+
+    it('excludes agent input from every scope named, such as a browser session', () => {
+      const index = new IdentifierSourceIndex();
+      index.recordAgentInput('browser-session:s1', 'jon@acme.example');
+      index.record('conv-b', 'Confirmation sent to jon@acme.example', { excludeAgentInputOf: ['conv-b', 'browser-session:s1'] });
+      expect(index.has('conv-b', 'email:jon@acme.example')).toBe(false);
+    });
+
+    it('keeps only email and phone keys from agent input', () => {
+      const index = new IdentifierSourceIndex();
+      index.recordAgentInput('conv-a', '[g5f0e1] code 482913 sam@venue.example +1 416 555 0100');
+      index.record('conv-a', 'U0123ABCD 482913 g5f0e1 sam@venue.example +1 416 555 0100', { excludeAgentInputOf: ['conv-a'] });
+      expect(index.has('conv-a', 'token:482913')).toBe(true);
+      expect(index.has('conv-a', 'email:sam@venue.example')).toBe(false);
+      expect(index.has('conv-a', 'phone:+14165550100')).toBe(false);
     });
   });
 });

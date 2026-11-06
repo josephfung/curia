@@ -122,6 +122,7 @@ import {
 } from './delegated-task-context.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { IdentifierSourceIndex, sharedIdentifierSourceIndex } from './identifier-source-index.js';
+import { recordAgentInputBeforeCall, recordSourceAfterCall, type ProvenanceRecording } from './provenance-recording.js';
 import { createIdentifierSources } from './identifier-sources.js';
 import { principalAgentLabel } from './agent-display-name.js';
 import {
@@ -2217,12 +2218,10 @@ export class AgentRuntime {
           // What the agent hands an echo-prone source tool (web-fetch, web-browser) is
           // recorded before the call, so a page repeating it cannot verify it (#2498).
           // Fail closed: if it could not be recorded, this call's result is not a source.
-          let agentInputUnrecorded = false;
+          let provenanceBefore: ProvenanceRecording | null = null;
           try {
-            const agentInputText = executionLayer.provenanceAgentInputText(toolCall.name, skillInput);
-            if (agentInputText) sourceIndex.recordAgentInput(sourceConversation, agentInputText);
+            provenanceBefore = recordAgentInputBeforeCall(executionLayer, sourceIndex, sourceConversation, toolCall.name, skillInput);
           } catch (err) {
-            agentInputUnrecorded = true;
             logger.warn({ err, agentId, toolName: toolCall.name }, 'identifier provenance: could not record agent input — result will not count as a source');
           }
 
@@ -2732,13 +2731,8 @@ export class AgentRuntime {
             // Best effort: a recording failure only means a later contact write is refused
             // and the agent asks again. It must not turn this successful call into an error.
             try {
-              const sourceText = agentInputUnrecorded
-                ? null
-                : executionLayer.provenanceSourceText(toolCall.name, skillInput, result.data);
-              if (sourceText) {
-                sourceIndex.record(sourceConversation, sourceText, {
-                  excludeAgentInput: executionLayer.isAgentEchoSource(toolCall.name),
-                });
+              if (provenanceBefore) {
+                recordSourceAfterCall(executionLayer, sourceIndex, sourceConversation, toolCall.name, skillInput, result.data, provenanceBefore);
               }
             } catch (err) {
               logger.warn({ err, agentId, toolName: toolCall.name }, 'identifier provenance: could not record a source-tool result');

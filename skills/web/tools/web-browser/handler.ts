@@ -66,12 +66,12 @@ const MAX_INTERACTABLE_REFS = 200;
 // long list — e.g. a survey's "Next" button — even when 40%+ of the page budget sat unused.
 const MIN_INTERACTABLE_CHARS = 6_000;
 
-// The header extractFrameContent prefixes its interactable list with. DUPLICATED from
-// dom-extract.ts on purpose: that function is serialized into the page and cannot
-// reference module scope, so the literal can't be shared as a const. If you change the
-// header in one place, change it in the other. getCleanedContent splits on it to budget
-// prose and refs separately.
-// Shared with the provenance reader (mainFrameProse, #2498): change the layout there.
+// REF_SECTION_SENTINEL, the header extractFrameContent prefixes its interactable list
+// with, comes from src/skills/_shared/web-page-content.ts with the rest of the page
+// layout, which the provenance reader (mainFrameProse, #2498) parses back. dom-extract.ts
+// keeps its own copy of the literal on purpose: that function is serialized into the page
+// and cannot reference module scope. Change both together. getCleanedContent splits on it
+// to budget prose and refs separately.
 
 // How long to wait for network activity to quiesce after a navigation. Heavy SPAs
 // (e.g. OpenTable's date picker) hydrate well after `domcontentloaded`, so we give

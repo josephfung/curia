@@ -1,0 +1,80 @@
+// provenance-recording.ts — what a tool call contributes to identifier provenance
+// (#2061, #2498, ADR-047). Shared by the agent runtime and the voice bridge, so both
+// record the same way.
+//
+// Before the call: what the agent hands an echo-prone source tool (web-fetch,
+// web-browser) is recorded as agent input, under the conversation and, for web-browser,
+// under the browser session it drives. After a successful call: the source text of the
+// result is recorded under the conversation, minus that agent input. A browser session
+// can be reattached from another conversation (keep_warm, a later scheduled run), so
+// its own scope carries what was typed into it across conversations.
+
+import type { ExecutionLayer } from '../skills/execution.js';
+import type { IdentifierSourceIndex } from './identifier-source-index.js';
+
+type ProvenanceExecution = Pick<ExecutionLayer, 'provenanceSourceText' | 'isAgentEchoSource' | 'provenanceAgentInputText'>;
+
+export interface ProvenanceRecording {
+  /** The agent input recorded before the call, or null when the tool takes none. */
+  agentInputText: string | null;
+}
+
+/** The scope key a browser session's agent input is recorded under. */
+export function browserSessionScope(sessionId: string): string {
+  return `browser-session:${sessionId}`;
+}
+
+function sessionIdOf(value: unknown): string | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const id = (value as Record<string, unknown>)['session_id'];
+  return typeof id === 'string' && id !== '' ? id : undefined;
+}
+
+/**
+ * Record the agent's input to an echo-prone source tool, before the call runs. Throws
+ * when it cannot be recorded; the caller must then not count the result as a source
+ * (fail closed).
+ */
+export function recordAgentInputBeforeCall(
+  execution: ProvenanceExecution,
+  index: IdentifierSourceIndex,
+  conversation: string,
+  toolName: string,
+  input: Record<string, unknown>,
+): ProvenanceRecording {
+  const agentInputText = execution.provenanceAgentInputText(toolName, input);
+  if (agentInputText) {
+    index.recordAgentInput(conversation, agentInputText);
+    const sessionId = sessionIdOf(input);
+    if (sessionId) index.recordAgentInput(browserSessionScope(sessionId), agentInputText);
+  }
+  return { agentInputText };
+}
+
+/**
+ * Record the source text of a successful result. For an echo-prone tool, agent input
+ * recorded under the conversation or the browser session is left out. A call that opened
+ * a new browser session learns its id only from the result: its own input is recorded
+ * under that session first, so later reattachments exclude it too.
+ */
+export function recordSourceAfterCall(
+  execution: ProvenanceExecution,
+  index: IdentifierSourceIndex,
+  conversation: string,
+  toolName: string,
+  input: Record<string, unknown>,
+  data: unknown,
+  before: ProvenanceRecording,
+): void {
+  const echo = execution.isAgentEchoSource(toolName);
+  const scopes = [conversation];
+  if (echo) {
+    const sessionId = sessionIdOf(input) ?? sessionIdOf(data);
+    if (sessionId) {
+      if (!sessionIdOf(input) && before.agentInputText) index.recordAgentInput(browserSessionScope(sessionId), before.agentInputText);
+      scopes.push(browserSessionScope(sessionId));
+    }
+  }
+  const sourceText = execution.provenanceSourceText(toolName, input, data);
+  if (sourceText) index.record(conversation, sourceText, echo ? { excludeAgentInputOf: scopes } : {});
+}

@@ -29,7 +29,7 @@ export function mainFrameProse(content: string): string {
   if (end !== -1) text = text.slice(0, end);
   // The element list's header, with or without the blank line before it (an empty
   // body leaves only one newline after trimming).
-  const refs = /(^|\n)--- Interactable elements ---\n/.exec(text);
+  const refs = new RegExp(`(^|\\n)${REF_SECTION_SENTINEL.trimStart()}`).exec(text);
   if (refs) text = text.slice(0, refs.index);
   // A frame marker at the start of a line, including the very first line: the top
   // frame's prose can be empty, and the builder trims the leading newline.
