@@ -461,6 +461,16 @@ describe('TaskUpdateHandler', () => {
       );
     });
 
+    it('keeps the decline marker when the agent replaces the tags without it', async () => {
+      const { result, repo } = await handOff({ tags: ['ceo-inbox'], progress_note: 'Should I send it?' });
+      expect(result.success).toBe(true);
+      expect(repo.updateTask).toHaveBeenCalledWith(
+        VALID_UUID,
+        expect.objectContaining({ tags: ['ceo-inbox', 'specialist-decline'] }),
+        'coordinator',
+      );
+    });
+
     it('leaves other tasks alone', async () => {
       const { result } = await handOff({}, makeTaskRow({ owner: 'curia', tags: ['delegation-failure'] }));
       expect(result.success).toBe(true);

@@ -645,11 +645,14 @@ export async function recordUnresolvedDecline(
   logger: Logger,
 ): Promise<boolean> {
   if (context.boundTaskId === undefined) {
+    // Bound the brief first so the post-decline tool history is never the part cut off.
+    const historyLine = laterToolsLine(decline);
+    const brief = boundUtf16(decline.task, Math.max(0, MAX_RECORDED_BRIEF - historyLine.length - 2));
     const escalation = await escalateDelegationFailure(
       executionLayer,
       caller,
       options,
-      { ...decline, task: `${decline.task}\n\n${laterToolsLine(decline)}`, declineFollowUp: true },
+      { ...decline, task: `${brief}\n\n${historyLine}`, declineFollowUp: true },
       logger,
     );
     return escalation.escalated;
@@ -673,7 +676,14 @@ export async function recordUnresolvedDecline(
       {
         task_id: context.boundTaskId,
         progress_note: note,
-        ...(repeated && { tags: [...new Set([...(context.boundTaskTags ?? []), NEEDS_DISPOSITION_TAG])] }),
+        // Tag the task so task-update's handoff rule sees the decline, keeping its other tags.
+        tags: [
+          ...new Set([
+            ...(context.boundTaskTags ?? []),
+            SPECIALIST_DECLINE_TAG,
+            ...(repeated ? [NEEDS_DISPOSITION_TAG] : []),
+          ]),
+        ],
       },
       caller,
       options,

@@ -592,8 +592,25 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
     }, logger);
     expect(ok).toBe(true);
     const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
-    expect(input['tags']).toEqual(['outreach', 'needs-disposition']);
+    expect(input['tags']).toEqual(['outreach', 'specialist-decline', 'needs-disposition']);
     expect(String(input['progress_note'])).toContain('stopped retrying');
+  });
+
+  it('tags a woken task with the decline marker on the first decline, keeping its tags', async () => {
+    const { layer, invoke } = execution();
+    await recordUnresolvedDecline(layer, undefined, {}, decline, {
+      boundTaskId: 'task-9',
+      boundTaskTags: ['outreach'],
+    }, logger);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(input['tags']).toEqual(['outreach', 'specialist-decline']);
+  });
+
+  it('keeps the post-decline tool history when the brief fills the recorded limit', async () => {
+    const { layer, invoke } = execution();
+    await recordUnresolvedDecline(layer, undefined, {}, { ...decline, task: 'x'.repeat(5000), laterTools: ['email-send'] }, {}, logger);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(String(input['description'])).toContain('After the decline the run called email-send:');
   });
 
   it('counts only the runtime\'s decline notes', () => {

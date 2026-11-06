@@ -2703,7 +2703,6 @@ export class AgentRuntime {
                   // narrated reply: the specialist's prose must not reach them (#1976).
                   // Any other failure escalates on its own, so an earlier decline from the
                   // same specialist is not filed a second time at turn end.
-                  if (!declined) turnDeclines.delete(delegateFailure.agent);
                   const dKey = delegationKey(delegateFailure.agent, delegateTask);
                   delegationGuard.recordFailure(dKey, delegateFailure);
                   if (delegationGuard.shouldEscalate(dKey)) {
@@ -2730,6 +2729,8 @@ export class AgentRuntime {
                     );
                     if (escalation.escalated) {
                       delegationGuard.markEscalated(dKey);
+                      // The replacement record covers the earlier decline.
+                      if (!declined) turnDeclines.delete(delegateFailure.agent);
                     }
                     pendingDelegationEscalation = {
                       ...delegateFailure,
@@ -3112,15 +3113,20 @@ export class AgentRuntime {
     // A scheduler, Bullpen or internal turn's reply is not read by the principal. A
     // delegated turn's reply is read by the agent that asked, which handles the result,
     // so it counts as relayed.
-    await settleTurnDeclines(
-      !isResponseError && !prepared.suppressDelivery && failureAudience.basis !== 'non_sender_channel',
-    );
+    const replyRelayed =
+      !isResponseError && !prepared.suppressDelivery && failureAudience.basis !== 'non_sender_channel';
 
-    // Persist the assistant response
-    if (memory) {
-      await memory.addTurn(conversationId, agentId, { role: 'assistant', content: prepared.content }, {
-        channelId: turnChannelId,
-      });
+    // Persist the assistant response. If persisting or publishing throws, only the
+    // generic failure message goes out, so the open decline is recorded then, not lost.
+    try {
+      if (memory) {
+        await memory.addTurn(conversationId, agentId, { role: 'assistant', content: prepared.content }, {
+          channelId: turnChannelId,
+        });
+      }
+    } catch (err) {
+      await settleTurnDeclines(false);
+      throw err;
     }
 
     const responseEvent = createAgentResponse({
@@ -3138,7 +3144,13 @@ export class AgentRuntime {
       ...failedSkillsPayload(),
       parentEventId: taskEvent.id,
     });
-    await this.publishAgentResponse(taskEvent, responseEvent);
+    try {
+      await this.publishAgentResponse(taskEvent, responseEvent);
+    } catch (err) {
+      await settleTurnDeclines(false);
+      throw err;
+    }
+    await settleTurnDeclines(replyRelayed);
 
     // Bullpen read-watermark (#1065, #1901). Stamp the woke thread always, ambient
     // threads that are not an open handoff, and ambient handoffs this turn actually

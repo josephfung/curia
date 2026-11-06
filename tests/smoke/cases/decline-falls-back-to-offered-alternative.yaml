@@ -40,8 +40,7 @@ tool_stubs:
     - match: { folder: DRAFTS }
       return: { folder: DRAFTS, count: 1, drafts: [{ id: draft-2496-1, threadId: 18f0d4a7c2e9b386, subject: "Re: Follow-up after the demo?", to: [{ name: Sarah Johnson, email: sarah.johnson@lumen.example }], cc: [], snippet: "Hi Sarah, yes, Thursday at 2pm works for me.", date: 1791879000 }] }
   send-draft:
-    - match: { draft_id: draft-2496-1 }
-      return: { sent: true, message_id: smoke-sent-2496, draft_id: draft-2496-1 }
+    # The draft lives in the principal's own mailbox; send-draft searches Curia's accounts.
     - match: {}
       error: Draft not found.
 
@@ -53,8 +52,9 @@ turns:
 expected_behaviors:
   - id: acts-on-the-fallback
     description: >
-      Either sends the saved draft itself (a send-draft call for draft-2496-1) or tells the
-      principal the reply to Sarah is saved in their Drafts, ready to send as written.
+      Tells the principal the reply to Sarah is saved in their Drafts, ready to send as
+      written. It may try send-draft, but that fails here, so it must then say the reply
+      is saved and not sent.
     weight: critical
   - id: no-routing-question
     description: >

@@ -165,13 +165,20 @@ export class TaskUpdateHandler implements ToolHandler {
         }
       }
 
+      // A tag replacement must not drop the decline marker the handoff rule keys on.
+      let tags = input.tags;
+      if (tags && !tags.includes(SPECIALIST_DECLINE_TAG)) {
+        const existing = await ctx.taskRepo.getTask(input.task_id);
+        if (existing?.tags.includes(SPECIALIST_DECLINE_TAG)) tags = [...tags, SPECIALIST_DECLINE_TAG];
+      }
+
       const updates: UpdateTaskParams = {
         status: input.status,
         priority: input.priority,
         owner: input.owner,
         dueAt,
         wakeAt,
-        tags: input.tags,
+        tags,
         progressNote,
       };
       if (blockerUpdate.present) updates.blockedByTaskId = blockerUpdate.id;
