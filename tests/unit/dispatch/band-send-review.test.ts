@@ -83,6 +83,23 @@ describe('BandSendReview', () => {
     }
   });
 
+  it('does not hold a principal-directed send on an unresolved origin: purpose is not asked there', async () => {
+    const { svc } = make([], { evidence: { unavailable: true, originUnresolved: true } });
+    const d = await svc.review({ ...base, principalDirected: true, score: 84 });
+    // The ordinary reviewer-failure path: fail open at 84.
+    expect(d.kind).toBe('send');
+  });
+
+  it('keeps the bounce ledger through an unresolved-origin hold, so the next draft is still a recheck', async () => {
+    const { svc, collect } = make([{ ...clean, unsupportedClaims: [CLAIM] }, { ok: false, failure: 'unreachable' }]);
+    expect((await svc.review(base)).kind).toBe('bounce');
+    collect.mockResolvedValueOnce({ unavailable: true, originUnresolved: true, toolResults: [], principalBlock: null });
+    expect((await svc.review(base)).kind).toBe('hold');
+    // The origin reads now, but the reviewer is down: a bounced draft holds rather than failing open.
+    const d = await svc.review(base);
+    expect(d.kind).toBe('hold');
+  });
+
   // Spot-check signals (#2159 Phase 3): the gateway records them with the pool row.
   it('reports speaks-as-principal as a signal on a send at 85', async () => {
     const { svc } = make([{ ...clean, speaksAsPrincipal: true }]);

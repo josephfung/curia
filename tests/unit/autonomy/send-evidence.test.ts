@@ -351,6 +351,13 @@ describe('SendEvidenceCollector', () => {
       expect(out.startsWith('HEAD')).toBe(true);
       expect(out.endsWith('TAIL')).toBe(true);
     });
+
+    it('holds the bound at the edges', () => {
+      expect(clipMiddle('x'.repeat(500), 500)).toBe('x'.repeat(500));
+      expect(clipMiddle('x'.repeat(501), 500).length).toBeLessThanOrEqual(500);
+      // A cap smaller than the marker keeps nothing of the text rather than slicing backwards.
+      expect(clipMiddle('x'.repeat(100), 10)).not.toContain('x');
+    });
   });
 
   describe('authority: who directed the work (#2312)', () => {

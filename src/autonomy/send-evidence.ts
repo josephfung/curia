@@ -116,13 +116,14 @@ function clip(text: string, max: number): string {
 
 /**
  * Trim from the middle, saying how much was left out, so text padded at the front or the back
- * cannot push the other end out of view (#2499). The result is at most `max` characters.
+ * cannot push the other end out of view (#2499). The result is at most `max` characters
+ * whenever `max` is longer than the marker (about 40); below that, only the marker is left.
  */
 export function clipMiddle(text: string, max: number): string {
   if (text.length <= max) return text;
   const marker = (n: number): string => `\n[… ${n} characters left out …]\n`;
   // The marker's length depends on the count; size it for the worst case.
-  const keep = max - marker(text.length).length;
+  const keep = Math.max(0, max - marker(text.length).length);
   const head = Math.ceil(keep / 2);
   const tail = keep - head;
   return `${text.slice(0, head)}${marker(text.length - keep)}${text.slice(text.length - tail)}`;
@@ -380,7 +381,9 @@ export class SendEvidenceCollector {
     if (typeof first !== 'string') return { ok: false, reason: 'root inbound has no content' };
     const texts = [first];
     if (root.conversationId !== null) {
-      // Newest first from the repo, so a cut keeps the latest push; read back oldest first.
+      // Turn lanes inject only the host turn's own sender (turn-lanes.ts), so these are that
+      // sender's words too. Newest first from the repo, so a cut keeps the latest push; read
+      // back oldest first.
       const ids = await this.deps.auditLogRepo.findInjectedInboundIds(root.conversationId, root.id, ORIGIN_FOLLOW_UPS_LIMIT);
       if (ids.length === ORIGIN_FOLLOW_UPS_LIMIT) {
         this.deps.logger.info({ rootTaskEventId: root.id, limit: ORIGIN_FOLLOW_UPS_LIMIT }, 'send-evidence: follow-up limit reached — older follow-ups left out');

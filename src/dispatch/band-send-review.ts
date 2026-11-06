@@ -209,12 +209,13 @@ export class BandSendReview {
     const hasToken = REDACTION_TOKEN.test(input.content) || (input.subject !== undefined && REDACTION_TOKEN.test(input.subject));
 
     const asked = await this.ask(input, questions, taskIds, input.content, askedItems);
-    if (asked.originUnresolved) {
+    if (asked.originUnresolved && questions.includes('purpose')) {
       // A delegated send whose chain cannot be followed (#2499): purpose would be judged on the
       // coordinator's brief alone. Not a reviewer outage, so it holds at every band rather than
-      // spending the fail-open allowance.
+      // spending the fail-open allowance. A principal-directed send is not asked purpose, so it
+      // takes the ordinary failure path below. The bounce ledger is kept, so a draft that
+      // bounced before is still a recheck when its origin can be read.
       this.deps.logger.warn({ conversationId: input.conversationId, channel: input.channel, score: input.score }, 'band review: delegated send\'s origin cannot be read — holding');
-      this.bounced.delete(key);
       return this.hold(BAND_RULES.unreviewed, ORIGIN_UNRESOLVED_REASON);
     }
     let verdict = asked.verdict;
