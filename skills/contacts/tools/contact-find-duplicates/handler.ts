@@ -42,6 +42,7 @@ import {
 } from '../../../../src/contacts/dedup-routing.js';
 import {
   OPEN_DEDUP_TASK_STATUSES,
+  TERMINAL_DEDUP_TASK_STATUSES,
   closeDedupTasksForMergedContact,
   reconcileOpenDedupTasks,
 } from '../../../../src/contacts/dedup-tasks.js';
@@ -66,8 +67,6 @@ const DEFAULT_MAX_AUTO_MERGES = 25;
 
 /** Who the contact.merged audit row names as the decider of an automatic merge. */
 const AUTO_MERGE_ACTOR = 'dedup-scan';
-
-const TERMINAL_STATUSES = ['done', 'cancelled'];
 
 /** Review tasks for one pair that closed within the cooldown. */
 interface ClosedReviews {
@@ -140,7 +139,7 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
       });
       const cooldownStart = new Date(Date.now() - DEFERRAL_COOLDOWN_DAYS * 24 * 60 * 60 * 1000);
       const closedTasks = await taskRepo.listTasks({
-        statuses: TERMINAL_STATUSES,
+        statuses: TERMINAL_DEDUP_TASK_STATUSES,
         tag: 'dedup',
         updatedAfter: cooldownStart,
         limit: TASK_FETCH_LIMIT,

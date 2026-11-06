@@ -22,7 +22,10 @@ import {
 /** Task statuses that count as an open review. */
 export const OPEN_DEDUP_TASK_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
 
-const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
+/** Task statuses that mean a review is finished. */
+export const TERMINAL_DEDUP_TASK_STATUSES = ['done', 'cancelled'];
+
+const TERMINAL_STATUSES = new Set(TERMINAL_DEDUP_TASK_STATUSES);
 
 /** The agent id recorded on task events this module writes. */
 const AGENT_ID = 'contacts';
@@ -125,7 +128,8 @@ export async function reconcileOpenDedupTasks(
       if (handBack) {
         notes.push('Handed back to Curia by the dedup scan: no person the principal has vouched '
           + 'for is on this pair and a merge changes no one\'s trust tier, so Curia decides it '
-          + '(merge or keep separate).');
+          + '(merge or keep separate). If the principal was already asked and answers, '
+          + 'their answer takes precedence.');
       }
       if (blockerClosed) {
         notes.push(`Unblocked by the dedup scan: task ${task.blockedByTaskId} has closed and this pair is still undecided.`);
