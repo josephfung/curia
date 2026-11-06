@@ -324,7 +324,7 @@ describeIf('Knowledge Graph Integration', () => {
     const entry = all.get(fact.id)!;
     // Forward owners by label, then the reverse-direction owner.
     expect(entry.owners.map((o) => o.id)).toEqual([ownerB.id, ownerC.id, lowerOwner.id, restricted.id, ownerA.id]);
-    expect(entry.owners[0]).toEqual({ id: ownerB.id, type: 'person', label: ownerB.label });
+    expect(entry.owners[0]).toEqual({ id: ownerB.id, type: 'person', label: ownerB.label, sensitivity: 'internal' });
     expect(entry.visibleCount).toBe(5);
     expect(entry.withheldCount).toBe(0);
 

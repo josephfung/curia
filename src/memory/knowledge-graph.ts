@@ -72,6 +72,9 @@ export interface FactOwner {
   id: string;
   type: NodeType;
   label: string;
+  /** The owner's own level, so a caller that names it can classify the result at the higher
+   *  of the two (#2502). */
+  sensitivity: Sensitivity;
 }
 
 /** The owners of one fact, as getFactOwners reports them. A fact with no live non-fact
@@ -357,6 +360,11 @@ export class KnowledgeGraphStore {
         throw new Error(`getFactOwners: unknown maxSensitivity value "${options.maxSensitivity}"`);
       }
       allowedLevels = SENSITIVITY_LEVELS.slice(0, maxRank + 1);
+    }
+    // Postgres rejects a NaN/Infinity LIMIT while the in-memory slice would not; reject here so
+    // both backends behave alike.
+    if (!Number.isFinite(options.perFactLimit)) {
+      throw new Error('getFactOwners: perFactLimit must be finite');
     }
     return this.backend.getFactOwners(factIds, Math.max(1, Math.floor(options.perFactLimit)), allowedLevels);
   }
@@ -848,6 +856,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
       id: string;
       type: NodeType;
       label: string;
+      sensitivity: Sensitivity;
       visible: boolean;
       visible_count: string;
       withheld_count: string;
@@ -862,7 +871,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
           WHERE source_node_id = ANY($1::uuid[]) AND archived_at IS NULL
        ),
        owners AS (
-         SELECT l.fact_id, n.id, n.type, n.label, MIN(l.dir) AS dir,
+         SELECT l.fact_id, n.id, n.type, n.label, n.sensitivity, MIN(l.dir) AS dir,
                 ($2::text[] IS NULL OR n.sensitivity = ANY($2::text[])) AS visible
            FROM links l
            JOIN kg_nodes n ON n.id = l.owner_id
@@ -876,7 +885,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
                 ROW_NUMBER() OVER (PARTITION BY o.fact_id, o.visible ORDER BY o.dir, o.label COLLATE "C", o.id) AS rn
            FROM owners o
        )
-       SELECT fact_id, id, type, label, visible, visible_count, withheld_count
+       SELECT fact_id, id, type, label, sensitivity, visible, visible_count, withheld_count
          FROM ranked
         WHERE (visible AND rn <= $3) OR (NOT visible AND rn = 1)
         ORDER BY fact_id, dir, label COLLATE "C", id`,
@@ -894,7 +903,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
         };
         byFact.set(row.fact_id, entry);
       }
-      if (row.visible) entry.owners.push({ id: row.id, type: row.type, label: row.label });
+      if (row.visible) entry.owners.push({ id: row.id, type: row.type, label: row.label, sensitivity: row.sensitivity });
     }
     return byFact;
   }
@@ -1557,7 +1566,7 @@ class InMemoryBackend implements KnowledgeGraphBackend {
         || (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0));
       const visible = all.filter((o) => allowedLevels === undefined || allowedLevels.includes(o.node.sensitivity));
       byFact.set(factId, {
-        owners: visible.slice(0, perFactLimit).map(({ node }) => ({ id: node.id, type: node.type, label: node.label })),
+        owners: visible.slice(0, perFactLimit).map(({ node }) => ({ id: node.id, type: node.type, label: node.label, sensitivity: node.sensitivity })),
         visibleCount: visible.length,
         withheldCount: all.length - visible.length,
       });

@@ -242,6 +242,22 @@ describe('MemoryQueryHandler', () => {
       expect(JSON.stringify(results)).not.toContain(secret.id);
     });
 
+    it('classifies a fact at the highest sensitivity among the owners it names', async () => {
+      const { mem, store } = makeMemory();
+      const { entity: secret } = await mem.createEntity({
+        type: 'person', label: 'Restricted Owner', properties: {}, source: 'test', sensitivity: 'restricted',
+      });
+      const fact = await store.createNode({ type: 'fact', label: 'internal fact', properties: {}, source: 'test', sensitivity: 'internal' });
+      await store.createEdge({ sourceNodeId: secret.id, targetNodeId: fact.id, type: 'relates_to', properties: {}, source: 'test' });
+
+      // No max_sensitivity: the owner is named, so the result cannot be reported as internal.
+      const results = await runQuery(mem, { query: 'internal fact', limit: 50 });
+
+      const row = results.find((r) => r.id === fact.id)!;
+      expect(row.owners).toEqual([{ id: secret.id, type: 'person', label: 'Restricted Owner' }]);
+      expect(row.sensitivity).toBe('restricted');
+    });
+
     it('lists at most five owners, entity-to-fact edges first, and counts the rest', async () => {
       const { mem, store } = makeMemory();
       const fact = await store.createNode({ type: 'fact', label: 'shared fact', properties: {}, source: 'test' });
@@ -263,6 +279,38 @@ describe('MemoryQueryHandler', () => {
       const owners = row.owners as Array<{ id: string; label: string }>;
       expect(owners.map((o) => o.label)).toEqual(['Owner 1', 'Owner 2', 'Owner 3', 'Owner 4', 'Owner 5']);
       expect(row.more_owners).toBe(2);
+    });
+
+    it('applies the owner limit to each fact, not to the batch', async () => {
+      const { mem, store } = makeMemory();
+      const facts = [];
+      for (const name of ['alpha', 'beta']) {
+        facts.push(await store.createNode({ type: 'fact', label: `batched ${name} fact`, properties: {}, source: 'test' }));
+      }
+      for (const [fi, fact] of facts.entries()) {
+        for (let i = 1; i <= 6; i++) {
+          const { entity } = await mem.createEntity({ type: 'person', label: `F${fi} Owner ${i}`, properties: {}, source: 'test' });
+          await store.createEdge({ sourceNodeId: entity.id, targetNodeId: fact.id, type: 'relates_to', properties: {}, source: 'test' });
+        }
+      }
+
+      const results = await runQuery(mem, { query: 'batched fact', type: 'fact', limit: 50 });
+
+      for (const [fi, fact] of facts.entries()) {
+        const row = results.find((r) => r.id === fact.id)!;
+        const owners = row.owners as Array<{ label: string }>;
+        expect(owners.map((o) => o.label)).toEqual([1, 2, 3, 4, 5].map((i) => `F${fi} Owner ${i}`));
+        expect(row.more_owners).toBe(1);
+        expect(row.unattached).toBeUndefined();
+      }
+    });
+
+    it('rejects a non-finite owner limit on either backend', async () => {
+      const { mem, store } = makeMemory();
+      const fact = await store.createNode({ type: 'fact', label: 'some fact', properties: {}, source: 'test' });
+      for (const perFactLimit of [NaN, Infinity]) {
+        await expect(mem.getFactOwners([fact.id], { perFactLimit })).rejects.toThrow(/finite/);
+      }
     });
 
     it('adds no owner fields to non-fact results', async () => {

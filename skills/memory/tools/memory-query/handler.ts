@@ -32,7 +32,7 @@ const SENSITIVITY_LEVELS_SET: ReadonlySet<string> = new Set(SENSITIVITY_LEVELS);
  * entity. The two counts appear only when non-zero.
  */
 function factOwnerFields(entry: FactOwnership | undefined): {
-  owners: FactOwner[];
+  owners: Array<Omit<FactOwner, 'sensitivity'>>;
   unattached?: true;
   more_owners?: number;
   owners_withheld?: number;
@@ -40,10 +40,21 @@ function factOwnerFields(entry: FactOwnership | undefined): {
   if (!entry) return { owners: [], unattached: true };
   const more = entry.visibleCount - entry.owners.length;
   return {
-    owners: entry.owners,
+    owners: entry.owners.map(({ id, type, label }) => ({ id, type, label })),
     ...(more > 0 ? { more_owners: more } : {}),
     ...(entry.withheldCount > 0 ? { owners_withheld: entry.withheldCount } : {}),
   };
+}
+
+/** The highest level among a fact and the owners a result names (#2502). */
+function effectiveSensitivity(own: Sensitivity, entry: FactOwnership | undefined): Sensitivity {
+  let level = own;
+  for (const owner of entry?.owners ?? []) {
+    if (SENSITIVITY_LEVELS.indexOf(owner.sensitivity) > SENSITIVITY_LEVELS.indexOf(level)) {
+      level = owner.sensitivity;
+    }
+  }
+  return level;
 }
 
 export class MemoryQueryHandler implements ToolHandler {
@@ -122,7 +133,9 @@ export class MemoryQueryHandler implements ToolHandler {
         // sensitivity tells the agent whether results can be shared or exported;
         // confidential/restricted facts must not be included in outbound messages
         // without explicit principal approval.
-        sensitivity: node.sensitivity,
+        // A fact that names an owner discloses that owner, so the result is classified at the
+        // higher of the fact's level and every owner named in it.
+        sensitivity: node.type === 'fact' ? effectiveSensitivity(node.sensitivity, ownership.get(node.id)) : node.sensitivity,
         last_confirmed_at: node.temporal.lastConfirmedAt.toISOString(),
         score,
       }));
