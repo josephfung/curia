@@ -110,4 +110,27 @@ describeIf('audit-log findToolResultsForTasks (#2159)', () => {
     expect(await repo.findInjectedInboundIds(conversationId, host, 1)).toEqual(['inbound-b']);
     expect(await repo.findInjectedInboundIds(conversationId, randomUUID(), 10)).toEqual([]);
   });
+
+  // #2499: one sender's earlier inbound messages on a conversation, for the band brief.
+  it('returns one sender\'s inbound messages on the conversation before a time, newest first', async () => {
+    const conversationId = `conv-${randomUUID()}`;
+    async function inbound(at: string, senderId: string, content: string, conv = conversationId, eventType = 'inbound.message'): Promise<void> {
+      await pool.query(
+        `INSERT INTO audit_log (timestamp, event_type, source_layer, source_id, payload, conversation_id)
+         VALUES ($1, $2, 'channel', 'email', $3::jsonb, $4)`,
+        [new Date(at), eventType, JSON.stringify({ senderId, content, conversationId: conv }), conv],
+      );
+    }
+    await inbound('2026-10-18T13:00:01.000Z', 'jordan@example.test', 'first');
+    await inbound('2026-10-18T13:00:02.000Z', 'someone@example.test', 'other sender');
+    await inbound('2026-10-18T13:00:03.000Z', 'jordan@example.test', 'second');
+    await inbound('2026-10-18T13:00:04.000Z', 'jordan@example.test', 'other conversation', `conv-${randomUUID()}`);
+    await inbound('2026-10-18T13:00:05.000Z', 'jordan@example.test', 'not an inbound', conversationId, 'agent.task');
+    await inbound('2026-10-18T13:00:06.000Z', 'jordan@example.test', 'at the cutoff');
+
+    const before = new Date('2026-10-18T13:00:06.000Z');
+    const rows = await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 10);
+    expect(rows.map((r) => r.payload['content'])).toEqual(['second', 'first']);
+    expect((await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 1)).map((r) => r.payload['content'])).toEqual(['second']);
+  });
 });

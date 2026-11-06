@@ -28,14 +28,20 @@
 //   4. In a `through_gateway` run (#2312), the THROUGH_GATEWAY_TOOLS skip 1 and 2: the send
 //      tools and the approval tools run their real handlers through production's gateway
 //      review, whose recording transports keep what passes. Every other run is unchanged.
+//   5. A `gated_tools` tool in a through-gateway run (#2499) is still answered by its stub,
+//      but through the review layer: its gates (A, B and band Gate C with the escalation
+//      judge and the turn's evidence) run first, and the stub stands in for the handler only
+//      if they let the call through. A held call raises production's approval. Every other
+//      stubbed tool is answered directly, as in 1.
 //
 // Stubs can be scoped to an agent (`agent: calendar`); an unscoped stub answers every
 // agent. Everything other than invoke() goes to the real layer, so tool definitions,
 // skill activation and the runtime's <task_error> formatting are production's.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolRegistry } from '../../src/skills/registry.js';
-import type { ToolResult } from '../../src/skills/types.js';
+import type { ToolContext, ToolResult } from '../../src/skills/types.js';
 import { newLiveSearchTally, recordLiveCall, type LiveSearchTally } from '../shared/live-search.js';
 import { applyCaseWrites, recordedDraftRead, recordedJobRead, CaseToolState } from '../shared/tool-state.js';
 import { emailAttachmentRefusal } from './attachment-guard.js';
@@ -171,7 +177,13 @@ export interface StubController {
    * another run's stubs. `realDelegation` runs `delegate` for real (#2027); `throughGateway`
    * runs the THROUGH_GATEWAY_TOOLS for real (#2312).
    */
-  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string, options?: { realDelegation?: boolean; throughGateway?: boolean; timezone?: string }): void;
+  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string, options?: { realDelegation?: boolean; throughGateway?: boolean; gatedTools?: readonly string[]; timezone?: string }): void;
+  /**
+   * The registry for the stack's review layer (`wrapReviewRegistry`, #2499): the same tools,
+   * except that a gated stub's call reaches its stub in place of the real handler, after the
+   * review layer's gates. Any other call reaches the real handler, as before.
+   */
+  reviewRegistry(registry: ToolRegistry): ToolRegistry;
   /** Close the conversation's run (and its specialists' conversations) and return its calls in order. */
   endRun(conversationId: string): StubbedCall[];
   /**
@@ -232,6 +244,8 @@ export function createStubController(
     realDelegation: boolean;
     /** THROUGH_GATEWAY_TOOLS run for real, past the stub table (#2312). */
     throughGateway: boolean;
+    /** Stubbed tools answered through the review layer's gates (#2499). */
+    gatedTools: ReadonlySet<string>;
     /** Specialist conversations this run started, each also a key of `delegated`. */
     specialists: Set<string>;
     /** Real delegate calls not yet returned, one entry (the target agent) per call. */
@@ -249,6 +263,13 @@ export function createStubController(
   const delegated = new Map<string, OpenRun>();
   let staleCalls = 0;
   const liveSearch = newLiveSearchTally();
+
+  /**
+   * The stub answer for the gated call in flight (#2499). Set around the review layer's invoke,
+   * so only the handler of that call, in that async context, is replaced: concurrent runs and
+   * the review layer's own sends are untouched.
+   */
+  const gatedAnswer = new AsyncLocalStorage<{ toolName: string; answer: () => Promise<ToolResult> }>();
 
   const runFor = (conversationId: string | undefined): OpenRun | undefined =>
     conversationId === undefined ? undefined : runs.get(conversationId) ?? delegated.get(conversationId);
@@ -268,6 +289,32 @@ export function createStubController(
     const named = `${SCENARIO_DELEGATE_PREFIX}${run.token}-${given}`;
     const owner = delegated.get(named);
     return owner === undefined || owner === run ? named : fresh();
+  };
+
+  /** A matched stub's answer, with the checks production's handler or gateway runs first. */
+  const stubAnswer = (
+    toolName: string,
+    input: Record<string, unknown>,
+    stub: NonNullable<ReturnType<typeof matchToolStub>>,
+    run: OpenRun | undefined,
+  ): ToolResult => {
+    if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
+    // A success stub stands in for the send, not for the attachment check the
+    // gateway runs first. A file_url outside the temp store is refused with
+    // production's error, and recorded as stubbed: the model can recover, and
+    // the miss is not a hole in the stub table (#2059).
+    const attachmentError = emailAttachmentRefusal(toolName, input);
+    if (attachmentError) return { success: false, error: skillError(attachmentError) };
+    // Likewise the recipient check: a typed address in a reference field is refused
+    // in production's words (#2149).
+    const recipientError = recipientReferenceRefusal(toolName, input);
+    if (recipientError) return { success: false, error: skillError(recipientError) };
+    // Clone so a handler-side mutation in one run cannot leak into the next.
+    const data = structuredClone(stub.return ?? null);
+    if (run && data !== null && typeof data === 'object' && !Array.isArray(data)) {
+      return { success: true, data: applyCaseWrites(toolName, data as Record<string, unknown>, input, run.tools) };
+    }
+    return { success: true, data };
   };
 
   const invokeStubbed = async (
@@ -320,25 +367,17 @@ export function createStubController(
         return { success: true, data: recorded };
       }
     }
+    if (stub && run?.gatedTools.has(toolName)) {
+      await note('stubbed');
+      if (!review) {
+        return { success: false, error: skillError(`Tool '${toolName}' is gated, but this stack has no review layer.`) };
+      }
+      const answer = (): Promise<ToolResult> => Promise.resolve(stubAnswer(toolName, input, stub, run));
+      return gatedAnswer.run({ toolName, answer }, () => review.invoke(...args));
+    }
     if (stub) {
       await note('stubbed');
-      if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
-      // A success stub stands in for the send, not for the attachment check the
-      // gateway runs first. A file_url outside the temp store is refused with
-      // production's error, and recorded as stubbed: the model can recover, and
-      // the miss is not a hole in the stub table (#2059).
-      const attachmentError = emailAttachmentRefusal(toolName, input);
-      if (attachmentError) return { success: false, error: skillError(attachmentError) };
-      // Likewise the recipient check: a typed address in a reference field is refused
-      // in production's words (#2149).
-      const recipientError = recipientReferenceRefusal(toolName, input);
-      if (recipientError) return { success: false, error: skillError(recipientError) };
-      // Clone so a handler-side mutation in one run cannot leak into the next.
-      const data = structuredClone(stub.return ?? null);
-      if (run && data !== null && typeof data === 'object' && !Array.isArray(data)) {
-        return { success: true, data: applyCaseWrites(toolName, data as Record<string, unknown>, input, run.tools) };
-      }
-      return { success: true, data };
+      return stubAnswer(toolName, input, stub, run);
     }
 
     if (stubs === null || mustStub(toolName, registry(), unavailable(), inert(), { realDelegation: run?.realDelegation, throughGateway: run?.throughGateway })) {
@@ -399,6 +438,31 @@ export function createStubController(
         },
       });
     },
+    reviewRegistry(base) {
+      return new Proxy(base, {
+        get(target, prop, receiver) {
+          if (prop === 'get') {
+            return (name: string) => {
+              const tool = target.get(name);
+              if (!tool) return tool;
+              return {
+                ...tool,
+                handler: {
+                  execute: (ctx: ToolContext): Promise<ToolResult> => {
+                    const gated = gatedAnswer.getStore();
+                    return gated?.toolName === name ? gated.answer() : tool.handler.execute(ctx);
+                  },
+                },
+              };
+            };
+          }
+          const value: unknown = Reflect.get(target, prop, receiver);
+          return typeof value === 'function'
+            ? (value as (...a: unknown[]) => unknown).bind(target)
+            : value;
+        },
+      });
+    },
     beginRun(next, conversationId, options = {}) {
       if (runs.has(conversationId)) throw new Error(`StubController.beginRun: conversation ${conversationId} already has an open run`);
       runs.set(conversationId, {
@@ -408,6 +472,7 @@ export function createStubController(
         tools: new CaseToolState(options.timezone),
         realDelegation: options.realDelegation === true,
         throughGateway: options.throughGateway === true,
+        gatedTools: new Set(options.gatedTools ?? []),
         specialists: new Set(),
         waiting: [],
         token: randomUUID().slice(0, 8),

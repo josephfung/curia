@@ -520,6 +520,13 @@ export interface ScenarioCase {
    * gateway check kinds read what they sent. Each send calls the review's judges.
    */
   throughGateway?: true;
+  /**
+   * Stubbed tools answered through the review layer's gates (#2499, `gated_tools`): Gate A, B
+   * and band Gate C (with the escalation judge and the turn's evidence) run first, and the stub
+   * stands in for the handler only when they let the call through; a held call raises
+   * production's approval. Needs `through_gateway`. Absent: stubs answer before any gate.
+   */
+  gatedTools?: string[];
   /** File the case came from, for messages. */
   sourceFile: string;
 }

@@ -593,6 +593,29 @@ export class AuditLogRepo {
   }
 
   /**
+   * One sender's latest inbound messages on a conversation before `before`, newest first
+   * (#2499). `senderId` is the channel's sender id as the inbound carried it (the dispatcher
+   * copies the same value onto the coordinator's agent.task). Rides idx_audit_conversation and
+   * is bounded by `limit`. Evidence for the band brief: a push in an earlier message is part of
+   * what the sender asked for, even when the message that started the work is bland.
+   */
+  async findRecentInboundsFromSender(conversationId: string, senderId: string, before: Date, limit: number): Promise<AuditLogRow[]> {
+    const clamped = Math.min(Math.max(limit, 1), MAX_LIMIT);
+    const result = await this.pool.query(
+      `SELECT ${SELECT_COLUMNS}
+       FROM audit_log
+       WHERE conversation_id = $1
+         AND event_type = 'inbound.message'
+         AND payload->>'senderId' = $2
+         AND timestamp < $3
+       ORDER BY timestamp DESC, id DESC
+       LIMIT $4`,
+      [conversationId, senderId, before, clamped],
+    );
+    return result.rows.map(mapRow);
+  }
+
+  /**
    * Requester-identity evidence rendered into one delegated specialist task (#1859).
    * `delegateEventId` is that task's `agent.task` id. Matches the structured
    * `target_id` and, if extraction failed, `payload.delegateEventId`.

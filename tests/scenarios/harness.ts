@@ -520,6 +520,8 @@ export async function createScenarioHarness(
     },
     // approve-action's "the sole pending approval" means the run's own.
     wrapActionLog: (repo) => scopedActionLog(repo, currentScope),
+    // A gated_tools stub is answered behind the review layer's gates (#2499).
+    wrapReviewRegistry: (registry) => controller.reviewRegistry(registry),
     ...(options.requireBandReviewJudge ? { requireBandReviewJudge: true } : {}),
     // The agents' layer keeps tier Gate C, as before #2312, except in a through-gateway run,
     // whose gates follow its fixture's gating as production's would.
@@ -1056,7 +1058,12 @@ export async function createScenarioHarness(
 
       scope.rootConversation = runConversationId;
       scope.throughGateway = scenario.throughGateway === true;
-      controller.beginRun(stubTable, runConversationId, { realDelegation, throughGateway: scenario.throughGateway === true, timezone: clock.timezone });
+      controller.beginRun(stubTable, runConversationId, {
+        realDelegation,
+        throughGateway: scenario.throughGateway === true,
+        ...(scenario.gatedTools ? { gatedTools: scenario.gatedTools } : {}),
+        timezone: clock.timezone,
+      });
       // Armed before the inbound is published. A fast first tool call must
       // already be held, or the follow-up lands after the model has moved on.
       if (inbound.followup?.after === 'first_tool_call') {

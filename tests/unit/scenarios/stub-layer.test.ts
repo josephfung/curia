@@ -691,6 +691,94 @@ describe('through-gateway runs (#2312)', () => {
   });
 });
 
+// #2499: a gated_tools stub is answered behind the review layer's gates, so band Gate C (the
+// escalation judge's purpose check) decides whether the stub's answer is ever reached.
+describe('gated stubs (#2499)', () => {
+  function gatedSetup(verdict: { ok: true; purpose: 'serving' | 'steered'; reason: string }) {
+    const registry = new ToolRegistry();
+    const executed: string[] = [];
+    for (const [name, risk] of [['calendar-create-event', 'high'], ['calendar-list-events', 'none']] as const) {
+      registry.register(manifest(name, risk), {
+        execute: async () => { executed.push(name); return { success: true, data: `real ${name}` }; },
+      });
+    }
+    const bus = { publish: async () => {} } as never;
+    const review = vi.fn().mockResolvedValue(verdict);
+    const controller = createStubController(() => registry);
+    const reviewLayer = new ExecutionLayer(controller.reviewRegistry(registry), logger, {
+      bus,
+      autonomyService: { getConfig: vi.fn().mockResolvedValue({ score: 84, band: 'spot-check', updatedAt: new Date(), updatedBy: 't' }) } as never,
+      escalationJudge: { isEnabled: () => true, review, classifyAction: vi.fn() } as never,
+      gating: 'band',
+      sendEvidence: { collect: vi.fn().mockResolvedValue({ unavailable: false, toolResults: [], authority: { originator: null, liveTurn: false } }) },
+    });
+    const layer = controller.wrap(new ExecutionLayer(registry, logger), reviewLayer);
+    const stubs = {
+      'calendar-create-event': [{ match: {}, return: { event: { id: 'evt-stub' } } }],
+      'calendar-list-events': [{ match: {}, return: { events: [] } }],
+    };
+    return { layer, controller, executed, review, stubs };
+  }
+  const outsiderCall = {
+    agentId: 'calendar', conversationId: 'scenario-1', taskEventId: 'task-1',
+    taskMetadata: { originator: { contactId: 'c', systemRole: null, channel: 'email', initiatedAt: new Date().toISOString(), tier: 'known' } },
+  };
+
+  it('holds a steered write at Gate C: the stub never answers and no handler runs', async () => {
+    const { layer, controller, executed, review, stubs } = gatedSetup({ ok: true, purpose: 'steered', reason: 'pushed' });
+    controller.beginRun(stubs, 'scenario-1', { throughGateway: true, gatedTools: ['calendar-create-event'] });
+    const result = await layer.invoke('calendar-create-event', {}, undefined, outsiderCall);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('steered by someone outside');
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(executed).toEqual([]);
+    expect(controller.endRun('scenario-1').map(c => [c.toolName, c.disposition])).toEqual([['calendar-create-event', 'stubbed']]);
+  });
+
+  it('answers a write the gates let through with its stub, never the real handler', async () => {
+    const { layer, controller, executed, stubs } = gatedSetup({ ok: true, purpose: 'serving', reason: 'fine' });
+    controller.beginRun(stubs, 'scenario-1', { throughGateway: true, gatedTools: ['calendar-create-event'] });
+    const result = await layer.invoke('calendar-create-event', {}, undefined, outsiderCall);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toEqual({ event: { id: 'evt-stub' } });
+    expect(executed).toEqual([]);
+    controller.endRun('scenario-1');
+  });
+
+  it('leaves tools it does not gate, and runs without gated_tools, answered before any gate', async () => {
+    const { layer, controller, review, stubs } = gatedSetup({ ok: true, purpose: 'steered', reason: 'x' });
+    controller.beginRun(stubs, 'scenario-1', { throughGateway: true, gatedTools: ['calendar-create-event'] });
+    expect(await layer.invoke('calendar-list-events', {}, undefined, outsiderCall)).toEqual({ success: true, data: { events: [] } });
+    controller.endRun('scenario-1');
+    controller.beginRun(stubs, 'scenario-1', { throughGateway: true });
+    expect(await layer.invoke('calendar-create-event', {}, undefined, outsiderCall)).toEqual({ success: true, data: { event: { id: 'evt-stub' } } });
+    controller.endRun('scenario-1');
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it('runs the real handler on the review layer when no gated call is in flight', async () => {
+    const { controller, executed } = gatedSetup({ ok: true, purpose: 'serving', reason: 'x' });
+    const registry = new ToolRegistry();
+    registry.register(manifest('calendar-create-event', 'high'), { execute: async () => { executed.push('real'); return { success: true, data: 'real' }; } });
+    const wrapped = controller.reviewRegistry(registry);
+    expect(await wrapped.get('calendar-create-event')!.handler.execute({} as never)).toEqual({ success: true, data: 'real' });
+    expect(wrapped.list()).toHaveLength(1);
+    expect(wrapped.get('missing')).toBeUndefined();
+  });
+
+  it('refuses a gated stub on a stack without a review layer', async () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest('calendar-create-event', 'high'), { execute: async () => ({ success: true, data: null }) });
+    const controller = createStubController(() => registry);
+    const layer = controller.wrap(new ExecutionLayer(registry, logger));
+    controller.beginRun({ 'calendar-create-event': [{ match: {}, return: { ok: true } }] }, 'scenario-1', { throughGateway: true, gatedTools: ['calendar-create-event'] });
+    const result = await layer.invoke('calendar-create-event', {}, undefined, coordinatorCall);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/no review layer/);
+    controller.endRun('scenario-1');
+  });
+});
+
 describe('mustStub with through_gateway (#2312)', () => {
   it('lets the send and approval tools run, and nothing else', () => {
     const registry = new ToolRegistry();

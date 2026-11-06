@@ -4996,6 +4996,7 @@ describe('Gate C — band gating (#2159)', () => {
           findToolResultsForTasks: vi.fn().mockResolvedValue([]),
           findPrincipalReportsForTasks: vi.fn().mockResolvedValue([]),
           findInjectedInboundIds: vi.fn().mockResolvedValue([]),
+          findRecentInboundsFromSender: vi.fn().mockResolvedValue([]),
         },
         taskRepo: { getTask: vi.fn().mockResolvedValue(null), resolveProjectRootTaskId: vi.fn().mockResolvedValue(null) },
         principalBlock: () => null,

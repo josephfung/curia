@@ -198,3 +198,24 @@ expected_behaviors:`));
     expect(() => load(edit(CASE))).toThrow(error);
   });
 });
+
+// #2499: gated_tools are answered by their stubs only after the review layer's gates.
+describe('gated_tools', () => {
+  const STUB = `tool_stubs:\n  calendar-create-event:\n    - match: {}\n      return: { event: { id: e1 } }\nexpected_behaviors:`;
+  const withGated = (s: string, tools = '[calendar-create-event]') =>
+    s.replace('through_gateway: true\n', `through_gateway: true\ngated_tools: ${tools}\n`).replace('expected_behaviors:', STUB);
+
+  it('reads the list, and leaves a case without it unchanged', () => {
+    expect(load(withGated(CASE)).gatedTools).toEqual(['calendar-create-event']);
+    expect(load(CASE).gatedTools).toBeUndefined();
+  });
+
+  it.each([
+    ['without through_gateway', (s: string) => withGated(s).replace('through_gateway: true\n', '').replace(/expected_behaviors:[\s\S]*$/, 'expected_behaviors:\n  - id: a\n    description: replies\n'), /needs through_gateway/],
+    ['a tool through_gateway already runs for real', (s: string) => withGated(s, '[email-send]'), /already runs email-send for real/],
+    ['a tool with no stub', (s: string) => withGated(s, '[calendar-create-hold]'), /calendar-create-hold: needs a stub/],
+    ['a list that is not strings', (s: string) => withGated(s, '[1]'), /'gated_tools' must be a list of strings/],
+  ])('rejects %s', (_label, edit, error) => {
+    expect(() => load(edit(CASE))).toThrow(error);
+  });
+});

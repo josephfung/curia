@@ -23,7 +23,10 @@
 // task (the turn that was not itself delegated). Beside the delegate's brief it passes what
 // started that task: for an inbound turn, the `inbound.message` the dispatcher parented it on
 // (the sender's text before any preamble) plus any follow-ups a turn lane drained into it; for
-// any other root, the root task's content. A chain that cannot be followed to its root, or an
+// any other root, the root task's content. With either, up to five earlier inbound messages
+// from the same sender on that conversation, newest first, so a push made in an earlier email
+// still reaches the judge when the message that started the work is bland. A chain that
+// cannot be followed to its root, or an
 // inbound that cannot be read, makes the evidence unavailable and flags `originUnresolved`:
 // the purpose check would otherwise judge the brief.
 //
@@ -56,6 +59,15 @@ export const EVIDENCE_TOTAL_MAX_CHARS = 12_000;
  * tool results get the rest.
  */
 export const EVIDENCE_ORIGIN_MAX_CHARS = 4_000;
+/**
+ * Earlier inbound messages from the root's sender on its conversation (#2499): a push in an
+ * earlier email, with a bland message that started the work. Newest first; each trimmed from
+ * the middle, all inside EVIDENCE_HISTORY_MAX_CHARS, behind the origin and ahead of the tool
+ * results in the budget.
+ */
+export const SENDER_HISTORY_LIMIT = 5;
+export const EVIDENCE_HISTORY_ITEM_MAX_CHARS = 1_200;
+export const EVIDENCE_HISTORY_MAX_CHARS = 3_000;
 /** Follow-ups a turn lane drained into the root turn, newest kept (#2499). */
 export const ORIGIN_FOLLOW_UPS_LIMIT = 5;
 /** Between the root inbound and each follow-up in the origin text. */
@@ -217,12 +229,12 @@ type DelegationRoot =
 
 /** What started the chain, as the judge sees it, or why it could not be read. */
 type OriginRead =
-  | { ok: true; content: string; kind: 'inbound' | 'task' }
+  | { ok: true; content: string; kind: 'inbound' | 'task'; at: string; history: Array<{ at: string; text: string }> }
   | { ok: false; reason: string };
 
 export class SendEvidenceCollector {
   constructor(private readonly deps: {
-    auditLogRepo: Pick<AuditLogRepo, 'findById' | 'findToolResultsForTasks' | 'findPrincipalReportsForTasks' | 'findInjectedInboundIds'>;
+    auditLogRepo: Pick<AuditLogRepo, 'findById' | 'findToolResultsForTasks' | 'findPrincipalReportsForTasks' | 'findInjectedInboundIds' | 'findRecentInboundsFromSender'>;
     /** Reads the bound task and its project root for authority (#2312). */
     taskRepo: Pick<TaskRepo, 'getTask' | 'resolveProjectRootTaskId'>;
     /** Reads a link's outreach row: its counterparties, and a task-less link's originator (#2312). Absent: a link has neither. */
@@ -276,8 +288,10 @@ export class SendEvidenceCollector {
         return { unavailable: true, originUnresolved: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
       }
       const originContent = origin?.content;
-      // The origin is kept first; the tool results share what is left of the budget.
-      const resultsBudget = EVIDENCE_TOTAL_MAX_CHARS - (originContent?.length ?? 0);
+      const historyChars = origin?.history.reduce((n, h) => n + h.text.length, 0) ?? 0;
+      // The origin is kept first, then the sender's earlier messages; the tool results share
+      // what is left of the budget.
+      const resultsBudget = EVIDENCE_TOTAL_MAX_CHARS - (originContent?.length ?? 0) - historyChars;
 
       const results = await this.deps.auditLogRepo.findToolResultsForTasks(taskEventIds, RESULTS_LIMIT);
       if (results.length === RESULTS_LIMIT) {
@@ -319,7 +333,8 @@ export class SendEvidenceCollector {
         ...(link !== null ? { linkedOutreachId: link.outreachId } : {}),
         ...(decisions ? { decisions } : {}),
         ...(reportsToPrincipal.length > 0 ? { reportsToPrincipal } : {}),
-        ...(origin ? { originContent: origin.content, originKind: origin.kind } : {}),
+        ...(origin ? { originContent: origin.content, originKind: origin.kind, originAt: origin.at } : {}),
+        ...(origin && origin.history.length > 0 ? { senderHistory: origin.history } : {}),
         ...(typeof content === 'string' ? { taskContent: clip(redactSecrets(content), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         ...(progress !== undefined ? { taskProgress: clip(redactSecrets(JSON.stringify(progress)), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         toolResults,
@@ -367,19 +382,27 @@ export class SendEvidenceCollector {
    * the dispatcher published) that is the sender's text as received, before the dispatcher's
    * preambles, then the follow-ups a turn lane drained into the turn, oldest first. Any other
    * root (a scheduled job, a wake, a parent no longer in audit_log) gives its task content,
-   * labelled as such. Redacted, then trimmed from the middle. A root with no content, or a
-   * drained follow-up whose inbound cannot be read, is a failure.
+   * labelled as such. Redacted, then trimmed from the middle. Either way, the sender's earlier
+   * messages on the conversation come with it (readSenderHistory). A root with no content, or
+   * a drained follow-up whose inbound cannot be read, is a failure.
    */
   private async readOrigin(root: AuditLogRow): Promise<OriginRead> {
     const parent = root.parentEventId ? await this.deps.auditLogRepo.findById(root.parentEventId) : null;
     if (parent === null || parent.eventType !== 'inbound.message') {
       const content = root.payload['content'];
       if (typeof content !== 'string') return { ok: false, reason: 'root task has no content' };
-      return { ok: true, kind: 'task', content: clipMiddle(redactSecrets(content), EVIDENCE_ORIGIN_MAX_CHARS) };
+      // A wake or other system-started root (late delegation keeps the origin's conversation
+      // and sender): the sender's recent messages there, when the task names a sender.
+      const history = await this.readSenderHistory(root.conversationId, root.payload['senderId'], root.timestamp, new Set());
+      return {
+        ok: true, kind: 'task', at: root.timestamp.toISOString(), history,
+        content: clipMiddle(redactSecrets(content), EVIDENCE_ORIGIN_MAX_CHARS),
+      };
     }
     const first = parent.payload['content'];
     if (typeof first !== 'string') return { ok: false, reason: 'root inbound has no content' };
     const texts = [first];
+    const used = new Set<string>([parent.id]);
     if (root.conversationId !== null) {
       // Turn lanes inject only the host turn's own sender (turn-lanes.ts), so these are that
       // sender's words too. Newest first from the repo, so a cut keeps the latest push; read
@@ -393,9 +416,41 @@ export class SendEvidenceCollector {
         const text = row?.eventType === 'inbound.message' ? row.payload['content'] : undefined;
         if (typeof text !== 'string') return { ok: false, reason: 'a follow-up drained into the root turn cannot be read' };
         texts.push(text);
+        used.add(id);
       }
     }
-    return { ok: true, kind: 'inbound', content: clipMiddle(redactSecrets(texts.join(FOLLOW_UP_SEPARATOR)), EVIDENCE_ORIGIN_MAX_CHARS) };
+    const history = await this.readSenderHistory(parent.conversationId ?? root.conversationId, parent.payload['senderId'], parent.timestamp, used);
+    return {
+      ok: true, kind: 'inbound', at: parent.timestamp.toISOString(), history,
+      content: clipMiddle(redactSecrets(texts.join(FOLLOW_UP_SEPARATOR)), EVIDENCE_ORIGIN_MAX_CHARS),
+    };
+  }
+
+  /**
+   * The sender's inbound messages on the conversation before `before`, newest first, each
+   * redacted and trimmed from the middle, until EVIDENCE_HISTORY_MAX_CHARS is spent (the newest
+   * are kept). Supplementary: no conversation or sender gives none, and a row without text is
+   * skipped. A failed read throws to collect()'s catch like any other.
+   */
+  private async readSenderHistory(
+    conversationId: string | null,
+    senderId: unknown,
+    before: Date,
+    skip: ReadonlySet<string>,
+  ): Promise<Array<{ at: string; text: string }>> {
+    if (conversationId === null || typeof senderId !== 'string' || senderId === '') return [];
+    const rows = await this.deps.auditLogRepo.findRecentInboundsFromSender(conversationId, senderId, before, SENDER_HISTORY_LIMIT);
+    const out: Array<{ at: string; text: string }> = [];
+    let total = 0;
+    for (const row of rows) {
+      const content = row.payload['content'];
+      if (skip.has(row.id) || typeof content !== 'string') continue;
+      const text = clipMiddle(redactSecrets(content), EVIDENCE_HISTORY_ITEM_MAX_CHARS);
+      if (total + text.length > EVIDENCE_HISTORY_MAX_CHARS) break;
+      total += text.length;
+      out.push({ at: row.timestamp.toISOString(), text });
+    }
+    return out;
   }
 
   /**
