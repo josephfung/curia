@@ -789,7 +789,7 @@ export class Dispatcher {
                   counted.confidence >= JUDGMENT_ELEVATION_THRESHOLD
                 ) {
                   const { confidence, prior } = counted;
-                  if (prior === null || !hasEarlierDayHistory(prior, new Date())) {
+                  if (prior === null || !(prior.createdAt instanceof Date) || !hasEarlierDayHistory(prior, new Date())) {
                     this.logger.info(
                       { contactId: resolvedContactId, confidence, priorInboundCount: prior?.inboundMessageCount ?? null },
                       'Judgment elevation withheld — sender has no earlier message or is on record under a day (#2500)',

@@ -2322,14 +2322,14 @@ describe('Dispatcher — first-time email sender stays unknown (#2500)', () => {
 
   it('elevates by judgment once the sender has written on an earlier day', async () => {
     const { bus, contactService, contactId } = await buildStack({ createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) });
-    // The message that created the contact two days ago (as Path 3 would have recorded it then).
+    // The sender wrote when the contact was created and again two minutes ago.
     await contactService.updateScoringFields(contactId, {
-      inboundMessageCountDelta: 1,
+      inboundMessageCountDelta: 2,
       contactConfidence: 0.15,
-      lastSeenAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      lastSeenAt: new Date(Date.now() - 2 * 60 * 1000),
     });
 
-    // Two messages minutes apart today: the second's previous message is recent, and it still elevates.
+    // The previous message is recent, but the contact is old enough to elevate.
     await sendFromStranger(bus, 'Subject: Following up\n\nAny news?');
 
     await vi.waitFor(async () => expect((await contactService.getContact(contactId))!.tier).toBe('known'), { timeout: 200 });
