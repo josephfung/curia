@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
-import { runner } from 'node-pg-migrate';
+import { resolveMigrationDirs, runMigrations } from './db/run-migrations.js';
 import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig, resolveRelayBudgetConfig, resolveTurnInjectionConfig, resolveOutboundJudgeConfig, resolveOutboundRedactionConfig, OutboundConfigError, type OutboundJudgeSettings, type OutboundRedactionSettings } from './config.js';
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
@@ -387,10 +387,11 @@ async function main(): Promise<void> {
   const autonomyGating = resolveAutonomyGating(yamlConfig.autonomy);
   const autonomyService = new AutonomyService(pool, logger, { gating: autonomyGating });
 
-  // Run pending migrations so the schema is always current when the process starts.
-  // Uses node-pg-migrate's programmatic runner with the same DATABASE_URL.
-  // This is safe for single-process deployments; node-pg-migrate acquires an
-  // advisory lock to prevent concurrent migration runs.
+  // Run pending migrations so the schema is always current when the process starts:
+  // upstream (src/db/migrations → pgmigrations), then a fork's local track if it has one
+  // (src/db/migrations-local → pgmigrations_local), via the helper every migrating path
+  // shares (#2465, ADR-061). node-pg-migrate acquires an advisory lock to prevent
+  // concurrent migration runs.
   //
   // Migrations are mostly plain .sql; rare .js wrappers (e.g. 081) exist when
   // pgm.noTransaction() is required (CREATE INDEX CONCURRENTLY). The runner
@@ -398,16 +399,24 @@ async function main(): Promise<void> {
   try {
     // Resolve from the project root (one level up from src/ or dist/) so the
     // path works both in dev (tsx src/index.ts) and production (tsx dist/index.js).
-    const migrationsDir = path.resolve(import.meta.dirname, '..', 'src', 'db', 'migrations');
-    const applied = await runner({
+    const result = await runMigrations({
       databaseUrl: config.databaseUrl,
-      dir: migrationsDir,
-      migrationsTable: 'pgmigrations',
-      direction: 'up',
+      dirs: resolveMigrationDirs(path.resolve(import.meta.dirname, '..')),
       log: (msg: string) => logger.debug({ migration: true }, msg),
     });
+    // A fork should see which directory its track came from on every boot; upstream installs
+    // without one get the line at debug only.
+    if (result.localTrackInUse) {
+      logger.info({ localDir: result.localDir, localMigrationFiles: result.localFileCount }, 'Local migration track in use');
+    } else {
+      logger.debug({ localDir: result.localDir }, 'No local migration track');
+    }
+    if (result.moved.length > 0) {
+      logger.info({ migrations: result.moved }, 'Moved fork migrations from pgmigrations to pgmigrations_local');
+    }
+    const applied = [...result.upstream, ...result.local];
     if (applied.length > 0) {
-      logger.info({ count: applied.length, migrations: applied.map(m => m.name) }, 'Database migrations applied');
+      logger.info({ count: applied.length, migrations: result.upstream, localMigrations: result.local }, 'Database migrations applied');
     } else {
       logger.debug('Database schema up to date');
     }

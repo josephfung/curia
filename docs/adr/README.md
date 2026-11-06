@@ -81,6 +81,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [057](057-two-http-chat-surfaces.md) | Retire bearer `/api/messages` and `/api/messages/stream`; console chat on `/api/chat` is the only message ingress. The HTTP adapter, `API_TOKEN`, and catalog entry stay (#999) | Accepted |
 | [058](058-time-saved-human-time-default.md) | Time saved estimates a person's time; named tools keep their anchors, and every undescribed call shares one default derived from a 60-day census (#2349) | Accepted |
 | [059](059-learned-activity-describers.md) | Tools with no describer get one learned per agent by a fast-tier model and stored in `activity_describers`; display only, never autonomy (#2455) | Accepted |
+| [061](061-two-track-migrations.md) | Forks' migrations run on a separate local track (`pgmigrations_local`); upstream DDL from 118 on is guarded and shape-checked (#2465) | Accepted |
 
 ## Adding new ADRs
 

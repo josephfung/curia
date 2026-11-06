@@ -32,5 +32,5 @@ CodeRabbit raised repeatedly on curia from August to November 2026 (644 findings
 - **Own your rows:** integration tests clean up and count only rows they created; never assert on table-wide counts. *(test isolation)*
 - **Scenario checks:** each critical check must fail a wrong run and pass a correct one; bind it to the specific tool call or task. *(scenario / smoke precision)*
 - **Docs follow code:** re-read every spec, ADR, `docs/dev` page and code comment that describes the behavior you changed. *(doc drift)*
-- **Migrations:** never edit an applied migration (add a new one); schema-qualify; make downgrades preserve pre-existing rows. *(migration safety)*
+- **Migrations:** never edit an applied migration (add a new one); schema-qualify; make downgrades preserve pre-existing rows; from 118 on, guard every create and shape-check every added column or constraint (ADR-061). *(migration safety)*
 - **Shell:** quote and default variables deliberately (`-` vs `:-`), and treat a failed probe as "unknown", not "absent". *(shell robustness)*

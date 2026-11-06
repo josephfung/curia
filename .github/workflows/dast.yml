@@ -86,7 +86,7 @@ jobs:
         run: echo "SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
 
       - name: Run database migrations
-        run: pnpm tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql
+        run: pnpm tsx scripts/migrate.ts
 
       # Curia resolves its required secrets (api_token, anthropic_api_key,
       # web_app_bootstrap_secret) from the encrypted vault, NOT from env — there is no

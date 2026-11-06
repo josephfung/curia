@@ -113,6 +113,7 @@ Step-by-step guides for common extension tasks — more detail than the quick re
 - [**Adding a Skill**](docs/dev/adding-a-tool.md) — manifest fields, `action_risk` and the autonomy gate, handler interface, secrets, testing checklist
 - [**Smoke Tests**](docs/dev/smoke-tests.md) - how our LLM-based testing works, and how to add more tests
 - [**Setup Wizard Walkthrough**](docs/dev/setup-wizard-e2e.md) - browser run of a fresh install through `/setup`; run it when you change the wizard
+- [**Migrations in a Fork**](docs/dev/fork-migrations.md) - the local migration track, and moving a fork's applied migrations onto it. Upstream migrations from 118 on must be guarded and shape-checked ([ADR-061](docs/adr/061-two-track-migrations.md))
 
 ## Adding a New Channel Adapter
 

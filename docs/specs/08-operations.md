@@ -430,6 +430,13 @@ with every schema change (recent examples: `048_add_contact_canonical_attributes
 
 Migrations run automatically on startup (before the bus starts accepting events). Failed migrations prevent startup with a clear error.
 
+There are two tracks ([ADR-061](../adr/061-two-track-migrations.md)): upstream
+(`src/db/migrations/` → `pgmigrations`) and, for forks, local (`src/db/migrations-local/` or
+`CURIA_LOCAL_MIGRATIONS_DIR` → `pgmigrations_local`), run in that order by
+`src/db/run-migrations.ts`. From migration 118 on, upstream DDL is guarded and shape-checked
+so it is safe on a fork that already has the object. Forks: see
+[docs/dev/fork-migrations.md](../dev/fork-migrations.md).
+
 ---
 
 ## Project Structure
