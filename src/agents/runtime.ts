@@ -774,7 +774,9 @@ export class AgentRuntime {
     if (boundTaskCtx && taskEvent.payload.channelId === 'scheduler' && this.config.taskRepo) {
       const fresh = await this.config.taskRepo.getTask(boundTaskCtx.taskId);
       if (fresh) {
-        boundTaskCtx = { ...boundTaskCtx, progress: fresh.progress };
+        // Tags too: the decline flag rewrites the whole tag list, so a wake whose context
+        // carried none (scheduler payload of just {task_id}) must not write a list of one.
+        boundTaskCtx = { ...boundTaskCtx, progress: fresh.progress, tags: fresh.tags };
       }
     }
 
