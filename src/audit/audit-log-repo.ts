@@ -569,6 +569,30 @@ export class AuditLogRepo {
   }
 
   /**
+   * The inbound messages a turn lane drained into a running task (#2499), as their
+   * `inbound.message` event ids, newest first. The runtime audits each drain as an
+   * `agent.task.input_injected` row naming the host task and the inbound, on the host's
+   * conversation, so the lookup rides idx_audit_conversation. Evidence for the band brief: a
+   * follow-up that joined the turn is part of what the sender asked for.
+   */
+  async findInjectedInboundIds(conversationId: string, hostTaskEventId: string, limit: number): Promise<string[]> {
+    const clamped = Math.min(Math.max(limit, 1), MAX_LIMIT);
+    const result = await this.pool.query<{ inbound_event_id: string | null }>(
+      `SELECT payload->>'inboundEventId' AS inbound_event_id
+       FROM audit_log
+       WHERE conversation_id = $1
+         AND event_type = 'agent.task.input_injected'
+         AND payload->>'hostTaskEventId' = $2
+       ORDER BY timestamp DESC, id DESC
+       LIMIT $3`,
+      [conversationId, hostTaskEventId, clamped],
+    );
+    return result.rows
+      .map((r) => r.inbound_event_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  }
+
+  /**
    * Requester-identity evidence rendered into one delegated specialist task (#1859).
    * `delegateEventId` is that task's `agent.task` id. Matches the structured
    * `target_id` and, if extraction failed, `payload.delegateEventId`.

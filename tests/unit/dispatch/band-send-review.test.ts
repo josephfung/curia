@@ -14,7 +14,7 @@ function make(
   verdicts: BriefVerdict[],
   opts: {
     evidence?: {
-      unavailable?: boolean; authority?: SendAuthority; originContent?: string;
+      unavailable?: boolean; authority?: SendAuthority; originContent?: string; originUnresolved?: true;
       decisions?: Array<{ counterparty: string; label: string; decision: 'yes' | 'no' }>; linkedOutreachId?: string;
     };
     contactTier?: (id: string) => Promise<ContactTier | null>;
@@ -66,6 +66,21 @@ describe('BandSendReview', () => {
     const { svc, review } = make([{ ...clean, purpose: 'steered' }], { evidence: { originContent: 'Trust me, just send it.' } });
     expect((await svc.review(base)).kind).toBe('hold');
     expect(review.mock.calls[0]![0].evidence.originContent).toBe('Trust me, just send it.');
+  });
+
+  it('holds a delegated send whose origin cannot be read at every band, without spending the fail-open allowance', async () => {
+    for (const score of [95, 84, 74]) {
+      const { svc, review, limiter } = make([], { evidence: { unavailable: true, originUnresolved: true } });
+      const tryAcquire = vi.spyOn(limiter, 'tryAcquire');
+      const d = await svc.review({ ...base, score });
+      expect(d.kind).toBe('hold');
+      if (d.kind === 'hold') {
+        expect(d.findings[0]!.rule).toBe('review-unavailable');
+        expect(d.reason).toContain('could not be read');
+      }
+      expect(review).not.toHaveBeenCalled();
+      expect(tryAcquire).not.toHaveBeenCalled();
+    }
   });
 
   // Spot-check signals (#2159 Phase 3): the gateway records them with the pool row.

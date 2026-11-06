@@ -88,4 +88,26 @@ describeIf('audit-log findToolResultsForTasks (#2159)', () => {
     expect(rows.map((r) => r.payload['summary'])).toEqual(['second', 'first']);
     expect(await repo.findPrincipalReportsForTasks([task], 1)).toHaveLength(1);
   });
+
+  // #2499: follow-ups a turn lane drained into a host task, as the runtime audits them.
+  it('returns the inbound ids drained into a host task on its conversation, newest first, and nothing else', async () => {
+    const conversationId = `conv-${randomUUID()}`;
+    const host = await seed('agent.task', '2026-10-18T12:00:00.000Z', null);
+    const otherHost = await seed('agent.task', '2026-10-18T12:00:00.000Z', null);
+    async function injected(at: string, hostTaskEventId: string, inboundEventId: string, conv = conversationId): Promise<void> {
+      await pool.query(
+        `INSERT INTO audit_log (timestamp, event_type, source_layer, source_id, payload, parent_event_id, conversation_id)
+         VALUES ($1, 'agent.task.input_injected', 'agent', 'coordinator', $2::jsonb, $3, $4)`,
+        [new Date(at), JSON.stringify({ hostTaskEventId, inboundEventId, conversationId: conv, agentId: 'coordinator', drainPoint: 'round', senderContactId: 'c' }), inboundEventId, conv],
+      );
+    }
+    await injected('2026-10-18T12:00:01.000Z', host, 'inbound-a');
+    await injected('2026-10-18T12:00:02.000Z', host, 'inbound-b');
+    await injected('2026-10-18T12:00:03.000Z', otherHost, 'inbound-other-host');
+    await injected('2026-10-18T12:00:04.000Z', host, 'inbound-other-conv', `conv-${randomUUID()}`);
+
+    expect(await repo.findInjectedInboundIds(conversationId, host, 10)).toEqual(['inbound-b', 'inbound-a']);
+    expect(await repo.findInjectedInboundIds(conversationId, host, 1)).toEqual(['inbound-b']);
+    expect(await repo.findInjectedInboundIds(conversationId, randomUUID(), 10)).toEqual([]);
+  });
 });

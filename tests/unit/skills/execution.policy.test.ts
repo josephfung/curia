@@ -4975,10 +4975,10 @@ describe('Gate C — band gating (#2159)', () => {
       ...(taskEventId !== undefined ? { taskEventId } : {}),
     });
 
-    function auditRow(id: string, payload: Record<string, unknown>): AuditLogRow {
+    function auditRow(id: string, payload: Record<string, unknown>, eventType = 'agent.task', parentEventId: string | null = null): AuditLogRow {
       return {
-        id, eventType: 'agent.task', timestamp: new Date(0), sourceLayer: 'dispatch', sourceId: 'x', conversationId: null,
-        taskId: null, parentEventId: null, payload, action: null, outcome: null, targetType: null, targetId: null,
+        id, eventType, timestamp: new Date(0), sourceLayer: 'dispatch', sourceId: 'x', conversationId: 'email-thread',
+        taskId: null, parentEventId, payload, action: null, outcome: null, targetType: null, targetId: null,
         initiatorType: null, initiatorId: null, entryHash: null,
       };
     }
@@ -4986,13 +4986,16 @@ describe('Gate C — band gating (#2159)', () => {
     function delegatedLayer(review: ReturnType<typeof vi.fn>, originTaskEventId: string | undefined) {
       const rows = new Map<string, AuditLogRow>([
         ['spec-task', auditRow('spec-task', { content: BRIEF, metadata: { originator: OUTSIDER, delegationOrigin: delegationOrigin(originTaskEventId) } })],
-        ['coord-task', auditRow('coord-task', { content: ROOT_INBOUND, metadata: { originator: OUTSIDER } })],
+        // The dispatcher's preamble sits ahead of the sender's words in the root task's content.
+        ['coord-task', auditRow('coord-task', { content: `[thread participants]\n${ROOT_INBOUND}`, metadata: { originator: OUTSIDER } }, 'agent.task', 'inbound-1')],
+        ['inbound-1', auditRow('inbound-1', { content: ROOT_INBOUND }, 'inbound.message')],
       ]);
       const sendEvidence = new SendEvidenceCollector({
         auditLogRepo: {
           findById: vi.fn(async (id: string) => rows.get(id) ?? null),
           findToolResultsForTasks: vi.fn().mockResolvedValue([]),
           findPrincipalReportsForTasks: vi.fn().mockResolvedValue([]),
+          findInjectedInboundIds: vi.fn().mockResolvedValue([]),
         },
         taskRepo: { getTask: vi.fn().mockResolvedValue(null), resolveProjectRootTaskId: vi.fn().mockResolvedValue(null) },
         principalBlock: () => null,
@@ -5016,9 +5019,11 @@ describe('Gate C — band gating (#2159)', () => {
       const { layer, options } = delegatedLayer(review, 'coord-task');
       const result = await layer.invoke('calendar-create-event', {}, undefined, options);
       expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('steered by someone outside');
       const brief = review.mock.calls[0]![0] as BriefInput;
       expect(brief.questions).toEqual(['purpose']);
       expect(brief.evidence.originContent).toBe(ROOT_INBOUND);
+      expect(brief.evidence.originKind).toBe('inbound');
       expect(brief.evidence.taskContent).toBe(BRIEF);
       expect(buildBriefUserPrompt(brief)).toContain(`<origin_json>${JSON.stringify(ROOT_INBOUND)}</origin_json>`);
     });

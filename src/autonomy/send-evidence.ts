@@ -20,9 +20,12 @@
 // Delegation (#2499): a delegated specialist's task row holds the coordinator's rewritten
 // brief, which reads like clean principal work whatever the person asked. When the turn
 // carries `delegationOrigin`, the walk follows `delegationOrigin.taskEventId` back to the root
-// task (the turn that was not itself delegated) and passes that task's content, the inbound
-// message in its sender's own words, beside the delegate's. A chain that cannot be followed to
-// its root makes the evidence unavailable: the purpose check would otherwise judge the brief.
+// task (the turn that was not itself delegated). Beside the delegate's brief it passes what
+// started that task: for an inbound turn, the `inbound.message` the dispatcher parented it on
+// (the sender's text before any preamble) plus any follow-ups a turn lane drained into it; for
+// any other root, the root task's content. A chain that cannot be followed to its root, or an
+// inbound that cannot be read, makes the evidence unavailable and flags `originUnresolved`:
+// the purpose check would otherwise judge the brief.
 //
 // Credentials are redacted before the evidence leaves for the judge's model provider, which
 // may differ from the agents'. Contact data is not: grounding checks claims such as "Dana's
@@ -47,12 +50,16 @@ export type { SendAuthority } from './judge-brief.js';
 export const EVIDENCE_RESULT_MAX_CHARS = 2_000;
 export const EVIDENCE_TOTAL_MAX_CHARS = 12_000;
 /**
- * The root inbound message of a delegation chain (#2499). Larger than one tool result: the
- * dispatcher puts its preambles (thread participants, message id, outbound context) ahead of
- * the person's words. It counts against EVIDENCE_TOTAL_MAX_CHARS, so it is kept first and the
+ * What started a delegation chain (#2499): the root inbound and its drained follow-ups. Larger
+ * than one tool result, and trimmed from the middle so both the opening and the latest
+ * follow-up survive. It counts against EVIDENCE_TOTAL_MAX_CHARS, so it is kept first and the
  * tool results get the rest.
  */
 export const EVIDENCE_ORIGIN_MAX_CHARS = 4_000;
+/** Follow-ups a turn lane drained into the root turn, newest kept (#2499). */
+export const ORIGIN_FOLLOW_UPS_LIMIT = 5;
+/** Between the root inbound and each follow-up in the origin text. */
+export const FOLLOW_UP_SEPARATOR = '\n\n[Follow-up the sender sent while the assistant was working on the message above]\n\n';
 /**
  * Delegation hops followed to the root. The coordinator is the only caller of `delegate`, so
  * a real chain is one hop; the bound stops a malformed or cyclic chain. Longer is a failure.
@@ -72,6 +79,11 @@ export interface CollectedEvidence extends BriefEvidence {
   decisions?: DisclosureDecisionRow[];
   /** The outreach row the drafting turn was linked to (#2312): a yes learns the requester onto it. Code only. */
   linkedOutreachId?: string;
+  /**
+   * Set with `unavailable` when a delegated turn's origin could not be followed or read
+   * (#2499), as opposed to a failed read. The send review holds rather than failing open.
+   */
+  originUnresolved?: true;
 }
 
 /** Which thread and recipients a send's decisions are read for (#2312). */
@@ -100,6 +112,20 @@ const LINK_STRENGTHS: ReadonlySet<string> = new Set(Object.keys({ strong: true, 
 
 function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * Trim from the middle, saying how much was left out, so text padded at the front or the back
+ * cannot push the other end out of view (#2499). The result is at most `max` characters.
+ */
+export function clipMiddle(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const marker = (n: number): string => `\n[… ${n} characters left out …]\n`;
+  // The marker's length depends on the count; size it for the worst case.
+  const keep = max - marker(text.length).length;
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return `${text.slice(0, head)}${marker(text.length - keep)}${text.slice(text.length - tail)}`;
 }
 
 /** Replace credential-shaped substrings (API keys, bearer tokens, long hex) with [REDACTED]. */
@@ -188,9 +214,14 @@ type DelegationRoot =
   | { ok: true; root: AuditLogRow | null }
   | { ok: false; reason: string };
 
+/** What started the chain, as the judge sees it, or why it could not be read. */
+type OriginRead =
+  | { ok: true; content: string; kind: 'inbound' | 'task' }
+  | { ok: false; reason: string };
+
 export class SendEvidenceCollector {
   constructor(private readonly deps: {
-    auditLogRepo: Pick<AuditLogRepo, 'findById' | 'findToolResultsForTasks' | 'findPrincipalReportsForTasks'>;
+    auditLogRepo: Pick<AuditLogRepo, 'findById' | 'findToolResultsForTasks' | 'findPrincipalReportsForTasks' | 'findInjectedInboundIds'>;
     /** Reads the bound task and its project root for authority (#2312). */
     taskRepo: Pick<TaskRepo, 'getTask' | 'resolveProjectRootTaskId'>;
     /** Reads a link's outreach row: its counterparties, and a task-less link's originator (#2312). Absent: a link has neither. */
@@ -231,27 +262,20 @@ export class SendEvidenceCollector {
       const boundTaskId = isRecord(boundTask) && typeof boundTask['taskId'] === 'string' ? boundTask['taskId'] : undefined;
       const link = readLink(isRecord(metadata) ? metadata['linkedTask'] : undefined);
 
-      // A delegated turn: the inbound that started the chain, in its sender's words (#2499).
+      // A delegated turn: what started the chain, in its sender's words (#2499).
       const delegation = await this.readDelegationRoot(task);
-      if (!delegation.ok) {
+      const origin: OriginRead | null = !delegation.ok
+        ? delegation
+        : delegation.root === null ? null : await this.readOrigin(delegation.root);
+      if (origin !== null && !origin.ok) {
         this.deps.logger.warn(
-          { taskEventIds, reason: delegation.reason },
-          'send-evidence: delegated turn\'s origin cannot be followed to its root — purpose cannot be judged',
+          { taskEventIds, reason: origin.reason },
+          'send-evidence: delegated turn\'s origin cannot be followed or read — purpose cannot be judged',
         );
-        return { unavailable: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
+        return { unavailable: true, originUnresolved: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
       }
-      const rootContent = delegation.root?.payload['content'];
-      if (delegation.root !== null && typeof rootContent !== 'string') {
-        this.deps.logger.warn(
-          { taskEventIds, rootTaskEventId: delegation.root.id },
-          'send-evidence: delegation root has no message content — purpose cannot be judged',
-        );
-        return { unavailable: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
-      }
-      const originContent = typeof rootContent === 'string'
-        ? clip(redactSecrets(rootContent), EVIDENCE_ORIGIN_MAX_CHARS)
-        : undefined;
-      // The root message is kept first; the tool results share what is left of the budget.
+      const originContent = origin?.content;
+      // The origin is kept first; the tool results share what is left of the budget.
       const resultsBudget = EVIDENCE_TOTAL_MAX_CHARS - (originContent?.length ?? 0);
 
       const results = await this.deps.auditLogRepo.findToolResultsForTasks(taskEventIds, RESULTS_LIMIT);
@@ -294,7 +318,7 @@ export class SendEvidenceCollector {
         ...(link !== null ? { linkedOutreachId: link.outreachId } : {}),
         ...(decisions ? { decisions } : {}),
         ...(reportsToPrincipal.length > 0 ? { reportsToPrincipal } : {}),
-        ...(originContent !== undefined ? { originContent } : {}),
+        ...(origin ? { originContent: origin.content, originKind: origin.kind } : {}),
         ...(typeof content === 'string' ? { taskContent: clip(redactSecrets(content), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         ...(progress !== undefined ? { taskProgress: clip(redactSecrets(JSON.stringify(progress)), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         toolResults,
@@ -335,6 +359,40 @@ export class SendEvidenceCollector {
       if (parent.eventType !== 'agent.task') return { ok: false, reason: 'origin row is not an agent.task' };
       current = parent;
     }
+  }
+
+  /**
+   * What started the root task. For an inbound turn (its parent row is the `inbound.message`
+   * the dispatcher published) that is the sender's text as received, before the dispatcher's
+   * preambles, then the follow-ups a turn lane drained into the turn, oldest first. Any other
+   * root (a scheduled job, a wake, a parent no longer in audit_log) gives its task content,
+   * labelled as such. Redacted, then trimmed from the middle. A root with no content, or a
+   * drained follow-up whose inbound cannot be read, is a failure.
+   */
+  private async readOrigin(root: AuditLogRow): Promise<OriginRead> {
+    const parent = root.parentEventId ? await this.deps.auditLogRepo.findById(root.parentEventId) : null;
+    if (parent === null || parent.eventType !== 'inbound.message') {
+      const content = root.payload['content'];
+      if (typeof content !== 'string') return { ok: false, reason: 'root task has no content' };
+      return { ok: true, kind: 'task', content: clipMiddle(redactSecrets(content), EVIDENCE_ORIGIN_MAX_CHARS) };
+    }
+    const first = parent.payload['content'];
+    if (typeof first !== 'string') return { ok: false, reason: 'root inbound has no content' };
+    const texts = [first];
+    if (root.conversationId !== null) {
+      // Newest first from the repo, so a cut keeps the latest push; read back oldest first.
+      const ids = await this.deps.auditLogRepo.findInjectedInboundIds(root.conversationId, root.id, ORIGIN_FOLLOW_UPS_LIMIT);
+      if (ids.length === ORIGIN_FOLLOW_UPS_LIMIT) {
+        this.deps.logger.info({ rootTaskEventId: root.id, limit: ORIGIN_FOLLOW_UPS_LIMIT }, 'send-evidence: follow-up limit reached — older follow-ups left out');
+      }
+      for (const id of [...ids].reverse()) {
+        const row = await this.deps.auditLogRepo.findById(id);
+        const text = row?.eventType === 'inbound.message' ? row.payload['content'] : undefined;
+        if (typeof text !== 'string') return { ok: false, reason: 'a follow-up drained into the root turn cannot be read' };
+        texts.push(text);
+      }
+    }
+    return { ok: true, kind: 'inbound', content: clipMiddle(redactSecrets(texts.join(FOLLOW_UP_SEPARATOR)), EVIDENCE_ORIGIN_MAX_CHARS) };
   }
 
   /**
