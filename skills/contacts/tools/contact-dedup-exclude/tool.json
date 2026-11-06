@@ -1,12 +1,13 @@
 {
   "name": "contact-dedup-exclude",
-  "description": "Record a permanent exclusion for a contact pair, preventing it from being proposed as a duplicate again. Call this when the principal explicitly says two contacts are not the same person. Works for any two contacts, including same-name contacts with no knowledge-graph node. Pinned exclusively to the contacts agent — not available to other agents.",
+  "description": "Record that two contacts are not the same person, so the pair is never proposed as a duplicate again. Call it for every \"not the same person\" outcome, whether the principal said so or you decided it. Works for same-name contacts with no knowledge-graph node too.",
   "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
     "contact_a_id": "string (UUID of the first contact)",
-    "contact_b_id": "string (UUID of the second contact)"
+    "contact_b_id": "string (UUID of the second contact)",
+    "decided_by": "string? (\"principal\" if the principal said so, \"curia\" if you decided; default \"principal\")"
   },
   "outputs": {
     "contact_a_id": "string — echoed back",

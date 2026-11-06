@@ -789,12 +789,16 @@ async function main(): Promise<void> {
         await principalIdentityHotReload.refresh();
       }
     },
-    onContactMerged: (primaryContactId, secondaryContactId, mergedAt) => {
+    onContactMerged: (primaryContactId, secondaryContactId, mergedAt, details) => {
       const event = createContactMerged({
         primaryContactId,
         secondaryContactId,
         // ContactMergedPayload.mergedAt is typed as Date — pass directly (no serialization here).
         mergedAt,
+        // Only present for the dedup scan's automatic merges (#2493): the audit row's record
+        // of why no human was asked.
+        ...(details?.reason !== undefined && { reason: details.reason }),
+        ...(details?.mergedBy !== undefined && { mergedBy: details.mergedBy }),
       });
       bus.publish('dispatch', event).catch((err: unknown) =>
         logger.error({ err }, 'Failed to publish contact.merged — audit trail may be incomplete'),

@@ -428,4 +428,52 @@ describe('TaskUpdateHandler', () => {
       expect(error).not.toMatch(/violates foreign key/);
     });
   });
+
+  // ── Dedup review routed to Curia (#2493) ────────────────────────────────────
+
+  describe('dedup review routed to Curia', () => {
+    const curiaTask = makeTaskRow({ tags: ['dedup', 'contacts', 'dedup-route:curia'] });
+
+    it('refuses to hand the task to the principal', async () => {
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(curiaTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, owner: 'ceo', status: 'waiting', progress_note: 'Merge?' },
+        taskRepo,
+      }));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('yours to decide');
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('refuses a tags update that drops the route tag', async () => {
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(curiaTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, tags: ['dedup'] },
+        taskRepo,
+      }));
+      expect(result.success).toBe(false);
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('still lets the principal own a review routed to them', async () => {
+      const principalTask = makeTaskRow({ tags: ['dedup', 'dedup-route:principal'] });
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(principalTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, owner: 'ceo', status: 'waiting' },
+        taskRepo,
+      }));
+      expect(result.success).toBe(true);
+      expect(taskRepo.updateTask).toHaveBeenCalled();
+    });
+
+    it('does not read the task for an update that neither changes owner nor tags', async () => {
+      const taskRepo = makeTaskRepo();
+      await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, status: 'in_progress' },
+        taskRepo,
+      }));
+      expect(taskRepo.getTask).not.toHaveBeenCalled();
+    });
+  });
 });
+

@@ -251,6 +251,10 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T20:17:18.967Z"
     },
+    "contacts dedup review of two companies is decided by Curia": {
+      "unstubbed": null,
+      "reason": "New in #2493; not yet run (paid suite). The first run records coverage."
+    },
     "contacts dedup review previews without merging": {
       "unstubbed": 0,
       "runs": 5,

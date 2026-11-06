@@ -21,6 +21,7 @@ import type {
   ContactCanonicalFields,
   ContactTier,
   ContactKind,
+  ContactMergedDetails,
   ChannelIdentity,
   ContactServiceOptions,
   CreateContactOptions,
@@ -446,7 +447,7 @@ export const PRINCIPAL_PROMPT_FIELDS = ['primaryEmail', 'preferredName', 'title'
  * - Resolves inbound senders by channel + identifier for dispatch routing
  */
 export class ContactService {
-  private onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
+  private onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date, details?: ContactMergedDetails) => void;
   private onIdentityVerified?: (contactId: string) => void;
   private onIdentitiesChanged?: (contactId: string) => void | Promise<void>;
   private onContactElevated?: (contactId: string, reason: TierElevationReason) => void;
@@ -1886,11 +1887,13 @@ export class ContactService {
    *   contacts.kg_node_id foreign key (#1711)
    *
    * @param dryRun - if true, return proposal without writing (default: false)
+   * @param details - audit context carried onto the contact.merged event (#2493)
    */
   async mergeContacts(
     primaryId: string,
     secondaryId: string,
     dryRun = false,
+    details?: ContactMergedDetails,
   ): Promise<MergeProposal | MergeResult> {
     if (primaryId === secondaryId) {
       throw new Error('primary_contact_id and secondary_contact_id must be different');
@@ -2044,9 +2047,9 @@ export class ContactService {
     // Primary absorbs the secondary's identities — refresh principal cache if either side
     // was (or is) the principal contact. Secondary is already deleted; notifying primary
     // is enough when the principal was the survivor.
-    this.announceContactsMerged(primaryId, [secondaryId], mergedAt);
+    this.announceContactsMerged(primaryId, [secondaryId], mergedAt, { details });
 
-    this.logger?.info({ primaryId, secondaryId }, 'Contacts merged');
+    this.logger?.info({ primaryId, secondaryId, ...details }, 'Contacts merged');
 
     return {
       primaryContactId: primaryId,
@@ -2126,17 +2129,18 @@ export class ContactService {
    * identity refresh for the survivor. Never throws — the merge is already committed.
    *
    * `identitiesChanged: false` skips the refresh (nothing was folded, e.g. a re-point).
+   * `details` is copied onto every contact.merged event (#2493).
    */
   announceContactsMerged(
     survivingContactId: string,
     mergedContactIds: string[],
     mergedAt: Date,
-    options?: { identitiesChanged?: boolean },
+    options?: { identitiesChanged?: boolean; details?: ContactMergedDetails },
   ): void {
     if (this.onContactMerged) {
       for (const secondaryId of mergedContactIds) {
         try {
-          this.onContactMerged(survivingContactId, secondaryId, mergedAt);
+          this.onContactMerged(survivingContactId, secondaryId, mergedAt, options?.details);
         } catch (callbackErr) {
           // The merge is already fully committed at this point — swallow the callback error
           // so the caller sees a successful merge result rather than a spurious failure.

@@ -1,8 +1,8 @@
 // handler.ts — contact-merge skill
 //
 // Merges two contacts into one. Use dry_run: true to preview the golden record
-// before committing. The Coordinator MUST present the preview to the principal and
-// get confirmation before calling with dry_run: false.
+// before committing. Commit only on the principal's confirmation, or on a dedup review
+// task routed to Curia (#2493: companies, automated senders, unvouched-for people).
 //
 // SECURITY / AUTONOMY: #1126 reclassified contact-merge from `elevated` to `normal` +
 // action_risk:'medium' (autonomy-governed). A live-principal-driven turn (incl. the delegated
@@ -22,6 +22,7 @@ import type { Contact } from '../../../../src/contacts/types.js';
 import { ContactNotFoundError } from '../../../../src/contacts/types.js';
 import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
 import { isUuid } from '../../../../src/util/uuid.js';
+import { closeDedupTasksForMergedContact } from '../../../../src/contacts/dedup-tasks.js';
 
 const NOT_MERGED = 'Nothing was merged.';
 
@@ -94,6 +95,22 @@ export class ContactMergeHandler implements ToolHandler {
 
       const goldenRecord = result.goldenRecord;
 
+      // A combined decision ("merge all five") runs as several merges, each stranding the
+      // sibling review tasks that name the contact it folded away. Close them now (#2493).
+      // The task for this pair is the caller's to complete with its own outcome note.
+      let reviewTasksClosed: number | undefined;
+      if (!result.dryRun && ctx.taskRepo) {
+        reviewTasksClosed = await closeDedupTasksForMergedContact(
+          ctx.taskRepo,
+          {
+            survivorId: result.primaryContactId,
+            secondaryId: result.secondaryContactId,
+            survivorName: goldenRecord.displayName,
+          },
+          ctx.log,
+        );
+      }
+
       return {
         success: true,
         data: {
@@ -112,6 +129,7 @@ export class ContactMergeHandler implements ToolHandler {
           ...('mergedAt' in result && result.mergedAt
             ? { merged_at: result.mergedAt.toISOString() }
             : {}),
+          ...(reviewTasksClosed !== undefined && { review_tasks_closed: reviewTasksClosed }),
         },
       };
     } catch (err) {

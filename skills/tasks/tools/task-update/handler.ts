@@ -8,6 +8,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { UpdateTaskParams } from '../../../../src/db/task-repo.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { isUuid } from '../../../../src/util/uuid.js';
+import { routeFromTags } from '../../../../src/contacts/dedup-routing.js';
 import {
   BLOCKED_BY_TASK_ID_ERROR,
   SELF_BLOCK_ERROR,
@@ -16,6 +17,11 @@ import {
   resolveOptionalId,
   taskNotFoundError,
 } from '../../optional-ref.js';
+
+const CURIA_DEDUP_ROUTE_ERROR =
+  'This dedup review is yours to decide, not the principal\'s: neither contact is a person they have '
+  + 'marked known or trusted. Merge the pair with contact-merge, or record it as not a duplicate with '
+  + 'contact-dedup-exclude (decided_by "curia"), then complete the task.';
 
 const VALID_STATUSES = new Set(['open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled']);
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
@@ -145,6 +151,22 @@ export class TaskUpdateHandler implements ToolHandler {
         const blocker = await ctx.taskRepo.getTask(blockerUpdate.id);
         if (!blocker) {
           return { success: false, error: taskNotFoundError('blocked_by_task_id', blockerUpdate.id) };
+        }
+      }
+
+      // A dedup review routed to Curia is not the principal's to decide (#2493): the pair
+      // has no person on it the principal has vouched for. Refused here rather than left
+      // to the prompt, since prod showed the agent handing nearly every pair over. The
+      // route tag itself is kept so a tags update cannot launder the hand-over.
+      if (input.owner === 'ceo' || input.tags !== undefined) {
+        const current = await ctx.taskRepo.getTask(input.task_id);
+        if (current && routeFromTags(current.tags) === 'curia') {
+          if (input.owner === 'ceo') {
+            return { success: false, error: CURIA_DEDUP_ROUTE_ERROR };
+          }
+          if (input.tags && routeFromTags(input.tags) !== 'curia') {
+            return { success: false, error: 'tags must keep the dedup-route:curia tag on a dedup review task.' };
+          }
         }
       }
 

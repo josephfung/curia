@@ -530,6 +530,10 @@ interface ContactMergedPayload {
   primaryContactId: string;
   secondaryContactId: string;
   mergedAt: Date;
+  /** Why the contacts were merged — set by the dedup scan's automatic merges (#2493). */
+  reason?: string;
+  /** Who decided the merge, e.g. 'dedup-scan'. Absent for an agent or console merge. */
+  mergedBy?: string;
 }
 
 // activity.summary — published by ActivitySummarizer (src/activity/summarizer.ts) once a
