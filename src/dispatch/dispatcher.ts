@@ -11,7 +11,8 @@ import type { InboundSenderContext, SenderContext, ChannelPolicyConfig, TrustLev
 import { isAutomatedKind } from '../contacts/types.js';
 import { principalNoteBody } from './principal-note-notification.js';
 import { unknownSenderPolicy } from '../contacts/channel-sender-policy.js';
-import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
+import { JUDGMENT_ELEVATION_THRESHOLD, hasEarlierDayHistory } from '../contacts/confidence-scorer.js';
+import type { InboundMessageRecord } from '../contacts/confidence-pipeline.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
@@ -764,33 +765,44 @@ export class Dispatcher {
               // SECURITY: email elevates only on `senderVerified` mail (SPF, DKIM and DMARC pass),
               // as the principal-acquaintance path does. A From address is forgeable, and at the
               // 0.3 scheduling threshold a judgment-elevated `known` email sender can book meetings.
+              // SECURITY: and only when the sender wrote before, on an earlier day (#2500). The
+              // confidence threshold alone is cleared by any first message (recency is 0.20), so
+              // without this a stranger's first email made them `known` for their second, minutes
+              // later. A missing history (prior null) fails closed: no elevation.
               if (this.confidencePipeline && !messageCounted) {
                 const contactService = this.contactService;
                 const snapshotTier = senderContext.tier;
                 const snapshotKind = senderContext.kind;
-                let newConfidence: number | undefined;
+                let counted: InboundMessageRecord | undefined;
                 try {
-                  newConfidence = await this.confidencePipeline.incrementalUpdate(resolvedContactId, { type: 'message_seen' });
-                  senderContext.contactConfidence = Math.max(senderContext.contactConfidence, newConfidence);
+                  counted = await this.confidencePipeline.recordInboundMessage(resolvedContactId);
+                  senderContext.contactConfidence = Math.max(senderContext.contactConfidence, counted.confidence);
                 } catch (err) {
                   this.logger.warn({ err, contactId: resolvedContactId }, 'Confidence pipeline update failed (non-fatal)');
                 }
                 if (
-                  newConfidence !== undefined &&
+                  counted !== undefined &&
                   contactService &&
                   snapshotTier === 'unknown' &&
                   !isAutomatedKind(snapshotKind) &&
                   (payload.channelId !== 'email' || payload.metadata?.['senderVerified'] === true) &&
-                  newConfidence >= JUDGMENT_ELEVATION_THRESHOLD
+                  counted.confidence >= JUDGMENT_ELEVATION_THRESHOLD
                 ) {
-                  const confidence = newConfidence;
-                  void (async () => {
-                    try {
-                      await contactService.elevateTierToKnown(resolvedContactId, 'judgment');
-                    } catch (err) {
-                      this.logger.warn({ err, contactId: resolvedContactId, confidence }, 'Judgment elevation failed (non-fatal)');
-                    }
-                  })();
+                  const { confidence, prior } = counted;
+                  if (prior === null || !hasEarlierDayHistory(prior, new Date())) {
+                    this.logger.info(
+                      { contactId: resolvedContactId, confidence, priorInboundCount: prior?.inboundMessageCount ?? null },
+                      'Judgment elevation withheld — no message from this sender on an earlier day (#2500)',
+                    );
+                  } else {
+                    void (async () => {
+                      try {
+                        await contactService.elevateTierToKnown(resolvedContactId, 'judgment');
+                      } catch (err) {
+                        this.logger.warn({ err, contactId: resolvedContactId, confidence }, 'Judgment elevation failed (non-fatal)');
+                      }
+                    })();
+                  }
                 }
               }
             }

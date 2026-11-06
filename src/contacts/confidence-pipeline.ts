@@ -12,13 +12,24 @@
 
 import type { Logger } from '../logger.js';
 import type { ContactService } from './contact-service.js';
-import { computeConfidence } from './confidence-scorer.js';
+import { computeConfidence, type PriorInboundHistory } from './confidence-scorer.js';
 
 export type ConfidenceSignal =
   | { type: 'message_seen'; count?: number }
   | { type: 'message_sent'; count?: number }
   | { type: 'trust_grant' }
   | { type: 'pairing_confirmed' };
+
+/** What counting one inbound message did (recordInboundMessage). */
+export interface InboundMessageRecord {
+  /** The new contact_confidence (0 when skipped, 1.0 for the principal). */
+  confidence: number;
+  /**
+   * The contact's inbound history from before this message, or null when nothing was
+   * counted (contact missing, principal, or a skip). Judgment elevation reads it (#2500).
+   */
+  prior: PriorInboundHistory | null;
+}
 
 export class ConfidencePipeline {
   constructor(
@@ -40,20 +51,39 @@ export class ConfidencePipeline {
    * Returns the new confidence value (or 0 if skipped).
    */
   async incrementalUpdate(contactId: string, signal: ConfidenceSignal): Promise<number> {
+    return (await this.apply(contactId, signal)).confidence;
+  }
+
+  /**
+   * Count one inbound message (a `message_seen` signal) and return the new confidence
+   * together with the contact's inbound history from before it, which the dispatcher's
+   * judgment elevation needs (#2500): confidence alone cannot tell a first message apart
+   * from a long-standing correspondent's, since recency is worth 0.20 after any message.
+   */
+  async recordInboundMessage(contactId: string): Promise<InboundMessageRecord> {
+    return this.apply(contactId, { type: 'message_seen' });
+  }
+
+  private async apply(contactId: string, signal: ConfidenceSignal): Promise<InboundMessageRecord> {
     const contact = await this.contactService.getContact(contactId);
     if (!contact) {
       this.logger?.debug({ contactId }, 'confidence-pipeline: contact not found — skipping');
-      return 0;
+      return { confidence: 0, prior: null };
     }
 
     // Skip principal contacts — confidence is hardcoded in ContactResolver
-    if (contact.systemRole === 'principal') return 1.0; // Principal confidence is hardcoded in ContactResolver
+    if (contact.systemRole === 'principal') return { confidence: 1.0, prior: null };
 
     const count = ('count' in signal ? signal.count : undefined) ?? 1;
     if (!Number.isInteger(count) || count < 1) {
       this.logger?.warn({ contactId, count }, 'confidence-pipeline: non-positive or non-integer count — skipping (likely a caller bug)');
-      return 0;
+      return { confidence: 0, prior: null };
     }
+    // Read before the update below, so this is the history from before this message.
+    const prior: PriorInboundHistory = {
+      inboundMessageCount: contact.inboundMessageCount,
+      lastSeenAt: contact.lastSeenAt,
+    };
 
     // Determine stat deltas based on signal type
     let inboundDelta = 0;
@@ -80,7 +110,7 @@ export class ConfidencePipeline {
     const result = await this.contactService.getContactWithIdentities(contactId);
     if (!result) {
       this.logger?.warn({ contactId }, 'confidence-pipeline: getContactWithIdentities returned null after getContact succeeded — possible data inconsistency');
-      return 0;
+      return { confidence: 0, prior: null };
     }
     const { identities } = result;
 
@@ -103,7 +133,7 @@ export class ConfidencePipeline {
       contactConfidence: newConfidence,
       lastSeenAt,
     });
-    return newConfidence;
+    return { confidence: newConfidence, prior };
   }
 
   /**

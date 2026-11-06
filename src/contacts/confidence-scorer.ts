@@ -31,8 +31,39 @@ export const MANUAL_BOOST = 0.10;
 /** Max confidence boost from verified identity pairings. Capped at 3 identities. */
 export const PAIRING_BOOST = 0.10;
 
-/** Minimum contact_confidence to trigger automatic tier elevation from 'unknown' to 'known'. */
+/**
+ * Minimum contact_confidence to trigger automatic tier elevation from 'unknown' to 'known'.
+ * Not sufficient on its own: recency is worth 0.20 right after any message, so a first
+ * message clears it. Judgment elevation also needs hasEarlierDayHistory() (#2500).
+ */
 export const JUDGMENT_ELEVATION_THRESHOLD = 0.20;
+
+/**
+ * How long before this message the sender's previous inbound message must have arrived
+ * for judgment elevation (#2500). A day apart, so neither the message that created the
+ * contact nor a burst of messages minutes apart counts as history.
+ */
+export const JUDGMENT_MIN_HISTORY_MS = 24 * 60 * 60 * 1000;
+
+/** A contact's inbound history as stored before the message being counted. */
+export interface PriorInboundHistory {
+  inboundMessageCount: number;
+  /** When the previous inbound message was counted; null when none was. */
+  lastSeenAt: Date | null;
+}
+
+/**
+ * True when the sender wrote before, at least JUDGMENT_MIN_HISTORY_MS before `now` (#2500).
+ *
+ * SECURITY: judgment elevation rests on the sender's own messages only, so it needs history
+ * that one sitting cannot fake. `senderVerified` proves the mail came from the sending
+ * domain, not who the person is (on free webmail, nothing at all). Evidence from the
+ * principal (their domain, their sent mail, Curia's sends) elevates by other paths.
+ */
+export function hasEarlierDayHistory(prior: PriorInboundHistory, now: Date): boolean {
+  if (prior.inboundMessageCount < 1 || prior.lastSeenAt === null) return false;
+  return now.getTime() - prior.lastSeenAt.getTime() >= JUDGMENT_MIN_HISTORY_MS;
+}
 
 /** Max number of verified identities that contribute to the pairing score. */
 const MAX_PAIRING_IDENTITIES = 3;

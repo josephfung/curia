@@ -51,7 +51,15 @@ function harness(opts: {
     principalAcquaintance: { check: { evidenceFor }, contacts: { elevateTierToKnown } },
     ...(opts.scoring
       ? {
-          confidencePipeline: { incrementalUpdate } as unknown as ConfidencePipeline,
+          // Path 3 counts through recordInboundMessage; route it to the same spy so each
+          // test counts every message_seen once, whichever path counted it.
+          confidencePipeline: {
+            incrementalUpdate,
+            recordInboundMessage: async (id: string) => ({
+              confidence: (await incrementalUpdate(id, { type: 'message_seen' })) as number,
+              prior: null,
+            }),
+          } as unknown as ConfidencePipeline,
           channelPolicies: { email: { trust: 'low', unknownSender: 'allow' } } as unknown as Record<string, ChannelPolicyConfig>,
         }
       : {}),

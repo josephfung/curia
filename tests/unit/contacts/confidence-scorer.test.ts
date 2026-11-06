@@ -5,6 +5,9 @@ import {
   W_INTERACTION,
   GRANT_BOOST,
   MANUAL_BOOST,
+  JUDGMENT_ELEVATION_THRESHOLD,
+  JUDGMENT_MIN_HISTORY_MS,
+  hasEarlierDayHistory,
   type ConfidenceInput,
 } from '../../../src/contacts/confidence-scorer.js';
 
@@ -168,5 +171,33 @@ describe('computeConfidence', () => {
 
   it('result is never negative', () => {
     expect(computeConfidence(input())).toBe(0);
+  });
+});
+
+// #2500: why the threshold alone cannot gate judgment elevation, and the history rule that does.
+describe('hasEarlierDayHistory', () => {
+  const now = new Date('2026-11-05T12:00:00Z');
+  const ago = (ms: number) => new Date(now.getTime() - ms);
+
+  it('a single message just seen already clears the judgment threshold', () => {
+    const first = computeConfidence(input({ inboundMessageCount: 1, lastSeenAt: now, now }));
+    expect(first).toBeGreaterThanOrEqual(JUDGMENT_ELEVATION_THRESHOLD);
+  });
+
+  it.each([
+    ['no earlier message', { inboundMessageCount: 0, lastSeenAt: null }],
+    ['a count without a last-seen time', { inboundMessageCount: 2, lastSeenAt: null }],
+    ['a last-seen time without a count', { inboundMessageCount: 0, lastSeenAt: ago(3 * JUDGMENT_MIN_HISTORY_MS) }],
+    ['a previous message two minutes ago', { inboundMessageCount: 1, lastSeenAt: ago(2 * 60 * 1000) }],
+    ['a previous message just under a day ago', { inboundMessageCount: 4, lastSeenAt: ago(JUDGMENT_MIN_HISTORY_MS - 1) }],
+  ])('is false for %s', (_label, prior) => {
+    expect(hasEarlierDayHistory(prior, now)).toBe(false);
+  });
+
+  it.each([
+    ['exactly a day ago', JUDGMENT_MIN_HISTORY_MS],
+    ['a month ago', 30 * JUDGMENT_MIN_HISTORY_MS],
+  ])('is true for a previous message %s', (_label, ms) => {
+    expect(hasEarlierDayHistory({ inboundMessageCount: 1, lastSeenAt: ago(ms) }, now)).toBe(true);
   });
 });
