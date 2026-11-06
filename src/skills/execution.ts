@@ -282,6 +282,12 @@ function buildActionDescription(
   );
 }
 
+/**
+ * Why band Gate C held an action it could not review (judge or evidence failure). Exported so
+ * the scenario harness can tell that hold from a verdict (#2499).
+ */
+export const BAND_GATE_C_UNREVIEWED_REASON = 'the reviewer was unavailable to check it';
+
 export class ExecutionLayer {
   private registry: ToolRegistry;
   private skillRegistry?: SkillRegistry;
@@ -1541,7 +1547,7 @@ export class ExecutionLayer {
       const verdict = await this.askBandGateC(questions, toolName, manifest, input, options, currentScore);
       if (!verdict.ok) {
         skillLogger.warn({ toolName, failure: verdict.failure, currentScore }, 'autonomy gate: Gate C band review unavailable — escalating');
-        return { blocked: await this.escalateBandGateC(args, 'the reviewer was unavailable to check it') };
+        return { blocked: await this.escalateBandGateC(args, BAND_GATE_C_UNREVIEWED_REASON) };
       }
       if (verdict.purpose === 'steered') {
         skillLogger.info({ toolName, reason: verdict.reason }, 'autonomy gate: Gate C band review — steered by an outsider');
@@ -1585,7 +1591,9 @@ export class ExecutionLayer {
     if (!this.escalationJudge?.isEnabled()) return { ok: false, failure: 'disabled' };
     try {
       // Purpose depends on what the turn was answering; without that the judge sees only the
-      // action, which leans toward "serving". A failed lookup is a review failure.
+      // action, which leans toward "serving". A failed lookup is a review failure. For a
+      // delegated specialist the collector also follows delegationOrigin to the root inbound,
+      // and a chain it cannot follow is unavailable too (#2499).
       let evidence: BriefEvidence = { toolResults: [] };
       if (this.sendEvidence) {
         if (!options?.taskEventId) return { ok: false, failure: 'unreachable' };

@@ -34,6 +34,7 @@
 // acts only on the run's own. readGatewayOutcome reads all of it before cleanup removes it.
 import { randomUUID } from 'node:crypto';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
+import { BAND_GATE_C_UNREVIEWED_REASON } from '../../src/skills/execution.js';
 import { createAgentDiscuss, createAgentTask, createInboundMessage, type AgentErrorEvent, type AgentResponseEvent, type AgentTaskEvent, type InjectionDrainPoint } from '../../src/bus/events.js';
 import { stampOriginator } from '../../src/contacts/stamp-originator.js';
 import {
@@ -389,6 +390,24 @@ export async function caseAutonomyError(
  * review). Without the band-review judge every detected item fails closed, so the run would
  * score a missing key as the agent's error: it is an errored run instead.
  */
+/**
+ * A gated call Gate C held because it could not review it (#2499) tests the judge's outage or
+ * a broken evidence chain, not the agent: the run is an error, not a pass.
+ */
+export function gatedReviewerError(
+  scenario: Pick<ScenarioCase, 'gatedTools'>,
+  gateway: { holds: ReadonlyArray<{ preamble?: string }> } | undefined,
+  toolCalls: ReadonlyArray<{ name: string; result?: { success: true; data: unknown } | { success: false; error: string } }> = [],
+): string | undefined {
+  // The gate's error names the reason whether or not the approval row was created, so a failed
+  // approval insert cannot hide the outage; the hold's preamble is the second witness.
+  const gated = new Set(scenario.gatedTools);
+  const refused = toolCalls.some((c) => gated.has(c.name) && c.result?.success === false && c.result.error.includes(BAND_GATE_C_UNREVIEWED_REASON));
+  return scenario.gatedTools && (refused || gateway?.holds.some((h) => h.preamble?.includes(BAND_GATE_C_UNREVIEWED_REASON)))
+    ? 'band Gate C held a gated call because its reviewer was unavailable (judge failure or unreadable evidence)'
+    : undefined;
+}
+
 export function throughGatewayJudgeError(
   scenario: Pick<ScenarioCase, 'throughGateway'>,
   stack: Pick<TestModeStack, 'bandReviewJudgeMissing'>,
@@ -520,6 +539,8 @@ export async function createScenarioHarness(
     },
     // approve-action's "the sole pending approval" means the run's own.
     wrapActionLog: (repo) => scopedActionLog(repo, currentScope),
+    // A gated_tools stub is answered behind the review layer's gates (#2499).
+    wrapReviewRegistry: (registry) => controller.reviewRegistry(registry),
     ...(options.requireBandReviewJudge ? { requireBandReviewJudge: true } : {}),
     // The agents' layer keeps tier Gate C, as before #2312, except in a through-gateway run,
     // whose gates follow its fixture's gating as production's would.
@@ -808,6 +829,40 @@ export async function createScenarioHarness(
   }
 
   /**
+   * The coordinator turn a `from: delegate` case's `origin` stands for (#2499): the requester's
+   * inbound.message and the coordinator agent.task the dispatcher parents on it, written to
+   * audit_log in the shape the bus's audit hook writes them. Written directly, not published:
+   * publishing would run the dispatcher and the coordinator, and the case runs only its
+   * specialist. Band review's evidence collector follows delegationOrigin.taskEventId to these
+   * rows, as it does in production. audit_log is append-only, so the rows stay (in the run's
+   * `scenario-` conversation), like every run's other audit rows.
+   */
+  async function recordDelegationOrigin(
+    requester: ResolvedSender,
+    content: string,
+    originator: unknown,
+  ): Promise<{ conversationId: string; taskEventId: string }> {
+    const conversationId = `scenario-${randomUUID()}`;
+    const insert = async (eventType: string, sourceLayer: string, sourceId: string, payload: Record<string, unknown>, parent: string | null): Promise<string> => {
+      const result = await stack.pool.query<{ id: string }>(
+        `INSERT INTO audit_log (timestamp, event_type, source_layer, source_id, payload, parent_event_id, conversation_id)
+         VALUES (now(), $1, $2, $3, $4::jsonb, $5, $6)
+         RETURNING id`,
+        [eventType, sourceLayer, sourceId, JSON.stringify(payload), parent, conversationId],
+      );
+      return result.rows[0]!.id;
+    };
+    const inboundId = await insert('inbound.message', 'channel', requester.channelId, {
+      conversationId, channelId: requester.channelId, senderId: requester.senderId, content,
+    }, null);
+    const taskEventId = await insert('agent.task', 'dispatch', 'dispatcher', {
+      agentId: COORDINATOR, conversationId, channelId: requester.channelId, senderId: requester.senderId,
+      content, metadata: { originator },
+    }, inboundId);
+    return { conversationId, taskEventId };
+  }
+
+  /**
    * What the coordinator's `delegate` call publishes for a specialist (#2025;
    * skills/delegate/handler.ts): an agent.task on the internal channel from the
    * coordinator, carrying the brief, with the dispatcher-stamped `Message ID` / `Account`
@@ -830,6 +885,9 @@ export async function createScenarioHarness(
     const account = inbound.email ? preambleAccountLabel(inbound.email.account) : undefined;
     const identifiers = inbound.email ? buildInboundEmailIdentifierBlock(messageId?.ok ? messageId.value : undefined, account) : null;
     const brief = identifiers ? identifiers + inbound.content : inbound.content;
+    const origin = inbound.origin === undefined
+      ? undefined
+      : await recordDelegationOrigin(requester, inbound.origin, originator);
     return bus.publish('dispatch', createAgentTask({
       agentId: agent,
       conversationId,
@@ -838,10 +896,12 @@ export async function createScenarioHarness(
       content: brief,
       metadata: {
         delegationOrigin: {
-          conversationId: `scenario-${randomUUID()}`,
+          conversationId: origin?.conversationId ?? `scenario-${randomUUID()}`,
           channelId: requester.channelId,
           agentId: COORDINATOR,
           originalTask: brief,
+          // The coordinator task this delegation came from, when the case gives its inbound (#2499).
+          ...(origin ? { taskEventId: origin.taskEventId } : {}),
         },
         ...(messageId?.ok ? { inboundNylasMessageId: messageId.value } : {}),
         ...(account ? { inboundEmailAccount: account } : {}),
@@ -1056,7 +1116,12 @@ export async function createScenarioHarness(
 
       scope.rootConversation = runConversationId;
       scope.throughGateway = scenario.throughGateway === true;
-      controller.beginRun(stubTable, runConversationId, { realDelegation, throughGateway: scenario.throughGateway === true, timezone: clock.timezone });
+      controller.beginRun(stubTable, runConversationId, {
+        realDelegation,
+        throughGateway: scenario.throughGateway === true,
+        ...(scenario.gatedTools ? { gatedTools: scenario.gatedTools } : {}),
+        timezone: clock.timezone,
+      });
       // Armed before the inbound is published. A fast first tool call must
       // already be held, or the follow-up lands after the model has moved on.
       if (inbound.followup?.after === 'first_tool_call') {
@@ -1342,10 +1407,11 @@ export async function createScenarioHarness(
       const reviewerError = gateway?.reviewerFailedOpen
         ? 'band review\'s fail-open cap tripped: the review judge failed on too many sends, so sends held for want of a reviewer'
         : undefined;
+      const gateReviewerError = gatedReviewerError(scenario, gateway, merged);
       const error = timeoutKind === 'delegate_wait'
         ? `${outcome.error} — a specialist was still working (${[...new Set(stillWorking)].join(', ')}): the run's wait ran out before the delegate wait did`
         : outcome.error ?? (thenOutcome?.error ? `inbound.then turn: ${thenOutcome.error}` : undefined)
-          ?? (wakeError ? `approval wake turn: ${wakeError}` : undefined) ?? premiseError ?? reviewerError;
+          ?? (wakeError ? `approval wake turn: ${wakeError}` : undefined) ?? premiseError ?? reviewerError ?? gateReviewerError;
       result = {
         runIndex,
         inboundContent,
