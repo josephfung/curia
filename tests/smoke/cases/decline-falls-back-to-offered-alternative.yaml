@@ -1,11 +1,12 @@
 name: Decline Falls Back To The Offered Alternative
 description: >
-  The principal asks Curia to send a reply to Marco from their inbox. The inbox
-  specialist declines: it only saves drafts. It already saved the reply as a draft and
-  says so. Curia must fall back rather than hand the routing back to the principal
-  (#2496): take the alternative (the saved draft) or send it itself, and tell the
-  principal plainly what happened. It must not ask the principal to re-scope, reassign
-  or cancel, and must not file a review task for them.
+  The principal asks Curia to reply to Sarah Johnson's email from their inbox and send it.
+  The inbox specialist declines: it only saves drafts. It already saved the reply as a
+  draft in her thread and says so. Curia must fall back rather than hand the routing back
+  to the principal (#2496): send the saved draft itself (send-draft) or present the draft
+  as ready, and tell the principal plainly what happened. It must not ask the principal to
+  re-scope, reassign or cancel, and must not file a review task for them. The draft really
+  is in Drafts here, so a check of the mailbox confirms what the specialist said.
 tags:
   - delegation
   - failure-path
@@ -24,29 +25,36 @@ tool_stubs:
         declined: true
         retryable: false
         message: >
-          I can't send email; I only save drafts. I saved a reply to Marco Ruiz in the
-          "Thursday planning session" thread saying yes to Thursday at 2pm, in the
-          principal's Drafts. Alternative: it is ready to send from Gmail as written.
+          I can't send email; I only save drafts. I saved a reply to Sarah Johnson in her
+          "Follow-up after the demo?" thread (draft draft-2496-1) saying yes to Thursday at
+          2pm. Alternative: it is in Drafts, ready to send as written.
     - match: {}
       return:
         agent: "{{input:agent}}"
         response: Done.
-  email-send:
-    - match: { to: null }
-      error: 'Missing recipient: pass to (a contact ID, or "principal" for the principal). Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
+  # The draft the specialist saved, where a check of the mailbox will find it.
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 1, drafts: [{ id: draft-2496-1, threadId: 18f0d4a7c2e9b386, subject: "Re: Follow-up after the demo?", to: [{ name: Sarah Johnson, email: sarah.johnson@lumen.example }], cc: [], snippet: "Hi Sarah, yes, Thursday at 2pm works for me.", date: 1791879000 }] }
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 1, drafts: [{ id: draft-2496-1, threadId: 18f0d4a7c2e9b386, subject: "Re: Follow-up after the demo?", to: [{ name: Sarah Johnson, email: sarah.johnson@lumen.example }], cc: [], snippet: "Hi Sarah, yes, Thursday at 2pm works for me.", date: 1791879000 }] }
+  send-draft:
+    - match: { draft_id: draft-2496-1 }
+      return: { sent: true, message_id: smoke-sent-2496, draft_id: draft-2496-1 }
     - match: {}
-      return: { message_id: smoke-sent-2496, to: "{{input:to}}", subject: "{{input:subject}}" }
+      error: Draft not found.
 
 turns:
   - role: user
     content: |
-      Reply to Marco's email about the planning session and tell him yes to Thursday at 2pm. Send it.
+      Reply to Sarah Johnson's email about a follow-up after the demo and tell her yes to Thursday at 2pm. Send it.
 
 expected_behaviors:
   - id: acts-on-the-fallback
     description: >
-      Either sends the reply itself (an email-send call) or tells the principal the reply
-      to Marco is saved in their Drafts, ready to send as written.
+      Either sends the saved draft itself (a send-draft call for draft-2496-1) or tells the
+      principal the reply to Sarah is saved in their Drafts, ready to send as written.
     weight: critical
   - id: no-routing-question
     description: >
@@ -58,8 +66,8 @@ expected_behaviors:
     weight: critical
   - id: accurate-about-sending
     description: >
-      Does not claim the email was sent unless an email-send call in this turn returned
-      success.
+      Does not claim the email was sent unless a send-draft or email-send call in this
+      turn returned success.
     weight: critical
   - id: no-internal-details
     description: >
