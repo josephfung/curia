@@ -397,6 +397,7 @@ describe('setup-status', () => {
       expect(task?.optional_upgrade?.vault_keys).toEqual(['tavily_api_key']);
       expect(task?.optional_upgrade?.configured).toBe(false);
       expect(typeof task?.optional_upgrade?.credential_how_to).toBe('string');
+      expect(typeof task?.optional_upgrade?.credential_how_to).toBe('string');
       expect(task?.optional_upgrade?.credential_how_to).toContain('tavily.com');
     });
 
