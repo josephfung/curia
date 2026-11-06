@@ -2145,7 +2145,12 @@ export class ContactService {
     if (this.onContactMerged) {
       for (const secondaryId of mergedContactIds) {
         try {
-          this.onContactMerged(survivingContactId, secondaryId, mergedAt, options?.details);
+          // details only when set: callers that never pass one see the original 3-arg call.
+          if (options?.details) {
+            this.onContactMerged(survivingContactId, secondaryId, mergedAt, options.details);
+          } else {
+            this.onContactMerged(survivingContactId, secondaryId, mergedAt);
+          }
         } catch (callbackErr) {
           // The merge is already fully committed at this point — swallow the callback error
           // so the caller sees a successful merge result rather than a spurious failure.
