@@ -138,8 +138,8 @@ describe('runtime identifier sources (#2061)', () => {
         channelId: 'cli',
         content: 'Fill the form, then read the page',
         calls: [
-          { name: 'web-browser', input: { action: 'type', selector: '[g1f0e1]', text: 'evnts@venue.example', session_id: 's1' } },
-          { name: 'web-browser', input: { action: 'get_content', session_id: 's1' } },
+          { name: 'web-browser', input: { action: 'type', selector: '[g1f0e1]', text: 'evnts@venue.example' } },
+          { name: 'web-browser', input: { action: 'get_content' } },
           { name: 'contact-create', input: {} },
         ],
         results: { 'web-browser': 'We will reply to evnts@venue.example from events@venue.example' },

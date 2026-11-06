@@ -64,9 +64,17 @@ describe('provenance recording (#2498)', () => {
     call(index, 'conv-a', 'web-browser', { action: 'get_content', session_id: 's-lost' },
       { session_id: 's-lost', content: 'Confirmation sent to jon@acme.co' });
     expect(index.has('conv-a', 'email:jon@acme.co')).toBe(false);
-    // Once the session's input is on record again, its results count.
+    // The empty record the first read created does not restore trust: a second read of the
+    // same address (typed before the history was lost) still records nothing.
+    call(index, 'conv-a', 'web-browser', { action: 'get_content', session_id: 's-lost' },
+      { session_id: 's-lost', content: 'Confirmation sent to jon@acme.co' });
+    expect(index.has('conv-a', 'email:jon@acme.co')).toBe(false);
     call(index, 'conv-a', 'web-browser', { action: 'get_content', session_id: 's-lost' },
       { session_id: 's-lost', content: 'Questions: help@book.example' });
+    expect(index.has('conv-a', 'email:help@book.example')).toBe(false);
+    // A fresh session (a new id) is trusted again.
+    call(index, 'conv-a', 'web-browser', { action: 'navigate', url: 'https://book.example' },
+      { session_id: 's-fresh', content: 'Questions: help@book.example' });
     expect(index.has('conv-a', 'email:help@book.example')).toBe(true);
   });
 

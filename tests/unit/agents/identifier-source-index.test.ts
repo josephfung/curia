@@ -101,6 +101,34 @@ describe('IdentifierSourceIndex', () => {
       expect(index.has('conv-a', 'token:U0999ZZZZ')).toBe(true);
     });
 
+    it('records nothing from a live scope whose input key was evicted by the key cap', () => {
+      const index = new IdentifierSourceIndex({ maxKeysPerConversation: 1 });
+      index.recordAgentInput('conv-a', 'jon@acme.example');
+      index.recordAgentInput('conv-a', 'sam@venue.example');
+      index.record('conv-a', 'Sent to jon@acme.example', { excludeAgentInputOf: ['conv-a'] });
+      expect(index.has('conv-a', 'email:jon@acme.example')).toBe(false);
+      expect(index.hasAgentInputScope('conv-a')).toBe(false);
+    });
+
+    it('records nothing from a live scope whose input key expired', () => {
+      let now = 0;
+      const index = new IdentifierSourceIndex({ now: () => now, ttlMs: 1000 });
+      index.recordAgentInput('conv-a', 'jon@acme.example');
+      now = 600;
+      index.recordAgentInput('conv-a', 'sam@venue.example');
+      now = 1200;
+      index.record('conv-a', 'Sent to jon@acme.example', { excludeAgentInputOf: ['conv-a'] });
+      expect(index.has('conv-a', 'email:jon@acme.example')).toBe(false);
+    });
+
+    it('keeps a scope marked lost untrusted when more input is recorded', () => {
+      const index = new IdentifierSourceIndex();
+      index.recordAgentInput('browser-session:s1', 'x');
+      index.markAgentInputLost('browser-session:s1');
+      index.recordAgentInput('browser-session:s1', 'y');
+      expect(index.hasAgentInputScope('browser-session:s1')).toBe(false);
+    });
+
     it('knows which scopes have recorded input, and forgets them on eviction and expiry', () => {
       let now = 0;
       const index = new IdentifierSourceIndex({ now: () => now, maxAgentInputScopes: 1, ttlMs: 1000 });

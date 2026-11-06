@@ -56,8 +56,11 @@ export function recordAgentInputBeforeCall(
     const sessionId = sessionIdOf(input);
     if (sessionId) {
       // Checked before recording: this call's own input would otherwise make any id look known.
-      unrecordedSession = !index.hasAgentInputScope(browserSessionScope(sessionId));
-      index.recordAgentInput(browserSessionScope(sessionId), agentInputText);
+      const scope = browserSessionScope(sessionId);
+      unrecordedSession = !index.hasAgentInputScope(scope);
+      index.recordAgentInput(scope, agentInputText);
+      // The record now starts from this call, so it must not make the session look known later.
+      if (unrecordedSession) index.markAgentInputLost(scope);
     }
   }
   return { agentInputText, unrecordedSession };

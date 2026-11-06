@@ -39,7 +39,8 @@ export interface IdentifierSourceIndexOptions {
  * scopes (by last record) and for the keys inside each.
  */
 class ScopedKeys {
-  private readonly scopes = new Map<string, { recordedAt: number; keys: Map<string, number> }>();
+  /** `lost`: a key of this scope was evicted or expired while the scope stayed live. */
+  private readonly scopes = new Map<string, { recordedAt: number; keys: Map<string, number>; lost: boolean }>();
 
   constructor(
     private readonly ttlMs: number,
@@ -53,10 +54,16 @@ class ScopedKeys {
       if (now - entry.recordedAt <= this.ttlMs) break;
       this.scopes.delete(key);
     }
-    const entry = this.scopes.get(scope) ?? { recordedAt: now, keys: new Map<string, number>() };
+    const entry = this.scopes.get(scope) ?? { recordedAt: now, keys: new Map<string, number>(), lost: false };
     entry.recordedAt = now;
     this.scopes.delete(scope);
     this.scopes.set(scope, entry);
+    // Keys expire one by one while the scope is kept alive by newer records.
+    for (const [key, addedAt] of entry.keys) {
+      if (now - addedAt <= this.ttlMs) break;
+      entry.keys.delete(key);
+      entry.lost = true;
+    }
     for (const key of found) {
       entry.keys.delete(key);
       entry.keys.set(key, now);
@@ -64,6 +71,7 @@ class ScopedKeys {
     for (const oldest of entry.keys.keys()) {
       if (entry.keys.size <= this.maxKeys) break;
       entry.keys.delete(oldest);
+      entry.lost = true;
     }
     for (const oldest of this.scopes.keys()) {
       if (this.scopes.size <= this.maxScopes) break;
@@ -76,9 +84,28 @@ class ScopedKeys {
     return addedAt !== undefined && now - addedAt <= this.ttlMs;
   }
 
+  /** Mark a scope's history as incomplete for good, creating the scope if it is not held. */
+  markLost(scope: string, now: number): void {
+    this.add(scope, new Set(), now);
+    const entry = this.scopes.get(scope);
+    if (entry) entry.lost = true;
+  }
+
+  /** True when the scope is live and has lost no key (evicted or expired). */
   hasScope(scope: string, now: number): boolean {
     const entry = this.scopes.get(scope);
-    return entry !== undefined && now - entry.recordedAt <= this.ttlMs;
+    if (entry === undefined || entry.lost || now - entry.recordedAt > this.ttlMs) return false;
+    const oldest = entry.keys.values().next();
+    return oldest.done === true || now - oldest.value <= this.ttlMs;
+  }
+
+  /** True when the scope is held and has lost a key, or one has expired since the last record. */
+  isIncomplete(scope: string, now: number): boolean {
+    const entry = this.scopes.get(scope);
+    if (entry === undefined) return false;
+    if (entry.lost) return true;
+    const oldest = entry.keys.values().next();
+    return oldest.done !== true && now - oldest.value > this.ttlMs;
   }
 
   get size(): number {
@@ -113,6 +140,10 @@ export class IdentifierSourceIndex {
   record(conversationKey: string, text: string, options: { excludeAgentInputOf?: readonly string[] } = {}): void {
     const found = sourceKeysInText(text);
     const now = this.now();
+    // Fail closed: a scope that lost an input key can no longer say what the agent typed.
+    for (const scope of options.excludeAgentInputOf ?? []) {
+      if (this.agentInput.isIncomplete(scope, now)) return;
+    }
     for (const scope of options.excludeAgentInputOf ?? []) {
       for (const key of found) if (this.agentInput.has(scope, key, now)) found.delete(key);
     }
@@ -139,6 +170,14 @@ export class IdentifierSourceIndex {
    */
   hasAgentInputScope(scopeKey: string): boolean {
     return this.agentInput.hasScope(scopeKey, this.now());
+  }
+
+  /**
+   * Keep a scope untrusted for good: its earlier input is unknown (#2498). Recording more
+   * input under it later does not restore it.
+   */
+  markAgentInputLost(scopeKey: string): void {
+    this.agentInput.markLost(scopeKey, this.now());
   }
 
   has(conversationKey: string, key: string): boolean {
