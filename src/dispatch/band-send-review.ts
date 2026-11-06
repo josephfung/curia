@@ -274,9 +274,16 @@ export class BandSendReview {
     // At 80+ a hold for stakes alone waits for the drafter's rewrite of the details, like one
     // waiting for the rewrite of a claim (#2473): the approval must not show them as sent.
     const stakesOnly = other.kind === 'hold' && !other.ask && other.findings.every((f) => f.rule === BAND_RULES.speaksAsPrincipal);
-    const base = isSpotCheckOrAbove(input.score) && stakesOnly && rewritesDetails(piiOutcome)
-      ? withHeldBeside(piiOutcome, other)
-      : combine(other, piiOutcome);
+    // A claim bounce carrying a stakes hold also outranks a disclosure hold that asks nobody:
+    // the drafter fixes the claim first, and the recheck holds with the stakes finding beside it.
+    const claimBounceHoldingStakes = other.kind === 'bounce'
+      && other.heldBeside?.some((f) => f.rule === BAND_RULES.speaksAsPrincipal) === true
+      && piiOutcome.kind === 'hold' && !piiOutcome.ask;
+    const base = claimBounceHoldingStakes
+      ? withHeldBeside(other, piiOutcome)
+      : isSpotCheckOrAbove(input.score) && stakesOnly && rewritesDetails(piiOutcome)
+        ? withHeldBeside(piiOutcome, other)
+        : combine(other, piiOutcome);
     if (quoted.length === 0 || base.kind !== 'send') return this.settle(key, taskIds, input, prior !== undefined, base);
     // The rest of the send goes out: the quote does too only if its items would.
     const quoteRulings = askedItems && quoted.every((q) => askedItems.includes(q)) ? rulings : undefined;

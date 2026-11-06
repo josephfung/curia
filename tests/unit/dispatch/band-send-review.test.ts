@@ -544,6 +544,14 @@ describe('BandSendReview', () => {
       }
     });
 
+    it('keeps the stakes finding beside a claim bounce when a trusted-directed item holds (#2473)', async () => {
+      const verdict: OkVerdict = { ...withRulings(ruling('directed')), unsupportedClaims: ['The clinic opens at 9.'], speaksAsPrincipal: true, stakes: 'commitment', stakesReason: 'Agrees to a date.' };
+      const { svc } = make([verdict], { evidence: { authority: fromTrusted }, contactTier: async () => 'trusted' });
+      const d = await svc.review({ ...pii, score: 85 });
+      expect(d.kind).toBe('bounce');
+      if (d.kind === 'bounce') expect(d.heldBeside?.map((f) => f.rule)).toEqual(['speaks-as-principal', 'pii-not-authorized']);
+    });
+
     it('does not ask disclosure, or pass items, when nothing was detected', async () => {
       for (const detectedItems of [undefined, []]) {
         const { svc, review } = make([clean]);
