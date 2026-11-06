@@ -390,6 +390,19 @@ export async function caseAutonomyError(
  * review). Without the band-review judge every detected item fails closed, so the run would
  * score a missing key as the agent's error: it is an errored run instead.
  */
+/**
+ * A gated call Gate C held because it could not review it (#2499) tests the judge's outage or
+ * a broken evidence chain, not the agent: the run is an error, not a pass.
+ */
+export function gatedReviewerError(
+  scenario: Pick<ScenarioCase, 'gatedTools'>,
+  gateway: { holds: ReadonlyArray<{ preamble?: string }> } | undefined,
+): string | undefined {
+  return scenario.gatedTools && gateway?.holds.some((h) => h.preamble?.includes(BAND_GATE_C_UNREVIEWED_REASON))
+    ? 'band Gate C held a gated call because its reviewer was unavailable (judge failure or unreadable evidence)'
+    : undefined;
+}
+
 export function throughGatewayJudgeError(
   scenario: Pick<ScenarioCase, 'throughGateway'>,
   stack: Pick<TestModeStack, 'bandReviewJudgeMissing'>,
@@ -1350,11 +1363,7 @@ export async function createScenarioHarness(
       const reviewerError = gateway?.reviewerFailedOpen
         ? 'band review\'s fail-open cap tripped: the review judge failed on too many sends, so sends held for want of a reviewer'
         : undefined;
-      // A gated write Gate C held because it could not review it (#2499) tests the judge's
-      // outage or a broken evidence chain, not the agent: an error, not a pass.
-      const gateReviewerError = scenario.gatedTools && gateway?.holds.some((h) => h.preamble?.includes(BAND_GATE_C_UNREVIEWED_REASON))
-        ? 'band Gate C held a gated call because its reviewer was unavailable (judge failure or unreadable evidence)'
-        : undefined;
+      const gateReviewerError = gatedReviewerError(scenario, gateway);
       const error = timeoutKind === 'delegate_wait'
         ? `${outcome.error} — a specialist was still working (${[...new Set(stillWorking)].join(', ')}): the run's wait ran out before the delegate wait did`
         : outcome.error ?? (thenOutcome?.error ? `inbound.then turn: ${thenOutcome.error}` : undefined)

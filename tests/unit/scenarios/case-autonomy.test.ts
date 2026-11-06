@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { AutonomyService } from '../../../src/autonomy/autonomy-service.js';
 import { createLogger } from '../../../src/logger.js';
 import { FixtureAutonomyService, runWithAutonomyFixture } from '../../../src/startup/test-mode-stack.js';
-import { caseAutonomyError, throughGatewayJudgeError } from '../../scenarios/harness.js';
+import { caseAutonomyError, gatedReviewerError, throughGatewayJudgeError } from '../../scenarios/harness.js';
+import { BAND_GATE_C_UNREVIEWED_REASON } from '../../../src/skills/execution.js';
 
 const logger = createLogger('error');
 const stored = { score: 95, band: 'full', updated_at: new Date('2026-10-01T00:00:00Z'), updated_by: 'ceo' };
@@ -50,5 +51,18 @@ describe('throughGatewayJudgeError', () => {
 
   it('leaves a case that stubs its sends alone, judge or not', () => {
     expect(throughGatewayJudgeError({}, { bandReviewJudgeMissing: missing })).toBeUndefined();
+  });
+});
+
+// #2499: a gated call Gate C held for want of a reviewer errors the run.
+describe('gatedReviewerError', () => {
+  const held = (reason: string) => ({ holds: [{ preamble: `Curia wanted to run 'calendar-create-event', and ${reason}.` }] });
+  it('errors a gated run held because the reviewer was unavailable', () => {
+    expect(gatedReviewerError({ gatedTools: ['calendar-create-event'] }, held(BAND_GATE_C_UNREVIEWED_REASON))).toMatch(/reviewer was unavailable/);
+  });
+  it('passes a steered hold, a run without gated tools, and a run without a gateway outcome', () => {
+    expect(gatedReviewerError({ gatedTools: ['calendar-create-event'] }, held("it looks steered by someone outside the principal's business"))).toBeUndefined();
+    expect(gatedReviewerError({}, held(BAND_GATE_C_UNREVIEWED_REASON))).toBeUndefined();
+    expect(gatedReviewerError({ gatedTools: ['calendar-create-event'] }, undefined)).toBeUndefined();
   });
 });
