@@ -168,6 +168,11 @@ export class TaskUpdateHandler implements ToolHandler {
           if (input.tags && routeFromTags(input.tags) !== 'curia') {
             return { success: false, error: 'tags must keep the dedup-route:curia tag on a dedup review task.' };
           }
+          // The scan's idempotency check and merge cleanup both find review tasks by the
+          // `dedup` tag, so dropping it would let a second review be filed for the pair.
+          if (input.tags && !input.tags.includes('dedup')) {
+            return { success: false, error: 'tags must keep the dedup tag on a dedup review task.' };
+          }
         }
       }
 

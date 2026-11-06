@@ -39,12 +39,16 @@ describeIf('contact-find-duplicates scan (#2493)', () => {
   const merges: Array<{ primaryId: string; secondaryId: string; details?: ContactMergedDetails }> = [];
 
   let pool: pg.Pool;
+  let dbValidated = false;
   let contactService: ContactService;
   let taskRepo: TaskRepo;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     await requireCuriaTestDatabase(pool);
+    // Only after validation: afterAll runs even when it fails, and must not delete on a
+    // database that is not the test one.
+    dbValidated = true;
     contactService = ContactService.createWithPostgres(pool, undefined, logger, {
       dedupService: new DedupService(),
       onContactMerged: (primaryId, secondaryId, _mergedAt, details) => {
@@ -56,16 +60,18 @@ describeIf('contact-find-duplicates scan (#2493)', () => {
   });
 
   afterAll(async () => {
-    await pool.query(
-      `DELETE FROM scheduled_jobs WHERE task_id IN (SELECT id FROM tasks WHERE title LIKE $1)`,
-      [`%${runId}%`],
-    );
-    await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`%${runId}%`]);
-    const ids = [...createdContactIds];
-    if (ids.length > 0) {
-      // Exclusions and identities go with the contact (ON DELETE CASCADE / explicit here).
-      await pool.query('DELETE FROM contact_channel_identities WHERE contact_id = ANY($1)', [ids]);
-      await pool.query('DELETE FROM contacts WHERE id = ANY($1)', [ids]);
+    if (dbValidated) {
+      await pool.query(
+        `DELETE FROM scheduled_jobs WHERE task_id IN (SELECT id FROM tasks WHERE title LIKE $1)`,
+        [`%${runId}%`],
+      );
+      await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`%${runId}%`]);
+      const ids = [...createdContactIds];
+      if (ids.length > 0) {
+        // Exclusions and identities go with the contact (ON DELETE CASCADE / explicit here).
+        await pool.query('DELETE FROM contact_channel_identities WHERE contact_id = ANY($1)', [ids]);
+        await pool.query('DELETE FROM contacts WHERE id = ANY($1)', [ids]);
+      }
     }
     await pool.end();
   });
@@ -213,7 +219,8 @@ describeIf('contact-find-duplicates scan (#2493)', () => {
     const summary = await runScan([a.id, b.id], 50);
     expect(summary['auto_merged']).toBe(0);
     expect(summary['filed']).toBe(1);
-    expect(await contactService.getContact(b.id)).not.toBeNull();
+    expect((await contactService.getContact(a.id))?.id).toBe(a.id);
+    expect((await contactService.getContact(b.id))?.id).toBe(b.id);
   });
 
   it('hands an owner-ceo review of two companies back to Curia', async () => {

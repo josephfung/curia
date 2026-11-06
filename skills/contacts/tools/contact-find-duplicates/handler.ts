@@ -64,6 +64,8 @@ export const DEFERRAL_COOLDOWN_DAYS = 56;
 
 /** Ceiling on automatic merges per run — a safety valve against a classifier bug. */
 const DEFAULT_MAX_AUTO_MERGES = 25;
+/** Review tasks filed per scan when the caller passes no max_tasks. */
+const DEFAULT_MAX_TASKS = 20;
 
 /** Who the contact.merged audit row names as the decider of an automatic merge. */
 const AUTO_MERGE_ACTOR = 'dedup-scan';
@@ -90,7 +92,7 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
     };
 
     const minScore = rawMinScore !== undefined ? Number(rawMinScore) : DEFAULT_MIN_SCORE;
-    const maxTasks = rawMaxTasks !== undefined ? Number(rawMaxTasks) : undefined;
+    const maxTasks = rawMaxTasks !== undefined ? Number(rawMaxTasks) : DEFAULT_MAX_TASKS;
 
     if (!Number.isFinite(minScore) || minScore < 0 || minScore > 1) {
       return { success: false, error: `Invalid min_score "${rawMinScore}": must be a number between 0 and 1.` };
@@ -144,13 +146,19 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
         updatedAfter: cooldownStart,
         limit: TASK_FETCH_LIMIT,
       });
-      for (const [label, list] of [['open', openTasks], ['recently closed', closedTasks]] as const) {
-        if (list.length >= TASK_FETCH_LIMIT) {
-          ctx.log.warn(
-            { count: list.length, limit: TASK_FETCH_LIMIT, group: label },
-            'contact-find-duplicates: task fetch hit limit — some pairs may be re-filed',
-          );
-        }
+      if (openTasks.length >= TASK_FETCH_LIMIT) {
+        ctx.log.warn(
+          { count: openTasks.length, limit: TASK_FETCH_LIMIT, group: 'open' },
+          'contact-find-duplicates: task fetch hit limit — some pairs may be re-filed',
+        );
+      }
+      // A truncated cooldown ledger would let a deferred pair be filed again inside its
+      // cooldown, so stop the scan rather than file against an incomplete ledger.
+      if (closedTasks.length >= TASK_FETCH_LIMIT) {
+        throw new Error(
+          `more than ${TASK_FETCH_LIMIT - 1} dedup reviews closed within ${DEFERRAL_COOLDOWN_DAYS} days; `
+          + 'the cooldown ledger would be incomplete',
+        );
       }
       recentlyClosed = new Map();
       for (const task of closedTasks) {
@@ -429,8 +437,9 @@ const ROUTE_LINES: Record<DedupRoute, string> = {
     + 'changes no one\'s trust tier, so do not ask the principal. Merge them, or record them '
     + 'as not duplicates with contact-dedup-exclude (decided_by "curia").',
   principal:
-    'Decision: settle it from the records if they are conclusive; otherwise ask the principal '
-    + '(they know at least one side, and a merge would extend that trust to the other).',
+    'Decision: ask the principal unless independent verified identity evidence proves the '
+    + 'contacts are the same. A shared company kg_node_id or a sender-selected name is not '
+    + 'conclusive identity evidence.',
 };
 
 function reviewDescription(

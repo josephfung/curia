@@ -126,8 +126,9 @@ describe('dedupPairFingerprint', () => {
     expect(dedupPairFingerprint(b, [], a, [identity(A, '+15555550100', true, 'sms'), identity(A, 'R@X.com')])).toBe(fp);
   });
 
-  it('changes on a name edit or an added identity', () => {
+  it('changes on a name edit, a tier change or an added identity', () => {
     const fp = dedupPairFingerprint(a, [], b, []);
+    expect(dedupPairFingerprint(a, [], { ...b, tier: 'known' }, [])).not.toBe(fp);
     expect(dedupPairFingerprint(a, [], { ...b, displayName: 'Robbie Jones' }, [])).not.toBe(fp);
     expect(dedupPairFingerprint(a, [], b, [identity(B, 'rob@x.com')])).not.toBe(fp);
   });

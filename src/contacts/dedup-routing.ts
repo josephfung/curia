@@ -139,23 +139,25 @@ export function choosePrimary(
 
 /**
  * A short hash of what the dedup scan compares for a pair: each contact's normalized
- * name and its channel identities. Stamped on the review task when it is filed, so a
+ * name, tier and channel identities. Stamped on the review task when it is filed, so a
  * later scan can tell whether either contact changed since (a name edit, an identity
  * added or removed) and re-file a deferred pair early.
  *
  * Order-independent: the two contacts are sorted by id.
  */
 export function dedupPairFingerprint(
-  a: Pick<Contact, 'id' | 'displayName'>,
+  a: Pick<Contact, 'id' | 'displayName' | 'tier'>,
   aIdentities: readonly ChannelIdentity[],
-  b: Pick<Contact, 'id' | 'displayName'>,
+  b: Pick<Contact, 'id' | 'displayName' | 'tier'>,
   bIdentities: readonly ChannelIdentity[],
 ): string {
-  const describe = (c: Pick<Contact, 'id' | 'displayName'>, ids: readonly ChannelIdentity[]) => {
+  const describe = (c: Pick<Contact, 'id' | 'displayName' | 'tier'>, ids: readonly ChannelIdentity[]) => {
     const keys = ids
       .map(i => `${i.channel}:${i.channel === 'email' ? i.channelIdentifier.toLowerCase() : i.channelIdentifier}`)
       .sort();
-    return `${c.id.toLowerCase()}|${normalizeDisplayName(c.displayName)}|${keys.join(',')}`;
+    // The tier is in the fingerprint: a tier change can change the route (unknown to known
+    // sends the pair to the principal), so a deferred pair must be reconsidered.
+    return `${c.id.toLowerCase()}|${normalizeDisplayName(c.displayName)}|${c.tier}|${keys.join(',')}`;
   };
   const sides = [describe(a, aIdentities), describe(b, bIdentities)].sort();
   return createHash('sha256').update(sides.join('\n')).digest('hex').slice(0, 16);

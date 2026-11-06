@@ -162,7 +162,7 @@ export async function reconcileOpenDedupTasks(
 async function isTerminal(taskRepo: DedupTaskRepo, taskId: string): Promise<boolean> {
   const blocker = await taskRepo.getTask(taskId);
   // A blocker that no longer exists blocks nothing.
-  return blocker === null || TERMINAL_STATUSES.has(blocker.status);
+  return blocker === null || TERMINAL_STATUSES.has(blocker.status) || blocker.status === 'failed';
 }
 
 /**
