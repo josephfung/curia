@@ -360,6 +360,7 @@ describe('OutboundContentFilter', () => {
         'We have a verified account and a trust fund to discuss.',
         'We verified trust account balances with the bank this morning.',
         'The title company verified trust ownership of the property.',
+        'The trust threshold for distributions is set out in section 4.',
       ])('leaves ordinary prose alone: %s', async (content) => {
         const result = await createTestFilter().check({ ...BASE_INPUT, content });
         expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(false);

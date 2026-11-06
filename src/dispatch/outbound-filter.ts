@@ -200,11 +200,12 @@ const INTERNAL_FIELD_NAMES: string[] = [
 // higher level of verified trust" discloses the trust system and tells a social engineer
 // what to argue next. Kept to phrases ordinary business mail does not use: bare "trust
 // score" or "trust level" are left out (a review site's TrustScore, "a level of trust"),
-// and so is bare "verified trust" ("we verified trust account balances").
+// and so are bare "verified trust" ("we verified trust account balances") and bare
+// "trust threshold" ("the trust threshold for distributions"), which needs my/your/our.
 const TRUST_SYSTEM_PHRASES: ReadonlyArray<{ label: string; pattern: RegExp }> = [
   { label: 'message trust score', pattern: /message[\s_]?trust[\s_]?score/ },
   { label: 'verified trust', pattern: /\b(level of|higher|more|enough|sufficient) verified trust\b|\bverified trust (with|level|score)\b/ },
-  { label: 'trust threshold', pattern: /\btrust thresholds?\b/ },
+  { label: 'trust threshold', pattern: /\b(my|your|our) (\w+ )?trust thresholds?\b/ },
 ];
 
 // Secret patterns — same as sanitize.ts but duplicated intentionally.
