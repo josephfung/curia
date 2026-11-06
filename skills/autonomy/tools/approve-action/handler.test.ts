@@ -88,6 +88,17 @@ describe('ApproveActionHandler', () => {
     expect(result.success).toBe(false);
   });
 
+  // #2495: a voice hand-off whose call ended files an elevated tool for confirmation. Its
+  // replay must run inside the approving turn's live principal turn to pass the elevated gate.
+  it('replays the approved action inside the approving live turn', async () => {
+    const execLayer = makeMockExecutionLayer();
+    await new ApproveActionHandler().execute(makeCtx({
+      actionLogRepo: makeMockRepo(), bus: makeMockBus(), executionLayer: execLayer, liveTurn: true,
+    }));
+    const options = (execLayer.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![3];
+    expect(options).toMatchObject({ humanApproved: true, liveTurn: true });
+  });
+
   it('approves, re-executes, writes child row, publishes audit event', async () => {
     const repo = makeMockRepo();
     const bus = makeMockBus();

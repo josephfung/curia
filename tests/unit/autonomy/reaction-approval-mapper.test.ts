@@ -140,7 +140,12 @@ describe('ReactionApprovalMapper', () => {
       'calendar-create-event',
       { title: 'Board sync' },
       expect.objectContaining({ contactId: 'principal-1', channel: 'slack' }),
-      expect.objectContaining({ humanApproved: true, liveTurn: true }),
+      // A principal originator with liveTurn: a queued elevated skill passes its gate (#2495).
+      expect.objectContaining({
+        humanApproved: true,
+        liveTurn: true,
+        taskMetadata: { originator: expect.objectContaining({ contactId: 'principal-1', systemRole: 'principal' }) },
+      }),
     );
     expect(bus.publish).toHaveBeenCalledWith(
       'dispatch',

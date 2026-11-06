@@ -389,8 +389,10 @@ export class ReactionApprovalMapper {
         taskEventId: row.taskId,
         conversationId: row.conversationId ?? undefined,
         liveTurn: true,
+        // The reactor was checked against the principal's identities above. systemRole makes the
+        // replay a live principal turn, so a queued elevated skill passes its gate (#2495).
         taskMetadata: {
-          originator: { contactId: deciderId, channel: channelId },
+          originator: { contactId: deciderId, systemRole: 'principal', channel: channelId },
         },
       },
     );

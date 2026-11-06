@@ -13,8 +13,14 @@
 // scope, this tool re-enters the normal path by publishing a coordinator
 // agent.task directly (impersonating the dispatch layer, same as delegate).
 //
-// The async task deliberately does NOT forward liveTurn — crossing the async
-// boundary must not preserve the elevated self-approval signal (#1126).
+// Live turn (#1126, #2495): the principal on a call is a live principal turn, but
+// the hand-off crosses an async boundary, which must not carry the elevated
+// self-approval signal. A now hand-off from the principal carries liveTurn with a
+// live-turn grant that ends when the wait on the call returns (or the call ends,
+// or its TTL runs out), so the coordinator and the specialists it delegates to can
+// run an elevated tool the principal asked for while they are still listening.
+// An after_call hand-off carries a grant id that was never live: an elevated tool
+// under it files a confirmation request instead of failing bare.
 // channelId is 'internal' so agent.response is not auto-relayed to voice TTS;
 // the coordinator reaches the principal via signal-send / email-send with
 // "principal" as the recipient (#2033).
@@ -34,6 +40,8 @@ import { createAgentTask } from '../../src/bus/events.js';
 import type { AgentResponseEvent, BusEvent } from '../../src/bus/events.js';
 import { principalSendTool, REACH_CHANNELS, type ReachChannel } from '../../src/agents/principal-reach.js';
 import { parseExecutionPausedPayload } from '../../src/agents/resumable-task.js';
+import { isLivePrincipalTurn } from '../../src/contacts/principal.js';
+import { issueLiveTurnGrant, lapsedLiveTurnGrantId } from '../../src/autonomy/live-turn-grants.js';
 
 /**
  * A follow-up goes on the channel the caller named, or else the principal's usual
@@ -382,6 +390,17 @@ export class AsyncOfframpHandler implements ToolHandler {
 
     const parentEventId = ctx.taskEventId ?? `async-offramp-${randomUUID()}`;
     const conversationId = `voice-offramp:${idempotencyKey.slice(0, 32)}`;
+    const voiceSessionId = ctx.taskMetadata?.['voiceSessionId'];
+
+    // A now hand-off from the principal stays a live turn only while the call waits
+    // on it (#2495). The grant's TTL is the wait itself, so it cannot outlive the
+    // wait even if the revoke below never runs.
+    const liveGrant = mode === 'now' && isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata)
+      ? issueLiveTurnGrant({
+        voiceSessionId: typeof voiceSessionId === 'string' ? voiceSessionId : null,
+        ttlMs: NOW_MODE_WAIT_MS,
+      })
+      : null;
 
     const taskEvent = createAgentTask({
       agentId: 'coordinator',
@@ -394,12 +413,15 @@ export class AsyncOfframpHandler implements ToolHandler {
         offrampMode: mode,
         followUpChannel,
         sourceVoiceConversationId: ctx.conversationId,
-        sourceVoiceSessionId: ctx.taskMetadata?.['voiceSessionId'],
+        sourceVoiceSessionId: voiceSessionId,
         brief,
         idempotencyKey,
         ...(originator ? { originator } : {}),
       },
-      // Deliberately omit liveTurn — async boundary (#1126).
+      // Distinct top-level fields, never metadata, so nothing can persist them (#1126).
+      // Without a live grant, the id is one that was never live (#2495).
+      ...(liveGrant ? { liveTurn: true } : {}),
+      liveTurnGrantId: liveGrant?.id ?? lapsedLiveTurnGrantId(),
       parentEventId,
     });
 
@@ -426,6 +448,7 @@ export class AsyncOfframpHandler implements ToolHandler {
       await ctx.bus.publishDetached('dispatch', taskEvent);
     } catch (err) {
       nowWait?.cancel();
+      liveGrant?.revoke();
       enqueuedByKey.delete(idempotencyKey);
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error(
@@ -452,6 +475,8 @@ export class AsyncOfframpHandler implements ToolHandler {
 
     if (nowWait) {
       const outcome = await nowWait.outcome;
+      // The call is no longer waiting: whatever the task does from here is not live.
+      liveGrant?.revoke();
       if (outcome.kind === 'question') {
         return {
           success: true,
@@ -494,7 +519,8 @@ export class AsyncOfframpHandler implements ToolHandler {
             result: payload.content,
             sent: payload.sends ?? [],
             task_event_id: taskEvent.id,
-            note: 'Tell the caller the result in your own words. Only messages listed in sent went out.',
+            note: 'Tell the caller the result in your own words. Only messages listed in sent went out. '
+              + 'If something is waiting for the principal\'s confirmation, say so plainly; never say it cannot be done.',
           },
         };
       }

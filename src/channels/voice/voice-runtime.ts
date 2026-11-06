@@ -62,6 +62,7 @@ import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
 import { findInternalJargon } from './spoken-jargon.js';
 import { findCompletionClaim } from './completion-claim.js';
 import { VoiceTurnError, VoiceTurnRunner } from './turn-runner.js';
+import { revokeLiveTurnGrantsForVoiceSession } from '../../autonomy/live-turn-grants.js';
 
 export {
   buildVoiceGreetingInstruction,
@@ -2435,6 +2436,8 @@ export class VoiceRuntime {
 
     live.ending = true;
     this.sessions.delete(sessionId);
+    // Work the principal handed off on this call stops being a live turn now (#2495).
+    revokeLiveTurnGrantsForVoiceSession(sessionId);
     let resolveDone!: (record: VoiceSessionRecord | null) => void;
     const entry: EndingSession = {
       session: live,

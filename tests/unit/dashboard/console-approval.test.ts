@@ -110,6 +110,8 @@ describe('approveFromConsole', () => {
       { contactId: 'principal-1', role: 'ceo', channel: 'web' },
       expect.objectContaining({
         humanApproved: true,
+        // A queued elevated skill replays inside the principal's live turn (#2495).
+        liveTurn: true,
         taskEventId: row().taskId,
         taskMetadata: {
           originator: expect.objectContaining({ contactId: 'principal-1', channel: 'web', systemRole: 'principal' }),

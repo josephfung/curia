@@ -289,6 +289,10 @@ export interface ToolContext {
    *  isPrincipalDirectedSend() for the Stage 2.5 bypass (#1870); other skills can ignore it.
    *  The elevated-skill gate is the main consumer, in the execution layer. */
   liveTurn?: boolean;
+  /** Live-turn grant id (#2495) from agent.task.payload.liveTurnGrantId. `delegate` forwards it
+   *  with `liveTurn`. By the time a skill sees it, the execution layer has already cleared
+   *  `liveTurn` if the grant lapsed. */
+  liveTurnGrantId?: string;
   /** IANA timezone name (e.g. "America/Toronto") for formatting user-facing timestamps.
    *  Populated from the global config timezone. Skills returning timestamps for display
    *  should use toLocalIso() with this value rather than returning raw UTC strings. */

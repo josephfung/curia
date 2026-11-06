@@ -110,14 +110,17 @@ export class ApproveActionHandler implements ToolHandler {
       // Step 2: Re-execute the original skill with humanApproved bypass.
       // humanApproved skips the autonomy + caller gates (ADR-018). taskMetadata is forwarded so
       // the re-executed handler reads the originating live-principal standing for its own audit /
-      // standing-continuity needs (the queued skill is always `normal` — elevated skills are
-      // autonomy-exempt and so are never blocked into the queue in the first place).
+      // standing-continuity needs. liveTurn is forwarded because the queued skill can be
+      // `elevated`: a voice hand-off whose call ended files one for confirmation (#2495), and
+      // its replay must pass the elevated gate. This skill is itself elevated, so the gate
+      // already guaranteed this turn is a live principal turn.
       const reResult = await ctx.executionLayer.invoke(
         row.toolName,
         row.payload,
         ctx.caller,
         {
           humanApproved: true,
+          liveTurn: ctx.liveTurn,
           sendResolution: pins ?? undefined,
           taskEventId: ctx.taskEventId,
           conversationId: row.conversationId ?? undefined,
