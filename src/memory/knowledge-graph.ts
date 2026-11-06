@@ -838,6 +838,10 @@ class PostgresBackend implements KnowledgeGraphBackend {
     // folds an owner linked by two edges into one. Rows come back bounded: at most
     // perFactLimit named owners per fact, plus one withheld row that carries only the counts.
     // Only id, type and label are read, so no embedding or properties leave the database.
+    // Labels sort with COLLATE "C" (code-unit order) so the in-memory backend's plain string
+    // comparison picks the same first perFactLimit owners. Owners need no embedding: this
+    // names nodes that entity-context and traversal already show, so search eligibility is
+    // not a visibility control here; archive status and the sensitivity ceiling are.
     const result = await this.pool.query<{
       fact_id: string;
       id: string;
@@ -868,13 +872,13 @@ class PostgresBackend implements KnowledgeGraphBackend {
          SELECT o.*,
                 COUNT(*) FILTER (WHERE o.visible) OVER (PARTITION BY o.fact_id) AS visible_count,
                 COUNT(*) FILTER (WHERE NOT o.visible) OVER (PARTITION BY o.fact_id) AS withheld_count,
-                ROW_NUMBER() OVER (PARTITION BY o.fact_id, o.visible ORDER BY o.dir, o.label, o.id) AS rn
+                ROW_NUMBER() OVER (PARTITION BY o.fact_id, o.visible ORDER BY o.dir, o.label COLLATE "C", o.id) AS rn
            FROM owners o
        )
        SELECT fact_id, id, type, label, visible, visible_count, withheld_count
          FROM ranked
         WHERE (visible AND rn <= $3) OR (NOT visible AND rn = 1)
-        ORDER BY fact_id, dir, label, id`,
+        ORDER BY fact_id, dir, label COLLATE "C", id`,
       [factIds, allowedLevels ?? null, perFactLimit],
     );
 

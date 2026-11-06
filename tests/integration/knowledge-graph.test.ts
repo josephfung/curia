@@ -311,23 +311,30 @@ describeIf('Knowledge Graph Integration', () => {
     await link(restricted.id, fact.id);
     await store.archiveNode(archivedOwner.id);
     await store.archiveEdge(archivedEdge.id);
+    // archiveNode cascades to its edges; this live edge to the archived owner checks the
+    // node's own archived_at filter.
+    await link(archivedOwner.id, fact.id, 'mentioned_in');
+    // Lowercase sorts after uppercase in code-unit order, matching the in-memory backend.
+    const lowerOwner = await mk('person', 'aa lowercase owner');
+    createdKgNodeIds.push(lowerOwner.id);
+    await link(lowerOwner.id, fact.id);
 
     const all = await store.getFactOwners([fact.id, orphan.id], { perFactLimit: 5 });
     expect(all.has(orphan.id)).toBe(false);
     const entry = all.get(fact.id)!;
     // Forward owners by label, then the reverse-direction owner.
-    expect(entry.owners.map((o) => o.id)).toEqual([ownerB.id, ownerC.id, restricted.id, ownerA.id]);
+    expect(entry.owners.map((o) => o.id)).toEqual([ownerB.id, ownerC.id, lowerOwner.id, restricted.id, ownerA.id]);
     expect(entry.owners[0]).toEqual({ id: ownerB.id, type: 'person', label: ownerB.label });
-    expect(entry.visibleCount).toBe(4);
+    expect(entry.visibleCount).toBe(5);
     expect(entry.withheldCount).toBe(0);
 
     const bounded = (await store.getFactOwners([fact.id], { perFactLimit: 2 })).get(fact.id)!;
     expect(bounded.owners.map((o) => o.id)).toEqual([ownerB.id, ownerC.id]);
-    expect(bounded.visibleCount).toBe(4);
+    expect(bounded.visibleCount).toBe(5);
 
     const ceiling = (await store.getFactOwners([fact.id], { perFactLimit: 5, maxSensitivity: 'internal' })).get(fact.id)!;
-    expect(ceiling.owners.map((o) => o.id)).toEqual([ownerB.id, ownerC.id, ownerA.id]);
-    expect(ceiling.visibleCount).toBe(3);
+    expect(ceiling.owners.map((o) => o.id)).toEqual([ownerB.id, ownerC.id, lowerOwner.id, ownerA.id]);
+    expect(ceiling.visibleCount).toBe(4);
     expect(ceiling.withheldCount).toBe(1);
 
     // Only a withheld owner: the fact still has an entry, with no names in it.

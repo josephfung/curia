@@ -213,6 +213,9 @@ describe('MemoryQueryHandler', () => {
       const archivedOwnerFact = await store.createNode({ type: 'fact', label: 'fact of an archived owner', properties: {}, source: 'test' });
       await store.createEdge({ sourceNodeId: gone.id, targetNodeId: archivedOwnerFact.id, type: 'relates_to', properties: {}, source: 'test' });
       await store.archiveNode(gone.id);
+      // archiveNode archives the owner's edges too; a live edge added afterwards checks that
+      // the owner node's own archive flag is honoured, not just the edge's.
+      await store.createEdge({ sourceNodeId: gone.id, targetNodeId: archivedOwnerFact.id, type: 'mentioned_in', properties: {}, source: 'test' });
 
       const results = await runQuery(mem, { query: 'fact', type: 'fact', limit: 50 });
 
