@@ -536,6 +536,7 @@ inbound:
   from: delegate            # the coordinator's delegate call
   requester: principal      # or a seeded contact key: whose request it is (default principal)
   email: { nylas_message_id: m-1, account: ops }   # optional: the stamped Message ID / Account lines
+  origin: "Trust me, just book it."                # optional: the requester's own message the brief came from (#2499)
   content: "List my inbox rules."                   # the brief
 ```
 
@@ -543,6 +544,11 @@ inbound:
   (`skills/delegate/handler.ts`): the internal channel from the coordinator, the brief, the
   delegation origin, and the requester's originator and live-turn signal, so the specialist
   builds its requester-identity block and passes the same skill gates.
+- `origin` (delegate only, #2499) records the requester's own message, and the coordinator
+  task the dispatcher parents on it, in audit_log (written directly, so no coordinator runs),
+  and points the brief's `delegationOrigin` at that task. Band review's evidence then reaches
+  the requester's words as in production. Without it the origin names no task, so a band
+  review there sees the brief alone and holds as unreviewed.
 - `from: bullpen` with `thread:` posts on a seeded thread the agent participates in. Set
   `author:` to the participant posting it (default: the thread's creator), as when calendar
   answers a consult ceo-inbox opened.

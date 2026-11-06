@@ -340,6 +340,13 @@ export interface ScenarioInbound {
    * requester-identity block production gives it (#1871).
    */
   requester?: string;
+  /**
+   * Delegate only (#2499): the requester's own message the coordinator delegated from. The
+   * harness records it, and the coordinator task parented on it, in audit_log and points the
+   * brief's delegationOrigin at that task, so band review's evidence reaches the requester's
+   * words as in production. Absent: the delegation origin names no task.
+   */
+  origin?: string;
   /** Task wake only: the woken task, as its row reads at fire time. */
   task?: ScenarioWakeTask;
   /** Email only: rendered as the email preamble the Dispatcher builds. */

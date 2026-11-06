@@ -95,7 +95,7 @@ const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'del
 const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const REPLY_KEYS = ['from', 'content'] as const;
 const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
-const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'email', 'task', 'followup', 'then'] as const;
+const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'origin', 'email', 'task', 'followup', 'then'] as const;
 const THEN_KEYS = ['content', 'channel', 'reply_to_approval'] as const;
 const FOLLOWUP_KEYS = ['after', 'from', 'content', 'channel'] as const;
 /** A follow-up held this long still releases the first tool, so a flag-off run can finish. */
@@ -771,6 +771,8 @@ function parseInbound(raw: unknown, file: string): ScenarioInbound {
   if (author !== undefined && from !== 'bullpen') throw new CaseError(file, `inbound.author is only for 'from: bullpen'`);
   const requester = optStr(raw, 'requester', file, 'inbound');
   if (requester !== undefined && from !== 'delegate') throw new CaseError(file, `inbound.requester is only for 'from: delegate'`);
+  const origin = optStr(raw, 'origin', file, 'inbound');
+  if (origin !== undefined && from !== 'delegate') throw new CaseError(file, `inbound.origin is only for 'from: delegate'`);
   return {
     from,
     channel: optStr(raw, 'channel', file, 'inbound'),
@@ -778,6 +780,7 @@ function parseInbound(raw: unknown, file: string): ScenarioInbound {
     thread: optStr(raw, 'thread', file, 'inbound'),
     ...(author !== undefined ? { author } : {}),
     ...(from === 'delegate' ? { requester: requester ?? 'principal' } : {}),
+    ...(origin !== undefined ? { origin } : {}),
     ...(taskWake ? { task: parseWakeTask(raw['task'], file) } : {}),
     ...(email
       ? {
