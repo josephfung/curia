@@ -620,7 +620,7 @@ export class AuditLogRepo {
          AND lower(payload->>'senderId') = lower($2)
          AND timestamp <= $3
          AND jsonb_typeof(payload->'content') = 'string'
-         AND id <> ALL($5::text[])
+         AND id::text <> ALL($5::text[])
        ORDER BY timestamp DESC, id DESC
        LIMIT $4`,
       [conversationId, senderId, before, clamped, [...excludeIds]],
