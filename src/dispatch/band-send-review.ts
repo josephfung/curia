@@ -7,11 +7,12 @@
 //
 // Which questions are asked:
 //   principal-directed (a live principal turn)  → grounding
-//   otherwise, at every band                    → all four (Gate C leaves sends to this review)
+//   otherwise, at every band                    → all five (Gate C leaves sends to this review)
 //
 // What each answer does:
 //   purpose = steered                → hold, at every band
-//   speaks as principal, below 80    → hold (the band asks first)
+//   speaks as principal              → by its stakes (#2473): routine sends at 80+, a commitment
+//                                       at 90+, financial or legal never; below that, hold
 //   unsupported claims / unneeded    → bounce to the drafter, ONCE per draft. Curia never
 //     disclosures                       cuts text out of a message: the drafter rewrites it.
 //                                       If the rewrite still has findings, at 80+ the send is
@@ -19,9 +20,12 @@
 //                                       again or tell the principal); below 80, held. The
 //                                       gateway holds instead of refusing when no drafter is
 //                                       waiting: a relayed reply or a saved draft.
-//   judge failure                    → 80+: send with a "sent without review" item, capped
-//                                       at 5 an hour (then hold until a judge call succeeds);
-//                                       below 80: hold.
+//   judge failure                    → hold at every band: the stakes are unrated, so treated
+//                                       as financial or legal (fail closed, #2473). The fail-open
+//                                       cap is not used. Only a principal-directed send, which
+//                                       is not stakes-gated, fails open at 80+: sent with a "sent
+//                                       without review" item, capped at 5 an hour (then hold
+//                                       until a judge call succeeds); below 80: hold.
 //
 // Detected personal data (#2312): `disclosure` is added to the questions, and the judge rules
 // each item directed / inferred / unsupported and whether the recipient asked. Code decides
@@ -40,7 +44,7 @@
 //   sender, or an address, contact or org domain on the outreach row. A `[REDACTED: …]`
 //   placeholder in the content bounces the same way. The strictest outcome of all the rules
 //   wins: block > hold > bounce > send, except that a bounce beats an ask, and an ask survives
-//   a hold for speaking as the principal below 80 (both reasons show on the approval).
+//   a hold for speaking as the principal below what its stakes need (both reasons show on the approval).
 //
 // A hold that waits only on the principal's yes to a requester (an askable recipient's request,
 // or a requested item held below 80 under the principal's task) carries `ask`: the gateway
@@ -72,7 +76,7 @@ import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import { reportEvidence, type CollectedEvidence, type SendEvidenceCollector } from '../autonomy/send-evidence.js';
 import { describePiiLabels, normalizeCounterparty, type DisclosureDecisionRow } from '../autonomy/disclosure-decisions.js';
 import type {
-  BriefAnswers, BriefDetectedItem, BriefQuestion, BriefVerdict, DisclosureRuling, SendAuthority,
+  BriefAnswers, BriefDetectedItem, BriefQuestion, BriefVerdict, DisclosureRuling, SendAuthority, SendStakes,
 } from '../autonomy/judge-brief.js';
 import type { ContactTier } from '../contacts/types.js';
 import { isSpotCheckOrAbove, type FailOpenLimiter } from '../autonomy/band-policy.js';
@@ -82,15 +86,28 @@ import { orgDomainsOf } from './task-outreach-capability.js';
 import { isUuid } from '../util/uuid.js';
 
 const BOUNCE_TTL_MS = 30 * 60_000;
-const ALL_QUESTIONS: readonly BriefQuestion[] = ['purpose', 'speaks-as-principal', 'grounding', 'necessity'];
+const ALL_QUESTIONS: readonly BriefQuestion[] = ['purpose', 'speaks-as-principal', 'stakes', 'grounding', 'necessity'];
+/**
+ * The score a send that speaks for the principal needs to go out without asking, by its stakes
+ * (#2473). Null: never, at any band. Routine is the spot-check line (isSpotCheckOrAbove).
+ */
+const STAKES_MIN_SCORE: Record<SendStakes, number | null> = { routine: 80, commitment: 90, financial_or_legal: null };
+const STAKES_LABEL: Record<SendStakes, string> = { routine: 'routine', commitment: 'commitment', financial_or_legal: 'financial or legal' };
+const STAKES_HOLD_LEAD: Record<SendStakes, string> = {
+  routine: 'Held for the principal: this message speaks for or commits the principal, and the autonomy band asks first for that.',
+  commitment: 'Held for the principal: this message commits the principal, and Curia sends a commitment without asking only at 90 or above.',
+  financial_or_legal: 'Held for the principal: this message commits the principal on money or legal terms, which always needs the principal\'s approval.',
+};
+/** The longest stakes reason shown on an approval; the judge is asked for one short sentence. */
+const STAKES_REASON_MAX = 200;
 /** The most detected items the judge rules on in one call; past it, none are asked about (#2312). */
 const MAX_REVIEWED_ITEMS = 10;
 /** A placeholder the tier redactor writes. Under band gating it is a defect, never delivered. */
 const REDACTION_TOKEN = /\[REDACTED: [A-Z0-9_]+\]/;
 const TOO_MANY_DETAIL = 'This message contains more personal details than can be reviewed at once. Send fewer, or split the message.';
 const TOKEN_DETAIL = 'This message contains a redaction placeholder. Rewrite it with the real content or without that part.';
-const SPEAKS_BELOW_80_REASON = 'Held for the principal: this message speaks for or commits the principal, and the autonomy band asks first for that.';
 const UNREVIEWED_BELOW_80_REASON = 'Held for the principal: the reviewer was unavailable, and this band asks first when it is.';
+const STAKES_UNREVIEWED_REASON = 'Held for the principal: the reviewer was unavailable, so what this message commits the principal to is unrated and treated as financial or legal. Stakes: financial or legal (unrated).';
 
 /** What the drafter is told when a send is blocked; the gateway appends the findings. */
 export const BLOCK_REASON = 'Not sent: after one rewrite it still has the problems below. Rewrite it again without them, or tell the principal.';
@@ -207,7 +224,11 @@ export class BandSendReview {
     const questions: readonly BriefQuestion[] = askedItems ? [...this.questionsFor(input), 'disclosure'] : this.questionsFor(input);
     const hasToken = REDACTION_TOKEN.test(input.content) || (input.subject !== undefined && REDACTION_TOKEN.test(input.subject));
 
-    const asked = await this.ask(input, questions, taskIds, input.content, askedItems);
+    // Every send the stakes gate covers fails closed (#2473): no fail-open send, no cap spent.
+    const stakesGated = questions.includes('stakes');
+    // The subject goes out with the body, so a commitment made only there is rated too.
+    const message = input.subject ? `Subject: ${input.subject}\n\n${input.content}` : input.content;
+    const asked = await this.ask(input, questions, taskIds, message, askedItems);
     let verdict = asked.verdict;
     if (verdict.ok && askedItems && !rulesOnEach(verdict.disclosures, askedItems)) {
       // The parser already refuses this; checked again because a gap here would read as a pass.
@@ -224,16 +245,22 @@ export class BandSendReview {
           this.deps.logger.warn({ conversationId: input.conversationId, failure: verdict.failure }, 'band review: reviewer unavailable on the recheck of a bounced draft — holding');
           return this.hold(BAND_RULES.unreviewed, recheckReason(prior.rules));
         }
+        if (stakesGated) {
+          this.deps.logger.warn({ conversationId: input.conversationId, channel: input.channel, failure: verdict.failure, score: input.score }, 'band review: reviewer unavailable — stakes unrated, holding at every band');
+          return this.hold(BAND_RULES.unreviewed, STAKES_UNREVIEWED_REASON);
+        }
         // An unreviewed quote never goes out: a fail-open send drops it.
         return withoutQuote(await this.onJudgeFailure(input, verdict.failure), quoted);
       }
       // Personal data or a placeholder never goes out unreviewed: no fail-open send, and the
       // fail-open allowance is not spent on it.
       this.deps.logger.warn({ conversationId: input.conversationId, channel: input.channel, failure: verdict.failure, items: items.length, token: hasToken }, 'band review: reviewer unavailable with personal data or a placeholder in the send — not failing open');
+      // At 80+ with no prior bounce this bounces for the items, which is not a send either: the
+      // stakes stay unrated, and a recheck the reviewer still can't answer holds (#2473).
       const other = prior
         ? this.hold(BAND_RULES.unreviewed, recheckReason(prior.rules))
         : !isSpotCheckOrAbove(input.score)
-          ? this.unreviewedBelow80Hold(own, hasToken)
+          ? this.unreviewedHold(stakesGated ? STAKES_UNREVIEWED_REASON : UNREVIEWED_BELOW_80_REASON, own, hasToken)
           : undefined;
       const pii = this.unreviewedPiiOutcome(input, own, hasToken, prior !== undefined);
       // PII first, so its reason leads a merged hold: the bounce may have been for the items.
@@ -243,7 +270,20 @@ export class BandSendReview {
 
     const other = this.otherRulesOutcome(input, verdict, items, prior !== undefined);
     const rulings = askedItems ? verdict.disclosures ?? [] : undefined;
-    const base = combine(other, await this.piiOutcome(input, own, rulings, asked, hasToken, prior !== undefined));
+    const piiOutcome = await this.piiOutcome(input, own, rulings, asked, hasToken, prior !== undefined);
+    // At 80+ a hold for stakes alone waits for the drafter's rewrite of the details, like one
+    // waiting for the rewrite of a claim (#2473): the approval must not show them as sent.
+    const stakesOnly = other.kind === 'hold' && !other.ask && other.findings.every((f) => f.rule === BAND_RULES.speaksAsPrincipal);
+    // A claim bounce carrying a stakes hold also outranks a disclosure hold that asks nobody:
+    // the drafter fixes the claim first, and the recheck holds with the stakes finding beside it.
+    const claimBounceHoldingStakes = other.kind === 'bounce'
+      && other.heldBeside?.some((f) => f.rule === BAND_RULES.speaksAsPrincipal) === true
+      && piiOutcome.kind === 'hold' && !piiOutcome.ask;
+    const base = claimBounceHoldingStakes
+      ? withHeldBeside(other, piiOutcome)
+      : isSpotCheckOrAbove(input.score) && stakesOnly && rewritesDetails(piiOutcome)
+        ? withHeldBeside(piiOutcome, other)
+        : combine(other, piiOutcome);
     if (quoted.length === 0 || base.kind !== 'send') return this.settle(key, taskIds, input, prior !== undefined, base);
     // The rest of the send goes out: the quote does too only if its items would.
     const quoteRulings = askedItems && quoted.every((q) => askedItems.includes(q)) ? rulings : undefined;
@@ -258,24 +298,29 @@ export class BandSendReview {
     detected: readonly BriefDetectedItem[],
     hasPrior: boolean,
   ): BandReviewDecision {
-    const speaksBelow80 = verdict.speaksAsPrincipal === true && !isSpotCheckOrAbove(input.score);
+    const speaksHeld = verdict.speaksAsPrincipal === true ? stakesHold(verdict, input.score) : undefined;
     if (verdict.purpose === 'steered') {
       this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel }, 'band review: held — steered by an outsider');
       const steered = this.hold(BAND_RULES.steered, 'Held for the principal: the reviewer judged this send to be steered by someone outside the principal\'s business.');
       // Both reasons hold it, so the approval shows both (#2333).
-      return speaksBelow80 && steered.kind === 'hold'
-        ? { ...steered, findings: [...steered.findings, { rule: BAND_RULES.speaksAsPrincipal, detail: SPEAKS_BELOW_80_REASON }] }
+      return speaksHeld && steered.kind === 'hold'
+        ? { ...steered, findings: [...steered.findings, speaksHeld] }
         : steered;
-    }
-    if (speaksBelow80) {
-      this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, score: input.score }, 'band review: held — speaks for the principal below 80');
-      return this.hold(BAND_RULES.speaksAsPrincipal, SPEAKS_BELOW_80_REASON);
     }
 
     const claims = verdict.unsupportedClaims ?? [];
     // Detected items are ruled under disclosure only (#2312): an unneeded-disclosure quote that
     // overlaps one is dropped, or an authorized item would bounce here anyway.
     const unneeded = (verdict.unnecessaryItems ?? []).filter((q) => !detected.some((d) => overlaps(q, d.text)));
+    // Below 80 a hold for speaking as the principal comes first, as before #2473. At 80+ a stakes
+    // hold waits for the drafter's rewrite: the principal is asked about a draft the review would
+    // send, not one it would bounce. The bounce or block carries the hold (`heldBeside`), so a
+    // send nobody can rewrite still shows it.
+    if (speaksHeld && (!isSpotCheckOrAbove(input.score) || (claims.length === 0 && unneeded.length === 0))) {
+      this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, score: input.score, stakes: verdict.stakes }, 'band review: held — speaks for the principal below what its stakes need');
+      return { kind: 'hold', reason: speaksHeld.detail, findings: [speaksHeld] };
+    }
+    const beside = speaksHeld ? { heldBeside: [speaksHeld] } : {};
     if (claims.length === 0 && unneeded.length === 0) {
       return { kind: 'send', signals: { ...(verdict.speaksAsPrincipal === true ? { speaksAsPrincipal: true } : {}), ...(hasPrior ? { bounced: true } : {}) } };
     }
@@ -285,7 +330,7 @@ export class BandSendReview {
         { conversationId: input.conversationId, channel: input.channel, claims: claims.length, items: unneeded.length },
         'band review: bounced to the drafter',
       );
-      return { kind: 'bounce', findings: this.bounceFindings(input.content, claims, unneeded, detected) };
+      return { kind: 'bounce', findings: this.bounceFindings(input.content, claims, unneeded, detected), ...beside };
     }
 
     // The one bounce is spent. Below 80 the principal decides; at 80+ the message is not sent.
@@ -296,7 +341,7 @@ export class BandSendReview {
       { conversationId: input.conversationId, channel: input.channel, claims: claims.length, items: unneeded.length, outcome: 'blocked' },
       'band review: blocked — findings survived the rewrite',
     );
-    return { kind: 'block', reason: BLOCK_REASON, findings: this.bounceFindings(input.content, claims, unneeded, detected) };
+    return { kind: 'block', reason: BLOCK_REASON, findings: this.bounceFindings(input.content, claims, unneeded, detected), ...beside };
   }
 
   /**
@@ -475,14 +520,14 @@ export class BandSendReview {
     return decisions.reduce(combine);
   }
 
-  /** The reviewer is down below 80: hold, naming (by label) the personal data the send carries. */
-  private unreviewedBelow80Hold(items: readonly BriefDetectedItem[], hasToken: boolean): BandReviewDecision {
-    const findings: FilterFinding[] = [{ rule: BAND_RULES.unreviewed, detail: UNREVIEWED_BELOW_80_REASON }];
+  /** The reviewer is down and the send holds: name (by label) the personal data it carries. */
+  private unreviewedHold(reason: string, items: readonly BriefDetectedItem[], hasToken: boolean): BandReviewDecision {
+    const findings: FilterFinding[] = [{ rule: BAND_RULES.unreviewed, detail: reason }];
     if (items.length > 0) {
       findings.push({ rule: BAND_RULES.pii, detail: `It contains personal details the reviewer could not check: ${[...new Set(items.map((i) => i.label))].join(', ')}.` });
     }
     if (hasToken) findings.push({ rule: BAND_RULES.token, detail: TOKEN_DETAIL });
-    return { kind: 'hold', reason: UNREVIEWED_BELOW_80_REASON, findings };
+    return { kind: 'hold', reason, findings };
   }
 
   /** Findings the drafter must rewrite away: bounce once, then block at 80+ or hold below. */
@@ -677,6 +722,27 @@ export class BandSendReview {
 
 const STRICTNESS: Record<BandReviewDecision['kind'], number> = { send: 0, bounce: 1, hold: 2, block: 3 };
 
+/**
+ * The hold for a send that speaks for the principal below the score its stakes need (#2473), or
+ * undefined when the score clears it. The finding names the rating and the judge's reason, so
+ * the approval says why it asked. A missing rating cannot happen (the review asks both questions together
+ * and the parser requires every answer); it is treated as the strictest.
+ */
+function stakesHold(verdict: BriefAnswers, score: number): FilterFinding | undefined {
+  const stakes = verdict.stakes ?? 'financial_or_legal';
+  const min = STAKES_MIN_SCORE[stakes];
+  if (min !== null && score >= min) return undefined;
+  // The judge's overall reason stands in when it left the stakes reason out.
+  const why = (verdict.stakesReason?.trim() ? verdict.stakesReason : verdict.reason ?? '').replace(/\s+/g, ' ').trim();
+  // Count code points, not UTF-16 units, so the cut never leaves half a surrogate pair.
+  const points = Array.from(why);
+  const shown = points.length > STAKES_REASON_MAX ? `${points.slice(0, STAKES_REASON_MAX - 1).join('').trimEnd()}…` : why;
+  return {
+    rule: BAND_RULES.speaksAsPrincipal,
+    detail: `${STAKES_HOLD_LEAD[stakes]} Stakes: ${STAKES_LABEL[stakes]}.${shown ? ` Why: ${shown}` : ''}`,
+  };
+}
+
 /** A bounce with a personal-details finding: the drafter must rewrite without an item (#2333). */
 function rewritesDetails(d: BandReviewDecision): boolean {
   return d.kind === 'bounce' && d.findings.some((f) => f.rule === BAND_RULES.pii);
@@ -690,7 +756,7 @@ function withHeldBeside(winner: BandReviewDecision, hold: BandReviewDecision): B
 
 /**
  * A hold raised because the send is steered by an outsider, with no ask (#2333). It may also
- * speak for the principal below 80: steering is what would hand the details to an outsider.
+ * speak for the principal below what its stakes need (#2473): steering is what would hand the details to an outsider.
  */
 function steeredOnly(d: BandReviewDecision): boolean {
   return d.kind === 'hold' && !d.ask
@@ -708,13 +774,13 @@ type Authority = 'principal' | 'principal-task' | 'none';
  * Two exceptions. A bounce beats an ask (#2312): the ask waits only on the principal's yes, and
  * a yes would send the other finding too; the drafter fixes that first, and the recheck asks.
  * A bounce over personal details beats a hold for steering (#2333), alone or beside speaking for
- * the principal below 80: that approval would show the details as sent if approved, to an
+ * the principal below what its stakes need: that approval would show the details as sent if approved, to an
  * outsider steering the send. The drafter rewrites without them, and a recheck that is still
  * steered holds without them. The bounce carries the hold's findings (`heldBeside`), so a saved
  * draft the gateway holds still shows them.
  *
  * Two holds merge into a plain hold, except that an ask survives a hold for speaking as the
- * principal below 80 (#2312): the principal is asked first either way, and the question names
+ * principal below what its stakes need (#2312, #2473): the principal is asked first either way, and the question names
  * who asked and records the answer. The approval shows the other reason beside it. Any other
  * hold (steered, a judge failure) drops the ask, so its warning leads.
  */
