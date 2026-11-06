@@ -6,8 +6,9 @@
 //
 //   - auto-merge — structural proof, nothing protected, nothing elevated. No task.
 //   - review, route 'curia' — Curia decides the pair itself: merge or exclude.
-//   - review, route 'principal' — Curia may hand the pair to the principal, because both
-//     sides are people and the principal has marked at least one of them known/trusted.
+//   - review, route 'principal' — Curia may hand the pair to the principal: both sides
+//     are people and one is known/trusted, or a merge would lend a known/trusted tier
+//     to the other side.
 //
 // Pure functions over Contact rows, so every rule is unit-testable without a database.
 
@@ -58,27 +59,45 @@ function isVouchedFor(c: Pick<Contact, 'tier'>): boolean {
 }
 
 /**
- * Route a fuzzy pair. Only a person/person pair with at least one known or trusted
- * side may reach the principal; companies, automated senders and people nobody has
- * vouched for are Curia's to curate.
+ * Whether merging the pair would give one side a trust tier the principal never granted
+ * it: one side is known or trusted and the other is at a different tier. A merge keeps
+ * the higher tier and moves both sides' addresses onto the survivor, so the lower side's
+ * addresses would inherit the principal's grant. Display names, and for organizations
+ * the shared KG node, are both reachable by a stranger (#2493 security review).
+ */
+function mergeWouldElevate(a: Pick<Contact, 'tier'>, b: Pick<Contact, 'tier'>): boolean {
+  return a.tier !== b.tier && (isVouchedFor(a) || isVouchedFor(b));
+}
+
+/**
+ * Route a fuzzy pair (or a structural one that may not be auto-merged).
+ *
+ * The principal decides when both sides are people and one is known or trusted, and
+ * whenever a merge would lend a known or trusted tier to the other side, whatever the
+ * kinds: a stranger's role address named "Acme Corp" must not be folded into the
+ * principal's trusted Acme Corp by Curia alone. Everything else (companies and senders
+ * at the same tier, people nobody has vouched for) is Curia's to curate.
  */
 export function dedupReviewRoute(a: Pick<Contact, 'kind' | 'tier'>, b: Pick<Contact, 'kind' | 'tier'>): DedupRoute {
   const bothPeople = a.kind === 'person' && b.kind === 'person';
-  return bothPeople && (isVouchedFor(a) || isVouchedFor(b)) ? 'principal' : 'curia';
+  if (bothPeople && (isVouchedFor(a) || isVouchedFor(b))) return 'principal';
+  return mergeWouldElevate(a, b) ? 'principal' : 'curia';
 }
 
 /**
  * Whether a structural pair may be merged with no review at all.
  *
- * Never for a structural contact (principal, agent, system role): a merge deletes the
- * secondary and copies identities onto the primary, which for the principal means new
- * addresses that Gate C and the `principal` alias trust.
- *
- * A name-only proof (exact normalized name) needs both sides at tier `unknown`. A
- * display name is chosen by whoever sends the message, so a stranger writing as
- * "Jane Doe" would otherwise be folded into the principal's trusted Jane Doe and inherit
- * her tier along with a new address. A shared verified identity or a shared KG node is
- * not something a sender can forge, so those merge at any tier.
+ * - Never for a structural contact (principal, agent, system role): a merge deletes the
+ *   secondary and copies identities onto the primary, which for the principal means new
+ *   addresses that Gate C and the `principal` alias trust.
+ * - Never when the two tiers differ: the survivor keeps the higher tier, so the merge
+ *   would hand one side's addresses a grant the principal never made for them.
+ * - A name-only proof needs both sides at tier `unknown`. A display name is chosen by
+ *   whoever sends the message, so a stranger writing as "Jane Doe" would otherwise be
+ *   folded into the principal's Jane Doe.
+ * - A shared KG node proves nothing when either side is an organization. Organization
+ *   contacts share their company's node by design, and an inbound role address is linked
+ *   to an existing org node by the display name its sender chose.
  */
 export function canAutoMerge(
   a: Contact,
@@ -87,7 +106,9 @@ export function canAutoMerge(
 ): boolean {
   if (classification.type !== 'structural') return false;
   if (isStructuralContact(a) || isStructuralContact(b)) return false;
-  if (classification.proof === 'name') return a.tier === 'unknown' && b.tier === 'unknown';
+  if (a.tier !== b.tier) return false;
+  if (classification.proof === 'name') return a.tier === 'unknown';
+  if (classification.proof === 'kg_node') return a.kind !== 'organization' && b.kind !== 'organization';
   return true;
 }
 

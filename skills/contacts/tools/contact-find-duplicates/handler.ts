@@ -189,9 +189,23 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
     const gate = await this.autoMergeGate(ctx);
 
     // -- Phase 1: settle the open queue --
-    const reconciled = await reconcileOpenDedupTasks({
-      taskRepo, openTasks, contactsById, excludedPairKeys, log: ctx.log,
-    });
+    // Best-effort: per-task errors are counted inside. Anything else is logged and the
+    // scan carries on with every open task's pair treated as still open, so nothing is
+    // filed twice.
+    let reconciled: Awaited<ReturnType<typeof reconcileOpenDedupTasks>>;
+    try {
+      reconciled = await reconcileOpenDedupTasks({
+        taskRepo, openTasks, contactsById, excludedPairKeys, log: ctx.log,
+      });
+    } catch (err) {
+      ctx.log.error({ err }, 'contact-find-duplicates: queue reconciliation failed — continuing without it');
+      const openPairKeys = new Set<string>();
+      for (const task of openTasks) {
+        const key = pairKeyFromDedupTask(task);
+        if (key) openPairKeys.add(key);
+      }
+      reconciled = { closed: 0, reassigned: 0, unblocked: 0, failed: 1, openPairKeys };
+    }
     const existingPairKeys = reconciled.openPairKeys;
 
     let autoMerged = 0;
@@ -221,10 +235,6 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
       const a = contactsById.get(aId);
       const b = contactsById.get(bId);
 
-      if (touchedThisRun.has(aId) || touchedThisRun.has(bId)) {
-        skippedMerged++;
-        continue;
-      }
       // Created after the snapshot, or deleted since findDuplicates read it: next run.
       if (!a || !b) continue;
 
@@ -249,6 +259,11 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
       // only at or above min_score.
       if (classification.type === 'fuzzy' && pair.score < minScore) continue;
       considered++;
+
+      if (touchedThisRun.has(aId) || touchedThisRun.has(bId)) {
+        skippedMerged++;
+        continue;
+      }
 
       if (classification.type === 'structural' && !excluded && gate.enabled && canAutoMerge(a, b, classification)) {
         if (autoMerged >= DEFAULT_MAX_AUTO_MERGES) {
@@ -411,12 +426,12 @@ function idsFor(pair: DuplicatePair, contactId: string): ChannelIdentity[] {
 // trigger), so the always-on prompt only has to say "follow the task's Decision line".
 const ROUTE_LINES: Record<DedupRoute, string> = {
   curia:
-    'Decision: yours. Neither contact is a person the principal has marked known or trusted, '
-    + 'so do not ask the principal. Merge them, or record them as not duplicates with '
-    + 'contact-dedup-exclude (decided_by "curia").',
+    'Decision: yours. No person the principal has vouched for is on this pair, and merging '
+    + 'changes no one\'s trust tier, so do not ask the principal. Merge them, or record them '
+    + 'as not duplicates with contact-dedup-exclude (decided_by "curia").',
   principal:
     'Decision: settle it from the records if they are conclusive; otherwise ask the principal '
-    + '(at least one side is a person they know).',
+    + '(they know at least one side, and a merge would extend that trust to the other).',
 };
 
 function reviewDescription(

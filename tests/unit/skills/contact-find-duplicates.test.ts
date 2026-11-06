@@ -704,6 +704,19 @@ describe('ContactFindDuplicatesHandler', () => {
     expect(task.description).toContain('Match type: structural');
   });
 
+  // #2493 security review: a stranger's role address named after the principal's trusted
+  // company is linked to that company's KG node, and must not be merged into it.
+  it('does not auto-merge a trusted org with a stranger sharing its KG node, and routes it to the principal', async () => {
+    const acme = makeContact(UUID_A, 'Acme Corp', { kind: 'organization', tier: 'trusted', kgNodeId: 'node-acme' });
+    const impostor = makeContact(UUID_B, 'Acme Corp', { kind: 'organization', kgNodeId: 'node-acme' });
+    const t = scan([pairOf(acme, [], impostor, [], 1)], [acme, impostor], { autonomyScore: 95 });
+    await t.run();
+    expect(t.mergeContacts).not.toHaveBeenCalled();
+    const task = t.createTask.mock.calls[0]![0] as { tags: string[]; description: string };
+    expect(task.tags).toContain('dedup-route:principal');
+    expect(task.description).not.toContain('do not ask the principal');
+  });
+
   it('auto-merges an exact-name pair when neither side has been vouched for', async () => {
     const a = makeContact(UUID_A, 'Acme Billing', { kind: 'automated' });
     const b = makeContact(UUID_B, 'ACME billing', { kind: 'organization' });
@@ -744,8 +757,9 @@ describe('ContactFindDuplicatesHandler', () => {
   });
 
   it.each([
-    ['organization', 'person', 'known', 'curia'],
-    ['person', 'automated', 'trusted', 'curia'],
+    ['organization', 'person', 'known', 'principal'],
+    ['person', 'automated', 'trusted', 'principal'],
+    ['organization', 'organization', 'unknown', 'curia'],
     ['person', 'person', 'unknown', 'curia'],
     ['person', 'person', 'known', 'principal'],
     ['person', 'person', 'trusted', 'principal'],

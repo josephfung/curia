@@ -224,8 +224,18 @@ describeIf('contact-find-duplicates scan (#2493)', () => {
     // Before #2493 the agent handed every pair to the principal like this.
     await taskRepo.updateTask(task!.id, { owner: 'ceo', status: 'waiting', tags: ['dedup', 'contacts', ...task!.tags.filter(t => t.startsWith('dedup-pair:'))] });
 
+    // The same pair filed a second time (the pre-#2493 re-filing), so the scan's queue
+    // sweep sorts real rows: pg returns created_at as a Date, not the typed string.
+    const dup = await taskRepo.createTask({
+      agentId: 'contacts', title: `Review possible duplicate (again) ${runId}`,
+      owner: 'curia', source: 'agent', sourceAgentId: 'contacts',
+      tags: ['dedup', 'contacts', ...task!.tags.filter(t => t.startsWith('dedup-pair:'))],
+    });
+
     const summary = await runScan([a.id, b.id]);
     expect(summary['tasks_handed_back']).toBe(1);
+    expect(summary['tasks_closed']).toBe(1);
+    expect((await taskRepo.getTask(dup.id))?.status).toBe('done');
     const after = await taskRepo.getTask(task!.id);
     expect(after).toMatchObject({ owner: 'curia', status: 'open' });
     expect(after!.tags).toContain('dedup-route:curia');

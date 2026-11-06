@@ -19,8 +19,9 @@ import {
 } from '../../optional-ref.js';
 
 const CURIA_DEDUP_ROUTE_ERROR =
-  'This dedup review is yours to decide, not the principal\'s: neither contact is a person they have '
-  + 'marked known or trusted. Merge the pair with contact-merge, or record it as not a duplicate with '
+  'This dedup review is yours to decide, not the principal\'s: no person they have vouched for is on '
+  + 'it, and merging changes no one\'s trust tier. Merge the pair with contact-merge, or record it as '
+  + 'not a duplicate with '
   + 'contact-dedup-exclude (decided_by "curia"), then complete the task.';
 
 const VALID_STATUSES = new Set(['open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled']);
@@ -154,8 +155,8 @@ export class TaskUpdateHandler implements ToolHandler {
         }
       }
 
-      // A dedup review routed to Curia is not the principal's to decide (#2493): the pair
-      // has no person on it the principal has vouched for. Refused here rather than left
+      // A dedup review routed to Curia is not the principal's to decide (#2493): no person
+      // the principal has vouched for is on it, and a merge changes no one's tier. Refused here rather than left
       // to the prompt, since prod showed the agent handing nearly every pair over. The
       // route tag itself is kept so a tags update cannot launder the hand-over.
       if (input.owner === 'ceo' || input.tags !== undefined) {

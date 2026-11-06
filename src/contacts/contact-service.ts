@@ -2022,7 +2022,12 @@ export class ContactService {
     // transaction; the secondary contact row is now gone, so the FK no longer
     // blocks deleteNode (#1711).
     let kgMerged = false;
-    if (primary.kgNodeId && secondary.kgNodeId && this.entityMemory) {
+    // Same node on both sides (organization contacts share their company's node): there
+    // is nothing to fold, and mergeEntities(X, X) would re-store the node's facts onto
+    // itself and delete the originals.
+    if (primary.kgNodeId && secondary.kgNodeId && primary.kgNodeId === secondary.kgNodeId) {
+      kgMerged = true;
+    } else if (primary.kgNodeId && secondary.kgNodeId && this.entityMemory) {
       try {
         await this.entityMemory.mergeEntities(primary.kgNodeId, secondary.kgNodeId);
         kgMerged = true;

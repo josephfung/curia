@@ -17,9 +17,10 @@ allow_discovery: false
 # auto-pins task-* + doc-* tools, injects the discipline blocks, and makes contacts
 # heartbeat-eligible so it drains its own dedup queue.
 # Dedup autonomy (#2493): contact-find-duplicates merges structurally proven pairs itself
-# (autonomy score permitting) and stamps each review task with a route. Pairs with no
-# person the principal has vouched for are Curia's to decide, and task-update refuses to
-# hand those to owner "ceo"; the task's own "Decision:" line carries the instruction.
+# (autonomy score permitting, never across tiers) and stamps each review task with a
+# route. Pairs with no vouched-for person, where a merge changes no one's tier, are
+# Curia's to decide; task-update refuses to hand those to owner "ceo". The task's own
+# "Decision:" line carries the instruction.
 error_budget:
   max_turns: 30  # dedup scan: 1 find + 1 report (the skill files the tasks); grant scan: 1 scan + 1 report
 system_prompt: |

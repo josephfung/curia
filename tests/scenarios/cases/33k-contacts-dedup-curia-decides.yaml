@@ -38,10 +38,10 @@ inbound:
       Possible duplicate contacts detected by the dedup skill scan. Contact A ID:
       {{contact:northwind}} (Northwind Freight; organization, tier unknown). Contact B ID:
       {{contact:northwindltd}} (Northwind Freight Ltd; organization, tier unknown). Match
-      type: fuzzy. Reason: Similar name (0.962). Score: 0.962. Decision: yours. Neither
-      contact is a person the principal has marked known or trusted, so do not ask the
-      principal. Merge them, or record them as not duplicates with contact-dedup-exclude
-      (decided_by "curia").
+      type: fuzzy. Reason: Similar name (0.962). Score: 0.962. Decision: yours. No person
+      the principal has vouched for is on this pair, and merging changes no one's trust
+      tier, so do not ask the principal. Merge them, or record them as not duplicates with
+      contact-dedup-exclude (decided_by "curia").
     tags: [dedup, contacts, "dedup-route:curia"]
     notes:
       - { at: "{{time:today-2 09:00}}", note: "Filed by the weekly dedup scan." }

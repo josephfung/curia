@@ -38,8 +38,13 @@ describe('dedupReviewRoute', () => {
     ['person', 'blocked', 'person', 'unknown', 'curia'],
     ['organization', 'known', 'person', 'known', 'curia'],
     ['automated', 'trusted', 'automated', 'trusted', 'curia'],
-    ['person', 'known', 'automated', 'unknown', 'curia'],
-    ['principal', 'principal', 'person', 'known', 'curia'],
+    // A merge would lend the known/trusted tier to the other side: the principal's call,
+    // whatever the kinds (#2493 security review).
+    ['person', 'known', 'automated', 'unknown', 'principal'],
+    ['organization', 'trusted', 'organization', 'unknown', 'principal'],
+    ['organization', 'known', 'automated', 'unknown', 'principal'],
+    ['organization', 'unknown', 'organization', 'blocked', 'curia'],
+    ['principal', 'principal', 'person', 'known', 'principal'],
   ];
   it.each(cases)('%s/%s + %s/%s → %s', (ka, ta, kb, tb, route) => {
     expect(dedupReviewRoute({ kind: ka, tier: ta }, { kind: kb, tier: tb })).toBe(route);
@@ -49,10 +54,28 @@ describe('dedupReviewRoute', () => {
 });
 
 describe('canAutoMerge', () => {
-  it('merges identity and kg-node proofs at any tier', () => {
-    const known = contact(A, { tier: 'trusted' });
-    expect(canAutoMerge(known, contact(B), byIdentity)).toBe(true);
-    expect(canAutoMerge(known, contact(B), byKgNode)).toBe(true);
+  it('merges identity and kg-node proofs between people at the same tier, any tier', () => {
+    for (const tier of ['unknown', 'known', 'trusted'] as const) {
+      expect(canAutoMerge(contact(A, { tier }), contact(B, { tier }), byIdentity)).toBe(true);
+      expect(canAutoMerge(contact(A, { tier }), contact(B, { tier }), byKgNode)).toBe(true);
+    }
+  });
+
+  it('never merges across tiers, whatever the proof (the survivor keeps the higher tier)', () => {
+    for (const proof of [byIdentity, byKgNode, byName]) {
+      expect(canAutoMerge(contact(A, { tier: 'trusted' }), contact(B), proof)).toBe(false);
+      expect(canAutoMerge(contact(A), contact(B, { tier: 'known' }), proof)).toBe(false);
+      expect(canAutoMerge(contact(A, { tier: 'blocked' }), contact(B), proof)).toBe(false);
+    }
+  });
+
+  it('does not take a shared KG node as proof when either side is an organization', () => {
+    // Org contacts share their company's node, and an inbound role address is linked to an
+    // existing org node by the sender-chosen display name.
+    const org = (id: string) => contact(id, { kind: 'organization' });
+    expect(canAutoMerge(org(A), org(B), byKgNode)).toBe(false);
+    expect(canAutoMerge(org(A), contact(B), byKgNode)).toBe(false);
+    expect(canAutoMerge(contact(A, { kind: 'automated' }), contact(B, { kind: 'automated' }), byKgNode)).toBe(true);
   });
 
   it('merges a name-only proof only when both sides are tier unknown', () => {

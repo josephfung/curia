@@ -75,7 +75,10 @@ export async function reconcileOpenDedupTasks(
   };
 
   // Oldest first, so the task kept for a pair filed twice is the one with history on it.
-  const tasks = [...input.openTasks].sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+  // createdAt is typed string but pg hands timestamptz back as a Date (no custom type
+  // parser), so compare through Date rather than as strings. Id breaks a tie.
+  const createdMs = (t: TaskRow) => new Date(t.createdAt as unknown as string | Date).getTime();
+  const tasks = [...input.openTasks].sort((x, y) => (createdMs(x) - createdMs(y)) || x.id.localeCompare(y.id));
   const keptTaskByPair = new Map<string, string>();
 
   for (const task of tasks) {
@@ -120,8 +123,9 @@ export async function reconcileOpenDedupTasks(
         : undefined;
       const notes: string[] = [];
       if (handBack) {
-        notes.push('Handed back to Curia by the dedup scan: neither contact is a person the '
-          + 'principal has marked known or trusted, so Curia decides this pair (merge or keep separate).');
+        notes.push('Handed back to Curia by the dedup scan: no person the principal has vouched '
+          + 'for is on this pair and a merge changes no one\'s trust tier, so Curia decides it '
+          + '(merge or keep separate).');
       }
       if (blockerClosed) {
         notes.push(`Unblocked by the dedup scan: task ${task.blockedByTaskId} has closed and this pair is still undecided.`);
@@ -130,7 +134,8 @@ export async function reconcileOpenDedupTasks(
         task.id,
         {
           ...(tags && { tags }),
-          ...(handBack && { owner: 'curia', status: 'open' }),
+          // A task still blocked on an open task keeps its status; only the owner moves.
+          ...(handBack && { owner: 'curia', ...(task.status !== 'blocked' && { status: 'open' }) }),
           ...(blockerClosed && { status: 'open', blockedByTaskId: null }),
           ...(notes.length > 0 && { progressNote: notes.join(' ') }),
         },
