@@ -376,6 +376,20 @@ describe('BandSendReview', () => {
       if (r.kind === 'hold') expect(r.reason).toContain('Stakes: routine.');
     });
 
+    it('falls back to the judge\'s overall reason when the stakes reason is empty', async () => {
+      const { svc } = make([{ ...speaks('commitment', ''), reason: 'Agrees to a delivery date.' }]);
+      const d = await svc.review({ ...base, score: 85 });
+      expect(d.kind).toBe('hold');
+      if (d.kind === 'hold') expect(d.reason).toContain('Why: Agrees to a delivery date.');
+    });
+
+    it('shows the judge the subject line, so a commitment made only there is rated', async () => {
+      const { svc, review } = make([speaks('routine')]);
+      await svc.review({ ...base, score: 85, subject: 'Re: PO 4471, approved for $12,000' });
+      expect(review.mock.calls[0]![0].message).toContain('Subject: Re: PO 4471, approved for $12,000');
+      expect(review.mock.calls[0]![0].message).toContain(base.content);
+    });
+
     it('treats a missing rating beside speaks-as-principal as financial or legal', async () => {
       const { svc } = make([{ ...clean, speaksAsPrincipal: true, stakes: undefined }]);
       expect((await svc.review({ ...base, score: 100 })).kind).toBe('hold');
@@ -517,6 +531,17 @@ describe('BandSendReview', () => {
       const { svc, review } = make([withRulings(ruling('directed'))], { evidence: { authority: live } });
       await svc.review(pii);
       expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'speaks-as-principal', 'stakes', 'grounding', 'necessity', 'disclosure']);
+    });
+
+    it('bounces an unauthorized item before holding a commitment for its stakes (#2473)', async () => {
+      const commitment: OkVerdict = { ...withRulings(ruling('inferred')), speaksAsPrincipal: true, stakes: 'commitment', stakesReason: 'Agrees to a date.' };
+      const { svc } = make([commitment], { evidence: { authority: fromOutsider } });
+      const d = await svc.review({ ...pii, score: 85 });
+      expect(d.kind).toBe('bounce');
+      if (d.kind === 'bounce') {
+        expect(d.findings.map((f) => f.rule)).toEqual(['pii-not-authorized']);
+        expect(d.heldBeside?.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+      }
     });
 
     it('does not ask disclosure, or pass items, when nothing was detected', async () => {

@@ -226,7 +226,9 @@ export class BandSendReview {
 
     // Every send the stakes gate covers fails closed (#2473): no fail-open send, no cap spent.
     const stakesGated = questions.includes('stakes');
-    const asked = await this.ask(input, questions, taskIds, input.content, askedItems);
+    // The subject goes out with the body, so a commitment made only there is rated too.
+    const message = input.subject ? `Subject: ${input.subject}\n\n${input.content}` : input.content;
+    const asked = await this.ask(input, questions, taskIds, message, askedItems);
     let verdict = asked.verdict;
     if (verdict.ok && askedItems && !rulesOnEach(verdict.disclosures, askedItems)) {
       // The parser already refuses this; checked again because a gap here would read as a pass.
@@ -268,7 +270,13 @@ export class BandSendReview {
 
     const other = this.otherRulesOutcome(input, verdict, items, prior !== undefined);
     const rulings = askedItems ? verdict.disclosures ?? [] : undefined;
-    const base = combine(other, await this.piiOutcome(input, own, rulings, asked, hasToken, prior !== undefined));
+    const piiOutcome = await this.piiOutcome(input, own, rulings, asked, hasToken, prior !== undefined);
+    // At 80+ a hold for stakes alone waits for the drafter's rewrite of the details, like one
+    // waiting for the rewrite of a claim (#2473): the approval must not show them as sent.
+    const stakesOnly = other.kind === 'hold' && !other.ask && other.findings.every((f) => f.rule === BAND_RULES.speaksAsPrincipal);
+    const base = isSpotCheckOrAbove(input.score) && stakesOnly && rewritesDetails(piiOutcome)
+      ? withHeldBeside(piiOutcome, other)
+      : combine(other, piiOutcome);
     if (quoted.length === 0 || base.kind !== 'send') return this.settle(key, taskIds, input, prior !== undefined, base);
     // The rest of the send goes out: the quote does too only if its items would.
     const quoteRulings = askedItems && quoted.every((q) => askedItems.includes(q)) ? rulings : undefined;
@@ -717,7 +725,8 @@ function stakesHold(verdict: BriefAnswers, score: number): FilterFinding | undef
   const stakes = verdict.stakes ?? 'financial_or_legal';
   const min = STAKES_MIN_SCORE[stakes];
   if (min !== null && score >= min) return undefined;
-  const why = (verdict.stakesReason ?? '').replace(/\s+/g, ' ').trim();
+  // The judge's overall reason stands in when it left the stakes reason out.
+  const why = (verdict.stakesReason?.trim() ? verdict.stakesReason : verdict.reason ?? '').replace(/\s+/g, ' ').trim();
   // Count code points, not UTF-16 units, so the cut never leaves half a surrogate pair.
   const points = Array.from(why);
   const shown = points.length > STAKES_REASON_MAX ? `${points.slice(0, STAKES_REASON_MAX - 1).join('').trimEnd()}…` : why;
