@@ -17,6 +17,13 @@
 // conversation and non-principal recipients (disclosure_decisions). Code only, like the link's
 // outreach id: band review renders them for the judge without the recipient identifiers.
 //
+// Delegation (#2499): a delegated specialist's task row holds the coordinator's rewritten
+// brief, which reads like clean principal work whatever the person asked. When the turn
+// carries `delegationOrigin`, the walk follows `delegationOrigin.taskEventId` back to the root
+// task (the turn that was not itself delegated) and passes that task's content, the inbound
+// message in its sender's own words, beside the delegate's. A chain that cannot be followed to
+// its root makes the evidence unavailable: the purpose check would otherwise judge the brief.
+//
 // Credentials are redacted before the evidence leaves for the judge's model provider, which
 // may differ from the agents'. Contact data is not: grounding checks claims such as "Dana's
 // number is …" against exactly that.
@@ -25,7 +32,7 @@
 // so every tool result a turn produced before it called a send skill is already in
 // audit_log when the gateway asks.
 
-import type { AuditLogRepo } from '../audit/audit-log-repo.js';
+import type { AuditLogRepo, AuditLogRow } from '../audit/audit-log-repo.js';
 import type { ContactTier, SystemRole } from '../contacts/types.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { OutreachLinkKind } from '../dispatch/outreach-matcher.js';
@@ -39,6 +46,18 @@ export type { SendAuthority } from './judge-brief.js';
 
 export const EVIDENCE_RESULT_MAX_CHARS = 2_000;
 export const EVIDENCE_TOTAL_MAX_CHARS = 12_000;
+/**
+ * The root inbound message of a delegation chain (#2499). Larger than one tool result: the
+ * dispatcher puts its preambles (thread participants, message id, outbound context) ahead of
+ * the person's words. It counts against EVIDENCE_TOTAL_MAX_CHARS, so it is kept first and the
+ * tool results get the rest.
+ */
+export const EVIDENCE_ORIGIN_MAX_CHARS = 4_000;
+/**
+ * Delegation hops followed to the root. The coordinator is the only caller of `delegate`, so
+ * a real chain is one hop; the bound stops a malformed or cyclic chain. Longer is a failure.
+ */
+export const DELEGATION_MAX_HOPS = 4;
 // A turn rarely makes more than a few dozen calls; the repo returns the newest first, so a
 // cut keeps the lookups closest to the send.
 const RESULTS_LIMIT = 60;
@@ -164,6 +183,11 @@ function taskText(text: string): string {
   return clip(redactSecrets(text), EVIDENCE_RESULT_MAX_CHARS);
 }
 
+/** The delegation chain's root task, or why it could not be followed. */
+type DelegationRoot =
+  | { ok: true; root: AuditLogRow | null }
+  | { ok: false; reason: string };
+
 export class SendEvidenceCollector {
   constructor(private readonly deps: {
     auditLogRepo: Pick<AuditLogRepo, 'findById' | 'findToolResultsForTasks' | 'findPrincipalReportsForTasks'>;
@@ -207,6 +231,29 @@ export class SendEvidenceCollector {
       const boundTaskId = isRecord(boundTask) && typeof boundTask['taskId'] === 'string' ? boundTask['taskId'] : undefined;
       const link = readLink(isRecord(metadata) ? metadata['linkedTask'] : undefined);
 
+      // A delegated turn: the inbound that started the chain, in its sender's words (#2499).
+      const delegation = await this.readDelegationRoot(task);
+      if (!delegation.ok) {
+        this.deps.logger.warn(
+          { taskEventIds, reason: delegation.reason },
+          'send-evidence: delegated turn\'s origin cannot be followed to its root — purpose cannot be judged',
+        );
+        return { unavailable: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
+      }
+      const rootContent = delegation.root?.payload['content'];
+      if (delegation.root !== null && typeof rootContent !== 'string') {
+        this.deps.logger.warn(
+          { taskEventIds, rootTaskEventId: delegation.root.id },
+          'send-evidence: delegation root has no message content — purpose cannot be judged',
+        );
+        return { unavailable: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
+      }
+      const originContent = typeof rootContent === 'string'
+        ? clip(redactSecrets(rootContent), EVIDENCE_ORIGIN_MAX_CHARS)
+        : undefined;
+      // The root message is kept first; the tool results share what is left of the budget.
+      const resultsBudget = EVIDENCE_TOTAL_MAX_CHARS - (originContent?.length ?? 0);
+
       const results = await this.deps.auditLogRepo.findToolResultsForTasks(taskEventIds, RESULTS_LIMIT);
       if (results.length === RESULTS_LIMIT) {
         this.deps.logger.info({ taskEventIds, limit: RESULTS_LIMIT }, 'send-evidence: result limit reached — older lookups left out');
@@ -218,7 +265,7 @@ export class SendEvidenceCollector {
         const toolName = String(r.payload['toolName'] ?? r.payload['skillName'] ?? 'unknown');
         const text = clip(renderResult(r.payload), EVIDENCE_RESULT_MAX_CHARS);
         // Newest first, so the budget keeps the lookups closest to the send.
-        if (total + text.length > EVIDENCE_TOTAL_MAX_CHARS) break;
+        if (total + text.length > resultsBudget) break;
         total += text.length;
         toolResults.push({ toolName, result: text });
       }
@@ -247,6 +294,7 @@ export class SendEvidenceCollector {
         ...(link !== null ? { linkedOutreachId: link.outreachId } : {}),
         ...(decisions ? { decisions } : {}),
         ...(reportsToPrincipal.length > 0 ? { reportsToPrincipal } : {}),
+        ...(originContent !== undefined ? { originContent } : {}),
         ...(typeof content === 'string' ? { taskContent: clip(redactSecrets(content), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         ...(progress !== undefined ? { taskProgress: clip(redactSecrets(JSON.stringify(progress)), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         toolResults,
@@ -255,6 +303,37 @@ export class SendEvidenceCollector {
     } catch (err) {
       this.deps.logger.error({ err, taskEventIds }, 'send-evidence: audit lookup failed — grounding cannot be judged');
       return { unavailable: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
+    }
+  }
+
+  /**
+   * Follow `delegationOrigin.taskEventId` from a delegated turn back to the root task: the
+   * first one that was not itself delegated. `root` is null for a turn that was not delegated.
+   * A malformed origin, a missing id, an unreadable or non-task row, a cycle, or a chain past
+   * DELEGATION_MAX_HOPS is a failure, never a shorter walk. Read errors propagate to collect()'s
+   * catch, which marks the evidence unavailable too.
+   *
+   * `delegationOrigin` is trusted structure: the dispatcher strips it from channel metadata,
+   * and only the delegate skill stamps it (#1860, ADR-045).
+   */
+  private async readDelegationRoot(task: AuditLogRow): Promise<DelegationRoot> {
+    const seen = new Set<string>([task.id]);
+    let current = task;
+    for (let hops = 0; ; hops++) {
+      const metadata = current.payload['metadata'];
+      const origin = isRecord(metadata) ? metadata['delegationOrigin'] : undefined;
+      // Absent (or null, as isDelegatedSpecialistTask reads it): this task was not delegated.
+      if (origin === undefined || origin === null) return { ok: true, root: hops === 0 ? null : current };
+      if (!isRecord(origin)) return { ok: false, reason: 'malformed delegationOrigin' };
+      if (hops >= DELEGATION_MAX_HOPS) return { ok: false, reason: `chain longer than ${DELEGATION_MAX_HOPS} hops` };
+      const parentId = origin['taskEventId'];
+      if (typeof parentId !== 'string' || parentId === '') return { ok: false, reason: 'delegationOrigin has no taskEventId' };
+      if (seen.has(parentId)) return { ok: false, reason: 'delegation chain loops' };
+      seen.add(parentId);
+      const parent = await this.deps.auditLogRepo.findById(parentId);
+      if (parent === null) return { ok: false, reason: 'origin task not found in audit_log' };
+      if (parent.eventType !== 'agent.task') return { ok: false, reason: 'origin row is not an agent.task' };
+      current = parent;
     }
   }
 

@@ -317,13 +317,15 @@ At every band an outsider steering Curia means the action is held, the integrity
 | A send (`HUMAN_SEND_SKILLS`) | proceed — the gateway's band review asks all four questions | same |
 | Any other action at medium risk or above | ask *purpose* if an outsider (below `trusted`) initiated it; escalate on "steered" | ask *purpose* and *speaks as principal*; escalate on "steered" or "yes" |
 | A low-risk action | ask *purpose* if an outsider initiated it | same |
-| Judge failure, or the drafting turn's evidence cannot be read | escalate | escalate |
+| Judge failure, or the drafting turn's evidence cannot be read (for a delegated specialist, including a delegation chain that cannot be followed to its root) | escalate | escalate |
 
 Gate C leaves sends to the gateway because it sees only a truncated description with contact references, while the gateway sees the whole message and its resolved recipients; a hold there raises the same approval. At 80+, a non-send the tier policy would have escalated emits a `gate_proceeded` digest item. Unlike the tier gate, band Gate C also covers system- and agent-originated tasks.
 
 ### Send-time review (`BandSendReview`, `src/dispatch/band-send-review.ts`)
 
 Under `band` the outbound filter's `contact-data-leak` rule and Stage 2.5 are off. After the integrity rules and Stage 2 pass, the gateway asks the escalation judge's brief (`src/autonomy/judge-brief.ts`). The judge sees the message, the recipients, the band and the drafting turn's evidence: the turn's tool results read back from the audit log (task → `tool.invoke` → `tool.result`), its task content and progress, and the "Who you serve" block. The evidence is passed beside the message, never written into it, and credentials are redacted before it leaves.
+
+**Delegated turns (#2499).** A delegated specialist's task content is the coordinator's rewritten brief, which reads like principal-serving work whatever the sender asked. When the drafting turn carries `delegationOrigin`, the collector (`src/autonomy/send-evidence.ts`) follows `delegationOrigin.taskEventId` back through the audit log to the root task, the first one that was not itself delegated, at most four hops. It passes that task's content, the inbound message in its sender's own words, as `originContent` beside the brief, and the judge is told to judge purpose by it. It is redacted like the rest, clipped to 4,000 characters and kept ahead of the tool results in the 12,000-character budget. A chain it cannot follow (a missing or malformed origin, an unreadable or non-task row, a loop, too many hops, a root with no content) makes the evidence unavailable. The same collector serves Gate C and the send review, so both see it; Gate C then escalates, and the send review treats it as a judge failure.
 
 | Send | Questions |
 |---|---|

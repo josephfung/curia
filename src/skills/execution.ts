@@ -1585,7 +1585,9 @@ export class ExecutionLayer {
     if (!this.escalationJudge?.isEnabled()) return { ok: false, failure: 'disabled' };
     try {
       // Purpose depends on what the turn was answering; without that the judge sees only the
-      // action, which leans toward "serving". A failed lookup is a review failure.
+      // action, which leans toward "serving". A failed lookup is a review failure. For a
+      // delegated specialist the collector also follows delegationOrigin to the root inbound,
+      // and a chain it cannot follow is unavailable too (#2499).
       let evidence: BriefEvidence = { toolResults: [] };
       if (this.sendEvidence) {
         if (!options?.taskEventId) return { ok: false, failure: 'unreachable' };

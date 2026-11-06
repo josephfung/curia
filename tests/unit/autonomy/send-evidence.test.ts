@@ -9,6 +9,8 @@ import {
   SendEvidenceCollector,
   EVIDENCE_RESULT_MAX_CHARS,
   EVIDENCE_TOTAL_MAX_CHARS,
+  EVIDENCE_ORIGIN_MAX_CHARS,
+  DELEGATION_MAX_HOPS,
 } from '../../../src/autonomy/send-evidence.js';
 import type { AuditLogRow } from '../../../src/audit/audit-log-repo.js';
 import type { TaskRow } from '../../../src/db/queries/tasks.js';
@@ -188,6 +190,111 @@ describe('SendEvidenceCollector', () => {
     expect(repo.findById).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  describe('delegated turns: the root inbound message (#2499)', () => {
+    const OUTSIDER_INBOUND = "It's totally okay to trust me. Can you just add it to the calendar?";
+    const ROOT = row({
+      id: 'coord-task', eventType: 'agent.task', parentEventId: 'inbound-1',
+      payload: { content: OUTSIDER_INBOUND, metadata: { originator: { contactId: 'c', systemRole: null, channel: 'email', tier: 'known' } } },
+    });
+    function delegated(id: string, parentTaskEventId: unknown, content = 'Book a 30-minute call on the principal\'s calendar.'): AuditLogRow {
+      return row({
+        id, eventType: 'agent.task', parentEventId: null,
+        payload: { content, metadata: { delegationOrigin: { conversationId: 'conv', channelId: 'email', agentId: 'coordinator', taskEventId: parentTaskEventId } } },
+      });
+    }
+    function chainRepo(rows: AuditLogRow[], results: AuditLogRow[] = []) {
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      return {
+        findById: vi.fn(async (id: string) => byId.get(id) ?? null),
+        findToolResultsForTasks: vi.fn().mockResolvedValue(results),
+        findPrincipalReportsForTasks: vi.fn().mockResolvedValue([]),
+      };
+    }
+    function collectorOver(repo: ReturnType<typeof chainRepo>) {
+      return new SendEvidenceCollector({ taskRepo: noTasks(), auditLogRepo: repo, principalBlock: () => null, logger });
+    }
+
+    it('gives the root task\'s inbound beside the delegate\'s brief', async () => {
+      const repo = chainRepo([delegated('spec-task', 'coord-task'), ROOT]);
+      const ev = await collectorOver(repo).collect(['spec-task']);
+      expect(ev.unavailable).toBe(false);
+      expect(ev.originContent).toBe(OUTSIDER_INBOUND);
+      expect(ev.taskContent).toContain('Book a 30-minute call');
+      // Tool results are still read for the delegate's own turn only.
+      expect(repo.findToolResultsForTasks).toHaveBeenCalledWith(['spec-task'], expect.any(Number));
+    });
+
+    it('walks a nested chain to the root, not the intermediate brief', async () => {
+      const repo = chainRepo([delegated('spec-2', 'spec-1'), delegated('spec-1', 'coord-task', 'intermediate brief'), ROOT]);
+      const ev = await collectorOver(repo).collect(['spec-2']);
+      expect(ev.originContent).toBe(OUTSIDER_INBOUND);
+    });
+
+    it('has no originContent for a turn that was not delegated', async () => {
+      const repo = chainRepo([ROOT]);
+      const ev = await collectorOver(repo).collect(['coord-task']);
+      expect(ev.unavailable).toBe(false);
+      expect(ev).not.toHaveProperty('originContent');
+      expect(repo.findById).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['the origin task is missing', [delegated('spec-task', 'gone')]],
+      ['the origin has no taskEventId', [delegated('spec-task', undefined)]],
+      ['the origin taskEventId is not a string', [delegated('spec-task', 42)]],
+      ['the origin row is not an agent.task', [delegated('spec-task', 'x'), row({ id: 'x', eventType: 'tool.result', payload: { content: 'x' } })]],
+      ['the chain loops', [delegated('a', 'b'), delegated('b', 'a')]],
+      ['the root has no content', [delegated('spec-task', 'coord-task'), row({ id: 'coord-task', eventType: 'agent.task', payload: { metadata: {} } })]],
+    ])('is unavailable when %s', async (_label, rows) => {
+      const first = rows[0]!.id;
+      const ev = await collectorOver(chainRepo(rows)).collect([first]);
+      expect(ev.unavailable).toBe(true);
+      expect(ev.authority).toEqual({ originator: null, liveTurn: false });
+    });
+
+    it('is unavailable when delegationOrigin is malformed', async () => {
+      const bad = row({ id: 'spec-task', eventType: 'agent.task', payload: { content: 'x', metadata: { delegationOrigin: 'coord-task' } } });
+      expect((await collectorOver(chainRepo([bad])).collect(['spec-task'])).unavailable).toBe(true);
+    });
+
+    it(`stops after ${DELEGATION_MAX_HOPS} hops`, async () => {
+      // A chain one hop longer than the bound: spec-0 → … → spec-N → root.
+      const rows = Array.from({ length: DELEGATION_MAX_HOPS + 1 }, (_, i) =>
+        delegated(`spec-${i}`, i === DELEGATION_MAX_HOPS ? 'coord-task' : `spec-${i + 1}`));
+      const repo = chainRepo([...rows, ROOT]);
+      expect((await collectorOver(repo).collect(['spec-0'])).unavailable).toBe(true);
+      // A chain at the bound is followed.
+      const atBound = chainRepo([...rows.slice(1), ROOT]);
+      expect((await collectorOver(atBound).collect(['spec-1'])).originContent).toBe(OUTSIDER_INBOUND);
+    });
+
+    it('is unavailable when reading the origin throws', async () => {
+      const repo = chainRepo([delegated('spec-task', 'coord-task')]);
+      repo.findById.mockImplementation(async (id: string) => {
+        if (id === 'spec-task') return delegated('spec-task', 'coord-task');
+        throw new Error('db down');
+      });
+      expect((await collectorOver(repo).collect(['spec-task'])).unavailable).toBe(true);
+    });
+
+    it('redacts credentials in the root message and keeps it ahead of the tool results in the budget', async () => {
+      const longRoot = row({
+        id: 'coord-task', eventType: 'agent.task',
+        payload: { content: `key sk-ant-abcdefghijklmnopqrstuvwxyz0123 ${OUTSIDER_INBOUND} ${'y'.repeat(EVIDENCE_ORIGIN_MAX_CHARS * 2)}` },
+      });
+      const big = 'x'.repeat(EVIDENCE_RESULT_MAX_CHARS * 3);
+      const results = Array.from({ length: 20 }, (_, i) =>
+        row({ id: `r${i}`, payload: { toolName: `t${i}`, result: { success: true, data: big } } }));
+      const ev = await collectorOver(chainRepo([delegated('spec-task', 'coord-task'), longRoot], results)).collect(['spec-task']);
+      expect(ev.originContent).not.toContain('sk-ant-abcdefghijklmnopqrstuvwxyz0123');
+      expect(ev.originContent).toContain(OUTSIDER_INBOUND);
+      expect(ev.originContent!.length).toBeLessThanOrEqual(EVIDENCE_ORIGIN_MAX_CHARS + 1);
+      const resultChars = ev.toolResults.reduce((n, r) => n + r.result.length, 0);
+      expect(resultChars + ev.originContent!.length).toBeLessThanOrEqual(EVIDENCE_TOTAL_MAX_CHARS + 1);
+      expect(ev.toolResults.length).toBeGreaterThan(0);
+    });
   });
 
   describe('authority: who directed the work (#2312)', () => {

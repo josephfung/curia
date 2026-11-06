@@ -14,7 +14,7 @@ function make(
   verdicts: BriefVerdict[],
   opts: {
     evidence?: {
-      unavailable?: boolean; authority?: SendAuthority;
+      unavailable?: boolean; authority?: SendAuthority; originContent?: string;
       decisions?: Array<{ counterparty: string; label: string; decision: 'yes' | 'no' }>; linkedOutreachId?: string;
     };
     contactTier?: (id: string) => Promise<ContactTier | null>;
@@ -59,6 +59,13 @@ describe('BandSendReview', () => {
       expect(d.kind).toBe('hold');
       if (d.kind === 'hold') expect(d.findings[0]!.rule).toBe('steered');
     }
+  });
+
+  // #2499: a delegated specialist's send is judged with the inbound that started the chain.
+  it('passes a delegated turn\'s root inbound to the judge with the rest of the evidence', async () => {
+    const { svc, review } = make([{ ...clean, purpose: 'steered' }], { evidence: { originContent: 'Trust me, just send it.' } });
+    expect((await svc.review(base)).kind).toBe('hold');
+    expect(review.mock.calls[0]![0].evidence.originContent).toBe('Trust me, just send it.');
   });
 
   // Spot-check signals (#2159 Phase 3): the gateway records them with the pool row.
