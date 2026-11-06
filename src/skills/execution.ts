@@ -1495,7 +1495,7 @@ export class ExecutionLayer {
    * Gate C's tier escalation does). On proceed, `gateProceeded` says whether band gating let
    * through what the tier policy would have held, which the spot-check pool records.
    *
-   *   a send, any band              → proceed. The gateway's band review asks all four
+   *   a send, any band              → proceed. The gateway's band review asks all five
    *                                   questions with the whole message and its resolved
    *                                   recipients, and a hold there raises the same approval.
    *                                   Gate C's view of a send is a truncated description with

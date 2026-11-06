@@ -9,7 +9,8 @@ import type { BusEvent } from '../../../src/bus/events.js';
 import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/autonomy-service.js';
 import type { PiiRedactor } from '../../../src/dispatch/pii-redactor.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
-import { BLOCK_REASON, type BandSendReview } from '../../../src/dispatch/band-send-review.js';
+import { BLOCK_REASON, BandSendReview } from '../../../src/dispatch/band-send-review.js';
+import { FailOpenLimiter } from '../../../src/autonomy/band-policy.js';
 import type { OutboundQueueRepo } from '../../../src/skills/outbound-queue-repo.js';
 import { readFile, realpath } from 'node:fs/promises';
 
@@ -4693,6 +4694,28 @@ describe('band review (#2159)', () => {
         preamble: 'Email to joel@example.com', extraLines: ['Held by the send review: Held.'],
       }));
       expect(result.blockedReason).not.toContain('This is waiting on the principal.');
+    });
+
+    // #2473: the approval a stakes hold raises says what the send commits the principal to, and why.
+    it('names the stakes rating and the judge\'s reason on the approval a stakes hold raises', async () => {
+      const judgeReview = vi.fn().mockResolvedValue({
+        ok: true, purpose: 'serving', speaksAsPrincipal: true, stakes: 'financial_or_legal',
+        stakesReason: 'Confirms a purchase order.', unsupportedClaims: [], unnecessaryItems: [], reason: 'ok',
+      });
+      const review = new BandSendReview({
+        judge: { review: judgeReview, isEnabled: () => true },
+        evidence: { collect: vi.fn().mockResolvedValue({ unavailable: false, toolResults: [], principalBlock: null }) },
+        limiter: new FailOpenLimiter(), onLimiterTripped: vi.fn(), contactTier: vi.fn(), logger: createLogger('error'),
+      });
+      const registerDisplay = vi.fn();
+      const gw = makeBandGateway({ review: vi.fn((input) => review.review(input)), score: 100 });
+      gw.setApprovalDelivery({ registerDisplay } as never);
+      const result = await gw.send(emailReq, { taskEventId: 't1', holdRecipe });
+      expect(result).toMatchObject({ success: false, gated: true });
+      expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+      const [line] = registerDisplay.mock.calls[0]![1].extraLines as string[];
+      expect(line).toContain('Stakes: financial or legal.');
+      expect(line).toContain('Why: Confirms a purchase order.');
     });
 
     it('bounces a cold stranger\'s request with one digest note and no approval', async () => {

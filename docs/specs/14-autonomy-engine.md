@@ -300,11 +300,21 @@ Effective standing is also what handlers see: `ctx.taskMetadata` carries the pos
 
 | Band | Score | Taking on new work | Coordinating | Speaking or committing as the principal | Principal hears about it |
 |---|---|---|---|---|---|
-| Full | 90+ | Proceeds | Acts | Acts | Digest, notable items only |
-| Spot-check | 80–89 | Proceeds, reports | Acts | Acts, after the fact check | Digest |
+| Full | 90+ | Proceeds | Acts | Acts, after the fact check; **asks first** on money or legal | Digest, notable items only |
+| Spot-check | 80–89 | Proceeds, reports | Acts | Routine: acts, after the fact check; a commitment, money or legal: **asks first** | Digest |
 | Approval | 70–79 | Proceeds, reports | Acts | **Asks first** | Digest, plus the asks |
 | Draft | 60–69 | Principal confirms | Drafts | Drafts | Digest, plus the asks |
 | Restricted | <60 | Proposes only | Drafts only | Drafts only | Digest |
+
+**Stakes (#2473).** When Curia speaks as the principal on its own initiative, the send review also rates what the message commits them to, and the rating sets the score it needs to go out without asking:
+
+| Stakes | Examples | Sends without asking at |
+|---|---|---|
+| `routine` | Acknowledgements, thanks, scheduling logistics, "got it" | 80+ |
+| `commitment` | Agreeing to dates, deliverables, terms or introductions; anything the principal would have to walk back | 90+ |
+| `financial_or_legal` | Payments, purchase orders, pricing, contracts, signatures, legal positions | Never: always held for approval |
+
+Principal-directed sends (a live principal turn, or a replay of what the principal approved) are not stakes-gated: the principal decided.
 
 At every band an outsider steering Curia means the action is held, the integrity rules block, and the fact check runs whenever Curia speaks as the principal. For sends to other people, Gates A and B are unchanged and apply on top. A send to the principal alone skips them at every band (see [Principal-only send bypass](#principal-only-send-bypass)), though Gate C can still hold it.
 
@@ -314,7 +324,7 @@ At every band an outsider steering Curia means the action is held, the integrity
 |---|---|---|
 | KG write from an unknown or blocked sender | escalate (#1290) | same |
 | External originator with no tier | escalate (#1059) | same |
-| A send (`HUMAN_SEND_SKILLS`) | proceed — the gateway's band review asks all four questions | same |
+| A send (`HUMAN_SEND_SKILLS`) | proceed — the gateway's band review asks all five questions | same |
 | Any other action at medium risk or above | ask *purpose* if an outsider (below `trusted`) initiated it; escalate on "steered" | ask *purpose* and *speaks as principal*; escalate on "steered" or "yes" |
 | A low-risk action | ask *purpose* if an outsider initiated it | same |
 | Judge failure, or the drafting turn's evidence cannot be read | escalate | escalate |
@@ -328,17 +338,21 @@ Under `band` the outbound filter's `contact-data-leak` rule and Stage 2.5 are of
 | Send | Questions |
 |---|---|
 | Principal-directed (a live principal turn) | grounding |
-| Everything else, at every band | purpose, speaks as principal, grounding, necessity |
+| Everything else, at every band | purpose, speaks as principal, stakes, grounding, necessity |
 | Any send with detected personal details | plus **disclosure**, principal-directed sends included |
 
-`send-draft` is the exception: `send-draft` marks every call `humanApproved`, so the review keys on whether the principal directed this draft send (a live turn or an approval). An autonomous one (a woken task) gets all four questions; a principal-directed one is reviewed only for its personal details, and a draft the principal approved as written is not reviewed (see **Saved drafts** below).
+`send-draft` is the exception: `send-draft` marks every call `humanApproved`, so the review keys on whether the principal directed this draft send (a live turn or an approval). An autonomous one (a woken task) gets all five questions; a principal-directed one is reviewed only for its personal details, and a draft the principal approved as written is not reviewed (see **Saved drafts** below).
 
 | Answer | Effect |
 |---|---|
 | steered | hold, at every band (a personal-details bounce beside it goes first, #2333) |
-| speaks as principal, below 80 | hold |
+| speaks as principal, `routine`, below 80 | hold |
+| speaks as principal, `commitment`, below 90 | hold |
+| speaks as principal, `financial_or_legal` | hold, at every band |
 | unsupported claims or unneeded disclosures | bounce to the drafter once; Curia never cuts text out of a message. If the rewrite still has findings: at 80+ refused back to the drafter (not sent, told to rewrite again or tell the principal, a digest item queued), except that a relayed reply or a saved draft, which has no drafter waiting, is held instead; below 80 hold |
-| judge failure | 80+: send with a `sent_without_review` item, at most five an hour, then hold until a judge call succeeds and email the principal once; below 80: hold. A failure on the recheck of a bounced draft holds. |
+| judge failure | The stakes are unrated, so treated as `financial_or_legal`: hold at every band, without using the fail-open cap (#2473). A send with personal details in its own text bounces first at 80+, as below; its recheck holds. Only a principal-directed send, which is not stakes-gated, fails open: 80+: send with a `sent_without_review` item, at most five an hour, then hold until a judge call succeeds and email the principal once; below 80: hold. A failure on the recheck of a bounced draft holds. |
+
+A sustained judge outage (provider down, or `escalation.judge.enabled: false`) therefore holds every autonomous send under band gating, each with its own approval and no single "the reviewer is down" notice; the once-per-trip notice covers only the principal-directed fail-open path. A stakes hold's approval names the rating and the judge's one-sentence reason (`Stakes: commitment. Why: …`), so the principal can tell why it asked. A missing or unknown rating is a malformed verdict, a judge failure. A stakes hold uses the `speaks-as-principal` rule, so an ask survives it (the approval shows both reasons). At 80+ a stakes hold never cuts the drafter's rewrite short: a draft that would also bounce for unsupported claims or unneeded disclosures bounces first (or blocks on the recheck), carrying the stakes hold beside it, and the clean rewrite is held for its stakes. Below 80 a hold for speaking as the principal still comes first.
 
 A bounce publishes `outbound.blocked`, so a relayed reply goes through the dispatcher's rewrite, and shows the drafter only text quoted verbatim from its message. A hold raises an approval through the send's `holdRecipe` (each send skill replays itself; relayed replies replay through `dispatcher-relay`) and never publishes `outbound.blocked`; a hold with no approval behind it queues a digest item. Sends the principal approved (`humanApproved`), system notifications and sends to the principal alone are not reviewed; sends to the principal alone are capped by the relay budget instead (below). A block never publishes `outbound.blocked` either (it would restart the relay rewrite loop); the bounce ledger entry survives a block with its time refreshed, so each further draft is still a recheck until one is clean.
 
@@ -357,7 +371,7 @@ See [ADR-054](../adr/054-authority-aware-pii-disclosure.md). Under `band` the ga
 | `unsupported`, requested, requester askable | n/a | hold, ask | hold, ask |
 | `unsupported` or any other `directed`/`inferred` | n/a | bounce | bounce |
 
-A bounce goes to the drafter once. A second unapproved item is a block at 80+ and a hold below 80; a relayed reply or a saved draft, with no drafter, is held, except a saved draft answering a cold stranger's request, which is refused (no approval; the digest is told). A principal-rooted task reached by an outsider's turn downgrades `directed` to `inferred`. An ask survives a hold for speaking as the principal below 80 (the approval shows both reasons); any other hold beside it drops the ask. A bounce over personal details beats a hold for steering (alone, or beside speaking for the principal below 80), whose approval would show them to be sent as written: the drafter rewrites without them first, and a recheck that is still steered holds (#2333). A saved draft, which can't be rewritten, holds with every reason; one refused for a cold stranger's request raises no approval, and its refusal and digest note still say it was steered. A steered send that speaks for the principal below 80 is held for both reasons. A block outranks any hold but keeps its reasons, so the hold a relayed reply or saved draft gets instead shows them. An ask is raised only when the requester was asked for the data and is **askable**: every non-principal recipient is a linked counterparty of a principal-directed task or a `known`/`trusted` contact. A cold stranger gets a bounce, a polite decline and a digest note. If the judge fails or times out, an item in the message's own text is unsupported and not askable (fail closed): at 80+ the draft bounces, below 80 it holds, and a recheck holds. A send whose only items are in the quoted thread is an ordinary judge failure: at 80+ it fails open without the quote (capped as above), below 80 it holds. When review is not running (a system notification), the tier redaction fallback applies.
+A bounce goes to the drafter once. A second unapproved item is a block at 80+ and a hold below 80; a relayed reply or a saved draft, with no drafter, is held, except a saved draft answering a cold stranger's request, which is refused (no approval; the digest is told). A principal-rooted task reached by an outsider's turn downgrades `directed` to `inferred`. An ask survives a hold for speaking as the principal (a stakes hold, #2473; the approval shows both reasons); any other hold beside it drops the ask. A bounce over personal details beats a hold for steering (alone, or beside speaking for the principal below 80), whose approval would show them to be sent as written: the drafter rewrites without them first, and a recheck that is still steered holds (#2333). A saved draft, which can't be rewritten, holds with every reason; one refused for a cold stranger's request raises no approval, and its refusal and digest note still say it was steered. A steered send that speaks for the principal below what its stakes need is held for both reasons. A block outranks any hold but keeps its reasons, so the hold a relayed reply or saved draft gets instead shows them. An ask is raised only when the requester was asked for the data and is **askable**: every non-principal recipient is a linked counterparty of a principal-directed task or a `known`/`trusted` contact. A cold stranger gets a bounce, a polite decline and a digest note. If the judge fails or times out, an item in the message's own text is unsupported and not askable (fail closed): at 80+ the draft bounces, below 80 it holds, and a recheck holds. A send whose only items are in the quoted thread is an ordinary judge failure: it holds (stakes unrated, #2473), except that a principal-directed one fails open at 80+ without the quote (capped as above). When review is not running (a system notification), the tier redaction fallback applies.
 
 **Quoted-thread exemption.** A detail only in the quoted thread is not a disclosure when every non-principal recipient was on the quoted message; otherwise the unauthorized quote is dropped, not bounced.
 
@@ -369,7 +383,7 @@ A bounce goes to the drafter once. A second unapproved item is a block at 80+ an
 
 **Saved drafts.** `send-draft` runs the same detection and review (it cannot bounce, so anything but "send" holds); a principal-directed draft gets a disclosure-only review. A draft passes as approved only when its stored subject and body match what was approved.
 
-Relayed replies skip the dispatcher's tier Gate C (except #1059's missing-tier escalate) and get all four questions at the gateway.
+Relayed replies skip the dispatcher's tier Gate C (except #1059's missing-tier escalate) and get all five questions at the gateway.
 
 ### Relay budget (`RelayBudget`, `src/autonomy/relay-budget.ts`) (#1320)
 
