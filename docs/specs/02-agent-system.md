@@ -48,8 +48,39 @@ no invite sender. The reason that judgment is task-scoped is ADR-045.
 A specialist that cannot do the task ends its reply with
 `<specialist_decline>`. A marker quoted earlier in the answer is not a refusal.
 `delegate` returns `declined: true` rather than prose,
-and `DelegationGuard` blocks further attempts to that specialist for the turn
-even when the coordinator rewords the brief.
+and `DelegationGuard` blocks further attempts to that specialist
+even when the coordinator rewords the brief. Inside the marker the specialist
+says what it could not do, what it did, and any alternative it can offer.
+
+#### Falling back from a decline (#2496)
+
+The routing decision a decline raises is Curia's, not the principal's.
+
+- **Before delegating.** An agent YAML's `limits` list what it structurally
+  cannot do, and the roster shows them after its line as "Cannot: …" (ceo-inbox:
+  drafts only; no draft to an address that is not a contact or from the
+  principal's mail). The coordinator routes around them instead of learning them
+  from a decline.
+- **On a decline,** the turn goes on. The result's `next_step` gives the order:
+  the specialist's offered alternative, the step done directly when the agent
+  holds the tool, then a specialist that can unblock it. A successful delegation
+  to another specialist reopens one retry to the one that declined (contacts adds
+  a recipient, then ceo-inbox drafts); a second decline closes it. The principal
+  is asked only for their input or authority, with one question.
+- **At the end of the turn,** a decline still open is relayed when the reply
+  reached its reader: a principal-side turn or the agent that delegated. Nothing
+  is filed, so the principal is not told twice. When nobody reads the reply (the
+  scheduler, Bullpen and internal channels, or a turn that ended on an error or
+  the budget), the decline is recorded: on a task wake as a progress note on the
+  woken task, otherwise as a follow-up task owned by `curia`, tagged
+  `specialist-decline`, which the backlog heartbeat wakes. Either record names
+  the tools the run called after the decline, so the work is not done twice. A
+  scheduled job also keeps the decline in `last_run_context.failedSkills`.
+- **Ownership.** `task-update` moves a `specialist-decline` task to owner `ceo`
+  only with a progress note that asks the principal a question.
+- **An outside sender's turn** still ends at the decline with the narrated reply
+  (`delegation-failure-reply.ts`), since the specialist's prose must not reach
+  them (#1976). Its follow-up task is owned by `curia` too.
 
 ### Late delegation delivery (#1799)
 

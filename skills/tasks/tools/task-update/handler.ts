@@ -8,6 +8,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { UpdateTaskParams } from '../../../../src/db/task-repo.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { isUuid } from '../../../../src/util/uuid.js';
+import { SPECIALIST_DECLINE_TAG } from '../../../../src/agents/specialist-decline.js';
 import {
   BLOCKED_BY_TASK_ID_ERROR,
   SELF_BLOCK_ERROR,
@@ -19,6 +20,14 @@ import {
 
 const VALID_STATUSES = new Set(['open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled']);
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
+
+// A decline's follow-up is Curia's while Curia can act on it (#2496). Handing it to the
+// principal must come with the one thing they can do that Curia cannot: answer.
+export const DECLINE_HANDOFF_ERROR =
+  'This task follows up a specialist decline, and moves to the principal (owner ceo) only with ' +
+  'a progress_note asking them one specific question. If you can still act on it (the ' +
+  'alternative the specialist offered, doing the step yourself, or a specialist that can ' +
+  'unblock it), do that and leave the owner as it is.';
 const MAX_PROGRESS_NOTE = 2000;
 // Room for " [truncated: N characters cut]" (29 chars + digits) inside the limit.
 const TRUNCATION_MARKER_RESERVE = 40;
@@ -145,6 +154,14 @@ export class TaskUpdateHandler implements ToolHandler {
         const blocker = await ctx.taskRepo.getTask(blockerUpdate.id);
         if (!blocker) {
           return { success: false, error: taskNotFoundError('blocked_by_task_id', blockerUpdate.id) };
+        }
+      }
+
+      if (input.owner === 'ceo' && !(progressNote ?? '').includes('?')) {
+        const current = await ctx.taskRepo.getTask(input.task_id);
+        if (current && current.owner !== 'ceo' && current.tags.includes(SPECIALIST_DECLINE_TAG)) {
+          ctx.log.info({ taskId: input.task_id }, 'task-update: refused decline handoff to the principal without a question');
+          return { success: false, error: DECLINE_HANDOFF_ERROR };
         }
       }
 

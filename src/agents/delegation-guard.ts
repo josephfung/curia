@@ -9,7 +9,13 @@ import { decodeResumeToken, resumeTokenOriginalTaskForm } from './resume-token.j
 import type { ExecutionLayer, InvokeOptions } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
 import type { Logger } from '../logger.js';
-import { buildDelegationEscalation, renderEscalation, type EscalationRequester } from './task-escalation.js';
+import {
+  buildDelegationEscalation,
+  DECLINE_FOLLOW_UP_ACTIONS,
+  renderEscalation,
+  type EscalationRequester,
+} from './task-escalation.js';
+import { SPECIALIST_DECLINE_REASON, SPECIALIST_DECLINE_TAG } from './specialist-decline.js';
 
 /** Total identical delegate calls allowed when the specialist failure was retryable. */
 export const MAX_RETRYABLE_IDENTICAL_DELEGATIONS = 2;
@@ -58,6 +64,21 @@ interface DelegationEntry {
   escalated: boolean;
 }
 
+/**
+ * Declines a specialist may give in one turn before it is blocked for good (#2496).
+ * After the first, one retry opens once another specialist's delegation succeeds:
+ * that is the unblock fallback (contacts verifies a recipient, then ceo-inbox drafts).
+ * A second decline closes it.
+ */
+export const MAX_SPECIALIST_DECLINES_PER_TURN = 2;
+
+interface AgentDeclineEntry {
+  failure: DelegationFailureInfo;
+  declines: number;
+  /** Set when another specialist's delegation succeeded after this decline. */
+  retryOpen: boolean;
+}
+
 export function delegationKey(agent: string, task: string): string {
   return `${agent}\0${task.trim()}`;
 }
@@ -72,12 +93,12 @@ export class DelegationGuard {
   private readonly entries = new Map<string, DelegationEntry>();
   /** Agent-scoped refusals (#1871). A reworded brief is a different key, so an
    *  identical-task block would not stop the retry loop a prose refusal caused. */
-  private readonly agentDeclines = new Map<string, DelegationFailureInfo>();
+  private readonly agentDeclines = new Map<string, AgentDeclineEntry>();
 
   /** Whether another identical delegation may be invoked. */
   canAttempt(key: string): boolean {
     const agent = agentFromDelegationKey(key);
-    if (agent !== '' && this.agentDeclines.has(agent)) return false;
+    if (agent !== '' && this.getAgentDecline(agent) !== undefined) return false;
     const entry = this.entries.get(key);
     if (!entry) return true;
     if (!entry.lastFailure) return true;
@@ -87,16 +108,47 @@ export class DelegationGuard {
 
   /**
    * Record a structured specialist refusal. Further delegate calls to this agent
-   * are blocked for the rest of the turn, including when the brief is reworded.
+   * are blocked, including when the brief is reworded, until another specialist's
+   * delegation succeeds (#2496). The second decline in a turn blocks it for good.
    */
   recordSpecialistDecline(agent: string, failure: DelegationFailureInfo): void {
     if (agent === '') return;
-    this.agentDeclines.set(agent, failure);
+    const prior = this.agentDeclines.get(agent);
+    this.agentDeclines.set(agent, { failure, declines: (prior?.declines ?? 0) + 1, retryOpen: false });
   }
 
-  /** The structured refusal recorded for this agent, if the turn already saw one. */
+  /**
+   * The refusal that blocks delegating to this agent now, or undefined when nothing
+   * blocks it: no decline this turn, or a retry opened by a later unblock.
+   */
   getAgentDecline(agent: string): DelegationFailureInfo | undefined {
-    return this.agentDeclines.get(agent);
+    const entry = this.agentDeclines.get(agent);
+    if (!entry || entry.retryOpen) return undefined;
+    return entry.failure;
+  }
+
+  /** Whether this agent declined at any point in the turn, retry open or not. */
+  hasDeclined(agent: string): boolean {
+    return this.agentDeclines.has(agent);
+  }
+
+  /**
+   * A delegation to `agent` succeeded. It may have unblocked a specialist that
+   * declined earlier (#2496), so each other declined specialist under the per-turn
+   * cap gets one retry. A success from a specialist that had declined (its retry)
+   * clears its decline: the work went through.
+   */
+  recordDelegationSuccess(agent: string): void {
+    this.agentDeclines.delete(agent);
+    for (const entry of this.agentDeclines.values()) {
+      if (entry.declines < MAX_SPECIALIST_DECLINES_PER_TURN) entry.retryOpen = true;
+    }
+  }
+
+  /** Close an open retry once it has been spent on a delegate call. */
+  consumeDeclineRetry(agent: string): void {
+    const entry = this.agentDeclines.get(agent);
+    if (entry) entry.retryOpen = false;
   }
 
   /** Record an in-flight delegate invocation (before the specialist runs). */
@@ -311,6 +363,20 @@ export function parseDelegateInProgressData(data: unknown, logger?: Logger): Del
   };
 }
 
+/**
+ * The specialist a delegate result came back from, when the result is a finished answer
+ * (#2496): not a failure, a refusal to start, a queued follow-up, a pause or a question
+ * for the principal. Null for anything else.
+ */
+export function parseDelegateSuccessAgent(data: unknown, logger?: Logger): string | null {
+  const record = delegateResultRecord(data, logger, 'success');
+  if (!record) return null;
+  if (record['failed'] === true || record['in_flight'] === true || record['in_progress'] === true) return null;
+  if (record['paused'] === true || record['needs_clarification'] === true) return null;
+  const agent = record['agent'];
+  return typeof agent === 'string' && agent !== '' ? agent : null;
+}
+
 /** Parse a delegate skill success payload that carries structured failure fields. */
 export function parseDelegateFailureData(data: unknown, logger?: Logger): DelegateFailureResult | null {
   if (data === null || data === undefined) return null;
@@ -389,7 +455,15 @@ function parseCreatedTaskId(data: unknown, logger: Logger): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
-/** Surface a non-retryable delegation failure on the principal backlog via task-create (#1171, #1267). */
+/**
+ * Surface a non-retryable delegation failure on the backlog via task-create (#1171, #1267).
+ *
+ * A structured decline (#1871) is filed as owner `curia`, not `ceo` (#2496): Curia can
+ * still take the specialist's alternative, do the step itself or unblock it, so the
+ * routing decision is not handed to the principal. The heartbeat wakes open Curia
+ * tasks, and the task moves to the principal only with a question for them
+ * (task-update enforces that). Every other failure stays a principal review task.
+ */
 export async function escalateDelegationFailure(
   executionLayer: ExecutionLayer,
   caller: CallerContext | undefined,
@@ -399,9 +473,10 @@ export async function escalateDelegationFailure(
   failure: DelegationFailureInfo & { task: string; awaitingReply?: EscalationRequester },
   logger: Logger,
 ): Promise<DelegationEscalationResult> {
-  // Structured, principal-facing payload (#1267): reason 'blocked' → blocked_on_human,
-  // anything else → agent_incomplete. Rendered into the principal task's progress note (the digest's
-  // data source) + description, and stored as the structured progress.escalation block.
+  const declined = isSpecialistDecline(failure);
+  // Structured payload (#1267): reason 'blocked' → blocked_on_human, anything else →
+  // agent_incomplete. Rendered into the task's progress note (the digest's data source) +
+  // description, and stored as the structured progress.escalation block.
   const escalation = buildDelegationEscalation({
     agent: failure.agent,
     reason: String(failure.reason),
@@ -410,11 +485,15 @@ export async function escalateDelegationFailure(
     task: failure.task,
     ...(failure.possiblySucceeded === true && { possiblySucceeded: true }),
     ...(failure.awaitingReply && { awaitingReply: failure.awaitingReply }),
+    ...(declined && { declined: true }),
   });
   const rendered = renderEscalation(escalation);
-  const title = escalation.failureMode === 'blocked_on_human'
-    ? `Review: ${failure.agent} is blocked on a person`
-    : `Review: ${failure.agent} could not complete delegated work`;
+  const title = declined
+    ? `Follow up: ${failure.agent} declined delegated work`
+    : escalation.failureMode === 'blocked_on_human'
+      ? `Review: ${failure.agent} is blocked on a person`
+      : `Review: ${failure.agent} could not complete delegated work`;
+  const owner = declined ? 'curia' : 'ceo';
 
   try {
     const result = await executionLayer.invoke(
@@ -424,17 +503,22 @@ export async function escalateDelegationFailure(
         description: [
           rendered.description,
           '',
+          // The specialist's own words, for the agent that picks the task up: what it
+          // could not do and any alternative it offered. Not shown in the digest.
+          ...(declined ? ['The specialist said:', boundUtf16(failure.message, MAX_DECLINE_MESSAGE), ''] : []),
           'Original delegated task:',
           failure.task,
         ].join('\n'),
-        owner: 'ceo',
+        owner,
         source: 'coordinator',
         // The failureMode tag distinguishes blocked-on-a-person from couldn't-finish (#1267).
         // external-waiting marks review tasks an outside sender is waiting on (#1978).
+        // specialist-decline marks a decline's follow-up; task-update keys its owner rule on it.
         tags: [
           'delegation-failure',
           failure.agent,
           escalation.failureMode,
+          ...(declined ? [SPECIALIST_DECLINE_TAG] : []),
           ...(failure.awaitingReply ? ['external-waiting'] : []),
         ],
         progress_note: rendered.progressNote,
@@ -445,15 +529,15 @@ export async function escalateDelegationFailure(
     );
     if (!result.success) {
       logger.error(
-        { agent: failure.agent, reason: failure.reason, error: result.error },
-        'Failed to escalate delegation failure to principal backlog via task-create',
+        { agent: failure.agent, reason: failure.reason, owner, error: result.error },
+        'Failed to escalate delegation failure to the backlog via task-create',
       );
       return { escalated: false };
     }
     const reviewTaskId = parseCreatedTaskId(result.data, logger);
     logger.info(
-      { agent: failure.agent, reason: failure.reason, reviewTaskId },
-      'Escalated delegation failure to principal backlog via task-create',
+      { agent: failure.agent, reason: failure.reason, owner, reviewTaskId },
+      'Escalated delegation failure to the backlog via task-create',
     );
     return {
       escalated: true,
@@ -462,10 +546,100 @@ export async function escalateDelegationFailure(
     };
   } catch (err) {
     logger.error(
-      { err, agent: failure.agent, reason: failure.reason },
-      'Unexpected error escalating delegation failure to principal backlog',
+      { err, agent: failure.agent, reason: failure.reason, owner },
+      'Unexpected error escalating delegation failure to the backlog',
     );
     return { escalated: false };
+  }
+}
+
+// The decline marker parser caps its message at 2000; the task description has room for it.
+const MAX_DECLINE_MESSAGE = 2000;
+
+/** Whether a delegation failure is a structured specialist decline (#1871). */
+export function isSpecialistDecline(failure: Pick<DelegationFailureInfo, 'declined' | 'reason'>): boolean {
+  return failure.declined === true || failure.reason === SPECIALIST_DECLINE_REASON;
+}
+
+/** A decline the turn ended without settling (#2496). */
+export interface UnresolvedDecline extends DelegationFailureInfo {
+  task: string;
+  /**
+   * Tools the turn called after the decline, in order. The agent may have finished the
+   * work another way (sent the draft itself) without a later delegation to show it, so
+   * whoever picks the record up checks these first rather than doing the work twice.
+   */
+  laterTools?: string[];
+}
+
+/** The record's line on what the turn did after the decline. */
+function laterToolsLine(decline: UnresolvedDecline): string {
+  const tools = [...new Set(decline.laterTools ?? [])];
+  return tools.length === 0
+    ? 'Nothing else was called after the decline.'
+    : `After the decline the run called ${tools.join(', ')}: check whether that finished the work before acting, and close this if it did.`;
+}
+
+/**
+ * Record a decline the turn did not relay to the principal or get past (#2496): a
+ * scheduled run, a task wake, a Bullpen thread or an internal hand-off, whose reply
+ * nobody reads. Without this the work silently does not happen.
+ *
+ * On a task wake the woken task is the record: its progress note says what was
+ * declined, so the task reflects the failure and its next wake starts from it. Anywhere
+ * else a Curia-owned follow-up task is filed, which the heartbeat wakes. A scheduled
+ * job also carries the decline in the run's failedSkills (recorded when it happened).
+ *
+ * Best-effort, like escalation: a failure is logged and reported as false.
+ */
+export async function recordUnresolvedDecline(
+  executionLayer: ExecutionLayer,
+  caller: CallerContext | undefined,
+  options: InvokeOptions,
+  decline: UnresolvedDecline,
+  context: { boundTaskId?: string },
+  logger: Logger,
+): Promise<boolean> {
+  if (context.boundTaskId === undefined) {
+    const escalation = await escalateDelegationFailure(
+      executionLayer,
+      caller,
+      options,
+      { ...decline, task: `${decline.task}\n\n${laterToolsLine(decline)}` },
+      logger,
+    );
+    return escalation.escalated;
+  }
+  const note = boundUtf16(
+    `${decline.agent} declined delegated work in this run. ${laterToolsLine(decline)} ` +
+    `Otherwise: ${DECLINE_FOLLOW_UP_ACTIONS.join(' ')} The specialist said: ${decline.message}`,
+    MAX_PROGRESS_NOTE,
+  );
+  try {
+    const result = await executionLayer.invoke(
+      'task-update',
+      { task_id: context.boundTaskId, progress_note: note },
+      caller,
+      options,
+    );
+    if (!result.success) {
+      logger.error(
+        { agent: decline.agent, boundTaskId: context.boundTaskId, error: result.error },
+        'Failed to record a specialist decline on the woken task via task-update',
+      );
+      return false;
+    }
+    logger.info(
+      { agent: decline.agent, boundTaskId: context.boundTaskId },
+      'Recorded a specialist decline on the woken task',
+    );
+    return true;
+  } catch (err) {
+    logger.error(
+      { err, agent: decline.agent, boundTaskId: context.boundTaskId },
+      'Unexpected error recording a specialist decline on the woken task',
+    );
+    return false;
   }
 }
 

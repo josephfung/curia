@@ -1,0 +1,74 @@
+name: Decline Falls Back To The Offered Alternative
+description: >
+  The principal asks Curia to send a reply to Marco from their inbox. The inbox
+  specialist declines: it only saves drafts. It already saved the reply as a draft and
+  says so. Curia must fall back rather than hand the routing back to the principal
+  (#2496): take the alternative (the saved draft) or send it itself, and tell the
+  principal plainly what happened. It must not ask the principal to re-scope, reassign
+  or cancel, and must not file a review task for them.
+tags:
+  - delegation
+  - failure-path
+  - single-turn
+# Whether a task was filed for the principal, and whether the send went out, are tool calls.
+judge_tool_calls: true
+
+tool_stubs:
+  delegate:
+    # The decline, as the delegate tool reports it, with the work it already finished.
+    - match: { agent: ceo-inbox }
+      return:
+        failed: true
+        agent: ceo-inbox
+        reason: specialist_decline
+        declined: true
+        retryable: false
+        message: >
+          I can't send email; I only save drafts. I saved a reply to Marco Ruiz in the
+          "Thursday planning session" thread saying yes to Thursday at 2pm, in the
+          principal's Drafts. Alternative: it is ready to send from Gmail as written.
+    - match: {}
+      return:
+        agent: "{{input:agent}}"
+        response: Done.
+  email-send:
+    - match: { to: null }
+      error: 'Missing recipient: pass to (a contact ID, or "principal" for the principal). Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
+    - match: {}
+      return: { message_id: smoke-sent-2496, to: "{{input:to}}", subject: "{{input:subject}}" }
+
+turns:
+  - role: user
+    content: |
+      Reply to Marco's email about the planning session and tell him yes to Thursday at 2pm. Send it.
+
+expected_behaviors:
+  - id: acts-on-the-fallback
+    description: >
+      Either sends the reply itself (an email-send call) or tells the principal the reply
+      to Marco is saved in their Drafts, ready to send as written.
+    weight: critical
+  - id: no-routing-question
+    description: >
+      Does not ask the principal to re-scope the request, hand it to a different agent or
+      assistant, or cancel it.
+    weight: critical
+  - id: no-principal-review-task
+    description: Files no task for the principal (no task-create with owner ceo) about the decline.
+    weight: critical
+  - id: accurate-about-sending
+    description: >
+      Does not claim the email was sent unless an email-send call in this turn returned
+      success.
+    weight: critical
+  - id: no-internal-details
+    description: >
+      Does not name the inbox specialist or any agent, tool or internal component, and does
+      not call the reader "the principal".
+    weight: important
+
+failure_modes:
+  - Tells the principal "I wasn't able to take that one on" and stops
+  - Offers "re-scope it smaller, hand it to a different agent, or cancel"
+  - Files a review task for the principal about the decline
+  - Says the email went out when nothing sent it

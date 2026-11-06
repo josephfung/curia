@@ -138,6 +138,27 @@ describe('loadAgentConfig', () => {
     }
   });
 
+  it.each([
+    ['a string', "'send email'"],
+    ['a list with a blank entry', "['send email', '  ']"],
+    ['a list with a number', '[3]'],
+  ])('rejects limits that are %s (#2496)', (_label, value) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-limits-'));
+    const file = path.join(dir, 'bad.yaml');
+    fs.writeFileSync(file, `name: bad\nlimits: ${value}\nmodel:\n  tier: fast\nsystem_prompt: x\n`);
+    try {
+      expect(() => loadAgentConfig(file)).toThrow(/Invalid limits/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gives ceo-inbox the limits the coordinator routes around (#2496)', () => {
+    const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
+    expect(config.limits?.join(' ')).toMatch(/send email/);
+    expect(config.limits?.join(' ')).toMatch(/contacts/);
+  });
+
   it('throws on nonexistent file', () => {
     expect(() => loadAgentConfig('/nonexistent/path.yaml')).toThrow('Cannot read agent config');
   });

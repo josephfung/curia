@@ -18,6 +18,11 @@
       "pattern": "\\S",
       "description": "When to delegate to this agent: its line in the specialist roster. Without it the roster shows description."
     },
+    "limits": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "\\S" },
+      "description": "Hard limits a delegating agent should know before routing here, shown after the roster line as 'Cannot: ...'."
+    },
     "role": { "type": "string" },
     "persona": {
       "type": "object",

@@ -113,6 +113,9 @@ interface AgentBudget {
 // text, which scheduler-list cuts at 160 characters; scheduler-list and scheduler-update point at it:
 // 84,003 over 76 local tools (main's tree measured 83,267, under its 83,284). The budget is set
 // to that measurement.
+// ceo-inbox's YAML `limits` (#2496: drafts only; no draft to an ungrounded address) ride on
+// its roster line as "Cannot: …", so the coordinator routes around them instead of learning
+// them from a decline: roster ~457 → ~498 tokens, inside the 500 budget.
 // web-send takes context_bridge again (#2440): a phone-app delivery registered no outbound
 // context, so a clarification or debrief answered in the app could not route back: +155 bytes,
 // 84,158 over 76 local tools. The budget rises by exactly that delta.

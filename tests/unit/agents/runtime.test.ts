@@ -8605,3 +8605,204 @@ describe('AgentRuntime note for the principal on a reply to someone else (prompt
     expect(response.payload.principalNote).toBeUndefined();
   });
 });
+
+describe('Specialist declines: fall back before escalating (#2496)', () => {
+  const toolDef = (name: string): ToolDefinition => ({
+    name,
+    description: name,
+    input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+  });
+  const usage = { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
+  const toolUse = (calls: Array<{ name: string; input: Record<string, unknown> }>) => ({
+    type: 'tool_use' as const,
+    toolCalls: calls.map((c, i) => ({ id: `call-${c.name}-${i}-${Math.random()}`, ...c })),
+    usage,
+    provenance: MOCK_PROVENANCE,
+  });
+  const text = (content: string) => ({ type: 'text' as const, content, usage, provenance: MOCK_PROVENANCE });
+  const declineData = (agent: string, message: string) => ({
+    agent,
+    declined: true,
+    failed: true,
+    reason: 'specialist_decline',
+    retryable: false,
+    message,
+    next_step: 'fall back',
+  });
+
+  interface Invocation { tool: string; input: Record<string, unknown> }
+
+  async function runDeclineTurn(opts: {
+    channelId: string;
+    senderId?: string;
+    metadata?: Record<string, unknown>;
+    content?: string;
+    llm: Array<ReturnType<typeof toolUse> | ReturnType<typeof text>>;
+    delegate: (input: Record<string, unknown>, n: number) => unknown;
+  }) {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const invocations: Invocation[] = [];
+    let delegateCalls = 0;
+    const mockExecution = {
+      invoke: vi.fn(async (tool: string, input: Record<string, unknown>) => {
+        invocations.push({ tool, input });
+        if (tool === 'delegate') {
+          delegateCalls += 1;
+          return { success: true, data: opts.delegate(input, delegateCalls) };
+        }
+        if (tool === 'task-create') return { success: true, data: { task_id: 'follow-up-1' } };
+        return { success: true, data: { ok: true } };
+      }),
+      getToolDefinitions: vi.fn(() => []),
+    } as unknown as ExecutionLayer;
+    const chatCalls: Array<{ messages: unknown[] }> = [];
+    let call = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async (req: { messages: unknown[] }) => {
+        chatCalls.push({ messages: [...req.messages] });
+        const next = opts.llm[Math.min(call, opts.llm.length - 1)]!;
+        call += 1;
+        return next;
+      }),
+    } as unknown as LLMProvider;
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate', 'email-send'],
+      skillToolDefs: [toolDef('delegate'), toolDef('email-send')],
+    });
+    agent.register();
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: `conv-2496-${Math.random()}`,
+      channelId: opts.channelId,
+      senderId: opts.senderId ?? 'ceo',
+      content: opts.content ?? 'Send the draft to Lena that is sitting in my inbox.',
+      senderContext: CONFIRMED_SENDER_CONTEXT,
+      ...(opts.metadata && { metadata: opts.metadata }),
+      parentEventId: 'inbound-2496',
+    }));
+    return { invocations, responses, chatCalls, provider };
+  }
+
+  const tools = (invocations: Invocation[], name: string) => invocations.filter((i) => i.tool === name);
+
+  it('keeps the turn going after a decline, does the step itself, and files nothing once the reply reaches the principal', async () => {
+    const { invocations, responses, chatCalls } = await runDeclineTurn({
+      channelId: 'cli',
+      llm: [
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Send the draft to Lena' } }]),
+        toolUse([{ name: 'email-send', input: { to: 'contact-lena', subject: 'Re: plans', body: 'Draft body' } }]),
+        text('Sent your note to Lena.'),
+      ],
+      delegate: (input) => declineData(String(input['agent']), 'I only save drafts; I cannot send. The draft is in Drafts.'),
+    });
+
+    // The decline came back to the model with its fallbacks, and the model acted on it.
+    expect(tools(invocations, 'email-send')).toHaveLength(1);
+    expect(JSON.stringify(chatCalls[1]!.messages)).toContain('specialist_decline');
+    // Relayed and resolved in the turn: no review task, owner curia or otherwise.
+    expect(tools(invocations, 'task-create')).toHaveLength(0);
+    expect(tools(invocations, 'task-update')).toHaveLength(0);
+    expect(responses).toHaveLength(1);
+    expect(responses[0]!.payload.content).toBe('Sent your note to Lena.');
+  });
+
+  it('still blocks a reworded brief to the declining specialist, with the fallbacks attached', async () => {
+    const { invocations, chatCalls } = await runDeclineTurn({
+      channelId: 'cli',
+      llm: [
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Send the draft to Lena' } }]),
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Please send that Lena draft now' } }]),
+        text('I could not send it; it is in your Drafts.'),
+      ],
+      delegate: (input) => declineData(String(input['agent']), 'Draft-only.'),
+    });
+
+    expect(tools(invocations, 'delegate')).toHaveLength(1);
+    const blocked = JSON.stringify(chatCalls[2]!.messages);
+    expect(blocked).toContain('\\"blocked\\":true');
+    expect(blocked).toContain('next_step');
+  });
+
+  it('opens one retry to the declining specialist after another specialist unblocks it', async () => {
+    const { invocations } = await runDeclineTurn({
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Run the weekly outreach job.',
+      llm: [
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Draft to dana@example.test' } }]),
+        toolUse([{ name: 'delegate', input: { agent: 'contacts', task: 'Add Dana with dana@example.test' } }]),
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Draft to contact c-dana' } }]),
+        text('Drafted the outreach to Dana.'),
+      ],
+      delegate: (input, n) => n === 1
+        ? declineData('ceo-inbox', 'That address is not in the mailbox or a contact.')
+        : { agent: input['agent'], response: 'Done.' },
+    });
+
+    expect(tools(invocations, 'delegate').map((i) => i.input['agent'])).toEqual(['ceo-inbox', 'contacts', 'ceo-inbox']);
+    // The retry went through, so even a background run has nothing to record.
+    expect(tools(invocations, 'task-create')).toHaveLength(0);
+  });
+
+  it('records a background decline as a Curia-owned follow-up and on the run\'s failed skills', async () => {
+    const { invocations, responses } = await runDeclineTurn({
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Run the weekly outreach job.',
+      llm: [
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Draft to dana@example.test' } }]),
+        text('Outreach could not be drafted.'),
+      ],
+      delegate: () => declineData('ceo-inbox', 'That address is not in the mailbox or a contact.'),
+    });
+
+    const created = tools(invocations, 'task-create');
+    expect(created).toHaveLength(1);
+    expect(created[0]!.input['owner']).toBe('curia');
+    expect(created[0]!.input['tags']).toEqual(expect.arrayContaining(['delegation-failure', 'specialist-decline', 'ceo-inbox']));
+    expect(String(created[0]!.input['description'])).toContain('That address is not in the mailbox or a contact.');
+    expect(String(created[0]!.input['progress_note'])).not.toMatch(/re-scope/i);
+    // The scheduler stores failedSkills in the job's last_run_context.
+    expect(responses[0]!.payload.failedSkills).toEqual([
+      { name: 'delegate', error: expect.stringContaining('ceo-inbox declined') },
+    ]);
+  });
+
+  it('records a decline on a task wake against the woken task instead of filing a new one', async () => {
+    const taskId = '11111111-2222-4333-8444-555555555555';
+    const { invocations } = await runDeclineTurn({
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task_id: taskId }),
+      metadata: { boundTask: { taskId, progress: {} } },
+      llm: [
+        toolUse([{ name: 'delegate', input: { agent: 'ceo-inbox', task: 'Draft to dana@example.test' } }]),
+        toolUse([{ name: 'email-send', input: { to: 'principal', subject: 'x', body: 'y' } }]),
+        text('Done for now.'),
+      ],
+      delegate: () => declineData('ceo-inbox', 'That address is not in the mailbox or a contact.'),
+    });
+
+    expect(tools(invocations, 'task-create')).toHaveLength(0);
+    const updates = tools(invocations, 'task-update');
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.input['task_id']).toBe(taskId);
+    const note = String(updates[0]!.input['progress_note']);
+    expect(note).toContain('ceo-inbox declined');
+    // What the run did after the decline, so the next wake does not do it twice.
+    expect(note).toContain('email-send');
+  });
+});

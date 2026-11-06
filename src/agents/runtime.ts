@@ -103,12 +103,17 @@ import {
   delegationKey,
   escalateDelegationFailure,
   findAlreadyDeliveredKey,
+  isSpecialistDecline,
   parseDelegateFailureData,
   parseDelegateInFlightData,
   parseDelegateInProgressData,
+  parseDelegateSuccessAgent,
+  recordUnresolvedDecline,
   seedAlreadyDelivered,
   type DelegationFailureInfo,
+  type UnresolvedDecline,
 } from './delegation-guard.js';
+import { DECLINE_NEXT_STEP } from './prompts/delegate-result-guidance.js';
 import {
   delegationOriginAgentId,
   delegationOriginConversationId,
@@ -120,7 +125,6 @@ import {
   renderRequesterIdentity,
   requesterContextEvidence,
 } from './delegated-task-context.js';
-import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { IdentifierSourceIndex, sharedIdentifierSourceIndex } from './identifier-source-index.js';
 import { createIdentifierSources } from './identifier-sources.js';
 import { principalAgentLabel } from './agent-display-name.js';
@@ -1590,6 +1594,45 @@ export class AgentRuntime {
     }
     const turnDateResolveTracker = new TurnDateResolveTracker();
     let pendingDelegationEscalation: PendingDelegationEscalation | null = null;
+    // Declines the turn has not got past yet, latest per specialist (#2496). A later
+    // successful delegation to the same specialist removes its entry.
+    const turnDeclines = new Map<string, {
+      decline: UnresolvedDecline;
+      caller: CallerContext | undefined;
+      invokeOptions: InvokeOptions;
+      /** skillsCalled.length when the decline came back. */
+      skillsCalledAt: number;
+    }>();
+    /**
+     * End-of-turn record for declines still open (#2496). When the turn's reply reached
+     * the principal, the agent has already relayed what it could not do, so nothing is
+     * filed: a review task would tell them the same failure twice. Otherwise nobody read
+     * the reply (a scheduled run, a task wake, a Bullpen thread, an internal hand-off, an
+     * error), and the decline is recorded so the work is not silently dropped.
+     */
+    const settleTurnDeclines = async (replyReachedPrincipal: boolean): Promise<void> => {
+      if (turnDeclines.size === 0) return;
+      const open = [...turnDeclines.values()];
+      turnDeclines.clear();
+      if (replyReachedPrincipal) {
+        logger.info(
+          { agentId, conversationId, declinedAgents: open.map((d) => d.decline.agent) },
+          'Specialist decline relayed in the reply to the principal — no follow-up task filed',
+        );
+        return;
+      }
+      if (!executionLayer) return;
+      for (const entry of open) {
+        await recordUnresolvedDecline(
+          executionLayer,
+          entry.caller,
+          entry.invokeOptions,
+          { ...entry.decline, laterTools: skillsCalled.slice(entry.skillsCalledAt) },
+          { ...(boundTaskCtx && { boundTaskId: boundTaskCtx.taskId }) },
+          logger,
+        );
+      }
+    };
     // Floor for a brief that did not dispatch (#1893). The handler uses this
     // same number when no duration hint is injected, including the unset
     // fallback (DEFAULT_DEFERRED_WAKE_MS, the handler's floor). A specialist
@@ -2287,10 +2330,16 @@ export class AgentRuntime {
                       ?? `Re-delegation to '${delegateAgent}' is blocked for this task.`,
                     escalated: delegationGuard.isEscalated(blockKey),
                     ...(prior?.declined === true && { declined: true }),
+                    // Still blocked after a decline: the fallbacks are what is left (#2496).
+                    ...(agentDecline !== undefined && { next_step: DECLINE_NEXT_STEP }),
                   },
                 };
               } else {
+                // A specialist that declined earlier reaches here only through the retry an
+                // unblock opened (#2496). This call spends it, whatever it returns.
+                const spendsDeclineRetry = delegationGuard.hasDeclined(delegateAgent);
                 result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
+                if (spendsDeclineRetry) delegationGuard.consumeDeclineRetry(delegateAgent);
               }
             } else {
               result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
@@ -2601,14 +2650,39 @@ export class AgentRuntime {
                 // An already_in_flight refusal was queued before the result was recorded,
                 // above, so the audit event carries the same `queued` the model sees.
                 const delegateFailure = parseDelegateFailureData(result.data, logger);
-                if (delegateFailure) {
+                const succeededAgent = delegateFailure === null && !delegateBlocked
+                  ? parseDelegateSuccessAgent(result.data)
+                  : null;
+                if (succeededAgent !== null) {
+                  // It may have unblocked a specialist that declined, and if it was that
+                  // specialist's retry, the decline is settled (#2496).
+                  delegationGuard.recordDelegationSuccess(succeededAgent);
+                  turnDeclines.delete(succeededAgent);
+                }
+                const declined = delegateFailure !== null && isSpecialistDecline(delegateFailure);
+                if (delegateFailure && declined) {
+                  delegationGuard.recordSpecialistDecline(delegateFailure.agent, delegateFailure);
+                  // On a scheduled run this is what the job's last_run_context keeps (#2496).
+                  recordFailedSkill(toolCall.name, `${delegateFailure.agent} declined: ${delegateFailure.message}`);
+                }
+                if (delegateFailure && declined && failureAudience.audience === 'principal') {
+                  // The turn goes on: the result's next_step gives the fallbacks (#2496).
+                  // Whether a follow-up is filed is settled when the turn ends, once it is
+                  // known whether the reply reached the principal.
+                  turnDeclines.set(delegateFailure.agent, {
+                    decline: { ...delegateFailure, task: delegateTask },
+                    caller,
+                    invokeOptions,
+                    skillsCalledAt: skillsCalled.length,
+                  });
+                  logger.info(
+                    { agentId, conversationId, targetAgent: delegateFailure.agent },
+                    'Specialist declined — the turn continues so the agent can fall back',
+                  );
+                } else if (delegateFailure) {
+                  // A decline on an outside sender's turn still ends the turn with the
+                  // narrated reply: the specialist's prose must not reach them (#1976).
                   const dKey = delegationKey(delegateFailure.agent, delegateTask);
-                  if (
-                    delegateFailure.declined === true
-                    || delegateFailure.reason === SPECIALIST_DECLINE_REASON
-                  ) {
-                    delegationGuard.recordSpecialistDecline(delegateFailure.agent, delegateFailure);
-                  }
                   delegationGuard.recordFailure(dKey, delegateFailure);
                   if (delegationGuard.shouldEscalate(dKey)) {
                     // On an outside sender's inbound, record them on the review task so the
@@ -2790,6 +2864,9 @@ export class AgentRuntime {
       messages.push(...streamResult.messages);
 
       if (earlyExitHandled || llmFailureHandled) {
+        // A clarification, an escalation, an error or the budget ended the turn: its reply
+        // is not the agent relaying the decline, so an open one is recorded (#2496).
+        await settleTurnDeclines(false);
         return;
       }
 
@@ -2800,6 +2877,7 @@ export class AgentRuntime {
           { agentId, conversationId },
           'Streaming tool loop stopped without a published response — no reply sent to the user',
         );
+        await settleTurnDeclines(false);
         return;
       }
 
@@ -2835,6 +2913,7 @@ export class AgentRuntime {
         };
         await this.publishAgentError(streamErr, taskEvent);
         await this.sendErrorResponse(taskEvent, streamErr, budgetHandoff);
+        await settleTurnDeclines(false);
         return;
       } else {
         // empty_stream / aborted — sensible fallback error response
@@ -2907,6 +2986,7 @@ export class AgentRuntime {
         budget.turnsUsed++;
         if (budget.turnsUsed >= budget.maxTurns) {
           await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', budgetHandoff);
+          await settleTurnDeclines(false);
           return;
         }
 
@@ -2915,7 +2995,10 @@ export class AgentRuntime {
         // chatWithRetry returns null when it has already published error events and sent an
         // error response — bail out here to avoid double-publishing a second response event
         // and writing a phantom turn to working memory.
-        if (!recovery) return;
+        if (!recovery) {
+          await settleTurnDeclines(false);
+          return;
+        }
 
         if (recovery.type === 'text' && recovery.content.trim() !== '') {
           responseContent = recovery.content;
@@ -3002,6 +3085,13 @@ export class AgentRuntime {
     const prepared = isResponseError
       ? { content: responseContent, suppressDelivery: false }
       : prepareAgentResponseContent(responseContent);
+
+    // A decline still open is relayed only by a real reply that its reader sees (#2496).
+    // A scheduler, Bullpen or internal turn's reply is not read by the principal, and a
+    // delegated turn's goes back to the agent that asked, which handles the result.
+    await settleTurnDeclines(
+      !isResponseError && !prepared.suppressDelivery && failureAudience.basis !== 'non_sender_channel',
+    );
 
     // Persist the assistant response
     if (memory) {

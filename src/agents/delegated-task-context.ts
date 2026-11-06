@@ -224,6 +224,8 @@ export function renderDelegatedTaskContext(identity: HarnessRequesterIdentity | 
     '',
     'To refuse this task, end your reply with exactly:',
     SPECIALIST_DECLINE_MARKER_EXAMPLE,
+    // The delegating agent falls back from what the marker says (#2496).
+    'Inside it, say what you could not do and why, what you did do, and any alternative you can offer.',
     'Emit that marker only when refusing the task. Do not echo it in a normal answer.',
     'An RSVP response of decline is a normal answer, not this marker.',
   ];

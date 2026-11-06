@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { TaskUpdateHandler } from './handler.js';
+import { DECLINE_HANDOFF_ERROR, TaskUpdateHandler } from './handler.js';
 import { BLOCKED_BY_TASK_ID_ERROR, SELF_BLOCK_ERROR } from '../../optional-ref.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { TaskRepo } from '../../../../src/db/task-repo.js';
@@ -426,6 +426,44 @@ describe('TaskUpdateHandler', () => {
       const error = (result as { success: false; error: string }).error;
       expect(error).toMatch(/blocked_by_task_id: task not found/);
       expect(error).not.toMatch(/violates foreign key/);
+    });
+  });
+
+  describe('decline follow-up handoff to the principal (#2496)', () => {
+    const declineTask = makeTaskRow({ owner: 'curia', tags: ['delegation-failure', 'ceo-inbox', 'specialist-decline'] });
+
+    async function handOff(input: Record<string, unknown>, current: TaskRow = declineTask) {
+      const repo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(current) });
+      const result = await new TaskUpdateHandler().execute(
+        makeCtx({ input: { task_id: VALID_UUID, owner: 'ceo', ...input }, taskRepo: repo }),
+      );
+      return { result, repo };
+    }
+
+    it('refuses to move it to the principal without a question', async () => {
+      const { result, repo } = await handOff({ progress_note: 'Re-scope it smaller, or cancel.' });
+      expect(result).toEqual({ success: false, error: DECLINE_HANDOFF_ERROR });
+      expect(repo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('refuses with no progress note at all', async () => {
+      const { result } = await handOff({});
+      expect(result.success).toBe(false);
+    });
+
+    it('moves it with one question for the principal', async () => {
+      const { result, repo } = await handOff({ progress_note: 'Should I send the Lena draft from your account as written?' });
+      expect(result.success).toBe(true);
+      expect(repo.updateTask).toHaveBeenCalledWith(
+        VALID_UUID,
+        expect.objectContaining({ owner: 'ceo' }),
+        'coordinator',
+      );
+    });
+
+    it('leaves other tasks alone', async () => {
+      const { result } = await handOff({}, makeTaskRow({ owner: 'curia', tags: ['delegation-failure'] }));
+      expect(result.success).toBe(true);
     });
   });
 });
