@@ -102,7 +102,7 @@ export async function decideRelayGateC(
   }
 
   // Band gating (#2159): a relayed reply had no Gate C at the skill, so the gateway's band
-  // review asks it all four questions, and an ask-first verdict raises the approval there.
+  // review asks it all five questions, and an ask-first verdict raises the approval there.
   // The missing-tier fail-closed above (#1059) still applies: that is integrity, not policy.
   if (opts.gating === 'band') return { kind: 'skip', reason: 'band_gating' };
 
