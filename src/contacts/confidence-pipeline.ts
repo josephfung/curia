@@ -82,7 +82,7 @@ export class ConfidencePipeline {
     // Read before the update below, so this is the history from before this message.
     const prior: PriorInboundHistory = {
       inboundMessageCount: contact.inboundMessageCount,
-      lastSeenAt: contact.lastSeenAt,
+      createdAt: contact.createdAt,
     };
 
     // Determine stat deltas based on signal type

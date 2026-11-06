@@ -14,7 +14,7 @@ import pg from 'pg';
 import pino from 'pino';
 import { ContactService } from '../src/contacts/contact-service.js';
 import { ConfidencePipeline } from '../src/contacts/confidence-pipeline.js';
-import { JUDGMENT_ELEVATION_THRESHOLD, JUDGMENT_MIN_HISTORY_MS } from '../src/contacts/confidence-scorer.js';
+import { JUDGMENT_ELEVATION_THRESHOLD, hasEarlierDayHistory } from '../src/contacts/confidence-scorer.js';
 import type { Contact } from '../src/contacts/types.js';
 
 const logger = pino({ name: 'rederive-contact-tiers' });
@@ -26,17 +26,16 @@ type ServiceLike = Pick<ContactService, 'listContacts' | 'elevateTierToKnown' | 
 type PipelineLike = Pick<ConfidencePipeline, 'fullRecomputeAll' | 'fullRecompute'>;
 
 /**
- * Stored-state stand-in for the dispatcher's hasEarlierDayHistory() (#2500). Only the
- * count and the latest message time are stored, so require two inbound messages, the
- * latest at least a day after the contact was created. A contact created by its first
- * message, or one whose messages all came in one burst, fails; without it this script
- * would elevate anyone who wrote once in the last week (recency alone clears the threshold).
+ * The dispatcher's hasEarlierDayHistory() rule (#2500), applied as of the contact's latest
+ * inbound message: at least one message before that one, and the contact on record a day
+ * or more by then. Without it this script would elevate anyone who wrote once in the last
+ * week, since recency alone clears the threshold.
  */
 export function storedHistorySpansDays(
   c: Pick<Contact, 'inboundMessageCount' | 'lastSeenAt' | 'createdAt'>,
 ): boolean {
-  if (c.inboundMessageCount < 2 || c.lastSeenAt === null) return false;
-  return c.lastSeenAt.getTime() - c.createdAt.getTime() >= JUDGMENT_MIN_HISTORY_MS;
+  if (c.lastSeenAt === null) return false;
+  return hasEarlierDayHistory({ inboundMessageCount: c.inboundMessageCount - 1, createdAt: c.createdAt }, c.lastSeenAt);
 }
 
 export async function runRederive(

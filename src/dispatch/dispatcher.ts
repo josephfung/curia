@@ -765,7 +765,7 @@ export class Dispatcher {
               // SECURITY: email elevates only on `senderVerified` mail (SPF, DKIM and DMARC pass),
               // as the principal-acquaintance path does. A From address is forgeable, and at the
               // 0.3 scheduling threshold a judgment-elevated `known` email sender can book meetings.
-              // SECURITY: and only when the sender wrote before, on an earlier day (#2500). The
+              // SECURITY: and only when the sender wrote before and has been on record a day (#2500). The
               // confidence threshold alone is cleared by any first message (recency is 0.20), so
               // without this a stranger's first email made them `known` for their second, minutes
               // later. A missing history (prior null) fails closed: no elevation.
@@ -792,7 +792,7 @@ export class Dispatcher {
                   if (prior === null || !hasEarlierDayHistory(prior, new Date())) {
                     this.logger.info(
                       { contactId: resolvedContactId, confidence, priorInboundCount: prior?.inboundMessageCount ?? null },
-                      'Judgment elevation withheld — no message from this sender on an earlier day (#2500)',
+                      'Judgment elevation withheld — sender has no earlier message or is on record under a day (#2500)',
                     );
                   } else {
                     void (async () => {

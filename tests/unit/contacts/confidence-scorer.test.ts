@@ -185,11 +185,10 @@ describe('hasEarlierDayHistory', () => {
   });
 
   it.each([
-    ['no earlier message', { inboundMessageCount: 0, lastSeenAt: null }],
-    ['a count without a last-seen time', { inboundMessageCount: 2, lastSeenAt: null }],
-    ['a last-seen time without a count', { inboundMessageCount: 0, lastSeenAt: ago(3 * JUDGMENT_MIN_HISTORY_MS) }],
-    ['a previous message two minutes ago', { inboundMessageCount: 1, lastSeenAt: ago(2 * 60 * 1000) }],
-    ['a previous message just under a day ago', { inboundMessageCount: 4, lastSeenAt: ago(JUDGMENT_MIN_HISTORY_MS - 1) }],
+    ['the message that created the contact', { inboundMessageCount: 0, createdAt: ago(1000) }],
+    ['a contact on record a month with no earlier message', { inboundMessageCount: 0, createdAt: ago(30 * JUDGMENT_MIN_HISTORY_MS) }],
+    ['a burst two minutes after creation', { inboundMessageCount: 3, createdAt: ago(2 * 60 * 1000) }],
+    ['a contact created just under a day ago', { inboundMessageCount: 4, createdAt: ago(JUDGMENT_MIN_HISTORY_MS - 1) }],
   ])('is false for %s', (_label, prior) => {
     expect(hasEarlierDayHistory(prior, now)).toBe(false);
   });
@@ -197,7 +196,12 @@ describe('hasEarlierDayHistory', () => {
   it.each([
     ['exactly a day ago', JUDGMENT_MIN_HISTORY_MS],
     ['a month ago', 30 * JUDGMENT_MIN_HISTORY_MS],
-  ])('is true for a previous message %s', (_label, ms) => {
-    expect(hasEarlierDayHistory({ inboundMessageCount: 1, lastSeenAt: ago(ms) }, now)).toBe(true);
+  ])('is true for a sender who wrote before and was created %s', (_label, ms) => {
+    expect(hasEarlierDayHistory({ inboundMessageCount: 1, createdAt: ago(ms) }, now)).toBe(true);
+  });
+
+  it('is true for a frequent correspondent on day two, however recent the last message', () => {
+    // Messages every few hours since yesterday: the previous one minutes ago does not matter.
+    expect(hasEarlierDayHistory({ inboundMessageCount: 9, createdAt: ago(JUDGMENT_MIN_HISTORY_MS + 60 * 1000) }, now)).toBe(true);
   });
 });

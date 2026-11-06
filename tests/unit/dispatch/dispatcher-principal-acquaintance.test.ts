@@ -53,6 +53,7 @@ function harness(opts: {
       ? {
           // Path 3 counts through recordInboundMessage; route it to the same spy so each
           // test counts every message_seen once, whichever path counted it.
+          // prior null: judgment elevation never fires here; this file tests #2227 only.
           confidencePipeline: {
             incrementalUpdate,
             recordInboundMessage: async (id: string) => ({

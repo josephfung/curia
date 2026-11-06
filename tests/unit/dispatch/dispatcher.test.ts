@@ -2049,7 +2049,7 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
     kind?: import('../../../src/contacts/types.js').ContactKind;
     confidence: number;
     withContactService?: boolean;
-    /** The sender's inbound history before this message. Default: one message two days ago. */
+    /** The sender's inbound history before this message. Default: one message, on record two days. */
     prior?: PriorInboundHistory | null;
   }) {
     const logger = createLogger('error');
@@ -2061,7 +2061,7 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
       : { elevateTierToKnown: elevateFn } as unknown as ContactService;
 
     const prior = opts.prior === undefined
-      ? { inboundMessageCount: 1, lastSeenAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) }
+      ? { inboundMessageCount: 1, createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) }
       : opts.prior;
     const confidencePipeline = {
       recordInboundMessage: vi.fn().mockResolvedValue({ confidence: opts.confidence, prior }),
@@ -2202,10 +2202,10 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
   // needs a message from the sender on an earlier day.
   const MINUTE = 60 * 1000;
   it.each([
-    ['the message that created the contact', { inboundMessageCount: 0, lastSeenAt: null }],
-    ['a second message two minutes after the first', { inboundMessageCount: 1, lastSeenAt: new Date(Date.now() - 2 * MINUTE) }],
-    ['a burst whose previous message was 23 hours ago', { inboundMessageCount: 5, lastSeenAt: new Date(Date.now() - 23 * 60 * MINUTE) }],
-    ['a count with no last-seen time', { inboundMessageCount: 3, lastSeenAt: null }],
+    ['the message that created the contact', { inboundMessageCount: 0, createdAt: new Date(Date.now() - 3000) }],
+    ['a second message two minutes after the first', { inboundMessageCount: 1, createdAt: new Date(Date.now() - 2 * MINUTE) }],
+    ['a contact on record 23 hours', { inboundMessageCount: 5, createdAt: new Date(Date.now() - 23 * 60 * MINUTE) }],
+    ['a first message from a contact created long ago', { inboundMessageCount: 0, createdAt: new Date(Date.now() - 30 * 24 * 60 * MINUTE) }],
     ['no recorded history (prior null)', null],
   ])('does not elevate a verified sender on %s', async (_label, prior) => {
     const { bus, elevateFn } = buildHarness({ confidence: 0.50, prior });
@@ -2222,10 +2222,10 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
     expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'judgment');
   });
 
-  it('elevates when the previous message was more than a day earlier', async () => {
+  it('elevates a sender who wrote before and has been on record more than a day', async () => {
     const { bus, elevateFn } = buildHarness({
       confidence: 0.22,
-      prior: { inboundMessageCount: 1, lastSeenAt: new Date(Date.now() - 25 * 60 * MINUTE) },
+      prior: { inboundMessageCount: 1, createdAt: new Date(Date.now() - 25 * 60 * MINUTE) },
     });
 
     await bus.publish('channel', createInboundMessage({
@@ -2243,7 +2243,7 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
 describe('Dispatcher — first-time email sender stays unknown (#2500)', () => {
   // Real contact store, scoring pipeline, resolver and authorization (config/), so the
   // test sees what production sees: confidence, tier, permissions and messageTrustScore.
-  async function buildStack(opts: { principalEvidence?: AcquaintanceEvidence | null } = {}) {
+  async function buildStack(opts: { principalEvidence?: AcquaintanceEvidence | null; createdAt?: Date } = {}) {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     const authConfig = loadAuthConfig(path.join(import.meta.dirname, '../../../config'));
@@ -2268,9 +2268,14 @@ describe('Dispatcher — first-time email sender stays unknown (#2500)', () => {
     bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     // What the email adapter does before dispatch: auto-create the sender at tier unknown.
+    // Only Date is faked, and only for the create, so the record can be dated in the past.
+    if (opts.createdAt) {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(opts.createdAt);
+    }
     const contact = await contactService.createContact({
       displayName: 'New Sender', source: 'email_participant', tier: 'unknown', primaryEmail: 'new.sender@gmail.com',
-    });
+    }).finally(() => { vi.useRealTimers(); });
     await contactService.linkIdentity({
       contactId: contact.id,
       channel: 'email',
@@ -2316,14 +2321,15 @@ describe('Dispatcher — first-time email sender stays unknown (#2500)', () => {
   });
 
   it('elevates by judgment once the sender has written on an earlier day', async () => {
-    const { bus, contactService, contactId } = await buildStack();
-    // An earlier message, two days ago (as Path 3 would have recorded it then).
+    const { bus, contactService, contactId } = await buildStack({ createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) });
+    // The message that created the contact two days ago (as Path 3 would have recorded it then).
     await contactService.updateScoringFields(contactId, {
       inboundMessageCountDelta: 1,
       contactConfidence: 0.15,
       lastSeenAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
     });
 
+    // Two messages minutes apart today: the second's previous message is recent, and it still elevates.
     await sendFromStranger(bus, 'Subject: Following up\n\nAny news?');
 
     await vi.waitFor(async () => expect((await contactService.getContact(contactId))!.tier).toBe('known'), { timeout: 200 });

@@ -55,13 +55,13 @@ describe('ConfidencePipeline', () => {
       const contact = await createTestContact();
 
       const first = await pipeline.recordInboundMessage(contact.id);
-      expect(first.prior).toEqual({ inboundMessageCount: 0, lastSeenAt: null });
+      expect(first.prior).toEqual({ inboundMessageCount: 0, createdAt: contact.createdAt });
       const afterFirst = await service.getContact(contact.id);
       expect(afterFirst!.inboundMessageCount).toBe(1);
       expect(first.confidence).toBeCloseTo(afterFirst!.contactConfidence);
 
       const second = await pipeline.recordInboundMessage(contact.id);
-      expect(second.prior).toEqual({ inboundMessageCount: 1, lastSeenAt: afterFirst!.lastSeenAt });
+      expect(second.prior).toEqual({ inboundMessageCount: 1, createdAt: contact.createdAt });
       expect((await service.getContact(contact.id))!.inboundMessageCount).toBe(2);
     });
 
