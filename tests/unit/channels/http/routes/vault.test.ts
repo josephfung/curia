@@ -17,7 +17,7 @@ import type { EventBus } from '../../../../../src/bus/bus.js';
 import { hashToken } from '../../../../../src/channels/http/session-auth.js';
 import type { UserSecretDetails } from '../../../../../src/secrets/user-secret-details.js';
 import type { SecretUsagePort, SecretUse } from '../../../../../src/secrets/secret-usage-repo.js';
-import type { UserSecretDetailsPatch } from '../../../../../src/secrets/secrets-service.js';
+import { StaleCardEditError, type UserSecretDetailsPatch } from '../../../../../src/secrets/secrets-service.js';
 import { CARD_VALIDATION_MESSAGES, type CreditCardPublicFields, type CreditCardSecretDoc, type StructuredSchemaTag } from '../../../../../src/secrets/structured-secret-schema.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
@@ -1220,6 +1220,19 @@ describe('vault routes', () => {
       expect(secrets.cardRenewals).toHaveLength(2);
       expect(secrets.cardPatches).toEqual([{ name: CARD_KEY, patch: { label: 'Everyday' } }]);
       expect(changes(published)).toEqual(['set:requested', 'details:requested', 'set:completed', 'details:completed']);
+    });
+
+    it('a stale edit (renewal or public-field patch) is a 409 the console can retry, not a 500', async () => {
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      const stale = async () => { throw new StaleCardEditError('card changed while this edit was prepared; try again'); };
+      secrets.renewCard = stale;
+      secrets.patchCardPublic = stale;
+      app = await build(secrets, fakeRegistry([]), {});
+      const renewal = await patch(app, CARD_KEY, { cvv: '456', expiry_month: 3, expiry_year: 2100 });
+      expect(renewal.statusCode).toBe(409);
+      expect(renewal.json()).toEqual({ error: 'card changed while this edit was prepared; try again' });
+      const publicEdit = await patch(app, CARD_KEY, { expiry_month: 3, expiry_year: 2100 });
+      expect(publicEdit.statusCode).toBe(409);
     });
 
     it('patch replace swaps the card', async () => {

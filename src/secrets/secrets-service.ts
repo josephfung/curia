@@ -23,6 +23,14 @@ type Queryable = Pick<DbPool, 'query'> | Pick<DbPoolClient, 'query'>;
 
 export type ValueFormat = 'string' | 'json';
 
+/** A card edit lost a race: the card is gone, or its public fields changed since the edit was based on them. */
+export class StaleCardEditError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StaleCardEditError';
+  }
+}
+
 /** Non-secret facts about a stored secret. Deliberately has no value or ciphertext field. */
 export interface SecretMetadata {
   name: string;
@@ -285,7 +293,7 @@ export class SecretsService {
         patch.basedOn === undefined ? null : JSON.stringify(patch.basedOn),
       ],
     );
-    if (result.rowCount === 0) throw new Error(`'${name}' is not a saved card, or it changed while this edit was prepared; try again`);
+    if (result.rowCount === 0) throw new StaleCardEditError(`'${name}' is not a saved card, or it changed while this edit was prepared; try again`);
   }
 
   /** Replace a card's secret. `{ cvv }` swaps only the CVV and keeps the number; the full
@@ -332,7 +340,7 @@ export class SecretsService {
             AND ($3::jsonb IS NULL OR public_fields = $3::jsonb)`,
         [name, JSON.stringify(change.publicFields), change.basedOn === undefined ? null : JSON.stringify(change.basedOn)],
       );
-      if (result.rowCount === 0) throw new Error(`'${name}' is not a saved card, or it changed while this was prepared; try again`);
+      if (result.rowCount === 0) throw new StaleCardEditError(`'${name}' is not a saved card, or it changed while this was prepared; try again`);
     });
   }
 

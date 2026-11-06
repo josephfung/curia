@@ -40,7 +40,7 @@ import { emailAccountGrantSecretName, isPerAccountEmailGrantKey } from '../../em
 import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
 import { actorFromRequest } from './sessions.js';
 import { isPlatformVaultKey, platformKeyLabel } from '../../../secrets/platform-keys.js';
-import type { PersonalSecretWrite, SecretMetadata, UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
+import { StaleCardEditError, type PersonalSecretWrite, type SecretMetadata, type UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
 import type { SecretUsagePort } from '../../../secrets/secret-usage-repo.js';
 import { consoleSecretNameInput, resolveUserSecretName, USER_SECRET_PREFIX } from '../../../secrets/user-secret-name.js';
 import { parseUserSecretDetails, type UserSecretDetails } from '../../../secrets/user-secret-details.js';
@@ -575,6 +575,9 @@ export async function vaultRoutes(
       }
       return reply.send({ ok: true });
     } catch (err) {
+      if (err instanceof StaleCardEditError) {
+        return reply.status(409).send({ error: err.message });
+      }
       request.log.error({ ...errFields(err), name }, 'vault card edit failed');
       return reply.status(500).send({ error: 'Failed to save card. Check server logs.' });
     }
