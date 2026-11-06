@@ -324,6 +324,11 @@ describe('OutboundContentFilter', () => {
         ['the score in words', 'Your message trust score is below what I need.'],
         ['a threshold', "That's under my trust threshold for scheduling."],
         ['verified trust with a sender', 'Once we have verified trust with you, I can book it.'],
+        ['a trust tier paraphrase', "You haven't reached the required trust tier."],
+        ['a sender trust score', 'Your trust score is too low for this.'],
+        ['not verified', 'Unfortunately you are not verified yet.'],
+        ['an LRM inside the phrase', 'a higher level of verified‎ trust with you'],
+        ['a hyphenated phrase', "That's under my trust-threshold for scheduling."],
         ['a fullwidth phrase', 'You need a higher ｖｅｒｉｆｉｅｄ ｔｒｕｓｔ level.'],
       ])('flags %s', async (_name, content) => {
         const result = await createTestFilter().check({ ...BASE_INPUT, content });
@@ -361,6 +366,8 @@ describe('OutboundContentFilter', () => {
         'We verified trust account balances with the bank this morning.',
         'The title company verified trust ownership of the property.',
         'The trust threshold for distributions is set out in section 4.',
+        'The trust tier of the fund is described in the prospectus.',
+        'The vendor is not verified in our ERP yet.',
       ])('leaves ordinary prose alone: %s', async (content) => {
         const result = await createTestFilter().check({ ...BASE_INPUT, content });
         expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(false);

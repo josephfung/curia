@@ -206,6 +206,11 @@ const TRUST_SYSTEM_PHRASES: ReadonlyArray<{ label: string; pattern: RegExp }> = 
   { label: 'message trust score', pattern: /message[\s_]?trust[\s_]?score/ },
   { label: 'verified trust', pattern: /\b(level of|higher|more|enough|sufficient) verified trust\b|\bverified trust (with|level|score)\b/ },
   { label: 'trust threshold', pattern: /\b(my|your|our) (\w+ )?trust thresholds?\b/ },
+  // Sender-specific disclosures: "trust tier/score/level" needs a possessive or a "required"
+  // style qualifier, and "not verified" needs a "you are" subject, so ordinary prose passes.
+  { label: 'trust tier', pattern: /\b(required|sufficient|necessary|enough|higher|your|my|our) (\w+ )?trust tiers?\b|\btrust tiers?\b.{0,20}\b(required|needed|necessary)\b/ },
+  { label: 'sender trust score', pattern: /\byour (\w+ )?trust (score|level|rating)\b|\b(trust|confidence) score (is|was|being)? ?(too )?(low|below|insufficient)\b/ },
+  { label: 'sender not verified', pattern: /\byou(?:'re| are| haven't| have not| aren't)(?: yet| currently)* (?:not )?(?:been )?verified\b|\bwe(?:'ve| have) not (?:yet )?verified you\b/ },
 ];
 
 // Secret patterns — same as sanitize.ts but duplicated intentionally.
@@ -449,7 +454,13 @@ export class OutboundContentFilter {
 
     // Sub-check 3: trust-system vocabulary (#2501). NFKC folds fullwidth and other
     // compatibility forms, and whitespace is collapsed so a line-wrapped phrase still matches.
-    const prose = lowerContent.normalize('NFKC').replace(/\s+/g, ' ');
+    // Format characters (LRM/RLM, zero-width, soft hyphen) are dropped, and hyphens and
+    // underscores read as spaces ("trust-threshold").
+    const prose = lowerContent
+      .normalize('NFKC')
+      .replace(/\p{Cf}/gu, '')
+      .replace(/[-‐-―_]+/g, ' ')
+      .replace(/\s+/g, ' ');
     const trustPhrase = TRUST_SYSTEM_PHRASES.find(({ pattern }) => pattern.test(prose));
     if (trustPhrase) {
       findings.push({
