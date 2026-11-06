@@ -10,7 +10,9 @@ import type { Logger } from '../logger.js';
 import { encrypt, decrypt } from './crypto.js';
 import { hasUserSecretDetails, type UserSecretDetails } from './user-secret-details.js';
 import {
+  detectCardBrand,
   isStructuredSchemaTag,
+  validateCvv,
   type CreditCardPublicFields,
   type CreditCardSecretDoc,
   type StructuredSchemaTag,
@@ -297,6 +299,16 @@ export class SecretsService {
       return;
     }
     await this.inTransaction(async client => {
+      // Lock and verify the card first: one deleted since the route checked must not be
+      // recreated, and a plain secret that took the name must not be overwritten.
+      const existing = (await client.query<{ schema: string | null }>(
+        `SELECT d.schema FROM secrets s LEFT JOIN user_secret_details d ON d.name = s.name
+          WHERE s.name = $1 FOR UPDATE OF s`,
+        [name],
+      )).rows[0];
+      if (existing?.schema !== 'credit_card') {
+        throw new Error(`'${name}' is not a saved card any more, so it cannot be replaced; try again`);
+      }
       await this.writeJson(client, name, change.secret);
       // Keep the existing label; only the public fields change here.
       await this.writeCardDetails(client, name, change.publicFields, null, false);
@@ -442,7 +454,14 @@ export class SecretsService {
     if (!row || row.value_format !== 'json') throw new Error(`Secret '${name}' is not a credit_card`);
     const doc = JSON.parse(decrypt(row.encrypted_value, row.iv, this.key)) as { _schema?: unknown };
     if (doc._schema !== 'credit_card') throw new Error(`Secret '${name}' is not a credit_card`);
-    await this.writeJson(client, name, { ...(doc as unknown as CreditCardSecretDoc), cvv });
+    // _schema was checked above; the rest of the shape was validated when the card was saved.
+    const card = doc as unknown as CreditCardSecretDoc;
+    // Checked against the number held under the lock: a card replaced after the route's own
+    // check (a Visa swapped for an Amex) must not end up with a CVV of the wrong length.
+    if (!validateCvv(cvv, detectCardBrand(card.number))) {
+      throw new Error(`The security code does not fit the card saved under '${name}'`);
+    }
+    await this.writeJson(client, name, { ...card, cvv });
   }
 
   private async writeJson(db: Queryable, name: string, obj: unknown): Promise<void> {

@@ -1165,7 +1165,7 @@ describe('vault routes', () => {
       app = await build(secrets, fakeRegistry([]), { bus });
       const res = await patch(app, CARD_KEY, { label: 'Everyday', expiry_month: 3, expiry_year: 2099, billing_zip: '' });
       expect(res.statusCode).toBe(200);
-      expect(secrets.cardPatches).toEqual([{ name: CARD_KEY, patch: { label: 'Everyday', publicFields: { ...PUB, expiry_month: '03' } } }]);
+      expect(secrets.cardPatches).toEqual([{ name: CARD_KEY, patch: { label: 'Everyday', publicFields: { ...PUB, expiry_month: '03' }, basedOn: PUB } }]);
       expect(secrets.cardReplaces).toEqual([]);
       expect(secrets.sets).toEqual([]);
       expect(changes(published)).toEqual(['details:requested', 'details:completed']);
@@ -1176,7 +1176,7 @@ describe('vault routes', () => {
       const secrets = fakeSecrets([CARD_KEY], withZip, FORMATS);
       app = await build(secrets, fakeRegistry([]));
       expect((await patch(app, CARD_KEY, { label: '', billing_zip: '' })).statusCode).toBe(200);
-      expect(secrets.cardPatches).toEqual([{ name: CARD_KEY, patch: { label: null, publicFields: PUB } }]);
+      expect(secrets.cardPatches).toEqual([{ name: CARD_KEY, patch: { label: null, publicFields: PUB, basedOn: { ...PUB, billing_zip: 'M5V' } } }]);
     });
 
     it('patch rejects an invalid public field with the message', async () => {
@@ -1209,7 +1209,7 @@ describe('vault routes', () => {
       app = await build(secrets, fakeRegistry([]), { bus });
       const res = await patch(app, CARD_KEY, { cvv: '456', expiry_month: 3, expiry_year: 2100 });
       expect(res.statusCode).toBe(200);
-      expect(secrets.cardRenewals).toEqual([{ name: CARD_KEY, change: { cvv: '456', publicFields: { ...PUB, expiry_month: '03', expiry_year: '2100' } } }]);
+      expect(secrets.cardRenewals).toEqual([{ name: CARD_KEY, change: { cvv: '456', publicFields: { ...PUB, expiry_month: '03', expiry_year: '2100' }, basedOn: PUB } }]);
       expect(secrets.cardReplaces).toEqual([]);
       expect(secrets.cardPatches).toEqual([]);
       expect(changes(published)).toEqual(['set:requested', 'set:completed']);

@@ -117,12 +117,12 @@ export interface VaultSecretsPort {
   setCard(name: string, secret: CreditCardSecretDoc, publicFields: CreditCardPublicFields, label: string | null): Promise<void>;
   getStructuredSchema(name: string): Promise<StructuredSchemaTag | null>;
   getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields } | null>;
-  patchCardPublic(name: string, patch: { label?: string | null; publicFields?: CreditCardPublicFields }): Promise<void>;
+  patchCardPublic(name: string, patch: { label?: string | null; publicFields?: CreditCardPublicFields; basedOn?: CreditCardPublicFields }): Promise<void>;
   replaceCardSecret(
     name: string,
     change: { cvv: string } | { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields },
   ): Promise<void>;
-  renewCard(name: string, change: { cvv: string; publicFields: CreditCardPublicFields }): Promise<void>;
+  renewCard(name: string, change: { cvv: string; publicFields: CreditCardPublicFields; basedOn?: CreditCardPublicFields }): Promise<void>;
   /** Value and sign-in details in one transaction; never replaces a JSON value. */
   setUserSecret(name: string, value: string, details: UserSecretDetails): Promise<PersonalSecretWrite>;
   /** Edit an existing personal key in one transaction; never recreates or replaces JSON. */
@@ -560,7 +560,7 @@ export async function vaultRoutes(
         await secretsService.replaceCardSecret(name, replacement);
         await auditCompleted(request, { name, action: 'set' });
       } else if (cvv !== undefined && publicFields !== undefined) {
-        await secretsService.renewCard(name, { cvv, publicFields });
+        await secretsService.renewCard(name, { cvv, publicFields, basedOn: current.publicFields });
         await auditCompleted(request, { name, action: 'set' });
       } else if (cvv !== undefined) {
         await secretsService.replaceCardSecret(name, { cvv });
@@ -569,7 +569,7 @@ export async function vaultRoutes(
       if (writesDetails) {
         await secretsService.patchCardPublic(name, {
           ...(label !== undefined ? { label } : {}),
-          ...(publicFields && !renewing ? { publicFields } : {}),
+          ...(publicFields && !renewing ? { publicFields, basedOn: current.publicFields } : {}),
         });
         await auditCompleted(request, { name, action: 'details' });
       }

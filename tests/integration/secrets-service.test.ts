@@ -369,6 +369,37 @@ describeIf('SecretsService', () => {
       expect((await service.getCardSecret(n)).cvv).toBe(SECRET.cvv);
     });
 
+    it('replaceCardSecret refuses a card that is gone or a plain secret under the name', async () => {
+      const gone = `${P}replgone`;
+      const next: CreditCardSecretDoc = { _schema: 'credit_card', number: '5555555555554444', cvv: '321' };
+      const nextPub: CreditCardPublicFields = { ...PUB, brand: 'mastercard', last4: '4444' };
+      await expect(service.replaceCardSecret(gone, { secret: next, publicFields: nextPub })).rejects.toThrow(/not a saved card/);
+      expect((await pool.query('SELECT 1 FROM secrets WHERE name = $1', [gone])).rows).toHaveLength(0);
+
+      const plain = `${P}replplain`;
+      await service.set(plain, 'hunter2');
+      await expect(service.replaceCardSecret(plain, { secret: next, publicFields: nextPub })).rejects.toThrow(/not a saved card/);
+      expect(await service.get(plain)).toBe('hunter2');
+    });
+
+    it('a CVV write is checked against the number held under the lock', async () => {
+      const n = `${P}cvvbrand`;
+      const amex: CreditCardSecretDoc = { _schema: 'credit_card', number: '378282246310005', cvv: '1234' };
+      await service.setCard(n, amex, { ...PUB, brand: 'amex', last4: '0005' }, null);
+      await expect(service.replaceCardSecret(n, { cvv: '999' })).rejects.toThrow(/does not fit/);
+      await expect(service.renewCard(n, { cvv: '999', publicFields: PUB })).rejects.toThrow(/does not fit/);
+      expect((await service.getCardSecret(n)).cvv).toBe('1234');
+    });
+
+    it('patchCardPublic and renewCard refuse a stale basedOn', async () => {
+      const n = `${P}stale`;
+      await service.setCard(n, SECRET, PUB, null);
+      const stale = { ...PUB, last4: '9999' };
+      await expect(service.patchCardPublic(n, { publicFields: stale, basedOn: stale })).rejects.toThrow(/changed/);
+      await expect(service.renewCard(n, { cvv: '555', publicFields: PUB, basedOn: stale })).rejects.toThrow(/changed/);
+      expect((await service.getCardSecret(n)).cvv).toBe(SECRET.cvv);
+    });
+
     it('getCardSecret refuses a non-card secret', async () => {
       const n = `${P}notcard`;
       await service.setJSON(n, { hello: 'world' });
