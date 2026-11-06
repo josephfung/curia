@@ -54,8 +54,9 @@ export function recordAgentInputBeforeCall(
 /**
  * Record the source text of a successful result. For an echo-prone tool, agent input
  * recorded under the conversation or the browser session is left out. A call that opened
- * a new browser session learns its id only from the result: its own input is recorded
- * under that session first, so later reattachments exclude it too.
+ * a new browser session (none requested, or the requested one had expired) learns its id
+ * only from the result: its own input is recorded under that session first, so later
+ * reattachments exclude it too.
  */
 export function recordSourceAfterCall(
   execution: ProvenanceExecution,
@@ -69,10 +70,16 @@ export function recordSourceAfterCall(
   const echo = execution.isAgentEchoSource(toolName);
   const scopes = [conversation];
   if (echo) {
-    const sessionId = sessionIdOf(input) ?? sessionIdOf(data);
-    if (sessionId) {
-      if (!sessionIdOf(input) && before.agentInputText) index.recordAgentInput(browserSessionScope(sessionId), before.agentInputText);
-      scopes.push(browserSessionScope(sessionId));
+    const requested = sessionIdOf(input);
+    if (requested) scopes.push(browserSessionScope(requested));
+    // The session the call actually ran in. It differs from the one requested when that
+    // one had expired and the browser started a fresh session: the input was typed into
+    // the new one, so it goes on that session's record too. The id is set by the handler,
+    // never by the page.
+    const actual = sessionIdOf(data);
+    if (actual && actual !== requested) {
+      if (before.agentInputText) index.recordAgentInput(browserSessionScope(actual), before.agentInputText);
+      scopes.push(browserSessionScope(actual));
     }
   }
   const sourceText = execution.provenanceSourceText(toolName, input, data);

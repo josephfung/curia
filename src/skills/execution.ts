@@ -61,8 +61,9 @@ const AGENT_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web-fetch', 'web-
  * malformed escape is left as it is rather than failing (decodeURIComponent throws), and
  * the result is only used to find identifiers, never shown or sent.
  */
-function percentDecode(text: string): string {
-  return text.replace(/\+/g, ' ').replace(/%([0-9a-f]{2})/gi, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+function percentDecode(text: string, plusAsSpace: boolean): string {
+  const spaced = plusAsSpace ? text.replace(/\+/g, ' ') : text;
+  return spaced.replace(/%([0-9a-f]{2})/gi, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)));
 }
 
 /**
@@ -684,14 +685,20 @@ export class ExecutionLayer {
    * session, cannot verify it. Null for any other tool. Over-collecting only refuses more,
    * so it covers the forms a page can show back that the raw strings miss:
    * - every string in the input (URLs, typed text, selected values, selectors);
-   * - each of them percent-decoded, twice (`sam%40x.com`, `sam%2540x.com`; `+` as a space);
+   * - each of them percent-decoded, once and twice (`sam%40x.com`, `sam%2540x.com`), with `+`
+ *   read both as a space and as itself (`sam%2Btag%40x.com`);
    * - typed and selected values (`text`, `value`) joined in order, for runs of up to three
    *   (`sam` typed into one field and `@x.com` picked in the next show up as one address).
    */
   provenanceAgentInputText(toolName: string, input: Record<string, unknown>): string | null {
     if (!this.isAgentEchoSource(toolName)) return null;
     const raw = provenanceSourceText(input, []);
-    const decoded = percentDecode(percentDecode(raw));
+    // Once and twice, with `+` as a space (a query string) and kept (`sam+tag@x.com`).
+    const decoded: string[] = [];
+    for (const plusAsSpace of [true, false]) {
+      const once = percentDecode(raw, plusAsSpace);
+      decoded.push(once, percentDecode(once, plusAsSpace));
+    }
     const steps = Array.isArray(input['actions']) ? input['actions'] : [input];
     const values: string[] = [];
     for (const step of steps) {
@@ -705,7 +712,7 @@ export class ExecutionLayer {
     for (let i = 0; i < values.length; i++) {
       for (let run = 2; run <= 3 && i + run <= values.length; run++) joined.push(values.slice(i, i + run).join(''));
     }
-    return [raw, decoded, ...joined].join('\n');
+    return [raw, ...decoded, ...joined].join('\n');
   }
 
   /**

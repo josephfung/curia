@@ -41,6 +41,23 @@ describe('provenance recording (#2498)', () => {
     expect(index.has(browserSessionScope('s2'), 'email:evnts@venue.example')).toBe(false);
   });
 
+  it('records the input under the fresh session when the requested one had expired', () => {
+    const index = new IdentifierSourceIndex();
+    // The agent passes stale s-old; the browser runs the call in a new session, s-new.
+    call(index, 'conv-a', 'web-browser', { action: 'type', text: 'jon@acme.co', session_id: 's-old', keep_warm: true },
+      { session_id: 's-new', session_reused: false, content: 'ok' });
+    call(index, 'conv-b', 'web-browser', { action: 'get_content', session_id: 's-new' }, { session_id: 's-new', content: 'Confirmation sent to jon@acme.co' });
+    expect(index.has('conv-b', 'email:jon@acme.co')).toBe(false);
+  });
+
+  it('keeps a browser session scope when many conversations record sources', () => {
+    const index = new IdentifierSourceIndex({ maxConversations: 2 });
+    call(index, 'conv-a', 'web-browser', { action: 'type', text: 'jon@acme.co', session_id: 's1' }, { session_id: 's1', content: 'ok' });
+    for (const conv of ['c1', 'c2', 'c3']) index.record(conv, `x@${conv}.example`);
+    call(index, 'conv-z', 'web-browser', { action: 'get_content', session_id: 's1' }, { session_id: 's1', content: 'Sent to jon@acme.co' });
+    expect(index.has('conv-z', 'email:jon@acme.co')).toBe(false);
+  });
+
   it('does not exclude agent input from a non-echo source', () => {
     const index = new IdentifierSourceIndex();
     call(index, 'conv-a', 'web-browser', { action: 'type', text: 'sam@venue.example', session_id: 's3' }, { session_id: 's3', content: 'ok' });

@@ -20,38 +20,82 @@ import { sourceKeysInText } from '../contacts/identifier-provenance.js';
 export interface IdentifierSourceIndexOptions {
   /** How long a recorded key counts. Default 24 hours. */
   ttlMs?: number;
-  /** Keys kept per conversation; the oldest go first. Default 5 000. */
+  /** Keys kept per conversation (and per agent-input scope); the oldest go first. Default 5 000. */
   maxKeysPerConversation?: number;
   /** Conversations kept; the least recently recorded goes first. Default 500. */
   maxConversations?: number;
+  /**
+   * Agent-input scopes kept (conversations and browser sessions, #2498). Default 2 000:
+   * kept apart from the sources and larger, so heavy browsing neither evicts conversations'
+   * sources nor drops a live session's typing early. Only email and phone keys are held.
+   */
+  maxAgentInputScopes?: number;
   now?: () => number;
 }
 
-interface ConversationEntry {
-  recordedAt: number;
-  /** Identifiers found in source-tool results, with when each was last seen. */
-  keys: Map<string, number>;
-  /** Identifiers the agent supplied to echo-prone source tools (#2498). */
-  agentKeys: Map<string, number>;
+/**
+ * Keys per scope with a TTL and two caps. Map iteration order is insertion order:
+ * re-inserting moves an entry to the end, so the first entry is always the oldest, for
+ * scopes (by last record) and for the keys inside each.
+ */
+class ScopedKeys {
+  private readonly scopes = new Map<string, { recordedAt: number; keys: Map<string, number> }>();
+
+  constructor(
+    private readonly ttlMs: number,
+    private readonly maxKeys: number,
+    private readonly maxScopes: number,
+  ) {}
+
+  add(scope: string, found: ReadonlySet<string>, now: number): void {
+    // Scopes are ordered by last record, so expired ones sit at the front.
+    for (const [key, entry] of this.scopes) {
+      if (now - entry.recordedAt <= this.ttlMs) break;
+      this.scopes.delete(key);
+    }
+    const entry = this.scopes.get(scope) ?? { recordedAt: now, keys: new Map<string, number>() };
+    entry.recordedAt = now;
+    this.scopes.delete(scope);
+    this.scopes.set(scope, entry);
+    for (const key of found) {
+      entry.keys.delete(key);
+      entry.keys.set(key, now);
+    }
+    for (const oldest of entry.keys.keys()) {
+      if (entry.keys.size <= this.maxKeys) break;
+      entry.keys.delete(oldest);
+    }
+    for (const oldest of this.scopes.keys()) {
+      if (this.scopes.size <= this.maxScopes) break;
+      this.scopes.delete(oldest);
+    }
+  }
+
+  has(scope: string, key: string, now: number): boolean {
+    const addedAt = this.scopes.get(scope)?.keys.get(key);
+    return addedAt !== undefined && now - addedAt <= this.ttlMs;
+  }
+
+  get size(): number {
+    return this.scopes.size;
+  }
 }
 
 export class IdentifierSourceIndex {
-  private readonly ttlMs: number;
-  private readonly maxKeys: number;
-  private readonly maxConversations: number;
   private readonly now: () => number;
-  // Map iteration order is insertion order: re-inserting moves an entry to the end,
-  // so the first entry is always the oldest — for conversations (by last record) and
-  // for the keys inside each.
-  // `agentKeys` holds what the agent supplied to echo-prone tools (#2498): those keys are
-  // never taken from such a tool's result. Both maps share the conversation's lifetime,
-  // so evicting a conversation drops its sources and its agent input together.
-  private readonly conversations = new Map<string, ConversationEntry>();
+  /** Identifiers found in source-tool results, per conversation. */
+  private readonly sources: ScopedKeys;
+  /**
+   * Identifiers the agent supplied to echo-prone source tools (#2498), per conversation
+   * and per browser session: never taken from such a tool's result.
+   */
+  private readonly agentInput: ScopedKeys;
 
   constructor(options: IdentifierSourceIndexOptions = {}) {
-    this.ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
-    this.maxKeys = options.maxKeysPerConversation ?? 5_000;
-    this.maxConversations = options.maxConversations ?? 500;
+    const ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
+    const maxKeys = options.maxKeysPerConversation ?? 5_000;
+    this.sources = new ScopedKeys(ttlMs, maxKeys, options.maxConversations ?? 500);
+    this.agentInput = new ScopedKeys(ttlMs, maxKeys, options.maxAgentInputScopes ?? 2_000);
     this.now = options.now ?? Date.now;
   }
 
@@ -63,17 +107,12 @@ export class IdentifierSourceIndex {
    */
   record(conversationKey: string, text: string, options: { excludeAgentInputOf?: readonly string[] } = {}): void {
     const found = sourceKeysInText(text);
-    if (found.size === 0) return;
-
     const now = this.now();
     for (const scope of options.excludeAgentInputOf ?? []) {
-      const agentKeys = this.live(scope, now)?.agentKeys;
-      if (agentKeys) {
-        for (const key of found) if (agentKeys.has(key)) found.delete(key);
-      }
+      for (const key of found) if (this.agentInput.has(scope, key, now)) found.delete(key);
     }
     if (found.size === 0) return;
-    this.add(conversationKey, found, now, 'keys');
+    this.sources.add(conversationKey, found, now);
   }
 
   /**
@@ -86,51 +125,16 @@ export class IdentifierSourceIndex {
   recordAgentInput(scopeKey: string, text: string): void {
     const found = new Set([...sourceKeysInText(text)].filter((key) => key.startsWith('email:') || key.startsWith('phone:')));
     if (found.size === 0) return;
-    this.add(scopeKey, found, this.now(), 'agentKeys');
-  }
-
-  /** The conversation's entry, when it has not expired. */
-  private live(conversationKey: string, now: number): ConversationEntry | undefined {
-    const conversation = this.conversations.get(conversationKey);
-    return conversation && now - conversation.recordedAt <= this.ttlMs ? conversation : undefined;
-  }
-
-  private add(conversationKey: string, found: ReadonlySet<string>, now: number, into: 'keys' | 'agentKeys'): void {
-    // Conversations are ordered by last record, so expired ones sit at the front.
-    for (const [key, conversation] of this.conversations) {
-      if (now - conversation.recordedAt <= this.ttlMs) break;
-      this.conversations.delete(key);
-    }
-
-    const conversation = this.conversations.get(conversationKey)
-      ?? { recordedAt: now, keys: new Map<string, number>(), agentKeys: new Map<string, number>() };
-    conversation.recordedAt = now;
-    this.conversations.delete(conversationKey);
-    this.conversations.set(conversationKey, conversation);
-
-    const keys = conversation[into];
-    for (const key of found) {
-      keys.delete(key);
-      keys.set(key, now);
-    }
-    for (const oldest of keys.keys()) {
-      if (keys.size <= this.maxKeys) break;
-      keys.delete(oldest);
-    }
-    for (const oldest of this.conversations.keys()) {
-      if (this.conversations.size <= this.maxConversations) break;
-      this.conversations.delete(oldest);
-    }
+    this.agentInput.add(scopeKey, found, this.now());
   }
 
   has(conversationKey: string, key: string): boolean {
-    const addedAt = this.conversations.get(conversationKey)?.keys.get(key);
-    return addedAt !== undefined && this.now() - addedAt <= this.ttlMs;
+    return this.sources.has(conversationKey, key, this.now());
   }
 
   /** Conversations currently held — for tests and diagnostics. */
   get size(): number {
-    return this.conversations.size;
+    return this.sources.size;
   }
 }
 

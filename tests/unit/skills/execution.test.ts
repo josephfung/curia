@@ -189,13 +189,14 @@ describe('ExecutionLayer', () => {
         registry.register(makeManifest({ name: 'web-browser', provenance_source: true }), noop);
         const text = execution.provenanceAgentInputText('web-browser', {
           actions: [
-            { action: 'navigate', url: 'https://search.example/?q=dana%40typo.example&r=lee%2540typo.example' },
+            { action: 'navigate', url: 'https://search.example/?q=dana%40typo.example&r=lee%2540typo.example&t=sam%2Btag%40typo.example' },
             { action: 'type', selector: 'Local part', text: 'sam' },
             { action: 'select', selector: 'Domain', value: '@typo.example' },
           ],
         }) ?? '';
         expect(text).toContain('dana@typo.example');
         expect(text).toContain('lee@typo.example');
+        expect(text).toContain('sam+tag@typo.example');
         expect(text).toContain('sam@typo.example');
       });
     });
