@@ -210,7 +210,7 @@ const TRUST_SYSTEM_PHRASES: ReadonlyArray<{ label: string; pattern: RegExp }> = 
   // style qualifier, and "not verified" needs a "you are" subject, so ordinary prose passes.
   { label: 'trust tier', pattern: /\b(required|sufficient|necessary|enough|higher|your|my|our) (\w+ )?trust tiers?\b|\btrust tiers?\b.{0,20}\b(required|needed|necessary)\b/ },
   { label: 'sender trust score', pattern: /\byour (\w+ )?trust (score|level|rating)\b|\b(trust|confidence) score (is|was|being)? ?(too )?(low|below|insufficient)\b/ },
-  { label: 'sender not verified', pattern: /\byou(?:'re| are| haven't| have not| aren't)(?: yet| currently)* (?:not )?(?:been )?verified\b|\bwe(?:'ve| have) not (?:yet )?verified you\b/ },
+  { label: 'sender not verified', pattern: /\byou(?:'re| are| haven't| have not| aren't)(?: yet| currently)*(?: not)?(?: yet| currently)*(?: been)? verified\b|\bwe(?:'ve| have) not (?:yet )?verified you\b/ },
 ];
 
 // Secret patterns — same as sanitize.ts but duplicated intentionally.
