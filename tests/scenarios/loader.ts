@@ -1118,6 +1118,11 @@ function validateThroughGateway(scenario: ScenarioCase, file: string): void {
   if (scenario.gatedTools && !scenario.throughGateway) {
     throw new CaseError(file, `'gated_tools' needs through_gateway: true (the gates run on its review layer)`);
   }
+  // approve-action replays a held call outside the gated call it came from, so it would reach
+  // the real handler, which test mode cannot serve. Not supported yet.
+  if (scenario.gatedTools && scenario.inbound.then) {
+    throw new CaseError(file, `'gated_tools' cannot be combined with inbound.then: approving a gated hold replays the real handler`);
+  }
   for (const tool of scenario.gatedTools ?? []) {
     if (THROUGH_GATEWAY_TOOLS.has(tool)) {
       throw new CaseError(file, `gated_tools.${tool}: through_gateway already runs ${tool} for real`);

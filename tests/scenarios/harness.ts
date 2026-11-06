@@ -34,6 +34,7 @@
 // acts only on the run's own. readGatewayOutcome reads all of it before cleanup removes it.
 import { randomUUID } from 'node:crypto';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
+import { BAND_GATE_C_UNREVIEWED_REASON } from '../../src/skills/execution.js';
 import { createAgentDiscuss, createAgentTask, createInboundMessage, type AgentErrorEvent, type AgentResponseEvent, type AgentTaskEvent, type InjectionDrainPoint } from '../../src/bus/events.js';
 import { stampOriginator } from '../../src/contacts/stamp-originator.js';
 import {
@@ -1349,10 +1350,15 @@ export async function createScenarioHarness(
       const reviewerError = gateway?.reviewerFailedOpen
         ? 'band review\'s fail-open cap tripped: the review judge failed on too many sends, so sends held for want of a reviewer'
         : undefined;
+      // A gated write Gate C held because it could not review it (#2499) tests the judge's
+      // outage or a broken evidence chain, not the agent: an error, not a pass.
+      const gateReviewerError = scenario.gatedTools && gateway?.holds.some((h) => h.preamble?.includes(BAND_GATE_C_UNREVIEWED_REASON))
+        ? 'band Gate C held a gated call because its reviewer was unavailable (judge failure or unreadable evidence)'
+        : undefined;
       const error = timeoutKind === 'delegate_wait'
         ? `${outcome.error} — a specialist was still working (${[...new Set(stillWorking)].join(', ')}): the run's wait ran out before the delegate wait did`
         : outcome.error ?? (thenOutcome?.error ? `inbound.then turn: ${thenOutcome.error}` : undefined)
-          ?? (wakeError ? `approval wake turn: ${wakeError}` : undefined) ?? premiseError ?? reviewerError;
+          ?? (wakeError ? `approval wake turn: ${wakeError}` : undefined) ?? premiseError ?? reviewerError ?? gateReviewerError;
       result = {
         runIndex,
         inboundContent,

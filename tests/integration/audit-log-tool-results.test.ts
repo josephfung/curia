@@ -132,5 +132,7 @@ describeIf('audit-log findToolResultsForTasks (#2159)', () => {
     const rows = await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 10);
     expect(rows.map((r) => r.payload['content'])).toEqual(['second', 'first']);
     expect((await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 1)).map((r) => r.payload['content'])).toEqual(['second']);
+    // An address in another case is the same sender.
+    expect((await repo.findRecentInboundsFromSender(conversationId, 'Jordan@Example.TEST', before, 10)).map((r) => r.payload['content'])).toEqual(['second', 'first']);
   });
 });

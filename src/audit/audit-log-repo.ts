@@ -595,8 +595,9 @@ export class AuditLogRepo {
   /**
    * One sender's latest inbound messages on a conversation before `before`, newest first
    * (#2499). `senderId` is the channel's sender id as the inbound carried it (the dispatcher
-   * copies the same value onto the coordinator's agent.task). Rides idx_audit_conversation and
-   * is bounded by `limit`. Evidence for the band brief: a push in an earlier message is part of
+   * copies the same value onto the coordinator's agent.task), compared without case: an email
+   * address in another case is the same sender. Scoped to the conversation (its
+   * (conversation_id, timestamp) index) and bounded by `limit`. Evidence for the band brief: a push in an earlier message is part of
    * what the sender asked for, even when the message that started the work is bland.
    */
   async findRecentInboundsFromSender(conversationId: string, senderId: string, before: Date, limit: number): Promise<AuditLogRow[]> {
@@ -606,7 +607,7 @@ export class AuditLogRepo {
        FROM audit_log
        WHERE conversation_id = $1
          AND event_type = 'inbound.message'
-         AND payload->>'senderId' = $2
+         AND lower(payload->>'senderId') = lower($2)
          AND timestamp < $3
        ORDER BY timestamp DESC, id DESC
        LIMIT $4`,

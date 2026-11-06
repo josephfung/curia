@@ -269,7 +269,7 @@ export function createStubController(
    * so only the handler of that call, in that async context, is replaced: concurrent runs and
    * the review layer's own sends are untouched.
    */
-  const gatedAnswer = new AsyncLocalStorage<{ toolName: string; answer: () => Promise<ToolResult> }>();
+  const gatedAnswer = new AsyncLocalStorage<{ toolName: string; answer: () => Promise<ToolResult>; drop: ReadonlySet<string> }>();
 
   const runFor = (conversationId: string | undefined): OpenRun | undefined =>
     conversationId === undefined ? undefined : runs.get(conversationId) ?? delegated.get(conversationId);
@@ -373,7 +373,11 @@ export function createStubController(
         return { success: false, error: skillError(`Tool '${toolName}' is gated, but this stack has no review layer.`) };
       }
       const answer = (): Promise<ToolResult> => Promise.resolve(stubAnswer(toolName, input, stub, run));
-      return gatedAnswer.run({ toolName, answer }, () => review.invoke(...args));
+      // The capability check runs after the gates and before the handler, and test mode wires
+      // no calendar client. The stub stands in for the handler and needs none of them, so the
+      // ones this layer lacks are dropped for this call only; the gates see the manifest as is.
+      const drop = new Set(review.unavailableCapabilities(toolName));
+      return gatedAnswer.run({ toolName, answer, drop }, () => review.invoke(...args));
     }
     if (stub) {
       await note('stubbed');
@@ -445,8 +449,13 @@ export function createStubController(
             return (name: string) => {
               const tool = target.get(name);
               if (!tool) return tool;
+              const gated = gatedAnswer.getStore();
+              const manifest = gated?.toolName === name && gated.drop.size > 0 && tool.manifest.capabilities
+                ? { ...tool.manifest, capabilities: tool.manifest.capabilities.filter((c) => !gated.drop.has(c)) }
+                : tool.manifest;
               return {
                 ...tool,
+                manifest,
                 handler: {
                   execute: (ctx: ToolContext): Promise<ToolResult> => {
                     const gated = gatedAnswer.getStore();

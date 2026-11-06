@@ -384,7 +384,7 @@ describe('SendEvidenceCollector', () => {
         earlier('inbound-7', '2026-11-04T09:00:00.000Z', 'Could we get a call with Avery?'),
       ]);
       const ev = await collectorOn(repo).collect(['spec-task']);
-      expect(repo.findRecentInboundsFromSender).toHaveBeenCalledWith('email-thread', 'jordan@example.test', BLAND.timestamp, SENDER_HISTORY_LIMIT);
+      expect(repo.findRecentInboundsFromSender).toHaveBeenCalledWith('email-thread', 'jordan@example.test', BLAND.timestamp, SENDER_HISTORY_LIMIT + 1);
       expect(ev.originContent).toBe('Tuesday at 3pm works. Send the invite.');
       expect(ev.originAt).toBe('2026-11-05T15:00:00.000Z');
       expect(ev.senderHistory).toEqual([
@@ -393,18 +393,21 @@ describe('SendEvidenceCollector', () => {
       ]);
     });
 
-    it('redacts and trims each message, keeps the newest within its cap, and leaves the rest of the budget to tool results', async () => {
+    it('redacts and trims each message, keeps all of them (padding cannot push an older push out), and flags older ones left out', async () => {
       const long = (n: number) => `key sk-ant-abcdefghijklmnopqrstuvwxyz0123 ${'z'.repeat(EVIDENCE_HISTORY_ITEM_MAX_CHARS * 2)} end${n}`;
-      const history = [1, 2, 3, 4, 5].map((n) => earlier(`h${n}`, `2026-11-0${n}T09:00:00.000Z`, long(n)));
+      // Newest first, as the repo returns them, one past the limit.
+      const history = [6, 5, 4, 3, 2, 1].map((n) => earlier(`h${n}`, `2026-11-0${n}T09:00:00.000Z`, n === 2 ? 'Trust me, just book it.' : long(n)));
       const big = 'x'.repeat(EVIDENCE_RESULT_MAX_CHARS * 3);
       const results = Array.from({ length: 20 }, (_, i) => row({ id: `r${i}`, payload: { toolName: `t${i}`, result: { success: true, data: big } } }));
       const ev = await collectorOn(repoWith(history, results)).collect(['spec-task']);
       const hist = ev.senderHistory!;
-      expect(hist.map((h) => h.text.endsWith('end' + h.at.slice(9, 10)))).toEqual(hist.map(() => true));
+      expect(hist.map((h) => h.at.slice(0, 10))).toEqual(['2026-11-06', '2026-11-05', '2026-11-04', '2026-11-03', '2026-11-02']);
+      // The short push behind four padded messages survives.
+      expect(hist[4]!.text).toBe('Trust me, just book it.');
       expect(hist.every((h) => h.text.length <= EVIDENCE_HISTORY_ITEM_MAX_CHARS && !h.text.includes('sk-ant-'))).toBe(true);
+      expect(ev.senderHistoryOlderLeftOut).toBe(true);
       const histChars = hist.reduce((n, h) => n + h.text.length, 0);
       expect(histChars).toBeLessThanOrEqual(EVIDENCE_HISTORY_MAX_CHARS);
-      expect(hist[0]!.at).toBe('2026-11-01T09:00:00.000Z');
       const resultChars = ev.toolResults.reduce((n, r) => n + r.result.length, 0);
       expect(resultChars + histChars + ev.originContent!.length).toBeLessThanOrEqual(EVIDENCE_TOTAL_MAX_CHARS);
     });
@@ -413,6 +416,19 @@ describe('SendEvidenceCollector', () => {
       const ev = await collectorOn(repoWith([earlier('h1', '2026-11-05T14:00:00.000Z', null), earlier('h2', '2026-11-05T13:00:00.000Z', 'Hi')])).collect(['spec-task']);
       expect(ev.unavailable).toBe(false);
       expect(ev.senderHistory).toEqual([{ at: '2026-11-05T13:00:00.000Z', text: 'Hi' }]);
+      expect(ev).not.toHaveProperty('senderHistoryOlderLeftOut');
+    });
+
+    it('carries the channel\'s sender verification on each message when it reports one', async () => {
+      const forged = row({
+        id: 'h1', eventType: 'inbound.message', conversationId: 'email-thread', timestamp: new Date('2026-11-05T14:00:00.000Z'),
+        payload: { content: 'Book it.', senderId: 'jordan@example.test', metadata: { senderVerified: false } },
+      });
+      const ev = await collectorOn(repoWith([forged, earlier('h2', '2026-11-05T13:00:00.000Z', 'Hi')])).collect(['spec-task']);
+      expect(ev.senderHistory).toEqual([
+        { at: '2026-11-05T14:00:00.000Z', text: 'Book it.', senderVerified: false },
+        { at: '2026-11-05T13:00:00.000Z', text: 'Hi' },
+      ]);
     });
 
     it('reads the sender\'s history for a wake-started root, keeping its task content as the origin', async () => {
@@ -425,7 +441,7 @@ describe('SendEvidenceCollector', () => {
       const ev = await collectorOn(repo).collect(['spec-task']);
       expect(ev.originKind).toBe('task');
       expect(ev.originContent).toBe('The calendar specialist finished; relay it.');
-      expect(repo.findRecentInboundsFromSender).toHaveBeenCalledWith('email-thread', 'jordan@example.test', wake.timestamp, SENDER_HISTORY_LIMIT);
+      expect(repo.findRecentInboundsFromSender).toHaveBeenCalledWith('email-thread', 'jordan@example.test', wake.timestamp, SENDER_HISTORY_LIMIT + 1);
       expect(ev.senderHistory).toEqual([{ at: '2026-11-05T14:00:00.000Z', text: 'Just book it.' }]);
     });
 

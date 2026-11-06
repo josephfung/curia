@@ -62,12 +62,13 @@ export const EVIDENCE_ORIGIN_MAX_CHARS = 4_000;
 /**
  * Earlier inbound messages from the root's sender on its conversation (#2499): a push in an
  * earlier email, with a bland message that started the work. Newest first; each trimmed from
- * the middle, all inside EVIDENCE_HISTORY_MAX_CHARS, behind the origin and ahead of the tool
- * results in the budget.
+ * the middle to EVIDENCE_HISTORY_ITEM_MAX_CHARS, so all SENDER_HISTORY_LIMIT always fit in
+ * EVIDENCE_HISTORY_MAX_CHARS and long messages cannot push an older one out. Behind the origin
+ * and ahead of the tool results in the budget.
  */
 export const SENDER_HISTORY_LIMIT = 5;
-export const EVIDENCE_HISTORY_ITEM_MAX_CHARS = 1_200;
-export const EVIDENCE_HISTORY_MAX_CHARS = 3_000;
+export const EVIDENCE_HISTORY_ITEM_MAX_CHARS = 600;
+export const EVIDENCE_HISTORY_MAX_CHARS = SENDER_HISTORY_LIMIT * EVIDENCE_HISTORY_ITEM_MAX_CHARS;
 /** Follow-ups a turn lane drained into the root turn, newest kept (#2499). */
 export const ORIGIN_FOLLOW_UPS_LIMIT = 5;
 /** Between the root inbound and each follow-up in the origin text. */
@@ -227,9 +228,15 @@ type DelegationRoot =
   | { ok: true; root: AuditLogRow | null }
   | { ok: false; reason: string };
 
+/** The sender's earlier messages, and whether older ones exist past the limit. */
+interface SenderHistory {
+  items: Array<{ at: string; text: string; senderVerified?: boolean }>;
+  olderLeftOut: boolean;
+}
+
 /** What started the chain, as the judge sees it, or why it could not be read. */
 type OriginRead =
-  | { ok: true; content: string; kind: 'inbound' | 'task'; at: string; history: Array<{ at: string; text: string }> }
+  | { ok: true; content: string; kind: 'inbound' | 'task'; at: string; history: SenderHistory }
   | { ok: false; reason: string };
 
 export class SendEvidenceCollector {
@@ -288,7 +295,7 @@ export class SendEvidenceCollector {
         return { unavailable: true, originUnresolved: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
       }
       const originContent = origin?.content;
-      const historyChars = origin?.history.reduce((n, h) => n + h.text.length, 0) ?? 0;
+      const historyChars = origin?.history.items.reduce((n, h) => n + h.text.length, 0) ?? 0;
       // The origin is kept first, then the sender's earlier messages; the tool results share
       // what is left of the budget.
       const resultsBudget = EVIDENCE_TOTAL_MAX_CHARS - (originContent?.length ?? 0) - historyChars;
@@ -334,7 +341,8 @@ export class SendEvidenceCollector {
         ...(decisions ? { decisions } : {}),
         ...(reportsToPrincipal.length > 0 ? { reportsToPrincipal } : {}),
         ...(origin ? { originContent: origin.content, originKind: origin.kind, originAt: origin.at } : {}),
-        ...(origin && origin.history.length > 0 ? { senderHistory: origin.history } : {}),
+        ...(origin && origin.history.items.length > 0 ? { senderHistory: origin.history.items } : {}),
+        ...(origin?.history.olderLeftOut ? { senderHistoryOlderLeftOut: true } : {}),
         ...(typeof content === 'string' ? { taskContent: clip(redactSecrets(content), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         ...(progress !== undefined ? { taskProgress: clip(redactSecrets(JSON.stringify(progress)), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         toolResults,
@@ -427,30 +435,36 @@ export class SendEvidenceCollector {
   }
 
   /**
-   * The sender's inbound messages on the conversation before `before`, newest first, each
-   * redacted and trimmed from the middle, until EVIDENCE_HISTORY_MAX_CHARS is spent (the newest
-   * are kept). Supplementary: no conversation or sender gives none, and a row without text is
-   * skipped. A failed read throws to collect()'s catch like any other.
+   * The sender's inbound messages on the conversation before `before`, newest first, up to
+   * SENDER_HISTORY_LIMIT, each redacted and trimmed from the middle. `olderLeftOut` says more
+   * exist past the limit. A row without text is skipped, and a root with no conversation or
+   * sender has none. A failed read throws to collect()'s catch, which makes the evidence
+   * unavailable: Gate C then escalates (fail closed), the send review treats it as a judge
+   * failure. Each item carries the channel's sender verification when it reports one (email:
+   * SPF/DKIM/DMARC), so a forged message in the thread does not read as the sender's.
    */
   private async readSenderHistory(
     conversationId: string | null,
     senderId: unknown,
     before: Date,
     skip: ReadonlySet<string>,
-  ): Promise<Array<{ at: string; text: string }>> {
-    if (conversationId === null || typeof senderId !== 'string' || senderId === '') return [];
-    const rows = await this.deps.auditLogRepo.findRecentInboundsFromSender(conversationId, senderId, before, SENDER_HISTORY_LIMIT);
-    const out: Array<{ at: string; text: string }> = [];
-    let total = 0;
-    for (const row of rows) {
+  ): Promise<SenderHistory> {
+    if (conversationId === null || typeof senderId !== 'string' || senderId === '') return { items: [], olderLeftOut: false };
+    // One past the limit, to know whether older messages were left out.
+    const rows = await this.deps.auditLogRepo.findRecentInboundsFromSender(conversationId, senderId, before, SENDER_HISTORY_LIMIT + 1);
+    const items: SenderHistory['items'] = [];
+    for (const row of rows.slice(0, SENDER_HISTORY_LIMIT)) {
       const content = row.payload['content'];
       if (skip.has(row.id) || typeof content !== 'string') continue;
-      const text = clipMiddle(redactSecrets(content), EVIDENCE_HISTORY_ITEM_MAX_CHARS);
-      if (total + text.length > EVIDENCE_HISTORY_MAX_CHARS) break;
-      total += text.length;
-      out.push({ at: row.timestamp.toISOString(), text });
+      const metadata = row.payload['metadata'];
+      const verified = isRecord(metadata) ? metadata['senderVerified'] : undefined;
+      items.push({
+        at: row.timestamp.toISOString(),
+        text: clipMiddle(redactSecrets(content), EVIDENCE_HISTORY_ITEM_MAX_CHARS),
+        ...(typeof verified === 'boolean' ? { senderVerified: verified } : {}),
+      });
     }
-    return out;
+    return { items, olderLeftOut: rows.length > SENDER_HISTORY_LIMIT };
   }
 
   /**

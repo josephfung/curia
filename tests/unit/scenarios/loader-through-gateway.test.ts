@@ -219,3 +219,13 @@ describe('gated_tools', () => {
     expect(() => load(edit(CASE))).toThrow(error);
   });
 });
+
+describe('gated_tools with an approval turn', () => {
+  it('refuses inbound.then: approving a gated hold would replay the real handler', () => {
+    const body = CASE
+      .replace('through_gateway: true\n', 'through_gateway: true\ngated_tools: [calendar-create-event]\n')
+      .replace('expected_behaviors:', 'tool_stubs:\n  calendar-create-event:\n    - match: {}\n      return: { event: { id: e1 } }\nexpected_behaviors:')
+      .replace('  email:\n    sender_verified: true\n', '  email:\n    sender_verified: true\n  then:\n    content: approve\n');
+    expect(() => load(body)).toThrow(/cannot be combined with inbound.then/);
+  });
+});
