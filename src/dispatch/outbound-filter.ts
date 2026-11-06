@@ -199,10 +199,11 @@ const INTERNAL_FIELD_NAMES: string[] = [
 // The trust system's own vocabulary (#2501). Telling a non-principal sender they lack "a
 // higher level of verified trust" discloses the trust system and tells a social engineer
 // what to argue next. Kept to phrases ordinary business mail does not use: bare "trust
-// score" or "trust level" are left out (a review site's TrustScore, "a level of trust").
+// score" or "trust level" are left out (a review site's TrustScore, "a level of trust"),
+// and so is bare "verified trust" ("we verified trust account balances").
 const TRUST_SYSTEM_PHRASES: ReadonlyArray<{ label: string; pattern: RegExp }> = [
   { label: 'message trust score', pattern: /message[\s_]?trust[\s_]?score/ },
-  { label: 'verified trust', pattern: /\bverified trust\b/ },
+  { label: 'verified trust', pattern: /\b(level of|higher|more|enough|sufficient) verified trust\b|\bverified trust (with|level|score)\b/ },
   { label: 'trust threshold', pattern: /\btrust thresholds?\b/ },
 ];
 
@@ -445,9 +446,9 @@ export class OutboundContentFilter {
       }
     }
 
-    // Sub-check 3: trust-system vocabulary (#2501). Whitespace is collapsed first so a
-    // line-wrapped phrase still matches.
-    const prose = lowerContent.replace(/\s+/g, ' ');
+    // Sub-check 3: trust-system vocabulary (#2501). NFKC folds fullwidth and other
+    // compatibility forms, and whitespace is collapsed so a line-wrapped phrase still matches.
+    const prose = lowerContent.normalize('NFKC').replace(/\s+/g, ' ');
     const trustPhrase = TRUST_SYSTEM_PHRASES.find(({ pattern }) => pattern.test(prose));
     if (trustPhrase) {
       findings.push({

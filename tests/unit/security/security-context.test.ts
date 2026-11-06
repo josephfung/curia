@@ -81,7 +81,12 @@ describe('compileSecurityContextBlock', () => {
     });
 
     it('scripts no trust or verification wording for the sender', () => {
-      // Quoted text is what the model copies to the sender.
+      // Every bullet that says what to tell the sender, other than the one that forbids
+      // the words, stays clear of them; so does any quoted line the model would copy.
+      const bullets = guidance.split(/\n- /).slice(1);
+      const toSender = bullets.filter((b) => /sender/.test(b) && !b.startsWith('Say nothing'));
+      expect(toSender.length).toBeGreaterThan(0);
+      for (const bullet of toSender) expect(bullet).not.toMatch(/trust|verif|score/i);
       const quoted = [...guidance.matchAll(/"([^"]*)"/g)].map((m) => m[1]!).join('\n');
       expect(quoted).not.toMatch(/trust|verif|score/i);
       expect(block).not.toMatch(/level of verified trust/i);

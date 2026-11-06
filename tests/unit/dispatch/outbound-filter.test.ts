@@ -323,6 +323,8 @@ describe('OutboundContentFilter', () => {
         ['the score name', 'Your messageTrustScore is too low for that.'],
         ['the score in words', 'Your message trust score is below what I need.'],
         ['a threshold', "That's under my trust threshold for scheduling."],
+        ['verified trust with a sender', 'Once we have verified trust with you, I can book it.'],
+        ['a fullwidth phrase', 'You need a higher ｖｅｒｉｆｉｅｄ ｔｒｕｓｔ level.'],
       ])('flags %s', async (_name, content) => {
         const result = await createTestFilter().check({ ...BASE_INPUT, content });
         expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(true);
@@ -356,6 +358,8 @@ describe('OutboundContentFilter', () => {
         'Their TrustScore on the review site is 4.2.',
         'Building a higher level of trust between the teams takes time.',
         'We have a verified account and a trust fund to discuss.',
+        'We verified trust account balances with the bank this morning.',
+        'The title company verified trust ownership of the property.',
       ])('leaves ordinary prose alone: %s', async (content) => {
         const result = await createTestFilter().check({ ...BASE_INPUT, content });
         expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(false);
