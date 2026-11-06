@@ -893,6 +893,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-20T13:37:35.219Z"
     },
+    "stranger asks for time gets a deferral": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-06T00:34:46.318Z"
+    },
     "style debrief prompt": {
       "unstubbed": 0,
       "runs": 5,

@@ -308,7 +308,7 @@ describe('coordinator scenario cases', () => {
     // one identity (ps-prefs); autonomy is per case since #2312, but each batch still agrees.
     const ps = cases.filter(c => c.tags.includes('principal-scheduling'));
     expect(ps.map(c => path.basename(c.sourceFile).slice(0, 3)).sort())
-      .toEqual(['25a', '25b', '25c', '25d', '25e', '25f', '25g', '25h', '25i', '25j', '25k', '25l', '25m', '25n']);
+      .toEqual(['25a', '25b', '25c', '25d', '25e', '25f', '25g', '25h', '25i', '25j', '25k', '25l', '25m', '25n', '25o']);
     for (const c of ps) {
       expect(c.releaseGate).toBe(false);
       expect(c.delegation).toBe('real');
