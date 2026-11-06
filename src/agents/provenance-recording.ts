@@ -17,6 +17,13 @@ type ProvenanceExecution = Pick<ExecutionLayer, 'provenanceSourceText' | 'isAgen
 export interface ProvenanceRecording {
   /** The agent input recorded before the call, or null when the tool takes none. */
   agentInputText: string | null;
+  /**
+   * True when the call requested a browser session that had no recorded agent input (the
+   * record was evicted or expired, or the session was started outside the recorded path,
+   * such as an approval replay). Its result cannot be filtered against what was typed
+   * there, so it is not recorded as a source at all.
+   */
+  unrecordedSession: boolean;
 }
 
 /** The scope key a browser session's agent input is recorded under. */
@@ -43,12 +50,17 @@ export function recordAgentInputBeforeCall(
   input: Record<string, unknown>,
 ): ProvenanceRecording {
   const agentInputText = execution.provenanceAgentInputText(toolName, input);
+  let unrecordedSession = false;
   if (agentInputText) {
     index.recordAgentInput(conversation, agentInputText);
     const sessionId = sessionIdOf(input);
-    if (sessionId) index.recordAgentInput(browserSessionScope(sessionId), agentInputText);
+    if (sessionId) {
+      // Checked before recording: this call's own input would otherwise make any id look known.
+      unrecordedSession = !index.hasAgentInputScope(browserSessionScope(sessionId));
+      index.recordAgentInput(browserSessionScope(sessionId), agentInputText);
+    }
   }
-  return { agentInputText };
+  return { agentInputText, unrecordedSession };
 }
 
 /**
@@ -68,6 +80,8 @@ export function recordSourceAfterCall(
   before: ProvenanceRecording,
 ): void {
   const echo = execution.isAgentEchoSource(toolName);
+  // Fail closed: earlier typing into this session is unknown, so the page may be echoing it.
+  if (echo && before.unrecordedSession) return;
   const scopes = [conversation];
   if (echo) {
     const requested = sessionIdOf(input);

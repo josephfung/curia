@@ -123,6 +123,27 @@ describe('ContactLinkIdentityHandler', () => {
       expect(await isVerified()).toBe(false);
     });
 
+    // #2498: agent_called and agent_stated rows are verified in place too, so the same
+    // duplicate check has to refuse them.
+    it.each(['agent_called', 'agent_stated'] as const)(
+      'refuses a near miss of another contact address for an unverified %s address, verifying nothing',
+      async (source) => {
+        const typed = await contacts.createContact({ displayName: 'Typed Recipient', source });
+        await contacts.linkIdentity({
+          contactId: typed.id, channel: 'email', channelIdentifier: 'priya@exampel.test', source,
+        });
+        const result = await handler.execute(makeCtx(contacts, {
+          contact_id: typed.id, channel: 'email', identifier: 'priya@exampel.test',
+        }));
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error).toContain(`"Priya Natarajan" (${priyaId}): similar email address`);
+          expect(result.error).toMatch(/Nothing was verified/);
+        }
+        expect((await contacts.getContactWithIdentities(typed.id))!.identities[0]!.verified).toBe(false);
+      },
+    );
+
     it('verifies it once distinct_from names that contact', async () => {
       const result = await restate({ distinct_from: [priyaId] });
       expect(result).toMatchObject({ success: true, data: { verified: true, already_linked: true } });

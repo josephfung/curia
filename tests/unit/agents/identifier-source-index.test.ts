@@ -91,13 +91,26 @@ describe('IdentifierSourceIndex', () => {
       expect(index.has('conv-b', 'email:jon@acme.example')).toBe(false);
     });
 
-    it('keeps only email and phone keys from agent input', () => {
+    it('keeps token keys too, so an echoed Slack or Telegram id is excluded', () => {
       const index = new IdentifierSourceIndex();
-      index.recordAgentInput('conv-a', '[g5f0e1] code 482913 sam@venue.example +1 416 555 0100');
-      index.record('conv-a', 'U0123ABCD 482913 g5f0e1 sam@venue.example +1 416 555 0100', { excludeAgentInputOf: ['conv-a'] });
-      expect(index.has('conv-a', 'token:482913')).toBe(true);
+      index.recordAgentInput('conv-a', 'Slack user U0123ABCD sam@venue.example +1 416 555 0100');
+      index.record('conv-a', 'U0123ABCD sam@venue.example +1 416 555 0100 U0999ZZZZ', { excludeAgentInputOf: ['conv-a'] });
+      expect(index.has('conv-a', 'token:U0123ABCD')).toBe(false);
       expect(index.has('conv-a', 'email:sam@venue.example')).toBe(false);
       expect(index.has('conv-a', 'phone:+14165550100')).toBe(false);
+      expect(index.has('conv-a', 'token:U0999ZZZZ')).toBe(true);
+    });
+
+    it('knows which scopes have recorded input, and forgets them on eviction and expiry', () => {
+      let now = 0;
+      const index = new IdentifierSourceIndex({ now: () => now, maxAgentInputScopes: 1, ttlMs: 1000 });
+      expect(index.hasAgentInputScope('browser-session:s1')).toBe(false);
+      index.recordAgentInput('browser-session:s1', 'no keys here');
+      expect(index.hasAgentInputScope('browser-session:s1')).toBe(true);
+      index.recordAgentInput('browser-session:s2', 'x');
+      expect(index.hasAgentInputScope('browser-session:s1')).toBe(false);
+      now = 2000;
+      expect(index.hasAgentInputScope('browser-session:s2')).toBe(false);
     });
   });
 });

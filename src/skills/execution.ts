@@ -689,6 +689,11 @@ export class ExecutionLayer {
    *   read both as a space and as itself (`sam%2Btag%40x.com`);
    * - typed and selected values (`text`, `value`) joined in order, for runs of up to three
    *   (`sam` typed into one field and `@x.com` picked in the next show up as one address).
+   *
+   * Known residual gap (accepted by the maintainer, #2498): an address typed in pieces
+   * across separate browser calls (`sam` in one, `@x.com` in the next) is not excluded,
+   * because only one call's values are joined. Closing it would mean tracking typed
+   * fragments per session; the cost and memory held outweigh a two-call, agent-authored case.
    */
   provenanceAgentInputText(toolName: string, input: Record<string, unknown>): string | null {
     if (!this.isAgentEchoSource(toolName)) return null;

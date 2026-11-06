@@ -58,6 +58,27 @@ describe('provenance recording (#2498)', () => {
     expect(index.has('conv-z', 'email:jon@acme.co')).toBe(false);
   });
 
+  it('records nothing from a requested session whose input record is gone (evicted, or never seen)', () => {
+    const index = new IdentifierSourceIndex();
+    // s-lost was typed into in a record that no longer exists (e.g. an approval replay).
+    call(index, 'conv-a', 'web-browser', { action: 'get_content', session_id: 's-lost' },
+      { session_id: 's-lost', content: 'Confirmation sent to jon@acme.co' });
+    expect(index.has('conv-a', 'email:jon@acme.co')).toBe(false);
+    // Once the session's input is on record again, its results count.
+    call(index, 'conv-a', 'web-browser', { action: 'get_content', session_id: 's-lost' },
+      { session_id: 's-lost', content: 'Questions: help@book.example' });
+    expect(index.has('conv-a', 'email:help@book.example')).toBe(true);
+  });
+
+  it('records nothing when the session scope was evicted between calls', () => {
+    const index = new IdentifierSourceIndex({ maxAgentInputScopes: 2 });
+    call(index, 'conv-a', 'web-browser', { action: 'type', text: 'jon@acme.co', session_id: 's1' }, { session_id: 's1', content: 'ok' });
+    // Other scopes push s1's record out.
+    for (const id of ['s2', 's3']) call(index, `conv-${id}`, 'web-browser', { action: 'navigate', url: 'https://x.example' }, { session_id: id, content: 'ok' });
+    call(index, 'conv-z', 'web-browser', { action: 'get_content', session_id: 's1' }, { session_id: 's1', content: 'Sent to jon@acme.co' });
+    expect(index.has('conv-z', 'email:jon@acme.co')).toBe(false);
+  });
+
   it('does not exclude agent input from a non-echo source', () => {
     const index = new IdentifierSourceIndex();
     call(index, 'conv-a', 'web-browser', { action: 'type', text: 'sam@venue.example', session_id: 's3' }, { session_id: 's3', content: 'ok' });

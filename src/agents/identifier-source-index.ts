@@ -76,6 +76,11 @@ class ScopedKeys {
     return addedAt !== undefined && now - addedAt <= this.ttlMs;
   }
 
+  hasScope(scope: string, now: number): boolean {
+    const entry = this.scopes.get(scope);
+    return entry !== undefined && now - entry.recordedAt <= this.ttlMs;
+  }
+
   get size(): number {
     return this.scopes.size;
   }
@@ -117,15 +122,23 @@ export class IdentifierSourceIndex {
 
   /**
    * Record what the agent supplied to an echo-prone source tool under `scopeKey` (a
-   * conversation, or a browser session's scope), before the call runs (#2498). Only email
-   * and phone keys are kept: those are what a web page can verify for a send, and opaque
-   * tokens (element refs, typed codes, passwords) would crowd them out of the cap and keep
-   * typed secrets in memory for no gain.
+   * conversation, or a browser session's scope), before the call runs (#2498). Token keys
+   * are kept with the email and phone ones: a page repeating an agent-supplied Slack or
+   * Telegram id must not verify it either. The scope is registered even when the text holds
+   * no keys, so `hasAgentInputScope` can tell a session whose input was recorded from one
+   * that was never seen.
    */
   recordAgentInput(scopeKey: string, text: string): void {
-    const found = new Set([...sourceKeysInText(text)].filter((key) => key.startsWith('email:') || key.startsWith('phone:')));
-    if (found.size === 0) return;
-    this.agentInput.add(scopeKey, found, this.now());
+    this.agentInput.add(scopeKey, sourceKeysInText(text), this.now());
+  }
+
+  /**
+   * Whether agent input has been recorded under `scopeKey` and is still held. False for a
+   * scope that was never recorded, was evicted, or expired: its exclusions are lost, so a
+   * result from that browser session cannot be trusted as a source (fail closed, #2498).
+   */
+  hasAgentInputScope(scopeKey: string): boolean {
+    return this.agentInput.hasScope(scopeKey, this.now());
   }
 
   has(conversationKey: string, key: string): boolean {
