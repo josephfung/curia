@@ -838,8 +838,9 @@ class PostgresBackend implements KnowledgeGraphBackend {
     // folds an owner linked by two edges into one. Rows come back bounded: at most
     // perFactLimit named owners per fact, plus one withheld row that carries only the counts.
     // Only id, type and label are read, so no embedding or properties leave the database.
-    // Labels sort with COLLATE "C" (code-unit order) so the in-memory backend's plain string
-    // comparison picks the same first perFactLimit owners. Owners need no embedding: this
+    // Labels sort with COLLATE "C" (byte order) so the in-memory backend's plain string
+    // comparison (UTF-16 code units) picks the same first perFactLimit owners for BMP text; the
+    // two can differ only for labels mixing U+E000-U+FFFF with astral characters (test double only). Owners need no embedding: this
     // names nodes that entity-context and traversal already show, so search eligibility is
     // not a visibility control here; archive status and the sensitivity ceiling are.
     const result = await this.pool.query<{
