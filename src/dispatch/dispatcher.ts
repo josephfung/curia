@@ -174,7 +174,7 @@ export interface DispatcherConfig {
   /**
    * Which policy gates the relay (#2159). Under 'band', a relayed reply skips the tier
    * Gate C (except #1059's missing-tier fail-closed); the gateway's band review asks all
-   * four questions instead. Default 'tier'. A gating on `autonomyService`'s config
+   * five questions instead. Default 'tier'. A gating on `autonomyService`'s config
    * overrides it per relay (#2312).
    */
   gating?: AutonomyGating;

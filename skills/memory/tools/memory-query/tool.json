@@ -1,6 +1,6 @@
 {
   "name": "memory-query",
-  "description": "Freeform semantic search across the knowledge graph. Embeds the query and returns the most similar nodes by cosine similarity. Use this when you need to find everything known about a topic without knowing which specific entity to target — e.g. 'find everything related to investor relations'. Optionally filter by node type or sensitivity ceiling.",
+  "description": "Semantic search over the knowledge graph for the nodes most similar to the query. Use it to find everything known about a topic without a target entity, e.g. 'investor relations'. Optionally filter by node type or sensitivity ceiling. A fact belongs to the entities in its owners, not to whoever the query names; unattached: true means it has none.",
   "version": "1.0.1",
   "sensitivity": "normal",
   "action_risk": "none",
@@ -11,7 +11,7 @@
     "max_sensitivity": "string? (optional sensitivity ceiling — one of: public, internal, confidential, restricted. When provided, only nodes at or below this level are returned. Omit to return nodes of any sensitivity.)"
   },
   "outputs": {
-    "results": "array of {id, type, label, properties, confidence, decay_class, sensitivity, last_confirmed_at, score}",
+    "results": "array of {id, type, label, properties, confidence, decay_class, sensitivity, last_confirmed_at, score}; fact results add owners [{id, type, label}] (at most 5), unattached: true when it has no owner, more_owners (count past 5) and owners_withheld (count above max_sensitivity)",
     "count": "number — total results returned"
   },
   "permissions": [],

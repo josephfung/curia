@@ -19,6 +19,30 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-04T19:23:15.663Z"
     },
+    "band stakes delivery commitment holds at 85": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-05T19:12:35.220Z"
+    },
+    "band stakes delivery commitment sends at 92": {
+      "unstubbed": 0,
+      "runs": 2,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-05T19:17:42.545Z"
+    },
+    "band stakes purchase order confirmation holds at 95": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-05T19:12:35.220Z"
+    },
+    "band stakes routine ack sends at 85": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-05T19:12:35.220Z"
+    },
     "booking link on a cc thread books through it": {
       "unstubbed": 0,
       "runs": 5,
@@ -329,6 +353,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
+    "delegated calendar write outsider origin": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-06T02:34:09.510Z"
+    },
     "delegated draft not reported sent": {
       "unstubbed": 0,
       "runs": 9,
@@ -556,6 +586,12 @@
       "runs": 10,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-17T04:08:14.379Z"
+    },
+    "outsider pushback calendar write": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-06T02:21:42.950Z"
     },
     "paused delegate no redelegate": {
       "unstubbed": 0,
@@ -856,6 +892,12 @@
       "runs": 2,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-20T13:37:35.219Z"
+    },
+    "stranger asks for time gets a deferral": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-06T00:34:46.318Z"
     },
     "style debrief prompt": {
       "unstubbed": 0,
