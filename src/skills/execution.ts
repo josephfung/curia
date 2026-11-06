@@ -686,7 +686,7 @@ export class ExecutionLayer {
    * so it covers the forms a page can show back that the raw strings miss:
    * - every string in the input (URLs, typed text, selected values, selectors);
    * - each of them percent-decoded, once and twice (`sam%40x.com`, `sam%2540x.com`), with `+`
- *   read both as a space and as itself (`sam%2Btag%40x.com`);
+   *   read both as a space and as itself (`sam%2Btag%40x.com`);
    * - typed and selected values (`text`, `value`) joined in order, for runs of up to three
    *   (`sam` typed into one field and `@x.com` picked in the next show up as one address).
    */
