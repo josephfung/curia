@@ -599,8 +599,18 @@ export class AuditLogRepo {
    * address in another case is the same sender. Scoped to the conversation (its
    * (conversation_id, timestamp) index) and bounded by `limit`. Evidence for the band brief: a push in an earlier message is part of
    * what the sender asked for, even when the message that started the work is bland.
+   *
+   * Messages stamped the same millisecond as `before` are included (ids are random, so they
+   * cannot be ordered against it): the caller names the ones it already has in `excludeIds`.
+   * Rows without string content and excluded ids are dropped before the limit applies.
    */
-  async findRecentInboundsFromSender(conversationId: string, senderId: string, before: Date, limit: number): Promise<AuditLogRow[]> {
+  async findRecentInboundsFromSender(
+    conversationId: string,
+    senderId: string,
+    before: Date,
+    limit: number,
+    excludeIds: readonly string[] = [],
+  ): Promise<AuditLogRow[]> {
     const clamped = Math.min(Math.max(limit, 1), MAX_LIMIT);
     const result = await this.pool.query(
       `SELECT ${SELECT_COLUMNS}
@@ -608,10 +618,12 @@ export class AuditLogRepo {
        WHERE conversation_id = $1
          AND event_type = 'inbound.message'
          AND lower(payload->>'senderId') = lower($2)
-         AND timestamp < $3
+         AND timestamp <= $3
+         AND jsonb_typeof(payload->'content') = 'string'
+         AND id <> ALL($5::text[])
        ORDER BY timestamp DESC, id DESC
        LIMIT $4`,
-      [conversationId, senderId, before, clamped],
+      [conversationId, senderId, before, clamped, [...excludeIds]],
     );
     return result.rows.map(mapRow);
   }

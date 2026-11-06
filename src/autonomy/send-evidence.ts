@@ -283,7 +283,9 @@ export class SendEvidenceCollector {
       const link = readLink(isRecord(metadata) ? metadata['linkedTask'] : undefined);
 
       // A delegated turn: what started the chain, in its sender's words (#2499).
-      const delegation = await this.readDelegationRoot(task);
+      // Across every drafting turn the ledger passed: a rewrite after a bounce is a new turn in
+      // the coordinator's conversation, but the bounced draft's turn still carries the origin.
+      const delegation = await this.readDelegationRootOf(taskEventIds, task);
       const origin: OriginRead | null = !delegation.ok
         ? delegation
         : delegation.root === null ? null : await this.readOrigin(delegation.root);
@@ -354,6 +356,22 @@ export class SendEvidenceCollector {
     }
   }
 
+  /** The first (oldest) turn's delegation root among the ids; any turn whose chain fails fails all. */
+  private async readDelegationRootOf(taskEventIds: readonly string[], latest: AuditLogRow): Promise<DelegationRoot> {
+    let found: DelegationRoot = { ok: true, root: null };
+    for (const id of taskEventIds) {
+      const row = id === latest.id ? latest : await this.deps.auditLogRepo.findById(id);
+      if (row === null) {
+        this.deps.logger.warn({ taskEventId: id }, 'send-evidence: an earlier drafting turn is not in audit_log — its delegation is not read');
+        continue;
+      }
+      const d = await this.readDelegationRoot(row);
+      if (!d.ok) return d;
+      if (found.ok && found.root === null) found = d;
+    }
+    return found;
+  }
+
   /**
    * Follow `delegationOrigin.taskEventId` from a delegated turn back to the root task: the
    * first one that was not itself delegated. `root` is null for a turn that was not delegated.
@@ -396,6 +414,9 @@ export class SendEvidenceCollector {
    */
   private async readOrigin(root: AuditLogRow): Promise<OriginRead> {
     const parent = root.parentEventId ? await this.deps.auditLogRepo.findById(root.parentEventId) : null;
+    // A parent the root names but audit_log no longer has may have been the inbound: the task
+    // content alone would stand in for the sender's words, so this is unresolved, not a task root.
+    if (root.parentEventId && parent === null) return { ok: false, reason: 'root task\'s parent row not found in audit_log' };
     if (parent === null || parent.eventType !== 'inbound.message') {
       const content = root.payload['content'];
       if (typeof content !== 'string') return { ok: false, reason: 'root task has no content' };
@@ -451,11 +472,13 @@ export class SendEvidenceCollector {
   ): Promise<SenderHistory> {
     if (conversationId === null || typeof senderId !== 'string' || senderId === '') return { items: [], olderLeftOut: false };
     // One past the limit, to know whether older messages were left out.
-    const rows = await this.deps.auditLogRepo.findRecentInboundsFromSender(conversationId, senderId, before, SENDER_HISTORY_LIMIT + 1);
+    // Rows already used and rows without text are filtered in the query, before its limit, so
+    // they cannot take a slot from a usable earlier message.
+    const rows = await this.deps.auditLogRepo.findRecentInboundsFromSender(conversationId, senderId, before, SENDER_HISTORY_LIMIT + 1, [...skip]);
     const items: SenderHistory['items'] = [];
     for (const row of rows.slice(0, SENDER_HISTORY_LIMIT)) {
       const content = row.payload['content'];
-      if (skip.has(row.id) || typeof content !== 'string') continue;
+      if (typeof content !== 'string') continue;
       const metadata = row.payload['metadata'];
       const verified = isRecord(metadata) ? metadata['senderVerified'] : undefined;
       items.push({

@@ -98,6 +98,18 @@ describe('BandSendReview', () => {
     // The origin reads now, but the reviewer is down: a bounced draft holds rather than failing open.
     const d = await svc.review(base);
     expect(d.kind).toBe('hold');
+    // The recheck hold, not the stakes-unrated one a cleared ledger would also give.
+    if (d.kind === 'hold') expect(d.reason).toContain('reviewer was unavailable to recheck it');
+  });
+
+  it('carries the redaction-placeholder finding on an unresolved-origin hold', async () => {
+    const { svc } = make([], { evidence: { unavailable: true, originUnresolved: true } });
+    const d = await svc.review({ ...base, subject: 'Re: [REDACTED: PHONE_NUMBER]' });
+    expect(d.kind).toBe('hold');
+    if (d.kind === 'hold') {
+      expect(d.reason).toContain('could not be read');
+      expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable', 'redaction-token']);
+    }
   });
 
   // Spot-check signals (#2159 Phase 3): the gateway records them with the pool row.

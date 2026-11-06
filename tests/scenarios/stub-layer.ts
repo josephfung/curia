@@ -269,7 +269,7 @@ export function createStubController(
    * so only the handler of that call, in that async context, is replaced: concurrent runs and
    * the review layer's own sends are untouched.
    */
-  const gatedAnswer = new AsyncLocalStorage<{ toolName: string; answer: () => Promise<ToolResult>; drop: ReadonlySet<string> }>();
+  const gatedAnswer = new AsyncLocalStorage<{ toolName: string; answer: (handlerInput: Record<string, unknown>) => Promise<ToolResult>; drop: ReadonlySet<string> }>();
 
   const runFor = (conversationId: string | undefined): OpenRun | undefined =>
     conversationId === undefined ? undefined : runs.get(conversationId) ?? delegated.get(conversationId);
@@ -372,7 +372,9 @@ export function createStubController(
       if (!review) {
         return { success: false, error: skillError(`Tool '${toolName}' is gated, but this stack has no review layer.`) };
       }
-      const answer = (): Promise<ToolResult> => Promise.resolve(stubAnswer(toolName, input, stub, run));
+      // The handler's input, not the call's: the review layer scrubs a tracked sign-in code
+      // before the handler runs, and the recorded write must hold what production's would.
+      const answer = (handlerInput: Record<string, unknown>): Promise<ToolResult> => Promise.resolve(stubAnswer(toolName, handlerInput, stub, run));
       // The capability check runs after the gates and before the handler, and test mode wires
       // no calendar client. The stub stands in for the handler and needs none of them, so the
       // ones this layer lacks are dropped for this call only; the gates see the manifest as is.
@@ -459,7 +461,7 @@ export function createStubController(
                 handler: {
                   execute: (ctx: ToolContext): Promise<ToolResult> => {
                     const gated = gatedAnswer.getStore();
-                    return gated?.toolName === name ? gated.answer() : tool.handler.execute(ctx);
+                    return gated?.toolName === name ? gated.answer(ctx.input) : tool.handler.execute(ctx);
                   },
                 },
               };

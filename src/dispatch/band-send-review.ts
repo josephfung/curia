@@ -237,7 +237,9 @@ export class BandSendReview {
       // takes the ordinary failure path below. The bounce ledger is kept, so a draft that
       // bounced before is still a recheck when its origin can be read.
       this.deps.logger.warn({ conversationId: input.conversationId, channel: input.channel, score: input.score }, 'band review: delegated send\'s origin cannot be read — holding');
-      return this.hold(BAND_RULES.unreviewed, ORIGIN_UNRESOLVED_REASON);
+      // The hold names the personal data and any redaction placeholder it carries, as the
+      // reviewer-unavailable hold does, so the placeholder's finding travels with it.
+      return this.unreviewedHold(ORIGIN_UNRESOLVED_REASON, own, hasToken);
     }
     let verdict = asked.verdict;
     if (verdict.ok && askedItems && !rulesOnEach(verdict.disclosures, askedItems)) {

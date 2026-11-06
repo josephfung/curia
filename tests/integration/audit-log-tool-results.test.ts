@@ -126,13 +126,23 @@ describeIf('audit-log findToolResultsForTasks (#2159)', () => {
     await inbound('2026-10-18T13:00:03.000Z', 'jordan@example.test', 'second');
     await inbound('2026-10-18T13:00:04.000Z', 'jordan@example.test', 'other conversation', `conv-${randomUUID()}`);
     await inbound('2026-10-18T13:00:05.000Z', 'jordan@example.test', 'not an inbound', conversationId, 'agent.task');
-    await inbound('2026-10-18T13:00:06.000Z', 'jordan@example.test', 'at the cutoff');
+    await inbound('2026-10-18T13:00:06.000Z', 'jordan@example.test', 'same millisecond as the cutoff');
+    await pool.query(
+      `INSERT INTO audit_log (timestamp, event_type, source_layer, source_id, payload, conversation_id)
+       VALUES ($1, 'inbound.message', 'channel', 'email', $2::jsonb, $3)`,
+      [new Date('2026-10-18T13:00:06.000Z'), JSON.stringify({ senderId: 'jordan@example.test', content: null }), conversationId],
+    );
+    await inbound('2026-10-18T13:00:07.000Z', 'jordan@example.test', 'after the cutoff');
 
     const before = new Date('2026-10-18T13:00:06.000Z');
     const rows = await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 10);
-    expect(rows.map((r) => r.payload['content'])).toEqual(['second', 'first']);
-    expect((await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 1)).map((r) => r.payload['content'])).toEqual(['second']);
+    // A message stamped the cutoff's millisecond is kept (it cannot be ordered against it); one without text never is.
+    expect(rows.map((r) => r.payload['content'])).toEqual(['same millisecond as the cutoff', 'second', 'first']);
+    expect((await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 1)).map((r) => r.payload['content'])).toEqual(['same millisecond as the cutoff']);
+    // Excluded ids are dropped before the limit, so they do not take a slot.
+    const sameMs = rows[0]!.id;
+    expect((await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 1, [sameMs])).map((r) => r.payload['content'])).toEqual(['second']);
     // An address in another case is the same sender.
-    expect((await repo.findRecentInboundsFromSender(conversationId, 'Jordan@Example.TEST', before, 10)).map((r) => r.payload['content'])).toEqual(['second', 'first']);
+    expect((await repo.findRecentInboundsFromSender(conversationId, 'Jordan@Example.TEST', before, 10)).map((r) => r.payload['content'])).toEqual(['same millisecond as the cutoff', 'second', 'first']);
   });
 });

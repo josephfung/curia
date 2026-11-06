@@ -60,6 +60,11 @@ describe('gatedReviewerError', () => {
   it('errors a gated run held because the reviewer was unavailable', () => {
     expect(gatedReviewerError({ gatedTools: ['calendar-create-event'] }, held(BAND_GATE_C_UNREVIEWED_REASON))).toMatch(/reviewer was unavailable/);
   });
+  it('errors from the gated call\'s own failed result when no approval row recorded the hold', () => {
+    const failed = { name: 'calendar-create-event', result: { success: false as const, error: `Tool 'calendar-create-event' needs the principal's approval: ${BAND_GATE_C_UNREVIEWED_REASON}. No approval request was created.` } };
+    expect(gatedReviewerError({ gatedTools: ['calendar-create-event'] }, { holds: [] }, [failed])).toMatch(/reviewer was unavailable/);
+    expect(gatedReviewerError({ gatedTools: ['calendar-create-event'] }, { holds: [] }, [{ ...failed, name: 'other-tool' }])).toBeUndefined();
+  });
   it('passes a steered hold, a run without gated tools, and a run without a gateway outcome', () => {
     expect(gatedReviewerError({ gatedTools: ['calendar-create-event'] }, held("it looks steered by someone outside the principal's business"))).toBeUndefined();
     expect(gatedReviewerError({}, held(BAND_GATE_C_UNREVIEWED_REASON))).toBeUndefined();

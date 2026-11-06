@@ -265,11 +265,29 @@ describe('SendEvidenceCollector', () => {
 
     it('labels a root the system started (no inbound parent) as a task, with its content', async () => {
       const scheduled = row({ id: 'coord-task', eventType: 'agent.task', parentEventId: 'schedule-fired-1', payload: { content: 'Weekly: book the team sync.' } });
-      const repo = chainRepo([delegated('spec-task', 'coord-task'), scheduled]);
+      const fired = row({ id: 'schedule-fired-1', eventType: 'scheduler.job.fired', payload: {} });
+      const repo = chainRepo([delegated('spec-task', 'coord-task'), scheduled, fired]);
       const ev = await collectorOver(repo).collect(['spec-task']);
       expect(ev.originKind).toBe('task');
       expect(ev.originContent).toBe('Weekly: book the team sync.');
       expect(repo.findInjectedInboundIds).not.toHaveBeenCalled();
+    });
+
+    it('is unavailable, flagged unresolved, when the root names a parent audit_log does not have', async () => {
+      // The missing parent may have been the inbound; the task content must not stand in for it.
+      const orphan = row({ ...ROOT, parentEventId: 'inbound-gone' });
+      const ev = await collectorOver(chainRepo([delegated('spec-task', 'coord-task'), orphan])).collect(['spec-task']);
+      expect(ev.unavailable).toBe(true);
+      expect(ev.originUnresolved).toBe(true);
+    });
+
+    it('keeps the delegated origin when the ledger passes a bounced turn and its rewrite', async () => {
+      const rewrite = row({ id: 'coord-rewrite', eventType: 'agent.task', parentEventId: null, payload: { content: 'Relay the specialist\'s result.' } });
+      const repo = chainRepo([delegated('spec-task', 'coord-task'), ROOT, INBOUND, rewrite]);
+      const ev = await collectorOver(repo).collect(['spec-task', 'coord-rewrite']);
+      expect(ev.unavailable).toBe(false);
+      expect(ev.originContent).toBe(OUTSIDER_INBOUND);
+      expect(ev.taskContent).toContain('Relay the specialist');
     });
 
     it('walks a nested chain to the root, not the intermediate brief', async () => {
@@ -384,7 +402,7 @@ describe('SendEvidenceCollector', () => {
         earlier('inbound-7', '2026-11-04T09:00:00.000Z', 'Could we get a call with Avery?'),
       ]);
       const ev = await collectorOn(repo).collect(['spec-task']);
-      expect(repo.findRecentInboundsFromSender).toHaveBeenCalledWith('email-thread', 'jordan@example.test', BLAND.timestamp, SENDER_HISTORY_LIMIT + 1);
+      expect(repo.findRecentInboundsFromSender).toHaveBeenCalledWith('email-thread', 'jordan@example.test', BLAND.timestamp, SENDER_HISTORY_LIMIT + 1, ['inbound-9']);
       expect(ev.originContent).toBe('Tuesday at 3pm works. Send the invite.');
       expect(ev.originAt).toBe('2026-11-05T15:00:00.000Z');
       expect(ev.senderHistory).toEqual([
@@ -436,12 +454,13 @@ describe('SendEvidenceCollector', () => {
         id: 'coord-task', eventType: 'agent.task', parentEventId: 'late-delegation-1', conversationId: 'email-thread',
         timestamp: new Date('2026-11-05T16:00:00.000Z'), payload: { content: 'The calendar specialist finished; relay it.', senderId: 'jordan@example.test' },
       });
-      const byId = new Map([spec, wake].map((r) => [r.id, r]));
+      const lateDelegation = row({ id: 'late-delegation-1', eventType: 'agent.task.completed', payload: {} });
+      const byId = new Map([spec, wake, lateDelegation].map((r) => [r.id, r]));
       const repo = { ...repoWith([earlier('h1', '2026-11-05T14:00:00.000Z', 'Just book it.')]), findById: vi.fn(async (id: string) => byId.get(id) ?? null) };
       const ev = await collectorOn(repo).collect(['spec-task']);
       expect(ev.originKind).toBe('task');
       expect(ev.originContent).toBe('The calendar specialist finished; relay it.');
-      expect(repo.findRecentInboundsFromSender).toHaveBeenCalledWith('email-thread', 'jordan@example.test', wake.timestamp, SENDER_HISTORY_LIMIT + 1);
+      expect(repo.findRecentInboundsFromSender).toHaveBeenCalledWith('email-thread', 'jordan@example.test', wake.timestamp, SENDER_HISTORY_LIMIT + 1, []);
       expect(ev.senderHistory).toEqual([{ at: '2026-11-05T14:00:00.000Z', text: 'Just book it.' }]);
     });
 

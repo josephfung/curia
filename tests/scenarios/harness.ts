@@ -397,8 +397,13 @@ export async function caseAutonomyError(
 export function gatedReviewerError(
   scenario: Pick<ScenarioCase, 'gatedTools'>,
   gateway: { holds: ReadonlyArray<{ preamble?: string }> } | undefined,
+  toolCalls: ReadonlyArray<{ name: string; result?: { success: true; data: unknown } | { success: false; error: string } }> = [],
 ): string | undefined {
-  return scenario.gatedTools && gateway?.holds.some((h) => h.preamble?.includes(BAND_GATE_C_UNREVIEWED_REASON))
+  // The gate's error names the reason whether or not the approval row was created, so a failed
+  // approval insert cannot hide the outage; the hold's preamble is the second witness.
+  const gated = new Set(scenario.gatedTools);
+  const refused = toolCalls.some((c) => gated.has(c.name) && c.result?.success === false && c.result.error.includes(BAND_GATE_C_UNREVIEWED_REASON));
+  return scenario.gatedTools && (refused || gateway?.holds.some((h) => h.preamble?.includes(BAND_GATE_C_UNREVIEWED_REASON)))
     ? 'band Gate C held a gated call because its reviewer was unavailable (judge failure or unreadable evidence)'
     : undefined;
 }
@@ -1402,7 +1407,7 @@ export async function createScenarioHarness(
       const reviewerError = gateway?.reviewerFailedOpen
         ? 'band review\'s fail-open cap tripped: the review judge failed on too many sends, so sends held for want of a reviewer'
         : undefined;
-      const gateReviewerError = gatedReviewerError(scenario, gateway);
+      const gateReviewerError = gatedReviewerError(scenario, gateway, merged);
       const error = timeoutKind === 'delegate_wait'
         ? `${outcome.error} — a specialist was still working (${[...new Set(stillWorking)].join(', ')}): the run's wait ran out before the delegate wait did`
         : outcome.error ?? (thenOutcome?.error ? `inbound.then turn: ${thenOutcome.error}` : undefined)
