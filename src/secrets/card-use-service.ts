@@ -117,6 +117,7 @@ export class CardUseService implements CardUseCapability {
     const { id, siteDomain } = await repo.create({
       secretName: input.secretName,
       last4: pub.publicFields.last4,
+      cardId: pub.cardId,
       siteUrl: input.siteUrl,
       conversationId: ctx.conversationId,
       taskId: ctx.taskEventId,

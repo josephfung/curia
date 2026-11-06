@@ -2,7 +2,7 @@
 // back-dating created_at / approved_at via SQL exercises the 30-minute bounds.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import pg from 'pg';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { CardUseRepo } from '../../src/secrets/card-use-repo.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
@@ -30,10 +30,10 @@ describeIf('CardUseRepo', () => {
   // Each test gets its own secret name + conversation so grants never leak between tests.
   function fixture() {
     seq += 1;
-    return { secretName: `user.cu_${suffix}_${seq}`, last4: '1111', conversationId: `conv-${suffix}-${seq}` };
+    return { secretName: `user.cu_${suffix}_${seq}`, last4: '1111', cardId: randomUUID(), conversationId: `conv-${suffix}-${seq}` };
   }
 
-  async function createApproved(f: { secretName: string; last4: string; conversationId: string }, siteUrl = 'https://www.aircanada.com/checkout') {
+  async function createApproved(f: { secretName: string; last4: string; cardId: string; conversationId: string }, siteUrl = 'https://www.aircanada.com/checkout') {
     const { id } = await repo.create({
       ...f,
       siteUrl,
@@ -168,7 +168,7 @@ describeIf('CardUseRepo', () => {
     expect(
       await repo.consumeFill({
         secretName: f.secretName,
-        last4: f.last4,
+        cardId: f.cardId,
         conversationId: `${f.conversationId}-other`,
         siteUrl: 'https://www.aircanada.com',
         field: 'number',
@@ -176,11 +176,14 @@ describeIf('CardUseRepo', () => {
     ).toBe('no_grant');
   });
 
-  it('a card replaced during the window (different last four) has no grant', async () => {
+  it('a card replaced during the window has no grant, even with the same last four', async () => {
     const f = fixture();
     await createApproved(f);
     const q = { ...f, siteUrl: 'https://www.aircanada.com', field: 'number' as const };
-    expect(await repo.consumeFill({ ...q, last4: '9999' })).toBe('no_grant');
+    const replaced = { ...q, cardId: randomUUID() };
+    expect(replaced.last4).toBe(f.last4);
+    expect(await repo.consumeFill(replaced)).toBe('no_grant');
+    expect(await repo.hasLiveGrant(replaced)).toBe(false);
     expect(await repo.consumeFill(q)).toBe('ok');
   });
 

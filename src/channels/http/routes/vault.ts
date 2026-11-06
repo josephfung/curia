@@ -880,9 +880,11 @@ export async function vaultRoutes(
       const named = await resolveConsoleName(request, request.body as NamingBody | undefined);
       if ('error' in named) return reply.status(400).send({ error: named.error });
       const meta = await metadataFor(named.name);
+      // The schema tells the console whether a card save would replace a card or be refused.
+      const schema = meta ? await secretsService.getStructuredSchema(named.name) : null;
       return reply.send({
         name: named.name,
-        existing: meta ? { updatedAt: meta.updatedAt.toISOString(), valueFormat: meta.valueFormat } : null,
+        existing: meta ? { updatedAt: meta.updatedAt.toISOString(), valueFormat: meta.valueFormat, schema } : null,
       });
     } catch (err) {
       request.log.error({ err }, 'POST /api/vault/user-secrets/preview failed');

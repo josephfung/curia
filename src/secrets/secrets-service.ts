@@ -245,15 +245,16 @@ export class SecretsService {
     return isStructuredSchemaTag(tag) ? tag : null;
   }
 
-  /** A card's label and public fields. Reads the details row only: nothing is decrypted. */
-  async getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields } | null> {
-    const result = await this.pool.query<{ label: string | null; public_fields: CreditCardPublicFields | null; schema: string | null }>(
-      'SELECT label, public_fields, schema FROM user_secret_details WHERE name = $1',
+  /** A card's label, public fields and identity (`cardId`: new whenever the number is replaced).
+   *  Reads the details row only: nothing is decrypted. */
+  async getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields; cardId: string } | null> {
+    const result = await this.pool.query<{ label: string | null; public_fields: CreditCardPublicFields | null; schema: string | null; card_id: string | null }>(
+      'SELECT label, public_fields, schema, card_id FROM user_secret_details WHERE name = $1',
       [name],
     );
     const row = result.rows[0];
-    if (!row || row.schema !== 'credit_card' || !row.public_fields) return null;
-    return { label: row.label, publicFields: row.public_fields };
+    if (!row || row.schema !== 'credit_card' || !row.public_fields || !row.card_id) return null;
+    return { label: row.label, publicFields: row.public_fields, cardId: row.card_id };
   }
 
   /** Edit a card's label and/or public fields. Never writes `secrets`, so the vault row's
@@ -479,12 +480,15 @@ export class SecretsService {
     setLabel: boolean,
   ): Promise<void> {
     await db.query(
-      `INSERT INTO user_secret_details (name, schema, label, public_fields)
-       VALUES ($1, 'credit_card', $2, $3::jsonb)
+      // Both callers store a new card number, so the card gets a new identity (card_id) and
+      // any card-use grant for the old one stops matching.
+      `INSERT INTO user_secret_details (name, schema, label, public_fields, card_id)
+       VALUES ($1, 'credit_card', $2, $3::jsonb, gen_random_uuid())
        ON CONFLICT (name) DO UPDATE SET
          schema        = 'credit_card',
          label         = CASE WHEN $4::boolean THEN EXCLUDED.label ELSE user_secret_details.label END,
          public_fields = EXCLUDED.public_fields,
+         card_id       = EXCLUDED.card_id,
          updated_at    = now()`,
       [name, label, JSON.stringify(publicFields), setLabel],
     );

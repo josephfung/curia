@@ -150,8 +150,8 @@ describeIf('saved card checkout, end to end', () => {
     expect((await fill(`${cardName}#expiry_mm`, 'https://evil.example.org/pay')).refusal).toBe('card_use_required');
     expect((await fill(`${cardName}#expiry_mm`, SITE, `${conversationId}-other`)).refusal).toBe('card_use_required');
 
-    // A card replaced during the window (same name, new last four) is not covered.
-    await secrets.setCard(cardName, SECRET, { ...PUBLIC, last4: '9999' }, 'E2E');
+    // A card replaced during the window is not covered, even when it ends in the same four digits.
+    await secrets.setCard(cardName, SECRET, PUBLIC, 'E2E');
     expect((await fill(`${cardName}#expiry_mm`, SITE)).refusal).toBe('card_use_required');
   });
 });

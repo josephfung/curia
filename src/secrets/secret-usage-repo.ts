@@ -28,7 +28,8 @@ export interface SecretUse {
 export interface CardUseDecision {
   kind: 'card_use';
   at: Date;
-  decision: 'approved' | 'denied' | 'expired';
+  /** 'failed': the principal approved but the replay failed before a grant was written. */
+  decision: 'approved' | 'denied' | 'expired' | 'failed';
   siteDomain: string;
   /** The amount as the agent stated it, from the request; null if the request row is gone. */
   amount: string | null;
@@ -98,7 +99,11 @@ export class SecretUsageRepo implements SecretUsagePort {
                  NULL, NULL, NULL, NULL, NULL,
                  a.payload->>'decision', a.payload->>'siteDomain', r.amount
             FROM audit_log a
-            LEFT JOIN card_use_requests r ON r.id::text = a.payload->>'requestId'
+            -- Join on the UUID so the primary key is used; the CASE keeps a missing or malformed
+            -- id from failing the cast and keeps its row (with no amount).
+            LEFT JOIN card_use_requests r ON r.id = CASE
+              WHEN a.payload->>'requestId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+              THEN (a.payload->>'requestId')::uuid END
            WHERE $3::boolean AND a.event_type = 'card_use.decided' AND a.payload->>'secretName' = $1
            ORDER BY a.timestamp DESC, a.seq DESC NULLS LAST
            LIMIT $2)
@@ -110,7 +115,7 @@ export class SecretUsageRepo implements SecretUsagePort {
     const items: SecretUseItem[] = [];
     for (const row of result.rows) {
       if (row.event_type === 'card_use.decided') {
-        if (row.decision !== 'approved' && row.decision !== 'denied' && row.decision !== 'expired') continue;
+        if (row.decision !== 'approved' && row.decision !== 'denied' && row.decision !== 'expired' && row.decision !== 'failed') continue;
         items.push({
           kind: 'card_use',
           at: row.timestamp,

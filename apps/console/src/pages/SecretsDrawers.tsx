@@ -181,12 +181,14 @@ interface SecretUse {
   byReference?: boolean;
   /** Saved cards: the field that was filled, e.g. expiry_mm. */
   secretField?: string;
-  decision?: 'approved' | 'denied' | 'expired';
+  decision?: 'approved' | 'denied' | 'expired' | 'failed';
   siteDomain?: string;
   amount?: string | null;
 }
 
-const DECISION_VERB = { approved: 'You approved', denied: 'You declined', expired: 'No answer to' } as const;
+const DECISION_VERB = {
+  approved: 'You approved', denied: 'You declined', expired: 'No answer to', failed: 'You approved, but no grant was written for',
+} as const;
 
 function UseText({ u }: { u: SecretUse }) {
   if (u.kind === 'card_use') {
@@ -615,7 +617,7 @@ type CreateType = 'website_login' | 'other' | 'credit_card';
 
 interface NamePreview {
   name: string;
-  existing: { updatedAt: string; valueFormat: 'string' | 'json' | null } | null;
+  existing: { updatedAt: string; valueFormat: 'string' | 'json' | null; schema?: string | null } | null;
 }
 
 const PREVIEW_DEBOUNCE_MS = 300;
@@ -673,7 +675,10 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
   }, [type, label, loginUrl, card.label, cardPrefix]);
 
   // A saved card may be replaced from here; any other structured value may not.
-  const structuredExisting = type !== 'credit_card' && preview?.existing?.valueFormat === 'json';
+  // The server refuses (409) a card save over anything that is not already a saved card.
+  const cardBlocked = type === 'credit_card' && preview?.existing != null && preview.existing.schema !== 'credit_card';
+  const structuredExisting = (type !== 'credit_card' && preview?.existing?.valueFormat === 'json')
+    || (cardBlocked && preview?.existing?.valueFormat === 'json');
   const cardErrors = validateCardForm(card, 'full');
   const ready = type === 'credit_card'
     ? card.label.trim() !== '' && card.number !== ''
@@ -745,7 +750,7 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
       onClose={onClose}
       // No Save until the name preview is back: a save before it could replace an existing
       // secret without the replacement notice.
-      footer={<SaveFooter onClose={onClose} onSave={() => void handleSave()} saving={saving} disabled={!ready || preview === null || structuredExisting} />}
+      footer={<SaveFooter onClose={onClose} onSave={() => void handleSave()} saving={saving} disabled={!ready || preview === null || structuredExisting || cardBlocked} />}
     >
       {error && <p className="autonomy-error">{error}</p>}
       <div className="form-field">
@@ -794,6 +799,8 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
         <div className="kg-merge-callout kg-merge-callout-warn secrets-callout">
           {structuredExisting ? (
             <span>⚠ You already have <code>{preview.name}</code>, which holds a structured value. {STRUCTURED_VALUE}</span>
+          ) : cardBlocked ? (
+            <span>⚠ You already have <code>{preview.name}</code>, which holds a different secret. Use another label for this card.</span>
           ) : (
             <span>
               ⚠ You already have <code>{preview.name}</code> (updated {shortDate(preview.existing.updatedAt)}).

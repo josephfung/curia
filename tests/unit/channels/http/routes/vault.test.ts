@@ -790,7 +790,7 @@ describe('vault routes', () => {
       app = await build(secrets, fakeRegistry(), { bus });
       const res = await post(app, '/api/vault/user-secrets/preview', { type: 'website_login', loginUrl: 'https://www.rogers.com/signin' });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ name: 'user.rogers_password', existing: { updatedAt: UPDATED.toISOString(), valueFormat: 'string' } });
+      expect(res.json()).toEqual({ name: 'user.rogers_password', existing: { updatedAt: UPDATED.toISOString(), valueFormat: 'string', schema: null } });
       expect(published).toEqual([]);
       expect(secrets.sets).toEqual([]);
     });
@@ -1144,7 +1144,7 @@ describe('vault routes', () => {
       app = await build(secrets, fakeRegistry([]));
       const res = await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', label: 'Personal', card: { number: '4111 1111 1111 1111', cvv: '999' } });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ name: CARD_KEY, existing: { updatedAt: UPDATED.toISOString(), valueFormat: 'json' } });
+      expect(res.json()).toEqual({ name: CARD_KEY, existing: { updatedAt: UPDATED.toISOString(), valueFormat: 'json', schema: 'credit_card' } });
       expect(res.body).not.toContain('4111');
       expect(res.body).not.toContain('999');
       expect(secrets.cardSets).toEqual([]);

@@ -3,7 +3,7 @@
 // than cleaning up.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import pg from 'pg';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { AuditLogger } from '../../src/audit/logger.js';
 import { createCardUseDecided, createSecretAccessed } from '../../src/bus/events.js';
 import { createSilentLogger } from '../../src/logger.js';
@@ -30,7 +30,8 @@ describeIf('SecretUsageRepo', () => {
   const nameA = `user.usage_rt_a_${suffix}`;
   const nameB = `user.usage_rt_b_${suffix}`;
   const cardName = `user.usage_rt_card_${suffix}`;
-  const cardDecidedAt = new Date(Date.now() - 20_000);
+  const failedCardName = `user.usage_rt_failed_${suffix}`;
+  const cardDecidedAt =new Date(Date.now() - 20_000);
   const cardReadAt = new Date(Date.now() - 25_000);
   const nameTie = `user.usage_rt_tie_${suffix}`;
   const tied = new Date(Date.now() - 20_000);
@@ -59,7 +60,7 @@ describeIf('SecretUsageRepo', () => {
     fill.timestamp = cardReadAt;
     await auditLogger.log(fill);
     const request = await new CardUseRepo(pool).create({
-      secretName: cardName, last4: '1111', siteUrl: 'https://www.aircanada.com/checkout', conversationId: `conv-${suffix}`,
+      secretName: cardName, last4: '1111', cardId: randomUUID(), siteUrl: 'https://www.aircanada.com/checkout', conversationId: `conv-${suffix}`,
       taskId: `task-${suffix}`, amount: 'CA$412.30', purpose: 'flight', origin: { agentId: 'travel' },
     });
     const decided = createCardUseDecided({
@@ -68,6 +69,14 @@ describeIf('SecretUsageRepo', () => {
     });
     decided.timestamp = cardDecidedAt;
     await auditLogger.log(decided);
+
+    // A failed replay whose request id is malformed: the row is kept, with no amount.
+    const failed = createCardUseDecided({
+      requestId: 'not-a-uuid', secretName: failedCardName, siteDomain: 'aircanada.com', decision: 'failed',
+      resume: false, origin: { agentId: 'travel' }, purpose: 'flight',
+    });
+    failed.timestamp = cardDecidedAt;
+    await auditLogger.log(failed);
 
     // Same timestamp twice: the one written second (higher seq) is the newer read.
     await write(nameTie, tied, 'web-browser');
@@ -123,6 +132,12 @@ describeIf('SecretUsageRepo', () => {
     expect(items[0]!.at.getTime()).toBe(cardDecidedAt.getTime());
     expect(JSON.stringify(items)).not.toMatch(/\d{12,}/);
     expect(await repo.recentUses(cardName, 1, true)).toHaveLength(1);
+  });
+
+  it('lists a failed decision, and keeps a row whose request id is not a UUID', async () => {
+    expect(await repo.recentUses(failedCardName, 5, true)).toEqual([
+      { kind: 'card_use', at: expect.any(Date), decision: 'failed', siteDomain: 'aircanada.com', amount: null },
+    ]);
   });
 
   it('skips the card-use slice unless asked, so a non-card secret never lists decisions', async () => {

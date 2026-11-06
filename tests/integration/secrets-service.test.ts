@@ -248,7 +248,7 @@ describeIf('SecretsService', () => {
       const n = `${P}both`;
       await service.upsertUserDetails(n, { loginUrl: 'https://shop.example/', username: 'pat' });
       await service.setCard(n, SECRET, PUB, 'Personal');
-      expect(await service.getCardPublic(n)).toEqual({ label: 'Personal', publicFields: PUB });
+      expect(await service.getCardPublic(n)).toEqual({ label: 'Personal', publicFields: PUB, cardId: expect.any(String) });
       expect(await service.getCardSecret(n)).toEqual(SECRET);
       expect(await service.getStructuredSchema(n)).toBe('credit_card');
       const raw = await service.get(n);
@@ -330,7 +330,24 @@ describeIf('SecretsService', () => {
       const nextPub: CreditCardPublicFields = { ...PUB, brand: 'mastercard', last4: '4444' };
       await service.replaceCardSecret(n, { secret: next, publicFields: nextPub });
       expect(await service.getCardSecret(n)).toEqual(next);
-      expect(await service.getCardPublic(n)).toEqual({ label: 'Keep', publicFields: nextPub });
+      expect(await service.getCardPublic(n)).toEqual({ label: 'Keep', publicFields: nextPub, cardId: expect.any(String) });
+    });
+
+    it('card identity changes on a replacement (even with the same last four) and survives edits', async () => {
+      const n = `${P}identity`;
+      await service.setCard(n, SECRET, PUB, 'Keep');
+      const first = (await service.getCardPublic(n))!.cardId;
+
+      await service.patchCardPublic(n, { label: 'Renamed', publicFields: { ...PUB, expiry_year: '2040' } });
+      await service.replaceCardSecret(n, { cvv: '999' });
+      await service.renewCard(n, { cvv: '998', publicFields: { ...PUB, expiry_year: '2041' } });
+      expect((await service.getCardPublic(n))!.cardId).toBe(first);
+
+      await service.replaceCardSecret(n, { secret: SECRET, publicFields: PUB });
+      const second = (await service.getCardPublic(n))!.cardId;
+      expect(second).not.toBe(first);
+      await service.setCard(n, SECRET, PUB, 'Keep');
+      expect((await service.getCardPublic(n))!.cardId).not.toBe(second);
     });
 
     it('a CVV replace racing a full replace never mixes old number with new cvv', async () => {

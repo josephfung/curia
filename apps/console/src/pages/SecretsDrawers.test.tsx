@@ -393,7 +393,7 @@ describe('SecretCreateDrawer — card', () => {
   });
 
   it('warns that saving replaces an existing card', async () => {
-    mocks.respond = () => json({ name: 'user.personal_visa_card', existing: { updatedAt: '2026-06-04T12:00:00.000Z', valueFormat: 'json' } });
+    mocks.respond = () => json({ name: 'user.personal_visa_card', existing: { updatedAt: '2026-06-04T12:00:00.000Z', valueFormat: 'json', schema: 'credit_card' } });
     await render(<SecretCreateDrawer existingRows={[]} onClose={() => {}} onSaved={() => {}} />);
     await click(button('Card'));
     await type(field('Label'), 'Personal');
@@ -401,6 +401,18 @@ describe('SecretCreateDrawer — card', () => {
     await settle(400);
     expect(document.body.textContent).toContain('Saving replaces it instead of adding a duplicate.');
     expect(document.body.textContent).not.toContain('Recapture through Curia');
+  });
+
+  it('refuses a card name that an untagged JSON secret already holds, with Save disabled', async () => {
+    mocks.respond = () => json({ name: 'user.personal_visa_card', existing: { updatedAt: '2026-06-04T12:00:00.000Z', valueFormat: 'json', schema: null } });
+    await render(<SecretCreateDrawer existingRows={[]} onClose={() => {}} onSaved={() => {}} />);
+    await click(button('Card'));
+    await type(field('Label'), 'Personal');
+    await type(field('Card number'), NUMBER);
+    await settle(400);
+    expect(document.body.textContent).not.toContain('Saving replaces it');
+    expect(document.body.textContent).toContain('holds a structured value');
+    expect((button('Save') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('shows validation messages and posts nothing for a bad card', async () => {
