@@ -196,6 +196,16 @@ const INTERNAL_FIELD_NAMES: string[] = [
   'sender_context',
 ];
 
+// The trust system's own vocabulary (#2501). Telling a non-principal sender they lack "a
+// higher level of verified trust" discloses the trust system and tells a social engineer
+// what to argue next. Kept to phrases ordinary business mail does not use: bare "trust
+// score" or "trust level" are left out (a review site's TrustScore, "a level of trust").
+const TRUST_SYSTEM_PHRASES: ReadonlyArray<{ label: string; pattern: RegExp }> = [
+  { label: 'message trust score', pattern: /message[\s_]?trust[\s_]?score/ },
+  { label: 'verified trust', pattern: /\bverified trust\b/ },
+  { label: 'trust threshold', pattern: /\btrust thresholds?\b/ },
+];
+
 // Secret patterns — same as sanitize.ts but duplicated intentionally.
 // These patterns cover the most common credential formats seen in the wild.
 const SECRET_PATTERNS: RegExp[] = [
@@ -382,13 +392,15 @@ export class OutboundContentFilter {
   /**
    * Rule: internal-structure
    *
-   * Two sub-checks:
+   * Three sub-checks:
    * 1. Bus event type names (dotted identifiers like "inbound.message") —
    *    these only appear in internal event bus traffic, never in user-facing prose.
    * 2. Internal field names in structured contexts (quoted or colon-prefixed) —
    *    e.g., "conversationId" or channelId: — indicating JSON/object leakage.
    *    The structured-context restriction avoids false positives on bare words
    *    like "agent" that have legitimate uses in English.
+   * 3. Trust-system vocabulary (TRUST_SYSTEM_PHRASES, #2501): the trust system stays
+   *    internal, so a non-principal recipient never reads about it.
    *
    * Principal bypass: echoing internal field names in a principal email is a bug, but
    * silently blocking the message hides the problem — the principal needs the actual
@@ -431,6 +443,17 @@ export class OutboundContentFilter {
         });
         break; // One finding is sufficient; the caller knows the content is suspect
       }
+    }
+
+    // Sub-check 3: trust-system vocabulary (#2501). Whitespace is collapsed first so a
+    // line-wrapped phrase still matches.
+    const prose = lowerContent.replace(/\s+/g, ' ');
+    const trustPhrase = TRUST_SYSTEM_PHRASES.find(({ pattern }) => pattern.test(prose));
+    if (trustPhrase) {
+      findings.push({
+        rule: 'internal-structure',
+        detail: `Content contains trust-system vocabulary: "${trustPhrase.label}"`,
+      });
     }
 
     return this.applyPrincipalBypass('internal-structure', findings, principalIsSoleRecipient);

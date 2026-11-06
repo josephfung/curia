@@ -893,6 +893,10 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-18T14:56:38.044Z"
     },
+    "stranger asks for time gets a deferral": {
+      "unstubbed": null,
+      "reason": "New in #2501; not yet run (paid suite). The first run records coverage."
+    },
     "style signal reply brief": {
       "unstubbed": 0,
       "runs": 5,
