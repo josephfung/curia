@@ -184,6 +184,12 @@ interface AgentResponsePayload {
    */
   sends?: string[];
   /**
+   * Skills an execution-layer access gate refused during the task, in call order (`gate` on
+   * the tool result, #2494). Set beside `sends`, only when there was one. The delegate skill uses it to report a
+   * decline's cause from code: a permission refusal, not a missing capability.
+   */
+  gateRefusals?: string[];
+  /**
    * The channel of the agent.task this answers. Set on responses that carry reply text:
    * the end of the tool-use loop and the delegation-failure reply, not the structured
    * clarification pause. The dispatcher reads it to tell a scheduler turn, whose reply

@@ -114,7 +114,7 @@ import {
   type DelegationFailureInfo,
   type UnresolvedDecline,
 } from './delegation-guard.js';
-import { DECLINE_NEXT_STEP } from './prompts/delegate-result-guidance.js';
+import { declineNextStep } from './prompts/delegate-result-guidance.js';
 import {
   delegationOriginAgentId,
   delegationOriginConversationId,
@@ -919,6 +919,9 @@ export class AgentRuntime {
     const skillsCalled: string[] = [];
     // Successful calls that sent a message or calendar notification (#2055).
     const sends: string[] = [];
+    // Calls an execution-layer access gate refused (#2494), so a specialist's decline
+    // can be reported to the delegating agent as a permission refusal.
+    const gateRefusals: string[] = [];
     // Skills that returned success:false — surfaced to the scheduler as
     // last_run_context.failedSkills without flipping job health (#1830).
     // Cap to distinct skill names so a flailing DB/API loop cannot bloat the
@@ -2352,7 +2355,7 @@ export class AgentRuntime {
                     escalated: delegationGuard.isEscalated(blockKey),
                     ...(prior?.declined === true && { declined: true }),
                     // Still blocked after a decline: the fallbacks are what is left (#2496).
-                    ...(agentDecline !== undefined && { next_step: DECLINE_NEXT_STEP }),
+                    ...(agentDecline !== undefined && { next_step: declineNextStep(agentDecline.declineCause, false) }),
                   },
                 };
               } else {
@@ -2843,6 +2846,7 @@ export class AgentRuntime {
           // Record for scheduler visibility (#1830) — distinct-skill cap + sanitised
           // error text (third-party bodies must not land unsanitised in last_run_context).
           recordFailedSkill(toolCall.name, result.error);
+          if (result.gate !== undefined) gateRefusals.push(toolCall.name);
           const isDbFailure = result.errorType === 'DATABASE_UNAVAILABLE';
           const isAuthFailure = result.errorType === 'AUTH_FAILURE';
           const mismatchFromFailure = identityMismatchFromToolResult(toolCall.name, result);
@@ -3148,6 +3152,7 @@ export class AgentRuntime {
       ...(prepared.suppressDelivery && { suppressDelivery: true }),
       skillsCalled,
       ...(!isResponseError && { sends }),
+      ...(!isResponseError && gateRefusals.length > 0 && { gateRefusals }),
       channelId: turnChannelId,
       ...(principalNote !== undefined && { principalNote }),
       ...failedSkillsPayload(),
@@ -3321,6 +3326,7 @@ export class AgentRuntime {
       agentId: esc.agent,
       reason: esc.reason,
       declined: esc.declined,
+      declineCause: esc.declineCause,
       possiblySucceeded: esc.possiblySucceeded,
       // For a sender, "escalated" licenses a follow-up promise, which holds only when the
       // review task records them as waiting (#1978). For the principal it reports the task.
@@ -3350,6 +3356,7 @@ export class AgentRuntime {
               // a promise that selection then rejects (or the reverse).
               escalated: replyInput.escalated,
               declined: esc.declined,
+              declineCause: esc.declineCause,
             }),
           },
         ];

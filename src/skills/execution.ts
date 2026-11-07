@@ -2063,6 +2063,7 @@ export class ExecutionLayer {
         return {
           success: false,
           error: this.wrapSkillError(`Tool '${toolName}' requires a live principal turn — it can only be invoked directly by the principal, not by a system job, an agent, or a woken/scheduled task`),
+          gate: 'live_principal_turn',
         };
       }
     }
@@ -2090,6 +2091,7 @@ export class ExecutionLayer {
           error: this.wrapSkillError(
             `Tool '${toolName}' is restricted to agents: ${allowedCallers.join(', ')}`,
           ),
+          gate: 'allowed_callers',
         };
       }
     }

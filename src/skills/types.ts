@@ -463,7 +463,19 @@ export type ToolResult =
       error: string;
       /** Structured classification when known (e.g. DATABASE_UNAVAILABLE). */
       errorType?: import('../errors/types.js').ErrorType;
+      /**
+       * Set by the execution layer when one of its access gates refused the call before
+       * the handler ran (#2494). The tool exists and works; this caller or turn may not
+       * use it. Handlers do not set it.
+       */
+      gate?: ToolGate;
     };
+
+/**
+ * An execution-layer gate that refused a call (#2494). `live_principal_turn`: an elevated
+ * tool outside a live principal turn. `allowed_callers`: an agent the manifest does not list.
+ */
+export type ToolGate = 'live_principal_turn' | 'allowed_callers';
 
 /**
  * Interface that all skill handlers implement.
