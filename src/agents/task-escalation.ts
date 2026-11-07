@@ -114,7 +114,21 @@ export interface DelegationEscalationInput {
   possiblySucceeded?: boolean;
   /** The outside sender waiting on a reply, when the failure ran on their inbound (#1978). */
   awaitingReply?: EscalationRequester;
+  /** The specialist refused with the structured decline marker (#1871). Curia's to resolve (#2496). */
+  declined?: boolean;
 }
+
+/**
+ * Next steps on a decline's follow-up task (#2496). The task is owned by Curia, so these
+ * are Curia's fallbacks, in order. The principal is asked only for their input or
+ * authority, with one question: never to re-scope, reassign or cancel.
+ */
+export const DECLINE_FOLLOW_UP_ACTIONS: readonly string[] = [
+  'Take the alternative the specialist offered, if it serves the request.',
+  'Otherwise do the step directly if you hold the tool, or have a specialist that can unblock it (for example contacts verifying an identity) do so, then retry.',
+  'Move this to the principal only when their input or authority is needed: set owner ceo with a progress note asking them one specific question.',
+  'Tell anyone about it in your own words, without the specialist, its tools or any IDs.',
+];
 
 // Bounds for the sender-supplied fields. They land in the digest, so a name or
 // address carrying a pasted essay must not take it over.
@@ -338,18 +352,24 @@ export function buildDelegationEscalation(input: DelegationEscalationInput): Tas
   const failureMode: EscalationFailureMode =
     input.reason === 'blocked' ? 'blocked_on_human' : 'agent_incomplete';
 
-  const headline = failureMode === 'blocked_on_human'
-    ? `Blocked on a person: ${input.agent} cannot proceed without input — ${input.message}`
-    : input.reason === 'timeout' && input.possiblySucceeded
-      ? input.message
-      : `${input.agent} could not finish the delegated work (${input.reason}).`;
+  // A decline's message is the specialist's prose to the delegating agent (#1976), so it
+  // stays out of the headline, which the digest shows. The task description carries it.
+  const headline = input.declined === true
+    ? `${input.agent} declined the delegated work.`
+    : failureMode === 'blocked_on_human'
+      ? `Blocked on a person: ${input.agent} cannot proceed without input — ${input.message}`
+      : input.reason === 'timeout' && input.possiblySucceeded
+        ? input.message
+        : `${input.agent} could not finish the delegated work (${input.reason}).`;
 
-  const suggested = input.reason === 'timeout' && input.possiblySucceeded
-    ? [
-      'The specialist may still be running — check whether it already delivered before taking further action.',
-      'Do not re-delegate the same work; the original run may still be in flight.',
-    ]
-    : suggestedActions(failureMode, input.reason, { agent: input.agent });
+  const suggested = input.declined === true
+    ? [...DECLINE_FOLLOW_UP_ACTIONS]
+    : input.reason === 'timeout' && input.possiblySucceeded
+      ? [
+        'The specialist may still be running — check whether it already delivered before taking further action.',
+        'Do not re-delegate the same work; the original run may still be in flight.',
+      ]
+      : suggestedActions(failureMode, input.reason, { agent: input.agent });
   // Someone outside is waiting: replying to them comes first. They were told it could
   // not be done yet and that it would be followed up (#1978).
   const actions = input.awaitingReply
