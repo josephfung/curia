@@ -5,8 +5,8 @@
 // onRequest exemption list) and self-authorize purely by redeeming the token. There is no
 // read path — the form can only WRITE a value into the vault, never reveal one.
 //
-//   GET  /api/secret-capture/:token  — form metadata { label, value_format } | 410 | 404
-//   POST /api/secret-capture/:token  — submit { value } → write to vault | 410 | 404 | 400
+//   GET  /api/secret-capture/:token  — form metadata { label, value_format, capture_template?, card? } | 410 | 404
+//   POST /api/secret-capture/:token  — submit { value } or, on a card link, { card } → write to vault | 410 | 404 | 400
 //
 // 410 Gone (not 404) for expired/consumed tokens deliberately does not distinguish "never
 // existed" from "already used" beyond what the user needs: a 404 means the token was never
@@ -18,11 +18,14 @@ import type { Logger } from '../../../logger.js';
 import type { CaptureMetadata, RedeemOutcome } from '../../../secrets/secret-capture-service.js';
 import type { EventBus } from '../../../bus/bus.js';
 import { createSecretCaptured } from '../../../bus/events.js';
+import { CARD_VALIDATION_MESSAGES } from '../../../secrets/structured-secret-schema.js';
 
 /** The narrow service surface these routes need: read metadata, redeem a value. No mint. */
 export interface SecretCapturePort {
   getMetadata(rawToken: string): Promise<CaptureMetadata>;
   redeem(rawToken: string, value: string): Promise<RedeemOutcome>;
+  /** Card links (#1358): validates the fields before the token is claimed. */
+  redeemCard(rawToken: string, card: Record<string, unknown>): Promise<RedeemOutcome>;
 }
 
 export interface SecretCaptureRouteOptions {
@@ -62,7 +65,14 @@ export async function secretCaptureRoutes(
       if (meta === 'expired') {
         return reply.status(410).send({ error: 'This capture link has expired or already been used.' });
       }
-      return reply.send({ label: meta.label, value_format: meta.valueFormat });
+      return reply.send({
+        label: meta.label,
+        value_format: meta.valueFormat,
+        // Present only on a card link. `card` is public fields (brand, last four, label), never
+        // the vault key or any secret, and exists only for a renewal.
+        ...(meta.captureTemplate ? { capture_template: meta.captureTemplate } : {}),
+        ...(meta.card ? { card: meta.card } : {}),
+      });
     } catch (err) {
       // Never log the token — only that the lookup failed. The error body is end-user-facing
       // (an anonymous form visitor), so it stays generic and actionable to them, not an operator.
@@ -74,20 +84,34 @@ export async function secretCaptureRoutes(
   // -- POST the submitted value --
   app.post('/api/secret-capture/:token', CAPTURE_RATE, async (request, reply) => {
     const { token } = request.params as { token: string };
-    const body = request.body as { value?: unknown } | undefined;
+    const body = request.body as { value?: unknown; card?: unknown } | undefined;
     const value = body?.value;
+    const card = body?.card;
 
-    // Value must be a non-empty string within the size cap. Validated here so the service
-    // only ever sees a sane value (and so an empty submission can't consume the token).
-    if (typeof value !== 'string' || value.length === 0) {
-      return reply.status(400).send({ error: 'Body must include a non-empty string "value".' });
-    }
-    if (value.length > MAX_CAPTURE_VALUE_LENGTH) {
-      return reply.status(400).send({ error: `Value exceeds ${MAX_CAPTURE_VALUE_LENGTH} characters.` });
+    if (card !== undefined) {
+      // Card link: the fields are validated field-by-field in the service. Here only the shape
+      // (a plain object) and the size are checked, so nothing malformed reaches it.
+      if (typeof card !== 'object' || card === null || Array.isArray(card)) {
+        return reply.status(400).send({ error: 'Body "card" must be an object of card fields.' });
+      }
+      if (JSON.stringify(card).length > MAX_CAPTURE_VALUE_LENGTH) {
+        return reply.status(400).send({ error: `Card exceeds ${MAX_CAPTURE_VALUE_LENGTH} characters.` });
+      }
+    } else {
+      // Value must be a non-empty string within the size cap. Validated here so the service
+      // only ever sees a sane value (and so an empty submission can't consume the token).
+      if (typeof value !== 'string' || value.length === 0) {
+        return reply.status(400).send({ error: 'Body must include a non-empty string "value".' });
+      }
+      if (value.length > MAX_CAPTURE_VALUE_LENGTH) {
+        return reply.status(400).send({ error: `Value exceeds ${MAX_CAPTURE_VALUE_LENGTH} characters.` });
+      }
     }
 
     try {
-      const result = await secretCaptureService.redeem(token, value);
+      const result = card !== undefined
+        ? await secretCaptureService.redeemCard(token, card as Record<string, unknown>) // object-checked above
+        : await secretCaptureService.redeem(token, value as string); // non-empty string-checked above
       switch (result.status) {
         case 'ok':
           // The value is now in the vault. Publish secret.captured (name/routing only, NEVER the
@@ -125,6 +149,12 @@ export async function secretCaptureRoutes(
           return reply.status(410).send({ error: 'This capture link has expired or already been used.' });
         case 'invalid_json':
           return reply.status(400).send({ error: 'Value must be valid JSON for this link.' });
+        case 'invalid_shape':
+          // A card that failed validation names its reason (the copy never echoes the value);
+          // a card posted to a plain link, or a value posted to a card link, has none.
+          return reply.status(400).send({
+            error: result.reason ? CARD_VALIDATION_MESSAGES[result.reason] : 'This link does not accept that kind of submission.',
+          });
       }
     } catch (err) {
       // A vault-write failure rolls the token back to unconsumed inside redeem() — the user

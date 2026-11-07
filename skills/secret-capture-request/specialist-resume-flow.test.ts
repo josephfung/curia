@@ -22,6 +22,7 @@ describe('specialist secret-capture resume flow (#995)', () => {
       async mintUserSecret(args) { captured = args.origin; return { rawToken: 'tok', secretName: 'user.aeroplan_password', expiresAt: new Date(Date.now() + 1e6) }; },
       async mintSystemSecret(args) { captured = args.origin; return { rawToken: 'tok', secretName: 'x', expiresAt: new Date() }; },
       async setUserSecretDetails() { throw new Error('not used'); },
+      async setUserCardPublic() { throw new Error('not used'); },
     };
     const originator = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' };
     const skillCtx = {

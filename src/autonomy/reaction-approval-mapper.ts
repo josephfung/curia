@@ -25,6 +25,7 @@ import type { ActionLogRepo } from './action-log-repo.js';
 import { RESOLVED_BY, type ActionLogRow } from './action-log-types.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import type { DisclosureDecisionRecorder } from './disclosure-decisions.js';
+import { cardUseRequestIdOf, type CardUseCapability } from '../secrets/card-use-service.js';
 import {
   DEFAULT_REACTION_INTENTS,
   mapEmojiToIntent,
@@ -98,6 +99,8 @@ export interface ReactionApprovalMapperConfig {
   reactionIntents?: ReactionIntentConfig;
   /** Records the principal's yes or no when the row carries a personal-data ask (#2312). */
   disclosureDecisions?: Pick<DisclosureDecisionRecorder, 'recordForApproval'>;
+  /** Settles a denied card-use request and resumes its conversation (#1358). */
+  cardUse?: Pick<CardUseCapability, 'decline'>;
 }
 
 export class ReactionApprovalMapper {
@@ -106,6 +109,7 @@ export class ReactionApprovalMapper {
   private readonly actionLogRepo: ActionLogRepo;
   private readonly contactService: ContactService;
   private readonly executionLayer: ExecutionLayer;
+  private readonly cardUse?: Pick<CardUseCapability, 'decline'>;
   private readonly principalIdentities: readonly ChannelIdentity[];
   private readonly reactionIntents: ReactionIntentConfig;
   private readonly disclosureDecisions?: Pick<DisclosureDecisionRecorder, 'recordForApproval'>;
@@ -119,6 +123,7 @@ export class ReactionApprovalMapper {
     this.principalIdentities = config.principalIdentities;
     this.reactionIntents = config.reactionIntents ?? DEFAULT_REACTION_INTENTS;
     this.disclosureDecisions = config.disclosureDecisions;
+    this.cardUse = config.cardUse;
   }
 
   register(): void {
@@ -385,6 +390,7 @@ export class ReactionApprovalMapper {
       { contactId: deciderId, role: 'ceo', channel: channelId },
       {
         humanApproved: true,
+        approvalVia: 'reaction',
         sendResolution: pins ?? undefined,
         taskEventId: row.taskId,
         conversationId: row.conversationId ?? undefined,
@@ -394,6 +400,8 @@ export class ReactionApprovalMapper {
         },
       },
     );
+
+    if (!reResult.success) await this.declineCardUse(row, 'expired');
 
     try {
       await this.actionLogRepo.insert({
@@ -435,12 +443,30 @@ export class ReactionApprovalMapper {
 
     if (opts.principalSaidNo) await this.recordAnswer(row, 'no');
 
+    // A denied card checkout: no grant, and the agent is resumed with "declined" (#1358).
+    await this.declineCardUse(row);
+
     await this.publishDecision('deny', row, deciderId, channelId, parentEventId);
 
     this.log.info(
       { rowId: row.id, shortRef: row.shortRef },
       'reaction-approval: denied via reaction',
     );
+  }
+
+  /** Settles the card-use request behind a denied approval or failed replay; nothing for any other row. */
+  private async declineCardUse(row: ActionLogRow, status: 'denied' | 'expired' = 'denied'): Promise<void> {
+    const requestId = cardUseRequestIdOf(row);
+    if (requestId === null) return;
+    if (!this.cardUse) {
+      this.log.error({ rowId: row.id, requestId }, 'reaction-approval: cardUse not wired — the denied card request is not settled');
+      return;
+    }
+    try {
+      await this.cardUse.decline(requestId, status);
+    } catch (err) {
+      this.log.error({ err, rowId: row.id, requestId }, 'reaction-approval: failed to settle the denied card-use request');
+    }
   }
 
   /** The principal's answer to a personal-data ask (#2312); nothing for any other row. */

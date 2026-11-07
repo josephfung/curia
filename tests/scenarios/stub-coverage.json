@@ -353,6 +353,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
+    "delegated calendar write outsider origin": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-06T02:34:09.510Z"
+    },
     "delegated draft not reported sent": {
       "unstubbed": 0,
       "runs": 9,
@@ -580,6 +586,12 @@
       "runs": 10,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-17T04:08:14.379Z"
+    },
+    "outsider pushback calendar write": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-06T02:21:42.950Z"
     },
     "paused delegate no redelegate": {
       "unstubbed": 0,
@@ -970,6 +982,14 @@
       "runs": 2,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-24T14:11:23.608Z"
+    },
+    "card pick by label and brand": {
+      "unstubbed": null,
+      "reason": "New in #1358; not yet run (paid suite). The first run records coverage."
+    },
+    "card ambiguous visa asks which": {
+      "unstubbed": null,
+      "reason": "New in #1358; not yet run (paid suite). The first run records coverage."
     }
   }
 }

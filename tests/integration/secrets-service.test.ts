@@ -1,10 +1,11 @@
 // Integration tests — require a live Postgres with migrations applied.
 // Skips automatically when DATABASE_URL is unset (CI without Postgres).
-import { vi, describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import pg from 'pg';
 import pino from 'pino';
 import { randomBytes } from 'node:crypto';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
+import type { CreditCardPublicFields, CreditCardSecretDoc } from '../../src/secrets/structured-secret-schema.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
@@ -227,6 +228,212 @@ describeIf('SecretsService', () => {
       await service.deleteUserDetails(n);
       expect((await service.listUserDetails()).has(n)).toBe(false);
       await expect(service.deleteUserDetails(n)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('credit cards', () => {
+    const P = 'user.test_card_';
+    const SECRET: CreditCardSecretDoc = { _schema: 'credit_card', number: '4111111111111111', cvv: '123' };
+    const PUB: CreditCardPublicFields = {
+      brand: 'visa', last4: '1111', expiry_month: '09', expiry_year: '2031', cardholder_name: 'Pat Doe',
+    };
+    const wipe = async (): Promise<void> => {
+      await pool.query("DELETE FROM secrets WHERE name LIKE 'user.test_card_%'");
+      await pool.query("DELETE FROM user_secret_details WHERE name LIKE 'user.test_card_%'");
+    };
+    beforeEach(wipe);
+    afterEach(wipe);
+
+    it('setCard writes both halves', async () => {
+      const n = `${P}both`;
+      await service.upsertUserDetails(n, { loginUrl: 'https://shop.example/', username: 'pat' });
+      await service.setCard(n, SECRET, PUB, 'Personal');
+      expect(await service.getCardPublic(n)).toEqual({ label: 'Personal', publicFields: PUB, cardId: expect.any(String) });
+      expect(await service.getCardSecret(n)).toEqual(SECRET);
+      expect(await service.getStructuredSchema(n)).toBe('credit_card');
+      const raw = await service.get(n);
+      expect(raw).not.toContain('expiry');
+      expect(raw).not.toContain('Pat Doe');
+      // Existing sign-in details survive, and listUserDetails returns the card fields.
+      const d = (await service.listUserDetails()).get(n)!;
+      expect(d).toEqual({
+        loginUrl: 'https://shop.example/', username: 'pat',
+        schema: 'credit_card', label: 'Personal', publicFields: PUB,
+      });
+    });
+
+    it('generic string and JSON writes refuse to overwrite a saved card', async () => {
+      const n = `${P}guard`;
+      await service.setCard(n, SECRET, PUB, null);
+      await expect(service.set(n, 'oops')).rejects.toThrow('saved card');
+      await expect(service.setJSON(n, { a: 1 })).rejects.toThrow('saved card');
+      expect(await service.getCardSecret(n)).toEqual(SECRET);
+    });
+
+    it('setCard is atomic', async () => {
+      const n = `${P}atomic`;
+      const realConnect = pool.connect.bind(pool) as () => Promise<pg.PoolClient>;
+      const failing = {
+        connect: async () => {
+          const client = await realConnect();
+          const realQuery = client.query.bind(client) as (...a: unknown[]) => Promise<unknown>;
+          // Pooled clients are reused: put the real query back when this one is released.
+          const realRelease = client.release.bind(client);
+          client.release = ((err?: Error | boolean) => {
+            client.query = realQuery as unknown as typeof client.query;
+            client.release = realRelease;
+            realRelease(err);
+          }) as typeof client.release;
+          client.query = ((...args: unknown[]) => {
+            const text = typeof args[0] === 'string' ? args[0] : '';
+            if (text.includes('user_secret_details') && text.includes('INSERT')) {
+              return Promise.reject(new Error('forced details failure'));
+            }
+            return realQuery(...args);
+          }) as typeof client.query;
+          return client;
+        },
+        query: pool.query.bind(pool),
+      } as unknown as pg.Pool;
+      const svc = new SecretsService(failing, KEY, logger);
+      await expect(svc.setCard(n, SECRET, PUB, null)).rejects.toThrow('forced details failure');
+      const { rows } = await pool.query('SELECT 1 FROM secrets WHERE name = $1', [n]);
+      expect(rows).toHaveLength(0);
+    });
+
+    it('patchCardPublic leaves secrets.updated_at unchanged', async () => {
+      const n = `${P}patch`;
+      await service.setCard(n, SECRET, PUB, 'Old');
+      const before = await pool.query<{ updated_at: Date }>('SELECT updated_at FROM secrets WHERE name = $1', [n]);
+      await new Promise(r => setTimeout(r, 10));
+      await service.patchCardPublic(n, { label: 'New', publicFields: { ...PUB, cardholder_name: 'Sam Roe' } });
+      const after = await pool.query<{ updated_at: Date }>('SELECT updated_at FROM secrets WHERE name = $1', [n]);
+      expect(after.rows[0]!.updated_at.getTime()).toBe(before.rows[0]!.updated_at.getTime());
+      const pub = await service.getCardPublic(n);
+      expect(pub?.label).toBe('New');
+      expect(pub?.publicFields.cardholder_name).toBe('Sam Roe');
+      await service.patchCardPublic(n, { label: null });
+      expect((await service.getCardPublic(n))?.label).toBeNull();
+    });
+
+    it('replaceCardSecret cvv keeps number', async () => {
+      const n = `${P}cvv`;
+      await service.setCard(n, SECRET, PUB, null);
+      await service.replaceCardSecret(n, { cvv: '999' });
+      expect(await service.getCardSecret(n)).toEqual({ ...SECRET, cvv: '999' });
+    });
+
+    it('replaceCardSecret with a full doc replaces both halves', async () => {
+      const n = `${P}full`;
+      await service.setCard(n, SECRET, PUB, 'Keep');
+      const next: CreditCardSecretDoc = { _schema: 'credit_card', number: '5555555555554444', cvv: '321' };
+      const nextPub: CreditCardPublicFields = { ...PUB, brand: 'mastercard', last4: '4444' };
+      await service.replaceCardSecret(n, { secret: next, publicFields: nextPub });
+      expect(await service.getCardSecret(n)).toEqual(next);
+      expect(await service.getCardPublic(n)).toEqual({ label: 'Keep', publicFields: nextPub, cardId: expect.any(String) });
+    });
+
+    it('card identity changes on a replacement (even with the same last four) and survives edits', async () => {
+      const n = `${P}identity`;
+      await service.setCard(n, SECRET, PUB, 'Keep');
+      const first = (await service.getCardPublic(n))!.cardId;
+
+      await service.patchCardPublic(n, { label: 'Renamed', publicFields: { ...PUB, expiry_year: '2040' } });
+      await service.replaceCardSecret(n, { cvv: '999' });
+      await service.renewCard(n, { cvv: '998', publicFields: { ...PUB, expiry_year: '2041' } });
+      expect((await service.getCardPublic(n))!.cardId).toBe(first);
+
+      await service.replaceCardSecret(n, { secret: SECRET, publicFields: PUB });
+      const second = (await service.getCardPublic(n))!.cardId;
+      expect(second).not.toBe(first);
+      await service.setCard(n, SECRET, PUB, 'Keep');
+      expect((await service.getCardPublic(n))!.cardId).not.toBe(second);
+    });
+
+    it('a CVV replace racing a full replace never mixes old number with new cvv', async () => {
+      const next: CreditCardSecretDoc = { _schema: 'credit_card', number: '5555555555554444', cvv: '321' };
+      const nextPub: CreditCardPublicFields = { ...PUB, brand: 'mastercard', last4: '4444' };
+      for (let i = 0; i < 10; i++) {
+        const n = `${P}race${i}`;
+        await service.setCard(n, SECRET, PUB, null);
+        await Promise.all([
+          service.replaceCardSecret(n, { cvv: '999' }),
+          service.replaceCardSecret(n, { secret: next, publicFields: nextPub }),
+        ]);
+        const doc = await service.getCardSecret(n);
+        // Either order is fine; the old number surviving means the cvv write used a stale read.
+        expect(doc.number).toBe(next.number);
+        expect(['321', '999']).toContain(doc.cvv);
+      }
+    });
+
+    it('renewCard writes the new cvv and the public fields together', async () => {
+      const n = `${P}renew`;
+      await service.setCard(n, SECRET, PUB, 'Personal');
+      await service.renewCard(n, { cvv: '555', publicFields: { ...PUB, expiry_month: '01', expiry_year: '2041' } });
+      expect(await service.getCardSecret(n)).toEqual({ ...SECRET, cvv: '555' });
+      const pub = await service.getCardPublic(n);
+      expect(pub?.publicFields).toMatchObject({ expiry_month: '01', expiry_year: '2041' });
+      expect(pub?.label).toBe('Personal');
+    });
+
+    it('renewCard lands neither write when the second one fails', async () => {
+      // A card doc in the vault with no card details row: the CVV write succeeds inside the
+      // transaction, the public-fields update then matches nothing and throws, so the CVV rolls back.
+      const n = `${P}renewfail`;
+      await service.setJSON(n, SECRET);
+      await expect(service.renewCard(n, { cvv: '555', publicFields: PUB })).rejects.toThrow(/not a saved card/);
+      expect((await service.getCardSecret(n)).cvv).toBe(SECRET.cvv);
+    });
+
+    it('replaceCardSecret refuses a card that is gone or a plain secret under the name', async () => {
+      const gone = `${P}replgone`;
+      const next: CreditCardSecretDoc = { _schema: 'credit_card', number: '5555555555554444', cvv: '321' };
+      const nextPub: CreditCardPublicFields = { ...PUB, brand: 'mastercard', last4: '4444' };
+      await expect(service.replaceCardSecret(gone, { secret: next, publicFields: nextPub })).rejects.toThrow(/not a saved card/);
+      expect((await pool.query('SELECT 1 FROM secrets WHERE name = $1', [gone])).rows).toHaveLength(0);
+
+      const plain = `${P}replplain`;
+      await service.set(plain, 'hunter2');
+      await expect(service.replaceCardSecret(plain, { secret: next, publicFields: nextPub })).rejects.toThrow(/not a saved card/);
+      expect(await service.get(plain)).toBe('hunter2');
+    });
+
+    it('a CVV write is checked against the number held under the lock', async () => {
+      const n = `${P}cvvbrand`;
+      const amex: CreditCardSecretDoc = { _schema: 'credit_card', number: '378282246310005', cvv: '1234' };
+      await service.setCard(n, amex, { ...PUB, brand: 'amex', last4: '0005' }, null);
+      await expect(service.replaceCardSecret(n, { cvv: '999' })).rejects.toThrow(/does not fit/);
+      await expect(service.renewCard(n, { cvv: '999', publicFields: PUB })).rejects.toThrow(/does not fit/);
+      expect((await service.getCardSecret(n)).cvv).toBe('1234');
+    });
+
+    it('patchCardPublic and renewCard refuse a stale basedOn', async () => {
+      const n = `${P}stale`;
+      await service.setCard(n, SECRET, PUB, null);
+      const stale = { ...PUB, last4: '9999' };
+      await expect(service.patchCardPublic(n, { publicFields: stale, basedOn: stale })).rejects.toThrow(/changed/);
+      await expect(service.renewCard(n, { cvv: '555', publicFields: PUB, basedOn: stale })).rejects.toThrow(/changed/);
+      expect((await service.getCardSecret(n)).cvv).toBe(SECRET.cvv);
+    });
+
+    it('getCardSecret refuses a non-card secret', async () => {
+      const n = `${P}notcard`;
+      await service.setJSON(n, { hello: 'world' });
+      await expect(service.getCardSecret(n)).rejects.toThrow(/credit_card/);
+    });
+
+    it('getCardPublic and getStructuredSchema do not decrypt', async () => {
+      const n = `${P}nodecrypt`;
+      await service.setCard(n, SECRET, PUB, null);
+      const g = vi.spyOn(service, 'get');
+      const gj = vi.spyOn(service, 'getJSON');
+      await service.getCardPublic(n);
+      await service.getStructuredSchema(n);
+      expect(g).not.toHaveBeenCalled();
+      expect(gj).not.toHaveBeenCalled();
+      expect(await service.getCardPublic(`${P}missing`)).toBeNull();
+      expect(await service.getStructuredSchema(`${P}missing`)).toBeNull();
     });
   });
 });

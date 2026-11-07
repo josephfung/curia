@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import type { ErrorType } from '../errors/types.js';
 import type { ContactTier, DedupConfidence, SystemRole, TierElevationReason, TrustLevel } from '../contacts/types.js';
 import type { Sensitivity, NodeType } from '../memory/types.js';
-import type { ActionRisk } from '../skills/types.js';
+import type { ActionRisk, ApprovalVia } from '../skills/types.js';
+import type { CardBrand } from '../secrets/structured-secret-schema.js';
+import type { CaptureOrigin } from '../secrets/secret-capture-service.js';
 import type { ReasoningEffort } from '../agents/llm/sampling-options.js';
 import type { ReasoningWatchdogRecord } from '../agents/llm/reasoning-watchdog.js';
 
@@ -980,6 +982,9 @@ interface SecretAccessedPayload {
   // #973) rather than via a manifest-declared ctx.secret() call. Distinguishes the
   // two access paths in the audit trail. Absent/false for declared-secret access.
   byReference?: boolean;
+  // Saved-card field that was resolved (e.g. 'number', 'expiry_mm_yy'). The name only,
+  // never the value (#1358). Absent for whole-secret reads.
+  secretField?: string;
 }
 
 // SecretChangedPayload — the principal set or removed a vault secret from the console
@@ -1026,6 +1031,39 @@ interface SecretCapturedPayload {
    *  carries no secret value. The resume subscriber decodes it to recover the specialist name and
    *  instructs the coordinator to re-delegate with it. */
   resumeToken?: string;
+}
+
+// -- Saved-card use (#1358) --
+//
+// card_use.requested: the agent asked to pay with a saved card; an approval is pending. Carries
+// brand and last four (public fields), never the number or CVV.
+// card_use.decided: the request resolved (approved, denied or expired). `resume` says whether
+// the originating conversation must be re-entered (false only when approve-action answered
+// inside the requesting conversation, whose result already tells the agent to continue).
+// `origin` is the routing captured at request time, the same shape a capture link carries.
+export interface CardUseRequestedPayload {
+  requestId: string;
+  secretName: string;
+  siteDomain: string;
+  /** Top level so the audit logger indexes the row by conversation. */
+  conversationId?: string;
+  amount: string;
+  brand: CardBrand;
+  last4: string;
+  label?: string;
+}
+
+export interface CardUseDecidedPayload {
+  requestId: string;
+  secretName: string;
+  siteDomain: string;
+  conversationId?: string;
+  /** 'failed': the principal approved but the replay failed before a grant was written. */
+  decision: 'approved' | 'denied' | 'expired' | 'failed';
+  via?: ApprovalVia;
+  resume: boolean;
+  origin: CaptureOrigin;
+  purpose: string;
 }
 
 // -- Late delegation (#1799) --
@@ -1934,6 +1972,21 @@ export interface SecretCapturedEvent extends BaseEvent {
   payload: SecretCapturedPayload;
 }
 
+// CardUseRequestedEvent — published when a card-use request is filed (#1358). No card number.
+export interface CardUseRequestedEvent extends BaseEvent {
+  type: 'card_use.requested';
+  sourceLayer: 'execution';
+  payload: CardUseRequestedPayload;
+}
+
+// CardUseDecidedEvent — published when a card-use request resolves (#1358). Task 6's
+// subscriber resumes the originating conversation from it.
+export interface CardUseDecidedEvent extends BaseEvent {
+  type: 'card_use.decided';
+  sourceLayer: 'execution';
+  payload: CardUseDecidedPayload;
+}
+
 // AutonomyToolBlockedEvent — execution layer blocked a skill invocation
 // due to insufficient autonomy score.
 export interface AutonomyToolBlockedEvent extends BaseEvent {
@@ -2227,6 +2280,8 @@ export type BusEvent =
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | SecretChangedEvent       // #2453: console set/delete of a vault secret (name only, never value)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
+  | CardUseRequestedEvent    // #1358: saved-card use requested (brand/last4/site/amount, never the number)
+  | CardUseDecidedEvent      // #1358: saved-card use approved, denied or expired
   | DelegationTimedOutEvent     // #1799: delegate wait timed out, specialist possibly still running
   | DelegationLateResolvedEvent // #1799: a late specialist response was delivered, recorded, or lost
   | DelegationRequesterContextEvent // #1859: identity evidence rendered into a delegated specialist prompt
@@ -2898,6 +2953,34 @@ export function createSecretCaptured(
     timestamp: new Date(),
     type: 'secret.captured',
     sourceLayer: 'system',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createCardUseRequested(
+  payload: CardUseRequestedPayload,
+  parentEventId?: string,
+): CardUseRequestedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'card_use.requested',
+    sourceLayer: 'execution',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createCardUseDecided(
+  payload: CardUseDecidedPayload,
+  parentEventId?: string,
+): CardUseDecidedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'card_use.decided',
+    sourceLayer: 'execution',
     payload,
     parentEventId,
   };

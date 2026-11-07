@@ -60,6 +60,11 @@ function makeSecretsPort(existingUserNames: string[] = []): CaptureSecretsPort &
     async upsertUserDetails(name: string, details: UserSecretDetails) {
       detailCalls.push({ name, details });
     },
+    // Card writes are exercised against a real database in tests/integration/secret-capture-card.test.ts.
+    async getCardPublic() { return null; },
+    async setCard() { throw new Error('setCard not expected in this unit test'); },
+    async renewCard() { throw new Error('renewCard not expected in this unit test'); },
+    async patchCardPublic() { throw new Error('patchCardPublic not expected in this unit test'); },
   };
 }
 
@@ -87,6 +92,24 @@ describe('resolveUserSecretName (re-export)', () => {
     expect(resolveUserSecretName('anthropic_api_key')).toBe('user.anthropic_api_key');
     expect(resolveUserSecretName('channel.email.nylas_api_key').startsWith('user.')).toBe(true);
     expect(resolveUserSecretName('channel.email.nylas_api_key')).not.toBe('channel.email.nylas_api_key');
+  });
+});
+
+describe('mintUserSecret over a saved card', () => {
+  it('refuses a template-less link for a key that is a saved card', async () => {
+    const { svc, secrets, queries } = makeService(undefined, ['user.visa_card']);
+    secrets.getCardPublic = async () => ({
+      label: 'Personal',
+      publicFields: { brand: 'visa', last4: '1111', expiry_month: '12', expiry_year: '2030', cardholder_name: 'Pat Doe' },
+    });
+    await expect(svc.mintUserSecret({ rawName: 'user.visa_card' }))
+      .rejects.toThrow("'user.visa_card' is a saved card. Use template credit_card to re-capture it, or credit_card_renewal for a new expiry and security code.");
+    expect(queries.some(q => q.sql.includes('INSERT INTO secret_capture_tokens'))).toBe(false);
+  });
+
+  it('still mints a template-less link for an existing plain secret', async () => {
+    const { svc } = makeService(undefined, ['user.flight']);
+    await expect(svc.mintUserSecret({ rawName: 'user.flight' })).resolves.toMatchObject({ secretName: 'user.flight' });
   });
 });
 

@@ -5,7 +5,9 @@ import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 import {
+  cardSummaryText,
   declarerLabel,
+  duplicateCardHints,
   duplicateSiteHints,
   errorMessage,
   filterCounts,
@@ -42,12 +44,27 @@ type Sort = { key: SecretSortKey; dir: 'asc' | 'desc' } | null;
 const KIND_CHIPS: ReadonlyArray<[SecretKind | 'all', string]> = [
   ['all', 'All'], ['personal', 'Personal'], ['system', 'System'], ['platform', 'Platform'],
 ];
-const STATUS_CHIPS: ReadonlyArray<SecretStatus> = ['configured', 'env', 'missing', 'not_set', 'not_declared'];
+const STATUS_CHIPS: ReadonlyArray<SecretStatus> = ['configured', 'expired', 'env', 'missing', 'not_set', 'not_declared'];
 const REQUIRED_CHIPS: ReadonlyArray<['required' | 'optional', string]> = [['required', 'Required'], ['optional', 'Optional']];
 
 const SEARCH_PLACEHOLDER = 'Search name, site, username…';
 
-function UsedFor({ row, sameSite }: { row: SecretRowData; sameSite: string[] | undefined }) {
+function UsedFor({ row, sameSite, sameCard }: {
+  row: SecretRowData;
+  sameSite: string[] | undefined;
+  sameCard: string[] | undefined;
+}) {
+  if (row.card) {
+    return (
+      <>
+        {cardSummaryText(row.card)}
+        {row.card.label && <span className="secrets-cell-sub">{row.card.label}</span>}
+        {sameCard?.map(other => (
+          <span key={other} className="secrets-cell-sub secrets-warn">⚠ same card as {other}</span>
+        ))}
+      </>
+    );
+  }
   if (row.kind === 'personal') {
     const host = siteHost(row.loginUrl);
     return (
@@ -120,6 +137,7 @@ export function SecretsPage() {
   const all = useMemo(() => rows ?? [], [rows]);
   const counts = useMemo(() => filterCounts(all), [all]);
   const hints = useMemo(() => duplicateSiteHints(all), [all]);
+  const cardHints = useMemo(() => duplicateCardHints(all), [all]);
   const visible = useMemo(() => sortSecrets(filterSecrets(all, filters), sort), [all, filters, sort]);
   const now = new Date();
 
@@ -283,7 +301,7 @@ export function SecretsPage() {
                             <td><NameCell row={r} /></td>
                             <td className="cell-muted">{KIND_LABEL[r.kind]}</td>
                             <td><StatusPill row={r} /></td>
-                            <td><UsedFor row={r} sameSite={hints.get(r.name)} /></td>
+                            <td><UsedFor row={r} sameSite={hints.get(r.name)} sameCard={cardHints.get(r.name)} /></td>
                             <td className={`secrets-nowrap ${r.updatedAt ? 'cell-mono' : 'cell-muted'}`}>{shortDate(r.updatedAt, now)}</td>
                             <td className={`secrets-nowrap ${r.lastUsedAt ? 'cell-mono' : 'cell-muted'}`}>{lastUsedText(r, now)}</td>
                             <td>

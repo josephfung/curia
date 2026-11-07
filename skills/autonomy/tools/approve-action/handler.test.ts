@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ApproveActionHandler, UNSHOWN_PERSONAL_DETAILS_ERROR } from './handler.js';
+import { PREDATING_CARD_USE_ERROR, SAME_TURN_CARD_USE_ERROR,UNSHOWN_CARD_USE_ERROR } from '../../../../src/secrets/card-use-service.js';
 import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipient-reference.js';
 import type { ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { ActionLogRepo } from '../../../../src/autonomy/action-log-repo.js';
@@ -158,6 +159,86 @@ describe('ApproveActionHandler', () => {
       const { result, execLayer } = await approve({ ...smsRow, payload: { recipient: 'contact-1', message: 'See you Thursday.' } });
       expect(result.success).toBe(true);
       expect(execLayer.invoke).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('a card-use confirmation (#1358)', () => {
+    const cardRow = {
+      ...PENDING_ROW, taskId: 'earlier-task', toolName: 'card-use-confirm', shortRef: 'card-1',
+      payload: { request_id: 'req-1' }, notificationSentAt: new Date(),
+    };
+
+    async function approve(row: Record<string, unknown>, ctx?: Partial<ToolContext>) {
+      const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row }) });
+      const execLayer = makeMockExecutionLayer();
+      const result = await new ApproveActionHandler().execute(
+        makeCtx({ actionLogRepo: repo, bus: makeMockBus(), executionLayer: execLayer, conversationId: 'conv-now', ...ctx }),
+      );
+      return { result, repo, execLayer };
+    }
+
+    it('refuses an undelivered card-use row and leaves it pending', async () => {
+      const { result, repo, execLayer } = await approve({ ...cardRow, notificationSentAt: null });
+      expect(result).toEqual({ success: false, error: UNSHOWN_CARD_USE_ERROR });
+      expect(repo.resolveRow).not.toHaveBeenCalled();
+      expect(execLayer.invoke).not.toHaveBeenCalled();
+    });
+
+    it('refuses approval in the requesting turn', async () => {
+      const { result, repo, execLayer } = await approve({ ...cardRow, taskId: 'task-1' });
+      expect(result).toEqual({ success: false, error: SAME_TURN_CARD_USE_ERROR });
+      expect(repo.resolveRow).not.toHaveBeenCalled();
+      expect(execLayer.invoke).not.toHaveBeenCalled();
+    });
+
+    it('refuses an approval whose message predates the confirmation', async () => {
+      const sentAt = new Date(Date.now() + 60_000);
+      const { result, repo, execLayer } = await approve({ ...cardRow, notificationSentAt: sentAt });
+      expect(result).toEqual({ success: false, error: PREDATING_CARD_USE_ERROR });
+      expect(repo.resolveRow).not.toHaveBeenCalled();
+      expect(execLayer.invoke).not.toHaveBeenCalled();
+    });
+
+    it('settles the request as failed when the replay fails', async () => {
+      const decline = vi.fn().mockResolvedValue(undefined);
+      const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: cardRow }) });
+      const execLayer = makeMockExecutionLayer({ success: false, error: 'boom' });
+      await new ApproveActionHandler().execute(makeCtx({
+        actionLogRepo: repo, bus: makeMockBus(), executionLayer: execLayer, conversationId: 'conv-now',
+        cardUse: { decline } as unknown as ToolContext['cardUse'],
+      }));
+      expect(decline).toHaveBeenCalledWith('req-1', 'failed');
+    });
+
+    it('does not settle the request when the replay succeeds', async () => {
+      const decline = vi.fn();
+      const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: cardRow }) });
+      await new ApproveActionHandler().execute(makeCtx({
+        actionLogRepo: repo, bus: makeMockBus(), executionLayer: makeMockExecutionLayer(), conversationId: 'conv-now',
+        cardUse: { decline } as unknown as ToolContext['cardUse'],
+      }));
+      expect(decline).not.toHaveBeenCalled();
+    });
+
+    it('replays a delivered row from a later turn as the coordinator, naming the approving conversation', async () => {
+      const { result, execLayer } = await approve(cardRow);
+      expect(result.success).toBe(true);
+      expect(execLayer.invoke).toHaveBeenCalledWith(
+        'card-use-confirm',
+        { request_id: 'req-1' },
+        expect.anything(),
+        expect.objectContaining({ humanApproved: true, approvalVia: 'coordinator', conversationId: 'conv-now' }),
+      );
+    });
+
+    it('tags every replay as coordinator-approved and keeps the row conversation for other tools', async () => {
+      const { execLayer } = await approve(PENDING_ROW);
+      expect(execLayer.invoke).toHaveBeenCalledWith(
+        'calendar-create-event',
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ approvalVia: 'coordinator', conversationId: 'conv-1' }),
+      );
     });
   });
 

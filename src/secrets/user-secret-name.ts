@@ -17,6 +17,7 @@
 // dot-free system key or a `channel.*` credential key.
 
 import { getDomainWithoutSuffix } from 'tldts';
+import { detectCardBrand } from './structured-secret-schema.js';
 
 /** Trust-boundary prefix for agent-captured personal secrets (#971 / #1497). */
 export const USER_SECRET_PREFIX = 'user.';
@@ -56,6 +57,8 @@ const TYPE_CANONICAL: Readonly<Record<string, string>> = {
   tokens: 'token',
   key: 'key',
   keys: 'key',
+  card: 'card',
+  cards: 'card',
 };
 
 /** Lower number = stronger type. Used when a name carries more than one type token. */
@@ -67,6 +70,7 @@ const TYPE_PRIORITY: Readonly<Record<string, number>> = {
   key: 4,
   secret: 5,
   pin: 6,
+  card: 7,
 };
 
 export interface UserSecretFingerprint {
@@ -235,13 +239,24 @@ export function siteIdentityFromUrl(url: string): string {
 
 /**
  * The free-text name the console feeds to `resolveUserSecretName`: the site for a
- * website login, the user's own label otherwise.
+ * website login, "<label> <brand> card" for a card, the user's own label otherwise.
  */
 export function consoleSecretNameInput(input: {
-  type: 'website_login' | 'other';
+  type: 'website_login' | 'other' | 'credit_card';
   label?: string;
   loginUrl?: string;
+  /** credit_card only: the card number as typed. Used for the brand word alone. */
+  number?: string;
 }): string {
+  if (input.type === 'credit_card') {
+    const label = input.label?.trim() ?? '';
+    if (label.length === 0) throw new Error('label is required');
+    const digits = (input.number ?? '').replace(/[\s-]/g, '');
+    if (digits.length === 0) throw new Error('number is required');
+    // "other" says nothing about the card, so it is left out of the name.
+    const brand = detectCardBrand(digits);
+    return brand === 'other' ? `${label} card` : `${label} ${brand} card`;
+  }
   if (input.type === 'website_login') {
     if (!input.loginUrl) throw new Error('loginUrl is required for a website login');
     return `${siteIdentityFromUrl(input.loginUrl)} password`;

@@ -9,8 +9,27 @@ import type { DbPool, DbPoolClient } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import { encrypt, decrypt } from './crypto.js';
 import { hasUserSecretDetails, type UserSecretDetails } from './user-secret-details.js';
+import {
+  detectCardBrand,
+  isStructuredSchemaTag,
+  validateCvv,
+  type CreditCardPublicFields,
+  type CreditCardSecretDoc,
+  type StructuredSchemaTag,
+} from './structured-secret-schema.js';
+
+/** Anything with a pg-style query method: the pool, or one client inside a transaction. */
+type Queryable = Pick<DbPool, 'query'> | Pick<DbPoolClient, 'query'>;
 
 export type ValueFormat = 'string' | 'json';
+
+/** A card edit lost a race: the card is gone, or its public fields changed since the edit was based on them. */
+export class StaleCardEditError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StaleCardEditError';
+  }
+}
 
 /** Non-secret facts about a stored secret. Deliberately has no value or ciphertext field. */
 export interface SecretMetadata {
@@ -33,8 +52,6 @@ export type PersonalSecretWrite =
   | { outcome: 'structured' }
   /** The key is not in the vault (an edit never recreates a deleted key). */
   | { outcome: 'missing' };
-
-type Queryable = Pick<DbPool | DbPoolClient, 'query'>;
 
 export class SecretsService {
   constructor(
@@ -76,12 +93,24 @@ export class SecretsService {
 
   /** Encrypt and upsert a string secret. */
   async set(name: string, value: string): Promise<void> {
+    await this.assertNotSavedCard(name);
     const { ciphertext, iv } = encrypt(value, this.key);
     await this.upsert(name, 'string', ciphertext, iv);
   }
 
+  /** A generic write (a capture redeem) must not replace a saved card's encrypted document
+   *  and leave its schema tag and public fields behind. Cards go through setCard /
+   *  replaceCardSecret. */
+  private async assertNotSavedCard(name: string): Promise<void> {
+    if (!name.startsWith('user.')) return;
+    if ((await this.getStructuredSchema(name)) !== null) {
+      throw new Error(`'${name}' is a saved card; replace it from the Secrets page, not by a generic write`);
+    }
+  }
+
   /** JSON-serialize, encrypt, and upsert a structured secret. */
   async setJSON(name: string, obj: unknown): Promise<void> {
+    await this.assertNotSavedCard(name);
     const { ciphertext, iv } = encrypt(JSON.stringify(obj), this.key);
     await this.upsert(name, 'json', ciphertext, iv);
   }
@@ -125,8 +154,11 @@ export class SecretsService {
   /** Non-secret sign-in details (login URL, username) per `user.*` key (#2201). Keys with
    *  no row are absent from the map. Never reads the secrets table. */
   async listUserDetails(): Promise<Map<string, UserSecretDetails>> {
-    const result = await this.pool.query<{ name: string; login_url: string | null; username: string | null }>(
-      `SELECT name, login_url, username FROM user_secret_details
+    const result = await this.pool.query<{
+      name: string; login_url: string | null; username: string | null;
+      schema: string | null; label: string | null; public_fields: CreditCardPublicFields | null;
+    }>(
+      `SELECT name, login_url, username, schema, label, public_fields FROM user_secret_details
         WHERE starts_with(name, 'user.')`,
     );
     const out = new Map<string, UserSecretDetails>();
@@ -135,6 +167,10 @@ export class SecretsService {
       out.set(row.name, {
         ...(row.login_url ? { loginUrl: row.login_url } : {}),
         ...(row.username ? { username: row.username } : {}),
+        ...(isStructuredSchemaTag(row.schema) && row.public_fields
+          ? { schema: row.schema, publicFields: row.public_fields }
+          : {}),
+        ...(row.label ? { label: row.label } : {}),
       });
     }
     return out;
@@ -175,6 +211,147 @@ export class SecretsService {
         patch.username !== undefined, patch.username ?? null,
       ],
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Credit cards (#1358). Number and CVV are one encrypted json secret; the
+  // non-secret facts live on the details row so viewing a card never decrypts.
+  // -------------------------------------------------------------------------
+
+  /** Save a card: encrypted doc in `secrets`, public fields in the details row, in one
+   *  transaction. Existing login_url / username on the details row are kept. */
+  async setCard(
+    name: string,
+    secret: CreditCardSecretDoc,
+    publicFields: CreditCardPublicFields,
+    label: string | null,
+  ): Promise<void> {
+    assertUserKey(name);
+    await this.inTransaction(async client => {
+      // Lock the row and refuse to replace anything that is not already this card: a password
+      // saved under the name after the link was minted must not be overwritten.
+      const existing = (await client.query<{ schema: string | null }>(
+        `SELECT d.schema FROM secrets s LEFT JOIN user_secret_details d ON d.name = s.name
+          WHERE s.name = $1 FOR UPDATE OF s`,
+        [name],
+      )).rows[0];
+      if (existing && existing.schema !== 'credit_card') {
+        throw new Error(`'${name}' holds a different secret, so a card cannot be saved over it`);
+      }
+      await this.writeJson(client, name, secret);
+      await this.writeCardDetails(client, name, publicFields, label, true);
+    });
+  }
+
+  /** The schema tag a key holds, from the details row only. Null for a plain or unknown key. */
+  async getStructuredSchema(name: string): Promise<StructuredSchemaTag | null> {
+    const result = await this.pool.query<{ schema: string | null }>(
+      'SELECT schema FROM user_secret_details WHERE name = $1',
+      [name],
+    );
+    const tag = result.rows[0]?.schema;
+    return isStructuredSchemaTag(tag) ? tag : null;
+  }
+
+  /** A card's label, public fields and identity (`cardId`: new whenever the number is replaced).
+   *  Reads the details row only: nothing is decrypted. */
+  async getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields; cardId: string } | null> {
+    const result = await this.pool.query<{ label: string | null; public_fields: CreditCardPublicFields | null; schema: string | null; card_id: string | null }>(
+      'SELECT label, public_fields, schema, card_id FROM user_secret_details WHERE name = $1',
+      [name],
+    );
+    const row = result.rows[0];
+    if (!row || row.schema !== 'credit_card' || !row.public_fields || !row.card_id) return null;
+    return { label: row.label, publicFields: row.public_fields, cardId: row.card_id };
+  }
+
+  /** Edit a card's label and/or public fields. Never writes `secrets`, so the vault row's
+   *  updated_at is untouched. Omitted keys are kept; `label: null` clears the label. */
+  async patchCardPublic(
+    name: string,
+    patch: {
+      label?: string | null;
+      publicFields?: CreditCardPublicFields;
+      /** The public fields `publicFields` was built from. The write applies only if the card
+       *  still holds exactly these, so a concurrent edit or replacement is not overwritten. */
+      basedOn?: CreditCardPublicFields;
+    },
+  ): Promise<void> {
+    assertUserKey(name);
+    const result = await this.pool.query(
+      `UPDATE user_secret_details SET
+         label         = CASE WHEN $2::boolean THEN $3::text ELSE label END,
+         public_fields = CASE WHEN $4::boolean THEN $5::jsonb ELSE public_fields END,
+         updated_at    = now()
+       WHERE name = $1 AND schema = 'credit_card'
+         AND ($6::jsonb IS NULL OR public_fields = $6::jsonb)`,
+      [
+        name,
+        patch.label !== undefined, patch.label ?? null,
+        patch.publicFields !== undefined,
+        patch.publicFields === undefined ? null : JSON.stringify(patch.publicFields),
+        patch.basedOn === undefined ? null : JSON.stringify(patch.basedOn),
+      ],
+    );
+    if (result.rowCount === 0) throw new StaleCardEditError(`'${name}' is not a saved card, or it changed while this edit was prepared; try again`);
+  }
+
+  /** Replace a card's secret. `{ cvv }` swaps only the CVV and keeps the number; the full
+   *  form replaces the doc and the public fields. One transaction. */
+  async replaceCardSecret(
+    name: string,
+    change: { cvv: string } | { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields },
+  ): Promise<void> {
+    assertUserKey(name);
+    if ('cvv' in change) {
+      await this.inTransaction(client => this.writeCvvLocked(client, name, change.cvv));
+      return;
+    }
+    await this.inTransaction(async client => {
+      // Lock and verify the card first: one deleted since the route checked must not be
+      // recreated, and a plain secret that took the name must not be overwritten.
+      const existing = (await client.query<{ schema: string | null }>(
+        `SELECT d.schema FROM secrets s LEFT JOIN user_secret_details d ON d.name = s.name
+          WHERE s.name = $1 FOR UPDATE OF s`,
+        [name],
+      )).rows[0];
+      if (existing?.schema !== 'credit_card') {
+        throw new Error(`'${name}' is not a saved card any more, so it cannot be replaced; try again`);
+      }
+      await this.writeJson(client, name, change.secret);
+      // Keep the existing label; only the public fields change here.
+      await this.writeCardDetails(client, name, change.publicFields, null, false);
+    });
+  }
+
+  /** Renew a saved card: the new CVV and the updated public fields (the new expiry) land in
+   *  one transaction, so a failure on either leaves the card exactly as it was. The number
+   *  and the label are kept. */
+  async renewCard(
+    name: string,
+    change: { cvv: string; publicFields: CreditCardPublicFields; basedOn?: CreditCardPublicFields },
+  ): Promise<void> {
+    assertUserKey(name);
+    await this.inTransaction(async client => {
+      await this.writeCvvLocked(client, name, change.cvv);
+      const result = await client.query(
+        `UPDATE user_secret_details SET public_fields = $2::jsonb, updated_at = now()
+          WHERE name = $1 AND schema = 'credit_card'
+            AND ($3::jsonb IS NULL OR public_fields = $3::jsonb)`,
+        [name, JSON.stringify(change.publicFields), change.basedOn === undefined ? null : JSON.stringify(change.basedOn)],
+      );
+      if (result.rowCount === 0) throw new StaleCardEditError(`'${name}' is not a saved card, or it changed while this was prepared; try again`);
+    });
+  }
+
+  /** The decrypted card doc. For the resolver only. Throws unless the stored doc is a credit_card. */
+  async getCardSecret(name: string): Promise<CreditCardSecretDoc> {
+    const doc = await this.getJSON<{ _schema?: unknown }>(name);
+    if (doc === null || doc._schema !== 'credit_card') {
+      throw new Error(`Secret '${name}' is not a credit_card`);
+    }
+    // _schema was checked above; the rest of the shape was validated when the card was saved.
+    return doc as unknown as CreditCardSecretDoc;
   }
 
   /** Remove a key's sign-in details. No error if there are none. */
@@ -272,16 +449,96 @@ export class SecretsService {
   }
 
   private async upsert(name: string, format: ValueFormat, ciphertext: string, iv: string): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO secrets (name, value_format, encrypted_value, iv, updated_at)
-       VALUES ($1, $2, $3, $4, now())
-      -- created_at is set once on INSERT (DEFAULT now()) and never modified on conflict.
-       ON CONFLICT (name) DO UPDATE
-         SET value_format = EXCLUDED.value_format,
-             encrypted_value = EXCLUDED.encrypted_value,
-             iv = EXCLUDED.iv,
-             updated_at = now()`,
-      [name, format, ciphertext, iv],
+    await upsertSecretRow(this.pool, name, format, ciphertext, iv);
+  }
+
+  /** Swap only the CVV of a stored card, inside the caller's transaction. Read-modify-write
+   *  under a row lock, so a racing replace cannot be overwritten with the number this call
+   *  read before it. */
+  private async writeCvvLocked(client: DbPoolClient, name: string, cvv: string): Promise<void> {
+    const row = (await client.query<{ encrypted_value: string; iv: string; value_format: ValueFormat }>(
+      'SELECT encrypted_value, iv, value_format FROM secrets WHERE name = $1 FOR UPDATE',
+      [name],
+    )).rows[0];
+    if (!row || row.value_format !== 'json') throw new Error(`Secret '${name}' is not a credit_card`);
+    const doc = JSON.parse(decrypt(row.encrypted_value, row.iv, this.key)) as { _schema?: unknown };
+    if (doc._schema !== 'credit_card') throw new Error(`Secret '${name}' is not a credit_card`);
+    // _schema was checked above; the rest of the shape was validated when the card was saved.
+    const card = doc as unknown as CreditCardSecretDoc;
+    // Checked against the number held under the lock: a card replaced after the route's own
+    // check (a Visa swapped for an Amex) must not end up with a CVV of the wrong length.
+    if (!validateCvv(cvv, detectCardBrand(card.number))) {
+      throw new Error(`The security code does not fit the card saved under '${name}'`);
+    }
+    await this.writeJson(client, name, { ...card, cvv });
+  }
+
+  private async writeJson(db: Queryable, name: string, obj: unknown): Promise<void> {
+    const { ciphertext, iv } = encrypt(JSON.stringify(obj), this.key);
+    await upsertSecretRow(db, name, 'json', ciphertext, iv);
+  }
+
+  /** Upsert the card columns of the details row, leaving login_url / username alone.
+   *  `setLabel` false keeps an existing label (used when only the secret is replaced). */
+  private async writeCardDetails(
+    db: Queryable,
+    name: string,
+    publicFields: CreditCardPublicFields,
+    label: string | null,
+    setLabel: boolean,
+  ): Promise<void> {
+    await db.query(
+      // Both callers store a new card number, so the card gets a new identity (card_id) and
+      // any card-use grant for the old one stops matching.
+      `INSERT INTO user_secret_details (name, schema, label, public_fields, card_id)
+       VALUES ($1, 'credit_card', $2, $3::jsonb, gen_random_uuid())
+       ON CONFLICT (name) DO UPDATE SET
+         schema        = 'credit_card',
+         label         = CASE WHEN $4::boolean THEN EXCLUDED.label ELSE user_secret_details.label END,
+         public_fields = EXCLUDED.public_fields,
+         card_id       = EXCLUDED.card_id,
+         updated_at    = now()`,
+      [name, label, JSON.stringify(publicFields), setLabel],
     );
   }
+
+  private async inTransaction<T>(fn: (client: DbPoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    let broken = false;
+    try {
+      await client.query('BEGIN');
+      const out = await fn(client);
+      await client.query('COMMIT');
+      return out;
+    } catch (err) {
+      // Roll back, then rethrow the original failure; a failed rollback must not mask it.
+      // A failed rollback means the connection is likely dead: destroy it rather than pool it.
+      await client.query('ROLLBACK').catch(() => { broken = true; });
+      throw err;
+    } finally {
+      client.release(broken);
+    }
+  }
+}
+
+function assertUserKey(name: string): void {
+  if (!name.startsWith('user.')) {
+    throw new Error(`Cards are only stored under user.* keys, not '${name}'`);
+  }
+}
+
+async function upsertSecretRow(
+  db: Queryable, name: string, format: ValueFormat, ciphertext: string, iv: string,
+): Promise<void> {
+  await db.query(
+    `INSERT INTO secrets (name, value_format, encrypted_value, iv, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+    -- created_at is set once on INSERT (DEFAULT now()) and never modified on conflict.
+     ON CONFLICT (name) DO UPDATE
+       SET value_format = EXCLUDED.value_format,
+           encrypted_value = EXCLUDED.encrypted_value,
+           iv = EXCLUDED.iv,
+           updated_at = now()`,
+    [name, format, ciphertext, iv],
+  );
 }
