@@ -146,6 +146,7 @@ describe('push preview', () => {
     ['host-like link destinations', '[a:]('],
     ['host-like image destinations', '![a:]('],
     ['escaped brackets', '[\\['],
+    ['escaped bracket run', '\\['],
     ['unclosed * italics', ' *a'],
     ['unclosed _ italics', ' _a'],
     ['blank lines', '\n'],

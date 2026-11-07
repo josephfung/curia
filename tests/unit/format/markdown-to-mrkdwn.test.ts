@@ -17,6 +17,7 @@ describe('markdownToMrkdwn', () => {
     ['unclosed link destinations', '[a]('],
     ['host-like link destinations', '[a:]('],
     ['escaped brackets', '[\\['],
+    ['escaped bracket run', '\\['],
   ])('converts links after a long run of %s in linear time', (_name, unit) => {
     const started = performance.now();
     const out = markdownToMrkdwn(`See [docs](https://example.com) ${unit.repeat(50_000)}`);

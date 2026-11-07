@@ -82,7 +82,7 @@ export function inlineMarkdownToMrkdwn(input: string): string {
   // A label may hold `\[` / `\]`; a url may hold ONE bracketed IPv6 host (`[::1]`).
   // Only one: repeated hosts would let `[a](` runs chain across the whole text again.
   text = text.replace(
-    /\[((?:[^[\]\\]|\\.)+)\]\(([^)\s[]+(?:\[[0-9A-Fa-f:.]+\][^)\s[]*)?|\[[0-9A-Fa-f:.]+\][^)\s[]*)\)/g,
+    /(?<!\\)\[((?:[^[\]\\]|\\.)+)\]\(([^)\s[]+(?:\[[0-9A-Fa-f:.]+\][^)\s[]*)?|\[[0-9A-Fa-f:.]+\][^)\s[]*)\)/g,
     (_m, label: string, url: string) => `<${url}|${label.replace(/\\([[\]])/g, '$1')}>`,
   );
 
