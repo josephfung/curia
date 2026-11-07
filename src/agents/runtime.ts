@@ -381,6 +381,9 @@ export interface AgentConfig {
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
 const RETRY_BACKOFF_MS = [1000, 5000, 15000] as const;
 
+/** Distinct gate-refused tool names one task reports on agent.response (#2494). */
+const MAX_GATE_REFUSALS = 10;
+
 /**
  * A non-retryable delegation failure waiting for its reply at the end of the turn.
  * senderRecorded: the review task records an outside sender as waiting on a reply
@@ -390,9 +393,6 @@ const RETRY_BACKOFF_MS = [1000, 5000, 15000] as const;
  * principal can be added to it later in the turn (#1990). Absent when no task was
  * logged or its id could not be read.
  */
-/** Distinct gate-refused tool names one task reports on agent.response (#2494). */
-const MAX_GATE_REFUSALS = 10;
-
 type PendingDelegationEscalation = DelegationFailureInfo & {
   task: string;
   escalated: boolean;

@@ -99,6 +99,12 @@ function attribute(attrs: string, name: string): string {
  * a gate refusal reached the principal as "no such capability". A stated `not_found` is
  * kept: the gated call may have been a side step, and the missing target is what the
  * principal has to hear. Otherwise the cause the specialist stated.
+ *
+ * Trade-off, on purpose: a refusal on an unrelated side call also overrides a stated
+ * `capability_absent`. The run's refusals carry no link to what the decline is about, so
+ * matching tool names would be a guess. The cost is a coordinator that asks for the
+ * principal's go-ahead where the capability may truly be missing; the opposite error, telling
+ * the principal a gated capability does not exist, is the one that was seen in production.
  */
 export function resolveDeclineCause(stated: DeclineCause, gateRefusals: readonly string[] | undefined): DeclineCause {
   if (stated === 'not_found') return stated;
