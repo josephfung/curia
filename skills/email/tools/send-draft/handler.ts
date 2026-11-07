@@ -45,18 +45,16 @@ function isTransientFetchError(err: unknown): boolean {
   return hasTransientErrorSignal(err.cause);
 }
 
-// Drafts ceo-inbox composes live in the principal's personal mailbox, which Curia
-// cannot send from. That is the usual reason a draft ID is in none of Curia's
-// accounts, so the error names it and the two things to do instead (#2262). Only
+// Drafts ceo-inbox composes live in the principal's own mailbox, outside Curia's
+// accounts. That is the usual reason a draft ID is in none of them, so the error
+// points at the specialist that sends those (#2262, #2474). Only
 // for a definitive miss in every account searched: a draft in an account that
 // could not be read was never ruled out.
 function draftNotFoundError(draftId: string, searched: string): string {
   return (
     `Draft not found: ${draftId}. Searched Curia's email accounts: ${searched}. ` +
-    'send-draft only sends drafts saved in Curia\'s own accounts. A draft the ceo-inbox specialist ' +
-    'made is in the principal\'s personal Gmail, and Curia cannot send it: tell the principal it is ' +
-    'in their Gmail Drafts, or, if they asked you to email them, send it yourself with email-send. ' +
-    'Do not retry this draft ID.'
+    'Drafts in the principal\'s own mailbox aren\'t in Curia\'s accounts; the ceo-inbox specialist ' +
+    'sends those. Do not retry this draft ID.'
   );
 }
 
