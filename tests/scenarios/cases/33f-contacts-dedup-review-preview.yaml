@@ -40,7 +40,7 @@ inbound:
       Possible duplicate contacts detected by the dedup skill scan. Contact A ID:
       {{contact:alice}} (Alice Smith). Contact B ID: {{contact:asmith}} (A. Smith). Match
       type: fuzzy. Reason: same email domain and similar name. Score: 0.951. Decision:
-      settle it from the records if they are conclusive; otherwise ask the principal (they
+      ask the principal unless independent verified identity evidence settles it (they
       know at least one side, and a merge would extend that trust to the other).
     tags: [dedup, contacts, "dedup-route:principal"]
     notes:

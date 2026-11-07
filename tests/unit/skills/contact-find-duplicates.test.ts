@@ -693,7 +693,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const result = await t.run();
     expect(t.mergeContacts).not.toHaveBeenCalled();
     expect(t.createTask).not.toHaveBeenCalled();
-    if (result.success) expect(result.data).toMatchObject({ skipped_protected: 1 });
+    expect(result).toMatchObject({ success: true, data: { skipped_protected: 1 } });
   });
 
   it('does not auto-merge an exact-name pair when one side is known (a display name can be forged)', async () => {
