@@ -3,6 +3,7 @@ import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
 import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
 import { CeoNylasClient, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
+import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 10;
@@ -76,6 +77,8 @@ export class CeoInboxSearchHandler implements ToolHandler {
         { queryLength: query.length, limit },
         'ceo-inbox-search: searching drafts via /drafts (client-side filter)',
       );
+      const since = parseModifiedSince(input.modified_since);
+      if (!since.ok) return { success: false, error: since.error };
       try {
         // Paginate the full drafts collection (bounded by DRAFT_SCAN_LIMIT) so a
         // match isn't missed on a mailbox with more than one page of drafts.
@@ -91,10 +94,13 @@ export class CeoInboxSearchHandler implements ToolHandler {
             'ceo-inbox-search: draft scan hit the cap — some drafts beyond the limit were not searched',
           );
         }
-        const drafts = allDrafts.filter((d) => draftMatchesQuery(d, query)).slice(0, limit);
+        // Date filter before the slice so the limit counts matching drafts (#2474).
+        const matched = filterModifiedSince(allDrafts.filter((d) => draftMatchesQuery(d, query)), since.seconds)
+          .slice(0, limit);
+        const { drafts, displayTimezone } = await annotateDrafts(ctx, matched, 'ceo-inbox-search');
         return {
           success: true,
-          data: { drafts, count: drafts.length, folder: 'DRAFTS' },
+          data: { drafts, count: drafts.length, folder: 'DRAFTS', displayTimezone },
         };
       } catch (err) {
         ctx.log.error({ err }, 'ceo-inbox-search: draft search failed');

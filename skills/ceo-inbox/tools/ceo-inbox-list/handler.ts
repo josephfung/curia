@@ -2,6 +2,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
 import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
 import { CeoNylasClient, NYLAS_MAX_LIST_LIMIT, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
+import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
@@ -55,14 +56,20 @@ export class CeoInboxListHandler implements ToolHandler {
     // Drafts are a distinct Nylas resource — query `/drafts`, not `/messages`.
     if (DRAFTS_FOLDER_NAMES.has(folder.toUpperCase())) {
       ctx.log.info({ folder, limit }, 'ceo-inbox-list: listing drafts via /drafts');
+      const since = parseModifiedSince(input.modified_since);
+      if (!since.ok) return { success: false, error: since.error };
       try {
-        const drafts = await client.listDrafts({ limit });
+        // Nylas /drafts has no date parameter (#2474): with a cutoff, fetch the full page
+        // and filter here, so the limit counts matching drafts rather than the newest N.
+        const fetched = await client.listDrafts({ limit: since.seconds === null ? limit : NYLAS_MAX_LIST_LIMIT });
+        const kept = filterModifiedSince(fetched, since.seconds).slice(0, limit);
+        const { drafts, displayTimezone } = await annotateDrafts(ctx, kept, 'ceo-inbox-list');
         return {
           success: true,
           // `drafts` (not `messages`) + an explicit `folder` make a genuine
           // empty result distinguishable from the old silent-zero failure where
           // the wrong endpoint was queried.
-          data: { drafts, count: drafts.length, folder: 'DRAFTS' },
+          data: { drafts, count: drafts.length, folder: 'DRAFTS', displayTimezone },
         };
       } catch (err) {
         ctx.log.error({ err }, 'ceo-inbox-list: failed to list drafts');

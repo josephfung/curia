@@ -8,11 +8,12 @@
   "inputs": {
     "limit": "number? (max messages to return, 1–50, default 20)",
     "folder": "string? (Gmail folder/label to list, default 'INBOX'; use 'SENT' for the Sent folder, or 'DRAFTS' to list unsent drafts)",
-    "unread_only": "boolean? (if true, only return unread messages, default true; ignored for DRAFTS)"
+    "unread_only": "boolean? (if true, only return unread messages, default true; ignored for DRAFTS)",
+    "modified_since": "string? (DRAFTS only: ISO 8601 date-time; keep drafts last changed at or after it. Resolve phrases like 'this morning' with date-resolve first)"
   },
   "outputs": {
     "messages": "array of { id, threadId, from, to, cc, subject, date, snippet, unread, folders, attachments: [{ id, filename, contentType, size, isCalendarInvite? }] } (for non-draft folders)",
-    "drafts": "array of { id, threadId, subject, to, cc, snippet, date } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
+    "drafts": "array of { id, threadId, subject, to, cc, snippet, date, date_local, created_by_curia (null if unknown) } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
     "count": "number of items returned",
     "has_more": "boolean — true when more unread messages remain beyond this batch (lets the caller drain the inbox in batches); absent for DRAFTS",
     "scan_incomplete": "boolean? — true when paging stopped at the cap while more messages may remain. Absent when the scan finished. An empty batch still has has_more false, so the drain loop does not spin"
@@ -20,6 +21,6 @@
   "permissions": [],
   "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 20000,
-  "capabilities": [],
+  "capabilities": ["auditLogRepo"],
   "optional_capabilities": ["curiaEmailAddresses"]
 }
