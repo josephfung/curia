@@ -27,6 +27,21 @@ describe('splitReplyQuote', () => {
     expect(splitReplyQuote(reversed).own).toBe('<p>Yes.</p>');
   });
 
+  it('splits on any element whose class list contains gmail_quote', () => {
+    const html = '<div>Sounds good.</div><div class="gmail_quote gmail_quote_container"><div class="gmail_attr">On Fri, Dana wrote:</div><blockquote class="gmail_quote">call 416-555-0100</blockquote></div>';
+    expect(splitReplyQuote(html).own).toBe('<div>Sounds good.</div>');
+    expect(splitReplyQuote('<p>a</p><blockquote class=\'x gmail_quote\'>q</blockquote>').own).toBe('<p>a</p>');
+    // Not a different class that merely starts with the name.
+    expect(splitReplyQuote('<p>a</p><div class="gmail_quote_container">q</div>').quote).toBe('');
+  });
+
+  it('splits at the earliest marker when a class-list Gmail quote follows Curia\'s', () => {
+    const html = `<p>Yes.</p>${REPLY_QUOTE_HTML_OPEN}newer</div><div class="gmail_quote gmail_quote_container">older</div>`;
+    expect(splitReplyQuote(html).own).toBe('<p>Yes.</p>');
+    const reversed = `<p>Yes.</p><div class="gmail_quote gmail_quote_container">older</div>${REPLY_QUOTE_HTML_OPEN}newer</div>`;
+    expect(splitReplyQuote(reversed).own).toBe('<p>Yes.</p>');
+  });
+
   it('returns an empty quote when there is no marker', () => {
     expect(splitReplyQuote('<p>Hello</p>')).toEqual({ own: '<p>Hello</p>', quote: '' });
   });
@@ -71,6 +86,11 @@ describe('quoteHeaderParticipants (#2474 final review S2)', () => {
 
   it('reads the sender from a Gmail attribution line', () => {
     const quote = '<div class="gmail_quote"><div dir="ltr" class="gmail_attr">On Thu, Nov 6, 2026 at 9:00 AM Dana &lt;<a href="mailto:dana@example.org">dana@example.org</a>&gt; wrote:<br></div><blockquote class="gmail_quote">Call me: 416-555-0199. cc bob@example.net</blockquote></div>';
+    expect(quoteHeaderParticipants(quote)).toEqual(['dana@example.org']);
+  });
+
+  it('reads the sender from a class-list Gmail quote', () => {
+    const quote = '<div class="gmail_quote gmail_quote_container"><div class="gmail_attr">On Thu, Dana &lt;dana@example.org&gt; wrote:<br></div><blockquote class="gmail_quote">cc bob@example.net</blockquote></div>';
     expect(quoteHeaderParticipants(quote)).toEqual(['dana@example.org']);
   });
 

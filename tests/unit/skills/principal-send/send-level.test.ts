@@ -38,11 +38,21 @@ describe('createSendLevelReader', () => {
       expect(JSON.stringify(warn.mock.calls), raw).not.toContain(raw.replace(/"/g, '\\"'));
     }
   });
-  it('does not warn for an unset value or a mailbox with no entry', async () => {
-    for (const raw of [null, '{"work":"all"}']) {
+  it('warns when the stored object has keys but no default entry, and still uses on_request', async () => {
+    for (const raw of ['{"Default":"off"}', '{"work":"all"}']) {
       const warn = vi.fn();
       const log = { ...logger, warn } as unknown as typeof logger;
-      expect(await createSendLevelReader({ get: async () => raw, logger: log })('default')).toBe('on_request');
+      expect(await createSendLevelReader({ get: async () => raw, logger: log })('default'), raw).toBe('on_request');
+      expect(warn, raw).toHaveBeenCalledOnce();
+      expect(JSON.stringify(warn.mock.calls), raw).not.toContain('off');
+      expect(JSON.stringify(warn.mock.calls), raw).not.toContain('Default');
+    }
+  });
+  it('does not warn for an unset value, an empty object, or another mailbox when default is set', async () => {
+    for (const [raw, mailbox] of [[null, 'default'], ['{}', 'default'], ['{"default":"off"}', 'work']] as const) {
+      const warn = vi.fn();
+      const log = { ...logger, warn } as unknown as typeof logger;
+      expect(await createSendLevelReader({ get: async () => raw, logger: log })(mailbox)).toBe('on_request');
       expect(warn).not.toHaveBeenCalled();
     }
   });

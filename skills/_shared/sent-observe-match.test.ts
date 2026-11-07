@@ -4,10 +4,12 @@ import {
   matchTasksToSent,
   formatDiffBlock,
   trimEvidenceDoc,
+  isCuriaSend,
   type DraftSnapshotLike,
   type SentMessageLike,
 } from './sent-observe-match.js';
 import { parsePendingDiffs } from './voice-learn-logic.js';
+import type { PrincipalSendEntry } from '../../src/skills/principal-send/send-ledger.js';
 
 const baseSent: SentMessageLike = {
   id: 'msg-1',
@@ -264,5 +266,24 @@ describe('trimEvidenceDoc', () => {
   it('returns the body unchanged when the cutoff itself is unparseable', () => {
     const body = `# H\n${diffBlock(OLD)}`;
     expect(trimEvidenceDoc(body, 'not-a-date')).toBe(body);
+  });
+});
+
+describe('isCuriaSend (#2474 PR 2)', () => {
+  const at = '2024-07-03T09:48:20.000Z';
+  const sentMsg = { id: 'msg-1', threadId: 'thread-1', to: [{ email: 'Alice@example.com' }], cc: [], date: Math.floor(Date.parse(at) / 1000) + 30 };
+  const base: PrincipalSendEntry = { draftId: 'd1', threadId: 'thread-1', recipients: ['alice@example.com'], mode: 'autonomous', at, outcome: 'sending' };
+
+  it('matches a sending or sent entry by thread, recipient and time', () => {
+    expect(isCuriaSend(sentMsg, [base])).toBe(true);
+    expect(isCuriaSend(sentMsg, [{ ...base, outcome: 'sent' }])).toBe(true);
+  });
+
+  it('never lets a held entry claim the principal\'s own reply by thread and time', () => {
+    expect(isCuriaSend(sentMsg, [{ ...base, outcome: 'held', reason: 'thread_cooldown' }])).toBe(false);
+  });
+
+  it('still counts an exact message id match whatever the outcome', () => {
+    expect(isCuriaSend(sentMsg, [{ ...base, outcome: 'held', messageId: 'msg-1' }])).toBe(true);
   });
 });
