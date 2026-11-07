@@ -47,9 +47,6 @@ export function isDeclineCause(value: unknown): value is DeclineCause {
 // that specialist for the turn.
 const MARKER_RE = /<specialist_decline\b([^>]*)>([\s\S]*?)<\/specialist_decline>\s*$/i;
 
-// Room for a drafted outline or reply, well inside the execution layer's output cap.
-const MAX_WORK_PRODUCT = 6000;
-
 export interface SpecialistDeclineMarker {
   /** Model-supplied reason attribute, or the stable reason when the attribute is absent. */
   reason: string;
@@ -81,7 +78,9 @@ export function parseSpecialistDeclineMarker(content: string): SpecialistDecline
   const reasonAttr = attribute(attrs, 'reason');
   if (reasonAttr === 'short_reason') return null;
   const causeAttr = attribute(attrs, 'cause').toLowerCase();
-  const before = Array.from(content.slice(0, match.index).trim()).slice(0, MAX_WORK_PRODUCT).join('');
+  // Not bounded here: like a normal answer, the execution layer's output cap applies, so
+  // a long draft is never cut short and passed on as if complete.
+  const before = content.slice(0, match.index).trim();
   return {
     reason: reasonAttr.length > 0 ? reasonAttr.slice(0, 120) : SPECIALIST_DECLINE_REASON,
     message: body.slice(0, 2000),

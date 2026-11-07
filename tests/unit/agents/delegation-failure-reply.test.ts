@@ -749,6 +749,8 @@ describe('a gate-refused decline is never told as a missing capability (#2494)',
       'Blocking Jordan Lee from the list is not supported.',
       "I can't ban people from the list, so Jordan Lee stays.",
       "There's no feature for blocking someone on the list.",
+      'I lack the ability to block Jordan Lee from the list.',
+      'Blocking on the list is unavailable, so Jordan Lee stays.',
     ]) {
       const selected = selectDelegationFailureReply({ ...block, modelText: reply(text) });
       expect(selected.rejected, text).toBe('denies_capability');

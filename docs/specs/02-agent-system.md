@@ -93,7 +93,8 @@ production a gate-refused block reached the principal as "no ban or blocklist
 capability", and a draft that did not exist as one "sitting in your Drafts".
 
 - **Cause, code first.** The execution layer tags a call its access gates refuse
-  (`gate` on the tool result: `live_principal_turn` or `allowed_callers`). The
+  (`gate` on the tool result: `live_principal_turn`, including a lapsed voice
+  grant's refusal or confirmation request (#2495), or `allowed_callers`). The
   specialist's runtime lists the distinct `live_principal_turn` refusals on
   `agent.response.gateRefusals`: those are the ones the principal can lift. A
   decline whose run hit one is `cause: gate_refused`, unless the specialist
@@ -102,7 +103,7 @@ capability", and a draft that did not exist as one "sitting in your Drafts".
   from the platform alone, so injected text cannot claim it. Otherwise
   `unspecified`.
 - **What was done.** The decline result carries `sent` (the run's message sends),
-  `work_product` (the specialist's text before the marker, without its
+  `work_product` (the specialist's text before the marker, whole, without its
   `<resolved_entities>` block) and `resolvedContactIds`.
 - **Relay on a principal-side turn** is the coordinator's, from those fields: the
   decline's `next_step` adds a line for the cause (never call a gate refusal a
@@ -113,6 +114,8 @@ capability", and a draft that did not exist as one "sitting in your Drafts".
   is rejected for the plain fallback.
 - **Records.** The follow-up task, the woken task's note and the principal's
   review task state the cause, marking a stated one as the specialist's report.
+  A follow-up or woken-task note also says what the run sent (so it is not sent
+  again) and quotes the start of any finished text as data, marked when cut short.
 - **Not covered:** other execution-layer refusals (autonomy score, restricted
   mode, Gate C) are untagged, and a decline that arrives after the delegate wait
   times out is relayed by the late-delivery path without its cause.

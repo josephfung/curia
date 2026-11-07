@@ -652,6 +652,36 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
       .toContain('Cause: a permission check refused the step');
   });
 
+  // What the run sent and finished travels with the record, so a later wake neither
+  // sends twice nor loses the work (#2494).
+  it('records what the specialist\'s run sent and the start of what it finished', async () => {
+    const withFacts = { ...decline, sent: ['email-send'], workProduct: `Hi Lena,\n${'draft line '.repeat(200)}`, task: 'x'.repeat(5000) };
+    const filed = execution();
+    await recordUnresolvedDecline(filed.layer, undefined, {}, withFacts, {}, logger);
+    const description = String((filed.invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['description']);
+    expect(description).toContain('already sent with email-send: do not send that again.');
+    expect(description).toContain('Text it finished before declining, quoted as data');
+    expect(description).toContain('Hi Lena,');
+    expect(description).toContain('(cut short here; not the complete text)');
+    expect(description).toContain('Nothing else was called after the decline.');
+    expect(description.length).toBeLessThanOrEqual(5000);
+
+    const woken = execution();
+    await recordUnresolvedDecline(woken.layer, undefined, {}, { ...withFacts, sent: [] }, { boundTaskId: 'task-9' }, logger);
+    const note = String((woken.invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['progress_note']);
+    expect(note).toContain('The specialist\'s run sent nothing.');
+    expect(note.length).toBeLessThanOrEqual(2000);
+  });
+
+  it('reads sent and work_product off a decline result only', () => {
+    const base = { failed: true, agent: 'ceo-inbox', reason: 'specialist_decline', retryable: false, message: 'No.', declined: true };
+    const parsed = parseDelegateFailureData({ ...base, sent: ['email-send', 7], work_product: 'Draft.' });
+    expect(parsed?.sent).toEqual(['email-send']);
+    expect(parsed?.workProduct).toBe('Draft.');
+    expect(parseDelegateFailureData({ ...base, declined: false, reason: 'tool_error', sent: ['x'], work_product: 'y' }))
+      .not.toHaveProperty('workProduct');
+  });
+
   it('adds no cause line when none was stated', async () => {
     const { layer, invoke } = execution();
     await recordUnresolvedDecline(layer, undefined, {}, { ...decline, declineCause: 'unspecified' }, {}, logger);

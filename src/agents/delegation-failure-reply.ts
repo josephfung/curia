@@ -448,6 +448,8 @@ const CAPABILITY_DENIAL = new RegExp([
   String.raw`\bno\s+means\s+to\b`,
   String.raw`\b(?:don['’]?t|do not|doesn['’]?t|does not)\s+have\s+(?:(?:a|an|any|the)\s+)?(?:[\w-]+\s+){0,2}(?:way|ability|abilities|capability|capabilities|feature|features|function|option|tool|tools|means)\b`,
   String.raw`\b(?:isn['’]?t|is not|aren['’]?t|are not)\s+(?:possible|supported)\b`,
+  String.raw`\b(?:is|are)\s+unavailable\b`,
+  String.raw`\b(?:lack|lacks|lacking)\s+(?:(?:a|an|any|the)\s+)?(?:[\w-]+\s+){0,2}(?:way|ability|abilities|capability|capabilities|feature|features|function|option|tool|tools|means)\b`,
   String.raw`\b(?:isn['’]?t|is not)\s+something\s+I\s+(?:can|am able to)\b`,
   String.raw`\b(?:I|we|Curia)\s+(?:can['’]?t|cannot|am unable to|are unable to|is unable to)\s+(?:ever\s+)?\w+\s+(?:people|anyone|contacts|senders)\b`,
 ].join('|'), 'i');

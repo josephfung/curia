@@ -174,7 +174,7 @@ describe('decline facts as data (#2494)', () => {
     )?.cause).toBe('unspecified');
   });
 
-  it('keeps the work finished before the marker, bounded, and omits it when there is none', () => {
+  it('keeps the work finished before the marker whole, and omits it when there is none', () => {
     const outline = 'Revised outline:\n1. Intro\n2. Results';
     const parsed = parseSpecialistDeclineMarker(
       `${outline}\n\n<specialist_decline reason="no_edit">I cannot edit the doc in place. I can save this as a new doc.</specialist_decline>`,
@@ -183,8 +183,9 @@ describe('decline facts as data (#2494)', () => {
     expect(parseSpecialistDeclineMarker(
       '<specialist_decline reason="x">Nothing to show.</specialist_decline>',
     )).not.toHaveProperty('workProduct');
-    const long = parseSpecialistDeclineMarker(`${'é'.repeat(7000)}<specialist_decline reason="x">No.</specialist_decline>`);
-    expect(Array.from(long?.workProduct ?? '').length).toBe(6000);
+    // A long draft is kept whole, as a normal answer is, so it is never passed on cut short.
+    const long = parseSpecialistDeclineMarker(`${'é'.repeat(9000)}<specialist_decline reason="x">No.</specialist_decline>`);
+    expect(long?.workProduct).toBe('é'.repeat(9000));
   });
 
   it('takes a gate refusal from code over the stated cause, except a stated not_found', () => {
