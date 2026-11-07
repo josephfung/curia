@@ -6,6 +6,11 @@ import type { ToolContext } from '../../src/skills/types.js';
 import { EventBus } from '../../src/bus/bus.js';
 import { createAgentResponse } from '../../src/bus/events.js';
 import type { AgentTaskEvent, BusEvent } from '../../src/bus/events.js';
+import {
+  activeLiveTurnGrantCountForTests,
+  isLiveTurnGrantActive,
+  resetLiveTurnGrantsForTests,
+} from '../../src/autonomy/live-turn-grants.js';
 
 function makeBus(opts: { failPublish?: boolean } = {}) {
   const published: BusEvent[] = [];
@@ -680,5 +685,103 @@ describe('AsyncOfframpHandler mode now (#2428)', () => {
 
     const bad = await handler.execute(makeCtx(bus, { brief: 'x', mode: 'later' }));
     expect(bad.success).toBe(false);
+  });
+
+  // #2495: the principal on the call is live while the call waits on the hand-off, and only then.
+  describe('live-turn grant (#2495)', () => {
+    beforeEach(() => {
+      resetLiveTurnGrantsForTests();
+    });
+
+    it('carries a live grant on a now hand-off while the call waits, and revokes it when the wait returns', async () => {
+      let activeDuringWork: boolean | undefined;
+      const { bus, published } = liveBus((task) => {
+        activeDuringWork = isLiveTurnGrantActive(task.payload.liveTurnGrantId);
+        return response(task, { content: 'Blocked both contacts.' });
+      });
+      const result = await handler.execute(makeCtx(bus, { brief: 'Block those two spam contacts', mode: 'now' }));
+      expect(result.success).toBe(true);
+      const task = published[0] as AgentTaskEvent;
+      expect(task.payload.liveTurn).toBe(true);
+      expect(typeof task.payload.liveTurnGrantId).toBe('string');
+      expect(activeDuringWork).toBe(true);
+      expect(isLiveTurnGrantActive(task.payload.liveTurnGrantId)).toBe(false);
+      expect(activeLiveTurnGrantCountForTests()).toBe(0);
+    });
+
+    it('never puts the live turn or the grant in task metadata', async () => {
+      const { bus, published } = liveBus((task) => response(task, { content: 'Done.' }));
+      await handler.execute(makeCtx(bus, { brief: 'Block that number', mode: 'now' }));
+      const metadata = (published[0] as AgentTaskEvent).payload.metadata ?? {};
+      expect(JSON.stringify(metadata)).not.toContain('ltg-');
+      expect(metadata).not.toHaveProperty('liveTurn');
+      expect(metadata).not.toHaveProperty('liveTurnGrantId');
+    });
+
+    it('revokes the grant when the caller speaks and the wait ends', async () => {
+      const controller = new AbortController();
+      const { bus, published } = liveBus();
+      const pending = handler.execute(makeCtx(bus, { brief: 'Block them', mode: 'now' }, { inputSignal: controller.signal }));
+      await Promise.resolve();
+      const grantId = (published[0] as AgentTaskEvent).payload.liveTurnGrantId;
+      expect(isLiveTurnGrantActive(grantId)).toBe(true);
+      controller.abort();
+      await pending;
+      expect(isLiveTurnGrantActive(grantId)).toBe(false);
+    });
+
+    it('cannot outlive the wait even if the revoke never runs', async () => {
+      vi.useFakeTimers();
+      try {
+        const { bus, published } = liveBus();
+        const pending = handler.execute(makeCtx(bus, { brief: 'Slow block', mode: 'now' }));
+        await Promise.resolve();
+        const grantId = (published[0] as AgentTaskEvent).payload.liveTurnGrantId;
+        expect(isLiveTurnGrantActive(grantId)).toBe(true);
+        await vi.advanceTimersByTimeAsync(NOW_MODE_WAIT_MS + 1);
+        await pending;
+        expect(isLiveTurnGrantActive(grantId)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('revokes the grant when the publish fails', async () => {
+      const { bus } = makeBus({ failPublish: true });
+      const result = await handler.execute(makeCtx(bus, { brief: 'Block them', mode: 'now' }));
+      expect(result.success).toBe(false);
+      expect(activeLiveTurnGrantCountForTests()).toBe(0);
+    });
+
+    it('gives an after_call hand-off no live turn, only a grant id that was never live', async () => {
+      const { bus, published } = liveBus();
+      await handler.execute(makeCtx(bus, { brief: 'Block them after the call' }));
+      const task = published[0] as AgentTaskEvent;
+      expect(task.payload.liveTurn).toBeUndefined();
+      expect(typeof task.payload.liveTurnGrantId).toBe('string');
+      expect(isLiveTurnGrantActive(task.payload.liveTurnGrantId)).toBe(false);
+      expect(activeLiveTurnGrantCountForTests()).toBe(0);
+    });
+
+    it('issues no live grant for a caller who is not the principal', async () => {
+      const { bus, published } = liveBus((task) => response(task, { content: 'Done.' }));
+      await handler.execute(makeCtx(bus, { brief: 'Block them', mode: 'now' }, { liveTurn: false }));
+      const task = published[0] as AgentTaskEvent;
+      expect(task.payload.liveTurn).toBeUndefined();
+      expect(isLiveTurnGrantActive(task.payload.liveTurnGrantId)).toBe(false);
+    });
+
+    it('does not carry the grant onto the forward task', async () => {
+      const controller = new AbortController();
+      const { bus, published, respond } = liveBus();
+      const pending = handler.execute(makeCtx(bus, { brief: 'Block them', mode: 'now' }, { inputSignal: controller.signal }));
+      await Promise.resolve();
+      controller.abort();
+      await pending;
+      await respond(response(published[0] as AgentTaskEvent, { content: 'Blocked.' }));
+      const forward = published[1] as AgentTaskEvent;
+      expect(forward.payload.liveTurn).toBeUndefined();
+      expect(forward.payload.liveTurnGrantId).toBeUndefined();
+    });
   });
 });

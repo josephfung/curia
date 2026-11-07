@@ -30,6 +30,7 @@ import {
 import type { VoiceToolBridge } from '../../../../src/channels/voice/voice-runtime.js';
 import { partnerCaller, principalCaller } from '../../../../src/channels/voice/test-fixtures.js';
 import { FakeAudioTransport } from '../../../../src/channels/voice/fake-audio-transport.js';
+import { isLiveTurnGrantActive, issueLiveTurnGrant } from '../../../../src/autonomy/live-turn-grants.js';
 import { FakeSttProvider, TtsHttpError } from '../../../../src/speech/index.js';
 import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from '../../../../src/speech/index.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from '../../../../src/channels/voice/session-store.js';
@@ -418,6 +419,25 @@ describe('VoiceRuntime', () => {
     const again = await runtime.endSession('s3', 'console_hangup');
     expect(again).toBeNull();
     expect(events.filter(e => e.type === 'voice.session.ended').length).toBe(1);
+  });
+
+  it('ends the live-turn grants of work handed off on the call when it ends (#2495)', async () => {
+    const llm = new FakeStreamProvider([[{ type: 'message_end', content: 'ok', usage, provenance }]]);
+    const { runtime } = makeRuntime({ llm });
+    await runtime.startSession({
+      sessionId: 's-grant',
+      conversationId: 'voice:s-grant',
+      roomName: 'voice-s-grant',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    const onCall = issueLiveTurnGrant({ voiceSessionId: 's-grant', ttlMs: 60_000 });
+    const otherCall = issueLiveTurnGrant({ voiceSessionId: 's-other', ttlMs: 60_000 });
+    await runtime.endSession('s-grant', 'console_hangup');
+    expect(isLiveTurnGrantActive(onCall.id)).toBe(false);
+    expect(isLiveTurnGrantActive(otherCall.id)).toBe(true);
+    otherCall.revoke();
   });
 
   it('keeps turnStats and the bridge\'s remote_hangup reason when the hangup paths race (#2379)', async () => {

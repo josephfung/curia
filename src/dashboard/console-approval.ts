@@ -255,6 +255,9 @@ export async function approveFromConsole(
     { contactId: deps.principalContactId, role: 'ceo', channel: 'web' },
     {
       humanApproved: true,
+      // The principal is approving in an authenticated console session right now. A queued
+      // elevated skill (#2495) needs that live turn to pass its gate on replay.
+      liveTurn: true,
       approvalVia: 'console',
       sendResolution: pins ?? undefined,
       conversationId: row.conversationId ?? undefined,

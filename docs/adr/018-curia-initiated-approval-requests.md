@@ -336,3 +336,14 @@ hole closes with zero exceptions). The `humanApproved: true` re-execution path i
 and still bypasses the autonomy and caller gates; it does not bypass the `elevated` gate,
 but the queued skills are always `normal` (elevated skills are autonomy-exempt and so are
 never blocked into the queue).
+
+**Amended (#2495, 2026-11-06).** One narrow case now puts an `elevated` skill in the queue: work
+the principal handed off on a voice call (`async-offramp`) whose live-turn grant has lapsed, because
+the call ended, the hand-off's wait returned, or it was an `after_call` hand-off. An elevated call
+with principal lineage under a lapsed grant files an approval request instead of failing. Curia
+still never proposes an authorization change on its own initiative: a task with no grant id
+(scheduled, woken, bullpen) keeps the plain refusal. Every approval path replays the queued
+elevated skill inside the approving live turn: `approve-action` forwards `liveTurn`, a principal
+reaction stamps a principal originator, and the console approval passes `liveTurn`.
+`approve-action`, `deny-action` and `dismiss-action` never enter the queue. See ADR-017's #2495
+amendment.

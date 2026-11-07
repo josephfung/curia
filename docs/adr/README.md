@@ -39,7 +39,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [014](014-capability-tier-model-routing.md) | Capability-tier model routing over per-agent model declarations | Accepted |
 | [015](015-llm-as-judge-intent-drift.md) | LLM-as-judge for intent drift detection | Accepted |
 | [016](016-mcp-sdk-dependency.md) | Official MCP SDK over hand-rolled transport; registry-transparent skill integration | Accepted |
-| [017](017-ceo-authorized-action-pattern.md) | CEO-authorized action pattern: task-origin check + `humanApproved` flag over per-action gateway methods | Accepted |
+| [017](017-ceo-authorized-action-pattern.md) | CEO-authorized action pattern: task-origin check + `humanApproved` flag over per-action gateway methods; amended 2026-11-06: a connected voice call is a live principal turn through a revocable live-turn grant, and its async continuation asks for confirmation (#2495) | Accepted |
 | [018](018-curia-initiated-approval-requests.md) | Curia-initiated approval requests via unified `autonomy_action_log` state machine | Accepted |
 | [019](019-delegation-aware-outbound-context.md) | Delegation-aware outbound context via a dedicated registry (replaces v1 context-memo) | Accepted |
 | [020](020-secrets-vault.md) | Application-layer AES-256-GCM secrets vault in PostgreSQL — structural typing, per-invocation pre-warm cache, env-var fallback for incremental migration | Accepted |
