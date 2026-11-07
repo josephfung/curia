@@ -68,6 +68,18 @@ import { UnknownEmailAccountError, type OutboundGateway } from './outbound-gatew
 const AGENT_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web-fetch', 'web-browser']);
 
 /**
+ * The character a web-browser `press_key` key types, or null for a key that types none
+ * (Enter, Tab, arrows, shortcuts). A single character, `Shift+<char>` and `Space` count;
+ * Playwright's other named character keys (`Period`, `Digit1`) are not reconstructed, so
+ * an address spelled with them is not excluded.
+ */
+function keyedCharacter(key: string): string | null {
+  if (key === 'Space') return ' ';
+  const base = key.startsWith('Shift+') && key.length > 6 ? key.slice(6) : key;
+  return [...base].length === 1 ? base : null;
+}
+
+/**
  * `%XX` escapes decoded byte by byte, and `+` read as a space. Lenient on purpose: a
  * malformed escape is left as it is rather than failing (decodeURIComponent throws), and
  * the result is only used to find identifiers, never shown or sent.
@@ -753,18 +765,42 @@ export class ExecutionLayer {
     }
     const steps = Array.isArray(input['actions']) ? input['actions'] : [input];
     const values: string[] = [];
+    // Characters entered with press_key ("s", "a", "Shift+M", "Space"): consecutive ones
+    // are one typed value, flushed by any other step or a non-character key (Tab, Enter).
+    let keyed = '';
+    const keyedRuns: string[] = [];
+    const flushKeyed = (): void => {
+      if (keyed !== '') {
+        values.push(keyed);
+        keyedRuns.push(keyed);
+      }
+      keyed = '';
+    };
     for (const step of steps) {
-      if (step === null || typeof step !== 'object') continue;
+      if (step === null || typeof step !== 'object') {
+        flushKeyed();
+        continue;
+      }
+      const fields = step as Record<string, unknown>;
+      const key = fields['key'];
+      if (typeof key === 'string') {
+        const char = keyedCharacter(key);
+        if (char !== null) keyed += char;
+        else flushKeyed();
+      } else {
+        flushKeyed();
+      }
       for (const field of ['text', 'value']) {
-        const value = (step as Record<string, unknown>)[field];
+        const value = fields[field];
         if (typeof value === 'string' && value !== '') values.push(value);
       }
     }
+    flushKeyed();
     const joined: string[] = [];
     for (let i = 0; i < values.length; i++) {
       for (let run = 2; run <= 3 && i + run <= values.length; run++) joined.push(values.slice(i, i + run).join(''));
     }
-    return [raw, ...decoded, ...joined].join('\n');
+    return [raw, ...decoded, ...keyedRuns, ...joined].join('\n');
   }
 
   /**

@@ -199,6 +199,19 @@ describe('ExecutionLayer', () => {
         expect(text).toContain('sam+tag@typo.example');
         expect(text).toContain('sam@typo.example');
       });
+
+      it('reconstructs an address entered one press_key at a time', () => {
+        registry.register(makeManifest({ name: 'web-browser', provenance_source: true }), noop);
+        const keys = [...'Sam@typo.example'].map((key) => ({ action: 'press_key', key }));
+        const text = execution.provenanceAgentInputText('web-browser', {
+          actions: [{ action: 'click', selector: 'Email' }, ...keys, { action: 'press_key', key: 'Enter' }],
+        }) ?? '';
+        expect(text).toContain('Sam@typo.example');
+        const shifted = execution.provenanceAgentInputText('web-browser', {
+          actions: [{ action: 'press_key', key: 'Shift+S' }, { action: 'press_key', key: 'a' }, { action: 'type', selector: 'x', text: '@typo.example' }],
+        }) ?? '';
+        expect(shifted).toContain('Sa@typo.example');
+      });
     });
   });
 
