@@ -224,6 +224,17 @@ const NO_APPROVAL_FOR_SIGN_IN_CODE =
   'stored for approval. Tell the principal the sign-in could not be finished at the current autonomy level.';
 
 /**
+ * Gate advisory tail for a tool whose call is never queued for approval (#2474, design D5): a
+ * send from the principal's own mailbox happens only on the principal's live request, so a
+ * blocked one is refused, and approve-action never replays it.
+ */
+export const NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND =
+  "No approval request was created: a send from the principal's mailbox is never queued for approval. The draft stays in their Drafts folder.";
+
+/** Tools a gate block refuses outright instead of filing an approval request (#2474). */
+const NO_QUEUED_APPROVAL_TOOLS: ReadonlySet<string> = new Set(['ceo-inbox-send-draft']);
+
+/**
  * Elevated tools that resolve approvals. A lapsed voice grant never files a confirmation
  * request for one of these (#2495): the principal would be approving an approval.
  */
@@ -910,6 +921,7 @@ export class ExecutionLayer {
       `but this skill (action_risk: ${String(actionRisk)}) requires ${requiredScore}. `;
 
     if (this.holdsUnscrubbedCode(toolName, input)) return baseMsg + NO_APPROVAL_FOR_SIGN_IN_CODE;
+    if (NO_QUEUED_APPROVAL_TOOLS.has(toolName)) return baseMsg + NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND;
 
     // Approval trigger — only if wired and task context is available.
     if (this.approvalTrigger && options?.taskEventId) {
@@ -969,6 +981,7 @@ export class ExecutionLayer {
         `does not permit ${String(actionRisk)}-risk actions without approval. `;
 
     if (this.holdsUnscrubbedCode(toolName, input)) return baseMsg + NO_APPROVAL_FOR_SIGN_IN_CODE;
+    if (NO_QUEUED_APPROVAL_TOOLS.has(toolName)) return baseMsg + NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND;
 
     if (this.approvalTrigger && options?.taskEventId) {
       try {

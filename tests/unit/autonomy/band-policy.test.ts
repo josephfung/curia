@@ -18,6 +18,10 @@ describe('HUMAN_SEND_SKILLS', () => {
     }
     expect(HUMAN_SEND_SKILLS.has('calendar-create-event')).toBe(false);
   });
+
+  it('has ceo-inbox-send-draft (#2474)', () => {
+    expect(HUMAN_SEND_SKILLS.has('ceo-inbox-send-draft')).toBe(true);
+  });
 });
 
 describe('FailOpenLimiter', () => {
