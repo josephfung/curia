@@ -15,13 +15,14 @@
 // in the conversation. The duplicate check still runs.
 //
 // Re-stating an address already on this contact is how an agent vouches for one it
-// typed earlier. An unverified outbound_recipient identity (recorded by the gateway
-// after a first-time send) is verified in place, after the same two checks: verifying
-// is the risky step, and the gateway records whatever address the agent typed, typos
-// included. Any other unverified source (agent_called, self_claimed, sms_participant, …)
-// is verified the same way on a live principal turn (#2515): the principal is vouching
-// for it right now, directly or through a synchronous delegation. Outside one it is
-// refused, and the refusal says how the principal can verify it.
+// typed earlier. An unverified identity an agent entered (AGENT_ENTERED_SOURCES: the
+// gateway's outbound_recipient after a first-time send, contact-register's agent_called,
+// agent_stated) is verified in place, after the same two checks: verifying is the risky
+// step, and those rows hold whatever the agent typed, typos included (#2498). Any other
+// unverified source (self_claimed, sms_participant, …) is verified the same way on a live
+// principal turn (#2515): the principal is vouching for it right now, directly or through
+// a synchronous delegation. Outside one it is refused, and the refusal says how the
+// principal can verify it.
 //
 // A structural contact (the principal, an agent, a system contact: isStructuralContact)
 // is never changed here — see structuralContactRefusal.
@@ -29,7 +30,7 @@
 // This skill uses contactService, which is a universal service.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import type { DuplicateCheck } from '../../../../src/contacts/types.js';
+import type { DuplicateCheck, IdentitySource } from '../../../../src/contacts/types.js';
 import { LINKABLE_CHANNEL_IDENTITY_SET } from '../../../../src/contacts/linkable-channels.js';
 import { normalizeAgentIdentifier } from '../../../../src/contacts/agent-identifier.js';
 import { sameIdentifier } from '../../../../src/contacts/identifier-near-miss.js';
@@ -51,11 +52,32 @@ const NEXT_SAME_NUMBER =
   'If this number belongs to both, call contact-link-identity again with distinct_from listing every ID above.';
 const NEXT =
   'Check the address: it resembles theirs. If it is right, call contact-link-identity again with distinct_from listing every ID above.';
+
+/**
+ * Sources of rows an agent typed. An unverified one is verified in place by a re-statement
+ * that passes the duplicate and provenance checks (#2041, #2498). agent_called was
+ * auto-verified until #2061, which is why it was missing here.
+ */
+const AGENT_ENTERED_SOURCES: ReadonlySet<IdentitySource> = new Set(['outbound_recipient', 'agent_called', 'agent_stated']);
+
+/** Why an unverified identity of another source is the principal's to verify. */
+function principalOnlyReason(source: IdentitySource): string {
+  switch (source) {
+    case 'self_claimed':
+      return 'the person gave it about themselves';
+    case 'sms_participant':
+      return 'it came from an inbound text, whose sender can be spoofed';
+    default:
+      return `it was recorded from ${source}, not by an agent`;
+  }
+}
+
 // "The console" alone is ambiguous: the principal may be talking to Curia in the console's chat.
-const NEEDS_PRINCIPAL =
-  'That address is already on this contact, unverified, and only the principal can vouch for it. ' +
-  'Nothing changed. The principal can verify it by asking Curia directly in a live conversation, ' +
-  "or in the contact's identity editor in the console's Contacts screen.";
+function needsPrincipal(source: IdentitySource): string {
+  return `That address is already on this contact, unverified, and ${principalOnlyReason(source)}. ` +
+    'Only the principal can vouch for it. Nothing changed. The principal can verify it by asking Curia ' +
+    "directly in a live conversation, or in the contact's identity editor in the console's Contacts screen.";
+}
 
 /**
  * The duplicate check for one address on one contact. Returns the refusal to hand the
@@ -168,17 +190,18 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         if (existing.verified) {
           return { success: true, data: { identity_id: existing.id, verified: true, already_linked: true } };
         }
-        // Who vouches for it: an agent, for an address an agent typed on a first-time send;
-        // the principal, for any other source, but only while they are giving the
-        // instruction (#2515). A woken, scheduled or bullpen task has principal lineage at
-        // most, which is not enough: the same line the `elevated` gate draws (ADR-017),
-        // including its refusal of a woken task even if a live-turn flag leaked onto it.
+        // Who vouches for it: an agent, for an address an agent typed (a first-time send,
+        // contact-register, an earlier link); the principal, for any other source, but only
+        // while they are giving the instruction (#2515). A woken, scheduled or bullpen task
+        // has principal lineage at most, which is not enough: the same line the `elevated`
+        // gate draws (ADR-017), including its refusal of a woken task even if a live-turn
+        // flag leaked onto it.
         const principalDirected = isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata)
           && ctx.taskMetadata?.['wakeContext'] === undefined;
-        if (existing.source === 'outbound_recipient' || principalDirected) {
-          // Verifying is the risky step: the gateway records an address as typed, and an
-          // address found by an agent can be a near miss of someone else's. Run the check
-          // a new address gets first, and require it to have a source in the conversation.
+        if (AGENT_ENTERED_SOURCES.has(existing.source) || principalDirected) {
+          // Verifying is the risky step: those rows hold the address as typed, and an address
+          // found by an agent can be a near miss of someone else's. Run the checks a new
+          // address gets first, and require it to have a source in the conversation.
           const restateRefusal = await duplicateRefusal(
             ctx,
             ctx.contactService,
@@ -192,7 +215,7 @@ export class ContactLinkIdentityHandler implements ToolHandler {
           const verified = await ctx.contactService.verifyIdentity(existing.id);
           ctx.log.info(
             { identityId: existing.id, contactId: contact_id, source: existing.source, principalDirected },
-            'contact-link-identity: re-stated unverified address verified (#2041, #2515)',
+            'contact-link-identity: re-stated unverified address verified (#2041, #2498, #2515)',
           );
           return { success: true, data: { identity_id: verified.id, verified: verified.verified, already_linked: true } };
         }
@@ -200,7 +223,7 @@ export class ContactLinkIdentityHandler implements ToolHandler {
           { identityId: existing.id, contactId: contact_id, source: existing.source },
           'contact-link-identity: refused — unverified address re-stated outside a live principal turn (#2515)',
         );
-        return { success: false, error: NEEDS_PRINCIPAL };
+        return { success: false, error: needsPrincipal(existing.source) };
       }
 
       // The number is already verified on a sibling channel of this contact: derive it.

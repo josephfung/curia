@@ -66,7 +66,7 @@ async function setup() {
   const acme = await contactService.createContact({ displayName: 'Acme Office', source: 'agent_called' });
   // Found on the organization's website weeks earlier: on file, unverified.
   await contactService.linkIdentity({
-    contactId: acme.id, channel: 'email', channelIdentifier: ADDRESS, source: 'agent_called', verified: false,
+    contactId: acme.id, channel: 'email', channelIdentifier: ADDRESS, source: 'self_claimed', verified: false,
   });
 
   const agentRegistry = new AgentRegistry();
@@ -161,7 +161,7 @@ describe('contact-link-identity: a live principal instruction verifies an addres
   it('refuses the same request from a woken principal-lineage task, leaving it unverified', async () => {
     // A wake never carries liveTurn; set it anyway, so the wake itself is what refuses.
     const reply = await principalAsks('web:woken', { liveTurn: true, metadata: { wakeContext: { derived: false } } });
-    expect(reply.payload.content).toContain('only the principal can vouch for it');
+    expect(reply.payload.content).toContain('Only the principal can vouch for it');
     expect(await ctx.isVerified()).toBe(false);
   });
 
@@ -177,7 +177,7 @@ describe('contact-link-identity: a live principal instruction verifies an addres
       parentEventId: 'bullpen-1',
     }));
     const reply = await replied;
-    expect(reply.payload.content).toContain('only the principal can vouch for it');
+    expect(reply.payload.content).toContain('Only the principal can vouch for it');
     expect(await ctx.isVerified()).toBe(false);
   });
 });

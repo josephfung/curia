@@ -123,6 +123,27 @@ describe('ContactLinkIdentityHandler', () => {
       expect(await isVerified()).toBe(false);
     });
 
+    // #2498: agent_called and agent_stated rows are verified in place too, so the same
+    // duplicate check has to refuse them.
+    it.each(['agent_called', 'agent_stated'] as const)(
+      'refuses a near miss of another contact address for an unverified %s address, verifying nothing',
+      async (source) => {
+        const typed = await contacts.createContact({ displayName: 'Typed Recipient', source });
+        await contacts.linkIdentity({
+          contactId: typed.id, channel: 'email', channelIdentifier: 'priya@exampel.test', source,
+        });
+        const result = await handler.execute(makeCtx(contacts, {
+          contact_id: typed.id, channel: 'email', identifier: 'priya@exampel.test',
+        }));
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error).toContain(`"Priya Natarajan" (${priyaId}): similar email address`);
+          expect(result.error).toMatch(/Nothing was verified/);
+        }
+        expect((await contacts.getContactWithIdentities(typed.id))!.identities[0]!.verified).toBe(false);
+      },
+    );
+
     it('verifies it once distinct_from names that contact', async () => {
       const result = await restate({ distinct_from: [priyaId] });
       expect(result).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
@@ -183,7 +204,7 @@ describe('ContactLinkIdentityHandler', () => {
     const result = await handler.execute(makeCtx(contacts, { contact_id: danaId, channel: 'sms', identifier: '+14165550199' }));
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toMatch(/only the principal can vouch for it/);
+      expect(result.error).toMatch(/Only the principal can vouch for it/);
       // Names both routes, not just "the console" (the principal may be in the console's chat).
       expect(result.error).toMatch(/asking Curia directly in a live conversation/);
       expect(result.error).toMatch(/identity editor/);
@@ -225,7 +246,7 @@ describe('ContactLinkIdentityHandler', () => {
     describe('refuses, and leaves it unverified', () => {
       beforeEach(async () => {
         await contacts.linkIdentity({
-          contactId: acmeId, channel: 'email', channelIdentifier: 'office@acme.example', source: 'agent_called', verified: false,
+          contactId: acmeId, channel: 'email', channelIdentifier: 'office@acme.example', source: 'self_claimed', verified: false,
         });
       });
 
@@ -237,7 +258,7 @@ describe('ContactLinkIdentityHandler', () => {
       ] as const)('%s', async (_label, override) => {
         const result = await restate({ ...LIVE, ...override });
         expect(result.success).toBe(false);
-        if (!result.success) expect(result.error).toMatch(/only the principal can vouch for it/);
+        if (!result.success) expect(result.error).toMatch(/Only the principal can vouch for it/);
         expect(await isVerified()).toBe(false);
       });
 
@@ -424,18 +445,42 @@ describe('ContactLinkIdentityHandler — identifier provenance (#2061)', () => {
     expect((await contacts.getContactWithIdentities(danaId))!.identities).toHaveLength(0);
   });
 
-  it('re-states an unverified outbound_recipient address only when it has a source', async () => {
-    await contacts.linkIdentity({ contactId: danaId, channel: 'email', channelIdentifier: 'dana@newco.example', source: 'outbound_recipient' });
-    const input = { contact_id: danaId, channel: 'email', identifier: 'dana@newco.example' };
+  // #2498: agent_called (contact-register) and agent_stated rows were refused as
+  // principal-only, so a sourced address could never be verified by an agent.
+  it.each(['outbound_recipient', 'agent_called', 'agent_stated'] as const)(
+    're-states an unverified %s address only when it has a source, keeping its source',
+    async (source) => {
+      await contacts.linkIdentity({ contactId: danaId, channel: 'email', channelIdentifier: 'dana@newco.example', source });
+      const input = { contact_id: danaId, channel: 'email', identifier: 'dana@newco.example' };
 
-    const refused = await handler.execute(makeCtx(contacts, input, { identifierSources: sourcesFrom('nothing here') }));
-    expect(refused.success).toBe(false);
-    if (!refused.success) expect(refused.error).toContain('Nothing was verified.');
-    expect((await contacts.getContactWithIdentities(danaId))!.identities[0]!.verified).toBe(false);
+      const refused = await handler.execute(makeCtx(contacts, input, { identifierSources: sourcesFrom('nothing here') }));
+      expect(refused.success).toBe(false);
+      if (!refused.success) {
+        expect(refused.error).toContain('Nothing was verified.');
+        expect(refused.error).not.toMatch(/Only the principal/);
+      }
+      expect((await contacts.getContactWithIdentities(danaId))!.identities[0]!.verified).toBe(false);
 
-    const verified = await handler.execute(makeCtx(contacts, input, { identifierSources: sourcesFrom('dana@newco.example') }));
-    expect(verified).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
-  });
+      const verified = await handler.execute(makeCtx(contacts, input, { identifierSources: sourcesFrom('dana@newco.example') }));
+      expect(verified).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
+      expect((await contacts.getContactWithIdentities(danaId))!.identities[0]).toMatchObject({ source, verified: true });
+    },
+  );
+
+  it.each(['self_claimed', 'sms_participant'] as const)(
+    'refuses an unverified %s address even when it has a source, saying why',
+    async (source) => {
+      await contacts.linkIdentity({ contactId: danaId, channel: 'sms', channelIdentifier: '+14165550199', source });
+      const result = await handler.execute(makeCtx(contacts, { contact_id: danaId, channel: 'sms', identifier: '+14165550199' },
+        { identifierSources: sourcesFrom('Text me at +1 416 555 0199') }));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/Only the principal can vouch for it/);
+        expect(result.error).toMatch(source === 'self_claimed' ? /about themselves/ : /spoofed/);
+      }
+      expect((await contacts.getContactWithIdentities(danaId))!.identities[0]!.verified).toBe(false);
+    },
+  );
 
   // #2447: a number already verified on a sibling phone-family channel of this contact
   // needs no source in the conversation. It is linked as a derived row.
