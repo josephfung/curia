@@ -1,9 +1,10 @@
 // own-text.ts — what in a principal-mailbox draft is the draft's own text (#2474, design D2).
 //
-// PII detection on a principal-mailbox send reads only the draft's own words: the quoted message
+// PII detection on a principal-mailbox send rules on the draft's own words. The quoted message
 // below a reply is someone else's (its signature phone numbers would hold almost every "Got it"),
-// and the principal's own address or phone is not a disclosure on a principal-directed send.
-// The content filter still sees the whole body.
+// so its details are ruled apart, as field `quote`, and only when someone on the send was not on
+// the quoted message (final review S2). The principal's own address or phone is not a disclosure
+// on a principal-directed send. The content filter still sees the whole body.
 
 import type { DetectedPii } from '../../dispatch/pii-redactor.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../_shared/reply-quote.js';
@@ -16,6 +17,34 @@ export function splitReplyQuote(html: string): { own: string; quote: string } {
   if (at.length === 0) return { own: html, quote: '' };
   const cut = Math.min(...at);
   return { own: html.slice(0, cut), quote: html.slice(cut) };
+}
+
+const EMAIL_PATTERN = /[A-Z0-9._%+'-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.[A-Z]{2,}/gi;
+const HEADER_LINE = /<strong>(?:From|To|Cc):<\/strong>/i;
+
+/**
+ * Who the quoted message was between, read from the quote's own header (#2474 final review S2):
+ * the From, To and Cc lines of the quote Curia builds, or the sender in a Gmail attribution line.
+ * Lowercased, once each. The quoted body is never read. Null when no header names anyone: the
+ * caller then reviews the quote's details (fail closed).
+ *
+ * The header is text in the draft, not the replied-to message's own record, so it is a claim:
+ * a model-written body could carry a quote marker and a header of its choosing.
+ */
+export function quoteHeaderParticipants(quote: string): string[] | null {
+  let header = '';
+  if (quote.startsWith(REPLY_QUOTE_HTML_OPEN)) {
+    // The attribution block closes with its first </div>; only its From/To/Cc lines count.
+    const end = quote.indexOf('</div>');
+    const block = end >= 0 ? quote.slice(0, end) : quote;
+    header = block.split(/<\/p>/i).filter((line) => HEADER_LINE.test(line)).join(' ');
+  } else if (quote.startsWith(GMAIL_QUOTE_OPEN)) {
+    // Gmail's attribution ("On …, Dana <dana@…> wrote:") comes before the first <blockquote>.
+    const end = quote.search(/<blockquote/i);
+    if (end >= 0) header = quote.slice(0, end);
+  }
+  const emails = [...new Set((header.match(EMAIL_PATTERN) ?? []).map((e) => e.toLowerCase()))];
+  return emails.length > 0 ? emails : null;
 }
 
 /** Shortest digit run treated as a phone number when comparing identities. */

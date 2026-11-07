@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { DraftProvenance, CURIA_DRAFT_TOOLS, PROVENANCE_LOOKBACK_DAYS } from '../../../../src/skills/principal-send/draft-provenance.js';
+import { DraftProvenance, CURIA_DRAFT_TOOLS, CURIA_EDIT_TOOLS, PROVENANCE_LOOKBACK_DAYS } from '../../../../src/skills/principal-send/draft-provenance.js';
 import type { AuditLogRow } from '../../../../src/audit/audit-log-repo.js';
 
 const logger = pino({ level: 'silent' });
@@ -88,5 +88,37 @@ describe('DraftProvenance.createdByCuria', () => {
     const repo = makeRepo([]);
     expect(await new DraftProvenance(repo, logger, () => NOW).createdByCuria([])).toEqual(new Set());
     expect(repo.findToolResults).not.toHaveBeenCalled();
+  });
+});
+
+describe('DraftProvenance.editedByCuria (#2474 final review S1)', () => {
+  it('counts a successful draft-edit result for the draft', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-edit', { success: true, data: { draft_id: 'd1' } })]);
+    expect(await new DraftProvenance(repo, logger, () => NOW).editedByCuria(['d1', 'd2'])).toEqual(new Set(['d1']));
+    expect(repo.findToolResults).toHaveBeenCalledWith(expect.objectContaining({
+      since: new Date(NOW.getTime() - PROVENANCE_LOOKBACK_DAYS * 86_400_000),
+      toolNames: [...CURIA_EDIT_TOOLS],
+    }));
+  });
+
+  it('ignores a failed edit', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-edit', { success: false, error: 'nope', data: { draft_id: 'd1' } })]);
+    expect(await new DraftProvenance(repo, logger, () => NOW).editedByCuria(['d1'])).toEqual(new Set());
+  });
+
+  it('does not count a create as an edit, and createdByCuria still ignores edits', async () => {
+    const repo = makeRepo([
+      row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1' } }),
+      row('ceo-inbox-draft-edit', { success: true, data: { draft_id: 'd2' } }),
+    ]);
+    const p = new DraftProvenance(repo, logger, () => NOW);
+    expect(await p.editedByCuria(['d1', 'd2'])).toEqual(new Set(['d2']));
+    expect(await p.createdByCuria(['d1', 'd2'])).toEqual(new Set(['d1']));
+  });
+
+  it('throws when the audit read fails', async () => {
+    const repo = makeRepo([]);
+    repo.findToolResults.mockRejectedValue(new Error('db down'));
+    await expect(new DraftProvenance(repo, logger, () => NOW).editedByCuria(['d1'])).rejects.toThrow('db down');
   });
 });

@@ -538,6 +538,7 @@ export async function createScenarioHarness(
         return scope?.throughGateway ? scope.principalDrafts : undefined;
       },
       curiaDraftIds: () => currentScope()?.curiaDraftIds,
+      curiaEditedDraftIds: () => currentScope()?.curiaEditedDraftIds,
       sendLevel: () => currentScope()?.sendLevel,
       // Labels and outcome of each band review, for the `reviewed` check (#2312).
       reviewed: (review) => { currentScope()?.reviews.push(review); },
@@ -1134,7 +1135,7 @@ export async function createScenarioHarness(
         // The principal's mailbox follows the stubbed ceo-inbox draft writes (#2474), so the
         // real ceo-inbox-send-draft sends what the stubs wrote, and an edit of a seeded draft.
         ...(scenario.throughGateway
-          ? { mailboxDrafts: mailboxDraftsOf(scope), draftMirror: (draft, curiaWrote) => mirrorPrincipalDraft(scope, draft, curiaWrote) }
+          ? { mailboxDrafts: mailboxDraftsOf(scope), draftMirror: (draft, curiaWrote, edited) => mirrorPrincipalDraft(scope, draft, curiaWrote, edited) }
           : {}),
       });
       // Armed before the inbound is published. A fast first tool call must

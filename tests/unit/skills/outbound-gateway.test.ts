@@ -5803,7 +5803,8 @@ describe('sendPrincipalDraft (#2474)', () => {
     return {
       id: 'd1', threadId: 'th1', subject: 'Re: Friday', from: [{ email: PRINCIPAL }],
       to: [{ email: 'dana@example.org' }], cc: [], bcc: [],
-      body: '<p>Friday works. See you then.</p>', snippet: '', date: 0, unread: false, folders: ['DRAFTS'], attachments: [],
+      // Modified an hour ago: inside the provenance lookback, so no sign of Curia reads as the principal's.
+      body: '<p>Friday works. See you then.</p>', snippet: '', date: Math.floor(Date.now() / 1000) - 3600, unread: false, folders: ['DRAFTS'], attachments: [],
       ...over,
     } as NylasMessage;
   }
@@ -5820,6 +5821,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     client?: ReturnType<typeof mailboxClient> | null;
     level?: 'off' | 'on_request' | 'routine' | 'all';
     createdByCuria?: string[] | Error;
+    editedByCuria?: string[] | Error;
     review?: ReturnType<typeof vi.fn>;
     score?: number;
     piiRedactor?: PiiRedactor;
@@ -5833,6 +5835,10 @@ describe('sendPrincipalDraft (#2474)', () => {
     const createdByCuria = vi.fn(async () => {
       if (o.createdByCuria instanceof Error) throw o.createdByCuria;
       return new Set(o.createdByCuria ?? []);
+    });
+    const editedByCuria = vi.fn(async () => {
+      if (o.editedByCuria instanceof Error) throw o.editedByCuria;
+      return new Set(o.editedByCuria ?? []);
     });
     const ledger = o.ledger ?? { recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined) };
     const readSendLevel = vi.fn().mockResolvedValue(o.level ?? 'on_request');
@@ -5856,10 +5862,10 @@ describe('sendPrincipalDraft (#2474)', () => {
       ...(o.conversationEntities ? { conversationEntities: o.conversationEntities } : {}),
       principalMailbox: async () => client as unknown as NylasClient | null,
       readSendLevel,
-      ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria } }),
+      ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria, editedByCuria } }),
       sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent'>,
     });
-    return { gw, client, review, createdByCuria, ledger, readSendLevel, actionLogRepo };
+    return { gw, client, review, createdByCuria, editedByCuria, ledger, readSendLevel, actionLogRepo };
   }
 
   function published(type: string): Array<{ type: string; payload: Record<string, unknown> }> {
@@ -5867,6 +5873,9 @@ describe('sendPrincipalDraft (#2474)', () => {
       .map(([, event]) => event as unknown as { type: string; payload: Record<string, unknown> })
       .filter((e) => e.type === type);
   }
+
+  /** A Gmail reply quote of a message from Dana, open at its <blockquote> (final review S2). */
+  const GMAIL_QUOTE_FROM_DANA = '<div class="gmail_quote"><div class="gmail_attr">On Thu, Dana &lt;<a href="mailto:dana@example.org">dana@example.org</a>&gt; wrote:<br></div><blockquote class="gmail_quote">';
 
   /** A redactor that detects each listed text wherever it occurs in what it is given. */
   function redactorFor(found: Array<{ label: string; text: string }>): PiiRedactor & { detect: ReturnType<typeof vi.fn> } {
@@ -5970,6 +5979,39 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
       expect(review).toHaveBeenCalledWith(expect.objectContaining({ draftAuthor: 'curia' }));
     }
+  });
+
+  it('6. treats a draft as Curia\'s when the edit lookup throws', async () => {
+    const { gw, review } = make({ editedByCuria: new Error('db down') });
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ draftAuthor: 'curia' }));
+  });
+
+  it('6. classes a draft Curia edited as curia-edited: reviewed, and the identity gate runs', async () => {
+    const { gw, review, editedByCuria } = make({ editedByCuria: ['d1'] });
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(editedByCuria).toHaveBeenCalledWith(['d1']);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ draftAuthor: 'curia-edited', principalDirected: true }));
+
+    const { ConversationEntityState } = await import('../../../src/entity-context/conversation-entities.js');
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Avery Lee']);
+    entities.turnIdentities.begin('t1');
+    const body = '<p>He and Xiaopu (last name to be confirmed) would like to attend.</p>';
+    const edited = make({ editedByCuria: ['d1'], conversationEntities: entities, client: mailboxClient(draft({ body })) });
+    expect(await edited.gw.sendPrincipalDraft('d1', opts)).toMatchObject({ success: false, blockedRules: ['unresolved-identity'] });
+  });
+
+  it('6. classes a draft last modified before the lookback as curia-edited: who wrote it is unknown', async () => {
+    const old = draft({ date: Math.floor(Date.now() / 1000) - 31 * 86_400 });
+    const { gw, review } = make({ client: mailboxClient(old) });
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ draftAuthor: 'curia-edited' }));
+  });
+
+  it('6. a Curia-created draft stays curia even when Curia also edited it', async () => {
+    const { gw, review } = make({ createdByCuria: ['d1'], editedByCuria: ['d1'] });
+    await gw.sendPrincipalDraft('d1', opts);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ draftAuthor: 'curia' }));
   });
 
   it('7. reviews through checkDraftSend with the principal-mailbox profile', async () => {
@@ -6112,9 +6154,9 @@ describe('sendPrincipalDraft (#2474)', () => {
     }));
   });
 
-  it('exempts the reply quote from PII detection', async () => {
+  it('exempts the reply quote from review when every recipient was on the quoted message', async () => {
     const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
-    const body = '<p>Got it, thanks.</p><div class="gmail_quote">On Thu, Dana wrote: call me at 416-555-0199</div>';
+    const body = `<p>Got it, thanks.</p>${GMAIL_QUOTE_FROM_DANA}call me at 416-555-0199</blockquote></div>`;
     const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body })) });
     expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
     // Detected (for the audit copy) but not ruled on: no review, nothing reported as disclosed.
@@ -6122,7 +6164,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(published('outbound.delivered')[0]!.payload['disclosed']).toBeUndefined();
   });
 
-  it('redacts a quoted phone in the audit copy without reviewing it', async () => {
+  it('redacts a quoted phone in the audit copy without reviewing it (recipients were on the quote)', async () => {
     const found = [{ label: 'PHONE_NUMBER', text: '416-555-0199' }];
     const detect = vi.fn((content: string) => found
       .filter((f) => content.includes(f.text))
@@ -6131,7 +6173,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       content: items.reduce((c, i) => c.split(i.matched).join('[REDACTED: PHONE_NUMBER]'), content), redactions: [],
     }));
     const piiRedactor = { detect, apply, redact: vi.fn() } as unknown as PiiRedactor;
-    const body = '<p>Got it, thanks.</p><div class="gmail_quote">On Thu, Dana wrote: call me at 416-555-0199</div>';
+    const body = `<p>Got it, thanks.</p>${GMAIL_QUOTE_FROM_DANA}call me at 416-555-0199</blockquote></div>`;
     const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body })) });
     expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
     expect(review).not.toHaveBeenCalled();
@@ -6139,6 +6181,40 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(content).not.toContain('416-555-0199');
     expect(content).toContain('[REDACTED: PHONE_NUMBER]');
     expect(published('outbound.delivered')[0]!.payload['disclosed']).toBeUndefined();
+  });
+
+  it('reviews quoted details as field quote when a recipient was not on the quoted message', async () => {
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
+    const body = `<p>Looping in Sam.</p>${GMAIL_QUOTE_FROM_DANA}call me at 416-555-0199</blockquote></div>`;
+    const d = draft({ body, cc: [{ email: 'sam@example.org' }] });
+    const { gw, review } = make({ piiRedactor, client: mailboxClient(d) });
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      draftAuthor: 'principal', detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'quote' })],
+    }));
+  });
+
+  it('reviews quoted details when the quote header names nobody (fail closed)', async () => {
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
+    const body = '<p>Got it.</p><div class="gmail_quote">On Thu, Dana wrote: call me at 416-555-0199</div>';
+    const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body })) });
+    await gw.sendPrincipalDraft('d1', opts);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ detectedItems: [expect.objectContaining({ field: 'quote' })] }));
+  });
+
+  it('leaves the draft unsent when the review would send it without its quote: a saved draft keeps its quote', async () => {
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
+    const body = `<p>Looping in Sam.</p>${GMAIL_QUOTE_FROM_DANA}call me at 416-555-0199</blockquote></div>`;
+    const review = vi.fn().mockResolvedValue({ kind: 'send', dropQuote: { labels: ['PHONE_NUMBER'] } });
+    const { gw, client, ledger, actionLogRepo } = make({ piiRedactor, review, client: mailboxClient(draft({ body, cc: [{ email: 'sam@example.org' }] })) });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'review_hold' });
+    expect(r.blockedReason).toMatch(/quoted message/);
+    expect(r.blockedReason).toMatch(/Nothing was sent; the draft is still in their Drafts folder\.$/);
+    expect(r.blockedReason).not.toContain('416-555-0199');
+    expect(client!.sendDraft).not.toHaveBeenCalled();
+    expect(ledger.recordSending).not.toHaveBeenCalled();
+    expect(actionLogRepo.insert).not.toHaveBeenCalled();
   });
 
   it('files no digest item on a content-filter block (the curia path still does)', async () => {

@@ -419,18 +419,28 @@ describe('the run\'s principal mailbox (#2474)', () => {
     const { seedRun } = await import('../../scenarios/seed.js');
     const scope = new SeedScope();
     await seedRun(seededCase(false), { stack, outboundContext: {} as never, scope });
-    mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'Offsite', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], body: 'Venue: the Harbour Room' }, false);
+    mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'Offsite', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], body: 'Venue: the Harbour Room' }, false, true);
     expect(scope.principalDrafts.get('draft-30z-acme')).toMatchObject({ threadId: 'thr-30z-acme', body: 'Venue: the Harbour Room' });
     expect(scope.curiaDraftIds.has('draft-30z-acme')).toBe(false);
+    // ...but marks it edited, so the send reviews it as curia-edited (final review S1).
+    expect(scope.curiaEditedDraftIds.has('draft-30z-acme')).toBe(true);
+  });
+
+  it('does not mark a draft-reply that returned an existing draft as edited', () => {
+    const scope = new SeedScope();
+    mirrorPrincipalDraft(scope, { id: 'draft-0003', subject: 'A', to: [], cc: [], body: 'B' }, false);
+    expect(scope.curiaEditedDraftIds.size).toBe(0);
   });
 
   it('is cleared with the run', () => {
     const scope = new SeedScope();
     mirrorPrincipalDraft(scope, { id: 'draft-0002', subject: 'A', to: [], cc: [], body: 'B' }, true);
+    mirrorPrincipalDraft(scope, { id: 'draft-0002', subject: 'A', to: [], cc: [], body: 'C' }, false, true);
     scope.sendLevel = 'all';
     scope.clear();
     expect(scope.principalDrafts.size).toBe(0);
     expect(scope.curiaDraftIds.size).toBe(0);
+    expect(scope.curiaEditedDraftIds.size).toBe(0);
     expect(scope.sendLevel).toBeUndefined();
   });
 });
