@@ -1,6 +1,6 @@
 -- 119_structured_secrets_and_card_use.sql
 --
--- Structured secrets (#1358, ADR-027, ADR-059). A saved credit card keeps its encrypted
+-- Structured secrets (#1358, ADR-027, ADR-060). A saved credit card keeps its encrypted
 -- number and CVV in `secrets` (json) and its non-secret facts (brand, last four, expiry,
 -- cardholder, billing postal code) beside it in `user_secret_details`, so viewing a card
 -- never decrypts anything. `schema` tags which structured type a key holds; `public_fields`
@@ -15,12 +15,20 @@ ALTER TABLE user_secret_details
   ADD COLUMN schema        TEXT CHECK (schema IN ('credit_card')),
   ADD COLUMN label         TEXT,
   ADD COLUMN public_fields JSONB,
+  -- Identity of the card a key holds: new whenever the number is replaced, kept across edits
+  -- of the public fields, a CVV swap and a renewal. A card-use grant is bound to it.
+  ADD COLUMN card_id       UUID,
   ADD CONSTRAINT user_secret_details_schema_public_fields_check
     CHECK ((schema IS NULL) = (public_fields IS NULL));
 
 CREATE TABLE card_use_requests (
   id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   secret_name        TEXT NOT NULL CHECK (starts_with(secret_name, 'user.')),
+  -- The card's last four when the request was filed (display only).
+  last4              TEXT NOT NULL,
+  -- The card's identity when the request was filed: a card replaced during the 30-minute
+  -- window no longer matches the grant, even if it ends in the same four digits.
+  card_id            UUID NOT NULL,
   site_domain        TEXT NOT NULL,
   conversation_id    TEXT NOT NULL,
   task_id            TEXT NOT NULL,
@@ -46,6 +54,7 @@ DROP TABLE IF EXISTS card_use_requests;
 
 ALTER TABLE user_secret_details
   DROP CONSTRAINT IF EXISTS user_secret_details_schema_public_fields_check,
+  DROP COLUMN IF EXISTS card_id,
   DROP COLUMN IF EXISTS public_fields,
   DROP COLUMN IF EXISTS label,
   DROP COLUMN IF EXISTS schema;

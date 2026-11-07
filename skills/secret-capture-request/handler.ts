@@ -81,7 +81,8 @@ export class SecretCaptureRequestHandler implements ToolHandler {
     if (expiry_month !== undefined && expiry_month !== null) cardEdit.expiry_month = expiry_month;
     if (expiry_year !== undefined && expiry_year !== null) cardEdit.expiry_year = expiry_year;
     if (cardholder_name !== undefined && cardholder_name !== null) cardEdit.cardholder_name = cardholder_name;
-    if (billing_zip !== undefined) cardEdit.billing_zip = billing_zip; // null clears it
+    // null or '' clears it
+    if (billing_zip !== undefined) cardEdit.billing_zip = billing_zip === '' ? null : billing_zip;
     const hasCardEdit = Object.keys(cardEdit).length > 0;
 
     let captureTemplate: CaptureTemplate | undefined;

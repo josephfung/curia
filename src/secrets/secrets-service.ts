@@ -10,7 +10,9 @@ import type { Logger } from '../logger.js';
 import { encrypt, decrypt } from './crypto.js';
 import { hasUserSecretDetails, type UserSecretDetails } from './user-secret-details.js';
 import {
+  detectCardBrand,
   isStructuredSchemaTag,
+  validateCvv,
   type CreditCardPublicFields,
   type CreditCardSecretDoc,
   type StructuredSchemaTag,
@@ -20,6 +22,14 @@ import {
 type Queryable = Pick<DbPool, 'query'> | Pick<DbPoolClient, 'query'>;
 
 export type ValueFormat = 'string' | 'json';
+
+/** A card edit lost a race: the card is gone, or its public fields changed since the edit was based on them. */
+export class StaleCardEditError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StaleCardEditError';
+  }
+}
 
 /** Non-secret facts about a stored secret. Deliberately has no value or ciphertext field. */
 export interface SecretMetadata {
@@ -243,15 +253,16 @@ export class SecretsService {
     return isStructuredSchemaTag(tag) ? tag : null;
   }
 
-  /** A card's label and public fields. Reads the details row only: nothing is decrypted. */
-  async getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields } | null> {
-    const result = await this.pool.query<{ label: string | null; public_fields: CreditCardPublicFields | null; schema: string | null }>(
-      'SELECT label, public_fields, schema FROM user_secret_details WHERE name = $1',
+  /** A card's label, public fields and identity (`cardId`: new whenever the number is replaced).
+   *  Reads the details row only: nothing is decrypted. */
+  async getCardPublic(name: string): Promise<{ label: string | null; publicFields: CreditCardPublicFields; cardId: string } | null> {
+    const result = await this.pool.query<{ label: string | null; public_fields: CreditCardPublicFields | null; schema: string | null; card_id: string | null }>(
+      'SELECT label, public_fields, schema, card_id FROM user_secret_details WHERE name = $1',
       [name],
     );
     const row = result.rows[0];
-    if (!row || row.schema !== 'credit_card' || !row.public_fields) return null;
-    return { label: row.label, publicFields: row.public_fields };
+    if (!row || row.schema !== 'credit_card' || !row.public_fields || !row.card_id) return null;
+    return { label: row.label, publicFields: row.public_fields, cardId: row.card_id };
   }
 
   /** Edit a card's label and/or public fields. Never writes `secrets`, so the vault row's
@@ -282,7 +293,7 @@ export class SecretsService {
         patch.basedOn === undefined ? null : JSON.stringify(patch.basedOn),
       ],
     );
-    if (result.rowCount === 0) throw new Error(`'${name}' is not a saved card, or it changed while this edit was prepared; try again`);
+    if (result.rowCount === 0) throw new StaleCardEditError(`'${name}' is not a saved card, or it changed while this edit was prepared; try again`);
   }
 
   /** Replace a card's secret. `{ cvv }` swaps only the CVV and keeps the number; the full
@@ -297,6 +308,16 @@ export class SecretsService {
       return;
     }
     await this.inTransaction(async client => {
+      // Lock and verify the card first: one deleted since the route checked must not be
+      // recreated, and a plain secret that took the name must not be overwritten.
+      const existing = (await client.query<{ schema: string | null }>(
+        `SELECT d.schema FROM secrets s LEFT JOIN user_secret_details d ON d.name = s.name
+          WHERE s.name = $1 FOR UPDATE OF s`,
+        [name],
+      )).rows[0];
+      if (existing?.schema !== 'credit_card') {
+        throw new Error(`'${name}' is not a saved card any more, so it cannot be replaced; try again`);
+      }
       await this.writeJson(client, name, change.secret);
       // Keep the existing label; only the public fields change here.
       await this.writeCardDetails(client, name, change.publicFields, null, false);
@@ -319,7 +340,7 @@ export class SecretsService {
             AND ($3::jsonb IS NULL OR public_fields = $3::jsonb)`,
         [name, JSON.stringify(change.publicFields), change.basedOn === undefined ? null : JSON.stringify(change.basedOn)],
       );
-      if (result.rowCount === 0) throw new Error(`'${name}' is not a saved card, or it changed while this was prepared; try again`);
+      if (result.rowCount === 0) throw new StaleCardEditError(`'${name}' is not a saved card, or it changed while this was prepared; try again`);
     });
   }
 
@@ -442,7 +463,14 @@ export class SecretsService {
     if (!row || row.value_format !== 'json') throw new Error(`Secret '${name}' is not a credit_card`);
     const doc = JSON.parse(decrypt(row.encrypted_value, row.iv, this.key)) as { _schema?: unknown };
     if (doc._schema !== 'credit_card') throw new Error(`Secret '${name}' is not a credit_card`);
-    await this.writeJson(client, name, { ...(doc as unknown as CreditCardSecretDoc), cvv });
+    // _schema was checked above; the rest of the shape was validated when the card was saved.
+    const card = doc as unknown as CreditCardSecretDoc;
+    // Checked against the number held under the lock: a card replaced after the route's own
+    // check (a Visa swapped for an Amex) must not end up with a CVV of the wrong length.
+    if (!validateCvv(cvv, detectCardBrand(card.number))) {
+      throw new Error(`The security code does not fit the card saved under '${name}'`);
+    }
+    await this.writeJson(client, name, { ...card, cvv });
   }
 
   private async writeJson(db: Queryable, name: string, obj: unknown): Promise<void> {
@@ -460,12 +488,15 @@ export class SecretsService {
     setLabel: boolean,
   ): Promise<void> {
     await db.query(
-      `INSERT INTO user_secret_details (name, schema, label, public_fields)
-       VALUES ($1, 'credit_card', $2, $3::jsonb)
+      // Both callers store a new card number, so the card gets a new identity (card_id) and
+      // any card-use grant for the old one stops matching.
+      `INSERT INTO user_secret_details (name, schema, label, public_fields, card_id)
+       VALUES ($1, 'credit_card', $2, $3::jsonb, gen_random_uuid())
        ON CONFLICT (name) DO UPDATE SET
          schema        = 'credit_card',
          label         = CASE WHEN $4::boolean THEN EXCLUDED.label ELSE user_secret_details.label END,
          public_fields = EXCLUDED.public_fields,
+         card_id       = EXCLUDED.card_id,
          updated_at    = now()`,
       [name, label, JSON.stringify(publicFields), setLabel],
     );

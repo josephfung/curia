@@ -20,6 +20,7 @@ import {
 const logger = pino({ level: 'silent' });
 
 const SITE = 'https://shop.example.com/checkout';
+const CARD_ID = '11111111-1111-4111-8111-111111111111';
 const PUBLIC: CreditCardPublicFields = {
   brand: 'visa',
   last4: '1111',
@@ -63,7 +64,7 @@ function setup(opts: {
     get: vi.fn().mockResolvedValue(opts.plain === undefined ? 'plain-value' : opts.plain),
     getJSON: vi.fn(),
     getStructuredSchema: vi.fn().mockResolvedValue(opts.schema ?? null),
-    getCardPublic: vi.fn().mockResolvedValue({ label: null, publicFields: opts.publicFields ?? PUBLIC }),
+    getCardPublic: vi.fn().mockResolvedValue({ label: null, publicFields: opts.publicFields ?? PUBLIC, cardId: CARD_ID }),
     getCardSecret: vi.fn().mockResolvedValue({ _schema: 'credit_card', number: NUMBER, cvv: CVV }),
   };
   const consumeFill = vi.fn().mockResolvedValue(opts.grant ?? 'ok');
@@ -141,7 +142,7 @@ describe('resolveSecretRef: saved cards', () => {
     const r = await s.resolve('user.visa#expiry_month_name', { siteUrl: SITE });
     expect(r.value).toBe('December');
     expect(s.consumeFill).toHaveBeenCalledWith({
-      secretName: 'user.visa', siteUrl: SITE, conversationId: 'conv-1', field: null,
+      secretName: 'user.visa', cardId: CARD_ID, siteUrl: SITE, conversationId: 'conv-1', field: null,
     });
     expect(s.secrets.get).not.toHaveBeenCalled();
     expect(s.secrets.getJSON).not.toHaveBeenCalled();
@@ -213,6 +214,16 @@ describe('resolveSecretRef: saved cards', () => {
     const r = await s.resolve('user.visa#number', { siteUrl: SITE }, { conversationId: 'conv-1' });
     expect(r.value).toBeUndefined();
     expect(r.error).toBeDefined();
+  });
+
+  it('withholds the secret when the card was replaced between the public and secret reads', async () => {
+    const s = setup({ schema: 'credit_card' });
+    s.secrets.getCardPublic
+      .mockResolvedValueOnce({ label: null, publicFields: PUBLIC, cardId: CARD_ID })
+      .mockResolvedValueOnce({ label: null, publicFields: PUBLIC, cardId: '22222222-2222-4222-8222-222222222222' });
+    const r = await s.resolve('user.visa#number', { siteUrl: SITE }, { conversationId: 'conv-1' });
+    expect(r.value).toBeUndefined();
+    expect(r.code).toBe('card_use_required');
   });
 
   it('unknown field fails before the grant is consumed', async () => {

@@ -2976,6 +2976,7 @@ export class ExecutionLayer {
             const outcome = this.cardUseRepo && conversationId
               ? await this.cardUseRepo.consumeFill({
                 secretName: name,
+                cardId: card.cardId,
                 siteUrl,
                 conversationId,
                 field: isCardSecretField(field) ? field : null,
@@ -2988,9 +2989,17 @@ export class ExecutionLayer {
 
             const secretDoc = isCardSecretField(field) ? await this.secretsService.getCardSecret(name) : null;
             // Expiry was checked at consumeFill; a slow vault read can outlast the window, so
-            // check again before the number or CVV leaves this closure.
-            if (secretDoc !== null && !(await this.cardUseRepo!.hasLiveGrant({ secretName: name, siteUrl, conversationId: conversationId! }))) {
-              throw new SecretRefRefusal('card_use_required', CARD_USE_REQUIRED_ERROR(name, registrableDomain(siteUrl) ?? 'this site'));
+            // check again before the number or CVV leaves this closure. A replacement writes the
+            // secret and the card identity in one transaction, so re-reading the identity after
+            // the secret read catches a card swapped between the two reads: the secret just read
+            // belongs to the card that was granted only if the identity is unchanged.
+            if (secretDoc !== null) {
+              const after = await this.secretsService.getCardPublic(name);
+              const granted = after !== null && after.cardId === card.cardId
+                && await this.cardUseRepo!.hasLiveGrant({ secretName: name, cardId: card.cardId, siteUrl, conversationId: conversationId! });
+              if (!granted) {
+                throw new SecretRefRefusal('card_use_required', CARD_USE_REQUIRED_ERROR(name, registrableDomain(siteUrl) ?? 'this site'));
+              }
             }
             const projected = projectCardField(field, card.publicFields, secretDoc);
             if (projected === '') {

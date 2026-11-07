@@ -248,7 +248,7 @@ describeIf('SecretsService', () => {
       const n = `${P}both`;
       await service.upsertUserDetails(n, { loginUrl: 'https://shop.example/', username: 'pat' });
       await service.setCard(n, SECRET, PUB, 'Personal');
-      expect(await service.getCardPublic(n)).toEqual({ label: 'Personal', publicFields: PUB });
+      expect(await service.getCardPublic(n)).toEqual({ label: 'Personal', publicFields: PUB, cardId: expect.any(String) });
       expect(await service.getCardSecret(n)).toEqual(SECRET);
       expect(await service.getStructuredSchema(n)).toBe('credit_card');
       const raw = await service.get(n);
@@ -330,7 +330,24 @@ describeIf('SecretsService', () => {
       const nextPub: CreditCardPublicFields = { ...PUB, brand: 'mastercard', last4: '4444' };
       await service.replaceCardSecret(n, { secret: next, publicFields: nextPub });
       expect(await service.getCardSecret(n)).toEqual(next);
-      expect(await service.getCardPublic(n)).toEqual({ label: 'Keep', publicFields: nextPub });
+      expect(await service.getCardPublic(n)).toEqual({ label: 'Keep', publicFields: nextPub, cardId: expect.any(String) });
+    });
+
+    it('card identity changes on a replacement (even with the same last four) and survives edits', async () => {
+      const n = `${P}identity`;
+      await service.setCard(n, SECRET, PUB, 'Keep');
+      const first = (await service.getCardPublic(n))!.cardId;
+
+      await service.patchCardPublic(n, { label: 'Renamed', publicFields: { ...PUB, expiry_year: '2040' } });
+      await service.replaceCardSecret(n, { cvv: '999' });
+      await service.renewCard(n, { cvv: '998', publicFields: { ...PUB, expiry_year: '2041' } });
+      expect((await service.getCardPublic(n))!.cardId).toBe(first);
+
+      await service.replaceCardSecret(n, { secret: SECRET, publicFields: PUB });
+      const second = (await service.getCardPublic(n))!.cardId;
+      expect(second).not.toBe(first);
+      await service.setCard(n, SECRET, PUB, 'Keep');
+      expect((await service.getCardPublic(n))!.cardId).not.toBe(second);
     });
 
     it('a CVV replace racing a full replace never mixes old number with new cvv', async () => {
@@ -366,6 +383,37 @@ describeIf('SecretsService', () => {
       const n = `${P}renewfail`;
       await service.setJSON(n, SECRET);
       await expect(service.renewCard(n, { cvv: '555', publicFields: PUB })).rejects.toThrow(/not a saved card/);
+      expect((await service.getCardSecret(n)).cvv).toBe(SECRET.cvv);
+    });
+
+    it('replaceCardSecret refuses a card that is gone or a plain secret under the name', async () => {
+      const gone = `${P}replgone`;
+      const next: CreditCardSecretDoc = { _schema: 'credit_card', number: '5555555555554444', cvv: '321' };
+      const nextPub: CreditCardPublicFields = { ...PUB, brand: 'mastercard', last4: '4444' };
+      await expect(service.replaceCardSecret(gone, { secret: next, publicFields: nextPub })).rejects.toThrow(/not a saved card/);
+      expect((await pool.query('SELECT 1 FROM secrets WHERE name = $1', [gone])).rows).toHaveLength(0);
+
+      const plain = `${P}replplain`;
+      await service.set(plain, 'hunter2');
+      await expect(service.replaceCardSecret(plain, { secret: next, publicFields: nextPub })).rejects.toThrow(/not a saved card/);
+      expect(await service.get(plain)).toBe('hunter2');
+    });
+
+    it('a CVV write is checked against the number held under the lock', async () => {
+      const n = `${P}cvvbrand`;
+      const amex: CreditCardSecretDoc = { _schema: 'credit_card', number: '378282246310005', cvv: '1234' };
+      await service.setCard(n, amex, { ...PUB, brand: 'amex', last4: '0005' }, null);
+      await expect(service.replaceCardSecret(n, { cvv: '999' })).rejects.toThrow(/does not fit/);
+      await expect(service.renewCard(n, { cvv: '999', publicFields: PUB })).rejects.toThrow(/does not fit/);
+      expect((await service.getCardSecret(n)).cvv).toBe('1234');
+    });
+
+    it('patchCardPublic and renewCard refuse a stale basedOn', async () => {
+      const n = `${P}stale`;
+      await service.setCard(n, SECRET, PUB, null);
+      const stale = { ...PUB, last4: '9999' };
+      await expect(service.patchCardPublic(n, { publicFields: stale, basedOn: stale })).rejects.toThrow(/changed/);
+      await expect(service.renewCard(n, { cvv: '555', publicFields: PUB, basedOn: stale })).rejects.toThrow(/changed/);
       expect((await service.getCardSecret(n)).cvv).toBe(SECRET.cvv);
     });
 

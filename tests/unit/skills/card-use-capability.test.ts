@@ -40,6 +40,12 @@ describe('card-use-confirm manifest', () => {
   });
 });
 
+describe('card-use-request manifest', () => {
+  it('is action_risk none: it only files an approval, so a held request must not replay', () => {
+    expect(manifestOf('card-use-request').action_risk).toBe('none');
+  });
+});
+
 describe('card-use-confirm fencing', () => {
   it('cannot be invoked by an agent, even with the coordinator as caller', async () => {
     const { layer, cardUse } = setup();

@@ -37,6 +37,25 @@ describe('buildCardPayload', () => {
     expect(buildCardPayload(good, 'renewal')).toEqual({ cvv: '123', expiry_month: '03', expiry_year: '2030' });
   });
 
+  it('full mode sends the label only when filled', () => {
+    expect(buildCardPayload({ ...good, label: ' Work ' }, 'full')['label']).toBe('Work');
+    expect(buildCardPayload(good, 'full')).not.toHaveProperty('label');
+  });
+
+  describe('edit-public against the original', () => {
+    const original = { label: 'Work', expiryMonth: '03', expiryYear: '2030', cardholderName: 'Ada', billingZip: 'N2L 3G1' };
+    const same = { ...EMPTY_CARD_FORM, label: 'Work', expiryMonth: '03', expiryYear: '2030', cardholderName: 'Ada', billingZip: 'N2L 3G1' };
+    it('sends nothing unchanged', () => {
+      expect(buildCardPayload(same, 'edit-public', original)).toEqual({});
+    });
+    it("sends '' to clear a label or a postal code that had a value", () => {
+      expect(buildCardPayload({ ...same, label: '  ', billingZip: '' }, 'edit-public', original)).toEqual({ label: '', billing_zip: '' });
+    });
+    it('does not send a postal code that was never saved', () => {
+      expect(buildCardPayload({ ...same, billingZip: '' }, 'edit-public', { ...original, billingZip: '' })).toEqual({});
+    });
+  });
+
   it('edit-public never sends number or cvv', () => {
     const p = buildCardPayload({ ...good, label: 'Work' }, 'edit-public');
     expect(p).not.toHaveProperty('number');
@@ -72,9 +91,16 @@ describe('validateCardForm', () => {
     expect(e).toEqual({});
   });
 
-  it('edit-public requires label and cardholder, checks zip', () => {
+  it('edit-public requires the cardholder, checks the postal code, and lets the label be blank', () => {
     const e = validateCardForm({ ...EMPTY_CARD_FORM, expiryMonth: '1', expiryYear: '2030', billingZip: '!!' }, 'edit-public', NOW);
-    expect(Object.keys(e).sort()).toEqual(['billingZip', 'cardholderName', 'label']);
+    expect(Object.keys(e).sort()).toEqual(['billingZip', 'cardholderName']);
+  });
+
+  it('edit-public does not re-check an unchanged expiry, so an expired card can take a new label', () => {
+    const original = { label: '', expiryMonth: '01', expiryYear: '2020', cardholderName: 'Ada', billingZip: '' };
+    const state = { ...EMPTY_CARD_FORM, expiryMonth: '01', expiryYear: '2020', label: 'Old', cardholderName: 'Ada' };
+    expect(validateCardForm(state, 'edit-public', NOW, original)).toEqual({});
+    expect(validateCardForm({ ...state, expiryYear: '2021' }, 'edit-public', NOW, original)).toHaveProperty('expiryMonth');
   });
 });
 

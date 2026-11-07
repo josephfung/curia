@@ -283,3 +283,27 @@ describe('card type token', () => {
     expect(resolveUserSecretName('Personal Visa card', existing)).toBe('user.personal_visa_card');
   });
 });
+
+describe('consoleSecretNameInput for a credit card', () => {
+  it('names the card from its label and the brand of its number', () => {
+    const name = (label: string, number: string) =>
+      resolveUserSecretName(consoleSecretNameInput({ type: 'credit_card', label, number }), []);
+    expect(name('Personal', '4111 1111 1111 1111')).toBe('user.personal_visa_card');
+    expect(name('Work', '5555-5555-5555-4444')).toBe('user.work_mastercard_card');
+    expect(name('Work', '378282246310005')).toBe('user.work_amex_card');
+  });
+
+  it('leaves an unknown brand out of the name', () => {
+    expect(consoleSecretNameInput({ type: 'credit_card', label: 'Travel', number: '9999999999999995' })).toBe('Travel card');
+  });
+
+  it('reuses the existing key for the same label and brand', () => {
+    const input = consoleSecretNameInput({ type: 'credit_card', label: 'Personal', number: '4111111111111111' });
+    expect(resolveUserSecretName(input, ['user.personal_visa_card'])).toBe('user.personal_visa_card');
+  });
+
+  it('requires a label and a number, and never puts the number in the error', () => {
+    expect(() => consoleSecretNameInput({ type: 'credit_card', number: '4111111111111111' })).toThrow('label is required');
+    expect(() => consoleSecretNameInput({ type: 'credit_card', label: 'x' })).toThrow('number is required');
+  });
+});

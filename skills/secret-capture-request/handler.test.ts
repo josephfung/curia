@@ -316,6 +316,13 @@ describe('SecretCaptureRequestHandler card templates (#1358)', () => {
     }]);
   });
 
+  it("details_only treats billing_zip '' as clearing it", async () => {
+    const minter = fakeMinter();
+    const result = await run({ secret_name: 'user.personal_visa_card', details_only: true, billing_zip: '' }, minter);
+    expect(result.success).toBe(true);
+    expect(minter.cardCalls).toEqual([{ rawName: 'user.personal_visa_card', edit: { billing_zip: null } }]);
+  });
+
   it('details_only returns the validation error from the card edit', async () => {
     const result = await run({ secret_name: 'user.refused', details_only: true, expiry_month: '1', expiry_year: '2001' });
     expect(result).toEqual({ success: false, error: 'This card has expired.' });

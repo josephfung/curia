@@ -20,6 +20,7 @@ export type CardUseStatus = 'pending' | 'approved' | 'denied' | 'expired';
 export interface CardUseRequestRow {
   id: string;
   secretName: string;
+  last4: string;
   siteDomain: string;
   conversationId: string;
   taskId: string;
@@ -35,6 +36,7 @@ export interface CardUseRequestRow {
 interface DbRow {
   id: string;
   secret_name: string;
+  last4: string;
   site_domain: string;
   conversation_id: string;
   task_id: string;
@@ -52,6 +54,10 @@ export class CardUseRepo {
 
   async create(r: {
     secretName: string;
+    /** The card's last four now (display only). */
+    last4: string;
+    /** The card's identity now; a grant only fills a card that still has it. */
+    cardId: string;
     siteUrl: string;
     conversationId: string;
     taskId: string;
@@ -65,10 +71,10 @@ export class CardUseRepo {
     }
     const result = await this.pool.query<{ id: string }>(
       `INSERT INTO card_use_requests
-         (secret_name, site_domain, conversation_id, task_id, amount, purpose, origin)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (secret_name, last4, card_id, site_domain, conversation_id, task_id, amount, purpose, origin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
-      [r.secretName, siteDomain, r.conversationId, r.taskId, r.amount, r.purpose, JSON.stringify(r.origin)],
+      [r.secretName, r.last4, r.cardId, siteDomain, r.conversationId, r.taskId, r.amount, r.purpose, JSON.stringify(r.origin)],
     );
     return { id: result.rows[0]!.id, siteDomain };
   }
@@ -79,7 +85,7 @@ export class CardUseRepo {
 
   async get(id: string): Promise<CardUseRequestRow | null> {
     const result = await this.pool.query<DbRow>(
-      `SELECT id, secret_name, site_domain, conversation_id, task_id, amount, purpose, origin,
+      `SELECT id, secret_name, last4, site_domain, conversation_id, task_id, amount, purpose, origin,
               status, approval_short_ref, created_at, approved_at
          FROM card_use_requests WHERE id = $1`,
       [id],
@@ -89,6 +95,7 @@ export class CardUseRepo {
     return {
       id: row.id,
       secretName: row.secret_name,
+      last4: row.last4,
       siteDomain: row.site_domain,
       conversationId: row.conversation_id,
       taskId: row.task_id,
@@ -149,46 +156,49 @@ export class CardUseRepo {
   }
 
   /**
-   * True while the newest grant for this card, conversation and site is inside its window.
-   * Checked again at the point a card value is released, on the database clock.
+   * True while the newest grant for this card (name and identity), conversation and site is
+   * inside its window. Checked again at the point a card value is released, on the database clock.
    */
-  async hasLiveGrant(q: { secretName: string; siteUrl: string; conversationId: string }): Promise<boolean> {
+  async hasLiveGrant(q: { secretName: string; cardId: string; siteUrl: string; conversationId: string }): Promise<boolean> {
     const siteDomain = registrableDomain(q.siteUrl);
     if (siteDomain === null) return false;
     const result = await this.pool.query(
       `SELECT 1 FROM card_use_requests
-        WHERE secret_name = $1 AND conversation_id = $2 AND site_domain = $3
+        WHERE secret_name = $1 AND card_id = $4 AND conversation_id = $2 AND site_domain = $3
           AND status = 'approved' AND approved_at > now() - interval '30 minutes'
         LIMIT 1`,
-      [q.secretName, q.conversationId, siteDomain],
+      [q.secretName, q.conversationId, siteDomain, q.cardId],
     );
     return result.rowCount === 1;
   }
 
   /**
-   * Spend one fill against the newest live grant for this card, conversation and site.
+   * Spend one fill against the newest live grant for this card (name and identity),
+   * conversation and site.
    * `field` null is a public field (brand, expiry, ...): it needs a grant but isn't counted.
    */
   async consumeFill(q: {
     secretName: string;
+    cardId: string;
     siteUrl: string;
     conversationId: string;
     field: 'number' | 'cvv' | null;
   }): Promise<'ok' | 'no_grant' | 'fill_limit'> {
     const siteDomain = registrableDomain(q.siteUrl);
     if (siteDomain === null) return 'no_grant';
-    // The grant scope is deliberately card + conversation + domain for 30 minutes: not bound to
-    // one checkout, and not revoked when the card is edited or replaced. The owner's retry flow
-    // depends on it: a merchant rejects the card (say, a wrong expiry), the owner fixes the card,
-    // and the retry must go through on the grant already given. Narrowing it forces a needless
-    // re-approval with no safety gain. Decided by the owner on #2481; don't tighten it.
+    // The grant scope is card identity + conversation + domain for 30 minutes: not bound to one
+    // checkout, and not revoked when the card is edited or renewed (card_id survives those). The
+    // owner's retry flow depends on it: a merchant rejects the card (say, a wrong expiry), the
+    // owner fixes it, and the retry goes through on the grant already given. Replacing the card
+    // gives it a new card_id, so a replacement ending in the same four digits needs a new
+    // approval (owner decision on #2483).
     const grant = await this.pool.query<{ id: string }>(
       `SELECT id FROM card_use_requests
-        WHERE secret_name = $1 AND conversation_id = $2 AND site_domain = $3
+        WHERE secret_name = $1 AND card_id = $4 AND conversation_id = $2 AND site_domain = $3
           AND status = 'approved' AND approved_at > now() - interval '30 minutes'
         ORDER BY approved_at DESC
         LIMIT 1`,
-      [q.secretName, q.conversationId, siteDomain],
+      [q.secretName, q.conversationId, siteDomain, q.cardId],
     );
     const grantId = grant.rows[0]?.id;
     if (grantId === undefined) return 'no_grant';

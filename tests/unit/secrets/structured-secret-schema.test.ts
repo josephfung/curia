@@ -11,6 +11,7 @@ import {
   isStructuredSchemaTag,
   normalizeCardLabel,
   parseSecretRef,
+  SecretRefRefusal,
   projectCardField,
   validateCardPublicPatch,
   validateCreditCard,
@@ -173,8 +174,8 @@ describe('projectCardField', () => {
 describe('parseSecretRef', () => {
   it('splits', () => expect(parseSecretRef('user.visa_card#cvv')).toEqual({ name: 'user.visa_card', field: 'cvv' }));
   it('no field', () => expect(parseSecretRef('user.x')).toEqual({ name: 'user.x', field: null }));
-  it('two #', () => expect(() => parseSecretRef('user.x#a#b')).toThrow());
-  it('empty field', () => expect(() => parseSecretRef('user.x#')).toThrow());
+  it('two #', () => expect(() => parseSecretRef('user.x#a#b')).toThrow(SecretRefRefusal));
+  it('empty field', () => expect(() => parseSecretRef('user.x#')).toThrow(SecretRefRefusal));
 });
 
 describe('isStructuredSchemaTag', () => {
