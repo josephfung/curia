@@ -125,7 +125,9 @@ beforeAll(async () => {
   service = new BrowserService({
     logger: createSilentLogger(),
     sessionTtlMs: 600_000,
-    // Same Patchright launch as BrowserService.launchPersistentContext, but headless.
+    // Same Patchright launch as BrowserService.launchPersistentContext, but headless and
+    // unsandboxed: CI's Ubuntu 24.04 runners block the user namespaces bundled Chromium's
+    // sandbox needs (#2521), and this browser only ever loads the routed fixtures below.
     contextFactory: async () => {
       context = await chromium.launchPersistentContext(tmpProfile, {
         headless: true,

@@ -650,6 +650,11 @@ export interface YamlConfig {
      * stays inside the skill's 120s timeout.
      */
     settleCapMs?: number;
+    /**
+     * Run Chrome with its own sandbox (#2521). Default true. In a container this needs the
+     * seccomp profile in docker/seccomp-chrome.json; false runs Chrome with --no-sandbox.
+     */
+    sandbox?: boolean;
   };
   agents?: {
     coordinator?: { config_path?: string };
@@ -1331,7 +1336,11 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   // reach BrowserService and schedule near-continuous sweeps. Reject malformed values here.
   const browser = config.browser;
   if (browser !== undefined) {
-    const { sessionTtlMs, sweepIntervalMs, profileDir, channel, proxy, locale, languages, settleCapMs } = browser;
+    const { sessionTtlMs, sweepIntervalMs, profileDir, channel, proxy, locale, languages, settleCapMs, sandbox } = browser;
+    // A quoted "false" in local.yaml is a truthy string; reject it rather than read it as on.
+    if (sandbox !== undefined && typeof sandbox !== 'boolean') {
+      throw new Error(`browser.sandbox must be true or false, got: ${JSON.stringify(sandbox)}`);
+    }
     if (sessionTtlMs !== undefined && (!Number.isInteger(sessionTtlMs) || sessionTtlMs <= 0)) {
       throw new Error(`browser.sessionTtlMs must be a positive integer, got: ${sessionTtlMs}`);
     }

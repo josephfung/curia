@@ -84,6 +84,10 @@ browser:
   # (ms). Ordinary pages return at once; the wait only runs while a page is blank, still
   # changing URL, or on a sign-in handoff. Air Canada's sign-in chain takes ~28s. Max 90000.
   settleCapMs: 35000
+  # Run Chrome with its own sandbox. In a container this needs the seccomp profile in
+  # docker/seccomp-chrome.json; without it the browser fails to start with an error saying
+  # so. false runs Chrome with --no-sandbox (a renderer exploit gets Curia's privileges).
+  sandbox: true
 
 agents:
   coordinator:

@@ -75,7 +75,28 @@ browser:
   locale: "en-US"         # Browser locale (BCP 47), part of fingerprint hardening.
   languages: []           # Ordered navigator.languages / Accept-Language, e.g. [en-CA, en-US, en]. Empty → [locale].
   settleCapMs: 35000      # Longest web-browser waits for a page to finish redirecting before reading it (ms). Max 90000.
+  sandbox: true           # Run Chrome with its own sandbox. Needs docker/seccomp-chrome.json in a container. See below.
 ```
+
+#### Chrome's sandbox (`sandbox`)
+
+With `sandbox: true` (the default) Chrome runs its own sandbox: renderer processes, which run page code, get their own user, PID and network namespaces and a seccomp-BPF filter. A page that exploits a renderer bug then still needs a second bug to reach Curia's files, environment or network. With `false` Chrome runs with `--no-sandbox`, and the same exploit runs with everything the Curia process has.
+
+The sandbox needs to create user namespaces. Docker's default seccomp profile blocks that, so a container that runs Chrome needs the profile in [`docker/seccomp-chrome.json`](../../docker/seccomp-chrome.json):
+
+```yaml
+services:
+  curia:
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp-chrome.json
+```
+
+Compose reads the file itself and resolves a relative path against the project directory (the compose file's folder unless `--project-directory` says otherwise). A missing file stops the container from starting. The profile is Docker's default ([moby/profiles](https://github.com/moby/profiles/blob/6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef/seccomp/default.json) at `6fe7deb`) with one change: `clone` and `unshare` are allowed with namespace flags. Docker's default otherwise allows them only with `CAP_SYS_ADMIN`. The container still runs without that capability and with `no-new-privileges`. Chrome's setuid sandbox is not an option, because `no-new-privileges` stops it from gaining root.
+
+On Ubuntu 23.10 and later, the host also restricts unprivileged user namespaces through AppArmor (`kernel.apparmor_restrict_unprivileged_userns`). Docker's `docker-default` AppArmor profile allows them (checked on Ubuntu 24.04 with Docker 29), so containers need no AppArmor change. Running from source on such a host, Ubuntu's AppArmor profile for Google Chrome (`/opt/google/chrome/chrome`) allows them, but Playwright's bundled Chromium has no profile. Use `channel: chrome` there, or set `sandbox: false` for local development.
+
+If Chrome cannot set up its sandbox, the browser fails to start with an error that names the profile. Curia never relaunches it without the sandbox on its own. The startup log line `Persistent browser context launched` carries `sandbox: true|false`, and `chrome://sandbox` in the running browser lists both layers.
 
 `settleCapMs` bounds the adaptive settle (#2244): an ordinary page is read at once, and the wait runs only while a page is blank, still changing URL, or on a sign-in handoff. Air Canada's sign-in chain takes up to ~28s. It must be a positive integer of at most 90000, so one wait stays inside the skill's 120s timeout.
 
