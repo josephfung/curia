@@ -86,6 +86,40 @@ The routing decision a decline raises is Curia's, not the principal's.
   them (#1976). Its review task stays with the principal, without the prose: a
   refusal made on someone else's behalf keeps the principal's review.
 
+#### Relaying a decline faithfully (#2494)
+
+A decline's facts travel as data, so the reply has no reason to guess. In
+production a gate-refused block reached the principal as "no ban or blocklist
+capability", and a draft that did not exist as one "sitting in your Drafts".
+
+- **Cause, code first.** The execution layer tags a call its access gates refuse
+  (`gate` on the tool result: `live_principal_turn`, including a lapsed voice
+  grant's refusal or confirmation request (#2495), or `allowed_callers`). The
+  specialist's runtime lists the distinct `live_principal_turn` refusals on
+  `agent.response.gateRefusals`: those are the ones the principal can lift. A
+  decline whose run hit one is `cause: gate_refused`, unless the specialist
+  stated `not_found`. A specialist may state only `not_found` or
+  `capability_absent` in the marker's `cause` attribute; `gate_refused` comes
+  from the platform alone, so injected text cannot claim it. Otherwise
+  `unspecified`.
+- **What was done.** The decline result carries `sent` (the run's message sends),
+  `work_product` (the specialist's text before the marker, whole, without its
+  `<resolved_entities>` block) and `resolvedContactIds`.
+- **Relay on a principal-side turn** is the coordinator's, from those fields: the
+  decline's `next_step` adds a line for the cause (never call a gate refusal a
+  missing capability; never describe a missing object as existing) and for
+  finished work (give it to the principal or use it).
+- **Relay to an outside sender** stays the narrated reply, which says nothing of
+  the cause (#2501). A draft that calls a gate-refused step a missing capability
+  is rejected for the plain fallback.
+- **Records.** The follow-up task, the woken task's note and the principal's
+  review task state the cause, marking a stated one as the specialist's report.
+  A follow-up or woken-task note also says what the run sent (so it is not sent
+  again) and quotes the start of any finished text as data, marked when cut short.
+- **Not covered:** other execution-layer refusals (autonomy score, restricted
+  mode, Gate C) are untagged, and a decline that arrives after the delegate wait
+  times out is relayed by the late-delivery path without its cause.
+
 ### Late delegation delivery (#1799)
 
 A `delegate` wait that times out does not stop the specialist — by design (#1288): cancelling an

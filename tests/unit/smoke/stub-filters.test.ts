@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { toLocalIso } from '../../../src/time/timestamp.js';
 import { CaseToolState, recordedJobRead } from '../../shared/tool-state.js';
 import { fillInputPlaceholders, matchesMailQuery, shapeStubResult } from '../../smoke/stub-filters.js';
+import { declineNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
 
 /** The next fire `scheduler-list` would show: cron in the job's zone, local ISO. */
 function expectedNextRun(cron: string, timezone: string): string {
@@ -62,6 +63,22 @@ describe('mailbox', () => {
     expect((shapeStubResult('ceo-inbox-search', inbox, { query: 'from:elena' }) as { messages: Array<{ id: string }> }).messages.map(m => m.id)).toEqual(['m2']);
     expect((shapeStubResult('ceo-inbox-list', inbox, {}) as { messages: Array<{ id: string }> }).messages.map(m => m.id)).toEqual(['m1']);
     expect((shapeStubResult('ceo-inbox-list', inbox, { unread_only: false }) as { count: number }).count).toBe(2);
+  });
+});
+
+describe('delegate decline stubs (#2494)', () => {
+  const decline = { agent: 'contacts', failed: true, declined: true, reason: 'specialist_decline', retryable: false, message: 'No.' };
+
+  it('attach the next step the delegate skill gives the cause', () => {
+    expect(shapeStubResult('delegate', { ...decline, cause: 'gate_refused' }, {}))
+      .toEqual({ ...decline, cause: 'gate_refused', next_step: declineNextStep('gate_refused', false) });
+    expect((shapeStubResult('delegate', { ...decline, work_product: 'Outline' }, {}) as Record<string, unknown>)['next_step'])
+      .toBe(declineNextStep(undefined, true));
+  });
+
+  it('leave a case\'s own next step and a non-decline alone', () => {
+    expect(shapeStubResult('delegate', { ...decline, next_step: 'custom' }, {})).toEqual({ ...decline, next_step: 'custom' });
+    expect(shapeStubResult('delegate', { agent: 'contacts', response: 'Done.' }, {})).toEqual({ agent: 'contacts', response: 'Done.' });
   });
 });
 

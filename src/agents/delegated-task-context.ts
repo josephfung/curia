@@ -226,6 +226,9 @@ export function renderDelegatedTaskContext(identity: HarnessRequesterIdentity | 
     SPECIALIST_DECLINE_MARKER_EXAMPLE,
     // The delegating agent falls back from what the marker says (#2496).
     'Inside it, say what you could not do and why, what you did do, and any alternative you can offer.',
+    // The cause travels as data, so the delegating agent cannot misreport it (#2494).
+    'Add a cause attribute when one fits: cause="not_found" when what you were asked to act on does not exist,',
+    'cause="capability_absent" when none of your tools can do it. A permission refusal is recorded for you.',
     'Emit that marker only when refusing the task. Do not echo it in a normal answer.',
     'An RSVP response of decline is a normal answer, not this marker.',
   ];

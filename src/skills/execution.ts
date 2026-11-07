@@ -2049,7 +2049,8 @@ export class ExecutionLayer {
           const confirmError = await this.buildElevatedConfirmationError(
             toolName, input, manifest.action_risk, autonomyConfig?.score ?? 0, options, skillLogger,
           );
-          return { success: false, error: this.wrapSkillError(confirmError) };
+          // Still a live-turn refusal: the principal's confirmation lifts it (#2494).
+          return { success: false, error: this.wrapSkillError(confirmError), gate: 'live_principal_turn' };
         }
         this.logger.warn(
           {
@@ -2063,6 +2064,7 @@ export class ExecutionLayer {
         return {
           success: false,
           error: this.wrapSkillError(`Tool '${toolName}' requires a live principal turn — it can only be invoked directly by the principal, not by a system job, an agent, or a woken/scheduled task`),
+          gate: 'live_principal_turn',
         };
       }
     }
@@ -2090,6 +2092,7 @@ export class ExecutionLayer {
           error: this.wrapSkillError(
             `Tool '${toolName}' is restricted to agents: ${allowedCallers.join(', ')}`,
           ),
+          gate: 'allowed_callers',
         };
       }
     }
@@ -3278,11 +3281,12 @@ export class ExecutionLayer {
         const confirmError = await this.buildElevatedConfirmationError(
           toolName, input, manifest.action_risk, autonomyConfig?.score ?? 0, options, skillLogger,
         );
-        return { success: false, error: this.wrapSkillError(confirmError) };
+        return { success: false, error: this.wrapSkillError(confirmError), gate: 'live_principal_turn' };
       }
       return {
         success: false,
         error: this.wrapSkillError(`Tool '${toolName}' requires a live principal turn — it can only be invoked directly by the principal, not by a system job, an agent, or a woken/scheduled task`),
+        gate: 'live_principal_turn',
       };
     }
 

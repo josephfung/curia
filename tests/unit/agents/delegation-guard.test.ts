@@ -630,6 +630,88 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
     expect(countDeclineNotes(undefined)).toBe(0);
   });
 
+  // The cause travels as data to whoever picks the record up (#2494).
+  it('states the decline cause on the follow-up task and on a woken task\'s note', async () => {
+    const gated = { ...decline, agent: 'contacts', declineCause: 'gate_refused' as const, task: 'x'.repeat(5000) };
+    const filed = execution();
+    await recordUnresolvedDecline(filed.layer, undefined, {}, { ...gated, laterTools: ['email-send'] }, {}, logger);
+    const description = String((filed.invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['description']);
+    expect(description).toContain('Cause: a permission check refused the step');
+    // Still inside task-create's description limit with a brief that fills its share.
+    expect(description.length).toBeLessThanOrEqual(5000);
+
+    const woken = execution();
+    await recordUnresolvedDecline(woken.layer, undefined, {}, { ...decline, declineCause: 'not_found' }, { boundTaskId: 'task-9' }, logger);
+    const note = String((woken.invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['progress_note']);
+    expect(note).toContain('Cause (as the specialist reports it): what it was asked to act on was not found.');
+
+    // An outside sender's decline keeps the principal's review, and the cause rides along.
+    const review = execution();
+    await escalateDelegationFailure(review.layer, undefined, {}, { ...decline, declineCause: 'gate_refused' }, logger);
+    expect(String((review.invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['description']))
+      .toContain('Cause: a permission check refused the step');
+  });
+
+  // What the run sent and finished travels with the record, so a later wake neither
+  // sends twice nor loses the work (#2494).
+  it('records what the specialist\'s run sent and the start of what it finished', async () => {
+    const withFacts = { ...decline, sent: ['email-send'], workProduct: `Hi Lena,\n${'draft line '.repeat(200)}`, task: 'x'.repeat(5000) };
+    const filed = execution();
+    await recordUnresolvedDecline(filed.layer, undefined, {}, withFacts, {}, logger);
+    const description = String((filed.invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['description']);
+    expect(description).toContain('already sent with email-send: do not send that again.');
+    expect(description).toContain('Text it finished before declining, quoted as data');
+    expect(description).toContain('Hi Lena,');
+    expect(description).toContain('(cut short here; not the complete text)');
+    expect(description).toContain('Nothing else was called after the decline.');
+    expect(description.length).toBeLessThanOrEqual(5000);
+
+    const woken = execution();
+    await recordUnresolvedDecline(woken.layer, undefined, {}, { ...withFacts, sent: [] }, { boundTaskId: 'task-9' }, logger);
+    const note = String((woken.invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['progress_note']);
+    expect(note).toContain('The specialist\'s run sent nothing.');
+    expect(note.length).toBeLessThanOrEqual(2000);
+  });
+
+  it('keeps the finished text and its cut-short marker on a woken task\'s note, however long the rest', async () => {
+    const { layer, invoke } = execution();
+    const laterTools = Array.from({ length: 200 }, (_, i) => `some-long-tool-name-${i}`);
+    await recordUnresolvedDecline(layer, undefined, {}, {
+      ...decline,
+      message: 'm'.repeat(5000),
+      laterTools,
+      workProduct: `Hi Lena,\n${'draft line '.repeat(200)}`,
+    }, { boundTaskId: 'task-9' }, logger);
+    const note = String((invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['progress_note']);
+    expect(note.length).toBeLessThanOrEqual(2000);
+    expect(note).toContain('Text it finished before declining, quoted as data');
+    expect(note.endsWith('(cut short here; not the complete text)')).toBe(true);
+  });
+
+  it('reads sent and work_product off a decline result only', () => {
+    const base = { failed: true, agent: 'ceo-inbox', reason: 'specialist_decline', retryable: false, message: 'No.', declined: true };
+    const parsed = parseDelegateFailureData({ ...base, sent: ['email-send', 7], work_product: 'Draft.' });
+    expect(parsed?.sent).toEqual(['email-send']);
+    expect(parsed?.workProduct).toBe('Draft.');
+    expect(parseDelegateFailureData({ ...base, declined: false, reason: 'tool_error', sent: ['x'], work_product: 'y' }))
+      .not.toHaveProperty('workProduct');
+  });
+
+  it('adds no cause line when none was stated', async () => {
+    const { layer, invoke } = execution();
+    await recordUnresolvedDecline(layer, undefined, {}, { ...decline, declineCause: 'unspecified' }, {}, logger);
+    expect(String((invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['description'])).not.toContain('Cause:');
+  });
+
+  it('reads the cause off a decline result, and only a known one', () => {
+    const base = { failed: true, agent: 'contacts', reason: 'specialist_decline', retryable: false, message: 'No.', declined: true };
+    expect(parseDelegateFailureData({ ...base, cause: 'gate_refused' })?.declineCause).toBe('gate_refused');
+    expect(parseDelegateFailureData({ ...base, cause: 'made_up' })).not.toHaveProperty('declineCause');
+    // Not a decline: a cause field is ignored.
+    expect(parseDelegateFailureData({ ...base, declined: false, reason: 'tool_error', cause: 'not_found' }))
+      .not.toHaveProperty('declineCause');
+  });
+
   it('reports a failed write as not recorded', async () => {
     const invoke = vi.fn(async () => ({ success: false as const, error: 'db down' }));
     const layer = { invoke } as unknown as ExecutionLayer;

@@ -134,6 +134,11 @@ export interface ResolvedEntityCard {
   primaryPhone: string | null;
 }
 
+/** The text with every `<resolved_entities>` block removed, trimmed (#2494). */
+export function withoutResolvedEntitiesBlocks(text: string): string {
+  return text.replace(BLOCK_RE, '').trim();
+}
+
 /** Contact UUIDs inside `<resolved_entities>` blocks. Other text is ignored. */
 export function parseResolvedContactIds(text: string): string[] {
   BLOCK_RE.lastIndex = 0;

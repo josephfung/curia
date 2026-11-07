@@ -1774,6 +1774,88 @@ describe('AgentRuntime tool-use loop', () => {
     const payload = responses[0]!.payload;
     expect(payload.skillsCalled).toEqual(['calendar-create-hold', 'email-send', 'calendar-create-event']);
     expect(payload.sends).toEqual(['calendar-create-event']);
+    // No access gate refused anything, so the field is left off.
+    expect(payload).not.toHaveProperty('gateRefusals');
+  });
+
+  it('reports calls an access gate refused, so a decline can say permission rather than capability (#2494)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [
+              { id: 'call-tier', name: 'contact-set-tier', input: { contact_id: 'c1', tier: 'blocked' } },
+              { id: 'call-tier-2', name: 'contact-set-tier', input: { contact_id: 'c1', tier: 'blocked' } },
+              { id: 'call-merge', name: 'contact-merge', input: {} },
+              { id: 'call-lookup', name: 'contact-lookup', input: { name: 'Jordan' } },
+            ],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: '<specialist_decline reason="tier_gate">Block not applied.</specialist_decline>',
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockImplementation(async (name: string) => {
+        if (name === 'contact-set-tier') {
+          return { success: false, error: 'requires a live principal turn', gate: 'live_principal_turn' };
+        }
+        // Static config no go-ahead lifts: not reported as a permission refusal.
+        if (name === 'contact-merge') return { success: false, error: 'restricted to agents: coordinator', gate: 'allowed_callers' };
+        // An ordinary failure is not a gate refusal.
+        return { success: false, error: 'lookup service unavailable' };
+      }),
+    } as unknown as ExecutionLayer;
+
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+
+    const toolDef = (name: string) => ({
+      name,
+      description: name,
+      input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    });
+    const agent = new AgentRuntime({
+      agentId: 'contacts',
+      systemPrompt: 'You are the contacts specialist.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [toolDef('contact-set-tier'), toolDef('contact-merge'), toolDef('contact-lookup')],
+      errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'contacts',
+      conversationId: 'conv-gate',
+      channelId: 'internal',
+      senderId: 'coordinator',
+      content: 'Block Jordan Lee',
+      parentEventId: 'parent-gate',
+    }));
+
+    expect(responses).toHaveLength(1);
+    // Distinct, and only the live-turn gate: an allowed_callers refusal is static config.
+    expect(responses[0]!.payload.gateRefusals).toEqual(['contact-set-tier']);
   });
 
   it('caps failedSkills to distinct names and counts overflow (#1830)', async () => {
@@ -8828,5 +8910,53 @@ describe('Specialist declines: fall back before escalating (#2496)', () => {
     expect(note).toContain('ceo-inbox declined');
     // What the run did after the decline, so the next wake does not do it twice.
     expect(note).toContain('email-send');
+  });
+
+  // The cause travels as data to every place a decline is relayed or recorded (#2494).
+  describe('the decline cause reaches the reply and the record (#2494)', () => {
+    const gated = (agent: string) => ({
+      ...declineData(agent, 'Block not applied: contact-set-tier refused both calls as a non-principal turn.'),
+      cause: 'gate_refused',
+    });
+
+    it('rejects an outside sender\'s draft that denies the capability, without telling them why (#2501)', async () => {
+      const { responses, chatCalls } = await runDeclineTurn({
+        channelId: 'email',
+        senderId: 'lena@example.test',
+        content: 'Subject: Mailing list\n\nPlease block Jordan Lee from the list.',
+        metadata: {
+          originator: { contactId: 'contact-lena', systemRole: null, channel: 'email', initiatedAt: '2026-11-07T10:00:00.000Z', tier: 'known' },
+        },
+        llm: [
+          toolUse([{ name: 'delegate', input: { agent: 'contacts', task: 'Block Jordan Lee' } }]),
+          // The production misreport, as the narration draft.
+          text('<reply>There is no ban or blocklist capability, so I cannot block Jordan Lee.</reply>'),
+        ],
+        delegate: () => gated('contacts'),
+      });
+
+      const narration = chatCalls[1]!.messages.at(-1) as { role: string; content: string };
+      expect(narration.role).toBe('system');
+      expect(narration.content).not.toMatch(/permission|approval|go-ahead/);
+      expect(responses).toHaveLength(1);
+      expect(responses[0]!.payload.content).toMatch(/^I wasn't able to take that one on\./);
+      expect(responses[0]!.payload.content).not.toMatch(/capability|principal|approval/i);
+    });
+
+    it('states the cause on a background decline\'s follow-up task', async () => {
+      const { invocations } = await runDeclineTurn({
+        channelId: 'scheduler',
+        senderId: 'scheduler',
+        content: 'Run the weekly contacts cleanup job.',
+        llm: [
+          toolUse([{ name: 'delegate', input: { agent: 'contacts', task: 'Block Jordan Lee' } }]),
+          text('Cleanup ran.'),
+        ],
+        delegate: () => gated('contacts'),
+      });
+      const created = tools(invocations, 'task-create');
+      expect(created).toHaveLength(1);
+      expect(String(created[0]!.input['description'])).toContain('Cause: a permission check refused the step');
+    });
   });
 });
