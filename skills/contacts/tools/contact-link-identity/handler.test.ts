@@ -182,8 +182,118 @@ describe('ContactLinkIdentityHandler', () => {
     await contacts.linkIdentity({ contactId: danaId, channel: 'sms', channelIdentifier: '+14165550199', source });
     const result = await handler.execute(makeCtx(contacts, { contact_id: danaId, channel: 'sms', identifier: '+14165550199' }));
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/Only the principal can verify it/);
+    if (!result.success) {
+      expect(result.error).toMatch(/only the principal can vouch for it/);
+      // Names both routes, not just "the console" (the principal may be in the console's chat).
+      expect(result.error).toMatch(/asking Curia directly in a live conversation/);
+      expect(result.error).toMatch(/identity editor/);
+      expect(result.error).not.toContain('5550199');
+    }
     expect((await contacts.getContactWithIdentities(danaId))!.identities[0]!.verified).toBe(false);
+  });
+
+  // #2515: on a live principal turn, the principal vouches for an unverified address of
+  // any source, after the same duplicate and provenance checks.
+  describe('re-stating an unverified address on a live principal turn', () => {
+    const PRINCIPAL_METADATA = {
+      originator: { contactId: 'principal-contact', systemRole: 'principal', channel: 'http', initiatedAt: '2026-11-05T15:00:00Z', tier: 'principal' },
+    };
+    const LIVE: Partial<ToolContext> = {
+      identifierSources: sourcesFrom('Can you verify them as office@acme.example, then try the drafts again'),
+      liveTurn: true,
+      taskMetadata: PRINCIPAL_METADATA,
+    };
+    let acmeId: string;
+
+    const restate = (extra: Partial<ToolContext>, input: Record<string, unknown> = {}) =>
+      handler.execute(makeCtx(contacts, { contact_id: acmeId, channel: 'email', identifier: 'office@acme.example', ...input }, extra));
+    const isVerified = async (): Promise<boolean> =>
+      (await contacts.getContactWithIdentities(acmeId))!.identities[0]!.verified;
+
+    beforeEach(async () => {
+      acmeId = (await contacts.createContact({ displayName: 'Acme Office', source: 'agent_called' })).id;
+    });
+
+    it.each(['agent_called', 'agent_stated', 'self_claimed'] as const)('verifies an unverified %s address, keeping its source', async (source) => {
+      await contacts.linkIdentity({ contactId: acmeId, channel: 'email', channelIdentifier: 'office@acme.example', source, verified: false });
+      expect(await isVerified()).toBe(false);
+      const result = await restate(LIVE);
+      expect(result).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
+      expect((await contacts.getContactWithIdentities(acmeId))!.identities[0]).toMatchObject({ source, verified: true });
+    });
+
+    describe('refuses, and leaves it unverified', () => {
+      beforeEach(async () => {
+        await contacts.linkIdentity({
+          contactId: acmeId, channel: 'email', channelIdentifier: 'office@acme.example', source: 'agent_called', verified: false,
+        });
+      });
+
+      it.each([
+        ['principal lineage with no live turn (a woken or scheduled task)', { liveTurn: undefined }],
+        ['a woken task that a live-turn flag leaked onto', { taskMetadata: { ...PRINCIPAL_METADATA, wakeContext: { derived: false } } }],
+        ['a live-turn flag without principal lineage', { taskMetadata: { originator: { contactId: 'agent', systemRole: 'agent', channel: 'internal', initiatedAt: '2026-11-05T15:00:00Z', tier: null } } }],
+        ['no task metadata at all', { taskMetadata: undefined }],
+      ] as const)('%s', async (_label, override) => {
+        const result = await restate({ ...LIVE, ...override });
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error).toMatch(/only the principal can vouch for it/);
+        expect(await isVerified()).toBe(false);
+      });
+
+      it('an address with no source in the conversation', async () => {
+        const result = await restate({ ...LIVE, identifierSources: sourcesFrom('verify the Acme address please') });
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error).toContain('appears in no message a person sent');
+          expect(result.error).toContain('Nothing was verified.');
+          expect(result.error).not.toContain('office@acme.example');
+        }
+        expect(await isVerified()).toBe(false);
+      });
+
+      it('an address another contact holds', async () => {
+        // The store cannot hold one address on two contacts, so the check's answer is stubbed:
+        // the same number in another format, as in the outbound_recipient case above.
+        const other = await contacts.createContact({ displayName: 'Acme Holding', source: 'ceo_stated' });
+        vi.spyOn(contacts, 'findLikelyDuplicates').mockResolvedValueOnce({ taken: [{ contact: other, channel: 'email' }], candidates: [] });
+        const result = await restate(LIVE);
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error).toContain(other.id);
+          expect(result.error).toContain('Nothing was verified.');
+        }
+        expect(await isVerified()).toBe(false);
+      });
+
+      it('an address resembling another contact\'s until distinct_from names that contact', async () => {
+        const similarId = (await contacts.createContact({ displayName: 'Acme Partners', source: 'ceo_stated' })).id;
+        await contacts.linkIdentity({ contactId: similarId, channel: 'email', channelIdentifier: 'office@acme.exmaple', source: 'ceo_stated' });
+        const refused = await restate(LIVE);
+        expect(refused.success).toBe(false);
+        if (!refused.success) {
+          expect(refused.error).toContain(`"Acme Partners" (${similarId}): similar email address`);
+          expect(refused.error).toContain('Nothing was verified.');
+        }
+        expect(await isVerified()).toBe(false);
+
+        const retried = await restate(LIVE, { distinct_from: [similarId] });
+        expect(retried).toMatchObject({ success: true, data: { verified: true } });
+      });
+    });
+
+    it('still refuses a structural contact on a live turn', async () => {
+      const principal = await contacts.createContact({ displayName: 'Joseph Fung', source: 'ceo_stated' });
+      await contacts.saveContact({ ...principal, systemRole: 'principal' });
+      await contacts.linkIdentity({
+        contactId: principal.id, channel: 'email', channelIdentifier: 'office@acme.example', source: 'agent_called', verified: false,
+      });
+      const result = await handler.execute(makeCtx(contacts,
+        { contact_id: principal.id, channel: 'email', identifier: 'office@acme.example' }, LIVE));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/managed by the principal, in the console/);
+      expect((await contacts.getContactWithIdentities(principal.id))!.identities[0]!.verified).toBe(false);
+    });
   });
 
   it('refuses an unknown contact ID and a malformed identifier', async () => {

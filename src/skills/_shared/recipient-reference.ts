@@ -602,9 +602,18 @@ export async function resolveRecipientReference(
     // retype it into another field, which is the failure this design removes.
     const who = isPrincipal ? 'The principal' : contactWho(found.contact);
     const why = onChannel.length > 0 ? ' (the ones on file are unverified, inactive, or not sendable on this channel)' : '';
+    // contact-link-identity verifies a re-stated outbound_recipient address on any turn, but
+    // any other unverified source only while the principal is asking for it live (#2515).
+    // Say which, rather than send the agent round to a re-statement that will be refused.
+    const restatable = onChannel.some((identity) => !identity.verified && identity.source === 'outbound_recipient');
     const next = isPrincipal
       ? 'Use a channel listed in Principal Contact Details.'
-      : 'Reach them on another channel, or add (or re-state) an address you are sure of with contact-link-identity.';
+      : restatable
+        ? 'Reach them on another channel, or re-state the address with contact-link-identity, copied from a message ' +
+          'or page in this conversation.'
+        : 'Reach them on another channel, or give contact-link-identity an address copied from a message or page in this ' +
+          'conversation. Re-stating an unverified one already on file is refused unless the principal is asking for ' +
+          'it in a live conversation.';
     return {
       ok: false,
       error: `${who} has no verified, active ${channel} address${why}. Nothing was sent. ${next}`,

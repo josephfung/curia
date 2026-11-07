@@ -160,16 +160,16 @@ Rejected verification rules:
 - **Unverified, with principal approval on the first send.** A person sees every new address once, but every cold outreach waits on the principal, and #2040 already weighed that friction as a product change.
 - **Unverified but sendable.** The resolver would special-case a source, breaking the rule that only verified addresses are sendable.
 
-This is not the near-miss rule rejected below (Option A). It covers every contact, not only the principal. It runs when an address is first stored, and again when an `outbound_recipient` address is re-stated before it is verified, not on every send. A hit asks the agent rather than blocks the send.
+This is not the near-miss rule rejected below (Option A). It covers every contact, not only the principal. It runs when an address is first stored, and again when an unverified address is re-stated and would be verified (below), not on every send. A hit asks the agent rather than blocks the send.
 
 Re-stating an address already on the same contact:
 - a verified identity: unchanged;
 - an unverified `outbound_recipient` identity: the same duplicate check and provenance check run first, because the gateway records the address as the agent typed it, typos included (the 2026-10-07 incident address was one). If both pass, the identity is verified in place, keeping its source. If not, the call is refused and nothing is verified;
-- anything else unverified (`self_claimed`, `sms_participant`): refused, because only the principal can verify those.
+- anything else unverified (`agent_called`, `self_claimed`, `sms_participant`, …): verified in place after the same two checks, but only on a live principal turn (`isLivePrincipalTurn`, with no `wakeContext`), directly or through a synchronous delegation (#2515). The principal is vouching for it right now. A woken, scheduled or bullpen task has principal lineage at most, which is not enough, the same line the `elevated` gate draws (ADR-017). Outside a live turn the call is refused, and the refusal names both routes: asking Curia in a live conversation, or the contact's identity editor in the console.
 
 Structural contacts are off limits to agents. No agent skill changes the addresses of a structural contact (the principal, an agent or a system contact: `isStructuralContact`). `contact-link-identity` refuses adding an identity, re-stating one, and verifying an `outbound_recipient` one. `contact-merge` refuses a structural contact on either side, since the primary gains the secondary's identities. `contact-unlink-identity` and `contact-set-identity-status` refuse a structural contact's identities. The principal's verified identities form the principal identity snapshot, which Gate C's carve-outs and the `principal` send alias trust, so an address an agent added there would be a way to impersonate the principal. The principal manages their own addresses in the console. The `ceo_stated` path that `contact-link-identity` used before this change had the same hole, and a security review flagged it.
 
-Apart from structural contacts, an agent may vouch only for what an agent typed. This is how agents reach contacts that a raw send created before this change.
+Apart from structural contacts, an agent may vouch only for what an agent typed, and the principal, live, for any other unverified address. This is how agents reach contacts that a raw send created before this change.
 
 ### Phone-family numbers are derived across channels (#2447)
 
