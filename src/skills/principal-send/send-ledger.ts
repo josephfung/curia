@@ -19,6 +19,8 @@ export interface PrincipalSendEntry {
   at: string;
   messageId?: string;
   outcome: 'sending' | 'sent' | 'held';
+  /** Why an autonomous send was held or refused (#2474 PR 2). Only on `held` entries. */
+  reason?: string;
 }
 
 const MODES: readonly string[] = ['principal-directed', 'autonomous'];
@@ -37,17 +39,19 @@ function isStringArray(v: unknown): v is string[] {
 export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
   if (doc.type !== PRINCIPAL_SEND_DOC_TYPE) return null;
   const f = doc.frontmatter;
-  const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome } = f;
+  const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome, reason } = f;
   if (typeof draftId !== 'string' || typeof threadId !== 'string' || typeof at !== 'string') return null;
   if (!isStringArray(recipients)) return null;
   if (typeof mode !== 'string' || !MODES.includes(mode)) return null;
   if (typeof outcome !== 'string' || !OUTCOMES.includes(outcome)) return null;
   if (messageId !== undefined && typeof messageId !== 'string') return null;
+  if (reason !== undefined && typeof reason !== 'string') return null;
   return {
     draftId, threadId, recipients, at,
     mode: mode as PrincipalSendEntry['mode'],
     outcome: outcome as PrincipalSendEntry['outcome'],
     ...(messageId !== undefined ? { messageId } : {}),
+    ...(reason !== undefined ? { reason } : {}),
   };
 }
 
@@ -68,6 +72,25 @@ export class PrincipalSendLedger {
       },
       body: '',
       // Unowned: the marker outlives the task that sent it, and /scratch's TTL retires it.
+      taskId: null,
+    });
+  }
+
+  /**
+   * Records an autonomous send that was held or refused, with why (#2474 PR 2). It starts the
+   * thread's cooldown (checkAutonomousLimits), so a resampled judge gets one try a day.
+   * Create-only like recordSending. Throws on a repo failure.
+   */
+  async recordHeld(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId'> & { reason: string }): Promise<void> {
+    const path = `${draftPrefix(e.draftId)}${Date.now()}.md`;
+    await this.docs.create({
+      path,
+      type: PRINCIPAL_SEND_DOC_TYPE,
+      frontmatter: {
+        draft_id: e.draftId, thread_id: e.threadId, recipients: e.recipients, mode: e.mode, at: e.at,
+        outcome: 'held', reason: e.reason,
+      },
+      body: '',
       taskId: null,
     });
   }
@@ -100,5 +123,19 @@ export class PrincipalSendLedger {
   async list(): Promise<PrincipalSendEntry[]> {
     const docs = await this.docs.listByPrefix(`${PRINCIPAL_SEND_LEDGER_PREFIX}/`);
     return docs.map(parseLedgerDoc).filter((e): e is PrincipalSendEntry => e !== null);
+  }
+
+  /**
+   * Autonomous entries on `threadId` whose `at` is at or after `sinceMs` (epoch ms), for the
+   * thread cooldown (#2474 PR 2). Principal-directed sends never start a cooldown. Fails closed:
+   * an entry with an unreadable `at` counts as recent, since a broken or forged marker may only
+   * block autonomous sends on its thread, never allow one. Throws on a repo failure.
+   */
+  async recentForThread(threadId: string, sinceMs: number): Promise<PrincipalSendEntry[]> {
+    return (await this.list()).filter((e) => {
+      if (e.mode !== 'autonomous' || e.threadId !== threadId) return false;
+      const at = Date.parse(e.at);
+      return !Number.isFinite(at) || at >= sinceMs;
+    });
   }
 }

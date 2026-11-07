@@ -83,3 +83,35 @@ describe('parseLedgerDoc', () => {
     expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, recipients: 'x' } })).toBeNull();
   });
 });
+
+describe('PrincipalSendLedger autonomous lookups (#2474 PR 2)', () => {
+  it('recordHeld stores the reason', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordHeld({ ...entry, mode: 'autonomous', reason: 'thread_cooldown' });
+    expect(await ledger.list()).toEqual([{ ...entry, mode: 'autonomous', outcome: 'held', reason: 'thread_cooldown' }]);
+    expect(docs.create.mock.calls[0]![0].path.startsWith(`${PRINCIPAL_SEND_LEDGER_PREFIX}/d1-`)).toBe(true);
+  });
+
+  it('recentForThread returns only autonomous entries on that thread inside the window', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    const since = Date.parse('2026-11-06T12:00:00.000Z');
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordHeld({ ...entry, draftId: 'b', mode: 'autonomous', at: '2026-11-07T11:00:00.000Z', reason: 'hold' });
+    await ledger.recordSending({ ...entry, draftId: 'c', mode: 'principal-directed', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'd', mode: 'autonomous', threadId: 't2', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'e', mode: 'autonomous', at: '2026-11-05T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'f', mode: 'autonomous', at: 'not a date' });
+    const got = await ledger.recentForThread('t1', since);
+    // An unreadable time counts as recent (fail closed).
+    expect(got.map((e) => e.draftId).sort()).toEqual(['a', 'b', 'f']);
+  });
+
+  it('parseLedgerDoc rejects a non-string reason', async () => {
+    const docs = makeDocs();
+    await new PrincipalSendLedger(docs, logger).recordHeld({ ...entry, reason: 'x' });
+    const doc = [...docs.docs.values()][0]!;
+    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, reason: 7 } })).toBeNull();
+  });
+});

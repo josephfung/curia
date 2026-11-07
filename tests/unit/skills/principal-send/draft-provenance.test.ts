@@ -122,3 +122,53 @@ describe('DraftProvenance.editedByCuria (#2474 final review S1)', () => {
     await expect(new DraftProvenance(repo, logger, () => NOW).editedByCuria(['d1'])).rejects.toThrow('db down');
   });
 });
+
+describe('DraftProvenance.curiaWritesInTask (#2474 PR 2)', () => {
+  function taskRepo(rows: AuditLogRow[]) {
+    const repo = makeRepo([]);
+    repo.findToolResultsForTasks.mockResolvedValue(rows);
+    return repo;
+  }
+
+  it('created only for draft-reply with already_exists false in this task', async () => {
+    const created = taskRepo([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', already_exists: false } }, '2026-11-07T11:00:00.000Z')]);
+    const p = new DraftProvenance(created, logger, () => NOW);
+    expect(await p.curiaWritesInTask('d1', 'task-1')).toEqual({ created: true, lastWriteAt: new Date('2026-11-07T11:00:00.000Z') });
+    expect(created.findToolResultsForTasks).toHaveBeenCalledWith(['task-1'], 500);
+
+    const existing = taskRepo([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', already_exists: true } })]);
+    expect(await new DraftProvenance(existing, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).toEqual({ created: false, lastWriteAt: null });
+
+    const failed = taskRepo([row('ceo-inbox-draft-reply', { success: false, error: 'x', data: { draft_id: 'd1' } })]);
+    expect(await new DraftProvenance(failed, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).toEqual({ created: false, lastWriteAt: null });
+
+    const other = taskRepo([row('ceo-inbox-draft-compose', { success: true, data: { draft_id: 'd2' } })]);
+    expect(await new DraftProvenance(other, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).toEqual({ created: false, lastWriteAt: null });
+  });
+
+  it('lastWriteAt includes a same-task draft-edit', async () => {
+    // Newest first, as findToolResultsForTasks returns them.
+    const repo = taskRepo([
+      row('ceo-inbox-draft-edit', { success: true, data: { draft_id: 'd1' } }, '2026-11-07T11:30:00.000Z'),
+      row('ceo-inbox-draft-edit', { success: false, error: 'x', data: { draft_id: 'd1' } }, '2026-11-07T11:45:00.000Z'),
+      row('ceo-inbox-draft-compose', { success: true, data: { draft_id: 'd1' } }, '2026-11-07T11:00:00.000Z'),
+    ]);
+    expect(await new DraftProvenance(repo, logger, () => NOW).curiaWritesInTask('d1', 'task-1'))
+      .toEqual({ created: true, lastWriteAt: new Date('2026-11-07T11:30:00.000Z') });
+  });
+
+  it('a draft created in another task is not created', async () => {
+    // The lookback finds it, but this task's results do not.
+    const repo = taskRepo([row('ceo-inbox-draft-edit', { success: true, data: { draft_id: 'd1' } }, '2026-11-07T11:30:00.000Z')]);
+    repo.findToolResults.mockResolvedValue([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', already_exists: false } })]);
+    const result = await new DraftProvenance(repo, logger, () => NOW).curiaWritesInTask('d1', 'task-2');
+    expect(result.created).toBe(false);
+    expect(repo.findToolResults).not.toHaveBeenCalled();
+  });
+
+  it('throws when the audit read fails', async () => {
+    const repo = makeRepo([]);
+    repo.findToolResultsForTasks.mockRejectedValue(new Error('db down'));
+    await expect(new DraftProvenance(repo, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).rejects.toThrow('db down');
+  });
+});
