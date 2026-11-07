@@ -2167,3 +2167,155 @@ describe('CeoInboxSentObserveHandler', () => {
     });
   });
 });
+
+describe('#2474 Curia sends from the principal mailbox are not the principal\'s writing', () => {
+  let handler: CeoInboxSentObserveHandler;
+  let mockFetch: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    handler = new CeoInboxSentObserveHandler();
+    mockFetch = vi.spyOn(globalThis, 'fetch');
+  });
+  afterEach(() => {
+    mockFetch.mockRestore();
+  });
+
+  // 2024-07-03T00:00:00Z
+  const AT_SEC = 1_719_964_800;
+  const AT_ISO = '2024-07-03T00:00:00.000Z';
+
+  const base = {
+    thread_id: 'thread-1',
+    subject: 'Re: Hello',
+    from: [{ email: 'ceo@example.com' }],
+    to: [{ email: 'Alice@Example.com' }],
+    cc: [],
+    unread: false,
+    folders: ['SENT'],
+    attachments: [],
+  };
+
+  function ledgerDoc(overrides: { messageId?: string; recipients?: string[]; threadId?: string } = {}) {
+    return {
+      path: '/scratch/principal-mailbox-sends/draft-9-1.md',
+      type: 'principal-mailbox-send',
+      frontmatter: {
+        draft_id: 'draft-9',
+        thread_id: overrides.threadId ?? 'thread-1',
+        recipients: overrides.recipients ?? ['alice@example.com'],
+        mode: 'principal-directed',
+        at: AT_ISO,
+        outcome: 'sent',
+        ...(overrides.messageId ? { message_id: overrides.messageId } : {}),
+      },
+      body: '',
+    };
+  }
+
+  const voiceSnapshot = {
+    path: '/scratch/voice-learning/draft-1.md',
+    type: VOICE_LEARNING_DOC_TYPE,
+    frontmatter: {
+      draft_id: 'draft-1',
+      thread_id: 'thread-1',
+      subject: 'Re: Hello',
+      recipients: { to: [{ email: 'alice@example.com' }], cc: [] },
+      created_at: '2024-07-02T00:00:00.000Z',
+    },
+    body: 'Thanks Alice.',
+  };
+
+  function serve(id: string, date: number): void {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes(`/messages/${id}`)) {
+        return new Response(
+          JSON.stringify({ data: { ...base, id, date, body: '<p>Thanks Alice.</p>', snippet: 'Thanks Alice.', bcc: [], labels: [] } }),
+          { status: 200 },
+        );
+      }
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify({ data: [{ ...base, id, snippet: 'Thanks Alice.', date }] }), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+  }
+
+  async function run(id: string, date: number, snapshots: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) {
+    serve(id, date);
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_721_000_000_000,
+      snapshots: snapshots as never,
+      tasks: [],
+      ...extra,
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    return { ctx, data: (result as { data: Record<string, unknown> }).data };
+  }
+
+  it('skips a SENT message whose id is in the ledger', async () => {
+    // Far outside the time window and a different thread: only the message id can match.
+    const { ctx, data } = await run('msg-curia', AT_SEC + 86_400, [
+      ledgerDoc({ messageId: 'msg-curia', threadId: 'other-thread' }),
+      voiceSnapshot,
+    ]);
+    expect(data.draft_matches).toBe(0);
+    expect(ctx.__docs.get(PENDING_DIFFS_PATH)?.body ?? '').not.toContain('msg-curia');
+  });
+
+  it('skips a SENT message on the ledger\'s thread to the same recipients within ten minutes', async () => {
+    // Case-differing address, no message id on the entry (the id write may have been lost).
+    const { data } = await run('msg-curia', AT_SEC + 300, [ledgerDoc(), voiceSnapshot]);
+    expect(data.draft_matches).toBe(0);
+  });
+
+  it('still matches a principal send on that thread an hour later', async () => {
+    const { data, ctx } = await run('msg-principal', AT_SEC + 3600, [ledgerDoc(), voiceSnapshot]);
+    expect(data.draft_matches).toBe(1);
+    expect(ctx.__docs.get(PENDING_DIFFS_PATH)?.body).toContain('msg-principal');
+  });
+
+  it('shadow pairing ignores Curia\'s sends', async () => {
+    const extract = vi.fn();
+    const { data, ctx } = await run('msg-curia', AT_SEC + 300, [
+      ledgerDoc({ messageId: 'msg-curia' }),
+      {
+        path: shadowDraftPath('src-1'),
+        type: SHADOW_DOC_TYPE,
+        frontmatter: {
+          source_message_id: 'src-1',
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          recipients: ['alice@example.com'],
+          created_at: AT_ISO,
+        },
+        body: 'shadow',
+      },
+    ], { infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm, withActionLogRepo: true });
+    expect(extract).not.toHaveBeenCalled();
+    expect(data.shadow_reconciled).toBe(0);
+    expect(ctx.__docs.get(shadowDraftPath('src-1'))?.frontmatter.reconciled_at).toBeUndefined();
+  });
+
+  it('matched_draft_ids is not written for a skipped message', async () => {
+    const { ctx } = await run('msg-curia', AT_SEC + 300, [ledgerDoc({ messageId: 'msg-curia' }), voiceSnapshot]);
+    const raw = ctx.__mem.__values.get(MATCHED_DRAFT_IDS_KEY);
+    expect(raw === undefined ? [] : JSON.parse(raw)).not.toContain('draft-1');
+  });
+
+  it('a ledger read failure logs a warning and the run still observes', async () => {
+    serve('msg-principal', AT_SEC + 3600);
+    const ctx = buildCtx({ force: true, nowMs: 1_721_000_000_000, snapshots: [voiceSnapshot], tasks: [] });
+    const real = ctx.workingDocs!.listByPrefix;
+    ctx.workingDocs!.listByPrefix = vi.fn(async (prefix: string) => {
+      if (prefix.startsWith('/scratch/principal-mailbox-sends')) throw new Error('db down');
+      return real(prefix);
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect((result as { data: { draft_matches: number } }).data.draft_matches).toBe(1);
+    expect(ctx.log.warn).toHaveBeenCalled();
+  });
+});

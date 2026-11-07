@@ -17,6 +17,7 @@ import {
 } from '../../../_shared/voice-learning-capture.js';
 import {
   formatDiffBlock,
+  isCuriaSend,
   matchDraftToSent,
   matchTasksToSent,
   trimEvidenceDoc,
@@ -31,6 +32,11 @@ import {
   type ShadowJudgePair,
   type ShadowSnapshot,
 } from '../../../_shared/shadow-draft.js';
+import {
+  PRINCIPAL_SEND_LEDGER_PREFIX,
+  parseLedgerDoc,
+  type PrincipalSendEntry,
+} from '../../../../src/skills/principal-send/send-ledger.js';
 import {
   readCompletionCandidates,
   writeCompletionCandidates,
@@ -466,6 +472,30 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // null once set); within a run pairShadowsToSends gives each send to at most one shadow.
     const judgePairs: ShadowJudgePair[] = [];
 
+    // Messages Curia sent from this mailbox (#2474) are not the principal's writing: skip them for
+    // voice learning, task matching and shadow pairing. Read once per run.
+    // Fail OPEN for learning only: if the ledger can't be read we warn and observe everything, so a
+    // ledger outage can't block the run or hold the watermark. The cost is that Curia's own sends in
+    // this window may be learned as the principal's; the ledger is advisory (send-ledger.ts).
+    let ledgerEntries: PrincipalSendEntry[] = [];
+    try {
+      const ledgerDocs = await ctx.workingDocs.listByPrefix(`${PRINCIPAL_SEND_LEDGER_PREFIX}/`);
+      ledgerEntries = ledgerDocs
+        .map(parseLedgerDoc)
+        .filter((e): e is PrincipalSendEntry => e !== null);
+    } catch (err) {
+      ctx.log.warn(
+        { err },
+        'ceo-inbox-sent-observe: could not read the principal send ledger — observing without skipping Curia sends',
+      );
+    }
+    const curiaSendIds = new Set<string>();
+    const principalMessages = messages.filter((m) => {
+      if (!isCuriaSend(m, ledgerEntries)) return true;
+      curiaSendIds.add(m.id);
+      return false;
+    });
+
     // Full sent bodies fetched during the message loop (for draft diffs), keyed by
     // message id so shadow reconcile can reuse them instead of re-fetching.
     const fetchedBodies = new Map<string, string>();
@@ -473,6 +503,9 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     for (const msg of messages) {
       if (msg.date > maxDate) maxDate = msg.date;
       if (msg.date < minDate) minDate = msg.date;
+
+      // Still counted in maxDate/minDate above so the watermark moves past it; just not learned from.
+      if (curiaSendIds.has(msg.id)) continue;
 
       let sentBody = msg.snippet ?? '';
 
@@ -527,7 +560,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // below can hold the watermark too.
     let shadowReconcileOk = true;
     if (ctx.actionLogRepo) {
-      const { pairs, superseded } = pairShadowsToSends(shadows, messages);
+      const { pairs, superseded } = pairShadowsToSends(shadows, principalMessages);
 
       // A failed mark logs but does NOT hold the watermark: on a retry the winning shadow is
       // already reconciled, so the loser would pair with the very send it lost.
