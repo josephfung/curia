@@ -90,6 +90,26 @@ describe('DismissActionHandler', () => {
     expect(repo.resolveRow).toHaveBeenCalledWith(10, 'resolved_externally', 'coordinator');
   });
 
+  it('declines the card-use request and resumes when a card-use row is dismissed (#1358)', async () => {
+    const cardRow = { ...PENDING_ROW, toolName: 'card-use-confirm', payload: { request_id: 'req-1' } };
+    const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: cardRow }) });
+    const decline = vi.fn().mockResolvedValue(undefined);
+    const result = await new DismissActionHandler().execute(makeCtx({
+      actionLogRepo: repo, bus: makeMockBus(), cardUse: { decline } as unknown as ToolContext['cardUse'],
+    }));
+
+    expect(result.success).toBe(true);
+    expect(decline).toHaveBeenCalledWith('req-1', 'denied', 'coordinator');
+  });
+
+  it('does not touch card use when a different row is dismissed', async () => {
+    const decline = vi.fn();
+    await new DismissActionHandler().execute(makeCtx({
+      actionLogRepo: makeMockRepo(), bus: makeMockBus(), cardUse: { decline } as unknown as ToolContext['cardUse'],
+    }));
+    expect(decline).not.toHaveBeenCalled();
+  });
+
   it('publishes human.decision with dismiss decision type', async () => {
     const repo = makeMockRepo();
     const bus = makeMockBus();

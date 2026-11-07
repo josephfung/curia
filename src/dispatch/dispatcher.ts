@@ -1050,6 +1050,10 @@ export class Dispatcher {
       senderId: payload.senderId,
       // #2312: computed from the adapter's own metadata, never from an inbound originator.
       authenticated: inboundSenderAuthenticated(payload.channelId, payload.metadata),
+      // The message's arrival at the adapter, not the time this turn runs: a queued "approve"
+      // must not look newer than the confirmation it predates (#1358). An unusable timestamp
+      // is left to default; the card-use guard reads the stamp and fails closed on its own.
+      initiatedAt: Number.isNaN(event.timestamp.getTime()) ? undefined : event.timestamp.toISOString(),
     });
     const originatorMeta: Record<string, unknown> = { originator };
     if (!senderContext?.resolved) {

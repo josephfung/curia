@@ -266,3 +266,20 @@ describe('consoleSecretNameInput + resolveUserSecretName', () => {
     expect(() => consoleSecretNameInput({ type: 'other' })).toThrow();
   });
 });
+
+describe('card type token', () => {
+  it('fingerprints card as the type, not identity', () => {
+    expect(fingerprintUserSecret('personal visa card')).toEqual({ identity: ['personal', 'visa'], type: 'card' });
+  });
+
+  it('names cards by owner and brand', () => {
+    expect(resolveUserSecretName('personal visa card', [])).toBe('user.personal_visa_card');
+    expect(resolveUserSecretName('work visa card', [])).toBe('user.work_visa_card');
+  });
+
+  it('keeps distinct cards distinct', () => {
+    const existing = ['user.personal_visa_card'];
+    expect(resolveUserSecretName('work visa card', existing)).toBe('user.work_visa_card');
+    expect(resolveUserSecretName('Personal Visa card', existing)).toBe('user.personal_visa_card');
+  });
+});

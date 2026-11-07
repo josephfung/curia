@@ -1556,16 +1556,20 @@ describe('originator metadata stamping', () => {
     const tasks: AgentTaskEvent[] = [];
     bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
-    await bus.publish('channel', createInboundMessage({
+    const inbound = createInboundMessage({
       conversationId: 'conv-ceo-1',
       channelId: 'signal',
       senderId: '+14155551234',
       content: 'Send that draft',
-    }));
+    });
+    // The message arrived well before this turn runs (#1358): the stamp must carry that time.
+    inbound.timestamp = new Date('2026-01-02T03:04:05.000Z');
+    await bus.publish('channel', inbound);
 
     expect(tasks).toHaveLength(1);
     const originator = tasks[0]!.payload.metadata?.originator as TaskOriginator;
     expect(originator).toBeDefined();
+    expect(originator.initiatedAt).toBe('2026-01-02T03:04:05.000Z');
     expect(originator.systemRole).toBe('principal');
     expect(originator.contactId).toBe('ceo-contact-id');
     expect(originator.channel).toBe('signal');

@@ -17,7 +17,7 @@
 // before invoking the handler. The handler receives ctx.entityContext[] and
 // never needs to call entity-context itself.
 
-import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus } from './types.js';
+import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, ApprovalVia } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
@@ -45,12 +45,34 @@ import {
   ORIGIN_TURN_OWNS_REPLY_KEY,
   parseOriginTurnOwnsReply,
 } from '../dispatch/origin-turn-reply.js';
+import {
+  BARE_CARD_REF_ERROR,
+  CARD_FIELDS,
+  CARD_FILL_LIMIT_ERROR,
+  CARD_USE_REQUIRED_ERROR,
+  isCardSecretField,
+  parseSecretRef,
+  projectCardField,
+} from '../secrets/structured-secret-schema.js';
+import { registrableDomain } from '../verification/domain.js';
 import { createSecretAccessed, createAutonomySkillBlocked, createAuthorizationDecision, createPrincipalReport } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import { UnknownEmailAccountError, type OutboundGateway } from './outbound-gateway.js';
+
+/** True when a vault string is a saved-card document (JSON object tagged credit_card). */
+function looksLikeCardDoc(value: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === 'object' && parsed !== null
+      && (parsed as { _schema?: unknown })._schema === 'credit_card';
+  } catch {
+    // Not JSON: an ordinary string secret.
+    return false;
+  }
+}
 
 /**
  * Per-invoke wrapper so Gate C and the handler share one `getEmailMessage`
@@ -165,6 +187,11 @@ const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 // http-request skill) can be added deliberately rather than by manifest edit alone.
 export const SECRET_RESOLVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['web-browser']);
 
+// Saved-card approvals (#1358) — see ctx.cardUse. Hard-allowlisted: declaring `cardUse`
+// elsewhere is refused. dismiss-action and deny-action decline a request, and approve-action settles one whose replay
+// failed; the card-use tools file and confirm it.
+export const CARD_USE_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['card-use-request', 'card-use-confirm', 'dismiss-action', 'deny-action', 'approve-action']);
+
 // Names-only `user.*` index (#1497) — see ctx.listUserSecretNames.
 // Hard-allowlisted to list-user-secrets: declaring userSecretIndex elsewhere has no effect.
 export const USER_SECRET_INDEX_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['list-user-secrets']);
@@ -202,6 +229,9 @@ export interface InvokeOptions {
    *  All other checks (elevated-skill gate, content filter, blocked-contact) still run.
    *  See ADR-018. */
   humanApproved?: boolean;
+  /** Which approval path is replaying the call (#1358). Set with humanApproved by approve-action
+   *  ('coordinator'), the reaction mapper ('reaction') and console approval ('console'). */
+  approvalVia?: ApprovalVia;
   /**
    * Hinted recipients recorded when the approval was filed. On a humanApproved
    * replay, the send is refused unless each one still resolves to the same
@@ -308,6 +338,9 @@ export class ExecutionLayer {
   // secretsService is NOT in capabilityServices — it is infrastructure accessed
   // through ctx.secret(), not a capability granted directly to skill handlers.
   private secretsService?: import('../secrets/secrets-service.js').SecretsService;
+  // Saved-card use grants (#1358). Unset in unit setups: card fields then fail closed.
+  private cardUseRepo?: import('../secrets/card-use-repo.js').CardUseRepo;
+  private cardUseService?: import('../secrets/card-use-service.js').CardUseCapability;
   private executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   private officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
   private browserService?: BrowserService;
@@ -383,6 +416,8 @@ export class ExecutionLayer {
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
     secretsService?: import('../secrets/secrets-service.js').SecretsService;
+    cardUseRepo?: import('../secrets/card-use-repo.js').CardUseRepo;
+    cardUseService?: import('../secrets/card-use-service.js').CardUseCapability;
     executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
     officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
     browserService?: BrowserService;
@@ -463,6 +498,8 @@ export class ExecutionLayer {
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
     this.secretsService = options?.secretsService;
+    this.cardUseRepo = options?.cardUseRepo;
+    this.cardUseService = options?.cardUseService;
     this.executiveProfileService = options?.executiveProfileService;
     this.officeIdentityService = options?.officeIdentityService;
     this.browserService = options?.browserService;
@@ -558,6 +595,9 @@ export class ExecutionLayer {
       // Injected as a plain field (default branch in the loop). Listed here so the
       // missing-cap guard fails closed if a skill declares it before it's wired.
       secretCapture: this.secretCaptureService,
+      // cardUse files and confirms saved-card checkout approvals (#1358). Plain field injection,
+      // restricted to CARD_USE_ALLOWED_TOOLS below.
+      cardUse: this.cardUseService,
       // secretResolver injects the by-reference resolver closure (#973), built in the
       // loop below. Backed by secretsService — listed here so the missing-cap guard fails
       // closed when a skill declares the capability but no vault is wired.
@@ -2615,6 +2655,7 @@ export class ExecutionLayer {
       taskEventId: options?.taskEventId,
       conversationId: options?.conversationId,
       humanApproved: options?.humanApproved,
+      approvalVia: options?.humanApproved ? options.approvalVia : undefined,
       channelId: options?.channelId,
       // Pre-construct the memory write source key so skills pass a rate-limit-compatible
       // source to entityMemory.storeFact(). This key matches the format that
@@ -2744,6 +2785,21 @@ export class ExecutionLayer {
       };
     }
 
+    // Hard-restrict cardUse to the allowlist (#1358): it files and settles the principal's
+    // per-checkout card approvals.
+    if (caps.includes('cardUse') && !CARD_USE_ALLOWED_TOOLS.has(manifest.name)) {
+      skillLogger.error(
+        { toolName, manifestName: manifest.name },
+        'SECURITY: cardUse capability is restricted to an allowlist — refusing to run skill',
+      );
+      return {
+        success: false,
+        error: this.wrapSkillError(
+          `Tool '${toolName}' declares capability 'cardUse' but is not on the card-use allowlist`,
+        ),
+      };
+    }
+
     // Hard-restrict userSecretIndex to the allowlist (#1497).
     // listUserSecretNames enumerates user.* key names (never values). Declaring the
     // capability is necessary but not sufficient; the skill name must also be on
@@ -2868,7 +2924,8 @@ export class ExecutionLayer {
         //   2. Audit: every resolution emits secret.accessed (name + source, byReference:true)
         //      — never the value. The value is returned to the handler only; the handler
         //      contract (see ToolContext.resolveSecretRef) forbids placing it in results/logs.
-        ctx.resolveSecretRef = async (ref: string): Promise<string> => {
+        ctx.resolveSecretRef = async (ref: string, opts?: { siteUrl?: string }): Promise<string> => {
+          // Guard first, on the whole ref: '#cvv' (empty name) and 'channel.x#number' die here.
           if (typeof ref !== 'string' || !ref.startsWith(USER_SECRET_PREFIX)) {
             throw new Error(
               `resolveSecretRef: only ${USER_SECRET_PREFIX}* secret references may be resolved by reference (got '${ref}')`,
@@ -2879,28 +2936,87 @@ export class ExecutionLayer {
             // secretsService is unset — but fail loud rather than silently returning ''.
             throw new Error('resolveSecretRef: secrets service is not configured');
           }
-          const value = await this.secretsService.get(ref);
-          if (value === null) {
-            throw new Error(`resolveSecretRef: secret '${ref}' was not found in the vault`);
+          const { name, field } = parseSecretRef(ref);
+          const schema = await this.secretsService.getStructuredSchema(name);
+
+          let value: string;
+          if (field === null) {
+            // A saved card is only ever addressed one field at a time (#1358).
+            if (schema !== null) throw new Error(BARE_CARD_REF_ERROR(name));
+            const plain = await this.secretsService.get(name);
+            if (plain === null) {
+              throw new Error(`resolveSecretRef: secret '${name}' was not found in the vault`);
+            }
+            // Defense in depth: if the schema tag row is gone but the vault row still holds a
+            // card, the bare ref must not hand out the whole card JSON.
+            if (looksLikeCardDoc(plain)) throw new Error(BARE_CARD_REF_ERROR(name));
+            value = plain;
+          } else {
+            if (schema !== 'credit_card') {
+              throw new Error(`\`#\` field addressing works only on saved cards; \`${name}\` isn't one`);
+            }
+            const siteUrl = opts?.siteUrl;
+            if (siteUrl === undefined || siteUrl === '') {
+              throw new Error('card fields can only be filled into a web page');
+            }
+            // Validate the field name and load the public fields BEFORE the grant check, so a
+            // typo or a row with missing public fields fails without consuming a fill.
+            if (!CARD_FIELDS.includes(field)) {
+              throw new Error(`Unknown card field '${field}'. Fields: ${CARD_FIELDS.join(', ')}`);
+            }
+            const card = await this.secretsService.getCardPublic(name);
+            if (card === null) {
+              throw new Error(`resolveSecretRef: secret '${name}' was not found in the vault`);
+            }
+            // The grant check runs on every path (humanApproved and principal-originated tasks
+            // included): it lives here, in the closure, not in the gates. Without a repo or a
+            // conversation there is no grant, so fail closed.
+            const conversationId = options?.conversationId;
+            const outcome = this.cardUseRepo && conversationId
+              ? await this.cardUseRepo.consumeFill({
+                secretName: name,
+                siteUrl,
+                conversationId,
+                field: isCardSecretField(field) ? field : null,
+              })
+              : 'no_grant';
+            if (outcome === 'no_grant') {
+              throw new Error(CARD_USE_REQUIRED_ERROR(name, registrableDomain(siteUrl) ?? 'this site'));
+            }
+            if (outcome === 'fill_limit') throw new Error(CARD_FILL_LIMIT_ERROR);
+
+            const secretDoc = isCardSecretField(field) ? await this.secretsService.getCardSecret(name) : null;
+            // Expiry was checked at consumeFill; a slow vault read can outlast the window, so
+            // check again before the number or CVV leaves this closure.
+            if (secretDoc !== null && !(await this.cardUseRepo!.hasLiveGrant({ secretName: name, siteUrl, conversationId: conversationId! }))) {
+              throw new Error(CARD_USE_REQUIRED_ERROR(name, registrableDomain(siteUrl) ?? 'this site'));
+            }
+            const projected = projectCardField(field, card.publicFields, secretDoc);
+            if (projected === '') {
+              throw new Error(`\`${name}\` has no ${field} saved`);
+            }
+            value = projected;
           }
-          // Audit — fire-and-forget, name + source only, flagged as by-reference.
+
+          // Audit — fire-and-forget, name (+ card field name) and source only, flagged as by-reference.
           if (this.bus) {
             this.bus.publish('execution', createSecretAccessed({
               toolName,
-              secretName: ref,
+              secretName: name,
+              ...(field !== null ? { secretField: field } : {}),
               agentId: options?.agentId,
               taskEventId: options?.taskEventId,
               source: 'vault',
               byReference: true,
             })).catch((err) => {
               skillLogger.error(
-                { err, secretName: ref, toolName, agentId: options?.agentId, taskEventId: options?.taskEventId },
+                { err, secretName: name, secretField: field ?? undefined, toolName, agentId: options?.agentId, taskEventId: options?.taskEventId },
                 'AUDIT FAILURE: secret.accessed (by-reference) event could not be published — secret was returned but access may not be recorded',
               );
             });
           }
-          // Debug log records the NAME only, never the value.
-          skillLogger.debug({ secretName: ref, source: 'vault', byReference: true }, 'Secret resolved by reference');
+          // Debug log records the NAME (and field name) only, never the value.
+          skillLogger.debug({ secretName: name, secretField: field ?? undefined, source: 'vault', byReference: true }, 'Secret resolved by reference');
           return value;
         };
       } else if (cap === 'userSecretIndex') {

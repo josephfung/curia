@@ -46,7 +46,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'autonomyService', 'executiveProfileService', 'officeIdentityService', 'browserService', 'bullpenService', 'toolSearch',
   'skillRegistry',
   'actionLogRepo', 'approvalDelivery', 'auditLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
-  'infraLlm', 'outboundContext', 'taskRepo', 'workingDocs', 'secretCapture', 'secretResolver',
+  'infraLlm', 'outboundContext', 'taskRepo', 'workingDocs', 'secretCapture', 'cardUse', 'secretResolver',
   'userSecretIndex',
   'diagnosticsRepo', 'sensitivityClassifier', 'verification', 'taskOutreach', 'disclosureDecisions',
   'voiceSessions',

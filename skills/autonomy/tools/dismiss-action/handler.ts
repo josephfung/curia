@@ -11,6 +11,7 @@ import { RESOLVED_BY, approvalLabel } from '../../../../src/autonomy/action-log-
 import { parseApprovalRefInput } from '../../../_shared/approval-ref.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
+import { cardUseRequestIdOf } from '../../../../src/secrets/card-use-service.js';
 
 export class DismissActionHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -43,6 +44,21 @@ export class DismissActionHandler implements ToolHandler {
       if (!transitioned) {
         ctx.log.warn({ rowId: row.id, shortRef: row.shortRef }, 'dismiss-action: row was already resolved concurrently');
         return { success: false, error: `${approvalLabel(row)} was already resolved by another action` };
+      }
+
+      // A dismissed card checkout is a no: nothing is granted, and the agent is resumed with
+      // "declined" (#1358).
+      const cardRequestId = cardUseRequestIdOf(row);
+      if (cardRequestId !== null) {
+        if (ctx.cardUse) {
+          try {
+            await ctx.cardUse.decline(cardRequestId, 'denied', 'coordinator');
+          } catch (err) {
+            ctx.log.error({ err, rowId: row.id, cardRequestId }, 'dismiss-action: failed to settle the dismissed card-use request');
+          }
+        } else {
+          ctx.log.error({ rowId: row.id, cardRequestId }, 'dismiss-action: cardUse not wired — the dismissed card request is not settled');
+        }
       }
 
       // Publish human.decision audit event (best-effort).

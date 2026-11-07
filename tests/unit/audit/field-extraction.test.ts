@@ -133,6 +133,44 @@ describe('extractStructuredFields', () => {
     )).toMatchObject({ initiator_type: 'system', initiator_id: 'web-browser' });
   });
 
+  it('extractor maps card_use.decided to target secret', () => {
+    expect(extractStructuredFields(
+      'card_use.decided',
+      { requestId: 'r1', secretName: 'user.visa_card', siteDomain: 'x.com', decision: 'approved', via: 'console', resume: true, purpose: 'flight' },
+      'evt-cu-d',
+      logger,
+    )).toEqual({
+      action: 'card_use_decided',
+      outcome: 'success',
+      target_type: 'secret',
+      target_id: 'user.visa_card',
+      initiator_type: 'human',
+      initiator_id: 'console',
+    });
+    expect(extractStructuredFields(
+      'card_use.decided',
+      { requestId: 'r1', secretName: 'user.visa_card', siteDomain: 'x.com', decision: 'expired', resume: true, purpose: 'flight' },
+      'evt-cu-e',
+      logger,
+    )).toMatchObject({ outcome: 'failure', initiator_type: 'system', initiator_id: 'card-use' });
+    // A coordinator deny/dismiss is the agent acting, not the principal refusing.
+    expect(extractStructuredFields(
+      'card_use.decided',
+      { requestId: 'r1', secretName: 'user.visa_card', siteDomain: 'x.com', decision: 'denied', via: 'coordinator', resume: true, purpose: 'flight' },
+      'evt-cu-c',
+      logger,
+    )).toMatchObject({ outcome: 'failure', initiator_type: 'agent', initiator_id: 'coordinator' });
+  });
+
+  it('extractor maps card_use.requested to a pending secret target', () => {
+    expect(extractStructuredFields(
+      'card_use.requested',
+      { requestId: 'r1', secretName: 'user.visa_card', siteDomain: 'x.com', amount: '10.00', brand: 'visa', last4: '4242' },
+      'evt-cu-r',
+      logger,
+    )).toMatchObject({ action: 'card_use_requested', outcome: 'pending', target_type: 'secret', target_id: 'user.visa_card' });
+  });
+
   it('maps a requested document.console_action as pending (write-ahead)', () => {
     expect(extractStructuredFields(
       'document.console_action',

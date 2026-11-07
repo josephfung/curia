@@ -46,7 +46,7 @@ export type ResumeRoutingRegistrar = (
  * Narrow the opaque originator bag from secret.captured into a TaskOriginator.
  * Returns undefined when the bag is missing required fields (pre-#972 tokens).
  */
-function parseOriginator(raw: Record<string, unknown> | undefined): TaskOriginator | undefined {
+export function parseOriginator(raw: Record<string, unknown> | undefined): TaskOriginator | undefined {
   if (!raw) return undefined;
   if (typeof raw.contactId !== 'string' || typeof raw.channel !== 'string') return undefined;
   if (typeof raw.initiatedAt !== 'string') return undefined;
@@ -92,7 +92,7 @@ function parseOriginator(raw: Record<string, unknown> | undefined): TaskOriginat
 }
 
 /** Fail-closed originator when the capture token carried none (#1733 / #1059). */
-function unresolvedExternalOriginator(channelId: string): TaskOriginator {
+export function unresolvedExternalOriginator(channelId: string): TaskOriginator {
   return {
     contactId: 'unresolved',
     systemRole: null,
@@ -123,7 +123,7 @@ const MAX_DISPATCHED_IDS = 10_000;
  * genuinely unroutable mint (an internal-channel link with no delegation context), which should
  * not occur but must not dead-end loudly into a non-deliverable channel.
  */
-const NON_DELIVERABLE_CHANNELS = new Set(['internal', 'bullpen', 'scheduler']);
+export const NON_DELIVERABLE_CHANNELS = new Set(['internal', 'bullpen', 'scheduler']);
 
 export class SecretCaptureResumeSubscriber {
   // In-memory guard against double-dispatch on duplicate event delivery. The redeem is already
