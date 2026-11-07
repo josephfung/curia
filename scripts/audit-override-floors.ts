@@ -157,6 +157,12 @@ export interface AdvisoryRecord {
    * GitHub serves and why converting them is the delicate part of this script.
    */
   ranges: string[];
+  /**
+   * The version each entry of `ranges` says it was patched in, index for index, or null
+   * where the API gave none. Absent when no entry has one. Used only to catch a range
+   * that ends BELOW its own patched version — see closeRangeGaps.
+   */
+  patchedVersions?: (string | null)[];
   source: 'global' | 'upstream-repo';
 }
 
@@ -192,6 +198,11 @@ export interface ImplicatedAdvisory {
   ghsaId: string;
   severity: Severity;
   source: AdvisoryRecord['source'];
+  /**
+   * Set when the advisory's range ended below its own patched version and the gap was
+   * treated as vulnerable: the patched version, so the report can say why.
+   */
+  gapClosedTo?: string;
 }
 
 export interface CheckedOverride {
@@ -824,10 +835,12 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
 
       // Validate every range up front so a format surprise is reported against this
       // override by name rather than mutating the verdict.
-      const validated = advisories.map((advisory) => ({
-        advisory,
-        ranges: toSemverRanges(advisory, override.subject),
-      }));
+      const stablePublished = published.filter(
+        (v) => semver.valid(v) !== null && semver.prerelease(v) === null,
+      );
+      const validated = advisories.map((advisory) =>
+        closeRangeGaps(advisory, toSemverRanges(advisory, override.subject), stablePublished),
+      );
 
       const effective = validated.filter(({ advisory, ranges }) => {
         const match = policy.allowlist.find(
@@ -851,13 +864,14 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
 
       const implicated: ImplicatedAdvisory[] = [];
       const vulnerable = new Set<string>();
-      for (const { advisory, ranges } of effective) {
+      for (const { advisory, ranges, gapClosedTo } of effective) {
         const hits = admitted.filter((v) => matchesAny(v, ranges));
         if (hits.length === 0) continue;
         implicated.push({
           ghsaId: advisory.ghsaId,
           severity: advisory.severity,
           source: advisory.source,
+          ...(gapClosedTo ? { gapClosedTo } : {}),
         });
         for (const hit of hits) vulnerable.add(hit);
       }
@@ -1032,6 +1046,48 @@ function toSemverRanges(advisory: AdvisoryRecord, pkg: string): string[] {
   });
 }
 
+/**
+ * Treat the versions between an advisory range's last hit and its own patched version
+ * as vulnerable.
+ *
+ * Hand-authored repo advisories can contradict themselves. basic-ftp's GHSA-2w5v-vj22-jp27
+ * says `< 6.2.5` but names 6.2.6 as the patched version, and its changelog agrees with the
+ * patched field: 6.2.5 only changed the release tooling. Trusting the range alone made
+ * this script recommend `>=6.2.5`, a still-vulnerable floor (#2490).
+ *
+ * This does NOT reintroduce trap 1. The patched version is never used as a floor; it only
+ * extends one range entry upward over published versions that sit strictly between that
+ * entry's highest matching release and the patch. A range that matches no published
+ * version below its patch has no anchor, so it is left alone, as is a patched field that
+ * is not a single plain version.
+ */
+function closeRangeGaps(
+  advisory: AdvisoryRecord,
+  ranges: string[],
+  published: string[],
+): { advisory: AdvisoryRecord; ranges: string[]; gapClosedTo?: string } {
+  let gapClosedTo: string | undefined;
+  const widened = ranges.map((range, i) => {
+    const patched = parsePatchedVersion(advisory.patchedVersions?.[i] ?? null);
+    if (!patched) return range;
+    const below = published.filter((v) => semver.lt(v, patched) && semver.satisfies(v, range));
+    if (below.length === 0) return range;
+    const lastHit = below.sort(semver.compare)[below.length - 1]!;
+    const gap = published.some((v) => semver.gt(v, lastHit) && semver.lt(v, patched));
+    if (!gap) return range;
+    gapClosedTo = patched;
+    return `${range} || >${lastHit} <${patched}`;
+  });
+  return { advisory, ranges: widened, ...(gapClosedTo ? { gapClosedTo } : {}) };
+}
+
+/** A patched-version field as a plain semver version, or null if it is anything else. */
+function parsePatchedVersion(raw: string | null): string | null {
+  if (!raw) return null;
+  const stripped = raw.trim().replace(/^>=\s*/, '');
+  return semver.valid(stripped);
+}
+
 function matchesAny(version: string, ranges: string[]): boolean {
   return ranges.some((range) => semver.satisfies(version, range));
 }
@@ -1123,7 +1179,10 @@ export function formatReport(report: AuditReport): string {
       lines.push(`    admits vulnerable: ${finding.vulnerableVersions.join(', ')}`);
       for (const advisory of finding.advisories) {
         const via = advisory.source === 'upstream-repo' ? ' [upstream repo only]' : '';
-        lines.push(`    ${advisory.ghsaId} (${advisory.severity})${via}`);
+        const gap = advisory.gapClosedTo
+          ? ` [range ends below its patched version; vulnerable up to ${advisory.gapClosedTo}]`
+          : '';
+        lines.push(`    ${advisory.ghsaId} (${advisory.severity})${via}${gap}`);
       }
       lines.push(
         finding.safeFloor === null
@@ -1147,7 +1206,10 @@ export function formatReport(report: AuditReport): string {
       lines.push(`    admits vulnerable: ${blocked.vulnerableVersions.join(', ')}`);
       for (const advisory of blocked.advisories) {
         const via = advisory.source === 'upstream-repo' ? ' [upstream repo only]' : '';
-        lines.push(`    ${advisory.ghsaId} (${advisory.severity})${via}`);
+        const gap = advisory.gapClosedTo
+          ? ` [range ends below its patched version; vulnerable up to ${advisory.gapClosedTo}]`
+          : '';
+        lines.push(`    ${advisory.ghsaId} (${advisory.severity})${via}${gap}`);
       }
       lines.push(`    ${blocked.safeVersion} is installable at ${blocked.installableAt}`);
     }
@@ -1295,6 +1357,10 @@ export interface RawAdvisory {
   vulnerabilities?: {
     package?: { ecosystem?: string; name?: string };
     vulnerable_version_range?: string;
+    /** Repo advisories (/repos/{slug}/security-advisories) carry this. */
+    patched_versions?: string | null;
+    /** The global DB (/advisories) carries this instead. */
+    first_patched_version?: string | null;
   }[];
 }
 
@@ -1326,6 +1392,9 @@ export function toAdvisoryRecords(
     );
     if (mine.length === 0) continue;
     const ranges = mine.map((v) => (v.vulnerable_version_range ?? '').trim());
+    const patchedVersions = mine.map(
+      (v) => v.patched_versions?.trim() || v.first_patched_version?.trim() || null,
+    );
 
     const severity = (advisory.severity ?? 'unknown').toLowerCase();
     records.push({
@@ -1335,6 +1404,7 @@ export function toAdvisoryRecords(
       // comparator, implementation-defined order).
       severity: (Object.hasOwn(SEVERITY_ORDER, severity) ? severity : 'unknown') as Severity,
       ranges,
+      ...(patchedVersions.some((p) => p !== null) ? { patchedVersions } : {}),
       source,
     });
   }

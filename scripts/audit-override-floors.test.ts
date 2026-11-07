@@ -527,6 +527,59 @@ describe('upstream repo advisories', () => {
     );
   });
 
+  it('treats versions between a range and its own patched version as vulnerable', async () => {
+    // The real case (#2490): basic-ftp GHSA-2w5v-vj22-jp27 says `< 6.2.5` but names 6.2.6
+    // as patched, and 6.2.5 only changed release tooling. Trusting the range alone
+    // recommended `>=6.2.5`, a floor that still admits the vulnerable 6.2.5.
+    const ftpAdvisory: AdvisoryRecord = {
+      ...adv('GHSA-2w5v-vj22-jp27', 'medium', ['< 6.2.5'], 'upstream-repo'),
+      patchedVersions: ['6.2.6'],
+    };
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  'get-uri>basic-ftp': '>=6.2.4'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { 'basic-ftp': ['6.2.3', '6.2.4', '6.2.5', '6.2.6'] },
+        repos: { 'basic-ftp': 'patrickjuchli/basic-ftp' },
+        repoAdvisories: { 'patrickjuchli/basic-ftp': { 'basic-ftp': [ftpAdvisory] } },
+      }),
+    });
+
+    expect(report.stale).toHaveLength(1);
+    expect(report.stale[0]!.vulnerableVersions).toEqual(['6.2.4', '6.2.5']);
+    expect(report.stale[0]!.safeFloor).toBe('>=6.2.6');
+    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toBe('6.2.6');
+    expect(formatReport(report)).toContain(
+      'range ends below its patched version; vulnerable up to 6.2.6',
+    );
+  });
+
+  it('does not extend a range whose patched version is on another line (trap 1)', async () => {
+    // Per-entry patched versions: the 7.x entry's patch must not condemn anything on 8.x,
+    // and a range that starts mid-line (>= 7.15.0) has no gap below its own last hit.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  undici: '>=7.30.2'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { undici: ['7.14.0', '7.30.1', '7.30.2', '8.0.0', '8.12.4'] },
+        global: {
+          undici: [
+            {
+              ...adv('GHSA-r4pc-4jcp-7pqc', 'medium', [
+                '>= 7.15.0, < 7.30.2',
+                '>= 8.0.0, < 8.12.4',
+              ]),
+              patchedVersions: ['7.30.2', '8.12.4'],
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(report.stale[0]!.vulnerableVersions).toEqual(['8.0.0']);
+    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toBeUndefined();
+  });
+
   it('ignores a sibling package advisory from the same monorepo', async () => {
     // Real false positive this caught: open-telemetry/opentelemetry-js publishes
     // GHSA-45rx-2jwx-cxfr, which affects @opentelemetry/propagator-jaeger — NOT
@@ -594,6 +647,38 @@ describe('toAdvisoryRecords', () => {
         ranges: ['< 2.9.0'],
         source: 'upstream-repo',
       },
+    ]);
+  });
+
+  it('carries each entry\'s patched version from either API shape', () => {
+    const raw: RawAdvisory[] = [
+      {
+        ghsa_id: 'GHSA-2w5v-vj22-jp27',
+        severity: 'medium',
+        state: 'published',
+        vulnerabilities: [
+          {
+            package: { ecosystem: 'npm', name: 'basic-ftp' },
+            vulnerable_version_range: '< 6.2.5',
+            patched_versions: '6.2.6',
+          },
+          {
+            package: { ecosystem: 'npm', name: 'basic-ftp' },
+            vulnerable_version_range: '< 5.3.2',
+            first_patched_version: '5.3.2',
+          },
+          {
+            package: { ecosystem: 'npm', name: 'basic-ftp' },
+            vulnerable_version_range: '< 4.0.0',
+          },
+        ],
+      },
+    ];
+
+    expect(toAdvisoryRecords(raw, 'basic-ftp', 'upstream-repo')[0]!.patchedVersions).toEqual([
+      '6.2.6',
+      '5.3.2',
+      null,
     ]);
   });
 
