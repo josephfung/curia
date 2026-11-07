@@ -18,29 +18,48 @@ judge_tool_calls: true
 
 tool_stubs:
   ceo-inbox-list:
-    - match: { folder: DRAFTS }
+    - match: { folder: DRAFTS, modified_since: null }
       return:
         folder: DRAFTS
         count: 3
+        displayTimezone: "{{timezone}}"
         drafts:
-          - { id: draft-s2-venue, threadId: thr-s2-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: "{{at:now-3h}}", date_local: "{{at:now-3h}}", created_by_curia: false }
-          - { id: draft-s2-renewal, threadId: thr-s2-renewal, subject: Renewal timing, to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], snippet: "Sam, we would like to talk about renewal timing.", date: "{{at:now-4h}}", date_local: "{{at:now-4h}}", created_by_curia: false }
-          - { id: draft-s2-old, threadId: thr-s2-old, subject: Pricing follow-up, to: [{ name: Lee Tan, email: lee.tan@lumen.example }], cc: [], snippet: "Lee, following up on pricing after the demo.", date: "{{at:now-48h}}", date_local: "{{at:now-48h}}", created_by_curia: false }
-  ceo-inbox-search:
+          - { id: draft-s2-venue, threadId: thr-s2-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: 1791800000, date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s2-renewal, threadId: thr-s2-renewal, subject: Renewal timing, to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], snippet: "Sam, we would like to talk about renewal timing.", date: 1791796400, date_local: "{{at:now-4h}}", created_by_curia: false }
+          - { id: draft-s2-old, threadId: thr-s2-old, subject: Pricing follow-up, to: [{ name: Lee Tan, email: lee.tan@lumen.example }], cc: [], snippet: "Lee, following up on pricing after the demo.", date: 1791630000, date_local: "{{at:now-48h}}", created_by_curia: false }
     - match: { folder: DRAFTS }
       return:
         folder: DRAFTS
         count: 2
+        displayTimezone: "{{timezone}}"
         drafts:
-          - { id: draft-s2-venue, threadId: thr-s2-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: "{{at:now-3h}}", date_local: "{{at:now-3h}}", created_by_curia: false }
-          - { id: draft-s2-renewal, threadId: thr-s2-renewal, subject: Renewal timing, to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], snippet: "Sam, we would like to talk about renewal timing.", date: "{{at:now-4h}}", date_local: "{{at:now-4h}}", created_by_curia: false }
+          - { id: draft-s2-venue, threadId: thr-s2-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: 1791800000, date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s2-renewal, threadId: thr-s2-renewal, subject: Renewal timing, to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], snippet: "Sam, we would like to talk about renewal timing.", date: 1791796400, date_local: "{{at:now-4h}}", created_by_curia: false }
+  ceo-inbox-search:
+    - match: { folder: DRAFTS, modified_since: null }
+      return:
+        folder: DRAFTS
+        count: 3
+        displayTimezone: "{{timezone}}"
+        drafts:
+          - { id: draft-s2-venue, threadId: thr-s2-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: 1791800000, date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s2-renewal, threadId: thr-s2-renewal, subject: Renewal timing, to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], snippet: "Sam, we would like to talk about renewal timing.", date: 1791796400, date_local: "{{at:now-4h}}", created_by_curia: false }
+          - { id: draft-s2-old, threadId: thr-s2-old, subject: Pricing follow-up, to: [{ name: Lee Tan, email: lee.tan@lumen.example }], cc: [], snippet: "Lee, following up on pricing after the demo.", date: 1791630000, date_local: "{{at:now-48h}}", created_by_curia: false }
+    - match: { folder: DRAFTS }
+      return:
+        folder: DRAFTS
+        count: 2
+        displayTimezone: "{{timezone}}"
+        drafts:
+          - { id: draft-s2-venue, threadId: thr-s2-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: 1791800000, date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s2-renewal, threadId: thr-s2-renewal, subject: Renewal timing, to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], snippet: "Sam, we would like to talk about renewal timing.", date: 1791796400, date_local: "{{at:now-4h}}", created_by_curia: false }
   ceo-inbox-read:
     - match: { draft_id: draft-s2-venue }
-      return: { id: draft-s2-venue, threadId: thr-s2-venue, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], bcc: [], subject: Venue for the offsite, body_plain: "Jo, shall we use the Harbour Room for the offsite? Let me know.", date: 0, is_draft: true }
+      return: { id: draft-s2-venue, threadId: thr-s2-venue, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], bcc: [], subject: Venue for the offsite, body_plain: "Jo, shall we use the Harbour Room for the offsite? Let me know.", date: 1791800000, is_draft: true }
     - match: { draft_id: draft-s2-renewal }
-      return: { id: draft-s2-renewal, threadId: thr-s2-renewal, to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], bcc: [], subject: Renewal timing, body_plain: "Sam, we would like to talk about renewal timing next month.", date: 0, is_draft: true }
+      return: { id: draft-s2-renewal, threadId: thr-s2-renewal, to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], bcc: [], subject: Renewal timing, body_plain: "Sam, we would like to talk about renewal timing next month.", date: 1791800000, is_draft: true }
     - match: { draft_id: draft-s2-old }
-      return: { id: draft-s2-old, threadId: thr-s2-old, to: [{ name: Lee Tan, email: lee.tan@lumen.example }], cc: [], bcc: [], subject: Pricing follow-up, body_plain: "Lee, following up on pricing after the demo.", date: 0, is_draft: true }
+      return: { id: draft-s2-old, threadId: thr-s2-old, to: [{ name: Lee Tan, email: lee.tan@lumen.example }], cc: [], bcc: [], subject: Pricing follow-up, body_plain: "Lee, following up on pricing after the demo.", date: 1791800000, is_draft: true }
 
 turns:
   - role: user
