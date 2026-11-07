@@ -30,7 +30,8 @@ import {
   validateNylasMessageId,
 } from '../channels/email/nylas-message-id.js';
 import type { ChannelIdentity } from '../contacts/types.js';
-import { provenanceSourceText } from '../contacts/identifier-provenance.js';
+import { isCaretOrDeleteKey, keyedCharacter, provenanceSourceText } from '../contacts/identifier-provenance.js';
+import { mainFrameProse } from './_shared/web-page-content.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -62,6 +63,19 @@ import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import { UnknownEmailAccountError, type OutboundGateway } from './outbound-gateway.js';
+
+/** Source tools whose results can echo the agent's own input (#2498). See isAgentEchoSource. */
+const AGENT_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web-fetch', 'web-browser']);
+
+/**
+ * `%XX` escapes decoded byte by byte, and `+` read as a space. Lenient on purpose: a
+ * malformed escape is left as it is rather than failing (decodeURIComponent throws), and
+ * the result is only used to find identifiers, never shown or sent.
+ */
+function percentDecode(text: string, plusAsSpace: boolean): string {
+  const spaced = plusAsSpace ? text.replace(/\+/g, ' ') : text;
+  return spaced.replace(/%([0-9a-f]{2})/gi, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+}
 
 /** True when a vault string is a saved-card document (JSON object tagged credit_card). */
 function looksLikeCardDoc(value: string): boolean {
@@ -703,7 +717,105 @@ export class ExecutionLayer {
     // An object result collapsed to a truncated string has lost the structure that tells
     // Curia's own messages and drafts apart, so none of it counts.
     if (typeof data === 'string' && data.endsWith(OBJECT_OUTPUT_TRUNCATED_MARKER)) return null;
+    // web-browser: only the top frame's prose (#2498). Its other fields (url, redirects,
+    // errors) repeat what the agent passed, and frames hold other origins' text.
+    if (toolName === 'web-browser') {
+      const content = data !== null && typeof data === 'object' ? (data as Record<string, unknown>)['content'] : undefined;
+      return typeof content === 'string' ? mainFrameProse(content) : null;
+    }
     return provenanceSourceText(data, this.selfEmails);
+  }
+
+  /**
+   * Whether `toolName`'s results can repeat text the agent supplied, so an identifier the
+   * agent wrote in an earlier call of these tools must not count as sourced by a later
+   * result (#2498): a page that echoes its URL ("results for …"), a form that shows back
+   * what was typed into it, a session's later page that shows an earlier entry. The web
+   * tools render pages the agent chose and drove. Mail and file reads return stored data,
+   * and web-search returns other sites' pages for a query, so neither is listed.
+   */
+  isAgentEchoSource(toolName: string): boolean {
+    return AGENT_ECHO_SOURCE_TOOLS.has(toolName) && this.registry.get(toolName)?.manifest.provenance_source === true;
+  }
+
+  /**
+   * The text the agent supplied to an echo-prone source tool, to record before the call
+   * runs so its result, and any later echo-prone result in the conversation or browser
+   * session, cannot verify it. Null for any other tool. Over-collecting only refuses more,
+   * so it covers the forms a page can show back that the raw strings miss:
+   * - every string in the input (URLs, typed text, selected values, selectors);
+   * - each of them percent-decoded, once and twice (`sam%40x.com`, `sam%2540x.com`), with `+`
+   *   read both as a space and as itself (`sam%2Btag%40x.com`);
+   * - typed and selected values (`text`, `value`) joined in order, for runs of up to three
+   *   (`sam` typed into one field and `@x.com` picked in the next show up as one address).
+   *
+   * Known residual gap (accepted by the maintainer, #2498): an address typed in pieces
+   * across separate browser calls (`sam` in one, `@x.com` in the next) is not excluded,
+   * because only one call's values are joined. Closing it would mean tracking typed
+   * fragments per session; the cost and memory held outweigh a two-call, agent-authored case.
+   */
+  provenanceAgentInputText(toolName: string, input: Record<string, unknown>): string | null {
+    if (!this.isAgentEchoSource(toolName)) return null;
+    const raw = provenanceSourceText(input, []);
+    // Once and twice, with `+` as a space (a query string) and kept (`sam+tag@x.com`).
+    const decoded: string[] = [];
+    for (const plusAsSpace of [true, false]) {
+      const once = percentDecode(raw, plusAsSpace);
+      decoded.push(once, percentDecode(once, plusAsSpace));
+    }
+    const steps = Array.isArray(input['actions']) ? input['actions'] : [input];
+    const values: string[] = [];
+    // Characters entered with press_key ("s", "a", "Shift+M", "Space"): consecutive ones
+    // are one typed value, flushed by any other step or a non-character key (Tab, Enter).
+    // Editing keys do not end a run: Backspace removes the last character, so `sam@e.com`,
+    // five Backspaces, `x.com` leaves `sam@x.com` in the field. Keys that move the caret or
+    // delete elsewhere are not reconstructed: recordAgentInputBeforeCall marks the browser
+    // session unable to verify anything from then on (keyedRunMovesCaret).
+    let keyed = '';
+    let rawKeyed = '';
+    const keyedRuns: string[] = [];
+    const flushKeyed = (): void => {
+      if (keyed !== '') {
+        values.push(keyed);
+        keyedRuns.push(keyed);
+      }
+      if (rawKeyed !== '') keyedRuns.push(rawKeyed);
+      keyed = '';
+      rawKeyed = '';
+    };
+    for (const step of steps) {
+      if (step === null || typeof step !== 'object') {
+        flushKeyed();
+        continue;
+      }
+      const fields = step as Record<string, unknown>;
+      const key = fields['key'];
+      if (typeof key === 'string') {
+        const char = keyedCharacter(key);
+        if (char !== null) {
+          keyed += char;
+          rawKeyed += char;
+        } else if (key === 'Backspace') {
+          keyed = [...keyed].slice(0, -1).join('');
+        } else if (isCaretOrDeleteKey(key) && rawKeyed !== '') {
+          // Inside a typed run: the run continues; the session is marked unverifiable.
+        } else {
+          flushKeyed();
+        }
+      } else {
+        flushKeyed();
+      }
+      for (const field of ['text', 'value']) {
+        const value = fields[field];
+        if (typeof value === 'string' && value !== '') values.push(value);
+      }
+    }
+    flushKeyed();
+    const joined: string[] = [];
+    for (let i = 0; i < values.length; i++) {
+      for (let run = 2; run <= 3 && i + run <= values.length; run++) joined.push(values.slice(i, i + run).join(''));
+    }
+    return [raw, ...decoded, ...keyedRuns, ...joined].join('\n');
   }
 
   /**

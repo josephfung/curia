@@ -4,6 +4,7 @@
   "version": "1.11.0",
   "sensitivity": "normal",
   "action_risk": "medium",
+  "provenance_source": true,
   "inputs": {
     "action": "string? (one browser action; required unless `actions` is given)",
     "actions": "object[]? (ordered list of {action, selector?, text?, value?, key?, url?, secret_ref?} steps run against the same page in one call; replaces the top-level action fields when present)",

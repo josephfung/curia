@@ -125,3 +125,46 @@ function sentBy(from: unknown, self: ReadonlySet<string>): boolean {
     return self.has(bracketed.trim().toLowerCase());
   });
 }
+
+/**
+ * The character a web-browser `press_key` key types, or null for a key that types none
+ * (Enter, Tab, arrows, shortcuts). A single character, `Shift+<char>` and `Space` count;
+ * Playwright's other named character keys (`Period`, `Digit1`) are not reconstructed, so
+ * an address spelled with them is not excluded.
+ */
+export function keyedCharacter(key: string): string | null {
+  if (key === 'Space') return ' ';
+  const base = key.startsWith('Shift+') && key.length > 6 ? key.slice(6) : key;
+  return [...base].length === 1 ? base : null;
+}
+
+const CARET_OR_DELETE_KEY = /^(Shift\+)?(Delete|Arrow|Home$|End$|Page|Control\+|Meta\+|Ctrl\+|Alt\+|ControlOrMeta\+)/;
+
+/** True for a key that moves the caret or deletes elsewhere (Delete, Arrow*, Home, End, Page*, Ctrl/Meta/Alt chords). */
+export function isCaretOrDeleteKey(key: string): boolean {
+  return CARET_OR_DELETE_KEY.test(key);
+}
+
+/**
+ * True when a web-browser call types characters with `press_key` and then moves the caret or
+ * deletes elsewhere. The field's content can no longer be reconstructed from the keys, so
+ * the browser session cannot verify any identifier from then on (#2498). Backspace is
+ * reconstructed and does not count.
+ */
+export function keyedRunMovesCaret(input: Record<string, unknown>): boolean {
+  const steps = Array.isArray(input['actions']) ? input['actions'] : [input];
+  let typed = false;
+  for (const step of steps) {
+    const key = step !== null && typeof step === 'object' ? (step as Record<string, unknown>)['key'] : undefined;
+    if (typeof key !== 'string') {
+      typed = false;
+    } else if (keyedCharacter(key) !== null) {
+      typed = true;
+    } else if (isCaretOrDeleteKey(key)) {
+      if (typed) return true;
+    } else if (key !== 'Backspace') {
+      typed = false;
+    }
+  }
+  return false;
+}

@@ -30,6 +30,10 @@ function scriptedProvider(calls: Array<{ name: string; input: Record<string, unk
   };
 }
 
+/** The source tools of these tests, and those whose results can echo the agent's input (#2498). */
+const SOURCES = new Set(['web-fetch', 'web-browser', 'email-get']);
+const ECHO_SOURCES = new Set(['web-fetch', 'web-browser']);
+
 const toolDef = (name: string) => ({ name, description: name, input_schema: { type: 'object' as const, properties: {}, required: [] as string[] } });
 
 async function runTask(opts: {
@@ -51,7 +55,9 @@ async function runTask(opts: {
       if (options?.identifierSources) seen.set(name, options.identifierSources);
       return { success: true, data: opts.results?.[name] ?? 'ok' };
     }),
-    provenanceSourceText: (name: string, _input: unknown, data: unknown) => (name === 'web-fetch' ? String(data) : null),
+    provenanceSourceText: (name: string, _input: unknown, data: unknown) => (SOURCES.has(name) ? String(data) : null),
+    isAgentEchoSource: (name: string) => ECHO_SOURCES.has(name),
+    provenanceAgentInputText: (name: string, input: unknown) => (ECHO_SOURCES.has(name) ? JSON.stringify(input) : null),
   } as unknown as ExecutionLayer;
 
   const runtime = new AgentRuntime({
@@ -107,6 +113,89 @@ describe('runtime identifier sources (#2061)', () => {
     await expect(sources.has('email', 'event@venue.example')).resolves.toBe(false);
   });
 
+  describe('agent input echoed by a web result (#2498)', () => {
+    it('does not count an address the agent put in a web-fetch URL, even when the page repeats it', async () => {
+      const { sourcesFor } = await runTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-echo-fetch',
+        channelId: 'cli',
+        content: 'Check the address',
+        calls: [
+          { name: 'web-fetch', input: { url: 'https://search.example/?q=evnts@venue.example' } },
+          { name: 'contact-create', input: {} },
+        ],
+        results: { 'web-fetch': 'Results for evnts@venue.example. Bookings: events@venue.example' },
+      });
+      const sources = sourcesFor('contact-create');
+      await expect(sources.has('email', 'evnts@venue.example')).resolves.toBe(false);
+      await expect(sources.has('email', 'events@venue.example')).resolves.toBe(true);
+    });
+
+    it('does not count an address typed into the browser earlier in the conversation', async () => {
+      const { sourcesFor } = await runTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-echo-browser',
+        channelId: 'cli',
+        content: 'Fill the form, then read the page',
+        calls: [
+          { name: 'web-browser', input: { action: 'type', selector: '[g1f0e1]', text: 'evnts@venue.example' } },
+          { name: 'web-browser', input: { action: 'get_content' } },
+          { name: 'contact-create', input: {} },
+        ],
+        results: { 'web-browser': 'We will reply to evnts@venue.example from events@venue.example' },
+      });
+      const sources = sourcesFor('contact-create');
+      await expect(sources.has('email', 'evnts@venue.example')).resolves.toBe(false);
+      await expect(sources.has('email', 'events@venue.example')).resolves.toBe(true);
+    });
+
+    it('still counts an address the agent typed when a non-echo source (a mail read) shows it', async () => {
+      const { sourcesFor } = await runTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-echo-mail',
+        channelId: 'cli',
+        content: 'Book it, then read the reply',
+        calls: [
+          { name: 'web-browser', input: { action: 'type', selector: '[g1f0e1]', text: 'sam@venue.example', session_id: 's1' } },
+          { name: 'email-get', input: { message_id: 'm1' } },
+          { name: 'contact-create', input: {} },
+        ],
+        results: { 'web-browser': 'Thanks', 'email-get': 'From: sam@venue.example' },
+      });
+      await expect(sourcesFor('contact-create').has('email', 'sam@venue.example')).resolves.toBe(true);
+    });
+
+    it('does not count the result when the agent input could not be recorded (fail closed)', async () => {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      const index = new IdentifierSourceIndex();
+      const executionLayer = {
+        invoke: vi.fn(async () => ({ success: true, data: 'Bookings: events@venue.example' })),
+        provenanceSourceText: (_name: string, _input: unknown, data: unknown) => String(data),
+        isAgentEchoSource: () => true,
+        provenanceAgentInputText: () => { throw new Error('boom'); },
+      } as unknown as ExecutionLayer;
+      const runtime = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider: scriptedProvider([{ name: 'web-fetch', input: { url: 'https://venue.example' } }]),
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer,
+        identifierSourceIndex: index,
+        pinnedTools: ['web-fetch'],
+        skillToolDefs: [toolDef('web-fetch')],
+      });
+      runtime.register();
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator', conversationId: 'conv-unrecorded', channelId: 'cli', senderId: 'user', content: 'Read it', parentEventId: 'inbound-1',
+      }));
+      expect(executionLayer.invoke).toHaveBeenCalledTimes(1);
+      expect(index.has('conv-unrecorded', 'email:events@venue.example')).toBe(false);
+    });
+  });
+
   it('does not count a result from a tool that is not a source', async () => {
     const { sourcesFor } = await runTask({
       agentId: 'coordinator',
@@ -152,6 +241,8 @@ describe('runtime identifier sources (#2061)', () => {
         return { success: true, data: 'ok' };
       }),
       provenanceSourceText: () => null,
+      isAgentEchoSource: () => false,
+      provenanceAgentInputText: () => null,
     } as unknown as ExecutionLayer;
     const runtime = new AgentRuntime({
       agentId: 'contacts',
