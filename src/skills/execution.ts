@@ -921,7 +921,14 @@ export class ExecutionLayer {
       `but this skill (action_risk: ${String(actionRisk)}) requires ${requiredScore}. `;
 
     if (this.holdsUnscrubbedCode(toolName, input)) return baseMsg + NO_APPROVAL_FOR_SIGN_IN_CODE;
-    if (NO_QUEUED_APPROVAL_TOOLS.has(toolName)) return baseMsg + NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND;
+    if (NO_QUEUED_APPROVAL_TOOLS.has(toolName)) {
+      // No approval row, so the digest is the principal's only sign that a draft is waiting (#2474).
+      // Only Gates A/B reach here (both scores known); Gate C goes through buildTierGateError.
+      if (!isPrincipalOriginated(options?.taskMetadata)) {
+        await this.publishPrincipalMailboxRefusal(currentScore, requiredScore, options, skillLogger);
+      }
+      return baseMsg + NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND;
+    }
 
     // Approval trigger — only if wired and task context is available.
     if (this.approvalTrigger && options?.taskEventId) {
@@ -1866,6 +1873,31 @@ export class ExecutionLayer {
       toolName, input, initiatingTier ?? 'none', manifest.action_risk, currentScore, options, skillLogger, sendPins, reason,
     );
     return { success: false, error: this.wrapSkillError(gateCError) };
+  }
+
+  /** Queue a digest item for an autonomous principal-mailbox send a gate refused (#2474). Never throws. */
+  private async publishPrincipalMailboxRefusal(
+    currentScore: number,
+    requiredScore: number,
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): Promise<void> {
+    if (!this.bus) {
+      skillLogger.warn({ currentScore, requiredScore }, 'autonomy gate: no bus — the principal_mailbox digest item is only in this log');
+      return;
+    }
+    try {
+      await this.bus.publish('execution', createPrincipalReport({
+        summary: `Left as a draft in your mailbox: a reply Curia wanted to send on its own. Autonomy is ${currentScore}; sending on its own needs ${requiredScore}.`,
+        urgency: 'digest',
+        source: 'principal_mailbox',
+        parentEventId: options?.taskEventId ?? 'system',
+        sourceLayer: 'execution',
+      }));
+    } catch (err) {
+      // Fail-open: the send is already refused; only the digest line is lost.
+      skillLogger.error({ err, currentScore, requiredScore }, 'autonomy gate: failed to queue the principal_mailbox report item');
+    }
   }
 
   /** Queue a digest item for an action band gating let through (#2159). Never throws. */
