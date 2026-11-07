@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OutboundGateway, UnknownEmailAccountError, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
+import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -4127,6 +4127,26 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
     const { gateway, draftHtml } = makeGateway({ persona: PERSONA });
     await gateway.createEmailDraft(email({ accountId: 'joseph' }));
     expect(draftHtml()).not.toContain('Digital EA');
+  });
+
+  // #2474: a send through the principal's own mailbox would be a second outbound surface
+  // beside the ceo-inbox send path, so the gateway refuses it before any other check.
+  it('send() refuses an email whose account is the principal\'s mailbox', async () => {
+    const { gateway, mocks } = makeGateway({ persona: PERSONA });
+    const result = await gateway.send(email({ accountId: 'joseph' }));
+    expect(result).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.bus.publish).not.toHaveBeenCalled();
+  });
+
+  it('sendEmailDraft refuses a draft in the principal\'s mailbox account', async () => {
+    const { gateway, mocks } = makeGateway({ persona: PERSONA });
+    const result = await gateway.sendEmailDraft('draft-1', 'joseph', {
+      recipientEmail: 'priya@example.com', body: 'Hi', subject: 'Call',
+    });
+    expect(result).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.bus.publish).not.toHaveBeenCalled();
   });
 
   it('ignores a signature already on the request', async () => {
