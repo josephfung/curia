@@ -7,6 +7,22 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { USER_SECRET_PREFIX } from '../../src/secrets/user-secret-name.js';
+import { CARD_FIELDS, isCardExpired, type CardBrand } from '../../src/secrets/structured-secret-schema.js';
+
+interface CardSummary {
+  label?: string;
+  brand: CardBrand;
+  last4: string;
+  expiry: string;
+  expired: boolean;
+}
+
+// Fixed copy (#1358): how to pick a card and pay with it. Only added when a card exists.
+const CARD_SUMMARY =
+  'Saved cards are listed under `cards`. Match the principal\'s words to a card\'s label and brand ("personal Visa", "the Amex"). ' +
+  'Exactly one match: use it. None or several: ask which card, naming each by label, brand and last four — never choose between plausible cards yourself. ' +
+  'An expired card: tell the principal and offer a renewal link (secret-capture-request with template `credit_card_renewal`). ' +
+  'To pay: card-use-request first, then fill fields with web-browser `secret_ref: "<key>#<field>"`.';
 
 export class ListUserSecretsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -25,10 +41,21 @@ export class ListUserSecretsHandler implements ToolHandler {
       // Sign-in details (#2201) are non-secret: where to sign in and as whom. Only keys that
       // are actually stored are reported, so a detail row for an abandoned capture never shows.
       const details: Record<string, { login_url?: string; username?: string }> = {};
+      const cards: Record<string, CardSummary> = {};
       if (ctx.listUserSecretDetails && keys.length > 0) {
         const all = await ctx.listUserSecretDetails();
         for (const key of keys) {
           const d = all.get(key);
+          if (d?.schema === 'credit_card' && d.publicFields) {
+            const pub = d.publicFields;
+            cards[key] = {
+              ...(d.label ? { label: d.label } : {}),
+              brand: pub.brand,
+              last4: pub.last4,
+              expiry: `${pub.expiry_month}/${pub.expiry_year}`,
+              expired: isCardExpired(pub),
+            };
+          }
           if (!d || (!d.loginUrl && !d.username)) continue;
           details[key] = {
             ...(d.loginUrl ? { login_url: d.loginUrl } : {}),
@@ -37,17 +64,21 @@ export class ListUserSecretsHandler implements ToolHandler {
         }
       }
 
+      const hasCards = Object.keys(cards).length > 0;
+
       return {
         success: true,
         data: {
           keys,
           count: keys.length,
           details,
+          ...(hasCards ? { cards, card_fields: CARD_FIELDS } : {}),
           summary: keys.length === 0
             ? 'No personal (user.*) secrets are stored yet. Use secret-capture-request to mint a capture link.'
             : `These are vault key names only — never values. Pass an exact key to secret-capture-request to update it in place, or to web-browser as secret_ref. Do not guess names, and do not ask the user to re-enter a secret that is already listed. ` +
               `To sign in, go straight to a key's login_url with its username; don't search the web for a sign-in page. ` +
-              `A key without details: check memory for the site's sign-in page and username first, and once a sign-in works, record them with secret-capture-request details_only.`,
+              `A key without details: check memory for the site's sign-in page and username first, and once a sign-in works, record them with secret-capture-request details_only.` +
+              (hasCards ? ` ${CARD_SUMMARY}` : ''),
         },
       };
     } catch (err) {

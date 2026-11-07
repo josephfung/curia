@@ -419,7 +419,7 @@ Summary text added when at least one card exists (fixed copy):
 ### Task 10: Capture — templates, card `details_only`, migration 119, route
 
 **Files:**
-- Create: `src/db/migrations/119_secret_capture_template.sql`. It adds `capture_template TEXT CHECK (capture_template IN ('credit_card','credit_card_renewal'))` to `secret_capture_tokens`.
+- Create: `src/db/migrations/120_secret_capture_template.sql`. It adds `capture_template TEXT CHECK (capture_template IN ('credit_card','credit_card_renewal'))` to `secret_capture_tokens`.
 - Modify:
   - `src/secrets/secret-capture-service.ts`:
     - `mintUserSecret` takes `template?`;

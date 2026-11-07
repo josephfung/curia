@@ -218,6 +218,16 @@ export class SecretsService {
   ): Promise<void> {
     assertUserKey(name);
     await this.inTransaction(async client => {
+      // Lock the row and refuse to replace anything that is not already this card: a password
+      // saved under the name after the link was minted must not be overwritten.
+      const existing = (await client.query<{ schema: string | null }>(
+        `SELECT d.schema FROM secrets s LEFT JOIN user_secret_details d ON d.name = s.name
+          WHERE s.name = $1 FOR UPDATE OF s`,
+        [name],
+      )).rows[0];
+      if (existing && existing.schema !== 'credit_card') {
+        throw new Error(`'${name}' holds a different secret, so a card cannot be saved over it`);
+      }
       await this.writeJson(client, name, secret);
       await this.writeCardDetails(client, name, publicFields, label, true);
     });
@@ -248,7 +258,13 @@ export class SecretsService {
    *  updated_at is untouched. Omitted keys are kept; `label: null` clears the label. */
   async patchCardPublic(
     name: string,
-    patch: { label?: string | null; publicFields?: CreditCardPublicFields },
+    patch: {
+      label?: string | null;
+      publicFields?: CreditCardPublicFields;
+      /** The public fields `publicFields` was built from. The write applies only if the card
+       *  still holds exactly these, so a concurrent edit or replacement is not overwritten. */
+      basedOn?: CreditCardPublicFields;
+    },
   ): Promise<void> {
     assertUserKey(name);
     const result = await this.pool.query(
@@ -256,15 +272,17 @@ export class SecretsService {
          label         = CASE WHEN $2::boolean THEN $3::text ELSE label END,
          public_fields = CASE WHEN $4::boolean THEN $5::jsonb ELSE public_fields END,
          updated_at    = now()
-       WHERE name = $1 AND schema = 'credit_card'`,
+       WHERE name = $1 AND schema = 'credit_card'
+         AND ($6::jsonb IS NULL OR public_fields = $6::jsonb)`,
       [
         name,
         patch.label !== undefined, patch.label ?? null,
         patch.publicFields !== undefined,
         patch.publicFields === undefined ? null : JSON.stringify(patch.publicFields),
+        patch.basedOn === undefined ? null : JSON.stringify(patch.basedOn),
       ],
     );
-    if (result.rowCount === 0) throw new Error(`'${name}' is not a saved card`);
+    if (result.rowCount === 0) throw new Error(`'${name}' is not a saved card, or it changed while this edit was prepared; try again`);
   }
 
   /** Replace a card's secret. `{ cvv }` swaps only the CVV and keeps the number; the full
@@ -275,24 +293,33 @@ export class SecretsService {
   ): Promise<void> {
     assertUserKey(name);
     if ('cvv' in change) {
-      // Read-modify-write under a row lock, so a racing replace cannot be overwritten
-      // with the number this call read before it.
-      await this.inTransaction(async client => {
-        const row = (await client.query<{ encrypted_value: string; iv: string; value_format: ValueFormat }>(
-          'SELECT encrypted_value, iv, value_format FROM secrets WHERE name = $1 FOR UPDATE',
-          [name],
-        )).rows[0];
-        if (!row || row.value_format !== 'json') throw new Error(`Secret '${name}' is not a credit_card`);
-        const doc = JSON.parse(decrypt(row.encrypted_value, row.iv, this.key)) as { _schema?: unknown };
-        if (doc._schema !== 'credit_card') throw new Error(`Secret '${name}' is not a credit_card`);
-        await this.writeJson(client, name, { ...(doc as unknown as CreditCardSecretDoc), cvv: change.cvv });
-      });
+      await this.inTransaction(client => this.writeCvvLocked(client, name, change.cvv));
       return;
     }
     await this.inTransaction(async client => {
       await this.writeJson(client, name, change.secret);
       // Keep the existing label; only the public fields change here.
       await this.writeCardDetails(client, name, change.publicFields, null, false);
+    });
+  }
+
+  /** Renew a saved card: the new CVV and the updated public fields (the new expiry) land in
+   *  one transaction, so a failure on either leaves the card exactly as it was. The number
+   *  and the label are kept. */
+  async renewCard(
+    name: string,
+    change: { cvv: string; publicFields: CreditCardPublicFields; basedOn?: CreditCardPublicFields },
+  ): Promise<void> {
+    assertUserKey(name);
+    await this.inTransaction(async client => {
+      await this.writeCvvLocked(client, name, change.cvv);
+      const result = await client.query(
+        `UPDATE user_secret_details SET public_fields = $2::jsonb, updated_at = now()
+          WHERE name = $1 AND schema = 'credit_card'
+            AND ($3::jsonb IS NULL OR public_fields = $3::jsonb)`,
+        [name, JSON.stringify(change.publicFields), change.basedOn === undefined ? null : JSON.stringify(change.basedOn)],
+      );
+      if (result.rowCount === 0) throw new Error(`'${name}' is not a saved card, or it changed while this was prepared; try again`);
     });
   }
 
@@ -402,6 +429,20 @@ export class SecretsService {
 
   private async upsert(name: string, format: ValueFormat, ciphertext: string, iv: string): Promise<void> {
     await upsertSecretRow(this.pool, name, format, ciphertext, iv);
+  }
+
+  /** Swap only the CVV of a stored card, inside the caller's transaction. Read-modify-write
+   *  under a row lock, so a racing replace cannot be overwritten with the number this call
+   *  read before it. */
+  private async writeCvvLocked(client: DbPoolClient, name: string, cvv: string): Promise<void> {
+    const row = (await client.query<{ encrypted_value: string; iv: string; value_format: ValueFormat }>(
+      'SELECT encrypted_value, iv, value_format FROM secrets WHERE name = $1 FOR UPDATE',
+      [name],
+    )).rows[0];
+    if (!row || row.value_format !== 'json') throw new Error(`Secret '${name}' is not a credit_card`);
+    const doc = JSON.parse(decrypt(row.encrypted_value, row.iv, this.key)) as { _schema?: unknown };
+    if (doc._schema !== 'credit_card') throw new Error(`Secret '${name}' is not a credit_card`);
+    await this.writeJson(client, name, { ...(doc as unknown as CreditCardSecretDoc), cvv });
   }
 
   private async writeJson(db: Queryable, name: string, obj: unknown): Promise<void> {
