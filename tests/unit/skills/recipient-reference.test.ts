@@ -176,6 +176,48 @@ describe('resolveRecipientReference', () => {
     }
   });
 
+  it('does not advise re-stating an inactive outbound_recipient address', async () => {
+    const sam = await contacts.createContact({ displayName: 'Sam Cold', source: 'outbound_recipient', tier: 'known' });
+    await contacts.linkIdentity({
+      contactId: sam.id, channel: 'email', channelIdentifier: 'sam@gone.example', source: 'outbound_recipient', status: 'bounced',
+    });
+    const result = await resolveRecipientReference(sam.id, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/inactive \(bounced or defunct\)/);
+      expect(result.error).not.toMatch(/re-state the address/);
+      expect(result.error).not.toContain('sam@gone.example');
+    }
+  });
+
+  it('gives console advice, not re-statement, for a structural contact', async () => {
+    const office = await contacts.createContact({ displayName: 'Front Desk', source: 'outbound_recipient', tier: 'known' });
+    await contacts.linkIdentity({ contactId: office.id, channel: 'email', channelIdentifier: 'desk@x.example', source: 'outbound_recipient' });
+    const saved = (await contacts.getContactWithIdentities(office.id))!.contact;
+    await contacts.saveContact({ ...saved, systemRole: 'principal' });
+    const result = await resolveRecipientReference(office.id, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/managed by the principal in the console/);
+      expect(result.error).not.toMatch(/re-state the address/);
+    }
+  });
+
+  it('states both rules when a contact has an outbound_recipient and another unverified source', async () => {
+    const mix = await contacts.createContact({ displayName: 'Mixed Co', source: 'agent_called', tier: 'known' });
+    await contacts.linkIdentity({ contactId: mix.id, channel: 'email', channelIdentifier: 'a@mixed.example', source: 'outbound_recipient' });
+    await contacts.linkIdentity({
+      contactId: mix.id, channel: 'email', channelIdentifier: 'b@mixed.example', source: 'agent_called', verified: false,
+    });
+    const result = await resolveRecipientReference(mix.id, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/earlier first-time send recorded/);
+      expect(result.error).toMatch(/refused unless the principal is asking for it in a live conversation/);
+      expect(result.error).not.toContain('mixed.example');
+    }
+  });
+
   it('refuses a blocked contact, since the gateway checks only the To tier (cc would get through)', async () => {
     const blocked = await contacts.createContact({ displayName: 'Blocked Person', source: 'ceo_stated', tier: 'blocked' });
     await contacts.linkIdentity({ contactId: blocked.id, channel: 'email', channelIdentifier: 'blocked@x.example', source: 'ceo_stated' });

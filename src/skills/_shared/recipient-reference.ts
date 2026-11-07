@@ -36,7 +36,7 @@
 // raw-address inputs are refused, never ignored.
 
 import { cleanedIdentityLabel, visibleIdentityLabel } from '../../agents/principal-contact-block.js';
-import type { ContactService } from '../../contacts/contact-service.js';
+import { isStructuralContact, type ContactService } from '../../contacts/contact-service.js';
 import { hasPresentValue } from '../../contacts/principal-carveout-parse.js';
 import type { ChannelIdentity, Contact } from '../../contacts/types.js';
 import { findPrincipalChannelRules } from '../../contacts/principal-channel-registry.js';
@@ -605,15 +605,32 @@ export async function resolveRecipientReference(
     // contact-link-identity verifies a re-stated outbound_recipient address on any turn, but
     // any other unverified source only while the principal is asking for it live (#2515).
     // Say which, rather than send the agent round to a re-statement that will be refused.
-    const restatable = onChannel.some((identity) => !identity.verified && identity.source === 'outbound_recipient');
+    // Only an active address is worth re-stating: verifying a bounced or defunct one leaves it
+    // unusable. A structural contact's addresses are never agent-managed, so no re-statement helps.
+    const unverified = onChannel.filter((identity) => !identity.verified);
+    const unverifiedActive = unverified.filter((identity) => identity.status === 'active');
+    const restatable = unverifiedActive.some((identity) => identity.source === 'outbound_recipient');
+    const needsPrincipalLive = unverifiedActive.some((identity) => identity.source !== 'outbound_recipient');
     const next = isPrincipal
       ? 'Use a channel listed in Principal Contact Details.'
-      : restatable
-        ? 'Reach them on another channel, or re-state the address with contact-link-identity, copied from a message ' +
-          'or page in this conversation.'
-        : 'Reach them on another channel, or give contact-link-identity an address copied from a message or page in this ' +
-          'conversation. Re-stating an unverified one already on file is refused unless the principal is asking for ' +
-          'it in a live conversation.';
+      : isStructuralContact(found.contact)
+        ? 'Reach them on another channel. A system contact\'s addresses are managed by the principal in the console.'
+        : restatable && needsPrincipalLive
+          ? 'Reach them on another channel. Re-stating an address with contact-link-identity, copied from a message or ' +
+            'page in this conversation, verifies one an earlier first-time send recorded; any other unverified one is ' +
+            'refused unless the principal is asking for it in a live conversation.'
+          : restatable
+            ? 'Reach them on another channel, or re-state the address with contact-link-identity, copied from a message ' +
+              'or page in this conversation.'
+            : needsPrincipalLive
+              ? 'Reach them on another channel, or give contact-link-identity an address copied from a message or page in ' +
+                'this conversation. Re-stating an unverified one already on file is refused unless the principal is ' +
+                'asking for it in a live conversation.'
+              : unverified.length > 0
+                ? 'Reach them on another channel. The address on file is inactive (bounced or defunct), so re-stating it ' +
+                  'would not make it usable; the principal can review it in the console.'
+                : 'Reach them on another channel, or give contact-link-identity an address copied from a message or page ' +
+                  'in this conversation.';
     return {
       ok: false,
       error: `${who} has no verified, active ${channel} address${why}. Nothing was sent. ${next}`,
