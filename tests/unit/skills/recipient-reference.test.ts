@@ -150,6 +150,32 @@ describe('resolveRecipientReference', () => {
     }
   });
 
+  // #2515: contact-link-identity verifies a re-stated outbound_recipient address on any
+  // turn, any other source only on a live principal turn. The advice must match.
+  it('advises re-stating an unverified outbound_recipient address', async () => {
+    const sam = await contacts.createContact({ displayName: 'Sam Cold', source: 'outbound_recipient', tier: 'known' });
+    await contacts.linkIdentity({ contactId: sam.id, channel: 'email', channelIdentifier: 'sam@cold.example', source: 'outbound_recipient' });
+    const result = await resolveRecipientReference(sam.id, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/re-state the address with contact-link-identity/);
+      expect(result.error).not.toMatch(/refused unless the principal/);
+    }
+  });
+
+  it('says a re-statement of any other unverified source needs the principal live', async () => {
+    const acme = await contacts.createContact({ displayName: 'Acme Office', source: 'agent_called', tier: 'known' });
+    await contacts.linkIdentity({
+      contactId: acme.id, channel: 'email', channelIdentifier: 'office@acme.example', source: 'agent_called', verified: false,
+    });
+    const result = await resolveRecipientReference(acme.id, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/refused unless the principal is asking for it in a live conversation/);
+      expect(result.error).not.toContain('office@acme.example');
+    }
+  });
+
   it('refuses a blocked contact, since the gateway checks only the To tier (cc would get through)', async () => {
     const blocked = await contacts.createContact({ displayName: 'Blocked Person', source: 'ceo_stated', tier: 'blocked' });
     await contacts.linkIdentity({ contactId: blocked.id, channel: 'email', channelIdentifier: 'blocked@x.example', source: 'ceo_stated' });

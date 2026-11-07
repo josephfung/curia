@@ -159,7 +159,8 @@ describe('contact-link-identity: a live principal instruction verifies an addres
   });
 
   it('refuses the same request from a woken principal-lineage task, leaving it unverified', async () => {
-    const reply = await principalAsks('web:woken', { metadata: { wakeContext: { derived: false } } });
+    // A wake never carries liveTurn; set it anyway, so the wake itself is what refuses.
+    const reply = await principalAsks('web:woken', { liveTurn: true, metadata: { wakeContext: { derived: false } } });
     expect(reply.payload.content).toContain('only the principal can vouch for it');
     expect(await ctx.isVerified()).toBe(false);
   });
