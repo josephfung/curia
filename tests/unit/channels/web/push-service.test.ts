@@ -125,6 +125,39 @@ describe('push preview', () => {
     expect(pushPreview('   ', false)).toBe(HIDDEN_PREVIEW);
   });
 
+  it('strips images and italics', () => {
+    expect(pushPreview('see ![chart](https://example.com/c.png) here', false)).toBe('see here');
+    expect(pushPreview('an *important* and _quiet_ note', false)).toBe('an important and quiet note');
+    expect(pushPreview('Plan:\n\n  - draft\n  2. send', false)).toBe('Plan: draft send');
+  });
+
+  it('strips images and links with escaped brackets or IPv6 hosts', () => {
+    expect(pushPreview('x ![see \\[note](https://example.com/i.png) y', false)).toBe('x y');
+    expect(pushPreview('x ![i](http://[::1]:8080/i.png) y', false)).toBe('x y');
+    expect(pushPreview('read [the \\[doc\\]](https://example.com) now', false)).toBe('read the [doc] now');
+    expect(pushPreview('open [site](https://[2001:db8::1]/a) now', false)).toBe('open site now');
+  });
+
+  it.each([
+    ['unclosed image openers', '!['],
+    ['unclosed link openers', '['],
+    ['unclosed image destinations', '![a]('],
+    ['unclosed link destinations', '[a]('],
+    ['host-like link destinations', '[a:]('],
+    ['host-like image destinations', '![a:]('],
+    ['escaped brackets', '[\\['],
+    ['escaped bracket run', '\\['],
+    ['unclosed * italics', ' *a'],
+    ['unclosed _ italics', ' _a'],
+    ['blank lines', '\n'],
+    ['whitespace-only lines', ' \n'],
+  ])('strips a long run of %s in linear time', (_name, unit) => {
+    const started = performance.now();
+    pushPreview(`[notes](https://example.com) ${unit.repeat(50_000)}`, false);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(pushPreview(`${unit.repeat(50)} [notes](https://example.com)`, false)).not.toContain('example.com');
+  });
+
   it('does not retry a local failure, and retries only 429 and 5xx', () => {
     expect(classifyPushStatus(201)).toBe('ok');
     expect(classifyPushStatus(404)).toBe('gone');
