@@ -4556,7 +4556,7 @@ describe('secretResolver capability (resolveSecretRef)', () => {
     // 'web-browser' is on the resolver allowlist.
     registry.register(makeResolverManifest('web-browser'), handler);
 
-    const secretsService = { get: vi.fn().mockResolvedValue(RESOLVED_VALUE) } as unknown as SecretsService;
+    const secretsService = { get: vi.fn().mockResolvedValue(RESOLVED_VALUE), getStructuredSchema: vi.fn().mockResolvedValue(null) } as unknown as SecretsService;
     const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
 
     const result = await layer.invoke('web-browser', {});
@@ -4619,7 +4619,7 @@ describe('secretResolver capability (resolveSecretRef)', () => {
       }),
     };
     registry.register(makeResolverManifest('web-browser'), handler);
-    const secretsService = { get: vi.fn().mockResolvedValue(null) } as unknown as SecretsService;
+    const secretsService = { get: vi.fn().mockResolvedValue(null), getStructuredSchema: vi.fn().mockResolvedValue(null) } as unknown as SecretsService;
     const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
 
     await layer.invoke('web-browser', {});
@@ -4639,7 +4639,7 @@ describe('secretResolver capability (resolveSecretRef)', () => {
     registry.register(makeResolverManifest('web-browser'), handler);
 
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
-    const secretsService = { get: vi.fn().mockResolvedValue(RESOLVED_VALUE) } as unknown as SecretsService;
+    const secretsService = { get: vi.fn().mockResolvedValue(RESOLVED_VALUE), getStructuredSchema: vi.fn().mockResolvedValue(null) } as unknown as SecretsService;
     const layer = new ExecutionLayer(registry, logger, {
       bus: mockBus,
       secretsService,

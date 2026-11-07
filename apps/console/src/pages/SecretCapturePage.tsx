@@ -9,6 +9,13 @@ import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { CuriaWordmark } from '../components/Icons';
 import { apiFetch } from '../api';
+import { CardFields } from '../components/CardFields';
+import {
+  buildCardPayload,
+  validateCardForm,
+  EMPTY_CARD_FORM,
+  type CardFormState,
+} from './card-form-utils';
 import {
   classifyMetadataResponse,
   validateSubmitValue,
@@ -20,6 +27,8 @@ export default function SecretCapturePage() {
   const { token } = useParams({ from: '/secret-capture/$token' });
   const [view, setView] = useState<CaptureView>({ kind: 'loading' });
   const [value, setValue] = useState('');
+  const [card, setCard] = useState<CardFormState>(EMPTY_CARD_FORM);
+  const [cardErrors, setCardErrors] = useState<Partial<Record<keyof CardFormState, string>>>({});
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   // Always holds the token currently shown. A submit captures the token it started with and
@@ -35,6 +44,8 @@ export default function SecretCapturePage() {
     activeToken.current = token;
     setView({ kind: 'loading' });
     setValue('');
+    setCard(EMPTY_CARD_FORM);
+    setCardErrors({});
     setError(null);
     (async () => {
       try {
@@ -58,11 +69,19 @@ export default function SecretCapturePage() {
     if (submitting || view.kind !== 'form') return;
     setError(null);
 
-    const check = validateSubmitValue(value, view.valueFormat);
-    if (!check.ok) {
-      setError(check.error);
-      return;
+    const mode = view.template === 'credit_card_renewal' ? 'renewal' : 'full';
+    if (view.template) {
+      const found = validateCardForm(card, mode);
+      setCardErrors(found);
+      if (Object.keys(found).length > 0) return;
+    } else {
+      const check = validateSubmitValue(value, view.valueFormat);
+      if (!check.ok) {
+        setError(check.error);
+        return;
+      }
     }
+    const template = view.template;
 
     const submittedToken = token;
     setSubmitting(true);
@@ -70,20 +89,21 @@ export default function SecretCapturePage() {
       const res = await apiFetch(`/api/secret-capture/${submittedToken}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value }),
+        body: JSON.stringify(template ? { card: buildCardPayload(card, mode) } : { value }),
       });
       // If the user navigated to a different capture link while this POST was in flight, drop
       // the stale result rather than overwriting the now-active token's page.
       if (activeToken.current !== submittedToken) return;
       if (res.ok) {
         setValue(''); // drop the value from memory as soon as it's accepted
+        setCard(EMPTY_CARD_FORM);
         setView({ kind: 'success' });
         return;
       }
       // Terminal failures: the link is no longer usable, so drop the entered secret from
       // component state rather than leaving it sitting in memory behind a dead form.
-      if (res.status === 410) { setValue(''); setView({ kind: 'gone' }); return; }
-      if (res.status === 404) { setValue(''); setView({ kind: 'notfound' }); return; }
+      if (res.status === 410) { setValue(''); setCard(EMPTY_CARD_FORM); setView({ kind: 'gone' }); return; }
+      if (res.status === 404) { setValue(''); setCard(EMPTY_CARD_FORM); setView({ kind: 'notfound' }); return; }
       // Parse the error body only when it's actually JSON, with an explicit fall-through to
       // the generic message — mirrors WizardPage's extractError() convention (no console).
       let data: { error?: string } = {};
@@ -123,6 +143,29 @@ export default function SecretCapturePage() {
       case 'success':
         return <p>Saved. You can close this window.</p>;
       case 'form':
+        if (view.template) {
+          const renewal = view.template === 'credit_card_renewal';
+          const brandText = view.card ? view.card.brand.charAt(0).toUpperCase() + view.card.brand.slice(1) : '';
+          return (
+            <form onSubmit={handleSubmit} className="login-form" noValidate>
+              <p>
+                {renewal && view.card
+                  ? <>Renew <strong>{brandText} ••{view.card.last4}</strong>{view.card.label ? ` (${view.card.label})` : ''}</>
+                  : <>Enter card details for: <strong>{view.label ?? 'the requested card'}</strong></>}
+              </p>
+              <CardFields
+                mode={renewal ? 'renewal' : 'full'}
+                state={card}
+                onChange={(patch) => setCard((prev) => ({ ...prev, ...patch }))}
+                errors={cardErrors}
+              />
+              {error && <p className="login-error">{error}</p>}
+              <button type="submit" className="btn btn-primary" disabled={submitting}>
+                {submitting ? 'Saving…' : 'Save securely'}
+              </button>
+            </form>
+          );
+        }
         return (
           <form onSubmit={handleSubmit} className="login-form">
             <label htmlFor="capture-value">

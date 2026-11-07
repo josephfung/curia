@@ -177,8 +177,11 @@ import { OfficeIdentityService } from './identity/service.js';
 import { ExecutiveProfileService } from './executive/service.js';
 import { loadEncryptionKey } from './secrets/crypto.js';
 import { SecretsService } from './secrets/secrets-service.js';
+import { CardUseRepo } from './secrets/card-use-repo.js';
+import { CardUseService } from './secrets/card-use-service.js';
 import { SecretCaptureService } from './secrets/secret-capture-service.js';
 import { SecretCaptureResumeSubscriber } from './secrets/secret-capture-resume-subscriber.js';
+import { CardUseResumeSubscriber } from './secrets/card-use-resume-subscriber.js';
 import { channelCredentialKeys, principalMailboxKeys } from './channels/http/routes/vault.js';
 import { migrateLegacyTavilyKey } from './secrets/migrate-legacy-tavily-key.js';
 import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
@@ -2707,7 +2710,12 @@ async function main(): Promise<void> {
   // is cancelled server-side too instead of holding a pool connection after they give up.
   const curiaEmailAddresses = (): Promise<string[]> =>
     emailAccountsRepo.listSelfEmails(CURIA_ADDRESS_LOOKUP_TIMEOUT_MS);
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  const cardUseRepo = new CardUseRepo(pool);
+  // Saved-card checkout approvals (#1358): files card-use-confirm approvals, writes the grant on
+  // the principal's yes, and settles denials and expiries. Shared by the execution layer's
+  // cardUse capability and the deny / expiry paths below.
+  const cardUseService = new CardUseService({ repo: cardUseRepo, secrets: secretsService, approvalTrigger, bus, logger });
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>
@@ -3296,6 +3304,7 @@ async function main(): Promise<void> {
     executionLayer,
     principalIdentities,
     disclosureDecisions,
+    cardUse: cardUseService,
     reactionIntents: {
       approve: reactionIntentsConfig?.approve ?? [...DEFAULT_REACTION_INTENTS.approve],
       reject: reactionIntentsConfig?.reject ?? [...DEFAULT_REACTION_INTENTS.reject],
@@ -3322,6 +3331,15 @@ async function main(): Promise<void> {
     (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
   );
   secretCaptureResumeSubscriber.start();
+
+  // Resume-after-card-decision (#1358): re-enters the agent parked mid-checkout when the
+  // principal answers a card-use confirmation outside the requesting conversation.
+  const cardUseResumeSubscriber = new CardUseResumeSubscriber(
+    bus,
+    logger,
+    (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
+  );
+  cardUseResumeSubscriber.start();
 
   // Late delegation delivery (#1799): a delegate wait that times out abandons a specialist that
   // keeps running. The subscriber opens a durable handle at timeout, and when the specialist
@@ -3386,6 +3404,7 @@ async function main(): Promise<void> {
     bus,
     // Safety net: approvals no agent delivered within 15 minutes go out once by email.
     approvalDelivery,
+    cardUse: cardUseService,
     logger,
     intervalMinutes: resolveApprovalExpiryConfig(yamlConfig.autonomy).sweepIntervalMinutes,
   });
@@ -3485,6 +3504,7 @@ async function main(): Promise<void> {
     contactService,
     executionLayer,
     disclosureDecisions,
+    cardUse: cardUseService,
     deleteMailboxDraft: briefingGateway
       ? (account, draftId) => briefingGateway.deleteMailboxDraft(account, draftId)
       : undefined,
