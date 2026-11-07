@@ -17,7 +17,8 @@ import type { EventBus } from '../../../../../src/bus/bus.js';
 import { hashToken } from '../../../../../src/channels/http/session-auth.js';
 import type { UserSecretDetails } from '../../../../../src/secrets/user-secret-details.js';
 import type { SecretUsagePort, SecretUse } from '../../../../../src/secrets/secret-usage-repo.js';
-import type { UserSecretDetailsPatch } from '../../../../../src/secrets/secrets-service.js';
+import { StaleCardEditError, type UserSecretDetailsPatch } from '../../../../../src/secrets/secrets-service.js';
+import { CARD_VALIDATION_MESSAGES, type CreditCardPublicFields, type CreditCardSecretDoc, type StructuredSchemaTag } from '../../../../../src/secrets/structured-secret-schema.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 
@@ -33,6 +34,15 @@ interface RecordingSecrets extends VaultSecretsPort {
   detailDeletes: string[];
   /** Every write in call order, e.g. 'details-delete:user.x', 'delete:user.x'. */
   order: string[];
+  cardSets: Array<{ name: string; secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields; label: string | null }>;
+  cardPatches: Array<{ name: string; patch: { label?: string | null; publicFields?: CreditCardPublicFields } }>;
+  cardRenewals: Array<{ name: string; change: { cvv: string; publicFields: CreditCardPublicFields } }>;
+  cardReplaces: Array<{ name: string; change: { cvv: string } | { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields } }>;
+  /** Anything that would decrypt a vault value. Listing a card must never call these. */
+  decrypts: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+  getJSON: ReturnType<typeof vi.fn>;
+  getCardSecret: ReturnType<typeof vi.fn>;
 }
 
 const CREATED = new Date('2026-09-01T00:00:00.000Z');
@@ -49,8 +59,33 @@ function fakeSecrets(
   const patches: Array<{ name: string; patch: UserSecretDetailsPatch }> = [];
   const detailDeletes: string[] = [];
   const order: string[] = [];
+  const cardSets: RecordingSecrets['cardSets'] = [];
+  const cardPatches: RecordingSecrets['cardPatches'] = [];
+  const cardReplaces: RecordingSecrets['cardReplaces'] = [];
+  const cardRenewals: RecordingSecrets['cardRenewals'] = [];
+  const decrypts = vi.fn(async () => { throw new Error('a decrypt was attempted'); });
   const present = new Set(preset);
   return {
+    cardSets,
+    cardPatches,
+    cardReplaces,
+    cardRenewals,
+    renewCard: async (name: string, change: { cvv: string; publicFields: CreditCardPublicFields }) => { cardRenewals.push({ name, change }); },
+    decrypts,
+    get: decrypts,
+    getJSON: decrypts,
+    getCardSecret: decrypts,
+    setCard: async (name: string, secret: CreditCardSecretDoc, publicFields: CreditCardPublicFields, label: string | null) => {
+      cardSets.push({ name, secret, publicFields, label });
+      present.add(name);
+    },
+    getStructuredSchema: async (name: string): Promise<StructuredSchemaTag | null> => details[name]?.schema ?? null,
+    getCardPublic: async (name: string) => {
+      const d = details[name];
+      return d?.schema === 'credit_card' && d.publicFields ? { label: d.label ?? null, publicFields: d.publicFields } : null;
+    },
+    patchCardPublic: async (name: string, patch: { label?: string | null; publicFields?: CreditCardPublicFields }) => { cardPatches.push({ name, patch }); },
+    replaceCardSecret: async (name: string, change: { cvv: string } | { secret: CreditCardSecretDoc; publicFields: CreditCardPublicFields }) => { cardReplaces.push({ name, change }); },
     sets,
     deletes,
     upserts,
@@ -755,7 +790,7 @@ describe('vault routes', () => {
       app = await build(secrets, fakeRegistry(), { bus });
       const res = await post(app, '/api/vault/user-secrets/preview', { type: 'website_login', loginUrl: 'https://www.rogers.com/signin' });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ name: 'user.rogers_password', existing: { updatedAt: UPDATED.toISOString(), valueFormat: 'string' } });
+      expect(res.json()).toEqual({ name: 'user.rogers_password', existing: { updatedAt: UPDATED.toISOString(), valueFormat: 'string', schema: null } });
       expect(published).toEqual([]);
       expect(secrets.sets).toEqual([]);
     });
@@ -945,7 +980,7 @@ describe('vault routes', () => {
   });
 
   describe('GET /api/vault/secrets/:name/uses', () => {
-    const USE: SecretUse = { at: new Date('2026-10-30T12:00:00.000Z'), agentId: 'coordinator', toolName: 'browser-login', source: 'vault', byReference: true };
+    const USE: SecretUse = { kind: 'read', at: new Date('2026-10-30T12:00:00.000Z'), agentId: 'coordinator', toolName: 'browser-login', source: 'vault', byReference: true, secretField: null };
     function recordingUsage() {
       const calls: Array<{ name: string; limit: number }> = [];
       const usage: SecretUsagePort = {
@@ -961,7 +996,7 @@ describe('vault routes', () => {
       const res = await app.inject({ method: 'GET', url: '/api/vault/secrets/tavily_api_key/uses?limit=500', headers: auth });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
-        uses: [{ at: '2026-10-30T12:00:00.000Z', agentId: 'coordinator', toolName: 'browser-login', source: 'vault', byReference: true }],
+        uses: [{ kind: 'read', at: '2026-10-30T12:00:00.000Z', agentId: 'coordinator', toolName: 'browser-login', source: 'vault', byReference: true }],
       });
       await app.inject({ method: 'GET', url: '/api/vault/secrets/tavily_api_key/uses', headers: auth });
       await app.inject({ method: 'GET', url: '/api/vault/secrets/tavily_api_key/uses?limit=0', headers: auth });
@@ -986,6 +1021,297 @@ describe('vault routes', () => {
       const res = await app.inject({ method: 'GET', url: '/api/vault/secrets/k/uses', headers: auth });
       expect(res.json()).toEqual({ uses: [] });
       expect((await app.inject({ method: 'GET', url: '/api/vault/secrets/k/uses' })).statusCode).toBe(401);
+    });
+  });
+
+  // --- saved cards (#1358, Task 13) ---
+
+  describe('saved cards', () => {
+    const CARD_KEY = 'user.personal_visa_card';
+    const NUMBER = '4111111111111111';
+    const CARD = { number: NUMBER, cvv: '123', expiry_month: 12, expiry_year: 2099, cardholder_name: 'Joseph Fung' };
+    const PUB: CreditCardPublicFields = { brand: 'visa', last4: '1111', expiry_month: '12', expiry_year: '2099', cardholder_name: 'Joseph Fung' };
+    const savedCard = (over: Partial<UserSecretDetails> = {}): Record<string, UserSecretDetails> => ({
+      [CARD_KEY]: { schema: 'credit_card', label: 'Personal', publicFields: PUB, ...over },
+    });
+    const FORMATS = { [CARD_KEY]: 'json' as const };
+
+    it('list returns a card summary without decrypting', async () => {
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]));
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+      const row = (res.json().secrets as Array<Record<string, unknown>>).find(r => r['name'] === CARD_KEY)!;
+      expect(row).toMatchObject({
+        kind: 'personal', configured: true,
+        card: { label: 'Personal', brand: 'visa', last4: '1111', expiry: '12/2099', cardholder_name: 'Joseph Fung', billing_zip: null, expired: false },
+      });
+      expect(secrets.decrypts).not.toHaveBeenCalled();
+      expect(res.body).not.toContain(NUMBER);
+    });
+
+    it('list carries the cardholder name and billing postal code, still without decrypting', async () => {
+      const secrets = fakeSecrets([CARD_KEY], savedCard({ publicFields: { ...PUB, billing_zip: 'N2L 3G1' } }), FORMATS);
+      app = await build(secrets, fakeRegistry([]));
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+      const row = (res.json().secrets as Array<Record<string, unknown>>).find(r => r['name'] === CARD_KEY)!;
+      expect(row['card']).toMatchObject({ cardholder_name: 'Joseph Fung', billing_zip: 'N2L 3G1' });
+      expect(secrets.decrypts).not.toHaveBeenCalled();
+    });
+
+    it('expired card status is expired', async () => {
+      const expiredPub = { ...PUB, expiry_month: '01', expiry_year: '2020' };
+      app = await build(fakeSecrets([CARD_KEY], savedCard({ publicFields: expiredPub, label: undefined }), FORMATS), fakeRegistry([]));
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+      const row = (res.json().secrets as Array<Record<string, unknown>>).find(r => r['name'] === CARD_KEY)!;
+      expect(row['card']).toEqual({ label: null, brand: 'visa', last4: '1111', expiry: '01/2020', cardholder_name: 'Joseph Fung', billing_zip: null, expired: true });
+      expect(row['configured']).toBe(true);
+    });
+
+    it('create card calls setCard; response and audit payloads carry no number or cvv', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets();
+      app = await build(secrets, fakeRegistry([]), { bus });
+      const res = await post(app, '/api/vault/user-secrets', {
+        type: 'credit_card', label: 'Personal', card: { ...CARD, billing_zip: 'M5V 2T6' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ name: CARD_KEY, replaced: false });
+      expect(secrets.cardSets).toEqual([{
+        name: CARD_KEY,
+        secret: { _schema: 'credit_card', number: NUMBER, cvv: '123' },
+        publicFields: { ...PUB, billing_zip: 'M5V 2T6' },
+        label: 'Personal',
+      }]);
+      expect(secrets.sets).toEqual([]);
+      expect(changes(published)).toEqual(['set:requested', 'set:completed']);
+      for (const text of [res.body, JSON.stringify(published)]) {
+        expect(text).not.toContain(NUMBER);
+        expect(text).not.toContain('"123"');
+      }
+    });
+
+    it('create card replaces an existing card and refuses an untagged JSON key', async () => {
+      const replaced = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(replaced, fakeRegistry([]));
+      const res = await post(app, '/api/vault/user-secrets', { type: 'credit_card', label: 'Personal', card: CARD });
+      expect(res.json()).toEqual({ name: CARD_KEY, replaced: true });
+      expect(replaced.cardSets).toHaveLength(1);
+      await app.close();
+
+      const { bus, published } = fakeBus();
+      const untagged = fakeSecrets([CARD_KEY], {}, FORMATS);
+      app = await build(untagged, fakeRegistry([]), { bus });
+      const refused = await post(app, '/api/vault/user-secrets', { type: 'credit_card', label: 'Personal', card: CARD });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().error).toContain('structured value');
+      expect(untagged.cardSets).toEqual([]);
+      expect(published).toEqual([]);
+    });
+
+    it('create card refuses to overwrite a plain string secret', async () => {
+      const secrets = fakeSecrets([CARD_KEY]);
+      app = await build(secrets, fakeRegistry([]));
+      const res = await post(app, '/api/vault/user-secrets', { type: 'credit_card', label: 'Personal', card: CARD });
+      expect(res.statusCode).toBe(409);
+      expect(secrets.cardSets).toEqual([]);
+    });
+
+    it('create card validation failure is a 400 with the message and writes nothing', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets();
+      app = await build(secrets, fakeRegistry([]), { bus });
+      const badLuhn = await post(app, '/api/vault/user-secrets', { type: 'credit_card', label: 'Personal', card: { ...CARD, number: '4111111111111112' } });
+      expect(badLuhn.statusCode).toBe(400);
+      expect(badLuhn.json()).toEqual({ error: CARD_VALIDATION_MESSAGES.number_checksum });
+      const badCvv = await post(app, '/api/vault/user-secrets', { type: 'credit_card', label: 'Personal', card: { ...CARD, cvv: '12' } });
+      expect(badCvv.json()).toEqual({ error: CARD_VALIDATION_MESSAGES.cvv_format });
+      const expired = await post(app, '/api/vault/user-secrets', { type: 'credit_card', label: 'Personal', card: { ...CARD, expiry_year: 2020 } });
+      expect(expired.json()).toEqual({ error: CARD_VALIDATION_MESSAGES.expired });
+      const noCard = await post(app, '/api/vault/user-secrets', { type: 'credit_card', label: 'Personal' });
+      expect(noCard.statusCode).toBe(400);
+      const noLabel = await post(app, '/api/vault/user-secrets', { type: 'credit_card', card: CARD });
+      expect(noLabel.statusCode).toBe(400);
+      for (const res of [badLuhn, badCvv, expired, noCard, noLabel]) {
+        expect(res.body).not.toContain(NUMBER);
+        expect(res.body).not.toContain('4111111111111112');
+      }
+      expect(secrets.cardSets).toEqual([]);
+      expect(published).toEqual([]);
+    });
+
+    it('preview names user.personal_visa_card from label and number, without echoing them', async () => {
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]));
+      const res = await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', label: 'Personal', card: { number: '4111 1111 1111 1111', cvv: '999' } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ name: CARD_KEY, existing: { updatedAt: UPDATED.toISOString(), valueFormat: 'json', schema: 'credit_card' } });
+      expect(res.body).not.toContain('4111');
+      expect(res.body).not.toContain('999');
+      expect(secrets.cardSets).toEqual([]);
+
+      const amex = await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', label: 'Work', card: { number: '378282246310005' } });
+      expect(amex.json().name).toBe('user.work_amex_card');
+      // A short prefix is enough to name the card: it need not be a valid number.
+      const prefix = await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', label: 'Work', card: { number: '37' } });
+      expect(prefix.statusCode).toBe(200);
+      expect(prefix.json().name).toBe('user.work_amex_card');
+      expect((await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', label: 'Work', card: {} })).statusCode).toBe(400);
+      expect((await post(app, '/api/vault/user-secrets/preview', { type: 'credit_card', card: { number: NUMBER } })).statusCode).toBe(400);
+    });
+
+    it('patch label and expiry audits details and writes no secret', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]), { bus });
+      const res = await patch(app, CARD_KEY, { label: 'Everyday', expiry_month: 3, expiry_year: 2099, billing_zip: '' });
+      expect(res.statusCode).toBe(200);
+      expect(secrets.cardPatches).toEqual([{ name: CARD_KEY, patch: { label: 'Everyday', publicFields: { ...PUB, expiry_month: '03' }, basedOn: PUB } }]);
+      expect(secrets.cardReplaces).toEqual([]);
+      expect(secrets.sets).toEqual([]);
+      expect(changes(published)).toEqual(['details:requested', 'details:completed']);
+    });
+
+    it("patch '' clears the label and the billing postal code", async () => {
+      const withZip = savedCard({ publicFields: { ...PUB, billing_zip: 'M5V' } });
+      const secrets = fakeSecrets([CARD_KEY], withZip, FORMATS);
+      app = await build(secrets, fakeRegistry([]));
+      expect((await patch(app, CARD_KEY, { label: '', billing_zip: '' })).statusCode).toBe(200);
+      expect(secrets.cardPatches).toEqual([{ name: CARD_KEY, patch: { label: null, publicFields: PUB, basedOn: { ...PUB, billing_zip: 'M5V' } } }]);
+    });
+
+    it('patch rejects an invalid public field with the message', async () => {
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]));
+      const res = await patch(app, CARD_KEY, { expiry_year: 2020 });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: CARD_VALIDATION_MESSAGES.expired });
+      expect((await patch(app, CARD_KEY, { cardholder_name: ' ' })).json()).toEqual({ error: CARD_VALIDATION_MESSAGES.cardholder_missing });
+      expect(secrets.cardPatches).toEqual([]);
+    });
+
+    it('patch cvv keeps the number', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]), { bus });
+      const res = await patch(app, CARD_KEY, { cvv: '456' });
+      expect(res.statusCode).toBe(200);
+      expect(secrets.cardReplaces).toEqual([{ name: CARD_KEY, change: { cvv: '456' } }]);
+      expect(secrets.cardPatches).toEqual([]);
+      expect(changes(published)).toEqual(['set:requested', 'set:completed']);
+      expect(JSON.stringify(published)).not.toContain('456');
+      expect(res.body).not.toContain('456');
+      expect((await patch(app, CARD_KEY, { cvv: '4567' })).json()).toEqual({ error: CARD_VALIDATION_MESSAGES.cvv_format });
+    });
+
+    it('patch cvv with expiry is one atomic renewal audited as set; a label rides separately as details', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]), { bus });
+      const res = await patch(app, CARD_KEY, { cvv: '456', expiry_month: 3, expiry_year: 2100 });
+      expect(res.statusCode).toBe(200);
+      expect(secrets.cardRenewals).toEqual([{ name: CARD_KEY, change: { cvv: '456', publicFields: { ...PUB, expiry_month: '03', expiry_year: '2100' }, basedOn: PUB } }]);
+      expect(secrets.cardReplaces).toEqual([]);
+      expect(secrets.cardPatches).toEqual([]);
+      expect(changes(published)).toEqual(['set:requested', 'set:completed']);
+      expect(JSON.stringify(published)).not.toContain('456');
+
+      published.length = 0;
+      await patch(app, CARD_KEY, { cvv: '456', expiry_year: 2100, label: 'Everyday' });
+      expect(secrets.cardRenewals).toHaveLength(2);
+      expect(secrets.cardPatches).toEqual([{ name: CARD_KEY, patch: { label: 'Everyday' } }]);
+      expect(changes(published)).toEqual(['set:requested', 'details:requested', 'set:completed', 'details:completed']);
+    });
+
+    it('a stale edit (renewal or public-field patch) is a 409 the console can retry, not a 500', async () => {
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      const stale = async () => { throw new StaleCardEditError('card changed while this edit was prepared; try again'); };
+      secrets.renewCard = stale;
+      secrets.patchCardPublic = stale;
+      app = await build(secrets, fakeRegistry([]), {});
+      const renewal = await patch(app, CARD_KEY, { cvv: '456', expiry_month: 3, expiry_year: 2100 });
+      expect(renewal.statusCode).toBe(409);
+      expect(renewal.json()).toEqual({ error: 'card changed while this edit was prepared; try again' });
+      const publicEdit = await patch(app, CARD_KEY, { expiry_month: 3, expiry_year: 2100 });
+      expect(publicEdit.statusCode).toBe(409);
+    });
+
+    it('patch replace swaps the card', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]), { bus });
+      const res = await patch(app, CARD_KEY, { replace: { ...CARD, number: '5555555555554444' } });
+      expect(res.statusCode).toBe(200);
+      expect(secrets.cardReplaces).toEqual([{
+        name: CARD_KEY,
+        change: {
+          secret: { _schema: 'credit_card', number: '5555555555554444', cvv: '123' },
+          publicFields: { ...PUB, brand: 'mastercard', last4: '4444' },
+        },
+      }]);
+      expect(changes(published)).toEqual(['set:requested', 'set:completed']);
+      expect(JSON.stringify(published)).not.toContain('5555555555554444');
+      const bad = await patch(app, CARD_KEY, { replace: { ...CARD, number: '1234' } });
+      expect(bad.json()).toEqual({ error: CARD_VALIDATION_MESSAGES.number_format });
+      const mixed = await patch(app, CARD_KEY, { replace: CARD, label: 'x' });
+      expect(mixed.statusCode).toBe(400);
+      expect(secrets.cardReplaces).toHaveLength(1);
+    });
+
+    it('value on a card is a 409', async () => {
+      const { bus, published } = fakeBus();
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]), { bus });
+      const res = await patch(app, CARD_KEY, { value: 'hunter2' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'Use the card fields to change a saved card.' });
+      expect(secrets.sets).toEqual([]);
+      expect(published).toEqual([]);
+    });
+
+    it('patch on a card with nothing to change is a 400, and a removed card is a 404', async () => {
+      const secrets = fakeSecrets([CARD_KEY], savedCard(), FORMATS);
+      app = await build(secrets, fakeRegistry([]));
+      expect((await patch(app, CARD_KEY, {})).statusCode).toBe(400);
+      await app.close();
+      app = await build(fakeSecrets([], savedCard(), FORMATS), fakeRegistry([]));
+      expect((await patch(app, CARD_KEY, { label: 'x' })).statusCode).toBe(404);
+    });
+
+    it('platform-key guard still comes first on card routes', async () => {
+      const secrets = fakeSecrets(['openrouter_api_key']);
+      app = await build(secrets, fakeRegistry([]));
+      expect((await patch(app, 'openrouter_api_key', { cvv: '123' })).statusCode).toBe(403);
+    });
+
+    it('asks for card-use decisions only for a saved card', async () => {
+      const flags: Array<boolean | undefined> = [];
+      const usage: SecretUsagePort = {
+        lastUsedByName: async () => new Map(),
+        recentUses: async (_n, _l, includeCardUses) => { flags.push(includeCardUses); return []; },
+      };
+      app = await build(fakeSecrets([CARD_KEY, 'user.rogers_password'], savedCard(), FORMATS), fakeRegistry([]), { usage });
+      for (const n of [CARD_KEY, 'user.rogers_password', 'tavily_api_key']) {
+        await app.inject({ method: 'GET', url: `/api/vault/secrets/${encodeURIComponent(n)}/uses`, headers: auth });
+      }
+      expect(flags).toEqual([true, false, false]);
+    });
+
+    it('uses include secretField and card_use items', async () => {
+      const usage: SecretUsagePort = {
+        lastUsedByName: async () => new Map(),
+        recentUses: async () => [
+          { kind: 'card_use', at: new Date('2026-10-31T12:00:00.000Z'), decision: 'approved', siteDomain: 'aircanada.com', amount: 'CA$412.30' },
+          { kind: 'read', at: new Date('2026-10-30T12:00:00.000Z'), agentId: 'travel', toolName: 'browser-fill', source: 'vault', byReference: true, secretField: 'expiry_mm' },
+        ],
+      };
+      app = await build(fakeSecrets(), fakeRegistry([]), { usage });
+      const res = await app.inject({ method: 'GET', url: `/api/vault/secrets/${CARD_KEY}/uses`, headers: auth });
+      expect(res.json()).toEqual({
+        uses: [
+          { kind: 'card_use', at: '2026-10-31T12:00:00.000Z', decision: 'approved', siteDomain: 'aircanada.com', amount: 'CA$412.30' },
+          { kind: 'read', at: '2026-10-30T12:00:00.000Z', agentId: 'travel', toolName: 'browser-fill', source: 'vault', byReference: true, secretField: 'expiry_mm' },
+        ],
+      });
     });
   });
 

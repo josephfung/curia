@@ -107,6 +107,7 @@ const REDACTION_TOKEN = /\[REDACTED: [A-Z0-9_]+\]/;
 const TOO_MANY_DETAIL = 'This message contains more personal details than can be reviewed at once. Send fewer, or split the message.';
 const TOKEN_DETAIL = 'This message contains a redaction placeholder. Rewrite it with the real content or without that part.';
 const UNREVIEWED_BELOW_80_REASON = 'Held for the principal: the reviewer was unavailable, and this band asks first when it is.';
+const ORIGIN_UNRESOLVED_REASON = 'Held for the principal: the message that started this delegated work could not be read, so the reviewer could not check who it serves.';
 const STAKES_UNREVIEWED_REASON = 'Held for the principal: the reviewer was unavailable, so what this message commits the principal to is unrated and treated as financial or legal. Stakes: financial or legal (unrated).';
 
 /** What the drafter is told when a send is blocked; the gateway appends the findings. */
@@ -229,6 +230,17 @@ export class BandSendReview {
     // The subject goes out with the body, so a commitment made only there is rated too.
     const message = input.subject ? `Subject: ${input.subject}\n\n${input.content}` : input.content;
     const asked = await this.ask(input, questions, taskIds, message, askedItems);
+    if (asked.originUnresolved && questions.includes('purpose')) {
+      // A delegated send whose chain cannot be followed (#2499): purpose would be judged on the
+      // coordinator's brief alone. Not a reviewer outage, so it holds at every band rather than
+      // spending the fail-open allowance. A principal-directed send is not asked purpose, so it
+      // takes the ordinary failure path below. The bounce ledger is kept, so a draft that
+      // bounced before is still a recheck when its origin can be read.
+      this.deps.logger.warn({ conversationId: input.conversationId, channel: input.channel, score: input.score }, 'band review: delegated send\'s origin cannot be read — holding');
+      // The hold names the personal data and any redaction placeholder it carries, as the
+      // reviewer-unavailable hold does, so the placeholder's finding travels with it.
+      return this.unreviewedHold(ORIGIN_UNRESOLVED_REASON, own, hasToken);
+    }
     let verdict = asked.verdict;
     if (verdict.ok && askedItems && !rulesOnEach(verdict.disclosures, askedItems)) {
       // The parser already refuses this; checked again because a gap here would read as a pass.
@@ -606,16 +618,21 @@ export class BandSendReview {
     taskIds: string[],
     message: string,
     detectedItems: readonly BriefDetectedItem[] | undefined,
-  ): Promise<{ verdict: BriefVerdict; authority?: SendAuthority; decisions?: DisclosureDecisionRow[]; linkedOutreachId?: string }> {
+  ): Promise<{ verdict: BriefVerdict; authority?: SendAuthority; decisions?: DisclosureDecisionRow[]; linkedOutreachId?: string; originUnresolved?: true }> {
     if (!this.deps.judge?.isEnabled()) return { verdict: { ok: false, failure: 'disabled' } };
     const collected = await this.deps.evidence.collect(taskIds, {
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       counterparties: nonPrincipalRecipients(input),
     });
     // Without evidence every claim looks unsupported; that is a review failure, not a bounce.
-    if (collected.unavailable) return { verdict: { ok: false, failure: 'unreachable' } };
+    if (collected.unavailable) {
+      return { verdict: { ok: false, failure: 'unreachable' }, ...(collected.originUnresolved ? { originUnresolved: true as const } : {}) };
+    }
     // Decisions and the outreach id stay with code: the judge reads the decisions as sentences.
-    const { decisions, linkedOutreachId, ...evidence } = collected;
+    const { decisions, linkedOutreachId, originUnresolved, ...evidence } = collected;
+    // Destructured only to keep it out of `evidence`; the failure path above is the one that carries it.
+    // The repo's no-unused-vars rule has no underscore exemption, so discard it explicitly.
+    void originUnresolved;
     const principalDecisions = describeDecisions(decisions, nonPrincipalRecipients(input));
     // Newest first, so the note leads. The relay's principal note is not under the drafting
     // task in audit_log (its parent is the agent.response), so it arrives with the send

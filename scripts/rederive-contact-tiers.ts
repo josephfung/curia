@@ -4,7 +4,8 @@
 // Recomputes contact_confidence for every contact, then elevates unknown→known
 // for person/org contacts whose recomputed confidence clears the judgment
 // elevation threshold — the retroactive equivalent of the live dispatcher's
-// judgment elevation. 'trusted' is a grant decision (#952), not re-derived here.
+// judgment elevation, including its earlier-day history rule (#2500).
+// 'trusted' is a grant decision (#952), not re-derived here.
 //
 // Run: pnpm run rederive:contact-tiers
 // Safety: idempotent — re-running elevates nothing once scores are stable.
@@ -13,7 +14,8 @@ import pg from 'pg';
 import pino from 'pino';
 import { ContactService } from '../src/contacts/contact-service.js';
 import { ConfidencePipeline } from '../src/contacts/confidence-pipeline.js';
-import { JUDGMENT_ELEVATION_THRESHOLD } from '../src/contacts/confidence-scorer.js';
+import { JUDGMENT_ELEVATION_THRESHOLD, hasEarlierDayHistory } from '../src/contacts/confidence-scorer.js';
+import type { Contact } from '../src/contacts/types.js';
 
 const logger = pino({ name: 'rederive-contact-tiers' });
 const { Pool } = pg;
@@ -22,6 +24,19 @@ const { Pool } = pg;
 // without depending on the full ContactService / ConfidencePipeline shapes.
 type ServiceLike = Pick<ContactService, 'listContacts' | 'elevateTierToKnown' | 'getContact'>;
 type PipelineLike = Pick<ConfidencePipeline, 'fullRecomputeAll' | 'fullRecompute'>;
+
+/**
+ * The dispatcher's hasEarlierDayHistory() rule (#2500), applied as of the contact's latest
+ * inbound message: at least one message before that one, and the contact on record a day
+ * or more by then. Without it this script would elevate anyone who wrote once in the last
+ * week, since recency alone clears the threshold.
+ */
+export function storedHistorySpansDays(
+  c: Pick<Contact, 'inboundMessageCount' | 'lastSeenAt' | 'createdAt'>,
+): boolean {
+  if (c.lastSeenAt === null) return false;
+  return hasEarlierDayHistory({ inboundMessageCount: c.inboundMessageCount - 1, createdAt: c.createdAt }, c.lastSeenAt);
+}
 
 export async function runRederive(
   contactService: ServiceLike,
@@ -79,7 +94,7 @@ export async function runRederive(
       // and the listContacts query — and to get a clean authoritative value.
       const confidence = await pipeline.fullRecompute(c.id);
 
-      if (confidence >= JUDGMENT_ELEVATION_THRESHOLD) {
+      if (confidence >= JUDGMENT_ELEVATION_THRESHOLD && storedHistorySpansDays(c)) {
         const didElevate = await contactService.elevateTierToKnown(c.id, 'judgment');
         if (didElevate) {
           elevated++;

@@ -692,6 +692,9 @@ const DESCRIBERS: Record<string, Describer> = {
   'contact-register': HIDDEN,
   'bullpen-post': HIDDEN,
   'ceo-inbox-shadow-draft': HIDDEN,
+  // Runs only as the replay of the principal's yes to a card checkout (#1358); the approval
+  // already has its own digest line.
+  'card-use-confirm': HIDDEN,
 };
 
 // Own keys only: DESCRIBERS is a plain object, so a tool named "constructor" or

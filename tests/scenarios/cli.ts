@@ -162,6 +162,11 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
         problems.push(`${c.name}: stubs '${tool}', which ${unreachableBy(runAgents)} in this stack`);
       }
     }
+    // A gated tool (#2499) must be one a run agent can reach, or its gates are never exercised.
+    for (const tool of c.gatedTools ?? []) {
+      if (!registry.get(tool)) problems.push(`${c.name}: gated_tools names '${tool}', which this stack did not register`);
+      else if (!reachable(tool, runAgents)) problems.push(`${c.name}: gated_tools names '${tool}', which ${unreachableBy(runAgents)} in this stack`);
+    }
     const hasSuccessStub = (tool: string, agents: string[]): boolean => stubsFor(tool, agents).some(st => st.error === undefined);
     const needsStub = (tool: string, agents: string[]): boolean =>
       reachable(tool, agents) && stubsFor(tool, agents).length === 0 && mustStubHere(tool);

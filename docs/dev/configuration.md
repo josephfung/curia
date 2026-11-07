@@ -626,6 +626,12 @@ disabled) — an absent token would otherwise silently expose the API. `setup.sh
 A missing *optional* secret (OpenAI, OpenRouter, AWS Bedrock, Signal) disables its feature via the
 existing `if (config.x)` guards rather than failing the boot.
 
+### Saved cards
+
+A credit card is a structured secret ([ADR-027](../adr/027-structured-secret-subfield-addressing.md)). The number and CVV are encrypted in the vault; brand, last four, expiry, cardholder name and billing postal code are stored as plain public fields, so the console and agents can show them without decrypting anything.
+
+Add a card from the Secrets page (**Create → Card**), or have an agent send a capture link with `secret-capture-request`. Curia asks the principal before every checkout; a card field resolves only under that per-checkout grant ([ADR-060](../adr/060-card-use-needs-per-checkout-confirmation.md)).
+
 ### Running tiers on AWS Bedrock
 
 Bedrock is an additive provider (ADR-041). Nothing changes for a deployment without AWS

@@ -31,6 +31,8 @@ description: |                 # human-readable purpose; shown in the admin UI a
   Tracks and categorizes expenses from receipts and emails.
 delegate_when: >-              # optional. The agent's line in the specialist roster; defaults to description
   Receipts, expense reports and spending questions. Forward the receipt with the request.
+limits:                        # optional. What it structurally cannot do; shown after its roster line as "Cannot: …"
+  - pay an invoice (record it; the principal pays)
 display_name: expense team     # optional. What a model might call this agent; failure replies reject drafts that use it. Not persona.display_name.
 
 # ------------------------------------------------------------------
@@ -128,6 +130,10 @@ When to delegate to this agent, for the model. It is the agent's line in the coo
 Keep it to two or three sentences. `tests/unit/agents/prompt-budget.test.ts` holds the roster over the core agents to a budget. Without this field the roster shows `description`.
 
 A roster line suits a specialist the coordinator uses rarely or for one narrow job, such as setup-wizard, diagnostics or meeting-debrief. Routing the coordinator applies on most turns, such as the principal's calendar and inbox, belongs in the coordinator's own prompt: moved into roster lines, those routes changed what it did on everyday requests (#1954, lesson 11 in [Changing an agent's prompt](#changing-an-agents-prompt)). Add a scenario case for the route when you add the line.
+
+### `limits` (optional)
+
+Hard limits a delegating agent should know before it routes work here: what this agent structurally cannot do, and where that work goes instead (#2496). The roster shows them after the agent's line as "Cannot: a; b.", so the coordinator picks a route that works instead of learning the limit from a decline. List only limits that commonly trip a delegation, such as ceo-inbox being draft-only. Each entry counts against the roster budget, so keep it to a short phrase.
 
 ### `model` (required)
 

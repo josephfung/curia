@@ -1,7 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react-oxc';
 import { createRequire } from 'node:module';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { bundleBuildId } from './vite-build-id.js';
 const require = createRequire(import.meta.url);
@@ -43,8 +43,16 @@ function stampServiceWorker(): Plugin {
     closeBundle() {
       if (!bundleGenerated) return;
       const built = path.resolve(import.meta.dirname, 'dist/sw.js');
-      if (!existsSync(built)) return;
-      writeFileSync(built, stampServiceWorkerSource(readFileSync(built, 'utf8'), buildId));
+      // Read and handle ENOENT rather than checking existsSync first: a check-then-read
+      // leaves a window where the file can change (CodeQL js/file-system-race).
+      let source: string;
+      try {
+        source = readFileSync(built, 'utf8');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw err;
+      }
+      writeFileSync(built, stampServiceWorkerSource(source, buildId));
     },
   };
 }

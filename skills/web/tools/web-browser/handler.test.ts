@@ -41,6 +41,7 @@ import { BrowserSession } from '../../../../src/browser/browser-session.js';
 import type { BrowserService } from '../../../../src/browser/browser-service.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { BrowserContext, Page } from 'playwright';
+import { CARD_FILL_LIMIT_ERROR, CARD_USE_REQUIRED_ERROR, SecretRefRefusal } from '../../../../src/secrets/structured-secret-schema.js';
 import { CodeTracker } from '../../../../src/verification/code-tracker.js';
 import type { VerificationRuntime } from '../../../../src/verification/index.js';
 import type { Verification } from '../../../../src/verification/types.js';
@@ -124,8 +125,8 @@ function makeToolContext(opts: {
   input: Record<string, unknown>;
   pageContent?: string;
   pageUrl?: string;
-  resolveSecretRef?: (ref: string) => Promise<string>;
-}): { ctx: ToolContext; session: BrowserSession; fill: ReturnType<typeof vi.fn> } {
+  resolveSecretRef?: (ref: string, opts?: { siteUrl?: string }) => Promise<string>;
+}): { ctx: ToolContext; session: BrowserSession; fill: ReturnType<typeof vi.fn>; page: ReturnType<typeof makeMockPage> } {
   const fill = vi.fn().mockResolvedValue(undefined);
   const page = makeMockPage(opts.pageContent ?? 'nothing sensitive here', fill, opts.pageUrl);
   const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
@@ -142,7 +143,7 @@ function makeToolContext(opts: {
     resolveSecretRef: opts.resolveSecretRef,
   } as unknown as ToolContext;
 
-  return { ctx, session, fill };
+  return { ctx, session, fill, page };
 }
 
 describe('web-browser type action with secret_ref (#973)', () => {
@@ -156,7 +157,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
     const result = await new WebBrowserHandler().execute(ctx);
 
     expect(result.success).toBe(true);
-    expect(resolveSecretRef).toHaveBeenCalledWith('user.aeroplan_password');
+    expect(resolveSecretRef).toHaveBeenCalledWith('user.aeroplan_password', { siteUrl: 'https://aeroplan.com/account' });
     // The resolved value was typed into the field via humanType (human keystroke cadence)...
     expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), SECRET_VALUE, expect.anything());
     // ...but never appears in the data returned to the LLM.
@@ -267,6 +268,195 @@ describe('web-browser type action with secret_ref (#973)', () => {
     // Literal text now uses humanType (keystroke cadence) rather than fill(), so that
     // behavioral challenge JS scores the typing as human. (#1053)
     expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), 'hello world', expect.anything());
+  });
+});
+
+describe('web-browser select and card fills with secret_ref (#1358)', () => {
+  const MONTH_LABEL = 'December';
+
+  it('select rejects secret_ref with value', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue(MONTH_LABEL);
+    const { ctx, page } = makeToolContext({
+      input: { action: 'select', selector: '#month', value: 'Dec', secret_ref: 'user.visa#expiry_month_name' },
+      resolveSecretRef,
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/either value or secret_ref/);
+    expect(resolveSecretRef).not.toHaveBeenCalled();
+    expect(page.locator('x').selectOption).not.toHaveBeenCalled();
+  });
+
+  it('a public card field is neither redacted nor does it suppress the screenshot', async () => {
+    const { ctx, session } = makeToolContext({
+      input: { action: 'select', selector: '#month', secret_ref: 'user.visa#expiry_mm', screenshot: true },
+      resolveSecretRef: vi.fn().mockResolvedValue('12'),
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(session.redactInjectedSecrets('Pay CA$412.30')).toBe('Pay CA$412.30');
+    if (result.success) {
+      expect((result.data as { screenshot_skipped?: string }).screenshot_skipped).toBeUndefined();
+    }
+  });
+
+  it('select with secret_ref registers the value for redaction and suppresses the screenshot', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue(MONTH_LABEL);
+    const { ctx, session, page } = makeToolContext({
+      input: { action: 'select', selector: '#month', secret_ref: 'user.visa#cvv', screenshot: true },
+      resolveSecretRef,
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(resolveSecretRef).toHaveBeenCalledWith('user.visa#cvv', { siteUrl: 'https://aeroplan.com/account' });
+    expect(page.locator('x').selectOption).toHaveBeenCalledWith(MONTH_LABEL);
+    expect(session.redactInjectedSecrets(`exp ${MONTH_LABEL}`)).toBe('exp [REDACTED]');
+    if (result.success) {
+      const data = result.data as { screenshot_base64?: string; screenshot_skipped?: string };
+      expect(data.screenshot_base64).toBeUndefined();
+      expect(data.screenshot_skipped).toBeTruthy();
+    }
+  });
+
+  it('batch select step with secret_ref is gated and suppresses the screenshot', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue(MONTH_LABEL);
+    const { ctx, page } = makeToolContext({
+      input: {
+        screenshot: true,
+        actions: [
+          { action: 'select', selector: '#month', secret_ref: 'user.visa#cvv' },
+          { action: 'select', selector: '#year', value: '2030' },
+        ],
+      },
+      resolveSecretRef,
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(resolveSecretRef).toHaveBeenCalledTimes(1);
+    expect(resolveSecretRef).toHaveBeenCalledWith('user.visa#cvv', { siteUrl: 'https://aeroplan.com/account' });
+    expect(page.locator('x').selectOption).toHaveBeenNthCalledWith(1, MONTH_LABEL);
+    expect(page.locator('x').selectOption).toHaveBeenNthCalledWith(2, '2030');
+    if (result.success) {
+      const data = result.data as { screenshot_base64?: string; screenshot_skipped?: string };
+      expect(data.screenshot_base64).toBeUndefined();
+      expect(data.screenshot_skipped).toBeTruthy();
+    }
+  });
+
+  it('type passes the top-level page URL as siteUrl', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue('4242424242424242');
+    const { ctx } = makeToolContext({
+      input: { action: 'type', selector: '#number', secret_ref: 'user.visa#number' },
+      pageUrl: 'https://shop.example.test/checkout?step=pay',
+      resolveSecretRef,
+    });
+
+    await new WebBrowserHandler().execute(ctx);
+
+    expect(resolveSecretRef).toHaveBeenCalledWith('user.visa#number', { siteUrl: 'https://shop.example.test/checkout?step=pay' });
+  });
+
+  it('refuses a card field on a plain HTTP page without resolving it', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue('4242424242424242');
+    const { ctx } = makeToolContext({
+      input: { action: 'type', selector: '#number', secret_ref: 'user.visa#number' },
+      pageUrl: 'http://shop.example.test/checkout',
+      resolveSecretRef,
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(resolveSecretRef).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+  });
+
+  it('redacts a card number the page reflects grouped by spaces or dashes', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue('4242424242424242');
+    const { ctx, session } = makeToolContext({
+      input: { action: 'type', selector: '#number', secret_ref: 'user.visa#number' },
+      pageUrl: 'https://shop.example.test/checkout',
+      resolveSecretRef,
+    });
+
+    await new WebBrowserHandler().execute(ctx);
+
+    expect(session.redactInjectedSecrets('4242 4242 4242 4242 / 4242-4242-4242-4242')).toBe('[REDACTED] / [REDACTED]');
+  });
+
+  it('keeps suppressing screenshots on later calls after a card number was filled', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue('4242424242424242');
+    const { ctx, session } = makeToolContext({
+      input: { action: 'type', selector: '#number', secret_ref: 'user.visa#number' },
+      pageUrl: 'https://shop.example.test/checkout',
+      resolveSecretRef,
+    });
+    await new WebBrowserHandler().execute(ctx);
+    expect(session.cardSecretInjected).toBe(true);
+  });
+
+  it('card-use refusal surfaces as the action error', async () => {
+    const refusal = CARD_USE_REQUIRED_ERROR('user.visa', 'example.test');
+    const resolveSecretRef = vi.fn().mockRejectedValue(new SecretRefRefusal('card_use_required', refusal));
+    const { ctx, session } = makeToolContext({
+      input: { action: 'type', selector: '#number', secret_ref: 'user.visa#number' },
+      resolveSecretRef,
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    // Unchanged: no "Browser action ... failed:" wrapper.
+    if (!result.success) expect(result.error).toBe(refusal);
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+    // A refusal is guidance, not a broken page: it does not count toward the click breaker.
+    expect(session.consecutiveFailures).toBe(0);
+
+    const limit = makeToolContext({
+      input: { action: 'select', selector: '#cvv', secret_ref: 'user.visa#cvv' },
+      resolveSecretRef: vi.fn().mockRejectedValue(new SecretRefRefusal('card_fill_limit', CARD_FILL_LIMIT_ERROR)),
+    });
+    const limited = await new WebBrowserHandler().execute(limit.ctx);
+    expect(limited).toEqual({ success: false, error: CARD_FILL_LIMIT_ERROR });
+  });
+
+  it('a refusal for an unknown field is returned unchanged; a plain resolver error is still wrapped', async () => {
+    const unknown = makeToolContext({
+      input: { action: 'type', selector: '#n', secret_ref: 'user.visa#pin' },
+      resolveSecretRef: vi.fn().mockRejectedValue(new SecretRefRefusal('unknown_card_field', "Unknown card field 'pin'. Fields: number")),
+    });
+    expect(await new WebBrowserHandler().execute(unknown.ctx)).toEqual({ success: false, error: "Unknown card field 'pin'. Fields: number" });
+    expect(unknown.session.consecutiveFailures).toBe(0);
+
+    const plain = makeToolContext({
+      input: { action: 'type', selector: '#n', secret_ref: 'user.visa#number' },
+      resolveSecretRef: vi.fn().mockRejectedValue(new Error('vault down')),
+    });
+    const r = await new WebBrowserHandler().execute(plain.ctx);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('vault down');
+    expect(plain.session.consecutiveFailures).toBe(1);
+  });
+
+  it('an error thrown by selectOption after injection cannot echo the resolved value', async () => {
+    const { ctx, page } = makeToolContext({
+      input: { action: 'select', selector: '#month', secret_ref: 'user.visa#cvv' },
+      resolveSecretRef: vi.fn().mockResolvedValue(MONTH_LABEL),
+    });
+    vi.mocked(page.locator('x').selectOption).mockRejectedValueOnce(new Error(`did not find option "${MONTH_LABEL}"`));
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(MONTH_LABEL);
+    expect(JSON.stringify(result)).toContain('[REDACTED]');
   });
 });
 

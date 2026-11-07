@@ -26,6 +26,20 @@ describe('generateShortRef', () => {
   });
 });
 
+describe('buildDescription for card-use-confirm (#1358)', () => {
+  it('shows card, site, amount and purpose from the masked display, never a number', () => {
+    const d = buildDescription('card-use-confirm', {
+      card: 'Visa ••1111 (Personal)', site: 'aircanada.com', amount: 'CA$412.30', purpose: 'YYZ-SFO, Dec 12',
+    });
+    expect(d).toBe('Pay CA$412.30 at aircanada.com with Visa ••1111 (Personal) for: YYZ-SFO, Dec 12');
+    expect(d).not.toMatch(/\d{13,}/);
+  });
+
+  it('falls back to a plain line when the display is incomplete', () => {
+    expect(buildDescription('card-use-confirm', { request_id: 'req-1' })).toBe('Pay with a saved card');
+  });
+});
+
 describe('buildDescription', () => {
   it('formats calendar-create-event with title', () => {
     const desc = buildDescription('calendar-create-event', { title: 'Lunch with Dana', start: '2026-05-06T12:00:00-04:00' });

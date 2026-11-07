@@ -17,6 +17,7 @@ const NOW = new Date('2026-10-18T12:00:00.000Z');
 const DAY_MS = 86_400_000;
 import type { BusEvent, PrincipalReportEvent } from '../../../src/bus/events.js';
 import type { Logger } from '../../../src/logger.js';
+import type { CardUseCapability } from '../../../src/secrets/card-use-service.js';
 
 // --- Fixtures ---
 
@@ -58,6 +59,7 @@ function makeSweep(overrides: {
   deliverResults?: DeliverResult[];
   availableChannels?: string[];
   withoutDelivery?: boolean;
+  cardUse?: { decline: ReturnType<typeof vi.fn> };
 } = {}) {
   const {
     findExpiredRows = [],
@@ -67,6 +69,7 @@ function makeSweep(overrides: {
     deliverResults = [],
     availableChannels = ['email'],
     withoutDelivery = false,
+    cardUse,
   } = overrides;
 
   const findExpired = vi.fn().mockResolvedValue(findExpiredRows);
@@ -92,6 +95,7 @@ function makeSweep(overrides: {
     actionLogRepo: { findExpired, expireRows, findUndelivered } as unknown as ActionLogRepo,
     bus: { publish } as unknown as EventBus,
     ...(withoutDelivery ? {} : { approvalDelivery: approvalDelivery as unknown as ApprovalDelivery }),
+    ...(cardUse ? { cardUse: cardUse as unknown as CardUseCapability } : {}),
     logger: logger as unknown as Logger,
     intervalMinutes: 60,
     undeliveredAfterMinutes: 15,
@@ -144,6 +148,32 @@ describe('ApprovalExpirySweep.tick (#2013)', () => {
     });
     expect(published.some((e) => e.type === 'outbound.notification')).toBe(false);
     expect(result).toEqual({ expired: 2, notified: 2, safetyNetDelivered: 0 });
+  });
+
+  it('settles the card-use request behind an expired card confirmation as expired (#1358)', async () => {
+    const decline = vi.fn().mockResolvedValue(undefined);
+    const rows = [
+      makeRow({ id: 1, toolName: 'card-use-confirm', payload: { request_id: 'req-1' } }),
+      makeRow({ id: 2 }),
+    ];
+    const { sweep } = makeSweep({ findExpiredRows: rows, cardUse: { decline } });
+
+    const result = await sweep.tick();
+
+    expect(result.expired).toBe(2);
+    expect(decline).toHaveBeenCalledTimes(1);
+    expect(decline).toHaveBeenCalledWith('req-1', 'expired');
+  });
+
+  it('keeps expiring and reporting when a card-use request cannot be settled', async () => {
+    const decline = vi.fn().mockRejectedValue(new Error('db down'));
+    const rows = [makeRow({ id: 1, toolName: 'card-use-confirm', payload: { request_id: 'req-1' } })];
+    const { sweep, logger } = makeSweep({ findExpiredRows: rows, cardUse: { decline } });
+
+    const result = await sweep.tick();
+
+    expect(result).toMatchObject({ expired: 1, notified: 1 });
+    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'req-1' }), expect.stringContaining('card-use'));
   });
 
   it('falls back to the tool name when a row has no description', async () => {

@@ -23,6 +23,13 @@ export interface AgentYamlConfig {
    */
   delegate_when?: string;
   /**
+   * Hard limits a delegating agent should know before routing work here (#2496): what
+   * this agent structurally cannot do, and where that work goes instead. Shown after
+   * the roster line as "Cannot: …", so the coordinator picks a route that works instead
+   * of learning it from a decline. Keep each one short; the roster has a token budget.
+   */
+  limits?: string[];
+  /**
    * What a model might call this agent in a principal-facing reply. Since #1975
    * delegation-failure replies never name the specialist; this label is checked
    * for and rejected, not shown. Not `persona.display_name`, which is
@@ -122,6 +129,13 @@ export function loadAgentConfig(filePath: string): AgentYamlConfig {
   const delegateWhen: unknown = config.delegate_when;
   if (delegateWhen !== undefined && (typeof delegateWhen !== 'string' || delegateWhen.trim() === '')) {
     throw new Error(`Invalid delegate_when in ${filePath}: must be a non-empty string`);
+  }
+  const limits: unknown = config.limits;
+  if (
+    limits !== undefined
+    && (!Array.isArray(limits) || limits.some((l) => typeof l !== 'string' || l.trim() === ''))
+  ) {
+    throw new Error(`Invalid limits in ${filePath}: must be a list of non-empty strings`);
   }
 
   // A bad declaration fails the load here rather than rendering a broken block or

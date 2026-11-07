@@ -3,6 +3,7 @@ import { Writable } from 'node:stream';
 import { DelegateHandler } from '../../../skills/delegate/handler.js';
 import {
   CLARIFICATION_NEXT_STEP,
+  DECLINE_NEXT_STEP,
   DRAFT_EMAIL_NEXT_STEP,
   NOTHING_SENT_NEXT_STEP,
   PAUSED_NEXT_STEP,
@@ -792,16 +793,19 @@ describe('DelegateHandler', () => {
       }
     });
 
-    // A decline is a refusal, a timeout may have gone through, and a non-retryable failure
-    // cannot be retried: each is escalated and narrated instead (#1860).
-    it('adds nothing to a decline', async () => {
+    // A decline carries the fallback order, not the per-agent failure step: the turn
+    // goes on and the delegating agent picks the route (#2496).
+    it('gives a decline the fallback next step', async () => {
       const result = await delegateTo('contacts', {
         content: '<specialist_decline reason="unknown_sender">No contact record.</specialist_decline>',
       });
       const data = (result as { data: { declined?: boolean; next_step?: string } }).data;
       expect(data.declined).toBe(true);
-      expect(data.next_step).toBeUndefined();
+      expect(data.next_step).toBe(DECLINE_NEXT_STEP);
     });
+
+    // A timeout may have gone through, and a non-retryable failure cannot be retried:
+    // each is escalated and narrated instead (#1860).
 
     it('adds nothing to a non-retryable failure', async () => {
       const result = await delegateTo('calendar', {
