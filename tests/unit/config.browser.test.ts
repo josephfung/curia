@@ -85,15 +85,4 @@ describe('loadYamlConfig: browser block validation', () => {
     const dir = writeTempConfig(`browser:\n  proxy: "http://browser-wg :8888"\n`);
     expect(() => loadYamlConfig(dir)).toThrow('browser.proxy is set but invalid');
   });
-
-  it('accepts sandbox: false', () => {
-    const dir = writeTempConfig(`browser:\n  sandbox: false\n`);
-    expect(loadYamlConfig(dir).browser?.sandbox).toBe(false);
-  });
-
-  // A quoted "false" is a truthy string: read loosely it would mean the opposite of what it says.
-  it('rejects a quoted sandbox value', () => {
-    const dir = writeTempConfig(`browser:\n  sandbox: "false"\n`);
-    expect(() => loadYamlConfig(dir)).toThrow('browser.sandbox');
-  });
 });

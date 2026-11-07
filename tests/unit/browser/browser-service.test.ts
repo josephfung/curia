@@ -434,7 +434,7 @@ describe('BrowserService (unit — mocked browser)', () => {
       return launch.mock.calls[call]![1] as { args: string[]; chromiumSandbox?: unknown; channel?: unknown };
     }
 
-    it('runs Chrome sandboxed by default', async () => {
+    it('always runs Chrome sandboxed', async () => {
       const launch = vi.spyOn(chromium, 'launchPersistentContext')
         .mockResolvedValue(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
       const svc = new BrowserService({ logger, profileDir });
@@ -442,15 +442,6 @@ describe('BrowserService (unit — mocked browser)', () => {
       await svc.stop();
       expect(launchOptions(launch).chromiumSandbox).toBe(true);
       expect(launchOptions(launch).args).not.toContain('--no-sandbox');
-    });
-
-    it('turns the sandbox off only when configured to', async () => {
-      const launch = vi.spyOn(chromium, 'launchPersistentContext')
-        .mockResolvedValue(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
-      const svc = new BrowserService({ logger, profileDir, sandbox: false });
-      await svc.start();
-      await svc.stop();
-      expect(launchOptions(launch).chromiumSandbox).toBe(false);
     });
 
     it('fails with a sandbox error instead of falling back to bundled Chromium', async () => {
@@ -493,10 +484,16 @@ describe('BrowserService (unit — mocked browser)', () => {
       await svc.stop();
     });
 
-    it('passes a sandbox failure through untouched when the sandbox is off', async () => {
+    // The error must point only at the fix. An off switch named here would be the first
+    // thing anyone tried. (#2521)
+    it('names the profile and offers no way to run unsandboxed', async () => {
       vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(sandboxFailure);
-      const svc = new BrowserService({ logger, profileDir, sandbox: false });
-      await expect(svc.start()).rejects.toBe(sandboxFailure);
+      const svc = new BrowserService({ logger, profileDir });
+      const err = await svc.start().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain('docker/seccomp-chrome.json');
+      expect((err as Error).message).not.toMatch(/no-sandbox|sandbox: false|unsandboxed/);
+      expect((err as Error).cause).toBe(sandboxFailure);
       await svc.stop();
     });
   });

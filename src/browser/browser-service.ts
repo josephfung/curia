@@ -82,12 +82,6 @@ interface BrowserServiceOptions {
   /** IANA timezone for the context, aligned to the principal. */
   timezone?: string;
   /**
-   * Run Chrome with its own sandbox (#2521). Default true. In a container this needs a
-   * seccomp profile that allows user namespaces (docker/seccomp-chrome.json). False runs
-   * Chrome with --no-sandbox, so a renderer exploit gets this process's privileges.
-   */
-  sandbox?: boolean;
-  /**
    * Optional factory to create the persistent BrowserContext.
    * Defaults to launchPersistentContext(...). Override in tests to inject a mock.
    */
@@ -107,7 +101,6 @@ export class BrowserService {
   private locale: string;
   private languages: string[];
   private timezone: string | undefined;
-  private sandbox: boolean;
   /** See BrowserServiceOptions.settleCapMs. Read by the web-browser skill. */
   readonly settleCapMs: number;
   private contextFactory: () => Promise<BrowserContext>;
@@ -152,7 +145,6 @@ export class BrowserService {
     this.locale = options.locale && options.locale.length > 0 ? options.locale : 'en-US';
     this.languages = [...new Set([this.locale, ...(options.languages ?? [])])];
     this.timezone = options.timezone;
-    this.sandbox = options.sandbox ?? true;
     this.settleCapMs = options.settleCapMs ?? 35_000;
     this.contextFactory = options.contextFactory ?? (() => this.launchPersistentContext());
   }
@@ -524,15 +516,13 @@ export class BrowserService {
     // null), so any lock present at launch is necessarily stale. Mirrors clearStaleX11Lock.
     clearStaleSingletonLock({ profileDir: this.profileDir, logger: this.logger });
 
-    if (!this.sandbox) {
-      this.logger.warn('Chrome sandbox disabled (browser.sandbox: false) — a renderer exploit would run with Curia\'s privileges');
-    }
-
     const baseOptions = {
       headless: false,
-      // Playwright adds --no-sandbox unless this is true, so this option alone decides
-      // whether Chrome's sandbox runs. (#2521)
-      chromiumSandbox: this.sandbox,
+      // Chrome always runs its own sandbox, so a renderer exploit still needs a second bug to
+      // reach this process's files, environment or network. Playwright adds --no-sandbox
+      // unless this is true. Deliberately not configurable: an off switch is the first thing
+      // tried when the sandbox fails to start, and the fix is the seccomp profile. (#2521)
+      chromiumSandbox: true,
       args: [
         // Patchright owns the navigator.webdriver / AutomationControlled surface, so we no
         // longer pass --disable-blink-features=AutomationControlled (stacking a flag it
@@ -573,7 +563,7 @@ export class BrowserService {
     } catch (err) {
       // Bundled Chromium would hit the same wall, and the fallback's "is the channel
       // installed?" message would point the operator the wrong way.
-      if (this.sandbox && isSandboxLaunchFailure(err)) throw this.sandboxLaunchError(err);
+      if (isSandboxLaunchFailure(err)) throw this.sandboxLaunchError(err);
       if (!this.channel) throw err; // no channel to fall back from — a genuine launch failure
       // Configured-vs-actual divergence: the operator asked for a real browser channel
       // (the whole point of the fingerprint hardening) and we couldn't honour it — almost
@@ -593,7 +583,7 @@ export class BrowserService {
           baseOptions,
         ) as unknown as BrowserContext;
       } catch (fallbackErr) {
-        if (this.sandbox && isSandboxLaunchFailure(fallbackErr)) throw this.sandboxLaunchError(fallbackErr);
+        if (isSandboxLaunchFailure(fallbackErr)) throw this.sandboxLaunchError(fallbackErr);
         throw fallbackErr;
       }
       this.logChannel(context, undefined);
@@ -603,14 +593,14 @@ export class BrowserService {
 
   /**
    * The error for a launch that died because Chrome could not set up its sandbox. Never
-   * retried without the sandbox: a silent downgrade would leave the browser unsandboxed
-   * with nothing but a log line to say so. (#2521)
+   * retried without the sandbox: the web-browser skill is unavailable until the host
+   * allows it. (#2521)
    */
   private sandboxLaunchError(cause: unknown): Error {
     const message =
       'Chrome sandbox could not start: the container blocks the user namespaces it needs. ' +
-      'Run the container with the seccomp profile in docker/seccomp-chrome.json, or set ' +
-      'browser.sandbox: false to run Chrome unsandboxed (see docs/dev/configuration.md).';
+      'Run the container with the seccomp profile in docker/seccomp-chrome.json ' +
+      '(see docs/dev/configuration.md).';
     this.logger.error({ err: cause }, message);
     return new Error(message, { cause });
   }
@@ -621,7 +611,7 @@ export class BrowserService {
     // Log the proxy server (never the credentials) so the egress posture is greppable —
     // a residential exit vs. direct datacenter egress is exactly what we want observable.
     this.logger.info(
-      { channel: channel ?? 'chromium', version, profileDir: this.profileDir, proxy: this.proxy?.server ?? null, sandbox: this.sandbox },
+      { channel: channel ?? 'chromium', version, profileDir: this.profileDir, proxy: this.proxy?.server ?? null },
       'Persistent browser context launched',
     );
   }
