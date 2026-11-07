@@ -792,7 +792,7 @@ const STRICTNESS: Record<BandReviewDecision['kind'], number> = { send: 0, bounce
 /**
  * The hold for a send that speaks for the principal below the score its stakes need (#2473), or
  * undefined when the score clears it. A sending setting's `ceiling` (#2474) also holds any rating
- * above it, and the finding says so when the score alone would have sent it. The finding names the rating and the judge's reason, so
+ * above it, and the finding says so (except financial_or_legal, which always asks). The finding names the rating and the judge's reason, so
  * the approval says why it asked. A missing rating cannot happen (the review asks both questions together
  * and the parser requires every answer); it is treated as the strictest.
  */
@@ -808,9 +808,12 @@ function stakesHold(verdict: BriefAnswers, score: number, ceiling?: SendStakes):
   // Count code points, not UTF-16 units, so the cut never leaves half a surrogate pair.
   const points = Array.from(why);
   const shown = points.length > STAKES_REASON_MAX ? `${points.slice(0, STAKES_REASON_MAX - 1).join('').trimEnd()}…` : why;
+  // Said whenever the setting holds it, even when the score would too: raising the score alone
+  // would not send it. Not for financial_or_legal, whose lead already says it always asks.
+  const aboveNote = aboveCeiling && stakes !== 'financial_or_legal' ? ' Above the sending setting.' : '';
   return {
     rule: BAND_RULES.speaksAsPrincipal,
-    detail: `${STAKES_HOLD_LEAD[stakes]}${aboveCeiling && scoreClears ? ' Above the sending setting.' : ''} Stakes: ${STAKES_LABEL[stakes]}.${shown ? ` Why: ${shown}` : ''}`,
+    detail: `${STAKES_HOLD_LEAD[stakes]}${aboveNote} Stakes: ${STAKES_LABEL[stakes]}.${shown ? ` Why: ${shown}` : ''}`,
   };
 }
 

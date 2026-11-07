@@ -233,6 +233,21 @@ describe('BandSendReview', () => {
         if (d.kind === 'hold') expect(d.reason).toContain('Stakes: financial or legal.');
       });
 
+      it('says "Above the sending setting." for a commitment under a routine ceiling at 85, where the score also holds it', async () => {
+        const { svc } = make([rated('commitment')]);
+        const d = await svc.review({ ...auto, score: 85, stakesCeiling: 'routine' });
+        expect(d.kind).toBe('hold');
+        if (d.kind === 'hold') expect(d.reason).toContain('Stakes: commitment.');
+        if (d.kind === 'hold') expect(d.reason).toContain(' Above the sending setting.');
+      });
+
+      it('never adds "Above the sending setting." to financial_or_legal: its lead already says always', async () => {
+        const { svc } = make([rated('financial_or_legal')]);
+        const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
+        expect(d.kind).toBe('hold');
+        if (d.kind === 'hold') expect(d.reason).not.toContain('Above the sending setting.');
+      });
+
       it('holds when the stakes judge fails, even at 85', async () => {
         const { svc, limiter } = make([{ ok: false, failure: 'unreachable' }]);
         const tryAcquire = vi.spyOn(limiter, 'tryAcquire');
