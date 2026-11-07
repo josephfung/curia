@@ -60,6 +60,27 @@ describe('checkAutonomousLimits', () => {
     expect(check({ curiaWrites: { created: true, lastWriteAt: null } })?.refusal).toBe('draft_changed_since_curia');
   });
 
+  it('refuses as changed when the draft date or the write time is not a finite number (fail closed)', () => {
+    expect(check({ draft: { ...draft, date: Number.NaN } })?.refusal).toBe('draft_changed_since_curia');
+    const undated = { ...draft } as Partial<NylasMessage>;
+    delete undated.date;
+    expect(check({ draft: undated as NylasMessage })?.refusal).toBe('draft_changed_since_curia');
+    expect(check({ curiaWrites: { created: true, lastWriteAt: new Date('not a date') } })?.refusal).toBe('draft_changed_since_curia');
+  });
+
+  it('refuses a draft with no recipient but the principal', () => {
+    const r = check({ draft: { ...draft, to: [{ email: 'ceo@corp.example' }] } });
+    expect(r?.refusal).toBe('recipient_not_on_thread');
+    expect(r?.detail).toBe('no external recipient');
+    expect(check({ draft: { ...draft, to: [] } })?.refusal).toBe('recipient_not_on_thread');
+  });
+
+  it('does not trust a verified message with more than one From address', () => {
+    const multi = { ...inboundVerified, from: [{ email: 'dana@example.org' }, { email: 'mallory@evil.example' }] };
+    expect(check({ thread: [multi] })?.refusal).toBe('recipient_not_on_thread');
+    expect(allowedThreadMembers([multi], PRINCIPAL)).toEqual(new Set(['ceo@corp.example']));
+  });
+
   it('refuses a draft that is not a reply', () => {
     expect(check({ thread: [] })?.refusal).toBe('not_a_reply');
     expect(check({ draft: { ...draft, threadId: '' } })?.refusal).toBe('not_a_reply');

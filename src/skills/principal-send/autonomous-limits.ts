@@ -58,8 +58,10 @@ export function allowedThreadMembers(thread: readonly NylasMessage[], principalA
       // From is the principal, already a member). A provider without a SENT label allows fewer
       // recipients until provider-specific sent detection exists.
       if (inSentFolder(msg)) for (const p of [...msg.to, ...msg.cc, ...msg.bcc]) members.add(lower(p.email));
-    } else if (parseSenderVerified(msg.headers)) {
-      for (const p of msg.from) members.add(lower(p.email));
+    } else if (msg.from.length === 1 && parseSenderVerified(msg.headers)) {
+      // DMARC aligns one header.from domain, not every mailbox of a multi-mailbox From, so only
+      // a single-address From is vouched for (fail closed).
+      members.add(lower(msg.from[0]!.email));
     }
   }
   return members;
@@ -88,9 +90,12 @@ export function checkAutonomousLimits(input: {
   if (!curiaWrites.created) {
     return { refusal: 'not_curia_draft', detail: 'Curia did not create this draft in this task' };
   }
-  // draft.date is Unix seconds. No write time means nothing to compare with: refuse (fail closed).
-  const lastWriteSec = curiaWrites.lastWriteAt === null ? null : curiaWrites.lastWriteAt.getTime() / 1000;
-  if (lastWriteSec === null || draft.date > lastWriteSec + CURIA_WRITE_SKEW_SEC) {
+  // draft.date is Unix seconds. A missing or non-finite draft date or write time leaves nothing
+  // to compare, and NaN compares false: refuse unless both are finite (fail closed).
+  const lastWriteSec = curiaWrites.lastWriteAt === null ? Number.NaN : curiaWrites.lastWriteAt.getTime() / 1000;
+  const draftSec: unknown = draft.date;
+  if (typeof draftSec !== 'number' || !Number.isFinite(draftSec) || !Number.isFinite(lastWriteSec)
+    || draftSec > lastWriteSec + CURIA_WRITE_SKEW_SEC) {
     return { refusal: 'draft_changed_since_curia', detail: 'the draft changed after Curia last wrote it' };
   }
   if (!draft.threadId || thread.length === 0) {
@@ -108,6 +113,10 @@ export function checkAutonomousLimits(input: {
     return { refusal: 'recipient_not_on_thread', detail: `${stranger} is not on the thread` };
   }
   const others = recipients.filter((r) => !isPrincipal(r));
+  // A send to no one but the principal is not a reply to the thread; refuse it with the same code.
+  if (others.length === 0) {
+    return { refusal: 'recipient_not_on_thread', detail: 'no external recipient' };
+  }
   if (others.length > AUTONOMOUS_MAX_RECIPIENTS) {
     return { refusal: 'too_many_recipients', detail: `${others.length} recipients; the limit is ${AUTONOMOUS_MAX_RECIPIENTS}` };
   }

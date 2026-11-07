@@ -12,9 +12,11 @@ import { REPLY_QUOTE_HTML_OPEN } from '../_shared/reply-quote.js';
 /**
  * The opening tag of any element whose class list holds the token `gmail_quote`: Gmail now writes
  * `<div class="gmail_quote gmail_quote_container">`, not only `class="gmail_quote"` (#2474 PR 2).
- * `gmail_quote_container` alone is a different token and does not match.
+ * `gmail_quote_container` alone is a different token and does not match. Every run stops at `<`
+ * or `>`, so a match attempt never leaves its tag: unbounded runs made the scan quadratic on
+ * hostile HTML (seconds at a few hundred KB).
  */
-const GMAIL_QUOTE_OPEN = /<[a-z][a-z0-9]*\b[^>]*?\bclass\s*=\s*(["'])(?:[^"']*\s)?gmail_quote(?=[\s"'])[^"']*\1/i;
+const GMAIL_QUOTE_OPEN = /<[a-z][a-z0-9]*\b[^<>]*?\bclass\s*=\s*(["'])(?:[^"'<>]*\s)?gmail_quote(?=[\s"'])[^"'<>]*\1/i;
 
 /** Splits at the earliest REPLY_QUOTE_HTML_OPEN or Gmail quote element; quote is '' when neither occurs. */
 export function splitReplyQuote(html: string): { own: string; quote: string } {

@@ -42,6 +42,15 @@ describe('splitReplyQuote', () => {
     expect(splitReplyQuote(reversed).own).toBe('<p>Yes.</p>');
   });
 
+  it('scans adversarial HTML in linear time', () => {
+    for (const unit of ['<a class=" ', '<a class="x ', '<a b class=\'']) {
+      const html = unit.repeat(Math.ceil(500_000 / unit.length));
+      const start = performance.now();
+      expect(splitReplyQuote(html).quote).toBe('');
+      expect(performance.now() - start, unit).toBeLessThan(200);
+    }
+  });
+
   it('returns an empty quote when there is no marker', () => {
     expect(splitReplyQuote('<p>Hello</p>')).toEqual({ own: '<p>Hello</p>', quote: '' });
   });
