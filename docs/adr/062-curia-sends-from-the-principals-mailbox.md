@@ -45,9 +45,10 @@ Missing, unreadable or unknown values read as `on_request`: that never widens au
 
 - A principal-written draft sent on request is not band-reviewed unless third-party personal data remains. The principal's own words are not fact-checked, and the identity gate does not read them.
 - A Curia-written draft sent on request gets purpose and grounding. "Go through my inbox and handle the easy ones" is principal-directed, but the content answers outsider mail.
-- Personal-data detection reads only the draft's own text, not the quoted message below a reply (its signature phone numbers would hold almost every reply), and on a principal-directed send drops the principal's own verified identities. The content filter still reads the whole body.
+- A draft Curia did not create but edited (`ceo-inbox-draft-edit`), or one last modified before the 30-day provenance lookback (nobody can tell who wrote it), gets purpose only, and the identity gate reads it. An edit can put Curia's words or a new recipient into the principal's draft; the principal's words are still not fact-checked.
+- Personal data in the quoted message below a reply is ruled apart (field `quote`), and only when someone on the send was not on the quoted message, by the quote's own header; a header that names nobody is reviewed. A saved draft's quote cannot be cut, so a review that would send without it leaves the draft unsent. On a principal-directed send the principal's own verified identities are dropped. The content filter still reads the whole body.
 - The principal's addresses on the draft are the sender's own, not an audience. A draft addressed only to the principal is refused: they can send it themselves.
-- Authorship comes from the audit log (`tool.result` rows of `ceo-inbox-draft-reply` / `-draft-compose`). If it cannot be read, the draft is treated as Curia's, which means more review, not less.
+- Authorship comes from the audit log (`tool.result` rows of `ceo-inbox-draft-reply` / `-draft-compose`, and `ceo-inbox-draft-edit` for the edited class). If it cannot be read, the draft is treated as Curia's, which means more review, not less.
 - The brief tells the judge the message goes out under the principal's name (a sender-profile line, added only for this profile so every other brief, Gate C's included, is unchanged).
 - Principal-directed sends are not stakes-gated (the principal decided), and are not put in the spot-check sample pool.
 

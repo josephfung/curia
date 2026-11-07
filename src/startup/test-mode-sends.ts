@@ -131,6 +131,8 @@ export interface SendRecorder {
   principalDrafts?(): Map<string, NylasMessage> | undefined;
   /** Which of those drafts Curia wrote (#2474). Undefined: every draft reads as Curia's. */
   curiaDraftIds?(): ReadonlySet<string> | undefined;
+  /** Which of those drafts Curia edited (#2474 final review S1). Undefined: every draft reads as edited. */
+  curiaEditedDraftIds?(): ReadonlySet<string> | undefined;
   /** The calling run's ceo_inbox/sending level (#2474). Undefined: the default, on_request. */
   sendLevel?(): SendLevel | undefined;
 }
@@ -417,6 +419,11 @@ export function createRecordingOutboundGateway(deps: {
               // Fail toward more review, as the gateway does without provenance: no run's
               // record means every draft reads as Curia's.
               return new Set(curia ? draftIds.filter(id => curia.has(id)) : draftIds);
+            },
+            editedByCuria: async (draftIds: readonly string[]) => {
+              const edited = recorder.curiaEditedDraftIds?.();
+              // Fail toward more review, as above.
+              return new Set(edited ? draftIds.filter(id => edited.has(id)) : draftIds);
             },
           },
           // No-op: the real ledger writes working docs, which a real instance's sent-observe

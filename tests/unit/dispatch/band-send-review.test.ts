@@ -172,6 +172,12 @@ describe('BandSendReview', () => {
       expect(review.mock.calls[0]![0].senderProfile).toBe('principal-mailbox');
     });
 
+    it('asks only purpose for a draft Curia edited: a steering check, not a fact-check of the principal\'s words', async () => {
+      const { svc, review } = make([{ ok: true, purpose: 'serving', reason: 'ok' }]);
+      await svc.review({ ...mailbox, draftAuthor: 'curia-edited' });
+      expect(review.mock.calls[0]![0].questions).toEqual(['purpose']);
+    });
+
     it('leaves every other review\'s brief without a sender profile', async () => {
       const { svc, review } = make([clean, { ok: true, unsupportedClaims: [], reason: 'ok' }]);
       await svc.review(base);

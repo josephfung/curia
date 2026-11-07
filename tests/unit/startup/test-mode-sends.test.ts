@@ -279,6 +279,28 @@ describe('the recording principal mailbox (#2474)', () => {
     expect(recorder.sends.map(s => [s.kind, s.from, s.to])).toEqual([['send', 'avery@example.test', ['jo.park@acme.example.test']]]);
   });
 
+  it('reads the run\'s edits: a draft Curia edited is reviewed as curia-edited (final review S1)', async () => {
+    const recent = Math.floor(Date.now() / 1000) - 3600;
+    const drafts = new Map([['draft-30v-acme', principalDraft({ date: recent })]]);
+    const reviewed: string[] = [];
+    const bandReview = { review: vi.fn(async (input: BandReviewInput) => { reviewed.push(String(input.draftAuthor)); return { kind: 'send' as const }; }) };
+    const build = (curiaEdited: ReadonlySet<string>) => createRecordingOutboundGateway({
+      recorder: { ...runRecorder(), principalDrafts: () => drafts, curiaDraftIds: () => new Set<string>(), curiaEditedDraftIds: () => curiaEdited },
+      emailAccounts: [{ name: 'curia', selfEmail: 'curia@example.test' }],
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockResolvedValue(null), getContact: vi.fn().mockResolvedValue(null),
+        createContact: vi.fn().mockResolvedValue({ id: 'contact-new' }), linkIdentity: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ContactService,
+      bus: new EventBus(logger),
+      logger,
+      principalIdentities: [],
+      principalMailbox: createRecordingPrincipalMailbox({ ...runRecorder(), principalDrafts: () => drafts }, () => 'avery@example.test'),
+      review: { contentFilter: new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' }), bandReview, gating: 'band' },
+    });
+    expect((await build(new Set(['draft-30v-acme'])).sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL })).success).toBe(true);
+    expect(reviewed).toEqual(['curia-edited']);
+  });
+
   it('reads the run\'s send level: off leaves the draft unsent', async () => {
     const drafts = new Map([['draft-30v-acme', principalDraft()]]);
     const recorder = { ...runRecorder(), principalDrafts: () => drafts, sendLevel: () => 'off' as const };

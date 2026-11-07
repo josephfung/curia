@@ -876,8 +876,8 @@ describe('principal-mailbox drafts (#2474)', () => {
       'ceo-inbox-draft-reply': [{ match: {}, return: { draft_id: 'draft-0001', subject: 'Re: Venue', to: [{ email: 'jo.park@acme.example.test' }], cc: [] } }],
       'ceo-inbox-draft-edit': [{ match: {}, return: { draft_id: 'scenario-draft-edit-1' } }],
     };
-    const mirrored: Array<{ draft: MailboxDraft; curiaWrote: boolean }> = [];
-    const draftMirror: DraftMirror = (draft, curiaWrote) => { mirrored.push({ draft, curiaWrote }); };
+    const mirrored: Array<{ draft: MailboxDraft; curiaWrote: boolean; edited?: true }> = [];
+    const draftMirror: DraftMirror = (draft, curiaWrote, edited) => { mirrored.push({ draft, curiaWrote, ...(edited ? { edited } : {}) }); };
     return { layer, controller, stubs, mirrored, draftMirror };
   }
 
@@ -898,7 +898,8 @@ describe('principal-mailbox drafts (#2474)', () => {
     const seeded: MailboxDraft = { id: 'draft-30z-acme', subject: 'Offsite', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], body: 'Venue: [venue TBD]' };
     controller.beginRun(stubs, 'scenario-1', { throughGateway: true, draftMirror, mailboxDrafts: [seeded] });
     await layer.invoke('ceo-inbox-draft-edit', { draft_id: 'draft-30z-acme', body: 'Venue: the Harbour Room' }, undefined, coordinatorCall);
-    expect(mirrored).toEqual([{ draft: { ...seeded, body: 'Venue: the Harbour Room' }, curiaWrote: false }]);
+    // An edit (final review S1): the gateway reviews the draft as curia-edited.
+    expect(mirrored).toEqual([{ draft: { ...seeded, body: 'Venue: the Harbour Room' }, curiaWrote: false, edited: true }]);
     // The seed itself is not a write: only the edit reached the mirror.
     const read = await layer.invoke('ceo-inbox-read', { draft_id: 'draft-30z-acme' }, undefined, coordinatorCall);
     expect(read).toMatchObject({ success: true, data: { id: 'draft-30z-acme', body_plain: 'Venue: the Harbour Room', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }] } });

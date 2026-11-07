@@ -65,6 +65,7 @@ import { budgetedOriginator, type RelayBudget } from '../autonomy/relay-budget.j
 import { isUuid } from '../util/uuid.js';
 import {
   BAND_RULES, describePiiLabels, type BandReviewAsk, type BandReviewReport, type BandReviewSignals, type BandSendReview,
+  type DraftAuthor,
 } from '../dispatch/band-send-review.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { askPreamble, displayName, normalizeCounterparty, type DisclosureAsk } from '../autonomy/disclosure-decisions.js';
@@ -87,8 +88,8 @@ import type { ErrorType } from '../errors/types.js';
 import type { PrincipalMailboxResolver } from '../channels/email/principal-mailbox-resolver.js';
 import { DEFAULT_MAILBOX, type SendLevel, type SendLevelReader } from './principal-send/send-level.js';
 import { isPrincipalDirectedMailboxSend, type SendAuthorityInput } from './principal-send/authority.js';
-import { dropOwnIdentityItems, splitReplyQuote } from './principal-send/own-text.js';
-import type { DraftProvenance } from './principal-send/draft-provenance.js';
+import { dropOwnIdentityItems, quoteHeaderParticipants, splitReplyQuote } from './principal-send/own-text.js';
+import { PROVENANCE_LOOKBACK_DAYS, type DraftProvenance } from './principal-send/draft-provenance.js';
 import type { PrincipalSendLedger } from './principal-send/send-ledger.js';
 import type { CallBudget } from '../util/call-budget.js';
 import { nylasMessageFailure } from '../channels/email/nylas-message-id.js';
@@ -407,8 +408,8 @@ export interface OutboundGatewayConfig {
   principalMailbox?: PrincipalMailboxResolver;
   /** The ceo_inbox/sending level per mailbox (#2474). Absent: on_request, the default. */
   readSendLevel?: SendLevelReader;
-  /** Which principal-mailbox drafts Curia wrote (#2474). Absent: every draft reads as Curia's. */
-  draftProvenance?: Pick<DraftProvenance, 'createdByCuria'>;
+  /** Which principal-mailbox drafts Curia wrote or edited (#2474). Absent: every draft reads as Curia's. */
+  draftProvenance?: Pick<DraftProvenance, 'createdByCuria' | 'editedByCuria'>;
   /** Per-send markers sent-observe skips (#2474, design D8). Absent: no markers. */
   sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent'>;
 }
@@ -693,7 +694,7 @@ interface DraftSendProfile {
   /** Recorded on the sent action and named in reports. */
   toolName: string;
   /** Principal mailbox only: who wrote the draft. */
-  author?: 'curia' | 'principal';
+  author?: DraftAuthor;
 }
 /** sendEmailDraft's options, passed through to the draft checks unchanged. */
 interface DraftSendOptions {
@@ -802,7 +803,7 @@ export class OutboundGateway {
   private readonly relayBudget?: RelayBudget;
   private readonly principalMailbox?: PrincipalMailboxResolver;
   private readonly readSendLevel?: SendLevelReader;
-  private readonly draftProvenance?: Pick<DraftProvenance, 'createdByCuria'>;
+  private readonly draftProvenance?: Pick<DraftProvenance, 'createdByCuria' | 'editedByCuria'>;
   private readonly sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent'>;
   private flushInFlight = new Set<string>();
   /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
@@ -2407,7 +2408,7 @@ export class OutboundGateway {
     editable?: boolean;
     /** A send from the principal's own mailbox, and who wrote the draft (#2474): passed to the review. */
     senderProfile?: 'principal-mailbox';
-    draftAuthor?: 'curia' | 'principal';
+    draftAuthor?: DraftAuthor;
     /**
      * A hold, an ask or a block leaves the draft unsent and returns `held` (#2474, design D5): no
      * approval row and no digest item. The principal-mailbox path never raises approvals.
@@ -2459,6 +2460,13 @@ export class OutboundGateway {
         : `Held for the principal: after one rewrite it still has these problems (${rules.join(', ')}).${heldBesideNote(decision.heldBeside)}`;
       this.log.info({ channel: request.channel, kind: decision.kind, rules }, 'outbound-gateway: band review held a principal-mailbox draft — left as a draft');
       return { held: reason, result: { success: false, blockedReason: reason, blockedRules: rules } };
+    }
+    // The review would send it without its quote, but a saved draft's quote cannot be cut (#2474
+    // final review S2): it stays a draft rather than go out with details not every recipient had.
+    if (args.leaveDraftOnHold && decision.kind === 'send' && decision.dropQuote) {
+      const reason = `Held for the principal: the quoted message below the reply holds ${describePiiLabels(decision.dropQuote.labels)} that not everyone on this send was on, and a saved draft can't be sent without its quote.`;
+      this.log.info({ channel: request.channel, labels: decision.dropQuote.labels }, 'outbound-gateway: band review would drop a principal-mailbox draft\'s quote — left as a draft');
+      return { held: reason, result: { success: false, blockedReason: reason, blockedRules: [BAND_RULES.pii] } };
     }
 
     // A block asks the drafter to rewrite, so it needs one waiting. A dispatcher relay's
@@ -4053,7 +4061,7 @@ export class OutboundGateway {
    * PR 1 sends only on a live principal turn (principal-directed); an autonomous call is refused.
    * The draft's checks are sendEmailDraft's (checkDraftSend) with the principal-mailbox profile:
    * the quote and the principal's own identities are not disclosures, the principal's addresses
-   * are not an audience, the review runs for a Curia-written draft or one with personal data, and
+   * are not an audience, the review runs for a draft Curia wrote or edited or one with personal data, and
    * a hold leaves the draft where it is with no approval row. Every early return leaves the draft.
    */
   async sendPrincipalDraft(draftId: string, options: {
@@ -4117,12 +4125,23 @@ export class OutboundGateway {
     const primary = [...to, ...cc, ...bcc].find((r) => !isPrincipal(r))!;
 
     // 6. Who wrote it. Fail toward more review: no provenance, or a failed read, counts as Curia's.
-    let author: 'curia' | 'principal' = 'curia';
+    // A draft Curia did not create but edited is `curia-edited` (final review S1): an edit can put
+    // Curia's words, or a new recipient, into the principal's draft. So is one last modified before
+    // the lookback, where no row could show Curia's hand (S1/F3). Only a recent draft with no
+    // create or edit row is the principal's.
+    let author: DraftAuthor = 'curia';
     if (this.draftProvenance) {
       try {
-        author = (await this.draftProvenance.createdByCuria([draftId])).has(draftId) ? 'curia' : 'principal';
+        if (!(await this.draftProvenance.createdByCuria([draftId])).has(draftId)) {
+          const lookbackStartSec = (Date.now() - PROVENANCE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000) / 1000;
+          // A missing or unreadable date is not recent: who wrote the draft is unknown.
+          const recent = Number.isFinite(draft.date) && draft.date >= lookbackStartSec;
+          const edited = (await this.draftProvenance.editedByCuria([draftId])).has(draftId);
+          author = edited || !recent ? 'curia-edited' : 'principal';
+        }
       } catch (err) {
         this.log.warn({ err, draftId }, 'outbound-gateway: draft provenance unreadable — reviewing it as Curia-written');
+        author = 'curia';
       }
     }
 
@@ -4292,7 +4311,7 @@ export class OutboundGateway {
     //
     // ceo-inbox turns call begin() (runtime.ts), so the gate would read the principal's own
     // draft. The principal's words naming people are theirs to send when they ask (#2474, D2);
-    // a Curia-written draft still goes through it.
+    // a draft Curia wrote or edited still goes through it (final review S1).
     const principalWordsOnRequest = principalMailbox && author === 'principal' && options?.principalDirected === true;
     const identityBlock = principalWordsOnRequest ? null : await this.blockForUnresolvedIdentity({
       request: {
@@ -4356,17 +4375,24 @@ export class OutboundGateway {
         // Everything detected is redacted in the copies the filter and the audit events see.
         const bodyFound = redactor.detect(body, 'email', ctx);
         const subjectFound = draftMeta.subject ? redactor.detect(draftMeta.subject, 'email', ctx) : [];
-        // What the review rules on. A principal-mailbox draft (#2474, design D2): only items in
-        // its own text, not the quoted message below it (someone else's signature would hold
-        // almost every "Got it"), and on a principal-directed send not the principal's own
-        // verified identities. Both stay redacted in the copies above.
+        // What the review rules on. A principal-mailbox draft (#2474, design D2): on a
+        // principal-directed send not the principal's own verified identities, and the quoted
+        // message below the reply ruled apart as field `quote` (someone else's signature would
+        // otherwise hold almost every "Got it"). Its items are dropped only when everyone on the
+        // send was on the quoted message (final review S2), as send() exempts a quote. All of
+        // them stay redacted in the copies above.
         const ownIdentities = principalMailbox && options?.principalDirected === true
           ? this.principalIdentities.filter((i) => i.verified).map((i) => i.channelIdentifier)
           : [];
-        const ownLength = principalMailbox ? splitReplyQuote(body).own.length : body.length;
+        const split = principalMailbox ? splitReplyQuote(body) : { own: body, quote: '' };
+        const ownLength = split.own.length;
         const bodyItems = dropOwnIdentityItems(bodyFound.filter((i) => i.start < ownLength), ownIdentities);
+        const quoteFound = dropOwnIdentityItems(bodyFound.filter((i) => i.start >= ownLength), ownIdentities);
+        const quoteItems = quoteFound.length > 0 && !this.quoteReachesOnlyItsParticipants(split.quote, audienceOf(draftEnvelope))
+          ? quoteFound
+          : [];
         const subjectItems = dropOwnIdentityItems(subjectFound, ownIdentities);
-        for (const [items, field] of [[bodyItems, 'body'], [subjectItems, 'subject']] as const) {
+        for (const [items, field] of [[bodyItems, 'body'], [quoteItems, 'quote'], [subjectItems, 'subject']] as const) {
           for (const item of items) {
             detectedItems.push({ id: `P${detectedItems.length + 1}`, label: item.label, text: item.matched, field });
           }
@@ -4511,10 +4537,11 @@ export class OutboundGateway {
     let bandReport: BandReviewReport | undefined;
     let bandSignals: BandReviewSignals | undefined;
     //
-    // A principal-mailbox draft (#2474, design D2) is reviewed when Curia wrote it, or when
-    // personal data remains: the principal's own words are not fact-checked.
+    // A principal-mailbox draft (#2474, design D2) is reviewed when Curia wrote or edited it (or
+    // who wrote it is unknown), or when personal data remains: the principal's own words are not
+    // fact-checked.
     const reviewThis = principalMailbox
-      ? author === 'curia' || detectedItems.length > 0
+      ? author !== 'principal' || detectedItems.length > 0
       : options?.principalDirected !== true || detectedItems.length > 0;
     if (bandReviewRuns && options?.principalApproved !== true && reviewThis) {
       const reviewed = principalMailbox ? draftRecipients.filter((r) => !r.isPrincipal) : draftRecipients;
@@ -4555,6 +4582,18 @@ export class OutboundGateway {
         principalIsSoleRecipient: draftPrincipalSole,
       },
     };
+  }
+
+  /**
+   * Whether everyone a principal-mailbox draft reaches, besides the principal, was on the message
+   * its quote shows (#2474 final review S2), by the quote's own header. A header that names
+   * nobody, or no audience, is never true: the quote's details are then reviewed (fail closed).
+   */
+  private quoteReachesOnlyItsParticipants(quote: string, audience: readonly string[]): boolean {
+    const participants = quoteHeaderParticipants(quote);
+    if (participants === null || audience.length === 0) return false;
+    const onQuote = new Set(participants.map(normalizeCounterparty));
+    return audience.every((r) => onQuote.has(normalizeCounterparty(r)));
   }
 
   /**

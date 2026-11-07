@@ -129,6 +129,8 @@ export class SeedScope {
   readonly principalDrafts = new Map<string, NylasMessage>();
   /** Which of principalDrafts Curia wrote (#2474): what the gateway's provenance reads. */
   readonly curiaDraftIds = new Set<string>();
+  /** Which of principalDrafts Curia edited (#2474 final review S1): reviewed as curia-edited. */
+  readonly curiaEditedDraftIds = new Set<string>();
   /** The run's ceo_inbox/sending level (`seed.principal_mailbox.send_level`, #2474); unset: on_request. */
   sendLevel: SendLevel | undefined;
   /** Action-log row ids the run wrote or read as its own (#2312): the only ids its delivery may claim. */
@@ -167,6 +169,7 @@ export class SeedScope {
     this.drafts.clear();
     this.principalDrafts.clear();
     this.curiaDraftIds.clear();
+    this.curiaEditedDraftIds.clear();
     this.sendLevel = undefined;
     this.errors.length = 0;
   }
@@ -194,13 +197,15 @@ function principalDraftMessage(draft: MailboxDraft, threadId: string, date: numb
 /**
  * Keep the run's principal mailbox in step with a stubbed ceo-inbox draft write (#2474; the
  * stub layer's DraftMirror). The draft is added or replaced, keeping the thread it was in;
- * `curiaWrote` (a new compose or reply) marks it Curia's, and an edit leaves its author as it
- * was. PR 2 extends this with the thread a reply lands on.
+ * `curiaWrote` (a new compose or reply) marks it Curia's; `edited` (a draft-edit) leaves its
+ * creator as it was and marks it edited, so the send reviews it as curia-edited (final review
+ * S1). PR 2 extends this with the thread a reply lands on.
  */
-export function mirrorPrincipalDraft(scope: SeedScope, draft: MailboxDraft, curiaWrote: boolean): void {
+export function mirrorPrincipalDraft(scope: SeedScope, draft: MailboxDraft, curiaWrote: boolean, edited?: true): void {
   const prev = scope.principalDrafts.get(draft.id);
   scope.principalDrafts.set(draft.id, principalDraftMessage(draft, prev?.threadId ?? '', Math.floor(Date.now() / 1000)));
   if (curiaWrote) scope.curiaDraftIds.add(draft.id);
+  if (edited) scope.curiaEditedDraftIds.add(draft.id);
 }
 
 /** The run's principal-mailbox drafts as the stub layer preloads them (#2474), so an edit applies to them. */

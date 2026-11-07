@@ -94,11 +94,13 @@ See [ADR-062](../adr/062-curia-sends-from-the-principals-mailbox.md). `ceo-inbox
 | Rule | Principal-directed send |
 |---|---|
 | Blocked contacts, content filter | As `sendEmailDraft`. The principal's own addresses on the draft are the sender's, not an audience, and are not checked |
-| Identity gate | Skipped for a principal-written draft (the principal's words naming people are theirs to send); runs for a Curia-written one |
-| Personal data | Detected in the draft's own text only: the quoted message below a reply (`gmail_quote` or Curia's reply quote) is not a disclosure. The principal's verified identities are dropped. The content filter and the audit copies still see everything, redacted |
+| Identity gate | Skipped for a principal-written draft (the principal's words naming people are theirs to send); runs for a Curia-written or Curia-edited one |
+| Personal data | Detected in the whole draft. Details in the quoted message below a reply (`gmail_quote` or Curia's reply quote) are field `quote`, dropped when every outside recipient is named in the quote's header (From/To/Cc, or Gmail's attribution line); a header naming nobody keeps them. The principal's verified identities are dropped. The content filter and the audit copies still see everything, redacted |
+| Quote the review would drop | A saved draft's quote can't be cut: the draft is left unsent (`review_hold`) |
 | Band review, principal-written draft | Not run unless personal data remains; then disclosure only |
+| Band review, Curia-edited draft | Purpose, plus disclosure when personal data remains |
 | Band review, Curia-written draft | Purpose and grounding, plus disclosure when personal data remains |
-| Authorship | Curia's when an audit `tool.result` of `ceo-inbox-draft-reply` / `-draft-compose` names the draft (`DraftProvenance`); an unreadable log counts as Curia's (more review) |
+| Authorship | Curia-written when an audit `tool.result` of `ceo-inbox-draft-reply` / `-draft-compose` created the draft (`DraftProvenance`). Otherwise Curia-edited when a successful `ceo-inbox-draft-edit` result names it, or when it was last modified before the 30-day lookback (who wrote it is unknown). Otherwise principal-written. An unreadable log counts as Curia-written (more review) |
 | Judge brief | Adds a sender-profile line: the message goes out under the principal's name. Only this profile renders it; every other brief, Gate C's included, is byte-identical |
 | Stakes | Not gated: the principal decided |
 | Relay budget | Not applicable |

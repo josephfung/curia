@@ -510,7 +510,8 @@ export interface MailboxDraft {
  * gateway's provenance counts; an edit, or a reply that found the principal's existing draft
  * (`already_exists: true`), is not.
  */
-export type DraftMirror = (draft: MailboxDraft, curiaWrote: boolean) => void;
+/** `edited`: the write was ceo-inbox-draft-edit on an existing draft (#2474 final review S1). */
+export type DraftMirror = (draft: MailboxDraft, curiaWrote: boolean, edited?: true) => void;
 
 /** Participants as addresses. A contact ID (no `@`) is not an address, so it is dropped. */
 function mailboxParticipants(value: unknown): DraftParticipant[] {
@@ -539,14 +540,14 @@ export class DraftState {
     this.drafts.set(draft.id, { ...draft, to: [...draft.to], cc: [...draft.cc] });
   }
 
-  private mirrored(record: DraftRecord, curiaWrote: boolean): void {
+  private mirrored(record: DraftRecord, curiaWrote: boolean, edited?: true): void {
     this.mirror?.({
       id: record.id,
       subject: record.subject,
       to: mailboxParticipants(record.to),
       cc: mailboxParticipants(record.cc),
       body: record.body,
-    }, curiaWrote);
+    }, curiaWrote, ...(edited ? [edited] as const : []));
   }
 
   recordWrite(toolName: string, data: Json, input: Json): Json {
@@ -615,7 +616,7 @@ export class DraftState {
       next.cc = uniqueByKey([...keep(prev.cc, addToKeys), ...addCc]).filter((p) => !toKeys.has(participantKey(p)));
     }
     this.drafts.set(id, next);
-    this.mirrored(next, false);
+    this.mirrored(next, false, true);
     return data;
   }
 
