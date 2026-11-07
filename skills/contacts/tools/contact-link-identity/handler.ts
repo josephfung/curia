@@ -15,10 +15,12 @@
 // in the conversation. The duplicate check still runs.
 //
 // Re-stating an address already on this contact is how an agent vouches for one it
-// typed earlier. An unverified outbound_recipient identity (recorded by the gateway
-// after a first-time send) is verified in place, after the same two checks: verifying
-// is the risky step, and the gateway records whatever address the agent typed, typos
-// included. Other unverified sources (self_claimed, sms_participant) need the principal.
+// typed earlier. An unverified identity an agent entered (AGENT_ENTERED_SOURCES: the
+// gateway's outbound_recipient after a first-time send, contact-register's agent_called,
+// agent_stated) is verified in place, after the same two checks: verifying is the risky
+// step, and those rows hold whatever the agent typed, typos included (#2498). Other
+// unverified sources (self_claimed, sms_participant) need the principal: the address came
+// from the person or the network, and no source in the conversation settles that.
 //
 // A structural contact (the principal, an agent, a system contact: isStructuralContact)
 // is never changed here — see structuralContactRefusal.
@@ -26,7 +28,7 @@
 // This skill uses contactService, which is a universal service.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import type { DuplicateCheck } from '../../../../src/contacts/types.js';
+import type { DuplicateCheck, IdentitySource } from '../../../../src/contacts/types.js';
 import { LINKABLE_CHANNEL_IDENTITY_SET } from '../../../../src/contacts/linkable-channels.js';
 import { normalizeAgentIdentifier } from '../../../../src/contacts/agent-identifier.js';
 import { sameIdentifier } from '../../../../src/contacts/identifier-near-miss.js';
@@ -47,6 +49,25 @@ const NEXT_SAME_NUMBER =
   'If this number belongs to both, call contact-link-identity again with distinct_from listing every ID above.';
 const NEXT =
   'Check the address: it resembles theirs. If it is right, call contact-link-identity again with distinct_from listing every ID above.';
+
+/**
+ * Sources of rows an agent typed. An unverified one is verified in place by a re-statement
+ * that passes the duplicate and provenance checks (#2041, #2498). agent_called was
+ * auto-verified until #2061, which is why it was missing here.
+ */
+const AGENT_ENTERED_SOURCES: ReadonlySet<IdentitySource> = new Set(['outbound_recipient', 'agent_called', 'agent_stated']);
+
+/** Why an unverified identity of another source is the principal's to verify. */
+function principalOnlyReason(source: IdentitySource): string {
+  switch (source) {
+    case 'self_claimed':
+      return 'the person gave it about themselves';
+    case 'sms_participant':
+      return 'it came from an inbound text, whose sender can be spoofed';
+    default:
+      return `it was recorded from ${source}, not by an agent`;
+  }
+}
 
 /**
  * The duplicate check for one address on one contact. Returns the refusal to hand the
@@ -159,10 +180,11 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         if (existing.verified) {
           return { success: true, data: { identity_id: existing.id, verified: true, already_linked: true } };
         }
-        if (existing.source === 'outbound_recipient') {
-          // An agent typed it on a first-time send; an agent re-stating it vouches for it.
-          // The gateway recorded the address as typed, so a typo of someone else's address
-          // is exactly what this can verify: run the check a new address gets first.
+        if (AGENT_ENTERED_SOURCES.has(existing.source)) {
+          // An agent typed it (a first-time send, contact-register, an earlier link); an
+          // agent re-stating it vouches for it. The row holds the address as typed, so a
+          // typo of someone else's address is exactly what this can verify: run the
+          // checks a new address gets first.
           const restateRefusal = await duplicateRefusal(
             ctx,
             ctx.contactService,
@@ -175,14 +197,16 @@ export class ContactLinkIdentityHandler implements ToolHandler {
           if (restateUnsourced) return { success: false, error: restateUnsourced };
           const verified = await ctx.contactService.verifyIdentity(existing.id);
           ctx.log.info(
-            { identityId: existing.id, contactId: contact_id },
-            'contact-link-identity: re-stated outbound_recipient address verified (#2041)',
+            { identityId: existing.id, contactId: contact_id, source: existing.source },
+            'contact-link-identity: re-stated agent-entered address verified (#2041, #2498)',
           );
           return { success: true, data: { identity_id: verified.id, verified: verified.verified, already_linked: true } };
         }
+        ctx.log.info({ identityId: existing.id, source: existing.source }, 'contact-link-identity: re-statement refused — principal-only source');
         return {
           success: false,
-          error: 'That address is already on this contact, unverified. Only the principal can verify it, in the console. Nothing changed.',
+          error: `That address is already on this contact, unverified, and ${principalOnlyReason(existing.source)}. ` +
+            'Only the principal can verify it, in the console. Nothing changed.',
         };
       }
 

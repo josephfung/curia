@@ -64,6 +64,7 @@ import {
 } from './agents/delegate-timeout.js';
 import { WorkingMemory } from './memory/working-memory.js';
 import { sharedIdentifierSourceIndex } from './agents/identifier-source-index.js';
+import { recordAgentInputBeforeCall, recordSourceAfterCall, type ProvenanceRecording } from './agents/provenance-recording.js';
 import { createIdentifierSources } from './agents/identifier-sources.js';
 import { EmbeddingService, redactUrlUserinfo } from './memory/embedding.js';
 import { resolveKnowledgeGraphEmbedding } from './memory/embedding-schema.js';
@@ -3048,6 +3049,13 @@ async function main(): Promise<void> {
             memory,
             logger,
           });
+          // Before the call, as a text turn does (#2498): fail closed when unrecorded.
+          let provenanceBefore: ProvenanceRecording | null = null;
+          try {
+            provenanceBefore = recordAgentInputBeforeCall(executionLayer, sharedIdentifierSourceIndex, ctx.conversationId, call.name, call.input);
+          } catch (err) {
+            logger.warn({ err, toolName: call.name }, 'identifier provenance: could not record voice agent input — result will not count as a source');
+          }
           // tool.invoke / tool.result around the call, as a text turn records them (#1968).
           const result = await invokeVoiceToolAudited({
             bus,
@@ -3076,8 +3084,9 @@ async function main(): Promise<void> {
           if (result.success) {
             const data = result.data;
             try {
-              const sourceText = executionLayer.provenanceSourceText(call.name, call.input, data);
-              if (sourceText) sharedIdentifierSourceIndex.record(ctx.conversationId, sourceText);
+              if (provenanceBefore) {
+                recordSourceAfterCall(executionLayer, sharedIdentifierSourceIndex, ctx.conversationId, call.name, call.input, data, provenanceBefore);
+              }
             } catch (err) {
               logger.warn({ err, toolName: call.name }, 'identifier provenance: could not record a voice source-tool result');
             }
