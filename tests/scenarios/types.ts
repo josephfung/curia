@@ -7,6 +7,7 @@ import type { InjectionDrainPoint } from '../../src/bus/events.js';
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import type { AutonomyFixture, OfficeIdentityFixture } from '../../src/startup/test-mode-stack.js';
 import type { RecordedReview } from '../../src/startup/test-mode-sends.js';
+import type { SendLevel } from '../../src/skills/principal-send/send-level.js';
 import type { VerificationDelivery, VerificationStatus } from '../../src/verification/types.js';
 import type { LiveSearchTally } from '../shared/live-search.js';
 import type { ObservedToolCall } from '../shared/turn-capture.js';
@@ -308,6 +309,40 @@ export interface SeedPrincipalIdentity {
   identifier: string;
 }
 
+/** A recipient on a seeded principal-mailbox draft (#2474). */
+export interface SeedDraftRecipient {
+  name?: string;
+  email: string;
+}
+
+/**
+ * A draft in the principal's own mailbox (#2474): what `ceo-inbox-send-draft` reads and sends.
+ * `byCuria` says whether Curia wrote it, which the gateway's provenance reads (a Curia-written
+ * draft is reviewed as Curia's words).
+ */
+export interface SeedPrincipalDraft {
+  id: string;
+  /** The Nylas thread id. Absent: the draft starts no thread the run knows. */
+  thread?: string;
+  to: SeedDraftRecipient[];
+  cc: SeedDraftRecipient[];
+  subject: string;
+  body: string;
+  /** When it was last modified: a date or a date placeholder (`{{at:now-3h}}`). Absent: now. */
+  modified?: string;
+  byCuria: boolean;
+}
+
+/**
+ * The principal's own mailbox for a through-gateway run (`seed.principal_mailbox`, #2474):
+ * its drafts, and the run's `ceo_inbox/sending` level for the default mailbox.
+ */
+export interface SeedPrincipalMailbox {
+  /** Absent: production's default, on_request. */
+  sendLevel?: SendLevel;
+  drafts: SeedPrincipalDraft[];
+}
+
 /**
  * The message the case's agent receives.
  * `from: principal` resolves through the stack's principal (channel `cli` by default;
@@ -481,6 +516,8 @@ export interface ScenarioCase {
     outreach: SeedOutreach[];
     /** Pinned-context documents and settings (#2339). Absent: every entry reads as unset. */
     pinned?: SeedPinned;
+    /** The principal's own mailbox (#2474), through_gateway only. Absent: no drafts, on_request. */
+    principalMailbox?: SeedPrincipalMailbox;
     /**
      * What is waiting on the principal on this run's principal turn (prompt trim PR 7):
      * the counts the Dispatcher's backlog line reports. Absent means nothing is waiting.

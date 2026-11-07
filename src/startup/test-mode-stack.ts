@@ -87,7 +87,7 @@ import { OutboundLlmJudge, type JudgeConfig } from '../dispatch/outbound-judge.j
 import { PiiRedactor } from '../dispatch/pii-redactor.js';
 import { extractPromptExfiltrationMarkers } from '../dispatch/prompt-exfiltration-markers.js';
 import { parseExtraPiiPatterns } from '../pii/scrubber.js';
-import { createRecordingOutboundGateway, PerRunFailOpenLimiter, subscribeRecordingRelays, type SendRecorder } from './test-mode-sends.js';
+import { createRecordingOutboundGateway, createRecordingPrincipalMailbox, PerRunFailOpenLimiter, subscribeRecordingRelays, type SendRecorder } from './test-mode-sends.js';
 import { createVerificationRuntime, type VerificationRuntime } from '../verification/index.js';
 import { createLogger, type Logger } from '../logger.js';
 import { createPool, type DbPool } from '../db/connection.js';
@@ -709,7 +709,9 @@ export function createNoSendOutboundGateway(deps: {
   return new OutboundGateway({
     // Deliberately empty, and no outboundQueue: a queued row would be flushed later
     // by any real instance sharing the database. Do not add either here — this is
-    // the no-send guarantee.
+    // the no-send guarantee. No principalMailbox either (#2474): ceo-inbox-send-draft is
+    // answered by a stub outside through_gateway, and one that got here would be refused
+    // (mailbox_unavailable).
     nylasClients: new Map(),
     contactService: deps.contactService,
     // No markers / judge: nothing is delivered, so there is nothing to filter.
@@ -866,6 +868,9 @@ function buildRecordingSends(deps: {
     logger,
     principalIdentities: deps.principalIdentities,
     autonomyService: deps.autonomyService,
+    // The principal's own mailbox (#2474): ceo-inbox-send-draft sends the calling run's drafts
+    // from it. A run without one (every run outside through_gateway) gets mailbox_unavailable.
+    principalMailbox: createRecordingPrincipalMailbox(deps.recorder, () => principalEmail.current),
     review: {
       contentFilter,
       piiRedactor,

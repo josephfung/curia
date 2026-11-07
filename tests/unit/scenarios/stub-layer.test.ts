@@ -6,7 +6,13 @@ import { createLogger } from '../../../src/logger.js';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { ActionRisk, ToolManifest } from '../../../src/skills/types.js';
-import { createStubController, mustStub } from '../../scenarios/stub-layer.js';
+import { createStubController, mustStub, THROUGH_GATEWAY_SEND_TOOLS } from '../../scenarios/stub-layer.js';
+import type { DraftMirror, MailboxDraft } from '../../shared/tool-state.js';
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import * as yaml from 'js-yaml';
+import { PRINCIPAL_SEND_REFUSALS } from '../../../src/skills/outbound-gateway.js';
+import { DEFAULT_STUBS_DIR, parseStubs } from '../../scenarios/loader.js';
 
 // Lets a test force two runs onto the same conversation token; real UUIDs otherwise.
 const uuid = vi.hoisted(() => ({ next: [] as string[] }));
@@ -841,5 +847,78 @@ describe('attach (#2312: inbound.then)', () => {
     expect(controller.endRun('scenario-1').map(c => c.toolName)).toEqual(['email-send']);
     expect(controller.rootOf('scenario-then-1')).toBeUndefined();
     expect(() => controller.attach('scenario-1', 'scenario-then-2')).toThrow(/no open run/);
+  });
+});
+
+// #2474: ceo-inbox-send-draft runs for real in a through-gateway run, from the principal's own
+// mailbox. Its drafts are the case's seeds plus what the stubbed ceo-inbox draft tools write.
+describe('principal-mailbox drafts (#2474)', () => {
+  it('runs ceo-inbox-send-draft for real in a through-gateway run', () => {
+    expect(THROUGH_GATEWAY_SEND_TOOLS.has('ceo-inbox-send-draft')).toBe(true);
+  });
+
+  it('refuses it in the ceo-inbox stub sets in production\'s words', () => {
+    for (const set of ['ceo-inbox-mailroom', 'ceo-inbox-office']) {
+      const stubs = parseStubs(yaml.load(readFileSync(path.join(DEFAULT_STUBS_DIR, `${set}.yaml`), 'utf-8')), `${set}.yaml`);
+      expect(stubs['ceo-inbox-send-draft'], set).toEqual([{ agent: 'ceo-inbox', match: {}, error: PRINCIPAL_SEND_REFUSALS.not_requested }]);
+    }
+  });
+
+  function draftSetup() {
+    const registry = new ToolRegistry();
+    for (const name of ['ceo-inbox-draft-compose', 'ceo-inbox-draft-reply', 'ceo-inbox-draft-edit', 'ceo-inbox-read']) {
+      registry.register(manifest(name, name === 'ceo-inbox-read' ? 'none' : 'low'), { execute: async () => ({ success: true, data: `real ${name}` }) });
+    }
+    const controller = createStubController(() => registry);
+    const layer = controller.wrap(new ExecutionLayer(registry, logger));
+    const stubs = {
+      'ceo-inbox-draft-compose': [{ match: {}, return: { draft_id: 'draft-0002', subject: 'Agenda' } }],
+      'ceo-inbox-draft-reply': [{ match: {}, return: { draft_id: 'draft-0001', subject: 'Re: Venue', to: [{ email: 'jo.park@acme.example.test' }], cc: [] } }],
+      'ceo-inbox-draft-edit': [{ match: {}, return: { draft_id: 'scenario-draft-edit-1' } }],
+    };
+    const mirrored: Array<{ draft: MailboxDraft; curiaWrote: boolean }> = [];
+    const draftMirror: DraftMirror = (draft, curiaWrote) => { mirrored.push({ draft, curiaWrote }); };
+    return { layer, controller, stubs, mirrored, draftMirror };
+  }
+
+  it('hands each stubbed compose or reply to the run\'s mirror as a draft Curia wrote', async () => {
+    const { layer, controller, stubs, mirrored, draftMirror } = draftSetup();
+    controller.beginRun(stubs, 'scenario-1', { throughGateway: true, draftMirror });
+    await layer.invoke('ceo-inbox-draft-compose', { to_addresses: ['sam@older.test'], subject: 'Agenda', body: 'Here is the agenda.' }, undefined, coordinatorCall);
+    await layer.invoke('ceo-inbox-draft-reply', { reply_to_message_id: 'm1', body: 'The Harbour Room works.' }, undefined, coordinatorCall);
+    expect(mirrored).toEqual([
+      { draft: { id: 'draft-0002', subject: 'Agenda', to: [{ email: 'sam@older.test' }], cc: [], body: 'Here is the agenda.' }, curiaWrote: true },
+      { draft: { id: 'draft-0001', subject: 'Re: Venue', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'The Harbour Room works.' }, curiaWrote: true },
+    ]);
+    controller.endRun('scenario-1');
+  });
+
+  it('applies a stubbed edit to a draft already in the mailbox, and reads it back', async () => {
+    const { layer, controller, stubs, mirrored, draftMirror } = draftSetup();
+    const seeded: MailboxDraft = { id: 'draft-30z-acme', subject: 'Offsite', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], body: 'Venue: [venue TBD]' };
+    controller.beginRun(stubs, 'scenario-1', { throughGateway: true, draftMirror, mailboxDrafts: [seeded] });
+    await layer.invoke('ceo-inbox-draft-edit', { draft_id: 'draft-30z-acme', body: 'Venue: the Harbour Room' }, undefined, coordinatorCall);
+    expect(mirrored).toEqual([{ draft: { ...seeded, body: 'Venue: the Harbour Room' }, curiaWrote: false }]);
+    // The seed itself is not a write: only the edit reached the mirror.
+    const read = await layer.invoke('ceo-inbox-read', { draft_id: 'draft-30z-acme' }, undefined, coordinatorCall);
+    expect(read).toMatchObject({ success: true, data: { id: 'draft-30z-acme', body_plain: 'Venue: the Harbour Room', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }] } });
+    controller.endRun('scenario-1');
+  });
+
+  it('does not count a reply that found the principal\'s existing draft as Curia\'s', async () => {
+    const { layer, controller, mirrored, draftMirror } = draftSetup();
+    const stubs = { 'ceo-inbox-draft-reply': [{ match: {}, return: { draft_id: 'draft-theirs', subject: 'Re: Venue', to: [{ email: 'jo.park@acme.example.test' }], cc: [], already_exists: true } }] };
+    controller.beginRun(stubs, 'scenario-1', { throughGateway: true, draftMirror });
+    await layer.invoke('ceo-inbox-draft-reply', { reply_to_message_id: 'm1', body: 'Sure.' }, undefined, coordinatorCall);
+    expect(mirrored.map(m => [m.draft.id, m.curiaWrote])).toEqual([['draft-theirs', false]]);
+    controller.endRun('scenario-1');
+  });
+
+  it('mirrors nothing for a run without a mirror', async () => {
+    const { layer, controller, stubs, mirrored } = draftSetup();
+    controller.beginRun(stubs, 'scenario-1');
+    await layer.invoke('ceo-inbox-draft-compose', { to_addresses: ['sam@older.test'], subject: 'Agenda', body: 'x' }, undefined, coordinatorCall);
+    expect(mirrored).toEqual([]);
+    controller.endRun('scenario-1');
   });
 });

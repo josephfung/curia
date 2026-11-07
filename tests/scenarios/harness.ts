@@ -113,6 +113,8 @@ import {
   createOutcomeGate,
   runConversations,
   describeError,
+  mailboxDraftsOf,
+  mirrorPrincipalDraft,
   seedRun,
   sweepLeftovers,
   type ResolvedEnvelope,
@@ -529,6 +531,14 @@ export async function createScenarioHarness(
       // Each run's own fail-open cap (#2312).
       limiter: () => currentScope()?.failOpen,
       drafts: () => currentScope()?.drafts,
+      // The principal's own mailbox (#2474): a through-gateway run's seeded and stubbed drafts,
+      // its authorship and its send level. Any other run has none (mailbox_unavailable).
+      principalDrafts: () => {
+        const scope = currentScope();
+        return scope?.throughGateway ? scope.principalDrafts : undefined;
+      },
+      curiaDraftIds: () => currentScope()?.curiaDraftIds,
+      sendLevel: () => currentScope()?.sendLevel,
       // Labels and outcome of each band review, for the `reviewed` check (#2312).
       reviewed: (review) => { currentScope()?.reviews.push(review); },
       // Relayed replies (#2312): production's adapter path, for a through-gateway run's own
@@ -1121,6 +1131,11 @@ export async function createScenarioHarness(
         throughGateway: scenario.throughGateway === true,
         ...(scenario.gatedTools ? { gatedTools: scenario.gatedTools } : {}),
         timezone: clock.timezone,
+        // The principal's mailbox follows the stubbed ceo-inbox draft writes (#2474), so the
+        // real ceo-inbox-send-draft sends what the stubs wrote, and an edit of a seeded draft.
+        ...(scenario.throughGateway
+          ? { mailboxDrafts: mailboxDraftsOf(scope), draftMirror: (draft, curiaWrote) => mirrorPrincipalDraft(scope, draft, curiaWrote) }
+          : {}),
       });
       // Armed before the inbound is published. A fast first tool call must
       // already be held, or the follow-up lands after the model has moved on.
