@@ -355,6 +355,13 @@ export interface TestModeStackOptions {
    */
   wrapActionLog?: (repo: ActionLogRepo) => ActionLogRepo;
   /**
+   * The tool registry the review layer reads its handlers from (recordSends only, #2499). The
+   * scenario suite wraps it so a stubbed tool it routes there runs the review layer's gates
+   * (Gate C with the escalation judge) and is answered by its stub in place of the handler.
+   * Absent: the stack's registry, unchanged. The layer agents call never sees the wrapper.
+   */
+  wrapReviewRegistry?: (registry: ToolRegistry) => ToolRegistry;
+  /**
    * Refuse to boot when the band-review judge (escalation.judge) cannot be built (recordSends
    * only). Without it band review fails every detected item closed, so a run tests the missing
    * key, not the agent. The scenario CLI sets it when a selected case is `through_gateway`; a
@@ -1457,7 +1464,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     // routes here see any of it; approve-action's replay runs here too (it re-invokes the
     // layer it was called on).
     const reviewExecutionLayer = recording
-      ? new ExecutionLayer(toolRegistry, logger, {
+      ? new ExecutionLayer(options.wrapReviewRegistry ? options.wrapReviewRegistry(toolRegistry) : toolRegistry, logger, {
           ...layerOptions,
           // Per-call gating, as production's: the case's fixture decides Gate C here.
           autonomyService: agentAutonomy,

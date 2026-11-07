@@ -569,6 +569,66 @@ export class AuditLogRepo {
   }
 
   /**
+   * The inbound messages a turn lane drained into a running task (#2499), as their
+   * `inbound.message` event ids, newest first. The runtime audits each drain as an
+   * `agent.task.input_injected` row naming the host task and the inbound, on the host's
+   * conversation, so the lookup rides idx_audit_conversation. Evidence for the band brief: a
+   * follow-up that joined the turn is part of what the sender asked for.
+   */
+  async findInjectedInboundIds(conversationId: string, hostTaskEventId: string, limit: number): Promise<string[]> {
+    const clamped = Math.min(Math.max(limit, 1), MAX_LIMIT);
+    const result = await this.pool.query<{ inbound_event_id: string | null }>(
+      `SELECT payload->>'inboundEventId' AS inbound_event_id
+       FROM audit_log
+       WHERE conversation_id = $1
+         AND event_type = 'agent.task.input_injected'
+         AND payload->>'hostTaskEventId' = $2
+       ORDER BY timestamp DESC, id DESC
+       LIMIT $3`,
+      [conversationId, hostTaskEventId, clamped],
+    );
+    return result.rows
+      .map((r) => r.inbound_event_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  }
+
+  /**
+   * One sender's latest inbound messages on a conversation before `before`, newest first
+   * (#2499). `senderId` is the channel's sender id as the inbound carried it (the dispatcher
+   * copies the same value onto the coordinator's agent.task), compared without case: an email
+   * address in another case is the same sender. Scoped to the conversation (its
+   * (conversation_id, timestamp) index) and bounded by `limit`. Evidence for the band brief: a push in an earlier message is part of
+   * what the sender asked for, even when the message that started the work is bland.
+   *
+   * Messages stamped the same millisecond as `before` are included (ids are random, so they
+   * cannot be ordered against it): the caller names the ones it already has in `excludeIds`.
+   * Rows without string content and excluded ids are dropped before the limit applies.
+   */
+  async findRecentInboundsFromSender(
+    conversationId: string,
+    senderId: string,
+    before: Date,
+    limit: number,
+    excludeIds: readonly string[] = [],
+  ): Promise<AuditLogRow[]> {
+    const clamped = Math.min(Math.max(limit, 1), MAX_LIMIT);
+    const result = await this.pool.query(
+      `SELECT ${SELECT_COLUMNS}
+       FROM audit_log
+       WHERE conversation_id = $1
+         AND event_type = 'inbound.message'
+         AND lower(payload->>'senderId') = lower($2)
+         AND timestamp <= $3
+         AND jsonb_typeof(payload->'content') = 'string'
+         AND id::text <> ALL($5::text[])
+       ORDER BY timestamp DESC, id DESC
+       LIMIT $4`,
+      [conversationId, senderId, before, clamped, [...excludeIds]],
+    );
+    return result.rows.map(mapRow);
+  }
+
+  /**
    * Requester-identity evidence rendered into one delegated specialist task (#1859).
    * `delegateEventId` is that task's `agent.task` id. Matches the structured
    * `target_id` and, if extraction failed, `payload.delegateEventId`.

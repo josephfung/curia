@@ -145,11 +145,9 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 
 ### Versioning skills and agents
 
-**Do not bump `version` in a PR.** Not in `tool.json`, `skills/<bundle>/SKILL.md` or `agents/<name>.yaml`. Two parallel PRs that each bump the same file collide, and the bump says nothing the diff does not. The release PR does it once, for every skill and agent that changed since the last tag: run `pnpm bump:versions` (a dry run against the latest `v*` tag), review the list, then `pnpm bump:versions --write` and commit the result with the other release-PR version changes.
+**Do not bump `version` in a PR.** Not in `tool.json`, `skills/<bundle>/SKILL.md` or `agents/<name>.yaml`. Two parallel PRs that each bump the same file collide, and the bump says nothing the diff does not. The release PR bumps them once; the `release` skill (`.claude/skills/release/SKILL.md`, step 4) says how, with `pnpm bump:versions`.
 
-- The script raises the **patch** version of every agent, tool (any non-test file in its directory) and bundle `SKILL.md` that differs from the last tag. It skips a file whose version already differs from the tag's, so it is safe to re-run and never overrides a deliberate bump.
-- For a **minor** bump (new capability, new input/output field, new pinned skill), edit the version by hand in the release PR before running the script; it leaves that file alone.
-- New skill or agent → start at `"0.1.0"`. That is the one hand-set version a feature PR carries; the script skips files that are new since the tag.
+- New skill or agent → start at `"0.1.0"`. That is the one hand-set version a feature PR carries.
 - `skills/_shared/` is not tracked by the script. A change there does not bump the tools that import it.
 
 The version is surfaced in structured logs, the registry listing and the tool-execution audit row (`toolVersion`), and is useful for correlating prod behaviour with a known config state. Nothing in the runtime requires it to move per PR. Tests may assert a version floor (valid semver, not below a given release) but must not pin an exact version: an exact pin forces every PR touching that agent to edit the test.
@@ -376,6 +374,7 @@ asked to prepare or cut a release, run pre-release checks, or tag a version.
 
 ## Scope Discipline
 
+- Read `docs/dev/principles.md` before planning: decide what it covers, and park what it doesn't (its last section lists what always goes to the maintainer).
 - Fix what was asked. Don't refactor surrounding code.
 - If you spot issues nearby, mention them — don't touch them.
 - No drive-by type annotations on code you didn't change.

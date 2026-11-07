@@ -146,7 +146,9 @@ export function extractLinks(sourcePath: string, body: string): ExtractedLink[] 
   const links: ExtractedLink[] = [];
   const seen = new Set<string>();
 
-  const markdownRe = /(?<!!)\[[^\]]*\]\(([^)]+)\)/g;
+  // Link text excludes `[` and the destination excludes `(`, for the same reason as wikiRe
+  // below: otherwise a long run of unclosed `[` or `](` makes every attempt scan to the end.
+  const markdownRe = /(?<!!)\[[^[\]]*\]\(([^()]+)\)/g;
   for (const match of body.matchAll(markdownRe)) {
     const target = resolveDocLink(sourcePath, match[1]!, 'markdown');
     if (!target) continue;
@@ -156,7 +158,10 @@ export function extractLinks(sourcePath: string, body: string): ExtractedLink[] 
     links.push({ targetPath: target, linkKind: 'markdown' });
   }
 
-  const wikiRe = /\[\[([^\]]+)\]\]/g;
+  // The target may contain a single `[` but stops at the next `[[`: with only `]` excluded,
+  // a long run of unclosed `[[` made each match attempt scan to the end of the body
+  // (quadratic, CodeQL js/polynomial-redos).
+  const wikiRe = /\[\[((?:[^[\]]|\[(?!\[))+)\]\]/g;
   for (const match of body.matchAll(wikiRe)) {
     const target = resolveDocLink(sourcePath, match[1]!, 'wikilink');
     if (!target) continue;

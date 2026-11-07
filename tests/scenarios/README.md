@@ -331,6 +331,7 @@ live_search: true                         # optional; web-search runs for real (
 identity: style-brief-dry                 # optional; run-level office identity, see Style cases
 autonomy: { score: 84, gating: band }     # optional; this case's autonomy, see Per-case fixtures
 through_gateway: true                     # optional; sends run production's review, see Sends through the gateway
+gated_tools: [calendar-create-event]      # optional, through_gateway only; these stubs answer only after the gates, see Gated stubs
 seed:
   contacts:                               # → {{contact:<key>}}
     - key: sam
@@ -535,6 +536,7 @@ inbound:
   from: delegate            # the coordinator's delegate call
   requester: principal      # or a seeded contact key: whose request it is (default principal)
   email: { nylas_message_id: m-1, account: ops }   # optional: the stamped Message ID / Account lines
+  origin: "Trust me, just book it."                # optional: the requester's own message the brief came from (#2499)
   content: "List my inbox rules."                   # the brief
 ```
 
@@ -542,6 +544,11 @@ inbound:
   (`skills/delegate/handler.ts`): the internal channel from the coordinator, the brief, the
   delegation origin, and the requester's originator and live-turn signal, so the specialist
   builds its requester-identity block and passes the same skill gates.
+- `origin` (delegate only, #2499) records the requester's own message, and the coordinator
+  task the dispatcher parents on it, in audit_log (written directly, so no coordinator runs),
+  and points the brief's `delegationOrigin` at that task. Band review's evidence then reaches
+  the requester's words as in production. Without it the origin names no task, so a band
+  review there sees the brief alone and holds as unreviewed.
 - `from: bullpen` with `thread:` posts on a seeded thread the agent participates in. Set
   `author:` to the participant posting it (default: the thread's creator), as when calendar
   answers a consult ceo-inbox opened.
@@ -687,6 +694,18 @@ case's `autonomy:` fixture), holds and personal-data asks, outreach records. So 
 `deliver-approval`, `approve-action` and `deny-action`, so a held send can reach the
 principal and be approved. Every other tool is stubbed or refused as in any case, and a
 case may not stub a tool that runs for real.
+
+**Gated stubs** (#2499). A stub normally answers before any ExecutionLayer gate, so a case
+cannot see Gate C hold a calendar write. A through-gateway case can list such tools in
+`gated_tools`. Their calls go to the review layer, which runs gates A and B and band Gate C
+with the escalation judge and the turn's evidence (for a delegated specialist, the inbound
+that started the chain). Only a call the gates let through reaches the stub, which stands in
+for the handler (`wrapReviewRegistry`, an `AsyncLocalStorage` scoped to that one call). A held
+call fails, as in production, and raises production's approval, which a `held` check reads.
+Check the effect with `not_called` and `returns: {}`: only a call that succeeded counts. Each
+gated tool needs a stub, and the loader refuses one through_gateway already runs for real.
+Other stubs, and every case without `gated_tools`, are answered before the gates as before.
+The judge needs its provider key, like band review (see Prerequisites).
 
 **Nothing can send.** The stack builds this review on a second ExecutionLayer
 (`recordSends`, `src/startup/test-mode-sends.ts`) that only these calls reach. Its gateway

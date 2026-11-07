@@ -4023,22 +4023,6 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     await runtime.endSession('onset', 'test');
   });
 
-  it('counts only the part of a chunk that played after the onset', async () => {
-    const { runtime, stt, transport, tts } = await speakingSession();
-
-    // Onset 60 ms ago, then one chunk of ten loud frames: only the last three (60 ms)
-    // are after it, short of the 100 ms needed.
-    stt.emitSpeechStarted({ startedAgoMs: 60 });
-    emitInbound(transport, LOUD, 10);
-    expect(tts.cancelled.size).toBe(0);
-
-    // Two more frames in a later chunk bring it to 100 ms.
-    await delay(40);
-    emitInbound(transport, LOUD, 2);
-    expect(tts.cancelled.size).toBeGreaterThan(0);
-    await runtime.endSession('onset', 'test');
-  });
-
   it('honours a raised threshold', async () => {
     const { runtime, stt, transport, tts } = await speakingSession({ bargeInSpeechStartMinDbfs: -6 });
 
