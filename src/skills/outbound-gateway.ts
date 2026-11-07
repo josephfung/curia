@@ -85,7 +85,7 @@ import { blankExactPhrases, describeUnresolvedIdentity, emailLocalNameTokens } f
 import type { IdentityGateMode } from '../config.js';
 import type { ErrorType } from '../errors/types.js';
 import type { PrincipalMailboxResolver } from '../channels/email/principal-mailbox-resolver.js';
-import { DEFAULT_MAILBOX, type SendLevelReader } from './principal-send/send-level.js';
+import { DEFAULT_MAILBOX, type SendLevel, type SendLevelReader } from './principal-send/send-level.js';
 import { isPrincipalDirectedMailboxSend, type SendAuthorityInput } from './principal-send/authority.js';
 import { dropOwnIdentityItems, splitReplyQuote } from './principal-send/own-text.js';
 import type { DraftProvenance } from './principal-send/draft-provenance.js';
@@ -2539,7 +2539,9 @@ export class OutboundGateway {
       } catch (err) {
         this.log.warn({ err, blockId }, 'outbound-gateway: failed to publish outbound.blocked for a band bounce — the send is still bounced');
       }
-      if (decision.strangerRequest) {
+      // Not for a principal-mailbox draft (#2474): the principal is on the live turn and the
+      // agent tells them; the digest gets nothing from that path.
+      if (decision.strangerRequest && !args.leaveDraftOnHold) {
         // A cold stranger asked for the principal's data: nobody can be asked, so the digest
         // says it was not shared (#2312), not that a reply went: the drafter may not rewrite.
         // Labels only, never the values.
@@ -4058,7 +4060,6 @@ export class OutboundGateway {
     authority: SendAuthorityInput;
     taskEventId?: string;
     conversationId?: string;
-    mailbox?: string;
   }): Promise<PrincipalDraftSendResult> {
     const refuse = (refusal: PrincipalSendRefusal, blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal]): PrincipalDraftSendResult => {
       this.log.info({ draftId, refusal }, 'outbound-gateway: principal-mailbox draft not sent');
@@ -4066,12 +4067,27 @@ export class OutboundGateway {
     };
 
     // 1. The grant is resolved per call so a re-sign-in applies at once; none → fail closed.
-    const client = this.principalMailbox ? await this.principalMailbox() : null;
+    let client: NylasClient | null = null;
+    try {
+      client = this.principalMailbox ? await this.principalMailbox() : null;
+    } catch (err) {
+      // Fail closed: a mailbox that could not be resolved is not sent from.
+      this.log.error({ err, draftId }, 'outbound-gateway: principal mailbox could not be resolved — not sending');
+    }
     if (!client) return refuse('mailbox_unavailable');
 
     // 2. The setting is read here, not by the caller, so no caller can skip it (design D3). An
     // absent reader is the default level; the reader itself turns unreadable into on_request.
-    const level = this.readSendLevel ? await this.readSendLevel(options.mailbox ?? DEFAULT_MAILBOX) : 'on_request';
+    let level: SendLevel = 'on_request';
+    try {
+      // Always the default mailbox's level: until #2475 there is one principal grant, and a
+      // caller-chosen key could read another mailbox's level than the grant used. #2475 binds
+      // the key to the mailbox the resolver returns.
+      if (this.readSendLevel) level = await this.readSendLevel(DEFAULT_MAILBOX);
+    } catch (err) {
+      // on_request, as the reader's own fallback: never widens autonomy, keeps principal-directed sends working.
+      this.log.warn({ err, draftId }, 'outbound-gateway: send level unreadable — using on_request');
+    }
     if (level === 'off') return refuse('setting_off');
 
     // 3. Authority. An approval replay is never a principal-directed send (design D5).
@@ -4173,17 +4189,20 @@ export class OutboundGateway {
       taskEventId: options.taskEventId,
       ...(detectedItems.length > 0 ? { disclosed: detectedItems.map(({ label, field }) => ({ label, field })) } : {}),
     });
-    // Recorded under its own tool name though principal-directed (design D2): it went out under
-    // the principal's name, so the spot-check pool sees every one.
-    await this.recordSentAction({
-      channel: 'email',
-      toolName: profile.toolName,
-      recipientLabel: outside.join(', '),
-      preview: redactedSubject || redactedBody,
-      recipient,
-      band,
-      options: checkOptions,
-    });
+    // Spot-check pool (#2159 Phase 3): not for a principal-directed send, as in sendEmailDraft.
+    // Every PR 1 send is principal-directed, so this never runs yet; PR 2's autonomous sends
+    // will record here under the profile's tool name.
+    if (checkOptions.principalDirected !== true) {
+      await this.recordSentAction({
+        channel: 'email',
+        toolName: profile.toolName,
+        recipientLabel: outside.join(', '),
+        preview: redactedSubject || redactedBody,
+        recipient,
+        band,
+        options: checkOptions,
+      });
+    }
     if (band.report) await this.publishBandReport(band.report, checkOptions);
 
     return { success: true, messageId: sent.id, ...(threadId ? { threadId } : {}), to: outside, subject: draft.subject };
@@ -4334,25 +4353,27 @@ export class OutboundGateway {
       const redactor = this.piiRedactor;
       try {
         const ctx = { recipientId: recipientEmail, principalIsSoleRecipient: draftPrincipalSole };
-        // A principal-mailbox draft (#2474, design D2): only its own text is read, not the quoted
-        // message below it (someone else's signature would hold almost every "Got it"); the
-        // content filter still reads the whole body. On a principal-directed send the principal's
-        // own verified identities are not disclosures. `own` is a prefix of body, so the items'
-        // offsets hold for body too.
+        // Everything detected is redacted in the copies the filter and the audit events see.
+        const bodyFound = redactor.detect(body, 'email', ctx);
+        const subjectFound = draftMeta.subject ? redactor.detect(draftMeta.subject, 'email', ctx) : [];
+        // What the review rules on. A principal-mailbox draft (#2474, design D2): only items in
+        // its own text, not the quoted message below it (someone else's signature would hold
+        // almost every "Got it"), and on a principal-directed send not the principal's own
+        // verified identities. Both stay redacted in the copies above.
         const ownIdentities = principalMailbox && options?.principalDirected === true
           ? this.principalIdentities.filter((i) => i.verified).map((i) => i.channelIdentifier)
           : [];
-        const detectIn = (text: string) => dropOwnIdentityItems(redactor.detect(text, 'email', ctx), ownIdentities);
-        const bodyItems = detectIn(principalMailbox ? splitReplyQuote(body).own : body);
-        const subjectItems = draftMeta.subject ? detectIn(draftMeta.subject) : [];
+        const ownLength = principalMailbox ? splitReplyQuote(body).own.length : body.length;
+        const bodyItems = dropOwnIdentityItems(bodyFound.filter((i) => i.start < ownLength), ownIdentities);
+        const subjectItems = dropOwnIdentityItems(subjectFound, ownIdentities);
         for (const [items, field] of [[bodyItems, 'body'], [subjectItems, 'subject']] as const) {
           for (const item of items) {
             detectedItems.push({ id: `P${detectedItems.length + 1}`, label: item.label, text: item.matched, field });
           }
         }
         // audit: false — nothing is redacted on the wire, so no outbound.pii_redacted.
-        redactedBody = redactor.apply(body, bodyItems, 'email', ctx, { audit: false }).content;
-        if (draftMeta.subject) redactedSubject = redactor.apply(draftMeta.subject, subjectItems, 'email', ctx, { audit: false }).content;
+        redactedBody = redactor.apply(body, bodyFound, 'email', ctx, { audit: false }).content;
+        if (draftMeta.subject) redactedSubject = redactor.apply(draftMeta.subject, subjectFound, 'email', ctx, { audit: false }).content;
       } catch (err) {
         return { result: await this.blockForRedactorError(err, draftRequest, body, recipientEmail, options) };
       }
@@ -4446,16 +4467,20 @@ export class OutboundGateway {
       }
 
       // Queued for the principal's digest, not emailed (#2159; informational since #1158).
-      await this.queueBlockReport(
-        [
-          'Email draft send blocked by the content filter. The agent was told why and may rewrite it and retry.',
-          `Reason: ${reasonSummary}`,
-          ...unmatchedRecipientNotificationLines(recipientEmail, unmatched),
-          `Draft ${draftId}; block ${blockId}; audit event ${blockedEvent.id}.`,
-        ].join('\n'),
-        options?.conversationId,
-        blockedEvent.id,
-      );
+      // Not for a principal-mailbox draft (#2474): the principal is on the live turn and the
+      // agent tells them why; that path files no digest items.
+      if (!principalMailbox) {
+        await this.queueBlockReport(
+          [
+            'Email draft send blocked by the content filter. The agent was told why and may rewrite it and retry.',
+            `Reason: ${reasonSummary}`,
+            ...unmatchedRecipientNotificationLines(recipientEmail, unmatched),
+            `Draft ${draftId}; block ${blockId}; audit event ${blockedEvent.id}.`,
+          ].join('\n'),
+          options?.conversationId,
+          blockedEvent.id,
+        );
+      }
       // Surface the principal-safe reason summary and rule name(s) to the caller so
       // the agent's tool loop can address the root cause and retry (#1158). reasonSummary
       // obeys buildBlockReasonSummary's per-rule contract — only an LLM-judge finding's

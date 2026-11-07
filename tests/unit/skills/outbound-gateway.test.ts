@@ -5882,6 +5882,23 @@ describe('sendPrincipalDraft (#2474)', () => {
 
   // ---- one test per step ----
 
+  it('1. refuses with mailbox_unavailable when resolving the mailbox throws', async () => {
+    const { gw } = make();
+    (gw as unknown as { principalMailbox: () => Promise<never> }).principalMailbox = async () => { throw new Error('vault down'); };
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'mailbox_unavailable' });
+  });
+
+  it('2. uses on_request when the send level cannot be read', async () => {
+    const { gw, client, readSendLevel } = make();
+    readSendLevel.mockRejectedValue(new Error('kg down'));
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(client!.sendDraft).toHaveBeenCalled();
+    // on_request still refuses an autonomous call.
+    const system = { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } };
+    expect(await gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } })).toMatchObject({ refusal: 'not_requested' });
+  });
+
   it('1. refuses with mailbox_unavailable when the principal mailbox is not connected', async () => {
     const { gw } = make({ client: null });
     const r = await gw.sendPrincipalDraft('d1', opts);
@@ -5896,10 +5913,10 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(client!.getDraft).not.toHaveBeenCalled();
   });
 
-  it('2. reads the named mailbox\'s level', async () => {
+  it('2. always reads the default mailbox\'s level: there is one principal grant until #2475', async () => {
     const { gw, readSendLevel } = make();
-    await gw.sendPrincipalDraft('d1', { ...opts, mailbox: 'work' });
-    expect(readSendLevel).toHaveBeenCalledWith('work');
+    await gw.sendPrincipalDraft('d1', opts);
+    expect(readSendLevel).toHaveBeenCalledWith('default');
   });
 
   it('3. refuses an approval replay with approval_replay', async () => {
@@ -5995,12 +6012,13 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(ledger.recordSent).toHaveBeenCalledWith('d1', 'sent-1');
   });
 
-  it('10. records the send and returns what went out', async () => {
-    const { gw, actionLogRepo } = make();
+  it('10. records the send and returns what went out, outside the spot-check pool', async () => {
+    const { gw, actionLogRepo } = make({ createdByCuria: ['d1'] });
     const r = await gw.sendPrincipalDraft('d1', opts);
     expect(r).toEqual({ success: true, messageId: 'sent-1', threadId: 'th1', to: ['dana@example.org'], subject: 'Re: Friday' });
     expect(published('outbound.delivered')).toEqual([expect.objectContaining({ payload: expect.objectContaining({ messageId: 'sent-1', recipientId: 'dana@example.org' }) })]);
-    expect(vi.mocked(actionLogRepo.insertSampled).mock.calls.map((c) => (c[0] as { toolName: string }).toolName)).toEqual(['ceo-inbox-send-draft']);
+    // Principal-directed, as sendEmailDraft: not sampled (PR 2's autonomous sends will be).
+    expect(actionLogRepo.insertSampled).not.toHaveBeenCalled();
     expect(mocks.contactService.resolveByChannelIdentity).not.toHaveBeenCalledWith('email', PRINCIPAL);
   });
 
@@ -6099,8 +6117,52 @@ describe('sendPrincipalDraft (#2474)', () => {
     const body = '<p>Got it, thanks.</p><div class="gmail_quote">On Thu, Dana wrote: call me at 416-555-0199</div>';
     const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body })) });
     expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    // Detected (for the audit copy) but not ruled on: no review, nothing reported as disclosed.
     expect(review).not.toHaveBeenCalled();
-    expect(piiRedactor.detect.mock.calls.map((c) => c[0])).not.toContain(body);
+    expect(published('outbound.delivered')[0]!.payload['disclosed']).toBeUndefined();
+  });
+
+  it('redacts a quoted phone in the audit copy without reviewing it', async () => {
+    const found = [{ label: 'PHONE_NUMBER', text: '416-555-0199' }];
+    const detect = vi.fn((content: string) => found
+      .filter((f) => content.includes(f.text))
+      .map((f) => ({ label: f.label, matched: f.text, start: content.indexOf(f.text), end: content.indexOf(f.text) + f.text.length })));
+    const apply = vi.fn((content: string, items: Array<{ matched: string }>) => ({
+      content: items.reduce((c, i) => c.split(i.matched).join('[REDACTED: PHONE_NUMBER]'), content), redactions: [],
+    }));
+    const piiRedactor = { detect, apply, redact: vi.fn() } as unknown as PiiRedactor;
+    const body = '<p>Got it, thanks.</p><div class="gmail_quote">On Thu, Dana wrote: call me at 416-555-0199</div>';
+    const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body })) });
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(review).not.toHaveBeenCalled();
+    const content = String(published('outbound.delivered')[0]!.payload['content']);
+    expect(content).not.toContain('416-555-0199');
+    expect(content).toContain('[REDACTED: PHONE_NUMBER]');
+    expect(published('outbound.delivered')[0]!.payload['disclosed']).toBeUndefined();
+  });
+
+  it('files no digest item on a content-filter block (the curia path still does)', async () => {
+    vi.mocked(mocks.contentFilter.check).mockResolvedValue({ passed: false, findings: [{ rule: 'secret-pattern', detail: 'x' }] });
+    const { gw, client } = make();
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, blockedRules: ['secret-pattern'] });
+    expect(published('principal.report')).toHaveLength(0);
+    expect(client!.sendDraft).not.toHaveBeenCalled();
+
+    (mocks.nylasClient as unknown as { sendDraft: ReturnType<typeof vi.fn> }).sendDraft = vi.fn().mockResolvedValue({ id: 'sent-2' });
+    await gw.sendEmailDraft('d2', 'curia', { recipientEmail: 'dana@example.org', body: 'Hi Dana.', subject: 'Hello' }, { humanApproved: true, taskEventId: 't1' });
+    expect(published('principal.report')).toHaveLength(1);
+  });
+
+  it('files no digest item on a stranger-request bounce', async () => {
+    const review = vi.fn().mockResolvedValue({
+      kind: 'bounce', findings: [{ rule: 'pii-not-authorized', detail: 'x' }],
+      strangerRequest: { labels: ['PHONE_NUMBER'], requester: 'dana@example.org' },
+    });
+    const { gw, client } = make({ review, createdByCuria: ['d1'] });
+    expect(await gw.sendPrincipalDraft('d1', opts)).toMatchObject({ success: false, blockedRules: ['pii-not-authorized'] });
+    expect(published('principal.report')).toHaveLength(0);
+    expect(client!.sendDraft).not.toHaveBeenCalled();
   });
 
   it('still runs the content filter over the quote', async () => {
@@ -6132,7 +6194,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(client!.sendDraft).not.toHaveBeenCalled();
   });
 
-  it('send-draft still records send-draft', async () => {
+  it('leaves send-draft\'s pool recording unchanged on a gateway wired for the principal mailbox', async () => {
     (mocks.nylasClient as unknown as { sendDraft: ReturnType<typeof vi.fn> }).sendDraft = vi.fn().mockResolvedValue({ id: 'sent-2' });
     const { gw, actionLogRepo } = make();
     await gw.sendEmailDraft('d2', 'curia', { recipientEmail: 'dana@example.org', body: 'Hi Dana.', subject: 'Hello' }, { humanApproved: true, principalDirected: false, taskEventId: 't1' });
