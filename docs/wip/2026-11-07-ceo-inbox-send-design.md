@@ -426,7 +426,8 @@ Estimated ~950–1,150 non-test lines, over XL, so split (each half ships alone)
 - SMS spoofing of the principal (earlier maintainer call).
 - An agent can write `ceo_inbox/sending` from any turn until #2519 decides a general guard.
 - Standing inbox rules are applied by the agent only.
-- A forged `/scratch/curia-sent/` marker removes learning evidence only.
+- A forged `/scratch/principal-mailbox-sends/` entry removes learning evidence or blocks
+  autonomous sends on a thread; it can never allow a send.
 - An outsider who is genuinely on a thread (verified sender) can receive a routine
   acknowledgement — what an EA would also send.
 
