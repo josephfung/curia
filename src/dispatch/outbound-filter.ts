@@ -196,6 +196,23 @@ const INTERNAL_FIELD_NAMES: string[] = [
   'sender_context',
 ];
 
+// The trust system's own vocabulary (#2501). Telling a non-principal sender they lack "a
+// higher level of verified trust" discloses the trust system and tells a social engineer
+// what to argue next. Kept to phrases ordinary business mail does not use: bare "trust
+// score" or "trust level" are left out (a review site's TrustScore, "a level of trust"),
+// and so are bare "verified trust" ("we verified trust account balances") and bare
+// "trust threshold" ("the trust threshold for distributions"), which needs my/your/our.
+const TRUST_SYSTEM_PHRASES: ReadonlyArray<{ label: string; pattern: RegExp }> = [
+  { label: 'message trust score', pattern: /message[\s_]?trust[\s_]?score/ },
+  { label: 'verified trust', pattern: /\b(level of|higher|more|enough|sufficient) verified trust\b|\bverified trust (with|level|score)\b/ },
+  { label: 'trust threshold', pattern: /\b(my|your|our) (\w+ )?trust thresholds?\b/ },
+  // Sender-specific disclosures: "trust tier/score/level" needs a possessive or a "required"
+  // style qualifier, and "not verified" needs a "you are" subject, so ordinary prose passes.
+  { label: 'trust tier', pattern: /\b(required|sufficient|necessary|enough|higher|your|my|our) (\w+ )?trust tiers?\b|\btrust tiers?\b.{0,20}\b(required|needed|necessary)\b/ },
+  { label: 'sender trust score', pattern: /\byour (\w+ )?trust (score|level|rating)\b|\b(trust|confidence) score (is|was|being)? ?(too )?(low|below|insufficient)\b/ },
+  { label: 'sender not verified', pattern: /\byou(?:'re| are| haven't| have not| aren't)(?: yet| currently)*(?: not)?(?: yet| currently)*(?: been)? verified\b|\bwe(?:'ve| have) not (?:yet )?verified you\b/ },
+];
+
 // Secret patterns — same as sanitize.ts but duplicated intentionally.
 // These patterns cover the most common credential formats seen in the wild.
 const SECRET_PATTERNS: RegExp[] = [
@@ -382,13 +399,15 @@ export class OutboundContentFilter {
   /**
    * Rule: internal-structure
    *
-   * Two sub-checks:
+   * Three sub-checks:
    * 1. Bus event type names (dotted identifiers like "inbound.message") —
    *    these only appear in internal event bus traffic, never in user-facing prose.
    * 2. Internal field names in structured contexts (quoted or colon-prefixed) —
    *    e.g., "conversationId" or channelId: — indicating JSON/object leakage.
    *    The structured-context restriction avoids false positives on bare words
    *    like "agent" that have legitimate uses in English.
+   * 3. Trust-system vocabulary (TRUST_SYSTEM_PHRASES, #2501): the trust system stays
+   *    internal, so a non-principal recipient never reads about it.
    *
    * Principal bypass: echoing internal field names in a principal email is a bug, but
    * silently blocking the message hides the problem — the principal needs the actual
@@ -431,6 +450,23 @@ export class OutboundContentFilter {
         });
         break; // One finding is sufficient; the caller knows the content is suspect
       }
+    }
+
+    // Sub-check 3: trust-system vocabulary (#2501). NFKC folds fullwidth and other
+    // compatibility forms, and whitespace is collapsed so a line-wrapped phrase still matches.
+    // Format characters (LRM/RLM, zero-width, soft hyphen) are dropped, and hyphens and
+    // underscores read as spaces ("trust-threshold").
+    const prose = lowerContent
+      .normalize('NFKC')
+      .replace(/\p{Cf}/gu, '')
+      .replace(/[-‐-―_]+/g, ' ')
+      .replace(/\s+/g, ' ');
+    const trustPhrase = TRUST_SYSTEM_PHRASES.find(({ pattern }) => pattern.test(prose));
+    if (trustPhrase) {
+      findings.push({
+        rule: 'internal-structure',
+        detail: `Content contains trust-system vocabulary: "${trustPhrase.label}"`,
+      });
     }
 
     return this.applyPrincipalBypass('internal-structure', findings, principalIsSoleRecipient);

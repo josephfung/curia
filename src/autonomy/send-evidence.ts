@@ -17,6 +17,19 @@
 // conversation and non-principal recipients (disclosure_decisions). Code only, like the link's
 // outreach id: band review renders them for the judge without the recipient identifiers.
 //
+// Delegation (#2499): a delegated specialist's task row holds the coordinator's rewritten
+// brief, which reads like clean principal work whatever the person asked. When the turn
+// carries `delegationOrigin`, the walk follows `delegationOrigin.taskEventId` back to the root
+// task (the turn that was not itself delegated). Beside the delegate's brief it passes what
+// started that task: for an inbound turn, the `inbound.message` the dispatcher parented it on
+// (the sender's text before any preamble) plus any follow-ups a turn lane drained into it; for
+// any other root, the root task's content. With either, up to five earlier inbound messages
+// from the same sender on that conversation, newest first, so a push made in an earlier email
+// still reaches the judge when the message that started the work is bland. A chain that
+// cannot be followed to its root, or an
+// inbound that cannot be read, makes the evidence unavailable and flags `originUnresolved`:
+// the purpose check would otherwise judge the brief.
+//
 // Credentials are redacted before the evidence leaves for the judge's model provider, which
 // may differ from the agents'. Contact data is not: grounding checks claims such as "Dana's
 // number is …" against exactly that.
@@ -25,7 +38,7 @@
 // so every tool result a turn produced before it called a send skill is already in
 // audit_log when the gateway asks.
 
-import type { AuditLogRepo } from '../audit/audit-log-repo.js';
+import type { AuditLogRepo, AuditLogRow } from '../audit/audit-log-repo.js';
 import type { ContactTier, SystemRole } from '../contacts/types.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { OutreachLinkKind } from '../dispatch/outreach-matcher.js';
@@ -39,6 +52,32 @@ export type { SendAuthority } from './judge-brief.js';
 
 export const EVIDENCE_RESULT_MAX_CHARS = 2_000;
 export const EVIDENCE_TOTAL_MAX_CHARS = 12_000;
+/**
+ * What started a delegation chain (#2499): the root inbound and its drained follow-ups. Larger
+ * than one tool result, and trimmed from the middle so both the opening and the latest
+ * follow-up survive. It counts against EVIDENCE_TOTAL_MAX_CHARS, so it is kept first and the
+ * tool results get the rest.
+ */
+export const EVIDENCE_ORIGIN_MAX_CHARS = 4_000;
+/**
+ * Earlier inbound messages from the root's sender on its conversation (#2499): a push in an
+ * earlier email, with a bland message that started the work. Newest first; each trimmed from
+ * the middle to EVIDENCE_HISTORY_ITEM_MAX_CHARS, so all SENDER_HISTORY_LIMIT always fit in
+ * EVIDENCE_HISTORY_MAX_CHARS and long messages cannot push an older one out. Behind the origin
+ * and ahead of the tool results in the budget.
+ */
+export const SENDER_HISTORY_LIMIT = 5;
+export const EVIDENCE_HISTORY_ITEM_MAX_CHARS = 600;
+export const EVIDENCE_HISTORY_MAX_CHARS = SENDER_HISTORY_LIMIT * EVIDENCE_HISTORY_ITEM_MAX_CHARS;
+/** Follow-ups a turn lane drained into the root turn, newest kept (#2499). */
+export const ORIGIN_FOLLOW_UPS_LIMIT = 5;
+/** Between the root inbound and each follow-up in the origin text. */
+export const FOLLOW_UP_SEPARATOR = '\n\n[Follow-up the sender sent while the assistant was working on the message above]\n\n';
+/**
+ * Delegation hops followed to the root. The coordinator is the only caller of `delegate`, so
+ * a real chain is one hop; the bound stops a malformed or cyclic chain. Longer is a failure.
+ */
+export const DELEGATION_MAX_HOPS = 4;
 // A turn rarely makes more than a few dozen calls; the repo returns the newest first, so a
 // cut keeps the lookups closest to the send.
 const RESULTS_LIMIT = 60;
@@ -53,6 +92,11 @@ export interface CollectedEvidence extends BriefEvidence {
   decisions?: DisclosureDecisionRow[];
   /** The outreach row the drafting turn was linked to (#2312): a yes learns the requester onto it. Code only. */
   linkedOutreachId?: string;
+  /**
+   * Set with `unavailable` when a delegated turn's origin could not be followed or read
+   * (#2499), as opposed to a failed read. The send review holds rather than failing open.
+   */
+  originUnresolved?: true;
 }
 
 /** Which thread and recipients a send's decisions are read for (#2312). */
@@ -81,6 +125,21 @@ const LINK_STRENGTHS: ReadonlySet<string> = new Set(Object.keys({ strong: true, 
 
 function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * Trim from the middle, saying how much was left out, so text padded at the front or the back
+ * cannot push the other end out of view (#2499). The result is at most `max` characters
+ * whenever `max` is longer than the marker (about 40); below that, only the marker is left.
+ */
+export function clipMiddle(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const marker = (n: number): string => `\n[… ${n} characters left out …]\n`;
+  // The marker's length depends on the count; size it for the worst case.
+  const keep = Math.max(0, max - marker(text.length).length);
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return `${text.slice(0, head)}${marker(text.length - keep)}${text.slice(text.length - tail)}`;
 }
 
 /** Replace credential-shaped substrings (API keys, bearer tokens, long hex) with [REDACTED]. */
@@ -164,9 +223,25 @@ function taskText(text: string): string {
   return clip(redactSecrets(text), EVIDENCE_RESULT_MAX_CHARS);
 }
 
+/** The delegation chain's root task, or why it could not be followed. */
+type DelegationRoot =
+  | { ok: true; root: AuditLogRow | null }
+  | { ok: false; reason: string };
+
+/** The sender's earlier messages, and whether older ones exist past the limit. */
+interface SenderHistory {
+  items: Array<{ at: string; text: string; senderVerified?: boolean }>;
+  olderLeftOut: boolean;
+}
+
+/** What started the chain, as the judge sees it, or why it could not be read. */
+type OriginRead =
+  | { ok: true; content: string; kind: 'inbound' | 'task'; at: string; history: SenderHistory }
+  | { ok: false; reason: string };
+
 export class SendEvidenceCollector {
   constructor(private readonly deps: {
-    auditLogRepo: Pick<AuditLogRepo, 'findById' | 'findToolResultsForTasks' | 'findPrincipalReportsForTasks'>;
+    auditLogRepo: Pick<AuditLogRepo, 'findById' | 'findToolResultsForTasks' | 'findPrincipalReportsForTasks' | 'findInjectedInboundIds' | 'findRecentInboundsFromSender'>;
     /** Reads the bound task and its project root for authority (#2312). */
     taskRepo: Pick<TaskRepo, 'getTask' | 'resolveProjectRootTaskId'>;
     /** Reads a link's outreach row: its counterparties, and a task-less link's originator (#2312). Absent: a link has neither. */
@@ -207,6 +282,26 @@ export class SendEvidenceCollector {
       const boundTaskId = isRecord(boundTask) && typeof boundTask['taskId'] === 'string' ? boundTask['taskId'] : undefined;
       const link = readLink(isRecord(metadata) ? metadata['linkedTask'] : undefined);
 
+      // A delegated turn: what started the chain, in its sender's words (#2499).
+      // Across every drafting turn the ledger passed: a rewrite after a bounce is a new turn in
+      // the coordinator's conversation, but the bounced draft's turn still carries the origin.
+      const delegation = await this.readDelegationRootOf(taskEventIds, task);
+      const origin: OriginRead | null = !delegation.ok
+        ? delegation
+        : delegation.root === null ? null : await this.readOrigin(delegation.root);
+      if (origin !== null && !origin.ok) {
+        this.deps.logger.warn(
+          { taskEventIds, reason: origin.reason },
+          'send-evidence: delegated turn\'s origin cannot be followed or read — purpose cannot be judged',
+        );
+        return { unavailable: true, originUnresolved: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
+      }
+      const originContent = origin?.content;
+      const historyChars = origin?.history.items.reduce((n, h) => n + h.text.length, 0) ?? 0;
+      // The origin is kept first, then the sender's earlier messages; the tool results share
+      // what is left of the budget.
+      const resultsBudget = EVIDENCE_TOTAL_MAX_CHARS - (originContent?.length ?? 0) - historyChars;
+
       const results = await this.deps.auditLogRepo.findToolResultsForTasks(taskEventIds, RESULTS_LIMIT);
       if (results.length === RESULTS_LIMIT) {
         this.deps.logger.info({ taskEventIds, limit: RESULTS_LIMIT }, 'send-evidence: result limit reached — older lookups left out');
@@ -218,7 +313,7 @@ export class SendEvidenceCollector {
         const toolName = String(r.payload['toolName'] ?? r.payload['skillName'] ?? 'unknown');
         const text = clip(renderResult(r.payload), EVIDENCE_RESULT_MAX_CHARS);
         // Newest first, so the budget keeps the lookups closest to the send.
-        if (total + text.length > EVIDENCE_TOTAL_MAX_CHARS) break;
+        if (total + text.length > resultsBudget) break;
         total += text.length;
         toolResults.push({ toolName, result: text });
       }
@@ -247,6 +342,9 @@ export class SendEvidenceCollector {
         ...(link !== null ? { linkedOutreachId: link.outreachId } : {}),
         ...(decisions ? { decisions } : {}),
         ...(reportsToPrincipal.length > 0 ? { reportsToPrincipal } : {}),
+        ...(origin ? { originContent: origin.content, originKind: origin.kind, originAt: origin.at } : {}),
+        ...(origin && origin.history.items.length > 0 ? { senderHistory: origin.history.items } : {}),
+        ...(origin?.history.olderLeftOut ? { senderHistoryOlderLeftOut: true } : {}),
         ...(typeof content === 'string' ? { taskContent: clip(redactSecrets(content), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         ...(progress !== undefined ? { taskProgress: clip(redactSecrets(JSON.stringify(progress)), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         toolResults,
@@ -256,6 +354,140 @@ export class SendEvidenceCollector {
       this.deps.logger.error({ err, taskEventIds }, 'send-evidence: audit lookup failed — grounding cannot be judged');
       return { unavailable: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
     }
+  }
+
+  /** The first (oldest) turn's delegation root among the ids; any turn whose chain fails fails all. */
+  private async readDelegationRootOf(taskEventIds: readonly string[], latest: AuditLogRow): Promise<DelegationRoot> {
+    let found: DelegationRoot = { ok: true, root: null };
+    for (const id of taskEventIds) {
+      const row = id === latest.id ? latest : await this.deps.auditLogRepo.findById(id);
+      if (row === null) {
+        this.deps.logger.warn({ taskEventId: id }, 'send-evidence: an earlier drafting turn is not in audit_log — its delegation is not read');
+        continue;
+      }
+      const d = await this.readDelegationRoot(row);
+      if (!d.ok) return d;
+      if (found.ok && found.root === null) found = d;
+    }
+    return found;
+  }
+
+  /**
+   * Follow `delegationOrigin.taskEventId` from a delegated turn back to the root task: the
+   * first one that was not itself delegated. `root` is null for a turn that was not delegated.
+   * A malformed origin, a missing id, an unreadable or non-task row, a cycle, or a chain past
+   * DELEGATION_MAX_HOPS is a failure, never a shorter walk. Read errors propagate to collect()'s
+   * catch, which marks the evidence unavailable too.
+   *
+   * `delegationOrigin` is trusted structure: the dispatcher strips it from channel metadata,
+   * and only the delegate skill stamps it (#1860, ADR-045).
+   */
+  private async readDelegationRoot(task: AuditLogRow): Promise<DelegationRoot> {
+    const seen = new Set<string>([task.id]);
+    let current = task;
+    for (let hops = 0; ; hops++) {
+      const metadata = current.payload['metadata'];
+      const origin = isRecord(metadata) ? metadata['delegationOrigin'] : undefined;
+      // Absent (or null, as isDelegatedSpecialistTask reads it): this task was not delegated.
+      if (origin === undefined || origin === null) return { ok: true, root: hops === 0 ? null : current };
+      if (!isRecord(origin)) return { ok: false, reason: 'malformed delegationOrigin' };
+      if (hops >= DELEGATION_MAX_HOPS) return { ok: false, reason: `chain longer than ${DELEGATION_MAX_HOPS} hops` };
+      const parentId = origin['taskEventId'];
+      if (typeof parentId !== 'string' || parentId === '') return { ok: false, reason: 'delegationOrigin has no taskEventId' };
+      if (seen.has(parentId)) return { ok: false, reason: 'delegation chain loops' };
+      seen.add(parentId);
+      const parent = await this.deps.auditLogRepo.findById(parentId);
+      if (parent === null) return { ok: false, reason: 'origin task not found in audit_log' };
+      if (parent.eventType !== 'agent.task') return { ok: false, reason: 'origin row is not an agent.task' };
+      current = parent;
+    }
+  }
+
+  /**
+   * What started the root task. For an inbound turn (its parent row is the `inbound.message`
+   * the dispatcher published) that is the sender's text as received, before the dispatcher's
+   * preambles, then the follow-ups a turn lane drained into the turn, oldest first. Any other
+   * root (a scheduled job, a wake, a parent no longer in audit_log) gives its task content,
+   * labelled as such. Redacted, then trimmed from the middle. Either way, the sender's earlier
+   * messages on the conversation come with it (readSenderHistory). A root with no content, or
+   * a drained follow-up whose inbound cannot be read, is a failure.
+   */
+  private async readOrigin(root: AuditLogRow): Promise<OriginRead> {
+    const parent = root.parentEventId ? await this.deps.auditLogRepo.findById(root.parentEventId) : null;
+    // A parent the root names but audit_log no longer has may have been the inbound: the task
+    // content alone would stand in for the sender's words, so this is unresolved, not a task root.
+    if (root.parentEventId && parent === null) return { ok: false, reason: 'root task\'s parent row not found in audit_log' };
+    if (parent === null || parent.eventType !== 'inbound.message') {
+      const content = root.payload['content'];
+      if (typeof content !== 'string') return { ok: false, reason: 'root task has no content' };
+      // A wake or other system-started root (late delegation keeps the origin's conversation
+      // and sender): the sender's recent messages there, when the task names a sender.
+      const history = await this.readSenderHistory(root.conversationId, root.payload['senderId'], root.timestamp, new Set());
+      return {
+        ok: true, kind: 'task', at: root.timestamp.toISOString(), history,
+        content: clipMiddle(redactSecrets(content), EVIDENCE_ORIGIN_MAX_CHARS),
+      };
+    }
+    const first = parent.payload['content'];
+    if (typeof first !== 'string') return { ok: false, reason: 'root inbound has no content' };
+    const texts = [first];
+    const used = new Set<string>([parent.id]);
+    if (root.conversationId !== null) {
+      // Turn lanes inject only the host turn's own sender (turn-lanes.ts), so these are that
+      // sender's words too. Newest first from the repo, so a cut keeps the latest push; read
+      // back oldest first.
+      const ids = await this.deps.auditLogRepo.findInjectedInboundIds(root.conversationId, root.id, ORIGIN_FOLLOW_UPS_LIMIT);
+      if (ids.length === ORIGIN_FOLLOW_UPS_LIMIT) {
+        this.deps.logger.info({ rootTaskEventId: root.id, limit: ORIGIN_FOLLOW_UPS_LIMIT }, 'send-evidence: follow-up limit reached — older follow-ups left out');
+      }
+      for (const id of [...ids].reverse()) {
+        const row = await this.deps.auditLogRepo.findById(id);
+        const text = row?.eventType === 'inbound.message' ? row.payload['content'] : undefined;
+        if (typeof text !== 'string') return { ok: false, reason: 'a follow-up drained into the root turn cannot be read' };
+        texts.push(text);
+        used.add(id);
+      }
+    }
+    const history = await this.readSenderHistory(parent.conversationId ?? root.conversationId, parent.payload['senderId'], parent.timestamp, used);
+    return {
+      ok: true, kind: 'inbound', at: parent.timestamp.toISOString(), history,
+      content: clipMiddle(redactSecrets(texts.join(FOLLOW_UP_SEPARATOR)), EVIDENCE_ORIGIN_MAX_CHARS),
+    };
+  }
+
+  /**
+   * The sender's inbound messages on the conversation before `before`, newest first, up to
+   * SENDER_HISTORY_LIMIT, each redacted and trimmed from the middle. `olderLeftOut` says more
+   * exist past the limit. A row without text is skipped, and a root with no conversation or
+   * sender has none. A failed read throws to collect()'s catch, which makes the evidence
+   * unavailable: Gate C then escalates (fail closed), the send review treats it as a judge
+   * failure. Each item carries the channel's sender verification when it reports one (email:
+   * SPF/DKIM/DMARC), so a forged message in the thread does not read as the sender's.
+   */
+  private async readSenderHistory(
+    conversationId: string | null,
+    senderId: unknown,
+    before: Date,
+    skip: ReadonlySet<string>,
+  ): Promise<SenderHistory> {
+    if (conversationId === null || typeof senderId !== 'string' || senderId === '') return { items: [], olderLeftOut: false };
+    // One past the limit, to know whether older messages were left out.
+    // Rows already used and rows without text are filtered in the query, before its limit, so
+    // they cannot take a slot from a usable earlier message.
+    const rows = await this.deps.auditLogRepo.findRecentInboundsFromSender(conversationId, senderId, before, SENDER_HISTORY_LIMIT + 1, [...skip]);
+    const items: SenderHistory['items'] = [];
+    for (const row of rows.slice(0, SENDER_HISTORY_LIMIT)) {
+      const content = row.payload['content'];
+      if (typeof content !== 'string') continue;
+      const metadata = row.payload['metadata'];
+      const verified = isRecord(metadata) ? metadata['senderVerified'] : undefined;
+      items.push({
+        at: row.timestamp.toISOString(),
+        text: clipMiddle(redactSecrets(content), EVIDENCE_HISTORY_ITEM_MAX_CHARS),
+        ...(typeof verified === 'boolean' ? { senderVerified: verified } : {}),
+      });
+    }
+    return { items, olderLeftOut: rows.length > SENDER_HISTORY_LIMIT };
   }
 
   /**

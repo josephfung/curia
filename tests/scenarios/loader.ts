@@ -77,7 +77,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach', 'pinned'] as const;
 const PINNED_KEYS = ['docs', 'configs', 'unavailable'] as const;
 const TASK_KEYS = ['key', 'title', 'intent', 'originator', 'agent'] as const;
@@ -95,7 +95,7 @@ const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'del
 const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const REPLY_KEYS = ['from', 'content'] as const;
 const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
-const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'email', 'task', 'followup', 'then'] as const;
+const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'origin', 'email', 'task', 'followup', 'then'] as const;
 const THEN_KEYS = ['content', 'channel', 'reply_to_approval'] as const;
 const FOLLOWUP_KEYS = ['after', 'from', 'content', 'channel'] as const;
 /** A follow-up held this long still releases the first tool, so a flag-off run can finish. */
@@ -771,6 +771,8 @@ function parseInbound(raw: unknown, file: string): ScenarioInbound {
   if (author !== undefined && from !== 'bullpen') throw new CaseError(file, `inbound.author is only for 'from: bullpen'`);
   const requester = optStr(raw, 'requester', file, 'inbound');
   if (requester !== undefined && from !== 'delegate') throw new CaseError(file, `inbound.requester is only for 'from: delegate'`);
+  const origin = optStr(raw, 'origin', file, 'inbound');
+  if (origin !== undefined && from !== 'delegate') throw new CaseError(file, `inbound.origin is only for 'from: delegate'`);
   return {
     from,
     channel: optStr(raw, 'channel', file, 'inbound'),
@@ -778,6 +780,7 @@ function parseInbound(raw: unknown, file: string): ScenarioInbound {
     thread: optStr(raw, 'thread', file, 'inbound'),
     ...(author !== undefined ? { author } : {}),
     ...(from === 'delegate' ? { requester: requester ?? 'principal' } : {}),
+    ...(origin !== undefined ? { origin } : {}),
     ...(taskWake ? { task: parseWakeTask(raw['task'], file) } : {}),
     ...(email
       ? {
@@ -1064,6 +1067,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   const releaseGate = optBool(raw, 'release_gate', file, 'case') ?? true;
   const throughGateway = optBool(raw, 'through_gateway', file, 'case');
   if (throughGateway === false) throw new CaseError(file, `'through_gateway' is true or absent`);
+  const gatedTools = strList(raw, 'gated_tools', file, 'case');
   // The release gate is one unfiltered run on the database's identity. An autonomy fixture
   // is pinned per case (#2312), so a case with one can join it.
   if (identity && releaseGate) {
@@ -1090,6 +1094,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     ...(identity ? { identity } : {}),
     ...(autonomy ? { autonomy } : {}),
     ...(throughGateway ? { throughGateway: true as const } : {}),
+    ...(gatedTools.length > 0 ? { gatedTools } : {}),
     sourceFile: file,
   };
 
@@ -1111,6 +1116,23 @@ function validateThroughGateway(scenario: ScenarioCase, file: string): void {
       if (!scenario.throughGateway && (GATEWAY_CHECK_KINDS as readonly string[]).includes(check.kind)) {
         throw new CaseError(file, `behavior '${b.id}': a '${check.kind}' check needs through_gateway: true`);
       }
+    }
+  }
+  if (scenario.gatedTools && !scenario.throughGateway) {
+    throw new CaseError(file, `'gated_tools' needs through_gateway: true (the gates run on its review layer)`);
+  }
+  // approve-action replays a held call outside the gated call it came from, so it would reach
+  // the real handler, which test mode cannot serve. Not supported yet.
+  if (scenario.gatedTools && scenario.inbound.then) {
+    throw new CaseError(file, `'gated_tools' cannot be combined with inbound.then: approving a gated hold replays the real handler`);
+  }
+  for (const tool of scenario.gatedTools ?? []) {
+    if (THROUGH_GATEWAY_TOOLS.has(tool)) {
+      throw new CaseError(file, `gated_tools.${tool}: through_gateway already runs ${tool} for real`);
+    }
+    // A gated tool with no stub would be refused before its gates, testing nothing.
+    if (!scenario.toolStubs[tool]?.length) {
+      throw new CaseError(file, `gated_tools.${tool}: needs a stub (tool_stubs or a stub set) to answer it once its gates pass`);
     }
   }
   if (!scenario.throughGateway) return;

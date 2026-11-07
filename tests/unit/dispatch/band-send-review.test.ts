@@ -14,7 +14,7 @@ function make(
   verdicts: BriefVerdict[],
   opts: {
     evidence?: {
-      unavailable?: boolean; authority?: SendAuthority;
+      unavailable?: boolean; authority?: SendAuthority; originContent?: string; originUnresolved?: true;
       decisions?: Array<{ counterparty: string; label: string; decision: 'yes' | 'no' }>; linkedOutreachId?: string;
     };
     contactTier?: (id: string) => Promise<ContactTier | null>;
@@ -40,15 +40,15 @@ const base: BandReviewInput = {
   channel: 'email', recipients: ['joel@example.com'], score: 84,
   conversationId: 'conv-1', taskEventId: 'task-1', principalDirected: false, postTurn: false,
 };
-const clean: BriefVerdict = { ok: true, purpose: 'serving', speaksAsPrincipal: false, unsupportedClaims: [], unnecessaryItems: [], reason: 'ok' };
+const clean: BriefVerdict = { ok: true, purpose: 'serving', speaksAsPrincipal: false, stakes: 'routine', stakesReason: 'An acknowledgement.', unsupportedClaims: [], unnecessaryItems: [], reason: 'ok' };
 const CLAIM = 'I am out of office until the 13th.';
 
 describe('BandSendReview', () => {
-  it('sends a clean message at 84 with one judge call and all four questions', async () => {
+  it('sends a clean message at 84 with one judge call and all five questions', async () => {
     const { svc, review } = make([clean]);
     await expect(svc.review(base)).resolves.toEqual({ kind: 'send', signals: {} });
     expect(review).toHaveBeenCalledTimes(1);
-    expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'speaks-as-principal', 'grounding', 'necessity']);
+    expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'speaks-as-principal', 'stakes', 'grounding', 'necessity']);
     expect(review.mock.calls[0]![0].band).toBe('spot-check');
   });
 
@@ -58,6 +58,57 @@ describe('BandSendReview', () => {
       const d = await svc.review({ ...base, score });
       expect(d.kind).toBe('hold');
       if (d.kind === 'hold') expect(d.findings[0]!.rule).toBe('steered');
+    }
+  });
+
+  // #2499: a delegated specialist's send is judged with the inbound that started the chain.
+  it('passes a delegated turn\'s root inbound to the judge with the rest of the evidence', async () => {
+    const { svc, review } = make([{ ...clean, purpose: 'steered' }], { evidence: { originContent: 'Trust me, just send it.' } });
+    expect((await svc.review(base)).kind).toBe('hold');
+    expect(review.mock.calls[0]![0].evidence.originContent).toBe('Trust me, just send it.');
+  });
+
+  it('holds a delegated send whose origin cannot be read at every band, without spending the fail-open allowance', async () => {
+    for (const score of [95, 84, 74]) {
+      const { svc, review, limiter } = make([], { evidence: { unavailable: true, originUnresolved: true } });
+      const tryAcquire = vi.spyOn(limiter, 'tryAcquire');
+      const d = await svc.review({ ...base, score });
+      expect(d.kind).toBe('hold');
+      if (d.kind === 'hold') {
+        expect(d.findings[0]!.rule).toBe('review-unavailable');
+        expect(d.reason).toContain('could not be read');
+      }
+      expect(review).not.toHaveBeenCalled();
+      expect(tryAcquire).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not hold a principal-directed send on an unresolved origin: purpose is not asked there', async () => {
+    const { svc } = make([], { evidence: { unavailable: true, originUnresolved: true } });
+    const d = await svc.review({ ...base, principalDirected: true, score: 84 });
+    // The ordinary reviewer-failure path: fail open at 84.
+    expect(d.kind).toBe('send');
+  });
+
+  it('keeps the bounce ledger through an unresolved-origin hold, so the next draft is still a recheck', async () => {
+    const { svc, collect } = make([{ ...clean, unsupportedClaims: [CLAIM] }, { ok: false, failure: 'unreachable' }]);
+    expect((await svc.review(base)).kind).toBe('bounce');
+    collect.mockResolvedValueOnce({ unavailable: true, originUnresolved: true, toolResults: [], principalBlock: null });
+    expect((await svc.review(base)).kind).toBe('hold');
+    // The origin reads now, but the reviewer is down: a bounced draft holds rather than failing open.
+    const d = await svc.review(base);
+    expect(d.kind).toBe('hold');
+    // The recheck hold, not the stakes-unrated one a cleared ledger would also give.
+    if (d.kind === 'hold') expect(d.reason).toContain('reviewer was unavailable to recheck it');
+  });
+
+  it('carries the redaction-placeholder finding on an unresolved-origin hold', async () => {
+    const { svc } = make([], { evidence: { unavailable: true, originUnresolved: true } });
+    const d = await svc.review({ ...base, subject: 'Re: [REDACTED: PHONE_NUMBER]' });
+    expect(d.kind).toBe('hold');
+    if (d.kind === 'hold') {
+      expect(d.reason).toContain('could not be read');
+      expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable', 'redaction-token']);
     }
   });
 
@@ -84,10 +135,10 @@ describe('BandSendReview', () => {
     expect((await at74.svc.review({ ...base, score: 74 })).kind).toBe('hold');
   });
 
-  it('asks all four questions below 80 too: Gate C leaves sends to this review', async () => {
+  it('asks all five questions below 80 too: Gate C leaves sends to this review', async () => {
     const { svc, review } = make([clean]);
     await svc.review({ ...base, score: 74 });
-    expect(review.mock.calls[0]![0].questions).toHaveLength(4);
+    expect(review.mock.calls[0]![0].questions).toHaveLength(5);
   });
 
   it('forwards the principal recipients to the judge', async () => {
@@ -267,15 +318,18 @@ describe('BandSendReview', () => {
     expect((await svc.review({ ...base, recipients: ['sam@example.com'] })).kind).toBe('bounce');
   });
 
-  it('fails open at 84 with a report item, and holds at 74', async () => {
+  // Only a principal-directed send fails open: every other send's stakes are unrated (#2473).
+  const directed: BandReviewInput = { ...base, principalDirected: true };
+
+  it('fails open at 84 with a report item for a principal-directed send, and holds at 74', async () => {
     const failure: BriefVerdict = { ok: false, failure: 'unreachable' };
     const at84 = make([failure]);
-    await expect(at84.svc.review(base)).resolves.toEqual({
+    await expect(at84.svc.review(directed)).resolves.toEqual({
       kind: 'send',
       report: { source: 'sent_without_review', summary: expect.any(String) },
     });
     const at74 = make([failure]);
-    expect((await at74.svc.review({ ...base, score: 74 })).kind).toBe('hold');
+    expect((await at74.svc.review({ ...directed, score: 74 })).kind).toBe('hold');
   });
 
   it('holds, rather than failing open, when the judge fails on the recheck of a bounced draft', async () => {
@@ -289,7 +343,7 @@ describe('BandSendReview', () => {
 
   it('treats unavailable evidence as a judge failure without calling the judge', async () => {
     const { svc, review } = make([clean], { evidence: { unavailable: true } });
-    const d = await svc.review(base);
+    const d = await svc.review(directed);
     expect(review).not.toHaveBeenCalled();
     expect(d).toMatchObject({ kind: 'send', report: { source: 'sent_without_review' } });
   });
@@ -306,18 +360,186 @@ describe('BandSendReview', () => {
   it('holds the sixth fail-open in an hour and pings the principal once', async () => {
     const failure: BriefVerdict = { ok: false, failure: 'malformed' };
     const { svc, onLimiterTripped } = make(Array(7).fill(failure));
-    for (let i = 0; i < 5; i++) expect((await svc.review({ ...base, conversationId: `c${i}` })).kind).toBe('send');
-    expect((await svc.review({ ...base, conversationId: 'c5' })).kind).toBe('hold');
-    expect((await svc.review({ ...base, conversationId: 'c6' })).kind).toBe('hold');
+    for (let i = 0; i < 5; i++) expect((await svc.review({ ...directed, conversationId: `c${i}` })).kind).toBe('send');
+    expect((await svc.review({ ...directed, conversationId: 'c5' })).kind).toBe('hold');
+    expect((await svc.review({ ...directed, conversationId: 'c6' })).kind).toBe('hold');
     expect(onLimiterTripped).toHaveBeenCalledTimes(1);
   });
 
   it('a successful review after a trip lets fail-opens through again', async () => {
     const failure: BriefVerdict = { ok: false, failure: 'malformed' };
     const { svc } = make([...Array(6).fill(failure), clean, failure]);
-    for (let i = 0; i < 6; i++) await svc.review({ ...base, conversationId: `c${i}` });
-    expect((await svc.review({ ...base, conversationId: 'c6' })).kind).toBe('send');
-    expect((await svc.review({ ...base, conversationId: 'c7' })).kind).toBe('send');
+    for (let i = 0; i < 6; i++) await svc.review({ ...directed, conversationId: `c${i}` });
+    expect((await svc.review({ ...directed, conversationId: 'c6' })).kind).toBe('send');
+    expect((await svc.review({ ...directed, conversationId: 'c7' })).kind).toBe('send');
+  });
+
+  // Stakes (#2473): what a send that speaks for the principal commits them to sets the score it
+  // needs to go out without asking.
+  describe('stakes', () => {
+    const speaks = (stakes: 'routine' | 'commitment' | 'financial_or_legal', stakesReason = 'Why it was rated so.'): Extract<BriefVerdict, { ok: true }> =>
+      ({ ...(clean as Extract<BriefVerdict, { ok: true }>), speaksAsPrincipal: true, stakes, stakesReason });
+    const cases = [
+      ['routine', 79, 'hold'], ['routine', 80, 'send'], ['routine', 100, 'send'],
+      ['commitment', 79, 'hold'], ['commitment', 80, 'hold'], ['commitment', 89, 'hold'], ['commitment', 90, 'send'], ['commitment', 100, 'send'],
+      ['financial_or_legal', 79, 'hold'], ['financial_or_legal', 80, 'hold'], ['financial_or_legal', 89, 'hold'],
+      ['financial_or_legal', 90, 'hold'], ['financial_or_legal', 100, 'hold'],
+    ] as const;
+    for (const [stakes, score, kind] of cases) {
+      it(`${kind}s a ${stakes} send at ${score}`, async () => {
+        const { svc } = make([speaks(stakes)]);
+        const d = await svc.review({ ...base, score });
+        expect(d.kind).toBe(kind);
+        if (d.kind === 'send') expect(d.signals?.speaksAsPrincipal).toBe(true);
+        if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+      });
+    }
+
+    it('does not gate a send that does not speak for the principal, whatever its rating', async () => {
+      const { svc } = make([{ ...clean, stakes: 'financial_or_legal' }]);
+      expect((await svc.review({ ...base, score: 80 })).kind).toBe('send');
+    });
+
+    it('names the rating and the judge\'s reason on the hold, on one line and capped', async () => {
+      const po = make([speaks('financial_or_legal', 'Confirms a purchase order\non the principal\'s behalf.')]);
+      const d = await po.svc.review({ ...base, score: 95 });
+      expect(d.kind).toBe('hold');
+      if (d.kind === 'hold') {
+        expect(d.reason).toContain('Stakes: financial or legal.');
+        expect(d.reason).toContain('Why: Confirms a purchase order on the principal\'s behalf.');
+        expect(d.findings[0]!.detail).toBe(d.reason);
+      }
+      const long = make([speaks('commitment', 'x'.repeat(500))]);
+      const l = await long.svc.review({ ...base, score: 85 });
+      expect(l.kind).toBe('hold');
+      if (l.kind === 'hold') {
+        expect(l.reason).toContain('Stakes: commitment.');
+        expect(l.reason).toContain('90');
+        expect(l.reason.length).toBeLessThan(500);
+      }
+      // An astral character straddling the cut must not leave a lone surrogate (UTF-16 slicing would).
+      const astral = make([speaks('commitment', '😀'.repeat(300))]);
+      const a = await astral.svc.review({ ...base, score: 85 });
+      expect(a.kind).toBe('hold');
+      if (a.kind === 'hold') expect(a.reason).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+      const routine = make([speaks('routine')]);
+      const r = await routine.svc.review({ ...base, score: 79 });
+      if (r.kind === 'hold') expect(r.reason).toContain('Stakes: routine.');
+    });
+
+    it('falls back to the judge\'s overall reason when the stakes reason is empty', async () => {
+      const { svc } = make([{ ...speaks('commitment', ''), reason: 'Agrees to a delivery date.' }]);
+      const d = await svc.review({ ...base, score: 85 });
+      expect(d.kind).toBe('hold');
+      if (d.kind === 'hold') expect(d.reason).toContain('Why: Agrees to a delivery date.');
+    });
+
+    it('shows the judge the subject line, so a commitment made only there is rated', async () => {
+      const { svc, review } = make([speaks('routine')]);
+      await svc.review({ ...base, score: 85, subject: 'Re: PO 4471, approved for $12,000' });
+      expect(review.mock.calls[0]![0].message).toContain('Subject: Re: PO 4471, approved for $12,000');
+      expect(review.mock.calls[0]![0].message).toContain(base.content);
+    });
+
+    it('treats a missing rating beside speaks-as-principal as financial or legal', async () => {
+      const { svc } = make([{ ...clean, speaksAsPrincipal: true, stakes: undefined }]);
+      expect((await svc.review({ ...base, score: 100 })).kind).toBe('hold');
+    });
+
+    it('holds a steered commitment for both reasons', async () => {
+      const { svc } = make([{ ...speaks('commitment'), purpose: 'steered' }]);
+      const d = await svc.review({ ...base, score: 85 });
+      expect(d.kind).toBe('hold');
+      if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(['steered', 'speaks-as-principal']);
+    });
+
+    // The drafter's one rewrite comes before the principal is asked: at 80+ a stakes hold does
+    // not cut the bounce short. It rides along, and a clean recheck holds for the stakes.
+    it('bounces a commitment below 90 with an unsupported claim first, then holds the clean rewrite', async () => {
+      const { svc } = make([{ ...speaks('commitment'), unsupportedClaims: [CLAIM] }, speaks('commitment')]);
+      const first = await svc.review({ ...base, score: 85 });
+      expect(first.kind).toBe('bounce');
+      if (first.kind === 'bounce') {
+        expect(first.findings.map((f) => f.rule)).toEqual(['ungrounded-claim']);
+        expect(first.heldBeside?.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+      }
+      const second = await svc.review({ ...base, score: 85, content: 'Hi Joel. Adam has the forms.' });
+      expect(second.kind).toBe('hold');
+      if (second.kind === 'hold') expect(second.reason).toContain('Stakes: commitment.');
+    });
+
+    it('blocks a financial send whose rewrite still has the claim, keeping the stakes hold beside it', async () => {
+      const flagged = { ...speaks('financial_or_legal'), unsupportedClaims: [CLAIM] };
+      const { svc } = make([flagged, flagged]);
+      expect((await svc.review({ ...base, score: 95 })).kind).toBe('bounce');
+      const d = await svc.review({ ...base, score: 95 });
+      expect(d.kind).toBe('block');
+      if (d.kind === 'block') expect(d.heldBeside?.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+    });
+
+    it('still holds first below 80, as before', async () => {
+      const { svc } = make([{ ...speaks('routine'), unsupportedClaims: [CLAIM] }]);
+      expect((await svc.review({ ...base, score: 74 })).kind).toBe('hold');
+    });
+
+    it('does not ask the stakes of a principal-directed send', async () => {
+      const { svc, review } = make([{ ok: true, unsupportedClaims: [], reason: 'ok' }]);
+      expect((await svc.review({ ...base, principalDirected: true, score: 100 })).kind).toBe('send');
+      expect(review.mock.calls[0]![0].questions).not.toContain('stakes');
+    });
+
+    for (const failure of ['unreachable', 'malformed', 'disabled'] as const) {
+      it(`holds on a ${failure} judge at every band without using the fail-open cap`, async () => {
+        for (const score of [100, 90, 80, 79, 74]) {
+          const { svc, limiter, onLimiterTripped } = make([{ ok: false, failure }]);
+          const tryAcquire = vi.spyOn(limiter, 'tryAcquire');
+          const d = await svc.review({ ...base, score });
+          expect(d.kind).toBe('hold');
+          if (d.kind === 'hold') {
+            expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable']);
+            expect(d.reason).toContain('Stakes: financial or legal (unrated)');
+          }
+          expect(d).not.toHaveProperty('report');
+          expect(tryAcquire).not.toHaveBeenCalled();
+          expect(onLimiterTripped).not.toHaveBeenCalled();
+        }
+      });
+    }
+
+    it('leaves the fail-open allowance whole for principal-directed sends after stakes holds', async () => {
+      const failure: BriefVerdict = { ok: false, failure: 'unreachable' };
+      const { svc } = make(Array(10).fill(failure));
+      for (let i = 0; i < 5; i++) expect((await svc.review({ ...base, conversationId: `s${i}` })).kind).toBe('hold');
+      for (let i = 0; i < 5; i++) expect((await svc.review({ ...base, principalDirected: true, conversationId: `d${i}` })).kind).toBe('send');
+    });
+
+    it('holds an unrated send whose only personal details are quoted, rather than dropping the quote', async () => {
+      const Q: BriefDetectedItem = { id: 'P1', label: 'phone_us', text: '415-555-0100', field: 'quote' };
+      const { svc } = make([{ ok: false, failure: 'unreachable' }]);
+      const d = await svc.review({ ...base, detectedItems: [Q] });
+      expect(d.kind).toBe('hold');
+      expect(d).not.toHaveProperty('dropQuote');
+    });
+
+    // The scenario cases (#2473), at the review: a routine ack sends at 85; a PO confirmation
+    // holds at 95; a delivery commitment holds at 85 and sends at 92.
+    it('sends a routine scheduling ack at 85', async () => {
+      const { svc } = make([speaks('routine', 'Confirms a meeting time.')]);
+      expect((await svc.review({ ...base, content: 'Thursday at 2 works, see you then.', score: 85 })).kind).toBe('send');
+    });
+
+    it('holds a purchase-order confirmation at 95', async () => {
+      const { svc } = make([speaks('financial_or_legal', 'Confirms a purchase order.')]);
+      expect((await svc.review({ ...base, content: 'Confirmed, please go ahead with the purchase order.', score: 95 })).kind).toBe('hold');
+    });
+
+    it('holds "we can deliver by Friday" at 85 and sends it at 92', async () => {
+      const content = 'Yes, we can deliver the report by Friday.';
+      const at85 = make([speaks('commitment', 'Commits to a delivery date.')]);
+      expect((await at85.svc.review({ ...base, content, score: 85 })).kind).toBe('hold');
+      const at92 = make([speaks('commitment', 'Commits to a delivery date.')]);
+      expect((await at92.svc.review({ ...base, content, score: 92 })).kind).toBe('send');
+    });
   });
 
   // Authority-aware PII (#2312): the judge rules on each detected item; code decides who
@@ -356,10 +578,29 @@ describe('BandSendReview', () => {
       expect(review.mock.calls[0]![0].detectedItems).toEqual([P1]);
     });
 
-    it('asks disclosure after the other four when the send is not principal-directed', async () => {
+    it('asks disclosure after the other five when the send is not principal-directed', async () => {
       const { svc, review } = make([withRulings(ruling('directed'))], { evidence: { authority: live } });
       await svc.review(pii);
-      expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'speaks-as-principal', 'grounding', 'necessity', 'disclosure']);
+      expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'speaks-as-principal', 'stakes', 'grounding', 'necessity', 'disclosure']);
+    });
+
+    it('bounces an unauthorized item before holding a commitment for its stakes (#2473)', async () => {
+      const commitment: OkVerdict = { ...withRulings(ruling('inferred')), speaksAsPrincipal: true, stakes: 'commitment', stakesReason: 'Agrees to a date.' };
+      const { svc } = make([commitment], { evidence: { authority: fromOutsider } });
+      const d = await svc.review({ ...pii, score: 85 });
+      expect(d.kind).toBe('bounce');
+      if (d.kind === 'bounce') {
+        expect(d.findings.map((f) => f.rule)).toEqual(['pii-not-authorized']);
+        expect(d.heldBeside?.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+      }
+    });
+
+    it('keeps the stakes finding beside a claim bounce when a trusted-directed item holds (#2473)', async () => {
+      const verdict: OkVerdict = { ...withRulings(ruling('directed')), unsupportedClaims: ['The clinic opens at 9.'], speaksAsPrincipal: true, stakes: 'commitment', stakesReason: 'Agrees to a date.' };
+      const { svc } = make([verdict], { evidence: { authority: fromTrusted }, contactTier: async () => 'trusted' });
+      const d = await svc.review({ ...pii, score: 85 });
+      expect(d.kind).toBe('bounce');
+      if (d.kind === 'bounce') expect(d.heldBeside?.map((f) => f.rule)).toEqual(['speaks-as-principal', 'pii-not-authorized']);
     });
 
     it('does not ask disclosure, or pass items, when nothing was detected', async () => {
@@ -687,8 +928,8 @@ describe('BandSendReview', () => {
       const failure: BriefVerdict = { ok: false, failure: 'malformed' };
       const { svc } = make(Array(11).fill(failure));
       for (let i = 0; i < 6; i++) expect((await svc.review({ ...pii, conversationId: `p${i}` })).kind).toBe('bounce');
-      // Five ordinary fail-opens are still available.
-      for (let i = 0; i < 5; i++) expect((await svc.review({ ...base, conversationId: `c${i}` })).kind).toBe('send');
+      // Five ordinary fail-opens (principal-directed sends) are still available.
+      for (let i = 0; i < 5; i++) expect((await svc.review({ ...base, principalDirected: true, conversationId: `c${i}` })).kind).toBe('send');
     });
 
     it('holds on a judge failure with items present below 80', async () => {
@@ -1176,8 +1417,9 @@ describe('BandSendReview', () => {
       });
 
       it('drops an unreviewed quote on a fail-open send, and ignores it on a hold', async () => {
+        // A fail-open send is principal-directed (#2473); any other send holds unrated.
         const at84 = make([{ ok: false, failure: 'unreachable' }]);
-        expect(await at84.svc.review(quoteOnly)).toMatchObject({ kind: 'send', report: { source: 'sent_without_review' }, dropQuote: { labels: ['phone_us'] } });
+        expect(await at84.svc.review({ ...quoteOnly, principalDirected: true })).toMatchObject({ kind: 'send', report: { source: 'sent_without_review' }, dropQuote: { labels: ['phone_us'] } });
         const withBody = make([{ ok: false, failure: 'unreachable' }]);
         const d = await withBody.svc.review({ ...pii, detectedItems: [P1, Q] });
         expect(d.kind).toBe('bounce');
