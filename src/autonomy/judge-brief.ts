@@ -98,8 +98,12 @@ export interface BriefEvidence {
    * `inbound`: originContent is the message that started the work as its sender wrote it, with
    * any follow-ups they sent during that turn. `task`: the chain began with a task the system
    * started (a scheduled job, a wake), and originContent is that task as the assistant got it.
+   * `reply_target`: an autonomous principal-mailbox reply (#2474) with no delegation origin;
+   * originContent is the message the reply answers, as its sender wrote it.
    */
-  originKind?: 'inbound' | 'task';
+  originKind?: 'inbound' | 'task' | 'reply_target';
+  /** `reply_target` only: whether the channel verified that message's sender (#2474). */
+  originSenderVerified?: boolean;
   /** When the origin arrived (inbound) or was started (task), ISO 8601, system-recorded. */
   originAt?: string;
   /**
@@ -235,9 +239,11 @@ function encode(value: unknown): string {
 }
 
 /** How the origin block is introduced, by what it holds (#2499). */
-const ORIGIN_LABELS: Record<NonNullable<BriefEvidence['originKind']>, string> = {
-  inbound: 'The message that started this work, before the assistant delegated it (as its sender wrote it, with any follow-ups they sent meanwhile; the authority block says who that is; the task above is the assistant\'s restatement)',
-  task: 'The task that started this work, before the assistant delegated it (as the assistant received it; the task above is the assistant\'s restatement)',
+const ORIGIN_LABELS: Record<NonNullable<BriefEvidence['originKind']>, (e: BriefEvidence) => string> = {
+  inbound: () => 'The message that started this work, before the assistant delegated it (as its sender wrote it, with any follow-ups they sent meanwhile; the authority block says who that is; the task above is the assistant\'s restatement)',
+  task: () => 'The task that started this work, before the assistant delegated it (as the assistant received it; the task above is the assistant\'s restatement)',
+  // An unknown verification reads "no": an unverified sender is never presented as verified.
+  reply_target: (e) => `The message this reply answers, as its sender wrote it (sender verified: ${e.originSenderVerified === true ? 'yes' : 'no'})`,
 };
 
 export function buildBriefUserPrompt(input: BriefInput): string {
@@ -253,7 +259,7 @@ export function buildBriefUserPrompt(input: BriefInput): string {
     ...(input.senderProfile === 'principal-mailbox' ? [SENDER_PROFILE_LINE] : []),
     // Only for a delegated turn, so a turn that was not delegated sees the brief unchanged.
     ...(input.evidence.originContent !== undefined
-      ? [`${ORIGIN_LABELS[input.evidence.originKind ?? 'task']}${input.evidence.originAt ? `, at ${encode(input.evidence.originAt)}` : ''}: <origin_json>${encode(input.evidence.originContent)}</origin_json>`]
+      ? [`${ORIGIN_LABELS[input.evidence.originKind ?? 'task'](input.evidence)}${input.evidence.originAt ? `, at ${encode(input.evidence.originAt)}` : ''}: <origin_json>${encode(input.evidence.originContent)}</origin_json>`]
       : []),
     ...((input.evidence.senderHistory?.length ?? 0) > 0
       ? [`Earlier messages from the same sender in this conversation, before the one above (newest first; "at" is when each arrived and "senderVerified" whether the channel verified the sender, both system-recorded${input.evidence.senderHistoryOlderLeftOut ? '; older ones left out' : ''}): <history_json>${encode(input.evidence.senderHistory)}</history_json>`]

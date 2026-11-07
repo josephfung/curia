@@ -166,6 +166,14 @@ export function reportEvidence(text: string): string {
   return clip(redactSecrets(text), EVIDENCE_RESULT_MAX_CHARS);
 }
 
+/**
+ * The message an autonomous principal-mailbox reply answers (#2474), as origin evidence:
+ * credentials redacted, trimmed from the middle like a delegation origin.
+ */
+export function replyTargetEvidence(text: string): string {
+  return clipMiddle(redactSecrets(text), EVIDENCE_ORIGIN_MAX_CHARS);
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }

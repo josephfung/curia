@@ -7,12 +7,16 @@
 //
 // Which questions are asked:
 //   principal-directed (a live principal turn)  → grounding
+//   autonomous, principal's own mailbox (#2474) → purpose, stakes, grounding, necessity
 //   otherwise, at every band                    → all five (Gate C leaves sends to this review)
 //
 // What each answer does:
 //   purpose = steered                → hold, at every band
 //   speaks as principal              → by its stakes (#2473): routine sends at 80+, a commitment
-//                                       at 90+, financial or legal never; below that, hold
+//                                       at 90+, financial or legal never; below that, hold. An
+//                                       autonomous principal-mailbox send (#2474) always speaks as
+//                                       the principal (not asked), and its sending setting's
+//                                       stakes ceiling holds any rating above it
 //   unsupported claims / unneeded    → bounce to the drafter, ONCE per draft. Curia never
 //     disclosures                       cuts text out of a message: the drafter rewrites it.
 //                                       If the rewrite still has findings, at 80+ the send is
@@ -73,7 +77,7 @@
 
 import type { Logger } from '../logger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
-import { reportEvidence, type CollectedEvidence, type SendEvidenceCollector } from '../autonomy/send-evidence.js';
+import { replyTargetEvidence, reportEvidence, type CollectedEvidence, type SendEvidenceCollector } from '../autonomy/send-evidence.js';
 import { describePiiLabels, normalizeCounterparty, type DisclosureDecisionRow } from '../autonomy/disclosure-decisions.js';
 import type {
   BriefAnswers, BriefDetectedItem, BriefQuestion, BriefVerdict, DisclosureRuling, SendAuthority, SendStakes,
@@ -92,6 +96,8 @@ const ALL_QUESTIONS: readonly BriefQuestion[] = ['purpose', 'speaks-as-principal
  * (#2473). Null: never, at any band. Routine is the spot-check line (isSpotCheckOrAbove).
  */
 const STAKES_MIN_SCORE: Record<SendStakes, number | null> = { routine: 80, commitment: 90, financial_or_legal: null };
+/** Orders the stakes ratings for a sending setting's ceiling (#2474). */
+const STAKES_RANK: Record<SendStakes, number> = { routine: 0, commitment: 1, financial_or_legal: 2 };
 const STAKES_LABEL: Record<SendStakes, string> = { routine: 'routine', commitment: 'commitment', financial_or_legal: 'financial or legal' };
 const STAKES_HOLD_LEAD: Record<SendStakes, string> = {
   routine: 'Held for the principal: this message speaks for or commits the principal, and the autonomy band asks first for that.',
@@ -156,6 +162,10 @@ export interface BandReviewInput {
   senderProfile?: 'principal-mailbox';
   /** Principal mailbox only: who wrote the draft (#2474). Decides the questions on a principal-directed send. */
   draftAuthor?: DraftAuthor;
+  /** Holds any stakes rating above this (#2474); unset = no ceiling. */
+  stakesCeiling?: SendStakes;
+  /** The message a principal-mailbox reply answers, used as origin evidence when the delegation walk finds none. */
+  origin?: { content: string; at?: string; senderVerified: boolean };
 }
 
 /**
@@ -290,6 +300,11 @@ export class BandSendReview {
       return this.settle(key, taskIds, input, prior !== undefined, other ? combine(pii, other) : pii);
     }
     this.deps.limiter.recordJudgeSuccess();
+    if (isAutonomousMailbox(input)) {
+      // #2474: every message from the principal's own mailbox speaks for the principal, so the
+      // judge is not asked; the stakes rating alone decides whether it may go out.
+      verdict = { ...verdict, speaksAsPrincipal: true };
+    }
 
     const other = this.otherRulesOutcome(input, verdict, items, prior !== undefined);
     const rulings = askedItems ? verdict.disclosures ?? [] : undefined;
@@ -321,7 +336,7 @@ export class BandSendReview {
     detected: readonly BriefDetectedItem[],
     hasPrior: boolean,
   ): BandReviewDecision {
-    const speaksHeld = verdict.speaksAsPrincipal === true ? stakesHold(verdict, input.score) : undefined;
+    const speaksHeld = verdict.speaksAsPrincipal === true ? stakesHold(verdict, input.score, input.stakesCeiling) : undefined;
     if (verdict.purpose === 'steered') {
       this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel }, 'band review: held — steered by an outsider');
       const steered = this.hold(BAND_RULES.steered, 'Held for the principal: the reviewer judged this send to be steered by someone outside the principal\'s business.');
@@ -629,6 +644,9 @@ export class BandSendReview {
       if (input.draftAuthor === 'principal') return [];
       return input.draftAuthor === 'curia-edited' ? ['purpose'] : ['purpose', 'grounding'];
     }
+    // #2474: an autonomous send from the principal's mailbox speaks for the principal by
+    // definition, so that question is not asked (review() sets it); stakes still is.
+    if (isAutonomousMailbox(input)) return ['purpose', 'stakes', 'grounding', 'necessity'];
     return input.principalDirected ? ['grounding'] : ALL_QUESTIONS;
   }
 
@@ -649,7 +667,18 @@ export class BandSendReview {
       return { verdict: { ok: false, failure: 'unreachable' }, ...(collected.originUnresolved ? { originUnresolved: true as const } : {}) };
     }
     // Decisions and the outreach id stay with code: the judge reads the decisions as sentences.
-    const { decisions, linkedOutreachId, originUnresolved, ...evidence } = collected;
+    const { decisions, linkedOutreachId, originUnresolved, ...collectedEvidence } = collected;
+    // An autonomous principal-mailbox reply (#2474) with no delegation origin is judged against
+    // the message it answers. A delegation origin wins: it is what started Curia's work.
+    const evidence = input.origin && collectedEvidence.originContent === undefined
+      ? {
+        ...collectedEvidence,
+        originContent: replyTargetEvidence(input.origin.content),
+        originKind: 'reply_target' as const,
+        ...(input.origin.at ? { originAt: input.origin.at } : {}),
+        originSenderVerified: input.origin.senderVerified,
+      }
+      : collectedEvidence;
     // Destructured only to keep it out of `evidence`; the failure path above is the one that carries it.
     // The repo's no-unused-vars rule has no underscore exemption, so discard it explicitly.
     void originUnresolved;
@@ -762,14 +791,18 @@ const STRICTNESS: Record<BandReviewDecision['kind'], number> = { send: 0, bounce
 
 /**
  * The hold for a send that speaks for the principal below the score its stakes need (#2473), or
- * undefined when the score clears it. The finding names the rating and the judge's reason, so
+ * undefined when the score clears it. A sending setting's `ceiling` (#2474) also holds any rating
+ * above it, and the finding says so when the score alone would have sent it. The finding names the rating and the judge's reason, so
  * the approval says why it asked. A missing rating cannot happen (the review asks both questions together
  * and the parser requires every answer); it is treated as the strictest.
  */
-function stakesHold(verdict: BriefAnswers, score: number): FilterFinding | undefined {
+function stakesHold(verdict: BriefAnswers, score: number, ceiling?: SendStakes): FilterFinding | undefined {
   const stakes = verdict.stakes ?? 'financial_or_legal';
   const min = STAKES_MIN_SCORE[stakes];
-  if (min !== null && score >= min) return undefined;
+  // A sending setting's ceiling (#2474) holds a rating above it whatever the score.
+  const aboveCeiling = ceiling !== undefined && STAKES_RANK[stakes] > STAKES_RANK[ceiling];
+  const scoreClears = min !== null && score >= min;
+  if (!aboveCeiling && scoreClears) return undefined;
   // The judge's overall reason stands in when it left the stakes reason out.
   const why = (verdict.stakesReason?.trim() ? verdict.stakesReason : verdict.reason ?? '').replace(/\s+/g, ' ').trim();
   // Count code points, not UTF-16 units, so the cut never leaves half a surrogate pair.
@@ -777,8 +810,13 @@ function stakesHold(verdict: BriefAnswers, score: number): FilterFinding | undef
   const shown = points.length > STAKES_REASON_MAX ? `${points.slice(0, STAKES_REASON_MAX - 1).join('').trimEnd()}…` : why;
   return {
     rule: BAND_RULES.speaksAsPrincipal,
-    detail: `${STAKES_HOLD_LEAD[stakes]} Stakes: ${STAKES_LABEL[stakes]}.${shown ? ` Why: ${shown}` : ''}`,
+    detail: `${STAKES_HOLD_LEAD[stakes]}${aboveCeiling && scoreClears ? ' Above the sending setting.' : ''} Stakes: ${STAKES_LABEL[stakes]}.${shown ? ` Why: ${shown}` : ''}`,
   };
+}
+
+/** A send from the principal's own mailbox that no live principal turn directed (#2474). */
+function isAutonomousMailbox(input: BandReviewInput): boolean {
+  return input.senderProfile === 'principal-mailbox' && !input.principalDirected;
 }
 
 /** A bounce with a personal-details finding: the drafter must rewrite without an item (#2333). */

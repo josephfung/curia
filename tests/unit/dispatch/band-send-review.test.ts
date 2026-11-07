@@ -186,6 +186,84 @@ describe('BandSendReview', () => {
       expect(review.mock.calls[1]![0]).not.toHaveProperty('senderProfile');
       expect(review.mock.calls[1]![0].questions).toEqual(['grounding']);
     });
+
+    // PR 2: Curia sends on its own from the principal's mailbox (levels routine / all).
+    describe('autonomous', () => {
+      const auto: BandReviewInput = { ...base, principalDirected: false, senderProfile: 'principal-mailbox', draftAuthor: 'curia' };
+      const rated = (stakes: 'routine' | 'commitment' | 'financial_or_legal'): BriefVerdict =>
+        ({ ok: true, purpose: 'serving', stakes, stakesReason: 'Why.', unsupportedClaims: [], unnecessaryItems: [], reason: 'ok' });
+
+      it('asks purpose, stakes, grounding and necessity for an autonomous principal-mailbox send', async () => {
+        const { svc, review } = make([rated('routine')]);
+        await svc.review(auto);
+        expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'stakes', 'grounding', 'necessity']);
+        expect(review.mock.calls[0]![0].senderProfile).toBe('principal-mailbox');
+      });
+
+      it('treats an autonomous principal-mailbox send as speaking for the principal without asking', async () => {
+        // The judge is not asked, so its answer has no speaksAsPrincipal; routine still needs 80.
+        const at74 = make([rated('routine')]);
+        const held = await at74.svc.review({ ...auto, score: 74 });
+        expect(held.kind).toBe('hold');
+        if (held.kind === 'hold') expect(held.findings.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+        const at85 = make([rated('routine')]);
+        await expect(at85.svc.review({ ...auto, score: 85 })).resolves.toEqual({ kind: 'send', signals: { speaksAsPrincipal: true } });
+      });
+
+      it('holds a commitment under a routine ceiling at score 95', async () => {
+        const { svc } = make([rated('commitment')]);
+        const d = await svc.review({ ...auto, score: 95, stakesCeiling: 'routine' });
+        expect(d.kind).toBe('hold');
+        if (d.kind === 'hold') {
+          expect(d.findings.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+          expect(d.reason).toContain('Stakes: commitment.');
+          expect(d.reason).toContain(' Above the sending setting.');
+        }
+      });
+
+      it('sends a commitment under a commitment ceiling at 92', async () => {
+        const { svc } = make([rated('commitment')]);
+        expect((await svc.review({ ...auto, score: 92, stakesCeiling: 'commitment' })).kind).toBe('send');
+      });
+
+      it('holds financial_or_legal at score 100 under all', async () => {
+        const { svc } = make([rated('financial_or_legal')]);
+        const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
+        expect(d.kind).toBe('hold');
+        if (d.kind === 'hold') expect(d.reason).toContain('Stakes: financial or legal.');
+      });
+
+      it('holds when the stakes judge fails, even at 85', async () => {
+        const { svc, limiter } = make([{ ok: false, failure: 'unreachable' }]);
+        const tryAcquire = vi.spyOn(limiter, 'tryAcquire');
+        const d = await svc.review({ ...auto, score: 85, stakesCeiling: 'commitment' });
+        expect(d.kind).toBe('hold');
+        expect(d).not.toHaveProperty('report');
+        expect(tryAcquire).not.toHaveBeenCalled();
+      });
+
+      it('uses the reply target as origin when no delegation origin exists', async () => {
+        const { svc, review } = make([rated('routine')]);
+        const content = `Please send it. sk-ant-abcdefghijklmnopqrstuvwxyz0123 ${'x'.repeat(5_000)}`;
+        await svc.review({ ...auto, origin: { content, at: '2026-11-06T10:00:00.000Z', senderVerified: true } });
+        const evidence = review.mock.calls[0]![0].evidence;
+        expect(evidence.originKind).toBe('reply_target');
+        expect(evidence.originAt).toBe('2026-11-06T10:00:00.000Z');
+        expect(evidence.originSenderVerified).toBe(true);
+        expect(evidence.originContent).toContain('Please send it.');
+        expect(evidence.originContent).not.toContain('sk-ant-abcdefghijklmnopqrstuvwxyz0123');
+        expect(evidence.originContent.length).toBeLessThanOrEqual(4_000);
+      });
+
+      it('prefers a delegation origin over the reply target', async () => {
+        const { svc, review } = make([rated('routine')], { evidence: { originContent: 'Delegated root.' } });
+        await svc.review({ ...auto, origin: { content: 'The reply target.', senderVerified: false } });
+        const evidence = review.mock.calls[0]![0].evidence;
+        expect(evidence.originContent).toBe('Delegated root.');
+        expect(evidence.originKind).not.toBe('reply_target');
+        expect(evidence).not.toHaveProperty('originSenderVerified');
+      });
+    });
   });
 
   it('bounces once with the quoted claim, then blocks a second occurrence at 84 with no recheck call', async () => {
