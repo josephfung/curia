@@ -994,6 +994,26 @@
     "card ambiguous visa asks which": {
       "unstubbed": null,
       "reason": "New in #1358; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox batch send reads back before sending": {
+      "unstubbed": null,
+      "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox batch send all three on go-ahead": {
+      "unstubbed": null,
+      "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox batch send one by one skipping one": {
+      "unstubbed": null,
+      "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox send refused when the setting is off": {
+      "unstubbed": null,
+      "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox edits then sends the principal draft": {
+      "unstubbed": null,
+      "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
     }
   }
 }
