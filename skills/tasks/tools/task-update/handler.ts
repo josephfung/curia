@@ -8,7 +8,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { UpdateTaskParams } from '../../../../src/db/task-repo.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { isUuid } from '../../../../src/util/uuid.js';
-import { dedupReviewRoute, routeFromTags } from '../../../../src/contacts/dedup-routing.js';
+import { dedupReviewRoute, dedupRouteTag, routeFromTags } from '../../../../src/contacts/dedup-routing.js';
 import { pairKeyFromDedupTask } from '../../../../src/contacts/dedup-pair-key.js';
 import { SPECIALIST_DECLINE_TAG } from '../../../../src/agents/specialist-decline.js';
 import {
@@ -199,8 +199,10 @@ export class TaskUpdateHandler implements ToolHandler {
           if (input.owner === 'ceo' && !(await routeNowPrincipal(ctx, current))) {
             return { success: false, error: CURIA_DEDUP_ROUTE_ERROR };
           }
-          if (input.tags && routeFromTags(input.tags) !== 'curia') {
-            return { success: false, error: 'tags must keep the dedup-route:curia tag on a dedup review task.' };
+          // routeFromTags returns the first route tag, so a second one riding along would
+          // make a reader that looks for `principal` first treat the task as principal-routed.
+          if (input.tags && (routeFromTags(input.tags) !== 'curia' || input.tags.includes(dedupRouteTag('principal')))) {
+            return { success: false, error: 'tags must carry only the dedup-route:curia route tag on a dedup review task.' };
           }
           // The scan's idempotency check and merge cleanup both find review tasks by the
           // `dedup` tag, so dropping it would let a second review be filed for the pair.

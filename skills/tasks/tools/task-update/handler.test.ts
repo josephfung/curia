@@ -465,6 +465,26 @@ describe('TaskUpdateHandler', () => {
       expect(taskRepo.updateTask).toHaveBeenCalled();
     });
 
+    it('refuses a tags update that drops the dedup tag', async () => {
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(curiaTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, tags: ['dedup-route:curia'] },
+        taskRepo,
+      }));
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('dedup tag') });
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('refuses a tags update that adds the principal route tag next to the curia one', async () => {
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(curiaTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, tags: ['dedup', 'dedup-route:curia', 'dedup-route:principal'] },
+        taskRepo,
+      }));
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('only the dedup-route:curia') });
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
+
     it('refuses a tags update that drops the route tag', async () => {
       const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(curiaTask) });
       const result = await new TaskUpdateHandler().execute(makeCtx({

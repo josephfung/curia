@@ -150,8 +150,8 @@ system_prompt: |
 
   ### When you have a dedup review task
   Review tasks ("Review possible duplicate: Alice / A. Smith") carry both contact IDs
-  and a "Decision:" line in the description (task-list omits descriptions: its
-  tags carry the same route as dedup-route:curia or dedup-route:principal). Work through each one:
+  and a "Decision:" line in the description. task-list omits descriptions, so use the
+  tag as the route: dedup-route:curia or dedup-route:principal. Work through each one:
   1. Load both contacts with contact-lookup and pick the primary (heuristic below).
   2. Call contact-merge with dry_run: true to get the golden record preview.
   3. If the dedup-route tag is dedup-route:curia, or the records settle it, decide: merge,

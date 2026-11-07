@@ -735,7 +735,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const result = await t.run();
     expect(t.mergeContacts).not.toHaveBeenCalled();
     expect(t.createTask).not.toHaveBeenCalled();
-    if (result.success) expect(result.data).toMatchObject({ skipped_excluded: 1 });
+    expect(result).toMatchObject({ success: true, data: { skipped_excluded: 1 } });
   });
 
   it('skips a later pair touching a contact merged earlier in the same run', async () => {
@@ -800,7 +800,7 @@ describe('ContactFindDuplicatesHandler', () => {
       });
       const result = await t.run();
       expect(t.createTask).not.toHaveBeenCalled();
-      if (result.success) expect(result.data).toMatchObject({ skipped_recently_decided: 1, filed: 0 });
+      expect(result).toMatchObject({ success: true, data: { skipped_recently_decided: 1, filed: 0 } });
     });
 
     it('re-files inside the cooldown when either contact changed since', async () => {
@@ -819,7 +819,8 @@ describe('ContactFindDuplicatesHandler', () => {
       const t = scan([pair()], [a, b], {
         closedTasks: [{ ...makeTaskRow(UUID_A, UUID_B), status: 'done', tags: ['dedup', 'contacts'] }],
       });
-      await t.run();
+      const result = await t.run();
+      expect(result).toMatchObject({ success: true });
       expect(t.createTask).not.toHaveBeenCalled();
     });
 
@@ -864,7 +865,8 @@ describe('ContactFindDuplicatesHandler', () => {
       const t = scan([], [known, other], {
         openTasks: [{ ...makeTaskRow(UUID_A, UUID_B), id: 'ceo-task', owner: 'ceo', status: 'waiting', tags: ['dedup', 'dedup-route:principal'] }],
       });
-      await t.run();
+      const result = await t.run();
+      expect(result).toMatchObject({ success: true });
       expect(t.updateTask).not.toHaveBeenCalled();
     });
 
