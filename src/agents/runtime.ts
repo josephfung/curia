@@ -1769,7 +1769,12 @@ export class AgentRuntime {
       // moves to true only for a live follow-up on a principal host.
       const lanes = this.config.turnLanes;
       const laned = lanes?.enabled === true && lanes.isLaned(taskEvent.payload);
-      const turnState = { liveTurn: taskEvent.payload.liveTurn === true };
+      // A voice hand-off's grant (#2495) bounds the task's own liveTurn. A live follow-up that
+      // joins the turn is a fresh principal inbound, so it drops the grant along with the bound.
+      const turnState: { liveTurn: boolean; liveTurnGrantId?: string } = {
+        liveTurn: taskEvent.payload.liveTurn === true,
+        liveTurnGrantId: taskEvent.payload.liveTurnGrantId,
+      };
       const hostIsPrincipal = laned && holderFromAgentTask(taskEvent).originatorIsPrincipal === true;
       const drainInjected = async (drainPoint: InjectionDrainPoint): Promise<Message[]> => {
         if (!laned || !lanes) return [];
@@ -1817,7 +1822,10 @@ export class AgentRuntime {
             );
           }
           budget.maxTurns += lanes.extraRoundsPerInjection;
-          if (input.liveTurn && hostIsPrincipal) turnState.liveTurn = true;
+          if (input.liveTurn && hostIsPrincipal) {
+            turnState.liveTurn = true;
+            turnState.liveTurnGrantId = undefined;
+          }
           // Ids only. The body, the label, and the guidance stay off the log.
           logger.info(
             {
@@ -2256,6 +2264,7 @@ export class AgentRuntime {
             parentEventId: invokeEvent.id,
             taskMetadata: taskEvent.payload.metadata,
             liveTurn: turnState.liveTurn,
+            ...(turnState.liveTurnGrantId !== undefined ? { liveTurnGrantId: turnState.liveTurnGrantId } : {}),
             delegationGuard,
             turnDateResolveResults: turnDateResolveTracker.snapshot(),
             senderId: taskEvent.payload.senderId,

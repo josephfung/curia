@@ -121,6 +121,7 @@ import type { SendEvidenceCollector } from '../autonomy/send-evidence.js';
 import type { BriefEvidence, BriefQuestion } from '../autonomy/judge-brief.js';
 import { meetsMinimumTier } from '../contacts/types.js';
 import { computeEffectiveTaskMetadata, DEFAULT_BYPASS_LADDER } from '../autonomy/effective-standing.js';
+import { isLiveTurnGrantActive } from '../autonomy/live-turn-grants.js';
 import type { BypassLadderConfig } from '../autonomy/effective-standing.js';
 import type { BrowserService } from '../browser/browser-service.js';
 import { formatAuthorizationSubjectSummary } from '../contacts/authorization.js';
@@ -208,6 +209,12 @@ const NO_APPROVAL_FOR_SIGN_IN_CODE =
   'No approval request was created: this call carries a sign-in code, and a sign-in code is never ' +
   'stored for approval. Tell the principal the sign-in could not be finished at the current autonomy level.';
 
+/**
+ * Elevated tools that resolve approvals. A lapsed voice grant never files a confirmation
+ * request for one of these (#2495): the principal would be approving an approval.
+ */
+const APPROVAL_RESOLUTION_TOOLS: ReadonlySet<string> = new Set(['approve-action', 'deny-action', 'dismiss-action']);
+
 /** Appended when an object result is too large and collapsed to a string (#1487). */
 const OBJECT_OUTPUT_TRUNCATED_MARKER = '[truncated — output exceeded limit]';
 
@@ -225,6 +232,11 @@ export interface InvokeOptions {
    *  requires it (plus principal lineage). Stamped only on fresh principal inbounds and forwarded
    *  by `delegate` across a synchronous delegation. */
   liveTurn?: boolean;
+  /** Live-turn grant (#2495) — forwarded from agent.task.payload.liveTurnGrantId. When set,
+   *  `liveTurn` counts only while the grant is active; invoke() clears it once the grant lapses.
+   *  A lapsed grant also marks the call as principal-directed, so an elevated tool files a
+   *  confirmation request instead of failing bare. */
+  liveTurnGrantId?: string;
   /** When true, autonomy gates (A and B) are skipped — the skill runs as if the
    *  score were sufficient. Only the approve-action skill (#428) should set this.
    *  All other checks (elevated-skill gate, content filter, blocked-contact) still run.
@@ -880,6 +892,55 @@ export class ExecutionLayer {
     }
 
     return baseMsg + `No approval request was created — the principal must authorize this action manually.`;
+  }
+
+  /**
+   * The advisory for an elevated call the principal directed on a voice call that is no longer
+   * live (#2495). Files an approval request the principal confirms through the usual path; on
+   * approval, approve-action replays it inside the principal's live turn. Falls back to asking
+   * the principal to repeat the request on a live channel when no request can be filed.
+   */
+  private async buildElevatedConfirmationError(
+    toolName: string,
+    input: Record<string, unknown>,
+    actionRisk: string | number,
+    currentScore: number,
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): Promise<string> {
+    const baseMsg =
+      `Not done yet: '${toolName}' needs the principal's confirmation, because the principal asked for it ` +
+      `on a call that is no longer live. This is not a missing capability; never say Curia cannot do it. `;
+    const fallback =
+      baseMsg + 'No approval request was created. Tell the principal it is waiting for their go-ahead: ' +
+      'they can confirm by asking again on any channel.';
+
+    if (this.holdsUnscrubbedCode(toolName, input)) return fallback;
+    if (!this.approvalTrigger || !options?.taskEventId) return fallback;
+
+    try {
+      const result = await this.approvalTrigger.request({
+        taskId: options.taskEventId,
+        conversationId: options.conversationId,
+        toolName,
+        actionRisk: String(actionRisk),
+        input,
+        displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
+        currentScore,
+        requiredScore: currentScore,
+        // Neutral on who asked: the call handed off work, but the tool call itself came from an
+        // agent, which may have read untrusted content since. The principal judges the action.
+        reason: `Curia wanted to run '${toolName}' for work handed off from the principal's voice call. ` +
+          `It is an elevated action, so it needs the principal's confirmation now that the call is no longer live.`,
+      });
+      if (!result.created) {
+        return baseMsg + `A confirmation request for it is already pending (ref: ${result.existingShortRef}).`;
+      }
+      return baseMsg + approvalAdvisory(result.shortRef, options.agentId, result.approvalNumber);
+    } catch (err) {
+      skillLogger.warn({ err, toolName }, 'elevated confirmation: approval trigger failed — returning fallback advisory');
+      return fallback;
+    }
   }
 
   /**
@@ -1838,6 +1899,19 @@ export class ExecutionLayer {
     // for both the normalization error path and the rest of the method.
     const skillLogger = this.logger.child({ skill: toolName });
 
+    // Live-turn grant (#2495): work the principal directed on a voice call carries `liveTurn`
+    // only while its grant is active. Clear it here, once, so every reader below (the elevated
+    // gate, the handler's ctx.liveTurn, `delegate`'s forward) sees a lapsed grant as not live.
+    const liveTurnGrantLapsed =
+      options?.liveTurnGrantId !== undefined && !isLiveTurnGrantActive(options.liveTurnGrantId);
+    if (liveTurnGrantLapsed && options?.liveTurn === true) {
+      skillLogger.info(
+        { toolName, taskEventId: options.taskEventId },
+        'live-turn grant lapsed — this call is no longer a live principal turn (#2495)',
+      );
+      options = { ...options, liveTurn: false };
+    }
+
     // Per-invoke cache: Gate C's getEmailMessage and the handler's share one
     // snapshot so an allowed email-reply is not fetched twice / raced (#1815).
     // The wrapper is created lazily on first Gate C fetch so other skills keep
@@ -1954,6 +2028,29 @@ export class ExecutionLayer {
       // off a wake. If the flag ever leaks onto a wake, this still fails closed.
       const isWokenTurn = (options?.taskMetadata as Record<string, unknown> | undefined)?.['wakeContext'] !== undefined;
       if (isWokenTurn || !isLivePrincipalTurn(options?.liveTurn, effectiveTaskMetadata)) {
+        // The principal directed this on a voice call that is no longer live (#2495): the
+        // call ended, the hand-off's wait returned, or it was an after_call hand-off. Ask the
+        // principal to confirm rather than fail bare. Never for a wake (its task carries no
+        // grant id, and the wakeContext check keeps it so), never without principal lineage,
+        // and never for the tools that resolve approvals: approving an approval is circular.
+        if (
+          !isWokenTurn
+          && liveTurnGrantLapsed
+          && isPrincipalOriginated(effectiveTaskMetadata)
+          && !APPROVAL_RESOLUTION_TOOLS.has(toolName)
+          // The caller gate below runs after this branch and is skipped on an approved replay,
+          // so a disallowed caller must not get a request filed at all.
+          && (!manifest.allowed_callers?.length || manifest.allowed_callers.includes(options?.agentId ?? 'system'))
+        ) {
+          this.logger.info(
+            { toolName, agentId: options?.agentId, taskEventId: options?.taskEventId },
+            'Elevated skill held for principal confirmation: directed on a voice call that is no longer live (#2495)',
+          );
+          const confirmError = await this.buildElevatedConfirmationError(
+            toolName, input, manifest.action_risk, autonomyConfig?.score ?? 0, options, skillLogger,
+          );
+          return { success: false, error: this.wrapSkillError(confirmError) };
+        }
         this.logger.warn(
           {
             toolName,
@@ -2687,6 +2784,8 @@ export class ExecutionLayer {
       // a synchronously-delegated specialist (a specialist acting inside the principal's live turn).
       // Distinct from taskMetadata so no persistence skill can sweep it into a wakeable row.
       liveTurn: options?.liveTurn,
+      // Forwarded with liveTurn by `delegate`, so a lapsed grant also bounds the specialist (#2495).
+      ...(options?.liveTurnGrantId !== undefined ? { liveTurnGrantId: options.liveTurnGrantId } : {}),
       ...(options?.inputSignal !== undefined ? { inputSignal: options.inputSignal } : {}),
       delegationGuard: options?.delegationGuard,
       turnDateResolveResults: options?.turnDateResolveResults,
@@ -3156,6 +3255,35 @@ export class ExecutionLayer {
           skillLogger.error({ err, toolName }, 'entity_enrichment: pre-enrichment failed, continuing without entity context');
         }
       }
+    }
+
+    // The entry check can go stale: gates, enrichment and approval writes above take time, and
+    // the call can end meanwhile (#2495). Recheck right before an elevated handler starts, and
+    // take the same lapsed-grant path as at entry.
+    if (
+      manifest.sensitivity === 'elevated'
+      && options?.liveTurn === true
+      && options.liveTurnGrantId !== undefined
+      && !isLiveTurnGrantActive(options.liveTurnGrantId)
+    ) {
+      skillLogger.info(
+        { toolName, taskEventId: options.taskEventId },
+        'live-turn grant lapsed before the elevated handler started (#2495)',
+      );
+      if (
+        isPrincipalOriginated(effectiveTaskMetadata)
+        && !APPROVAL_RESOLUTION_TOOLS.has(toolName)
+        && (!manifest.allowed_callers?.length || manifest.allowed_callers.includes(options.agentId ?? 'system'))
+      ) {
+        const confirmError = await this.buildElevatedConfirmationError(
+          toolName, input, manifest.action_risk, autonomyConfig?.score ?? 0, options, skillLogger,
+        );
+        return { success: false, error: this.wrapSkillError(confirmError) };
+      }
+      return {
+        success: false,
+        error: this.wrapSkillError(`Tool '${toolName}' requires a live principal turn — it can only be invoked directly by the principal, not by a system job, an agent, or a woken/scheduled task`),
+      };
     }
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');

@@ -5,6 +5,7 @@
 // the repo returns results newest first, as findToolResultsForTasks does.
 
 import { describe, expect, it, vi } from 'vitest';
+import { issueLiveTurnGrant } from '../../../src/autonomy/live-turn-grants.js';
 import {
   SendEvidenceCollector,
   EVIDENCE_RESULT_MAX_CHARS,
@@ -513,6 +514,19 @@ describe('SendEvidenceCollector', () => {
       });
       // No bound task on the turn, so nothing to look up.
       expect(taskRepo.getTask).not.toHaveBeenCalled();
+    });
+
+    it('counts a voice hand-off\'s liveTurn only while its grant is active (#2495)', async () => {
+      const grant = issueLiveTurnGrant({ voiceSessionId: 's1', ttlMs: 60_000 });
+      const task = row({
+        id: 'task-1', eventType: 'agent.task', parentEventId: null,
+        payload: { content: 'Block them', liveTurn: true, liveTurnGrantId: grant.id, metadata: { originator: PRINCIPAL_SIGNAL } },
+      });
+      const collector = new SendEvidenceCollector({ taskRepo: noTasks(), auditLogRepo: makeRepo([], task), principalBlock: () => null, logger });
+
+      expect((await collector.collect(['task-1'])).authority.liveTurn).toBe(true);
+      grant.revoke();
+      expect((await collector.collect(['task-1'])).authority.liveTurn).toBe(false);
     });
 
     it('reads a standing-task wake: the bound task and its root, each with its originator, clipped and redacted', async () => {
