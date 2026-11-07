@@ -155,8 +155,9 @@ describe('loadAgentConfig', () => {
 
   it('gives ceo-inbox the limits the coordinator routes around (#2496)', () => {
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.limits?.join(' ')).toMatch(/send email/);
     expect(config.limits?.join(' ')).toMatch(/contacts/);
+    // Sending moved to ceo-inbox-send-draft (#2474), so it is no longer a limit.
+    expect(config.limits?.join(' ')).not.toMatch(/send email/);
   });
 
   it('throws on nonexistent file', () => {
