@@ -87,6 +87,44 @@ describe('provenance recording (#2498)', () => {
     expect(index.has('conv-z', 'email:jon@acme.co')).toBe(false);
   });
 
+  it('treats a session as unable to verify anything once typed keys are followed by a caret key', () => {
+    const index = new IdentifierSourceIndex();
+    const press = (key: string) => ({ action: 'press_key', key });
+    // `sam@.com`, ArrowLeft x4, `x` leaves `sam@x.com` in the field; no per-key rule gets there.
+    const actions = [...[...'sam@.com'].map(press), ...Array.from({ length: 4 }, () => press('ArrowLeft')), press('x')];
+    call(index, 'conv-a', 'web-browser', { action: 'batch', actions, session_id: 's9' },
+      { session_id: 's9', content: 'Confirmation sent to sam@x.com. Questions: help@book.example' });
+    expect(index.has('conv-a', 'email:sam@x.com')).toBe(false);
+    expect(index.has('conv-a', 'email:help@book.example')).toBe(false);
+    // A later page in the same session, which could echo the field again, counts for nothing.
+    call(index, 'conv-a', 'web-browser', { action: 'get_content', session_id: 's9' },
+      { session_id: 's9', content: 'Profile: sam@x.com, support@book.example' });
+    expect(index.has('conv-a', 'email:sam@x.com')).toBe(false);
+    expect(index.has('conv-a', 'email:support@book.example')).toBe(false);
+  });
+
+  it('does the same when the session id arrives only in the result', () => {
+    const index = new IdentifierSourceIndex();
+    const press = (key: string) => ({ action: 'press_key', key });
+    const actions = [...[...'sam@.com'].map(press), press('ArrowLeft'), press('x')];
+    call(index, 'conv-a', 'web-browser', { action: 'batch', actions },
+      { session_id: 's10', content: 'Sent to sam@x.com' });
+    expect(index.has('conv-a', 'email:sam@x.com')).toBe(false);
+    call(index, 'conv-b', 'web-browser', { action: 'get_content', session_id: 's10' },
+      { session_id: 's10', content: 'Sent to sam@x.com; help@book.example' });
+    expect(index.has('conv-b', 'email:help@book.example')).toBe(false);
+  });
+
+  it('keeps trusting a session whose keys include only Backspace edits', () => {
+    const index = new IdentifierSourceIndex();
+    const press = (key: string) => ({ action: 'press_key', key });
+    const actions = [...[...'sam@e.com'].map(press), press('Backspace'), press('Enter')];
+    call(index, 'conv-a', 'web-browser', { action: 'navigate', url: 'https://book.example' }, { session_id: 's11', content: 'Book' });
+    call(index, 'conv-a', 'web-browser', { action: 'batch', actions, session_id: 's11' },
+      { session_id: 's11', content: 'Questions: help@book.example' });
+    expect(index.has('conv-a', 'email:help@book.example')).toBe(true);
+  });
+
   it('does not exclude agent input from a non-echo source', () => {
     const index = new IdentifierSourceIndex();
     call(index, 'conv-a', 'web-browser', { action: 'type', text: 'sam@venue.example', session_id: 's3' }, { session_id: 's3', content: 'ok' });

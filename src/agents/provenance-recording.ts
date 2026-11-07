@@ -9,6 +9,7 @@
 // can be reattached from another conversation (keep_warm, a later scheduled run), so
 // its own scope carries what was typed into it across conversations.
 
+import { keyedRunMovesCaret } from '../contacts/identifier-provenance.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import type { IdentifierSourceIndex } from './identifier-source-index.js';
 
@@ -24,6 +25,8 @@ export interface ProvenanceRecording {
    * there, so it is not recorded as a source at all.
    */
   unrecordedSession: boolean;
+  /** True when the call types characters and then moves the caret or deletes (keyedRunMovesCaret). */
+  movesCaret: boolean;
 }
 
 /** The scope key a browser session's agent input is recorded under. */
@@ -51,19 +54,22 @@ export function recordAgentInputBeforeCall(
 ): ProvenanceRecording {
   const agentInputText = execution.provenanceAgentInputText(toolName, input);
   let unrecordedSession = false;
+  // Typed keys then a caret or delete key: the field can't be reconstructed, so this
+  // session verifies nothing from now on, this call's own result included.
+  const movesCaret = agentInputText !== null && keyedRunMovesCaret(input);
   if (agentInputText) {
     index.recordAgentInput(conversation, agentInputText);
     const sessionId = sessionIdOf(input);
     if (sessionId) {
       // Checked before recording: this call's own input would otherwise make any id look known.
       const scope = browserSessionScope(sessionId);
-      unrecordedSession = !index.hasAgentInputScope(scope);
+      unrecordedSession = !index.hasAgentInputScope(scope) || movesCaret;
       index.recordAgentInput(scope, agentInputText);
       // The record now starts from this call, so it must not make the session look known later.
       if (unrecordedSession) index.markAgentInputLost(scope);
     }
   }
-  return { agentInputText, unrecordedSession };
+  return { agentInputText, unrecordedSession, movesCaret };
 }
 
 /**
@@ -97,6 +103,11 @@ export function recordSourceAfterCall(
     if (actual && actual !== requested) {
       if (before.agentInputText) index.recordAgentInput(browserSessionScope(actual), before.agentInputText);
       scopes.push(browserSessionScope(actual));
+    }
+    // The session the keys went into verifies nothing from now on, so neither does this result.
+    if (before.movesCaret) {
+      if (actual) index.markAgentInputLost(browserSessionScope(actual));
+      return;
     }
   }
   const sourceText = execution.provenanceSourceText(toolName, input, data);

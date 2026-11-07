@@ -220,10 +220,12 @@ describe('ExecutionLayer', () => {
           actions: [...[...'sam@e.com'].map(press), ...Array.from({ length: 5 }, () => press('Backspace')), ...[...'x.com'].map(press)],
         }) ?? '';
         expect(edited).toContain('sam@x.com');
+        // Caret keys are not reconstructed here; the runtime marks the session instead
+        // (provenance-recording.test.ts).
         const moved = execution.provenanceAgentInputText('web-browser', {
           actions: [...[...'sam@e.com'].map(press), press('ArrowLeft'), press('Delete')],
         }) ?? '';
-        expect(moved).toContain('am@e');
+        expect(moved).toContain('sam@e.com');
       });
     });
   });

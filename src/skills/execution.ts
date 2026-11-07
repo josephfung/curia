@@ -30,7 +30,7 @@ import {
   validateNylasMessageId,
 } from '../channels/email/nylas-message-id.js';
 import type { ChannelIdentity } from '../contacts/types.js';
-import { provenanceSourceText } from '../contacts/identifier-provenance.js';
+import { isCaretOrDeleteKey, keyedCharacter, provenanceSourceText } from '../contacts/identifier-provenance.js';
 import { mainFrameProse } from './_shared/web-page-content.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
@@ -66,18 +66,6 @@ import { UnknownEmailAccountError, type OutboundGateway } from './outbound-gatew
 
 /** Source tools whose results can echo the agent's own input (#2498). See isAgentEchoSource. */
 const AGENT_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web-fetch', 'web-browser']);
-
-/**
- * The character a web-browser `press_key` key types, or null for a key that types none
- * (Enter, Tab, arrows, shortcuts). A single character, `Shift+<char>` and `Space` count;
- * Playwright's other named character keys (`Period`, `Digit1`) are not reconstructed, so
- * an address spelled with them is not excluded.
- */
-function keyedCharacter(key: string): string | null {
-  if (key === 'Space') return ' ';
-  const base = key.startsWith('Shift+') && key.length > 6 ? key.slice(6) : key;
-  return [...base].length === 1 ? base : null;
-}
 
 /**
  * `%XX` escapes decoded byte by byte, and `+` read as a space. Lenient on purpose: a
@@ -769,29 +757,19 @@ export class ExecutionLayer {
     // are one typed value, flushed by any other step or a non-character key (Tab, Enter).
     // Editing keys do not end a run: Backspace removes the last character, so `sam@e.com`,
     // five Backspaces, `x.com` leaves `sam@x.com` in the field. Keys that move the caret or
-    // delete elsewhere (Delete, arrows, Home, End, Ctrl/Meta chords) make the field
-    // unpredictable, so every substring of the raw run is recorded (fail closed).
+    // delete elsewhere are not reconstructed: recordAgentInputBeforeCall marks the browser
+    // session unable to verify anything from then on (keyedRunMovesCaret).
     let keyed = '';
     let rawKeyed = '';
-    let uncertain = false;
     const keyedRuns: string[] = [];
     const flushKeyed = (): void => {
       if (keyed !== '') {
         values.push(keyed);
         keyedRuns.push(keyed);
       }
-      if (rawKeyed !== '') {
-        keyedRuns.push(rawKeyed);
-        if (uncertain) {
-          const capped = rawKeyed.slice(0, 200);
-          for (let i = 0; i < capped.length; i++) {
-            for (let j = i + 1; j <= capped.length; j++) keyedRuns.push(capped.slice(i, j));
-          }
-        }
-      }
+      if (rawKeyed !== '') keyedRuns.push(rawKeyed);
       keyed = '';
       rawKeyed = '';
-      uncertain = false;
     };
     for (const step of steps) {
       if (step === null || typeof step !== 'object') {
@@ -807,8 +785,8 @@ export class ExecutionLayer {
           rawKeyed += char;
         } else if (key === 'Backspace') {
           keyed = [...keyed].slice(0, -1).join('');
-        } else if (/^(Delete|Arrow|Home$|End$|Page|Control\+|Meta\+|Ctrl\+|Alt\+|ControlOrMeta\+)/.test(key) && rawKeyed !== '') {
-          uncertain = true;
+        } else if (isCaretOrDeleteKey(key) && rawKeyed !== '') {
+          // Inside a typed run: the run continues; the session is marked unverifiable.
         } else {
           flushKeyed();
         }
