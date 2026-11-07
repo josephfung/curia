@@ -21,7 +21,7 @@
 // step, and those rows hold whatever the agent typed, typos included (#2498). Any other
 // unverified source (self_claimed, sms_participant, …) is verified the same way on a live
 // principal turn (#2515): the principal is vouching for it right now, directly or through
-// a synchronous delegation. Outside one it is refused, and the refusal says how the
+// a synchronous delegation, or approved this exact call. Otherwise it is refused, and the refusal says how the
 // principal can verify it.
 //
 // A structural contact (the principal, an agent, a system contact: isStructuralContact)
@@ -30,7 +30,7 @@
 // This skill uses contactService, which is a universal service.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import type { DuplicateCheck, IdentitySource } from '../../../../src/contacts/types.js';
+import { AGENT_ENTERED_SOURCES, type DuplicateCheck, type IdentitySource } from '../../../../src/contacts/types.js';
 import { LINKABLE_CHANNEL_IDENTITY_SET } from '../../../../src/contacts/linkable-channels.js';
 import { normalizeAgentIdentifier } from '../../../../src/contacts/agent-identifier.js';
 import { sameIdentifier } from '../../../../src/contacts/identifier-near-miss.js';
@@ -52,13 +52,6 @@ const NEXT_SAME_NUMBER =
   'If this number belongs to both, call contact-link-identity again with distinct_from listing every ID above.';
 const NEXT =
   'Check the address: it resembles theirs. If it is right, call contact-link-identity again with distinct_from listing every ID above.';
-
-/**
- * Sources of rows an agent typed. An unverified one is verified in place by a re-statement
- * that passes the duplicate and provenance checks (#2041, #2498). agent_called was
- * auto-verified until #2061, which is why it was missing here.
- */
-const AGENT_ENTERED_SOURCES: ReadonlySet<IdentitySource> = new Set(['outbound_recipient', 'agent_called', 'agent_stated']);
 
 /** Why an unverified identity of another source is the principal's to verify. */
 function principalOnlyReason(source: IdentitySource): string {
@@ -195,9 +188,11 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         // while they are giving the instruction (#2515). A woken, scheduled or bullpen task
         // has principal lineage at most, which is not enough: the same line the `elevated`
         // gate draws (ADR-017), including its refusal of a woken task even if a live-turn
-        // flag leaked onto it.
-        const principalDirected = isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata)
-          && ctx.taskMetadata?.['wakeContext'] === undefined;
+        // flag leaked onto it. A replay the principal approved (`humanApproved`, set only by
+        // approve-action and reaction approvals) is the principal vouching for this exact call,
+        // even when the voice grant it was directed under has since lapsed.
+        const principalDirected = ctx.humanApproved === true
+          || (isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata) && ctx.taskMetadata?.['wakeContext'] === undefined);
         if (AGENT_ENTERED_SOURCES.has(existing.source) || principalDirected) {
           // Verifying is the risky step: those rows hold the address as typed, and an address
           // found by an agent can be a near miss of someone else's. Run the checks a new

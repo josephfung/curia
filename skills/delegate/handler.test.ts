@@ -164,6 +164,25 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     expect(task.payload.liveTurn).toBe(false);
     expect(task.payload.liveTurnGrantId).toBe('ltg-lapsed-1');
   });
+
+  it('drops a live signal and grant that leaked onto a woken task (#2515)', async () => {
+    // The specialist's metadata carries no wakeContext, so forwarding the flag would turn a
+    // wake into a live principal turn there: the elevated gate and contact-link-identity's
+    // principal re-statement would both pass.
+    const { bus, published } = makeBus();
+    await new DelegateHandler().execute(makeCtx(bus, {
+      liveTurn: true,
+      liveTurnGrantId: 'ltg-1',
+      taskMetadata: {
+        originator: { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' },
+        wakeContext: { derived: false },
+      },
+    }));
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    expect(task.payload.liveTurn).toBeUndefined();
+    expect(task.payload.liveTurnGrantId).toBeUndefined();
+    expect(task.payload.metadata).not.toHaveProperty('wakeContext');
+  });
 });
 
 describe('DelegateHandler turn deadline (#2371)', () => {

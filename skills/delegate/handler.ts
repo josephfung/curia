@@ -699,6 +699,8 @@ export class DelegateHandler implements ToolHandler {
     if (ctx.taskMetadata?.originator) {
       delegationMetadata.originator = ctx.taskMetadata.originator;
     }
+    // ctx.taskMetadata is the effective standing, which keeps the wake marker (#1125).
+    const wokenTurn = ctx.taskMetadata?.['wakeContext'] !== undefined;
 
     // Publish an agent.task event for the specialist.
     // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
@@ -724,10 +726,12 @@ export class DelegateHandler implements ToolHandler {
       // and `liveTurn` is a distinct field no persistence skill copies. It is "live" only for the
       // duration of this synchronous call; the moment work crosses an async boundary
       // (scheduler-create, task wake_at, a persisted bullpen thread) the signal is gone.
-      liveTurn: ctx.liveTurn,
+      // A woken task is never live, and delegationMetadata carries no wakeContext, so a flag
+      // leaked onto a wake would become a live turn here: drop it (#2515).
+      liveTurn: wokenTurn ? undefined : ctx.liveTurn,
       // A voice hand-off's grant (#2495) rides along, so the specialist's live turn ends when
       // the grant does, and a lapsed one still asks the principal to confirm.
-      ...(ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
+      ...(!wokenTurn && ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
       // When this wait ends (#2371): the reasoning watchdog positions its time trigger
       // against it. A distinct field, never cancelling the specialist's turn.
       turnDeadlineAt: Date.now() + specialistTimeoutMs,

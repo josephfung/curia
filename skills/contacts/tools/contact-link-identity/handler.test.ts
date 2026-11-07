@@ -243,6 +243,15 @@ describe('ContactLinkIdentityHandler', () => {
       expect((await contacts.getContactWithIdentities(acmeId))!.identities[0]).toMatchObject({ source, verified: true });
     });
 
+    it('verifies on a replay the principal approved, after the voice grant lapsed', async () => {
+      await contacts.linkIdentity({
+        contactId: acmeId, channel: 'email', channelIdentifier: 'office@acme.example', source: 'self_claimed', verified: false,
+      });
+      const result = await restate({ ...LIVE, liveTurn: false, liveTurnGrantId: 'ltg-lapsed', humanApproved: true });
+      expect(result).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
+      expect(await isVerified()).toBe(true);
+    });
+
     describe('refuses, and leaves it unverified', () => {
       beforeEach(async () => {
         await contacts.linkIdentity({
