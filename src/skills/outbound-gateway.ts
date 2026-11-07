@@ -671,6 +671,13 @@ function wakeAskFor(request: OutboundSendRequest, ask: BandReviewAsk): ApprovalW
 // OutboundGateway
 // ---------------------------------------------------------------------------
 
+/**
+ * Refusal for a send through a Curia email account bound to the principal's own mailbox (#2474).
+ * Curia sends from that mailbox only through the ceo-inbox principal-mailbox path.
+ */
+export const PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL =
+  "This email account is the principal's own mailbox. Curia sends from it only through the ceo-inbox specialist, so nothing was sent.";
+
 export class OutboundGateway {
   /** All configured email accounts: accountId → NylasClient. */
   private readonly nylasClients: Map<string, NylasClient>;
@@ -904,6 +911,17 @@ export class OutboundGateway {
       originator?: TaskOriginator;
     },
   ): Promise<OutboundSendResult> {
+    // Closes the second outbound surface (#2474, design D1): a send through an account bound to
+    // the principal's own mailbox would bypass the principal-mailbox send path. Runs before every
+    // other step so nothing is gated, recorded or published for it. Fail-closed: a refusal sends nothing.
+    if (request.channel === 'email' && this.isPrincipalMailbox(request.accountId)) {
+      this.log.warn(
+        { accountId: request.accountId },
+        'outbound-gateway: send refused — account is the principal\'s own mailbox (#2474)',
+      );
+      return { success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL };
+    }
+
     // ------------------------------------------------------------------
     // Step 0: Autonomy gate — score below 'medium' threshold blocks all outbound sends
     // ------------------------------------------------------------------
@@ -3756,6 +3774,15 @@ export class OutboundGateway {
       holdRecipe?: SendRecipe;
     },
   ): Promise<OutboundSendResult> {
+    // Closes the second outbound surface (#2474, design D1); see send(). Fail-closed.
+    if (this.isPrincipalMailbox(accountId)) {
+      this.log.warn(
+        { draftId, accountId },
+        'outbound-gateway: draft send refused — account is the principal\'s own mailbox (#2474)',
+      );
+      return { success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL };
+    }
+
     // ------------------------------------------------------------------
     // Step 0: Autonomy gate
     // ------------------------------------------------------------------
