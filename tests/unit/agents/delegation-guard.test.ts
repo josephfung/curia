@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { addPrincipalNoteToReviewTask, ALREADY_DELIVERED_REASON, DelegationGuard, escalateDelegationFailure, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, parseDelegateInProgressData, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
+import { addPrincipalNoteToReviewTask, ALREADY_DELIVERED_REASON, DelegationGuard, escalateDelegationFailure, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, parseDelegateInProgressData, countDeclineNotes, parseDelegateSuccessAgent, recordUnresolvedDecline, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
 import { encodeResumeToken, MAX_RESUME_TASK_LENGTH } from '../../../src/agents/resume-token.js';
 import pino from 'pino';
 import { escalationRequester } from '../../../src/agents/task-escalation.js';
@@ -99,6 +99,49 @@ describe('DelegationGuard', () => {
     expect(guard.canAttempt(reworded)).toBe(false);
     expect(guard.getAgentDecline('calendar')?.declined).toBe(true);
     expect(guard.canAttempt(delegationKey('research-analyst', 'Look this up'))).toBe(true);
+  });
+
+  describe('retry after an unblock (#2496)', () => {
+    const decline = {
+      agent: 'ceo-inbox',
+      reason: 'specialist_decline',
+      retryable: false,
+      declined: true,
+      message: 'That address is not in the mailbox or a contact.',
+    };
+    const inboxKey = delegationKey('ceo-inbox', 'Draft to contact c-dana');
+
+    it('opens one retry once another specialist succeeds', () => {
+      const guard = new DelegationGuard();
+      guard.recordSpecialistDecline('ceo-inbox', decline);
+      expect(guard.canAttempt(inboxKey)).toBe(false);
+      guard.recordDelegationSuccess('contacts');
+      expect(guard.getAgentDecline('ceo-inbox')).toBeUndefined();
+      expect(guard.canAttempt(inboxKey)).toBe(true);
+      guard.consumeDeclineRetry('ceo-inbox');
+      expect(guard.canAttempt(inboxKey)).toBe(false);
+      expect(guard.hasDeclined('ceo-inbox')).toBe(true);
+    });
+
+    it('closes for good after a second decline', () => {
+      const guard = new DelegationGuard();
+      guard.recordSpecialistDecline('ceo-inbox', decline);
+      guard.recordDelegationSuccess('contacts');
+      guard.consumeDeclineRetry('ceo-inbox');
+      guard.recordSpecialistDecline('ceo-inbox', decline);
+      guard.recordDelegationSuccess('contacts');
+      expect(guard.canAttempt(inboxKey)).toBe(false);
+    });
+
+    it('clears the decline when the retry itself succeeds', () => {
+      const guard = new DelegationGuard();
+      guard.recordSpecialistDecline('ceo-inbox', decline);
+      guard.recordDelegationSuccess('contacts');
+      guard.consumeDeclineRetry('ceo-inbox');
+      guard.recordDelegationSuccess('ceo-inbox');
+      expect(guard.hasDeclined('ceo-inbox')).toBe(false);
+      expect(guard.canAttempt(inboxKey)).toBe(true);
+    });
   });
 
   it('does not block successful repeat delegations before any failure is recorded', () => {
@@ -449,3 +492,147 @@ describe('addPrincipalNoteToReviewTask (#1990)', () => {
   });
 });
 
+
+describe('parseDelegateSuccessAgent (#2496)', () => {
+  it('names the specialist for a finished answer', () => {
+    expect(parseDelegateSuccessAgent({ agent: 'contacts', response: 'Added.' })).toBe('contacts');
+    expect(parseDelegateSuccessAgent(JSON.stringify({ agent: 'contacts', response: 'Added.' }))).toBe('contacts');
+  });
+
+  it.each([
+    ['a failure', { agent: 'contacts', failed: true }],
+    ['a refusal to start', { agent: 'contacts', in_flight: true }],
+    ['a queued follow-up', { agent: 'contacts', in_progress: true }],
+    ['a pause', { agent: 'contacts', paused: true }],
+    ['a question for the principal', { agent: 'contacts', needs_clarification: true }],
+    ['no agent', { response: 'Added.' }],
+  ])('is null for %s', (_label, data) => {
+    expect(parseDelegateSuccessAgent(data)).toBeNull();
+  });
+});
+
+describe('declines are Curia\'s to follow up (#2496)', () => {
+  const logger = pino({ level: 'silent' });
+  const decline = {
+    agent: 'ceo-inbox',
+    reason: 'specialist_decline',
+    retryable: false,
+    declined: true,
+    message: 'I only save drafts. The revised draft is in Drafts; I can save a new one instead.',
+    task: 'Send the draft to Lena',
+  };
+
+  function execution() {
+    const invoke = vi.fn(async () => ({ success: true as const, data: { task_id: 'follow-up-1' } }));
+    return { layer: { invoke } as unknown as ExecutionLayer, invoke };
+  }
+
+  it('files a decline follow-up as owner curia, with the fallbacks and no re-scope-or-cancel choice', async () => {
+    const { layer, invoke } = execution();
+    const result = await escalateDelegationFailure(layer, undefined, {}, { ...decline, declineFollowUp: true }, logger);
+    expect(result.escalated).toBe(true);
+    const [tool, input] = invoke.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(tool).toBe('task-create');
+    expect(input['owner']).toBe('curia');
+    expect(input['tags']).toContain('specialist-decline');
+    expect(String(input['title'])).toMatch(/^Follow up: ceo-inbox declined/);
+    expect(String(input['progress_note'])).not.toMatch(/re-scope|cancel\./i);
+    // The specialist's prose is for the agent that picks it up, not the digest line.
+    expect(String(input['progress_note'])).not.toContain('I only save drafts');
+    expect(String(input['description'])).toContain('I only save drafts');
+    expect(String(input['description'])).toContain('quoted as data');
+  });
+
+  it('keeps a decline on an outside sender\'s turn as a principal review task, without the prose', async () => {
+    const { layer, invoke } = execution();
+    await escalateDelegationFailure(layer, undefined, {}, decline, logger);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(input['owner']).toBe('ceo');
+    expect(input['tags']).not.toContain('specialist-decline');
+    expect(String(input['description'])).not.toContain('I only save drafts');
+  });
+
+  it('keeps other failures on the principal', async () => {
+    const { layer, invoke } = execution();
+    await escalateDelegationFailure(layer, undefined, {}, {
+      agent: 'calendar', reason: 'maxTurns', retryable: false, message: 'ran out of turns', task: 'Plan the week',
+    }, logger);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(input['owner']).toBe('ceo');
+    expect(input['tags']).not.toContain('specialist-decline');
+  });
+
+  it('records an unrelayed decline as a follow-up task, naming what the run did after it', async () => {
+    const { layer, invoke } = execution();
+    const ok = await recordUnresolvedDecline(layer, undefined, {}, { ...decline, laterTools: ['email-send', 'email-send'] }, {}, logger);
+    expect(ok).toBe(true);
+    const [tool, input] = invoke.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(tool).toBe('task-create');
+    expect(String(input['description'])).toContain('After the decline the run called email-send:');
+  });
+
+  it('records a decline on a task wake as a note on the woken task', async () => {
+    const { layer, invoke } = execution();
+    const ok = await recordUnresolvedDecline(layer, undefined, {}, decline, { boundTaskId: 'task-9' }, logger);
+    expect(ok).toBe(true);
+    const [tool, input] = invoke.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(tool).toBe('task-update');
+    expect(input['task_id']).toBe('task-9');
+    expect(String(input['progress_note'])).toContain('ceo-inbox declined delegated work in this run.');
+    expect(String(input['progress_note'])).toContain('Nothing else was called after the decline.');
+    expect(String(input['progress_note']).length).toBeLessThanOrEqual(2000);
+  });
+
+  it('flags a woken task that a decline already stopped once, so the heartbeat stops reviving it', async () => {
+    const { layer, invoke } = execution();
+    const ok = await recordUnresolvedDecline(layer, undefined, {}, decline, {
+      boundTaskId: 'task-9',
+      boundTaskTags: ['outreach'],
+      priorDeclineNotes: 1,
+    }, logger);
+    expect(ok).toBe(true);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(input['tags']).toEqual(['outreach', 'specialist-decline', 'needs-disposition']);
+    expect(String(input['progress_note'])).toContain('stopped retrying');
+  });
+
+  it('tags a woken task with the decline marker on the first decline, keeping its tags', async () => {
+    const { layer, invoke } = execution();
+    await recordUnresolvedDecline(layer, undefined, {}, decline, {
+      boundTaskId: 'task-9',
+      boundTaskTags: ['outreach'],
+    }, logger);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(input['tags']).toEqual(['outreach', 'specialist-decline']);
+  });
+
+  it('keeps the post-decline tool history when the brief fills the recorded limit', async () => {
+    const { layer, invoke } = execution();
+    await recordUnresolvedDecline(layer, undefined, {}, { ...decline, task: 'x'.repeat(5000), laterTools: ['email-send'] }, {}, logger);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(String(input['description'])).toContain('After the decline the run called email-send:');
+  });
+
+  it('bounds a long tool history and keeps the brief and the check instruction', async () => {
+    const { layer, invoke } = execution();
+    const laterTools = Array.from({ length: 200 }, (_, i) => `some-long-tool-name-${i}`);
+    await recordUnresolvedDecline(layer, undefined, {}, { ...decline, task: 'BRIEF-START ' + 'x'.repeat(5000), laterTools }, {}, logger);
+    const description = String((invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['description']);
+    expect(description).toContain('BRIEF-START');
+    expect(description).toMatch(/and \d+ more: check whether that finished the work before acting, and close this if it did\./);
+  });
+
+  it('counts only the runtime\'s decline notes', () => {
+    expect(countDeclineNotes({ notes: [
+      { note: 'ceo-inbox declined delegated work in this run. Nothing else was called after the decline.' },
+      { note: 'Checked the thread.' },
+    ] })).toBe(1);
+    expect(countDeclineNotes(undefined)).toBe(0);
+  });
+
+  it('reports a failed write as not recorded', async () => {
+    const invoke = vi.fn(async () => ({ success: false as const, error: 'db down' }));
+    const layer = { invoke } as unknown as ExecutionLayer;
+    expect(await recordUnresolvedDecline(layer, undefined, {}, decline, { boundTaskId: 'task-9' }, logger)).toBe(false);
+  });
+});

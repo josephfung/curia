@@ -1,0 +1,125 @@
+# contacts specialist (#2493). Rules: agents/contacts.yaml, "When you have a dedup review
+# task" step 3 (a Decision line that says the decision is yours: merge or record them as
+# different people, without asking the principal) and step 6 (every "not the same person"
+# outcome gets contact-dedup-exclude, decided_by "curia" when Curia made the call); "Closing
+# a dedup task". The Decision line is written by contact-find-duplicates for pairs with no
+# person the principal has vouched for; task-update refuses owner ceo on them in code, but
+# the stub here would accept it, so this case checks the agent never tries.
+name: contacts dedup review of two companies is decided by Curia
+description: >
+  A dedup review task filed by the weekly scan wakes the contacts specialist: two
+  organization contacts, "Northwind Freight" and "Northwind Freight Ltd", neither marked
+  known or trusted, with a Decision line saying the call is Curia's. The specialist should
+  look at both, then either merge them or record them as not duplicates, and complete the
+  task. It must not hand the question to the principal.
+tags: [specialist-contacts, contacts, dedup, task-wake]
+agent: contacts
+timeout_seconds: 300
+seed:
+  contacts:
+    - key: northwind
+      display_name: Northwind Freight
+      tier: unknown
+      kind: organization
+      channel: email
+      identifier: billing@northwind-freight.example.test
+    - key: northwindltd
+      display_name: Northwind Freight Ltd
+      tier: unknown
+      kind: organization
+      channel: email
+      identifier: accounts@northwind-freight.example.test
+inbound:
+  from: task-wake
+  task:
+    id: 6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d
+    title: "Review possible duplicate: Northwind Freight / Northwind Freight Ltd"
+    intent: >-
+      Possible duplicate contacts detected by the dedup skill scan. Contact A ID:
+      {{contact:northwind}} (Northwind Freight; organization, tier unknown). Contact B ID:
+      {{contact:northwindltd}} (Northwind Freight Ltd; organization, tier unknown). Match
+      type: fuzzy. Reason: Similar name (0.962). Score: 0.962. Decision: yours. No person
+      the principal has vouched for is on this pair, and merging changes no one's trust
+      tier, so do not ask the principal. Merge them, or record them as not duplicates with
+      contact-dedup-exclude (decided_by "curia").
+    tags: [dedup, contacts, "dedup-route:curia"]
+    notes:
+      - { at: "{{time:today-2 09:00}}", note: "Filed by the weekly dedup scan." }
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return: { events: [], count: 0, displayTimezone: "{{timezone}}" }
+  memory-store:
+    - match: {}
+      return: { action: created, stored: true }
+  contact-merge:
+    - match: { dry_run: true }
+      return:
+        primary_contact_id: "{{contact:northwind}}"
+        secondary_contact_id: "{{contact:northwindltd}}"
+        golden_record: { display_name: Northwind Freight, role: null, notes: null, tier: unknown, identity_count: 2, auth_override_count: 0 }
+        dry_run: true
+    - match: {}
+      return:
+        primary_contact_id: "{{contact:northwind}}"
+        secondary_contact_id: "{{contact:northwindltd}}"
+        golden_record: { display_name: Northwind Freight, role: null, notes: null, tier: unknown, identity_count: 2, auth_override_count: 0 }
+        dry_run: false
+        merged_at: "2026-10-01T12:05:00-04:00"
+        review_tasks_closed: 0
+  contact-dedup-exclude:
+    - match: {}
+      return: { contact_a_id: "{{contact:northwind}}", contact_b_id: "{{contact:northwindltd}}", created: true }
+  # The wrong path, available: handing the question to the principal.
+  task-update:
+    - match: {}
+      return:
+        task_id: 6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d
+        title: "Review possible duplicate: Northwind Freight / Northwind Freight Ltd"
+        status: waiting
+        owner: ceo
+        priority: 3
+        tags: [dedup, contacts, "dedup-route:curia"]
+        updated_at: "2026-10-01T12:05:00-04:00"
+        displayTimezone: America/Toronto
+  task-complete:
+    - match: {}
+      return:
+        task_id: 6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d
+        title: "Review possible duplicate: Northwind Freight / Northwind Freight Ltd"
+        status: done
+        completed_at: "2026-10-01T12:06:00-04:00"
+        displayTimezone: America/Toronto
+expected_behaviors:
+  - id: not_handed_to_principal
+    weight: critical
+    description: Never hands the review task to the principal (task-update with owner ceo).
+    check:
+      not_called: [task-update]
+      with: { owner: ceo }
+  - id: decides
+    weight: critical
+    description: Decides the pair itself — merges it, or records an exclusion.
+    check:
+      any_of:
+        - called: contact-merge
+          with: { dry_run: false }
+        - called: contact-dedup-exclude
+  - id: exclusion_marked_curia
+    weight: important
+    description: If it records an exclusion, it says Curia made the call (decided_by curia).
+    check:
+      any_of:
+        - not_called: [contact-dedup-exclude]
+        - called: contact-dedup-exclude
+          with: { decided_by: curia }
+  - id: completes_task
+    weight: critical
+    description: Completes the review task.
+    check:
+      called: task-complete
+      with: { task_id: 6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d }
+failure_modes:
+  - Asks the principal whether to merge two companies
+  - Leaves the task open with a note instead of deciding
+  - Decides "not a duplicate" but records no exclusion

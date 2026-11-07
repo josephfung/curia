@@ -57,6 +57,7 @@ import { DateTime } from 'luxon';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 import {
   CLARIFICATION_NEXT_STEP,
+  DECLINE_NEXT_STEP,
   PAUSED_NEXT_STEP,
   delegateFailureNextStep,
 } from '../../src/agents/prompts/delegate-result-guidance.js';
@@ -724,6 +725,9 @@ export class DelegateHandler implements ToolHandler {
       // duration of this synchronous call; the moment work crosses an async boundary
       // (scheduler-create, task wake_at, a persisted bullpen thread) the signal is gone.
       liveTurn: ctx.liveTurn,
+      // A voice hand-off's grant (#2495) rides along, so the specialist's live turn ends when
+      // the grant does, and a lapsed one still asks the principal to confirm.
+      ...(ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
       // When this wait ends (#2371): the reasoning watchdog positions its time trigger
       // against it. A distinct field, never cancelling the specialist's turn.
       turnDeadlineAt: Date.now() + specialistTimeoutMs,
@@ -995,6 +999,8 @@ export class DelegateHandler implements ToolHandler {
             reason: SPECIALIST_DECLINE_REASON,
             retryable: false,
             message: decline.message,
+            // The fallback order (#2496): the turn goes on, so the next step is the coordinator's.
+            next_step: DECLINE_NEXT_STEP,
           },
         };
       }

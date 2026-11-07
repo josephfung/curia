@@ -81,6 +81,7 @@ export function registerAgentRoster(agentRegistry: AgentRegistry, agentConfigs: 
       role: agentConfig.role ?? 'specialist',
       description: agentConfig.description ?? agentConfig.name,
       delegateWhen: agentConfig.delegate_when,
+      ...(agentConfig.limits !== undefined && { limits: agentConfig.limits }),
       displayName: agentConfig.display_name,
       expectedDurationSeconds: agentConfig.expected_duration_seconds,
       pinnedDocPaths: pinnedDocPaths(parsePinnedContext(agentConfig.pinned_context, agentConfig.name)),

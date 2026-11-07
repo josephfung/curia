@@ -1,6 +1,6 @@
 {
   "name": "contact-find-duplicates",
-  "description": "Scan all contacts for duplicate pairs above a score threshold, file Curia-owned review tasks for new pairs, and return a summary. Idempotent: pairs that already have an open 'dedup' task (matched by structured dedup-pair tag or description IDs) or a recorded dedup exclusion are skipped. Use this for the weekly scheduled scan — it files tasks rather than returning a raw list, so it never floods the agent context.",
+  "description": "Weekly contacts dedup scan. Merges pairs with structural proof itself (when the autonomy score allows), files one Curia-owned review task per remaining pair above the score threshold, closes review tasks that are already settled, and returns summary counts, never a raw pair list. Skips pairs with an open review task, a recorded exclusion, or a review closed in the last 8 weeks unless a contact changed since.",
   "version": "2.2.1",
   "sensitivity": "normal",
   "action_risk": "low",
@@ -9,14 +9,26 @@
     "max_tasks": "number?"
   },
   "outputs": {
+    "auto_merged": "number",
+    "auto_merge_failed": "number",
+    "auto_merge_capped": "number",
+    "auto_merge_enabled": "boolean",
+    "auto_merge_disabled_reason": "string? — why auto-merge was off this run",
     "filed": "number",
+    "filed_for_principal": "number — of filed, how many the principal may be asked about",
     "skipped_existing": "number",
     "skipped_excluded": "number",
+    "skipped_recently_decided": "number",
+    "skipped_merged_this_run": "number",
     "capped": "number",
     "failed": "number",
+    "tasks_closed": "number",
+    "tasks_handed_back": "number",
+    "tasks_unblocked": "number",
     "total_scanned": "number"
   },
   "capabilities": ["taskRepo"],
+  "optional_capabilities": ["autonomyService"],
   "permissions": [],
   "secrets": [],
   "timeout": 60000

@@ -72,6 +72,13 @@ export interface AgentTaskPayload {
    *  live turn inherits it). Structurally absent from every wake, scheduler fire, and persisted
    *  task — those construct their own agent.task without it. The elevated-skill gate requires it. */
   liveTurn?: boolean;
+  /** Live-turn grant (#2495). Set by `async-offramp` on work the principal directed on a voice
+   *  call, and forwarded by `delegate` alongside `liveTurn`. While the grant is active
+   *  (src/autonomy/live-turn-grants.ts) `liveTurn` counts; once it lapses (the call's wait
+   *  returned, the call ended, or it never was live) it does not, and an elevated tool asks
+   *  the principal to confirm instead of failing. A distinct top-level field for the same
+   *  reason as `liveTurn`: a skill forwarding the metadata bag must not carry it. */
+  liveTurnGrantId?: string;
   /** Synthetic-turn signal (#1892). Like `liveTurn`, a DISTINCT top-level field rather than a
    *  `metadata` key, so a skill forwarding the metadata bag cannot set it by accident. Stamped
    *  `true` when an internal producer re-enters an agent with a brief Curia wrote to itself,
@@ -532,6 +539,10 @@ interface ContactMergedPayload {
   primaryContactId: string;
   secondaryContactId: string;
   mergedAt: Date;
+  /** Why the contacts were merged — set by the dedup scan's automatic merges (#2493). */
+  reason?: string;
+  /** Who decided the merge, e.g. 'dedup-scan'. Absent for an agent or console merge. */
+  mergedBy?: string;
 }
 
 // activity.summary — published by ActivitySummarizer (src/activity/summarizer.ts) once a

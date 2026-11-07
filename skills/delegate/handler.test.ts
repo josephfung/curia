@@ -148,6 +148,22 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
     expect(task.payload.liveTurn).toBeUndefined();
   });
+
+  it('forwards a voice hand-off\'s live-turn grant with the live signal, off the metadata bag (#2495)', async () => {
+    const { bus, published } = makeBus();
+    await new DelegateHandler().execute(makeCtx(bus, { liveTurn: true, liveTurnGrantId: 'ltg-1' }));
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    expect(task.payload.liveTurnGrantId).toBe('ltg-1');
+    expect(task.payload.metadata).not.toHaveProperty('liveTurnGrantId');
+  });
+
+  it('forwards a lapsed grant id even when the turn is no longer live (#2495)', async () => {
+    const { bus, published } = makeBus();
+    await new DelegateHandler().execute(makeCtx(bus, { liveTurn: false, liveTurnGrantId: 'ltg-lapsed-1' }));
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    expect(task.payload.liveTurn).toBe(false);
+    expect(task.payload.liveTurnGrantId).toBe('ltg-lapsed-1');
+  });
 });
 
 describe('DelegateHandler turn deadline (#2371)', () => {

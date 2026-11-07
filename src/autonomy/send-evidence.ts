@@ -39,6 +39,7 @@
 // audit_log when the gateway asks.
 
 import type { AuditLogRepo, AuditLogRow } from '../audit/audit-log-repo.js';
+import { isLiveTurnGrantActive } from './live-turn-grants.js';
 import type { ContactTier, SystemRole } from '../contacts/types.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { OutreachLinkKind } from '../dispatch/outreach-matcher.js';
@@ -326,10 +327,13 @@ export class SendEvidenceCollector {
         .filter((s): s is string => typeof s === 'string' && s.length > 0)
         .map(reportEvidence);
 
+      const grantId = task.payload['liveTurnGrantId'];
       const authority: SendAuthority = {
         originator: readOriginator(isRecord(metadata) ? metadata['originator'] : undefined),
-        // The dispatcher's distinct top-level signal (#1126); only an exact true counts.
-        liveTurn: task.payload['liveTurn'] === true,
+        // The dispatcher's distinct top-level signal (#1126); only an exact true counts. A voice
+        // hand-off's liveTurn counts only while its grant is active (#2495).
+        liveTurn: task.payload['liveTurn'] === true
+          && (grantId === undefined || isLiveTurnGrantActive(typeof grantId === 'string' ? grantId : undefined)),
         ...(boundTaskId !== undefined ? await this.readTasks(boundTaskId) : {}),
         ...(link !== null ? { linkedTask: await this.readLinkedTask(link) } : {}),
       };

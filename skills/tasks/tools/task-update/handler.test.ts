@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { TaskUpdateHandler } from './handler.js';
+import { DECLINE_HANDOFF_ERROR, TaskUpdateHandler } from './handler.js';
 import { BLOCKED_BY_TASK_ID_ERROR, SELF_BLOCK_ERROR } from '../../optional-ref.js';
+import { dedupPairTag } from '../../../../src/contacts/dedup-pair-key.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { TaskRepo } from '../../../../src/db/task-repo.js';
 import type { TaskRow } from '../../../../src/db/queries/tasks.js';
@@ -428,4 +429,139 @@ describe('TaskUpdateHandler', () => {
       expect(error).not.toMatch(/violates foreign key/);
     });
   });
+
+  // ── Dedup review routed to Curia (#2493) ────────────────────────────────────
+
+  describe('dedup review routed to Curia', () => {
+    const curiaTask = makeTaskRow({ tags: ['dedup', 'contacts', 'dedup-route:curia'] });
+
+    it('refuses to hand the task to the principal', async () => {
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(curiaTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, owner: 'ceo', status: 'waiting', progress_note: 'Merge?' },
+        taskRepo,
+      }));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('yours to decide');
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('allows the hand-over once a contact on the pair has become known since filing', async () => {
+      const idA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const idB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      const task = makeTaskRow({ tags: ['dedup', 'contacts', 'dedup-route:curia', dedupPairTag(idA, idB)] });
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(task) });
+      const contactService = {
+        getContact: vi.fn(async (id: string) => ({
+          id, kind: 'person', tier: id === idA ? 'known' : 'unknown',
+        })),
+      };
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, owner: 'ceo', status: 'waiting', progress_note: 'Merge?' },
+        taskRepo,
+        contactService: contactService as never,
+      }));
+      expect(result.success).toBe(true);
+      expect(taskRepo.updateTask).toHaveBeenCalled();
+    });
+
+    it('refuses a tags update that drops the dedup tag', async () => {
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(curiaTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, tags: ['dedup-route:curia'] },
+        taskRepo,
+      }));
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('dedup tag') });
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('refuses a tags update that adds the principal route tag next to the curia one', async () => {
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(curiaTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, tags: ['dedup', 'dedup-route:curia', 'dedup-route:principal'] },
+        taskRepo,
+      }));
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('only the dedup-route:curia') });
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('refuses a tags update that drops the route tag', async () => {
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(curiaTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, tags: ['dedup'] },
+        taskRepo,
+      }));
+      expect(result.success).toBe(false);
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('still lets the principal own a review routed to them', async () => {
+      const principalTask = makeTaskRow({ tags: ['dedup', 'dedup-route:principal'] });
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(principalTask) });
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, owner: 'ceo', status: 'waiting' },
+        taskRepo,
+      }));
+      expect(result.success).toBe(true);
+      expect(taskRepo.updateTask).toHaveBeenCalled();
+    });
+
+    it('does not read the task for an update that neither changes owner nor tags', async () => {
+      const taskRepo = makeTaskRepo();
+      await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, status: 'in_progress' },
+        taskRepo,
+      }));
+      expect(taskRepo.getTask).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('decline follow-up handoff to the principal (#2496)', () => {
+    const declineTask = makeTaskRow({ owner: 'curia', tags: ['delegation-failure', 'ceo-inbox', 'specialist-decline'] });
+
+    async function handOff(input: Record<string, unknown>, current: TaskRow = declineTask) {
+      const repo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(current) });
+      const result = await new TaskUpdateHandler().execute(
+        makeCtx({ input: { task_id: VALID_UUID, owner: 'ceo', ...input }, taskRepo: repo }),
+      );
+      return { result, repo };
+    }
+
+    it('refuses to move it to the principal without a question', async () => {
+      const { result, repo } = await handOff({ progress_note: 'Re-scope it smaller, or cancel.' });
+      expect(result).toEqual({ success: false, error: DECLINE_HANDOFF_ERROR });
+      expect(repo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('refuses with no progress note at all', async () => {
+      const { result } = await handOff({});
+      expect(result.success).toBe(false);
+    });
+
+    it('moves it with one question for the principal', async () => {
+      const { result, repo } = await handOff({ progress_note: 'Should I send the Lena draft from your account as written?' });
+      expect(result.success).toBe(true);
+      expect(repo.updateTask).toHaveBeenCalledWith(
+        VALID_UUID,
+        expect.objectContaining({ owner: 'ceo' }),
+        'coordinator',
+      );
+    });
+
+    it('keeps the decline marker when the agent replaces the tags without it', async () => {
+      const { result, repo } = await handOff({ tags: ['ceo-inbox'], progress_note: 'Should I send it?' });
+      expect(result.success).toBe(true);
+      expect(repo.updateTask).toHaveBeenCalledWith(
+        VALID_UUID,
+        expect.objectContaining({ tags: ['ceo-inbox', 'specialist-decline'] }),
+        'coordinator',
+      );
+    });
+
+    it('leaves other tasks alone', async () => {
+      const { result } = await handOff({}, makeTaskRow({ owner: 'curia', tags: ['delegation-failure'] }));
+      expect(result.success).toBe(true);
+    });
+  });
 });
+

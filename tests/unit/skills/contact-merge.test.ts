@@ -136,7 +136,7 @@ describe('ContactMergeHandler', () => {
       { contactService: contactService as never },
     ));
     expect(result.success).toBe(true);
-    expect(contactService.mergeContacts).toHaveBeenCalledWith(VALID_UUID_A, VALID_UUID_B, false);
+    expect(contactService.mergeContacts).toHaveBeenCalledWith(VALID_UUID_A, VALID_UUID_B, false, { mergedBy: 'contact-merge' });
     if (result.success) {
       const data = result.data as { merged_at: string };
       expect(data.merged_at).toBe('2026-04-05T12:00:00.000Z');
@@ -259,4 +259,57 @@ describe('ContactMergeHandler — structural contacts', () => {
     expect(await contacts.getContact(eve.id)).toBeUndefined();
     expect((await contacts.resolveByChannelIdentity('email', 'eve@evil.example'))?.contactId).toBe(dana.id);
   });
+
+  // #2493: a combined decision runs as several merges; each closes the sibling review
+  // tasks that name the contact it folded away.
+  describe('stranded dedup review tasks', () => {
+    const VALID_UUID_C = '550e8400-e29b-41d4-a716-446655440002';
+    const goldenRecord = {
+      displayName: 'Jenna Torres', role: 'CFO', notes: null, tier: 'known', identities: [], authOverrides: [],
+    };
+    const dedupTask = (id: string, a: string, b: string) => ({
+      id, tags: ['dedup', `dedup-pair:${a < b ? `${a}:${b}` : `${b}:${a}`}`], description: null,
+    });
+
+    function setup(dryRun: boolean) {
+      const contactService = {
+        getContact: vi.fn().mockResolvedValue(ORDINARY),
+        mergeContacts: vi.fn().mockResolvedValue({
+          primaryContactId: VALID_UUID_A, secondaryContactId: VALID_UUID_B, goldenRecord, dryRun,
+          ...(dryRun ? {} : { mergedAt: new Date() }),
+        }),
+      };
+      const taskRepo = {
+        listTasks: vi.fn().mockResolvedValue([
+          dedupTask('own', VALID_UUID_A, VALID_UUID_B),
+          dedupTask('sibling', VALID_UUID_B, VALID_UUID_C),
+        ]),
+        completeTask: vi.fn().mockResolvedValue({}),
+      };
+      return { contactService, taskRepo };
+    }
+
+    it('closes siblings naming the merged-away contact, leaving the pair\'s own task', async () => {
+      const { contactService, taskRepo } = setup(false);
+      const result = await handler.execute(makeCtx(
+        { primary_contact_id: VALID_UUID_A, secondary_contact_id: VALID_UUID_B, dry_run: false },
+        { contactService: contactService as never, taskRepo: taskRepo as never },
+      ));
+      expect(result.success).toBe(true);
+      expect(taskRepo.completeTask).toHaveBeenCalledOnce();
+      expect(taskRepo.completeTask).toHaveBeenCalledWith('sibling', expect.stringContaining('Jenna Torres'), 'contacts');
+      if (result.success) expect(result.data).toMatchObject({ review_tasks_closed: 1 });
+    });
+
+    it('closes nothing on a dry run', async () => {
+      const { contactService, taskRepo } = setup(true);
+      await handler.execute(makeCtx(
+        { primary_contact_id: VALID_UUID_A, secondary_contact_id: VALID_UUID_B },
+        { contactService: contactService as never, taskRepo: taskRepo as never },
+      ));
+      expect(taskRepo.listTasks).not.toHaveBeenCalled();
+      expect(taskRepo.completeTask).not.toHaveBeenCalled();
+    });
+  });
 });
+

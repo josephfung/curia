@@ -8,6 +8,12 @@
 /** Stable failure reason on the delegate result. Not the model's free-text attribute. */
 export const SPECIALIST_DECLINE_REASON = 'specialist_decline';
 
+/**
+ * Tag on a decline's Curia-owned follow-up task (#2496). task-update moves a task
+ * carrying it to the principal only with a question for them.
+ */
+export const SPECIALIST_DECLINE_TAG = 'specialist-decline';
+
 /** Shown in the delegated-task system message so the format is harness-set. */
 export const SPECIALIST_DECLINE_MARKER_EXAMPLE =
   '<specialist_decline reason="short_reason">why the task cannot be done</specialist_decline>';

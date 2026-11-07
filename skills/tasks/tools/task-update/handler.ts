@@ -8,6 +8,9 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { UpdateTaskParams } from '../../../../src/db/task-repo.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { isUuid } from '../../../../src/util/uuid.js';
+import { dedupReviewRoute, dedupRouteTag, routeFromTags } from '../../../../src/contacts/dedup-routing.js';
+import { pairKeyFromDedupTask } from '../../../../src/contacts/dedup-pair-key.js';
+import { SPECIALIST_DECLINE_TAG } from '../../../../src/agents/specialist-decline.js';
 import {
   BLOCKED_BY_TASK_ID_ERROR,
   SELF_BLOCK_ERROR,
@@ -17,14 +20,49 @@ import {
   taskNotFoundError,
 } from '../../optional-ref.js';
 
+const CURIA_DEDUP_ROUTE_ERROR =
+  'This dedup review is yours to decide, not the principal\'s: no person they have vouched for is on '
+  + 'it, and merging changes no one\'s trust tier. Merge the pair with contact-merge, or record it as '
+  + 'not a duplicate with '
+  + 'contact-dedup-exclude (decided_by "curia"), then complete the task.';
+
 const VALID_STATUSES = new Set(['open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled']);
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
+
+// A decline's follow-up is Curia's while Curia can act on it (#2496). Handing it to the
+// principal must come with the one thing they can do that Curia cannot: answer.
+export const DECLINE_HANDOFF_ERROR =
+  'This task follows up a specialist decline, and moves to the principal (owner ceo) only with ' +
+  'a progress_note asking them one specific question. If you can still act on it (the ' +
+  'alternative the specialist offered, doing the step yourself, or a specialist that can ' +
+  'unblock it), do that and leave the owner as it is.';
 const MAX_PROGRESS_NOTE = 2000;
 // Room for " [truncated: N characters cut]" (29 chars + digits) inside the limit.
 const TRUNCATION_MARKER_RESERVE = 40;
 
 // Strict ISO-8601 datetime with timezone offset. Rejects loose strings that new Date() would accept.
 const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Whether a dedup review stamped route 'curia' is the principal's by the contacts' current
+ * tiers. False when the contacts cannot be read: the stored route then stands.
+ */
+async function routeNowPrincipal(
+  ctx: ToolContext,
+  task: { tags?: string[]; description?: string | null },
+): Promise<boolean> {
+  const key = pairKeyFromDedupTask(task);
+  if (!key || !ctx.contactService) return false;
+  const [idA, idB] = key.split(':');
+  if (!idA || !idB) return false;
+  try {
+    const [a, b] = await Promise.all([ctx.contactService.getContact(idA), ctx.contactService.getContact(idB)]);
+    return a && b ? dedupReviewRoute(a, b) === 'principal' : false;
+  } catch (err) {
+    ctx.log.warn({ err, idA, idB }, 'task-update: could not re-read dedup pair contacts — keeping the stored route');
+    return false;
+  }
+}
 
 export class TaskUpdateHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -148,13 +186,54 @@ export class TaskUpdateHandler implements ToolHandler {
         }
       }
 
+      // A dedup review routed to Curia is not the principal's to decide (#2493): no person
+      // the principal has vouched for is on it, and a merge changes no one's tier. Refused here rather than left
+      // to the prompt, since prod showed the agent handing nearly every pair over. The
+      // route tag itself is kept so a tags update cannot launder the hand-over.
+      if (input.owner === 'ceo' || input.tags !== undefined) {
+        const current = await ctx.taskRepo.getTask(input.task_id);
+        if (current && routeFromTags(current.tags) === 'curia') {
+          // The stored route is the one at filing time. A contact vouched for since then
+          // makes the pair the principal's, so recompute it from the current tiers; with
+          // no way to read them, the stored route stands.
+          if (input.owner === 'ceo' && !(await routeNowPrincipal(ctx, current))) {
+            return { success: false, error: CURIA_DEDUP_ROUTE_ERROR };
+          }
+          // routeFromTags returns the first route tag, so a second one riding along would
+          // make a reader that looks for `principal` first treat the task as principal-routed.
+          if (input.tags && (routeFromTags(input.tags) !== 'curia' || input.tags.includes(dedupRouteTag('principal')))) {
+            return { success: false, error: 'tags must carry only the dedup-route:curia route tag on a dedup review task.' };
+          }
+          // The scan's idempotency check and merge cleanup both find review tasks by the
+          // `dedup` tag, so dropping it would let a second review be filed for the pair.
+          if (input.tags && !input.tags.includes('dedup')) {
+            return { success: false, error: 'tags must keep the dedup tag on a dedup review task.' };
+          }
+        }
+      }
+
+      if (input.owner === 'ceo' && !(progressNote ?? '').includes('?')) {
+        const current = await ctx.taskRepo.getTask(input.task_id);
+        if (current && current.owner !== 'ceo' && current.tags.includes(SPECIALIST_DECLINE_TAG)) {
+          ctx.log.info({ taskId: input.task_id }, 'task-update: refused decline handoff to the principal without a question');
+          return { success: false, error: DECLINE_HANDOFF_ERROR };
+        }
+      }
+
+      // A tag replacement must not drop the decline marker the handoff rule keys on.
+      let tags = input.tags;
+      if (tags && !tags.includes(SPECIALIST_DECLINE_TAG)) {
+        const existing = await ctx.taskRepo.getTask(input.task_id);
+        if (existing?.tags.includes(SPECIALIST_DECLINE_TAG)) tags = [...tags, SPECIALIST_DECLINE_TAG];
+      }
+
       const updates: UpdateTaskParams = {
         status: input.status,
         priority: input.priority,
         owner: input.owner,
         dueAt,
         wakeAt,
-        tags: input.tags,
+        tags,
         progressNote,
       };
       if (blockerUpdate.present) updates.blockedByTaskId = blockerUpdate.id;

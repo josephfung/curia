@@ -586,7 +586,7 @@ export interface ContactServiceOptions {
     reason: string,
   ) => void;
   /** Called after a successful non-dry-run merge to notify subscribers (e.g., for audit logging). */
-  onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
+  onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date, details?: ContactMergedDetails) => void;
   /** Called when a verified identity is linked — triggers confidence recompute.
    *  May return a Promise; rejections are caught by ContactService (non-fatal). */
   onIdentityVerified?: (contactId: string) => void | Promise<void>;
@@ -597,4 +597,22 @@ export interface ContactServiceOptions {
   /** Called after a contact's tier is automatically elevated to 'known'.
    *  Fired with the reason for observability/audit trail. Non-throwing. */
   onContactElevated?: (contactId: string, reason: TierElevationReason) => void;
+}
+
+/**
+ * Optional audit context for a merge, carried onto the contact.merged event (#2493).
+ * Set by the dedup scan's automatic merges so the audit row says why no human was asked.
+ */
+export interface ContactMergedDetails {
+  /** Why the contacts were merged, e.g. the dedup classifier's structural proof. */
+  reason?: string;
+  /** Who decided the merge, e.g. 'dedup-scan'. Absent for an agent or console merge. */
+  mergedBy?: string;
+  /**
+   * Abort the merge, writing nothing, if the contacts locked inside the transaction are at
+   * different tiers or either is structural. The dedup scan sets it: it approved the pair
+   * from a snapshot, and a tier granted since would otherwise lend the grant to the other
+   * side's addresses (#2493).
+   */
+  requireSameTier?: boolean;
 }

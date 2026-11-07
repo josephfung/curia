@@ -1,6 +1,6 @@
 {
   "name": "contact-merge",
-  "description": "Merge two contacts into one, consolidating channel identities and auth overrides using golden-record survivorship rules. Use dry_run: true to preview the result before committing. Always confirm with the principal before running with dry_run: false. It cannot change the principal's own addresses.",
+  "description": "Merge two contacts into one, consolidating channel identities and auth overrides using golden-record survivorship rules. Use dry_run: true to preview the result before committing. Run dry_run: false only when the principal confirmed the merge, or when a dedup review task says the decision is yours. It cannot change the principal's own addresses.",
   "version": "1.1.2",
   "sensitivity": "normal",
   "action_risk": "medium",
@@ -14,8 +14,10 @@
     "secondary_contact_id": "string",
     "golden_record": "object",
     "dry_run": "boolean",
-    "merged_at": "string?"
+    "merged_at": "string?",
+    "review_tasks_closed": "number? — other open dedup review tasks closed because they named the merged-away contact"
   },
+  "optional_capabilities": ["taskRepo"],
   "permissions": [],
   "secrets": [],
   "timeout": 30000
