@@ -169,7 +169,8 @@ the draft and files a digest item (D9). PD sends skip D4.
    acknowledgement never needs one *(call; simpler than hashing thread attachments)*.
 6. **One per thread per day, and not after a hold.** At most one autonomous send per thread
    per 24h; after a hold or refusal on a thread, no autonomous send there for 24h. Read from
-   the audit events D9 emits (durable across restarts, unlike the in-memory bounce ledger).
+   the D8 send ledger (durable across restarts, unlike the in-memory bounce ledger; a forged
+   entry can only block sends, never allow one).
    Stops an attacker resampling the judge with repeated emails *(call)*.
 7. **Not outsider-originated.** Refuse if `isOutsiderOriginated(taskMetadata)`. The intended
    autonomous path is system-originated triage; an outsider emailing Curia's own address
@@ -222,8 +223,9 @@ the draft and files a digest item (D9). PD sends skip D4.
 
 Per-send marker documents, create-only, so nothing read-modify-writes a shared set:
 
-- Before sending, `sendPrincipalDraft` writes `/scratch/curia-sent/<draftId>.md` (draft ID,
-  thread ID, recipients, time); after, it adds the returned message ID.
+- Before sending, `sendPrincipalDraft` writes a ledger doc under
+  `/scratch/principal-mailbox-sends/` (draft ID, thread ID, recipients, mode, time); after, it
+  adds the returned message ID. Autonomous holds and refusals are recorded there too (D4.6).
 - `ceo-inbox-sent-observe` lists the prefix and skips (a) any SENT message whose ID matches,
   and (b) any message on that thread to those recipients within a few minutes of the marker
   (the Nylas send response's `id` isn't documented to equal the SENT listing's ID on Gmail).
