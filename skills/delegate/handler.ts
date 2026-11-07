@@ -57,6 +57,7 @@ import { DateTime } from 'luxon';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 import {
   CLARIFICATION_NEXT_STEP,
+  DECLINE_NEXT_STEP,
   PAUSED_NEXT_STEP,
   delegateFailureNextStep,
 } from '../../src/agents/prompts/delegate-result-guidance.js';
@@ -998,6 +999,8 @@ export class DelegateHandler implements ToolHandler {
             reason: SPECIALIST_DECLINE_REASON,
             retryable: false,
             message: decline.message,
+            // The fallback order (#2496): the turn goes on, so the next step is the coordinator's.
+            next_step: DECLINE_NEXT_STEP,
           },
         };
       }

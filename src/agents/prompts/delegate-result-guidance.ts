@@ -48,6 +48,24 @@ export const NOTHING_SENT_NEXT_STEP_LINES: readonly string[] = [
 ];
 
 /**
+ * A specialist declined with the structured marker (#1871, #2496). Rides on the decline
+ * result, so it arrives exactly when the coordinator has to choose a fallback, and the
+ * turn continues rather than ending in a review task. The runtime reopens one retry to
+ * the declining specialist after another specialist's delegation succeeds.
+ */
+export const DECLINE_NEXT_STEP_LINES: readonly string[] = [
+  'The specialist declined. `message` is its account, written to you: what it could not do,',
+  'why, and any alternative it offered or finished. Before telling the principal it cannot',
+  'be done, try in order: (1) the alternative it offered, if it serves the request; (2) the',
+  'step yourself, if you hold the tool (for example email-send for a draft it could not',
+  'send); (3) a specialist that can unblock it (for example contacts verifying or adding a',
+  'recipient), after which one retry to this specialist is allowed. Ask the principal only',
+  'when their input or authority is needed, with one specific question; never ask them to',
+  're-scope, reassign or cancel. Report what was and was not done in your own words: do not',
+  'quote `message`, and leave out the specialist and any tool, grant or ID it names.',
+];
+
+/**
  * A delegation to a specialist that failed and may be retried: a retryable failure, or a
  * failed tool result. Keyed by agent id; only specialists whose failure has a known wrong
  * reading carry one. These were sentences in the coordinator prompt until prompt trim PR 6.
@@ -84,3 +102,4 @@ export const CLARIFICATION_NEXT_STEP = CLARIFICATION_NEXT_STEP_LINES.join(' ');
 export const PAUSED_NEXT_STEP = PAUSED_NEXT_STEP_LINES.join(' ');
 export const DRAFT_EMAIL_NEXT_STEP = DRAFT_EMAIL_NEXT_STEP_LINES.join(' ');
 export const NOTHING_SENT_NEXT_STEP = NOTHING_SENT_NEXT_STEP_LINES.join(' ');
+export const DECLINE_NEXT_STEP = DECLINE_NEXT_STEP_LINES.join(' ');

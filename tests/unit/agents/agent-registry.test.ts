@@ -110,6 +110,17 @@ describe('AgentRegistry', () => {
     );
   });
 
+  it('appends an agent\'s limits to its roster line (#2496)', () => {
+    registry.register('ceo-inbox', {
+      role: 'specialist',
+      description: 'The principal\'s inbox.',
+      limits: ['send email (drafts only)', 'edit a doc in place.\n'],
+    });
+    expect(registry.specialistSummary()).toBe(
+      '- @ceo-inbox: The principal\'s inbox. Cannot: send email (drafts only); edit a doc in place.',
+    );
+  });
+
   it('keeps a multi-line value on its own roster line', () => {
     // A YAML literal block (`|`) keeps its line breaks; the roster must not spill them
     // onto lines with no `- @name:` label.

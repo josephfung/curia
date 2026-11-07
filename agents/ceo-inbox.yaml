@@ -11,6 +11,11 @@ description: >
   escalates urgent items to the coordinator via the bullpen for Signal delivery.
   Also runs a daily sent-observe pass (voice-learning diffs + task-completion
   candidates) separate from triage.
+# Shown after the roster line as "Cannot: …" (#2496), so the coordinator routes around
+# them instead of learning them from a decline.
+limits:
+  - send email (drafts only; send it yourself with email-send)
+  - draft to an address not from a contact or the principal's mail (have contacts add them first)
 
 model:
   tier: standard

@@ -12,6 +12,8 @@ export interface AgentRegistryEntry {
   description: string;
   /** Agent YAML `delegate_when`: the agent's roster line. Absent → `description`. */
   delegateWhen?: string;
+  /** Agent YAML `limits` (#2496): appended to the roster line as "Cannot: …". */
+  limits?: readonly string[];
   /**
    * Agent YAML `display_name` (#1860). Delegation-failure replies reject a
    * draft that uses it rather than showing it (#1975).
@@ -58,7 +60,8 @@ export class AgentRegistry {
    * The roster: one line per specialist saying when to delegate to it. Agents without a
    * `delegate_when` (curia-deploy's custom agents, for now) show their description.
    * Whitespace runs collapse to one space, so a YAML literal block (`|`) keeps its whole
-   * value on the agent's `- @name:` line instead of spilling onto unlabelled lines.
+   * value on the agent's `- @name:` line instead of spilling onto unlabelled lines. An
+   * agent's `limits` follow on the same line (#2496).
    */
   specialistSummary(): string {
     const specialists = this.listSpecialists();
@@ -66,7 +69,7 @@ export class AgentRegistry {
       return 'No specialist agents are currently available.';
     }
     return specialists
-      .map(s => `- @${s.name}: ${(s.delegateWhen ?? s.description).replace(/\s+/g, ' ').trim()}`)
+      .map(s => `- @${s.name}: ${oneLine(s.delegateWhen ?? s.description)}${limitsSuffix(s.limits)}`)
       .join('\n');
   }
 
@@ -81,6 +84,16 @@ export class AgentRegistry {
       .map((agent) => agent.name)
       .sort((a, b) => a.localeCompare(b));
   }
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/** " Cannot: a; b." for an agent with limits, '' otherwise. */
+function limitsSuffix(limits: readonly string[] | undefined): string {
+  if (!limits || limits.length === 0) return '';
+  return ` Cannot: ${limits.map((l) => oneLine(l).replace(/[.;]+$/, '')).join('; ')}.`;
 }
 
 function isUsableDurationHint(value: number | undefined): boolean {

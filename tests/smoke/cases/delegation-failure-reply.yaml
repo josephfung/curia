@@ -1,11 +1,13 @@
 name: Delegation Failure Reply Stays Clean
 description: >
   The principal asks about tomorrow's calendar and the calendar specialist declines.
-  The coordinator must tell the principal it couldn't check, in a plain message. That
-  reply comes from the runtime's failure-narration call (src/agents/delegation-failure-reply.ts),
-  which has leaked the model's reasoning, the narration instructions and the internal
-  brief it sent the specialist (#1975), and relayed the specialist's internal decline
-  prose verbatim (#1976).
+  The coordinator must tell the principal it couldn't check, in a plain message. Since
+  #2496 a decline on the principal's turn no longer ends it: the coordinator reads the
+  decline (with its fallback next_step) and writes the reply itself. Before, the reply
+  came from the runtime's failure-narration call (src/agents/delegation-failure-reply.ts),
+  which leaked the model's reasoning, the narration instructions and the internal brief
+  it sent the specialist (#1975), and relayed the specialist's decline prose verbatim
+  (#1976). Neither may happen on the new path either.
 tags:
   - delegation
   - failure-path
