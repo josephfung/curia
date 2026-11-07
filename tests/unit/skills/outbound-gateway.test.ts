@@ -6430,10 +6430,11 @@ describe('sendPrincipalDraft (#2474)', () => {
       }
     });
 
-    it('5. a draft that is gone is still reported: one digest item, a held marker', async () => {
+    it('5. a draft that is gone is still reported: one digest item, no held marker without a thread', async () => {
       const { gw, ledger } = makeAuto({ client: autoClient(null) });
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
-      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ draftId: 'd1', mode: 'autonomous', reason: PRINCIPAL_SEND_REFUSALS.not_found }));
+      // No thread to cool down: no held marker, only the digest item.
+      expect(ledger.recordHeld).not.toHaveBeenCalled();
       expect(reports()).toEqual([expect.objectContaining({ summary: `Left as a draft in your mailbox: a reply Curia drafted. ${PRINCIPAL_SEND_REFUSALS.not_found}` })]);
     });
 
@@ -6608,6 +6609,52 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(review).toHaveBeenCalledWith(expect.objectContaining({
           detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'quote' })],
         }));
+      });
+
+      const HOLD_PII = { kind: 'hold', reason: 'Held for the principal: it shares a phone number.', findings: [{ rule: 'pii-not-authorized', detail: 'x' }] };
+
+      it('reviews a phone number in an HTML comment inside a genuine quote: held, not sent', async () => {
+        const quote = buildReplyQuote(SIGNED, 'UTC', { format: 'html' }).replace('</blockquote>', '<!-- 416-555-0123 --></blockquote>');
+        const review = vi.fn().mockResolvedValue(HOLD_PII);
+        const found = [{ label: 'PHONE_NUMBER', text: '416-555-0123' }];
+        const { gw, client } = makeAuto({ review, piiRedactor: redactorFor(found), client: autoClient(autoDraft({ body: `<p>Got it.</p>${quote}` }), [SIGNED]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold' });
+        expect(review).toHaveBeenCalledWith(expect.objectContaining({ detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'quote' })] }));
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      it('reviews a phone number in an img src inside a genuine quote: held, not sent', async () => {
+        const quote = buildReplyQuote(SIGNED, 'UTC', { format: 'html' }).replace('</blockquote>', '<img src="https://x.example/?n=416-555-0123"></blockquote>');
+        const review = vi.fn().mockResolvedValue(HOLD_PII);
+        const found = [{ label: 'PHONE_NUMBER', text: '416-555-0123' }];
+        const { gw, client } = makeAuto({ review, piiRedactor: redactorFor(found), client: autoClient(autoDraft({ body: `<p>Got it.</p>${quote}` }), [SIGNED]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold' });
+        expect(review).toHaveBeenCalledWith(expect.objectContaining({ detectedItems: [expect.objectContaining({ field: 'quote' })] }));
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      it('reviews a quote of an earlier message that Bob, now a recipient, was not on', async () => {
+        const bob = inbound({ id: 'm2', from: [{ name: 'Bob', email: 'bob@example.org' }], body: '<p>Count me in.</p>', date: nowSec() - 3600 });
+        const body = `<p>Got it, thanks.</p>${buildReplyQuote(SIGNED, 'UTC', { format: 'html' })}`;
+        const { gw, review } = makeAuto({
+          piiRedactor: redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]),
+          client: autoClient(autoDraft({ body, cc: [{ email: 'bob@example.org' }] }), [SIGNED, bob]),
+        });
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(review).toHaveBeenCalledWith(expect.objectContaining({ detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'quote' })] }));
+      });
+
+      it('exempts a genuine quote whose message held the phone and had every recipient on it: sent at 85', async () => {
+        const toBoth = inbound({ cc: [{ email: 'bob@example.org' }], body: SIGNED.body });
+        const bob = inbound({ id: 'm2', from: [{ name: 'Bob', email: 'bob@example.org' }], body: '<p>Count me in.</p>', date: nowSec() - 3600 });
+        const body = `<p>Got it, thanks.</p>${buildReplyQuote(toBoth, 'UTC', { format: 'html' })}`;
+        const { gw, review, client } = makeAuto({
+          piiRedactor: redactorFor(piiFound),
+          client: autoClient(autoDraft({ body, cc: [{ email: 'bob@example.org' }] }), [toBoth, bob]),
+        });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect((review.mock.calls[0]![0] as { detectedItems?: unknown[] }).detectedItems).toBeUndefined();
+        expect(client!.sendDraft).toHaveBeenCalled();
       });
 
       it('reviews a quote with no quoted body (a marker alone, fail closed)', async () => {

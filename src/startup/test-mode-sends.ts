@@ -427,10 +427,10 @@ export function createRecordingOutboundGateway(deps: {
               return new Set(edited ? draftIds.filter(id => edited.has(id)) : draftIds);
             },
             // An autonomous send's D4.1 check (#2474 PR 2), from the same record: written now, so
-            // only a draft edited after Curia's write reads as changed.
+            // only a draft edited after Curia's write reads as changed. No record proves nothing,
+            // so nothing reads as Curia's (fail closed, unlike the review default above).
             curiaWritesInTask: async (draftId: string) => {
-              const curia = recorder.curiaDraftIds?.();
-              const created = curia ? curia.has(draftId) : true;
+              const created = recorder.curiaDraftIds?.()?.has(draftId) === true;
               return { created, lastWriteAt: created ? new Date() : null };
             },
           },

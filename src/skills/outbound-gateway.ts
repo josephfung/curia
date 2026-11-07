@@ -95,8 +95,9 @@ import {
   AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, replyTarget, type AutonomousLimitRefusal,
 } from './principal-send/autonomous-limits.js';
 import { isOutsiderOriginated } from '../contacts/principal.js';
-import { parseSenderVerified } from '../channels/email/message-converter.js';
-import { htmlToText } from '../channels/email/html-to-text.js';
+import {
+  mailboxDraftLabel, quoteItemsToReview, replyOrigin, threadMessageProof, type ThreadMessageProof,
+} from './principal-send/quote-proof.js';
 import type { SendStakes } from '../autonomy/judge-brief.js';
 import type { CallBudget } from '../util/call-budget.js';
 import { nylasMessageFailure } from '../channels/email/nylas-message-id.js';
@@ -481,63 +482,6 @@ function recipientNotOnThread(detail: string): string {
  */
 const AUTONOMOUS_THREAD_READ_LIMIT = 50;
 
-/**
- * How a digest item names a principal-mailbox draft (#2474, design D9): `"<subject>" to <names>`,
- * each non-principal recipient by display name, else address.
- */
-function mailboxDraftLabel(draft: NylasMessage, isPrincipal: (email: string) => boolean): string {
-  const seen = new Set<string>();
-  const names: string[] = [];
-  for (const r of [...draft.to, ...draft.cc, ...draft.bcc]) {
-    const email = r.email.trim().toLowerCase();
-    if (!email || seen.has(email) || isPrincipal(email)) continue;
-    seen.add(email);
-    names.push(r.name?.trim() || r.email.trim());
-  }
-  return `"${draft.subject}"${names.length > 0 ? ` to ${names.join(', ')}` : ''}`;
-}
-
-/** HTML as text for comparing a quote with a thread message: whitespace collapsed, lowercased. */
-function comparableText(html: string | undefined | null): string {
-  return htmlToText(html).replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-/**
- * The quote's detected items an autonomous send's review must still rule on (#2474, security).
- * The draft body is model-written, so a quote marker in it proves nothing: an injected model could
- * put one above personal data. A quote counts as the thread's only when its quoted body (from its
- * first <blockquote>) is, as text, inside a non-draft message on the thread. Then its body's items
- * are exempt, and so is an address in its header that was on that message; anything else in the
- * header (the draft's own text) is reviewed. Otherwise every item is reviewed (fail closed).
- */
-function quoteItemsNotOnThread(
-  items: readonly DetectedPii[],
-  quote: string,
-  quoteStart: number,
-  thread: ReadonlyArray<{ text: string; participants: ReadonlySet<string> }>,
-): DetectedPii[] {
-  if (items.length === 0) return [];
-  const bodyAt = quote.search(/<blockquote\b/i);
-  if (bodyAt < 0) return [...items];
-  const quoted = comparableText(quote.slice(bodyAt));
-  const source = quoted ? thread.find((m) => m.text.includes(quoted)) : undefined;
-  if (!source) return [...items];
-  const bodyStart = quoteStart + bodyAt;
-  return items.filter((i) => i.start < bodyStart && !source.participants.has(i.matched.trim().toLowerCase()));
-}
-
-/**
- * The message an autonomous reply answers, as band review's origin (#2474, design D2). The sender
- * counts as verified only when its own headers say so (fail closed).
- */
-function replyOrigin(target: NylasMessage): { content: string; at?: string; senderVerified: boolean } {
-  return {
-    content: htmlToText(target.body),
-    ...(Number.isFinite(target.date) ? { at: new Date(target.date * 1000).toISOString() } : {}),
-    senderVerified: parseSenderVerified(target.headers),
-  };
-}
-
 /** sendPrincipalDraft's result (#2474). */
 export interface PrincipalDraftSendResult extends OutboundSendResult {
   /** Nothing was sent and the draft is still in the principal's Drafts folder. */
@@ -807,11 +751,11 @@ interface DraftSendProfile {
   /** Autonomous only: the message the reply answers, as the review's origin evidence. */
   origin?: { content: string; at?: string; senderVerified: boolean };
   /**
-   * Autonomous only: the thread's non-draft messages (comparableText of each body, and who was on
-   * it). A quote is exempt from review only when the thread holds its text (security: the draft
-   * body is model-written, so a quote marker in it proves nothing).
+   * Autonomous only: the thread's non-draft messages. A quote's item is exempt from review only
+   * when one of them proves the recipients already had it (quoteItemsToReview; security: the
+   * draft body is model-written, so a quote marker in it proves nothing).
    */
-  threadMessages?: ReadonlyArray<{ text: string; participants: ReadonlySet<string> }>;
+  threadMessages?: readonly ThreadMessageProof[];
 }
 /** sendEmailDraft's options, passed through to the draft checks unchanged. */
 interface DraftSendOptions {
@@ -4319,6 +4263,8 @@ export class OutboundGateway {
         // Fail closed: a full first page may not hold every participant.
         if (thread.length >= AUTONOMOUS_THREAD_READ_LIMIT) return stop('thread_unreadable');
         // The limits rule on messages someone received: no draft (this one included) counts.
+        // Recognises Google's DRAFT label only: other providers' draft folder ids are opaque and
+        // not recognised (the principal grant is Google today).
         thread = thread.filter((m) => m.id !== draftId && !m.folders.some((f) => /^DRAFTS?$/i.test(f)));
       }
       let curiaWrites: CuriaDraftWrites;
@@ -4350,10 +4296,7 @@ export class OutboundGateway {
         // routine sends only routine; all adds commitment. financial_or_legal never (#2473).
         stakesCeiling: level === 'all' ? 'commitment' : 'routine',
         ...(target ? { origin: replyOrigin(target) } : {}),
-        threadMessages: thread.map((m) => ({
-          text: comparableText(m.body),
-          participants: new Set([...m.from, ...m.to, ...m.cc].map((p) => p.email.trim().toLowerCase())),
-        })),
+        threadMessages: thread.map(threadMessageProof),
       };
     }
 
@@ -4493,12 +4436,17 @@ export class OutboundGateway {
       }
     }
     const isPrincipal = (email: string) => this.isPrincipalOnChannel('email', email);
-    if (refusal !== 'thread_cooldown') {
+    if (refusal === 'thread_cooldown') {
+      // Not extended: the cooldown refusal files the digest item only.
+    } else if (!draft?.threadId) {
+      // No thread (the draft is gone or unreadable): there is no cooldown to start.
+      this.log.info({ draftId, refusal }, 'outbound-gateway: autonomous stop on a draft with no known thread — no held marker');
+    } else {
       try {
         await this.sendLedger?.recordHeld({
           draftId,
-          threadId: draft?.threadId ?? '',
-          recipients: draft ? [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((r) => r.email.trim().toLowerCase()))].filter((r) => r && !isPrincipal(r)) : [],
+          threadId: draft.threadId,
+          recipients: [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((r) => r.email.trim().toLowerCase()))].filter((r) => r && !isPrincipal(r)),
           mode: 'autonomous',
           at: new Date().toISOString(),
           reason,
@@ -4688,8 +4636,8 @@ export class OutboundGateway {
         //
         // An autonomous send (PR 2) excludes only the mailbox's own addresses: the principal's
         // phone or personal email in a reply Curia sends on its own is reviewed like any detail.
-        // Its quote is exempt when the thread holds it: the D4.3 limit proved every recipient is
-        // genuinely on the thread (design D2). See quoteItemsNotOnThread.
+        // A quoted item is exempt only when a thread message holds the quote and that item, and
+        // had every recipient of this send on it (quoteItemsToReview).
         const ownIdentities = principalMailbox && options?.principalDirected === true
           ? this.principalIdentities.filter((i) => i.verified).map((i) => i.channelIdentifier)
           : autonomousMailbox ? this.principalEmailAddresses() : [];
@@ -4698,7 +4646,7 @@ export class OutboundGateway {
         const bodyItems = dropOwnIdentityItems(bodyFound.filter((i) => i.start < ownLength), ownIdentities);
         const quoteFound = dropOwnIdentityItems(bodyFound.filter((i) => i.start >= ownLength), ownIdentities);
         const quoteItems = autonomousMailbox
-          ? quoteItemsNotOnThread(quoteFound, split.quote, ownLength, profile.threadMessages ?? [])
+          ? quoteItemsToReview(quoteFound, split.quote, profile.threadMessages ?? [], audienceOf(draftEnvelope))
           : quoteFound.length > 0 && !this.quoteReachesOnlyItsParticipants(split.quote, audienceOf(draftEnvelope))
             ? quoteFound
             : [];
