@@ -310,12 +310,12 @@ describe('the recording principal mailbox (#2474)', () => {
     expect(drafts.has('draft-30v-acme')).toBe(true);
   });
 
-  it('refuses an autonomous send, as PR 1 does everywhere', async () => {
+  it('refuses an autonomous send it cannot review: this gateway runs no band review (PR 2)', async () => {
     const drafts = new Map([['draft-30v-acme', principalDraft()]]);
     const recorder = { ...runRecorder(), principalDrafts: () => drafts, sendLevel: () => 'all' as const };
     const system = { taskMetadata: { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
     const result = await gateway(recorder, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: system });
-    expect(result).toMatchObject({ success: false, refusal: 'not_requested' });
+    expect(result).toMatchObject({ success: false, leftAsDraft: true, refusal: 'no_band_review' });
     expect(recorder.sends).toEqual([]);
   });
 

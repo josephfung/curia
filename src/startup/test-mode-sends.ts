@@ -41,6 +41,7 @@ import type { PrincipalEmailRef } from '../contacts/types.js';
 import type { AgentPersona } from '../skills/types.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../skills/_shared/reply-quote.js';
 import { DEFAULT_SEND_LEVEL, type SendLevel } from '../skills/principal-send/send-level.js';
+import type { PrincipalSendEntry } from '../skills/principal-send/send-ledger.js';
 
 /** One message a recording transport took: what would have left the process. */
 export interface RecordedSend {
@@ -425,13 +426,35 @@ export function createRecordingOutboundGateway(deps: {
               // Fail toward more review, as above.
               return new Set(edited ? draftIds.filter(id => edited.has(id)) : draftIds);
             },
+            // An autonomous send's D4.1 check (#2474 PR 2), from the same record: written now, so
+            // only a draft edited after Curia's write reads as changed.
+            curiaWritesInTask: async (draftId: string) => {
+              const curia = recorder.curiaDraftIds?.();
+              const created = curia ? curia.has(draftId) : true;
+              return { created, lastWriteAt: created ? new Date() : null };
+            },
           },
-          // No-op: the real ledger writes working docs, which a real instance's sent-observe
-          // shares, for a send that never left (the same reason there is no outbound queue).
-          sendLedger: { recordSending: async () => {}, recordSent: async () => {} },
+          // In memory: the real ledger writes working docs, which a real instance's sent-observe
+          // shares, for a send that never left (the same reason there is no outbound queue). The
+          // autonomous thread cooldown still holds within the run.
+          sendLedger: inMemorySendLedger(),
         }
       : {}),
   });
+}
+
+/** The principal-mailbox send ledger for one recording gateway (#2474): markers in memory only. */
+function inMemorySendLedger(): NonNullable<ConstructorParameters<typeof OutboundGateway>[0]['sendLedger']> {
+  const entries: PrincipalSendEntry[] = [];
+  return {
+    recordSending: async (e) => { entries.push({ ...e, outcome: 'sending' }); },
+    recordSent: async (draftId, messageId) => {
+      const latest = [...entries].reverse().find(e => e.draftId === draftId && e.outcome === 'sending');
+      if (latest) Object.assign(latest, { outcome: 'sent', messageId });
+    },
+    recordHeld: async (e) => { entries.push({ ...e, outcome: 'held' }); },
+    recentForThread: async (threadId, sinceEpochMs) => entries.filter(e => e.mode === 'autonomous' && e.threadId === threadId && Date.parse(e.at) >= sinceEpochMs),
+  };
 }
 
 /**

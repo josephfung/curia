@@ -89,8 +89,15 @@ import type { PrincipalMailboxResolver } from '../channels/email/principal-mailb
 import { DEFAULT_MAILBOX, type SendLevel, type SendLevelReader } from './principal-send/send-level.js';
 import { isPrincipalDirectedMailboxSend, type SendAuthorityInput } from './principal-send/authority.js';
 import { dropOwnIdentityItems, quoteHeaderParticipants, splitReplyQuote } from './principal-send/own-text.js';
-import { PROVENANCE_LOOKBACK_DAYS, type DraftProvenance } from './principal-send/draft-provenance.js';
-import type { PrincipalSendLedger } from './principal-send/send-ledger.js';
+import { PROVENANCE_LOOKBACK_DAYS, type CuriaDraftWrites, type DraftProvenance } from './principal-send/draft-provenance.js';
+import type { PrincipalSendEntry, PrincipalSendLedger } from './principal-send/send-ledger.js';
+import {
+  AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, replyTarget, type AutonomousLimitRefusal,
+} from './principal-send/autonomous-limits.js';
+import { isOutsiderOriginated } from '../contacts/principal.js';
+import { parseSenderVerified } from '../channels/email/message-converter.js';
+import { htmlToText } from '../channels/email/html-to-text.js';
+import type { SendStakes } from '../autonomy/judge-brief.js';
 import type { CallBudget } from '../util/call-budget.js';
 import { nylasMessageFailure } from '../channels/email/nylas-message-id.js';
 import {
@@ -408,10 +415,16 @@ export interface OutboundGatewayConfig {
   principalMailbox?: PrincipalMailboxResolver;
   /** The ceo_inbox/sending level per mailbox (#2474). Absent: on_request, the default. */
   readSendLevel?: SendLevelReader;
-  /** Which principal-mailbox drafts Curia wrote or edited (#2474). Absent: every draft reads as Curia's. */
-  draftProvenance?: Pick<DraftProvenance, 'createdByCuria' | 'editedByCuria'>;
-  /** Per-send markers sent-observe skips (#2474, design D8). Absent: no markers. */
-  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent'>;
+  /**
+   * Which principal-mailbox drafts Curia wrote or edited (#2474). Absent: every draft reads as
+   * Curia's on a principal-directed send, and an autonomous send is refused (not_curia_draft).
+   */
+  draftProvenance?: Pick<DraftProvenance, 'createdByCuria' | 'editedByCuria' | 'curiaWritesInTask'>;
+  /**
+   * Per-send markers sent-observe skips (#2474, design D8), and the autonomous thread cooldown
+   * (D4.6). Absent: no markers, and an autonomous send is refused (thread_cooldown).
+   */
+  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread'>;
 }
 
 /**
@@ -422,7 +435,12 @@ export interface OutboundGatewayConfig {
 export type PrincipalSendRefusal =
   | 'mailbox_unavailable' | 'setting_off' | 'not_requested' | 'approval_replay'
   | 'not_found' | 'lookup_failed' | 'no_recipients' | 'principal_only' | 'review_hold' | 'draft_changed'
-  | 'send_unconfirmed';
+  | 'send_unconfirmed'
+  // An autonomous send (PR 2, design D4): Curia sending on its own under the routine / all levels.
+  | 'outsider_originated' | 'no_band_review' | 'thread_unreadable' | AutonomousLimitRefusal;
+
+/** How every autonomous refusal ends: the principal still has the draft. */
+const STILL_A_DRAFT = ' Nothing was sent; the draft is still in their Drafts folder.';
 
 /** What the agent relays for each refusal (#2474). review_hold's is the suffix after the review's reason. */
 export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
@@ -437,7 +455,58 @@ export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
   review_hold: ' Nothing was sent; the draft is still in their Drafts folder.',
   draft_changed: 'The draft changed while Curia was checking it. Nothing was sent; read the latest version and ask the principal again.',
   send_unconfirmed: "The send to the principal's mailbox didn't confirm, so it may or may not have gone out. Check the principal's Sent folder before sending again.",
+  outsider_originated: `This work started from someone outside, so Curia won't send from the principal's mailbox on its own.${STILL_A_DRAFT}`,
+  no_band_review: `The send review isn't running, so Curia won't send from the principal's mailbox on its own.${STILL_A_DRAFT}`,
+  thread_unreadable: `Couldn't read the thread to check who's on it, so Curia didn't send on its own.${STILL_A_DRAFT}`,
+  not_curia_draft: `Curia sends on its own only a reply it drafted in this same pass.${STILL_A_DRAFT}`,
+  draft_changed_since_curia: `The draft changed after Curia wrote it, so Curia left it for the principal.${STILL_A_DRAFT}`,
+  not_a_reply: `Curia sends on its own only replies on an existing thread.${STILL_A_DRAFT}`,
+  mailing_list: `The thread is a mailing list, so Curia didn't reply on its own.${STILL_A_DRAFT}`,
+  // Without the limit's detail; recipientNotOnThread names who.
+  recipient_not_on_thread: `The reply goes to someone who isn't genuinely on the thread.${STILL_A_DRAFT}`,
+  too_many_recipients: `The reply goes to more than five people, so Curia left it for the principal.${STILL_A_DRAFT}`,
+  has_attachments: `The reply has attachments, so Curia left it for the principal.${STILL_A_DRAFT}`,
+  thread_cooldown: `Curia already replied or held a reply on this thread in the last day.${STILL_A_DRAFT}`,
 };
+
+/** recipient_not_on_thread's text, naming who (the limit's detail). */
+function recipientNotOnThread(detail: string): string {
+  return `The reply goes to someone who isn't genuinely on the thread (${detail}).${STILL_A_DRAFT}`;
+}
+
+/**
+ * The most thread messages an autonomous send reads (#2474, design D4.3). A full page is refused:
+ * the first page may not hold every participant.
+ */
+const AUTONOMOUS_THREAD_READ_LIMIT = 50;
+
+/**
+ * How a digest item names a principal-mailbox draft (#2474, design D9): `"<subject>" to <names>`,
+ * each non-principal recipient by display name, else address.
+ */
+function mailboxDraftLabel(draft: NylasMessage, isPrincipal: (email: string) => boolean): string {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const r of [...draft.to, ...draft.cc, ...draft.bcc]) {
+    const email = r.email.trim().toLowerCase();
+    if (!email || seen.has(email) || isPrincipal(email)) continue;
+    seen.add(email);
+    names.push(r.name?.trim() || r.email.trim());
+  }
+  return `"${draft.subject}"${names.length > 0 ? ` to ${names.join(', ')}` : ''}`;
+}
+
+/**
+ * The message an autonomous reply answers, as band review's origin (#2474, design D2). The sender
+ * counts as verified only when its own headers say so (fail closed).
+ */
+function replyOrigin(target: NylasMessage): { content: string; at?: string; senderVerified: boolean } {
+  return {
+    content: htmlToText(target.body),
+    ...(Number.isFinite(target.date) ? { at: new Date(target.date * 1000).toISOString() } : {}),
+    senderVerified: parseSenderVerified(target.headers),
+  };
+}
 
 /** sendPrincipalDraft's result (#2474). */
 export interface PrincipalDraftSendResult extends OutboundSendResult {
@@ -701,6 +770,12 @@ interface DraftSendProfile {
   toolName: string;
   /** Principal mailbox only: who wrote the draft. */
   author?: DraftAuthor;
+  /** Principal mailbox only: Curia sending on its own (#2474 PR 2), past the D4 limits. */
+  autonomous?: true;
+  /** Autonomous only: the highest stakes the sending level lets go without asking. */
+  stakesCeiling?: SendStakes;
+  /** Autonomous only: the message the reply answers, as the review's origin evidence. */
+  origin?: { content: string; at?: string; senderVerified: boolean };
 }
 /** sendEmailDraft's options, passed through to the draft checks unchanged. */
 interface DraftSendOptions {
@@ -809,8 +884,8 @@ export class OutboundGateway {
   private readonly relayBudget?: RelayBudget;
   private readonly principalMailbox?: PrincipalMailboxResolver;
   private readonly readSendLevel?: SendLevelReader;
-  private readonly draftProvenance?: Pick<DraftProvenance, 'createdByCuria' | 'editedByCuria'>;
-  private readonly sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent'>;
+  private readonly draftProvenance?: OutboundGatewayConfig['draftProvenance'];
+  private readonly sendLedger?: OutboundGatewayConfig['sendLedger'];
   private flushInFlight = new Set<string>();
   /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
   private flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2415,6 +2490,10 @@ export class OutboundGateway {
     /** A send from the principal's own mailbox, and who wrote the draft (#2474): passed to the review. */
     senderProfile?: 'principal-mailbox';
     draftAuthor?: DraftAuthor;
+    /** An autonomous principal-mailbox send (#2474 PR 2): the sending level's stakes ceiling. */
+    stakesCeiling?: SendStakes;
+    /** An autonomous principal-mailbox send: the message the reply answers, as origin evidence. */
+    origin?: { content: string; at?: string; senderVerified: boolean };
     /**
      * A hold, an ask or a block leaves the draft unsent and returns `held` (#2474, design D5): no
      * approval row and no digest item. The principal-mailbox path never raises approvals.
@@ -2447,6 +2526,8 @@ export class OutboundGateway {
         ...(args.subject !== undefined ? { subject: args.subject } : {}),
         ...(args.senderProfile ? { senderProfile: args.senderProfile } : {}),
         ...(args.draftAuthor ? { draftAuthor: args.draftAuthor } : {}),
+        ...(args.stakesCeiling ? { stakesCeiling: args.stakesCeiling } : {}),
+        ...(args.origin ? { origin: args.origin } : {}),
       });
     } catch (err) {
       // BandSendReview is not meant to throw; if it does, the send was not reviewed. Hold.
@@ -4062,13 +4143,18 @@ export class OutboundGateway {
   }
 
   /**
-   * Send a draft from the principal's own mailbox (#2474, design D1–D2, D5, D6, D8).
+   * Send a draft from the principal's own mailbox (#2474, design D1–D6, D8, D9).
    *
-   * PR 1 sends only on a live principal turn (principal-directed); an autonomous call is refused.
-   * The draft's checks are sendEmailDraft's (checkDraftSend) with the principal-mailbox profile:
-   * the quote and the principal's own identities are not disclosures, the principal's addresses
-   * are not an audience, the review runs for a draft Curia wrote or edited or one with personal data, and
-   * a hold leaves the draft where it is with no approval row. Every early return leaves the draft.
+   * Principal-directed (a live principal turn): the draft's checks are sendEmailDraft's
+   * (checkDraftSend) with the principal-mailbox profile: the quote and the principal's own
+   * identities are not disclosures, the principal's addresses are not an audience, the review runs
+   * for a draft Curia wrote or edited or one with personal data, and a hold leaves the draft where
+   * it is with no approval row. Every early return leaves the draft.
+   *
+   * Autonomous (PR 2: levels routine / all, anything not principal-directed): only a reply Curia
+   * drafted in this task, past the code-enforced limits (D4), reviewed with every question and the
+   * level's stakes ceiling. A final stop leaves the draft, writes a held marker (the thread's
+   * cooldown) and files one digest item; a send files one too. A review bounce is not final.
    */
   async sendPrincipalDraft(draftId: string, options: {
     authority: SendAuthorityInput;
@@ -4089,6 +4175,7 @@ export class OutboundGateway {
       this.log.error({ err, draftId }, 'outbound-gateway: principal mailbox could not be resolved — not sending');
     }
     if (!client) return refuse('mailbox_unavailable');
+    const mailbox = client;
 
     // 2. The setting is read here, not by the caller, so no caller can skip it (design D3). An
     // absent reader is the default level; the reader itself turns unreadable into on_request.
@@ -4106,37 +4193,61 @@ export class OutboundGateway {
 
     // 3. Authority. An approval replay is never a principal-directed send (design D5).
     if (options.authority.humanApproved === true) return refuse('approval_replay');
-    // PR 2 replaces this branch with the autonomous path; until then, fail closed.
-    if (!isPrincipalDirectedMailboxSend(options.authority)) return refuse('not_requested');
+    const autonomous = !isPrincipalDirectedMailboxSend(options.authority);
+    // on_request: only what the principal asks for on a live turn (design D3). Nothing to report.
+    if (autonomous && level === 'on_request') return refuse('not_requested');
+
+    // From here an autonomous stop is final (design D9): a held marker and one digest item.
+    let draft: NylasMessage | null = null;
+    let lookedUp = false;
+    const stop = async (refusal: PrincipalSendRefusal, blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal]): Promise<PrincipalDraftSendResult> => {
+      if (autonomous) {
+        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, refusal, reason: blockedReason, options });
+      }
+      return refuse(refusal, blockedReason);
+    };
+
+    let autonomy: AutonomyRead | undefined;
+    if (autonomous) {
+      // An outsider writing to Curia's own address does not start a send from the principal's (D4.7).
+      if (isOutsiderOriginated(options.authority.taskMetadata)) return stop('outsider_originated');
+      // Fail closed: with no band review running, the draft would send unreviewed (design D2). The
+      // autonomy config can set one send's gating, so this read is the one the checks use.
+      autonomy = await this.readAutonomy();
+      if (this.currentGating(autonomy) !== 'band' || !this.bandReview) return stop('no_band_review');
+      // Fail closed: with no task or no provenance, nothing can show Curia drafted it in this task (D4.1).
+      if (!options.taskEventId || !this.draftProvenance) return stop('not_curia_draft');
+    }
 
     // 4. The draft, through the same client the re-read and the send use.
-    let draft: NylasMessage | null;
     try {
-      draft = await client.getDraft(draftId);
+      draft = await mailbox.getDraft(draftId);
     } catch (err) {
       this.log.warn({ err, draftId }, 'outbound-gateway: principal-mailbox draft read failed — not sending it');
-      return refuse('lookup_failed');
+      lookedUp = true;
+      return stop('lookup_failed');
     }
-    if (!draft) return refuse('not_found');
+    lookedUp = true;
+    if (!draft) return stop('not_found');
 
     // 5. Recipients, compared case-insensitively. The primary is the first outside recipient on
     // To, else Cc, else Bcc.
     const lower = (list: ReadonlyArray<{ email: string }> | undefined) => (list ?? []).map((r) => r.email.trim().toLowerCase()).filter((e) => e.length > 0);
     const [to, cc, bcc] = [lower(draft.to), lower(draft.cc), lower(draft.bcc)];
     const recipients = [...new Set([...to, ...cc, ...bcc])];
-    if (recipients.length === 0) return refuse('no_recipients');
+    if (recipients.length === 0) return stop('no_recipients');
     const isPrincipal = (email: string) => this.isPrincipalOnChannel('email', email);
     const outside = recipients.filter((r) => !isPrincipal(r));
-    if (outside.length === 0) return refuse('principal_only');
+    if (outside.length === 0) return stop('principal_only');
     const primary = [...to, ...cc, ...bcc].find((r) => !isPrincipal(r))!;
 
     // 6. Who wrote it. Fail toward more review: no provenance, or a failed read, counts as Curia's.
     // A draft Curia did not create but edited is `curia-edited` (final review S1): an edit can put
     // Curia's words, or a new recipient, into the principal's draft. So is one last modified before
     // the lookback, where no row could show Curia's hand (S1/F3). Only a recent draft with no
-    // create or edit row is the principal's.
+    // create or edit row is the principal's. An autonomous draft is Curia's: D4.1 below proves it.
     let author: DraftAuthor = 'curia';
-    if (this.draftProvenance) {
+    if (!autonomous && this.draftProvenance) {
       try {
         if (!(await this.draftProvenance.createdByCuria([draftId])).has(draftId)) {
           const lookbackStartSec = (Date.now() - PROVENANCE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000) / 1000;
@@ -4150,37 +4261,90 @@ export class OutboundGateway {
         author = 'curia';
       }
     }
+    let profile: DraftSendProfile = { mailbox: 'principal', toolName: 'ceo-inbox-send-draft', author };
+
+    // 6a. Autonomous only: the code-enforced limits (design D4), before the review and before this
+    // send's own ledger marker, so the cooldown never meets it.
+    if (autonomous) {
+      const principalAddresses = this.principalEmailAddresses();
+      let thread: NylasMessage[] = [];
+      // No thread: nothing to read, and checkAutonomousLimits refuses it (not_a_reply).
+      if (draft.threadId) {
+        try {
+          thread = await mailbox.listMessages({ threadId: draft.threadId, fields: 'include_headers', limit: AUTONOMOUS_THREAD_READ_LIMIT });
+        } catch (err) {
+          // Fail closed: who is on the thread is unknown.
+          this.log.warn({ err, draftId }, 'outbound-gateway: thread read failed — not sending on its own');
+          return stop('thread_unreadable');
+        }
+        // Fail closed: a full first page may not hold every participant.
+        if (thread.length >= AUTONOMOUS_THREAD_READ_LIMIT) return stop('thread_unreadable');
+        // The limits rule on messages someone received: no draft (this one included) counts.
+        thread = thread.filter((m) => m.id !== draftId && !m.folders.some((f) => /^DRAFTS?$/i.test(f)));
+      }
+      let curiaWrites: CuriaDraftWrites;
+      try {
+        curiaWrites = await this.draftProvenance!.curiaWritesInTask(draftId, options.taskEventId!);
+      } catch (err) {
+        // Fail closed: nothing shows Curia drafted it in this task.
+        this.log.warn({ err, draftId }, 'outbound-gateway: task draft writes unreadable — not sending on its own');
+        return stop('not_curia_draft');
+      }
+      // Fail closed: with no ledger, or a failed read, the thread's cooldown may be running.
+      if (!this.sendLedger) return stop('thread_cooldown');
+      let recentEntries: PrincipalSendEntry[] = [];
+      try {
+        if (draft.threadId) recentEntries = await this.sendLedger.recentForThread(draft.threadId, Date.now() - AUTONOMOUS_THREAD_COOLDOWN_MS);
+      } catch (err) {
+        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — treating the thread as cooling down');
+        return stop('thread_cooldown');
+      }
+      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries });
+      if (limit) {
+        return stop(limit.refusal, limit.refusal === 'recipient_not_on_thread' ? recipientNotOnThread(limit.detail) : PRINCIPAL_SEND_REFUSALS[limit.refusal]);
+      }
+      // The message being answered, as the review's origin (design D2): a triage turn reads many,
+      // and the one replied to can fall out of the evidence window.
+      const target = replyTarget(thread, principalAddresses);
+      profile = {
+        ...profile,
+        autonomous: true,
+        // routine sends only routine; all adds commitment. financial_or_legal never (#2473).
+        stakesCeiling: level === 'all' ? 'commitment' : 'routine',
+        ...(target ? { origin: replyOrigin(target) } : {}),
+      };
+    }
 
     // 7. The checks. The original addresses go to the re-read below, which compares them itself.
     const draftMeta = { recipientEmail: primary, body: draft.body, subject: draft.subject, allRecipients: recipients };
-    const profile: DraftSendProfile = { mailbox: 'principal', toolName: 'ceo-inbox-send-draft', author };
     const checkOptions: DraftSendOptions = {
-      principalDirected: true,
+      principalDirected: !autonomous,
       ...(options.conversationId ? { conversationId: options.conversationId } : {}),
       ...(options.taskEventId ? { taskEventId: options.taskEventId } : {}),
     };
-    const autonomy = await this.readAutonomy();
-    const checked = await this.checkDraftSend({ profile, draftId, draftMeta, autonomy, options: checkOptions });
+    const checked = await this.checkDraftSend({ profile, draftId, draftMeta, autonomy: autonomy ?? await this.readAutonomy(), options: checkOptions });
     if ('result' in checked) {
-      if (checked.held !== undefined) return refuse('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`);
+      if (checked.held !== undefined) return stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`);
       // Every other stop leaves the draft where it is and returns its reason: a review bounce
       // (the drafter edits once and resends), a blocked contact, the identity gate, the content
-      // filter or a redactor error.
+      // filter or a redactor error. Not final, so no marker and no digest item: a second bounce
+      // becomes a block, which holds.
       return { ...checked.result, leftAsDraft: true };
     }
     const { recipient, band, detectedItems, redactedBody, redactedSubject } = checked.proceed;
 
     // 8. Send only what was checked (#2312). The re-read tells a vanished draft from an edited one.
-    const state = await this.draftStateSinceFetch(client, draftId, draftMeta);
-    if (state === 'gone') return refuse('not_found');
-    if (state === 'failed') return refuse('lookup_failed');
-    if (state === 'changed') return refuse('draft_changed');
+    const state = await this.draftStateSinceFetch(mailbox, draftId, draftMeta);
+    if (state === 'gone') return stop('not_found');
+    if (state === 'failed') return stop('lookup_failed');
+    if (state === 'changed') return stop('draft_changed');
 
     // 9. The marker, the send, the message id. A marker failure is not fatal: it only loses
-    // learning evidence (sent-observe may learn this message as the principal's writing).
+    // learning evidence (sent-observe may learn this message as the principal's writing) and, for
+    // an autonomous send, this send's cooldown entry.
     try {
       await this.sendLedger?.recordSending({
-        draftId, threadId: draft.threadId, recipients: outside, mode: 'principal-directed', at: new Date().toISOString(),
+        draftId, threadId: draft.threadId, recipients: outside, mode: autonomous ? 'autonomous' : 'principal-directed', at: new Date().toISOString(),
       });
     } catch (err) {
       this.log.warn({ err, draftId }, 'outbound-gateway: send ledger marker not written — sending anyway');
@@ -4188,23 +4352,30 @@ export class OutboundGateway {
     let sent: NylasMessage;
     try {
       // No retry: a send that may have gone out must not go twice.
-      sent = await client.sendDraft(draftId);
+      sent = await mailbox.sendDraft(draftId);
     } catch (err) {
       // The outcome is unknown (final review C2): a timeout or 5xx may come after the email went.
       // So not leftAsDraft, and the text says to check Sent rather than that nothing was sent;
       // a principal resending from their mail app would otherwise send it twice.
       this.log.error({ err, draftId }, 'outbound-gateway: principal-mailbox sendDraft failed — outcome unknown');
+      // Not "left as a draft": it may have gone. The `sending` marker already starts the cooldown.
+      if (autonomous) {
+        await this.publishMailboxDigest(`Tried to send for you from your mailbox: ${mailboxDraftLabel(draft, isPrincipal)}. ${PRINCIPAL_SEND_REFUSALS.send_unconfirmed}`, options);
+      }
       return { success: false, refusal: 'send_unconfirmed', blockedReason: PRINCIPAL_SEND_REFUSALS.send_unconfirmed };
     }
-    this.log.info({ draftId, messageId: sent.id, recipientId: redactId(primary) }, 'outbound-gateway: principal-mailbox draft sent');
+    this.log.info({ draftId, messageId: sent.id, recipientId: redactId(primary), autonomous }, 'outbound-gateway: principal-mailbox draft sent');
     try {
       await this.sendLedger?.recordSent(draftId, sent.id);
     } catch (err) {
       this.log.warn({ err, draftId, messageId: sent.id }, 'outbound-gateway: send ledger message id not recorded');
     }
 
-    // 10. Record it as sendEmailDraft does. Only outside recipients are promoted (design D2).
-    for (const r of outside) await this.promoteOrCreateRecipientContact('email', r);
+    // 10. Record it as sendEmailDraft does. Only outside recipients are promoted, and only on a
+    // principal-directed send (design D2): Curia's own reply does not vouch for anyone.
+    if (!autonomous) {
+      for (const r of outside) await this.promoteOrCreateRecipientContact('email', r);
+    }
     const threadId = sent.threadId || draft.threadId;
     await this.publishDelivered({
       channel: 'email',
@@ -4219,8 +4390,7 @@ export class OutboundGateway {
       ...(detectedItems.length > 0 ? { disclosed: detectedItems.map(({ label, field }) => ({ label, field })) } : {}),
     });
     // Spot-check pool (#2159 Phase 3): not for a principal-directed send, as in sendEmailDraft.
-    // Every PR 1 send is principal-directed, so this never runs yet; PR 2's autonomous sends
-    // will record here under the profile's tool name.
+    // An autonomous send is recorded under the profile's tool name.
     if (checkOptions.principalDirected !== true) {
       await this.recordSentAction({
         channel: 'email',
@@ -4233,8 +4403,76 @@ export class OutboundGateway {
       });
     }
     if (band.report) await this.publishBandReport(band.report, checkOptions);
+    if (autonomous) await this.publishMailboxDigest(`Sent for you from your mailbox: ${mailboxDraftLabel(draft, isPrincipal)}.`, options);
 
     return { success: true, messageId: sent.id, ...(threadId ? { threadId } : {}), to: outside, subject: draft.subject };
+  }
+
+  /** The principal's verified email addresses: the mailbox's own, for an autonomous send (#2474). */
+  private principalEmailAddresses(): string[] {
+    return this.principalIdentities.filter((i) => i.channel === 'email' && i.verified).map((i) => i.channelIdentifier);
+  }
+
+  /**
+   * Records an autonomous principal-mailbox send that stopped for good (#2474, design D4.6, D9): a
+   * held marker, which starts the thread's 24h cooldown, and one "Left as a draft" digest item. A
+   * cooldown refusal files the item only, so it does not extend the cooldown. Never throws: the
+   * refusal stands whatever is recorded.
+   */
+  private async recordAutonomousStop(args: {
+    mailbox: NylasClient;
+    draftId: string;
+    draft: NylasMessage | null;
+    /** The draft read was made: a null draft is gone or unreadable, not unread. */
+    lookedUp: boolean;
+    refusal: PrincipalSendRefusal;
+    reason: string;
+    options: { taskEventId?: string; conversationId?: string };
+  }): Promise<void> {
+    const { draftId, refusal, reason, options } = args;
+    let draft = args.draft;
+    if (!draft && !args.lookedUp) {
+      // Refused before the draft was read: read it once, only to name it and its thread.
+      try {
+        draft = await args.mailbox.getDraft(draftId);
+      } catch (err) {
+        this.log.warn({ err, draftId }, 'outbound-gateway: draft unreadable for its digest item — reporting it unnamed');
+      }
+    }
+    const isPrincipal = (email: string) => this.isPrincipalOnChannel('email', email);
+    if (refusal !== 'thread_cooldown') {
+      try {
+        await this.sendLedger?.recordHeld({
+          draftId,
+          threadId: draft?.threadId ?? '',
+          recipients: draft ? [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((r) => r.email.trim().toLowerCase()))].filter((r) => r && !isPrincipal(r)) : [],
+          mode: 'autonomous',
+          at: new Date().toISOString(),
+          reason,
+        });
+      } catch (err) {
+        // The refusal stands; only this thread's cooldown is lost.
+        this.log.error({ err, draftId, refusal }, 'outbound-gateway: held marker not written — the thread\'s cooldown is not started');
+      }
+    }
+    const what = draft ? mailboxDraftLabel(draft, isPrincipal) : 'a reply Curia drafted';
+    await this.publishMailboxDigest(`Left as a draft in your mailbox: ${what}. ${reason}`, options);
+  }
+
+  /** One digest item for an autonomous principal-mailbox send (#2474, design D9). A failure is logged; the outcome stands. */
+  private async publishMailboxDigest(summary: string, options: { taskEventId?: string; conversationId?: string }): Promise<void> {
+    try {
+      await this.bus.publish('dispatch', createPrincipalReport({
+        summary,
+        urgency: 'digest',
+        source: 'principal_mailbox',
+        ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+        parentEventId: options.taskEventId ?? 'system',
+        sourceLayer: 'dispatch',
+      }));
+    } catch (err) {
+      this.log.error({ err }, 'outbound-gateway: principal-mailbox digest item not recorded');
+    }
   }
 
   /**
@@ -4256,6 +4494,9 @@ export class OutboundGateway {
     // are the sender's own (reply-all keeps them in Cc), not an audience: the blocked-contact
     // checks and the review do not see them.
     const principalMailbox = profile.mailbox === 'principal';
+    // Curia sending on its own from the principal's mailbox (#2474 PR 2): sendPrincipalDraft has
+    // already applied the D4 limits, so every recipient is genuinely on the thread.
+    const autonomousMailbox = principalMailbox && profile.autonomous === true;
     const author = profile.author ?? 'curia';
     const audienceOf = (addrs: readonly string[]): string[] => (principalMailbox
       ? addrs.filter((a) => !this.isPrincipalOnChannel('email', a))
@@ -4391,14 +4632,19 @@ export class OutboundGateway {
         // otherwise hold almost every "Got it"). Its items are dropped only when everyone on the
         // send was on the quoted message (final review S2), as send() exempts a quote. All of
         // them stay redacted in the copies above.
+        //
+        // An autonomous send (PR 2) excludes only the mailbox's own addresses: the principal's
+        // phone or personal email in a reply Curia sends on its own is reviewed like any detail.
+        // Its quote is exempt outright: the D4.3 limit proved every recipient is genuinely on the
+        // thread the quote comes from (design D2).
         const ownIdentities = principalMailbox && options?.principalDirected === true
           ? this.principalIdentities.filter((i) => i.verified).map((i) => i.channelIdentifier)
-          : [];
+          : autonomousMailbox ? this.principalEmailAddresses() : [];
         const split = principalMailbox ? splitReplyQuote(body) : { own: body, quote: '' };
         const ownLength = split.own.length;
         const bodyItems = dropOwnIdentityItems(bodyFound.filter((i) => i.start < ownLength), ownIdentities);
         const quoteFound = dropOwnIdentityItems(bodyFound.filter((i) => i.start >= ownLength), ownIdentities);
-        const quoteItems = quoteFound.length > 0 && !this.quoteReachesOnlyItsParticipants(split.quote, audienceOf(draftEnvelope))
+        const quoteItems = !autonomousMailbox && quoteFound.length > 0 && !this.quoteReachesOnlyItsParticipants(split.quote, audienceOf(draftEnvelope))
           ? quoteFound
           : [];
         const subjectItems = dropOwnIdentityItems(subjectFound, ownIdentities);
@@ -4416,6 +4662,12 @@ export class OutboundGateway {
     }
     const gating = this.currentGating(autonomy);
     const bandReviewRuns = gating === 'band' && this.bandReview !== undefined && !draftPrincipalSole;
+    if (autonomousMailbox && !bandReviewRuns) {
+      // Fail closed: sendPrincipalDraft checks this first; an autonomous send never goes unreviewed.
+      const reason = "Held for the principal: the send review isn't running.";
+      this.log.warn({ draftId }, 'outbound-gateway: autonomous principal-mailbox send with no band review — left as a draft');
+      return { result: { success: false, blockedReason: reason }, held: reason };
+    }
     // Under tier gating a principal-directed draft (a live principal turn, or an approval
     // replay) is sent as written: the principal is in the loop, as tier has no review to ask.
     // Band with no review wired still refuses: band means a review decides, and none can.
@@ -4572,7 +4824,12 @@ export class OutboundGateway {
         // A principal-mailbox draft goes back to its drafter once on a bounce (#2474, D2), and a
         // hold leaves it a draft (D5). send-draft's saved drafts cannot be rewritten in place.
         ...(principalMailbox
-          ? { editable: true, senderProfile: 'principal-mailbox' as const, draftAuthor: author, leaveDraftOnHold: true }
+          ? {
+            editable: true, senderProfile: 'principal-mailbox' as const, draftAuthor: author, leaveDraftOnHold: true,
+            // Autonomous only (PR 2): the level's ceiling, and the message the reply answers.
+            ...(profile.stakesCeiling ? { stakesCeiling: profile.stakesCeiling } : {}),
+            ...(profile.origin ? { origin: profile.origin } : {}),
+          }
           : { editable: false }),
       });
       if (outcome.result) return { result: outcome.result, ...(outcome.held !== undefined ? { held: outcome.held } : {}) };
