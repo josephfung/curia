@@ -35,6 +35,8 @@ Three things had to be settled:
 | `routine` | plus autonomous sends rated `routine`, at score 80+ |
 | `all` | plus autonomous `commitment` sends, at 90+. `financial_or_legal` never goes out autonomously (#2473) |
 
+In PR 1 (#2474's first half), `routine` and `all` behave as `on_request`.
+
 Missing, unreadable or unknown values read as `on_request`: that never widens autonomy, and keeps principal-directed sends working. `sendPrincipalDraft` reads the setting itself through an injected reader, so no caller can skip it. Until #2475 the only key is `default`, and the gateway always reads the default mailbox's level (a caller-chosen key could read another mailbox's level than the grant it sends from). The setting is pinned into ceo-inbox's context and changed like any config-store setting, in conversation or the console.
 
 **Principal-directed means a live principal turn, authenticated.** `isPrincipalDirectedMailboxSend` (`src/skills/principal-send/authority.ts`) requires `isLivePrincipalTurn`, and for an email-originated turn an adapter-verified sender (`TaskOriginator.authenticated`); an unverified email "principal" turn counts as autonomous. An approval replay (`humanApproved`) is never principal-directed and is refused outright. Voice, Signal, Slack, web, CLI and console count as they do elsewhere.
