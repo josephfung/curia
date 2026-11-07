@@ -4,7 +4,17 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { apiFetch } from '../api.js';
 import { formatDateTime } from './contacts-utils.js';
+import { CardFields } from '../components/CardFields.js';
 import {
+  buildCardPayload,
+  EMPTY_CARD_FORM,
+  validateCardForm,
+  type CardEditOriginal,
+  type CardFormState,
+} from './card-form-utils.js';
+import {
+  cardBrandName,
+  cardSummaryText,
   declarerLabel,
   errorMessage,
   lastUsedText,
@@ -13,6 +23,7 @@ import {
   removeSecretFlow,
   secretStatus,
   siteHost,
+  type SecretCardSummary,
   type SecretKind,
   type SecretRowData,
   type SecretStatus,
@@ -28,6 +39,7 @@ export const KIND_LABEL: Record<SecretKind, string> = {
 
 export const STATUS_LABEL: Record<SecretStatus, string> = {
   configured: 'Configured',
+  expired: 'Expired',
   env: 'From env',
   missing: 'Missing',
   not_set: 'Not set',
@@ -37,6 +49,7 @@ export const STATUS_LABEL: Record<SecretStatus, string> = {
 // Reuses the existing pill tones: green set, amber env fallback, red missing, grey otherwise.
 const STATUS_PILL_CLASS: Record<SecretStatus, string> = {
   configured: 'confirmed',
+  expired: 'blocked',
   env: 'provisional',
   missing: 'blocked',
   not_set: '',
@@ -156,13 +169,40 @@ function EnvFallbackNote({ row }: { row: SecretRowData }) {
 
 // ── View ──────────────────────────────────────────────────────────────────────
 
+// A recent use is a read by Curia, or (saved cards only) the principal's decision on a request to
+// pay with the card. Mirrors the items GET /api/vault/secrets/:name/uses returns.
 interface SecretUse {
+  kind?: 'read' | 'card_use';
   at: string;
-  agentId: string | null;
+  agentId?: string | null;
   /** '' when the read wasn't made through a tool. */
-  toolName: string;
-  source: string | null;
-  byReference: boolean;
+  toolName?: string;
+  source?: string | null;
+  byReference?: boolean;
+  /** Saved cards: the field that was filled, e.g. expiry_mm. */
+  secretField?: string;
+  decision?: 'approved' | 'denied' | 'expired' | 'failed';
+  siteDomain?: string;
+  amount?: string | null;
+}
+
+const DECISION_VERB = {
+  approved: 'You approved', denied: 'You declined', expired: 'No answer to', failed: 'You approved, but no grant was written for',
+} as const;
+
+function UseText({ u }: { u: SecretUse }) {
+  if (u.kind === 'card_use') {
+    const verb = DECISION_VERB[u.decision ?? 'approved'];
+    const what = u.amount ? u.amount : 'a payment';
+    return <span>{u.decision === 'expired' ? `${verb} a request for ${what} at ${u.siteDomain}` : `${verb} ${what} at ${u.siteDomain}`}</span>;
+  }
+  return (
+    <span>
+      {/* A null agentId is a system-initiated read, not missing data. */}
+      {u.agentId ?? 'System'} · {u.toolName || u.source || 'unknown'}
+      {u.secretField && <> · Filled <code>{u.secretField}</code></>}
+    </span>
+  );
 }
 
 function RecentUses({ row }: { row: SecretRowData }) {
@@ -206,8 +246,7 @@ function RecentUses({ row }: { row: SecretRowData }) {
         <ul className="secrets-uses">
           {uses.map((u, i) => (
             <li key={`${u.at}-${i}`}>
-              {/* A null agentId is a system-initiated read (SecretUse), not missing data. */}
-              <span>{u.agentId ?? 'System'} · {u.toolName || u.source || 'unknown'}</span>
+              <UseText u={u} />
               {/* Same relative wording as the Last used column. */}
               <span className="secrets-hint">{lastUsedText({ ...row, readAtStartup: false, configured: true, lastUsedAt: u.at }, now)}</span>
             </li>
@@ -268,7 +307,20 @@ export function SecretViewDrawer({ row, onClose, onEdit, onRemoved }: {
       <Facts>
         <Fact label="Kind">{KIND_LABEL[row.kind]}</Fact>
         <Fact label="Status"><StatusPill row={row} /></Fact>
-        {row.kind === 'personal' && (
+        {row.card && (
+          <>
+            <Fact label="Label">{row.card.label ?? <span className="secrets-hint">None saved</span>}</Fact>
+            <Fact label="Brand">{cardBrandName(row.card)}</Fact>
+            <Fact label="Last four">••{row.card.last4}</Fact>
+            <Fact label="Name on card">{row.card.cardholder_name}</Fact>
+            <Fact label="Postal code">{row.card.billing_zip ?? <span className="secrets-hint">None saved</span>}</Fact>
+            <Fact label="Expiry">
+              {row.card.expiry}
+              {row.card.expired && <> <span className="status-pill secrets-status blocked">Expired</span></>}
+            </Fact>
+          </>
+        )}
+        {row.kind === 'personal' && !row.card && (
           <>
             <Fact label="Sign-in page">
               {!row.loginUrl ? <span className="secrets-hint">No sign-in site saved</span>
@@ -278,7 +330,7 @@ export function SecretViewDrawer({ row, onClose, onEdit, onRemoved }: {
             <Fact label="Username">{row.username ?? <span className="secrets-hint">None saved</span>}</Fact>
           </>
         )}
-        {row.valueFormat === 'json' && <Fact label="Value">Structured value</Fact>}
+        {row.valueFormat === 'json' && !row.card && <Fact label="Value">Structured value</Fact>}
         <Fact label="Created">{row.createdAt ? formatDateTime(row.createdAt) : 'n/a'}</Fact>
         <Fact label="Updated">{row.updatedAt ? formatDateTime(row.updatedAt) : 'n/a'}</Fact>
       </Facts>
@@ -326,11 +378,126 @@ function detailChange(input: string, current: string | undefined): string | null
   return next === '' ? null : next;
 }
 
-export function SecretEditDrawer({ row, onClose, onSaved }: {
-  row: SecretRowData;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
+type EditDrawerProps = { row: SecretRowData; onClose: () => void; onSaved: () => void };
+
+export function SecretEditDrawer(props: EditDrawerProps) {
+  return props.row.card ? <CardEditDrawer {...props} card={props.row.card} /> : <ValueEditDrawer {...props} />;
+}
+
+// Mirrors validateCvv in src/secrets/structured-secret-schema.ts: 4 digits for amex, 3 for every other brand.
+const cvvLength = (brand: SecretCardSummary['brand']): number => (brand === 'amex' ? 4 : 3);
+
+/** A saved card: the public fields save without the vault and without the number. A new CVV is
+ *  optional (blank keeps the current one); "Replace card" swaps in a whole new card instead. */
+function CardEditDrawer({ row, card, onClose, onSaved }: EditDrawerProps & { card: SecretCardSummary }) {
+  const [expiryMonth = '', expiryYear = ''] = card.expiry.split('/');
+  const original: CardEditOriginal = {
+    label: card.label ?? '',
+    expiryMonth,
+    expiryYear,
+    cardholderName: card.cardholder_name,
+    billingZip: card.billing_zip ?? '',
+  };
+  const [form, setForm] = useState<CardFormState>({
+    ...EMPTY_CARD_FORM,
+    label: original.label,
+    expiryMonth,
+    expiryYear,
+    cardholderName: original.cardholderName,
+    billingZip: original.billingZip,
+  });
+  const [newCvv, setNewCvv] = useState('');
+  const [replacing, setReplacing] = useState(false);
+  const [replacement, setReplacement] = useState<CardFormState>(EMPTY_CARD_FORM);
+  const [showErrors, setShowErrors] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const errors = replacing
+    ? validateCardForm(replacement, 'full')
+    : validateCardForm(form, 'edit-public', new Date(), original);
+  const cvvError = !replacing && newCvv !== '' && !new RegExp(`^\\d{${cvvLength(card.brand)}}$`).test(newCvv)
+    ? `The security code should be ${cvvLength(card.brand)} digits.` : undefined;
+  const hasErrors = Object.keys(errors).length > 0 || cvvError !== undefined;
+
+  // Only what changed goes out. The server takes `replace` alone, without the other fields.
+  const body: Record<string, unknown> = replacing
+    ? { replace: buildCardPayload(replacement, 'full') }
+    : { ...buildCardPayload(form, 'edit-public', original), ...(newCvv !== '' ? { cvv: newCvv } : {}) };
+  const nothingToSave = !replacing && Object.keys(body).length === 0;
+
+  async function handleSave() {
+    if (hasErrors) {
+      setShowErrors(true);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/vault/user-secrets/${encodeURIComponent(row.name)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await errorMessage(res));
+      // Nothing typed here may outlive the save.
+      setNewCvv('');
+      setReplacement(EMPTY_CARD_FORM);
+      setReplacing(false);
+      onSaved();
+    } catch (err) {
+      console.error('[SecretEditDrawer] card save failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save card');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <DrawerShell
+      title={`Edit ${readableLabel(row.name)}`}
+      onClose={onClose}
+      footer={<SaveFooter onClose={onClose} onSave={() => void handleSave()} saving={saving} disabled={nothingToSave} />}
+    >
+      {error && <p className="autonomy-error">{error}</p>}
+      <div className="form-field">
+        <span className="secrets-field-label">Vault key</span>
+        <code>{row.name}</code>
+        <span className="secrets-hint">Can't be renamed.</span>
+      </div>
+      <p className="secrets-hint">{cardSummaryText(card)}</p>
+
+      {replacing ? (
+        <>
+          <CardFields mode="full" state={replacement} errors={showErrors ? errors : {}}
+            onChange={patch => setReplacement(r => ({ ...r, ...patch }))} />
+          <div className="kg-merge-callout kg-merge-callout-warn secrets-callout">
+            <span>⚠ This swaps in a different card. The saved number and security code are replaced.</span>
+          </div>
+        </>
+      ) : (
+        <>
+          <CardFields mode="edit-public" state={form} errors={showErrors ? errors : {}}
+            onChange={patch => setForm(f => ({ ...f, ...patch }))} />
+          <div className="form-field">
+            <label htmlFor="se-cvv">New CVV</label>
+            <input id="se-cvv" type="password" inputMode="numeric" autoComplete="off" maxLength={4}
+              value={newCvv} onChange={e => setNewCvv(e.target.value)} placeholder="Leave blank to keep the current one" />
+            {showErrors && cvvError && <p className="login-error" role="alert">{cvvError}</p>}
+          </div>
+        </>
+      )}
+      <div>
+        <button type="button" className="btn btn-secondary btn-sm" aria-expanded={replacing}
+          onClick={() => { setReplacing(r => !r); setShowErrors(false); }}>
+          {replacing ? 'Keep this card' : 'Replace card'}
+        </button>
+      </div>
+    </DrawerShell>
+  );
+}
+
+function ValueEditDrawer({ row, onClose, onSaved }: EditDrawerProps) {
   const [loginUrl, setLoginUrl] = useState(row.loginUrl ?? '');
   const [username, setUsername] = useState(row.username ?? '');
   const [value, setValue] = useState('');
@@ -446,11 +613,11 @@ export function SecretEditDrawer({ row, onClose, onSaved }: {
 
 // ── Create ────────────────────────────────────────────────────────────────────
 
-type CreateType = 'website_login' | 'other';
+type CreateType = 'website_login' | 'other' | 'credit_card';
 
 interface NamePreview {
   name: string;
-  existing: { updatedAt: string; valueFormat: 'string' | 'json' | null } | null;
+  existing: { updatedAt: string; valueFormat: 'string' | 'json' | null; schema?: string | null } | null;
 }
 
 const PREVIEW_DEBOUNCE_MS = 300;
@@ -465,6 +632,8 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
   const [username, setUsername] = useState('');
   const [label, setLabel] = useState('');
   const [value, setValue] = useState('');
+  const [card, setCard] = useState<CardFormState>(EMPTY_CARD_FORM);
+  const [showErrors, setShowErrors] = useState(false);
   const [preview, setPreview] = useState<NamePreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -472,14 +641,21 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
 
   // The name comes from the server's naming policy, so the console and capture links can never
   // disagree. Asked again 300ms after the type, label or URL last changed.
+  // Only the first six digits leave the browser for naming: enough to tell the brand, and typing
+  // the rest of the number does not ask again.
+  const cardPrefix = card.number.replace(/[\s-]/g, '').slice(0, 6);
   useEffect(() => {
-    const namingInput = type === 'website_login' ? loginUrl.trim() : label.trim();
+    const cardLabel = card.label.trim();
+    const namingInput = type === 'website_login' ? loginUrl.trim() : type === 'other' ? label.trim() : cardLabel;
     setPreview(null);
     setPreviewError(null);
-    if (namingInput === '') return;
+    if (namingInput === '' || (type === 'credit_card' && cardPrefix === '')) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      const body = type === 'website_login' ? { type, loginUrl: namingInput } : { type, label: namingInput };
+      // A card's name is the label plus the brand word, which the server reads off the number.
+      const body = type === 'website_login' ? { type, loginUrl: namingInput }
+        : type === 'other' ? { type, label: namingInput }
+          : { type, label: namingInput, card: { number: cardPrefix } };
       apiFetch('/api/vault/user-secrets/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -496,10 +672,17 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
         });
     }, PREVIEW_DEBOUNCE_MS);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [type, label, loginUrl]);
+  }, [type, label, loginUrl, card.label, cardPrefix]);
 
-  const structuredExisting = preview?.existing?.valueFormat === 'json';
-  const ready = value.length > 0 && (type === 'website_login' ? loginUrl.trim() !== '' : label.trim() !== '');
+  // A saved card may be replaced from here; any other structured value may not.
+  // The server refuses (409) a card save over anything that is not already a saved card.
+  const cardBlocked = type === 'credit_card' && preview?.existing != null && preview.existing.schema !== 'credit_card';
+  const structuredExisting = (type !== 'credit_card' && preview?.existing?.valueFormat === 'json')
+    || (cardBlocked && preview?.existing?.valueFormat === 'json');
+  const cardErrors = validateCardForm(card, 'full');
+  const ready = type === 'credit_card'
+    ? card.label.trim() !== '' && card.number !== ''
+    : value.length > 0 && (type === 'website_login' ? loginUrl.trim() !== '' : label.trim() !== '');
 
   // Audit aid: another personal secret already signs in to this site under a different name.
   const host = siteHost(loginUrl.trim());
@@ -507,22 +690,32 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
     r.kind === 'personal' && r.name !== preview?.name && siteHost(r.loginUrl) === host).map(r => r.name);
 
   async function handleSave() {
+    if (type === 'credit_card' && Object.keys(cardErrors).length > 0) {
+      setShowErrors(true);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
+      // The server names and labels a card from the top-level label; the rest is the card.
+      const { label: cardLabel = '', ...cardFields } = buildCardPayload(card, 'full');
       const res = await apiFetch('/api/vault/user-secrets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type,
-          ...(type === 'other' ? { label: label.trim() } : {}),
-          ...(loginUrl.trim() ? { loginUrl: loginUrl.trim() } : {}),
-          ...(username.trim() ? { username: username.trim() } : {}),
-          value,
-        }),
+        body: JSON.stringify(type === 'credit_card'
+          ? { type, label: cardLabel, card: cardFields }
+          : {
+            type,
+            ...(type === 'other' ? { label: label.trim() } : {}),
+            ...(loginUrl.trim() ? { loginUrl: loginUrl.trim() } : {}),
+            ...(username.trim() ? { username: username.trim() } : {}),
+            value,
+          }),
       });
       if (!res.ok) throw new Error(await errorMessage(res));
+      // The number and security code must not outlive the save.
       setValue('');
+      setCard(EMPTY_CARD_FORM);
       onSaved();
     } catch (err) {
       console.error('[SecretCreateDrawer] save failed:', err);
@@ -557,7 +750,7 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
       onClose={onClose}
       // No Save until the name preview is back: a save before it could replace an existing
       // secret without the replacement notice.
-      footer={<SaveFooter onClose={onClose} onSave={() => void handleSave()} saving={saving} disabled={!ready || preview === null || structuredExisting} />}
+      footer={<SaveFooter onClose={onClose} onSave={() => void handleSave()} saving={saving} disabled={!ready || preview === null || structuredExisting || cardBlocked} />}
     >
       {error && <p className="autonomy-error">{error}</p>}
       <div className="form-field">
@@ -569,10 +762,9 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
           <button type="button" className={type === 'other' ? 'on' : ''} aria-pressed={type === 'other'} onClick={() => setType('other')}>
             Other
           </button>
-          {/* A disabled button gets no hover events, so the tooltip sits on a wrapper. */}
-          <span title="Coming soon — ADR-027">
-            <button type="button" disabled>Card (later)</button>
-          </span>
+          <button type="button" className={type === 'credit_card' ? 'on' : ''} aria-pressed={type === 'credit_card'} onClick={() => setType('credit_card')}>
+            Card
+          </button>
         </div>
       </div>
 
@@ -582,6 +774,9 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
           {usernameField}
           {valueField('Password')}
         </>
+      ) : type === 'credit_card' ? (
+        <CardFields mode="full" showLabel state={card} errors={showErrors ? cardErrors : {}}
+          onChange={patch => setCard(c => ({ ...c, ...patch }))} />
       ) : (
         <>
           <div className="form-field">
@@ -604,6 +799,8 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
         <div className="kg-merge-callout kg-merge-callout-warn secrets-callout">
           {structuredExisting ? (
             <span>⚠ You already have <code>{preview.name}</code>, which holds a structured value. {STRUCTURED_VALUE}</span>
+          ) : cardBlocked ? (
+            <span>⚠ You already have <code>{preview.name}</code>, which holds a different secret. Use another label for this card.</span>
           ) : (
             <span>
               ⚠ You already have <code>{preview.name}</code> (updated {shortDate(preview.existing.updatedAt)}).
@@ -612,7 +809,7 @@ export function SecretCreateDrawer({ existingRows, onClose, onSaved }: {
           )}
         </div>
       )}
-      {sameSite.length > 0 && (
+      {type !== 'credit_card' && sameSite.length > 0 && (
         <p className="secrets-hint">⚠ Same site as {sameSite.join(', ')}.</p>
       )}
     </DrawerShell>

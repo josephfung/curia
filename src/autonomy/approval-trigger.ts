@@ -179,6 +179,14 @@ export function buildDescription(
   input: Record<string, unknown>,
 ): string {
   // Determine verb
+  // A card checkout shows what is being paid, from the masked display only (#1358).
+  if (toolName === 'card-use-confirm') {
+    const str = (k: string): string => (typeof input[k] === 'string' ? (input[k] as string).trim() : '');
+    const [amount, site, card, purpose] = [str('amount'), str('site'), str('card'), str('purpose')];
+    if (!amount || !site || !card) return 'Pay with a saved card';
+    return truncate(`Pay ${amount} at ${site} with ${card}${purpose ? ` for: ${purpose}` : ''}`, MAX_DESCRIPTION_LENGTH);
+  }
+
   let verb = '';
   for (const rule of VERB_RULES) {
     if (rule.test(toolName)) { verb = rule.verb; break; }
@@ -268,6 +276,8 @@ export class ApprovalTriggerService {
      * send when the identity or its name no longer matches (#2047).
      */
     sendResolution?: readonly SendRecipientPin[];
+    /** How long the approval stays answerable. Default 24 hours; a card-use request asks for 30 minutes. */
+    expiresInMs?: number;
   }): Promise<ApprovalRequestResult> {
     const { taskId, conversationId, toolName, actionRisk, input, currentScore, requiredScore } = opts;
     const shown = opts.displayInput ?? input;
@@ -321,7 +331,7 @@ export class ApprovalTriggerService {
     // Sanitize description before storing and sending — the input fields come from
     // LLM-generated skill arguments and may contain dangerous tags.
     const description = sanitizeOutput(buildDescription(toolName, shown));
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
+    const expiresAt = new Date(Date.now() + (opts.expiresInMs ?? 24 * 60 * 60 * 1000)); // default 24h from now
 
     for (let attempt = 1; attempt <= MAX_INSERT_RETRIES; attempt++) {
       shortRef = generateShortRef();

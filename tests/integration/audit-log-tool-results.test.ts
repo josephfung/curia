@@ -88,4 +88,61 @@ describeIf('audit-log findToolResultsForTasks (#2159)', () => {
     expect(rows.map((r) => r.payload['summary'])).toEqual(['second', 'first']);
     expect(await repo.findPrincipalReportsForTasks([task], 1)).toHaveLength(1);
   });
+
+  // #2499: follow-ups a turn lane drained into a host task, as the runtime audits them.
+  it('returns the inbound ids drained into a host task on its conversation, newest first, and nothing else', async () => {
+    const conversationId = `conv-${randomUUID()}`;
+    const host = await seed('agent.task', '2026-10-18T12:00:00.000Z', null);
+    const otherHost = await seed('agent.task', '2026-10-18T12:00:00.000Z', null);
+    async function injected(at: string, hostTaskEventId: string, inboundEventId: string, conv = conversationId): Promise<void> {
+      await pool.query(
+        `INSERT INTO audit_log (timestamp, event_type, source_layer, source_id, payload, parent_event_id, conversation_id)
+         VALUES ($1, 'agent.task.input_injected', 'agent', 'coordinator', $2::jsonb, $3, $4)`,
+        [new Date(at), JSON.stringify({ hostTaskEventId, inboundEventId, conversationId: conv, agentId: 'coordinator', drainPoint: 'round', senderContactId: 'c' }), inboundEventId, conv],
+      );
+    }
+    await injected('2026-10-18T12:00:01.000Z', host, 'inbound-a');
+    await injected('2026-10-18T12:00:02.000Z', host, 'inbound-b');
+    await injected('2026-10-18T12:00:03.000Z', otherHost, 'inbound-other-host');
+    await injected('2026-10-18T12:00:04.000Z', host, 'inbound-other-conv', `conv-${randomUUID()}`);
+
+    expect(await repo.findInjectedInboundIds(conversationId, host, 10)).toEqual(['inbound-b', 'inbound-a']);
+    expect(await repo.findInjectedInboundIds(conversationId, host, 1)).toEqual(['inbound-b']);
+    expect(await repo.findInjectedInboundIds(conversationId, randomUUID(), 10)).toEqual([]);
+  });
+
+  // #2499: one sender's earlier inbound messages on a conversation, for the band brief.
+  it('returns one sender\'s inbound messages on the conversation before a time, newest first', async () => {
+    const conversationId = `conv-${randomUUID()}`;
+    async function inbound(at: string, senderId: string, content: string, conv = conversationId, eventType = 'inbound.message'): Promise<void> {
+      await pool.query(
+        `INSERT INTO audit_log (timestamp, event_type, source_layer, source_id, payload, conversation_id)
+         VALUES ($1, $2, 'channel', 'email', $3::jsonb, $4)`,
+        [new Date(at), eventType, JSON.stringify({ senderId, content, conversationId: conv }), conv],
+      );
+    }
+    await inbound('2026-10-18T13:00:01.000Z', 'jordan@example.test', 'first');
+    await inbound('2026-10-18T13:00:02.000Z', 'someone@example.test', 'other sender');
+    await inbound('2026-10-18T13:00:03.000Z', 'jordan@example.test', 'second');
+    await inbound('2026-10-18T13:00:04.000Z', 'jordan@example.test', 'other conversation', `conv-${randomUUID()}`);
+    await inbound('2026-10-18T13:00:05.000Z', 'jordan@example.test', 'not an inbound', conversationId, 'agent.task');
+    await inbound('2026-10-18T13:00:06.000Z', 'jordan@example.test', 'same millisecond as the cutoff');
+    await pool.query(
+      `INSERT INTO audit_log (timestamp, event_type, source_layer, source_id, payload, conversation_id)
+       VALUES ($1, 'inbound.message', 'channel', 'email', $2::jsonb, $3)`,
+      [new Date('2026-10-18T13:00:06.000Z'), JSON.stringify({ senderId: 'jordan@example.test', content: null }), conversationId],
+    );
+    await inbound('2026-10-18T13:00:07.000Z', 'jordan@example.test', 'after the cutoff');
+
+    const before = new Date('2026-10-18T13:00:06.000Z');
+    const rows = await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 10);
+    // A message stamped the cutoff's millisecond is kept (it cannot be ordered against it); one without text never is.
+    expect(rows.map((r) => r.payload['content'])).toEqual(['same millisecond as the cutoff', 'second', 'first']);
+    expect((await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 1)).map((r) => r.payload['content'])).toEqual(['same millisecond as the cutoff']);
+    // Excluded ids are dropped before the limit, so they do not take a slot.
+    const sameMs = rows[0]!.id;
+    expect((await repo.findRecentInboundsFromSender(conversationId, 'jordan@example.test', before, 1, [sameMs])).map((r) => r.payload['content'])).toEqual(['second']);
+    // An address in another case is the same sender.
+    expect((await repo.findRecentInboundsFromSender(conversationId, 'Jordan@Example.TEST', before, 10)).map((r) => r.payload['content'])).toEqual(['same millisecond as the cutoff', 'second', 'first']);
+  });
 });

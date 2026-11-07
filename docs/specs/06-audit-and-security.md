@@ -338,7 +338,7 @@ the contact resolved again. So this first message is authorized and scored as a 
 contact's: about 0.34, over the scheduling threshold. Lookup failures and timeouts leave the sender `unknown`. The elevation is
 published as `contact.elevated` with the evidence as its `reason`.
 
-When a request's `messageTrustScore` falls below the required threshold, the Coordinator declines the action: "I'm not able to do that without a higher level of verified trust with you. If you'd like, I can let [CEO name] know you reached out." The Coordinator may still respond in a general, non-action way (introductions, pleasantries, clarifying questions). It never explains the trust system or mentions scores to external senders. Trust thresholds do not apply to the CEO (role: `ceo` or channel: `cli`).
+When a request's `messageTrustScore` falls below the required threshold, the Coordinator does not take the action. It tells the sender it will check with the principal (by name) and get back to them, without saying why, and leaves the principal a `<note_for_principal>` with the request, so the principal does hear about it (#2501). The Coordinator may still respond in a general, non-action way (introductions, pleasantries, clarifying questions). It never mentions trust, verification or scores to external senders: an earlier scripted decline ("…without a higher level of verified trust with you") told a social engineer what to argue next. The outbound filter's `internal-structure` rule backs this up by flagging trust-system vocabulary sent to anyone but the principal (spec 15). Trust thresholds do not apply to the CEO (role: `ceo` or channel: `cli`).
 
 ### Cross-Channel Verification (Future)
 

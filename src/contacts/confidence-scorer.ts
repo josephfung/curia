@@ -31,8 +31,46 @@ export const MANUAL_BOOST = 0.10;
 /** Max confidence boost from verified identity pairings. Capped at 3 identities. */
 export const PAIRING_BOOST = 0.10;
 
-/** Minimum contact_confidence to trigger automatic tier elevation from 'unknown' to 'known'. */
+/**
+ * Minimum contact_confidence to trigger automatic tier elevation from 'unknown' to 'known'.
+ * Not sufficient on its own: recency is worth 0.20 right after any message, so a first
+ * message clears it. Judgment elevation also needs hasEarlierDayHistory() (#2500).
+ */
 export const JUDGMENT_ELEVATION_THRESHOLD = 0.20;
+
+/**
+ * How long a sender must have been on record before this message for judgment elevation
+ * (#2500). A day, so neither the message that created the contact nor a burst of messages
+ * minutes after it counts as history. Measured from the contact's creation, not from the
+ * previous message, so someone who writes several times a day still elevates on day two.
+ */
+export const JUDGMENT_MIN_HISTORY_MS = 24 * 60 * 60 * 1000;
+
+/** A contact's inbound history as stored before the message being counted. */
+export interface PriorInboundHistory {
+  /** Inbound messages counted before this one. */
+  inboundMessageCount: number;
+  /** When the contact record was created (by the email adapter, on first sight). */
+  createdAt: Date;
+}
+
+/**
+ * True when the sender wrote at least once before this message and has been on record for
+ * at least JUDGMENT_MIN_HISTORY_MS (#2500).
+ *
+ * SECURITY: judgment elevation rests on the sender's own messages only, so it needs history
+ * that one sitting cannot produce. `senderVerified` proves the mail came from the sending
+ * domain, not who the person is (on free webmail, nothing at all). Evidence from the
+ * principal (their domain, their sent mail) elevates by other paths.
+ *
+ * Accepted limit: a contact created earlier without writing (a CC'd participant, a KG or
+ * contact-create record) counts from its creation, so its second message can elevate. The
+ * sender still has to have been seen by the system a day earlier.
+ */
+export function hasEarlierDayHistory(prior: PriorInboundHistory, now: Date): boolean {
+  if (prior.inboundMessageCount < 1) return false;
+  return now.getTime() - prior.createdAt.getTime() >= JUDGMENT_MIN_HISTORY_MS;
+}
 
 /** Max number of verified identities that contribute to the pairing score. */
 const MAX_PAIRING_IDENTITIES = 3;

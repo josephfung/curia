@@ -9,16 +9,24 @@ import { secretCaptureRoutes, type SecretCapturePort } from '../../../../../src/
 import type { CaptureMetadata, RedeemOutcome } from '../../../../../src/secrets/secret-capture-service.js';
 import type { EventBus } from '../../../../../src/bus/bus.js';
 import type { BusEvent, Layer } from '../../../../../src/bus/events.js';
+import { CARD_VALIDATION_MESSAGES } from '../../../../../src/secrets/structured-secret-schema.js';
 import { createSilentLogger } from '../../../../../src/logger.js';
 
 /** A scripted fake: returns the configured metadata/redeem outcome and records redeem calls. */
 function makeFakeService(opts: {
   metadata?: CaptureMetadata;
   redeem?: RedeemOutcome | (() => Promise<RedeemOutcome>);
-}): SecretCapturePort & { redeemCalls: Array<{ token: string; value: string }> } {
+}): SecretCapturePort & { redeemCalls: Array<{ token: string; value: string }>; cardCalls: Array<{ token: string; card: Record<string, unknown> }> } {
   const redeemCalls: Array<{ token: string; value: string }> = [];
+  const cardCalls: Array<{ token: string; card: Record<string, unknown> }> = [];
   return {
     redeemCalls,
+    cardCalls,
+    async redeemCard(token: string, card: Record<string, unknown>) {
+      cardCalls.push({ token, card });
+      if (typeof opts.redeem === 'function') return opts.redeem();
+      return opts.redeem ?? { status: 'ok', captured: { secretName: 'user.x', label: null } };
+    },
     async getMetadata() {
       return opts.metadata ?? 'not_found';
     },
@@ -63,6 +71,32 @@ describe('secret-capture routes', () => {
       const res = await app.inject({ method: 'GET', url: '/api/secret-capture/abc' });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ label: 'Flight password', value_format: 'string' });
+    });
+
+    it('GET exposes capture_template and renewal card summary', async () => {
+      app = await build(makeFakeService({
+        metadata: {
+          label: 'Personal',
+          valueFormat: 'json',
+          captureTemplate: 'credit_card_renewal',
+          card: { brand: 'visa', last4: '1111', label: 'Personal' },
+        },
+      }));
+      const res = await app.inject({ method: 'GET', url: '/api/secret-capture/abc' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        label: 'Personal',
+        value_format: 'json',
+        capture_template: 'credit_card_renewal',
+        card: { brand: 'visa', last4: '1111', label: 'Personal' },
+      });
+      expect(res.body).not.toContain('user.');
+    });
+
+    it('GET exposes capture_template for a new-card link without a card summary', async () => {
+      app = await build(makeFakeService({ metadata: { label: null, valueFormat: 'json', captureTemplate: 'credit_card' } }));
+      const res = await app.inject({ method: 'GET', url: '/api/secret-capture/abc' });
+      expect(res.json()).toEqual({ label: null, value_format: 'json', capture_template: 'credit_card' });
     });
 
     it('returns 410 for an expired/consumed token', async () => {
@@ -181,6 +215,53 @@ describe('secret-capture routes', () => {
     it('maps invalid_json → 400', async () => {
       app = await build(makeFakeService({ redeem: { status: 'invalid_json' } }));
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'not json' } });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('POST {card} redeems through redeemCard and publishes without card data', async () => {
+      const svc = makeFakeService({ redeem: { status: 'ok', captured: { secretName: 'user.card', label: 'Personal', taskEventId: 't1' } } });
+      const bus = makeFakeBus();
+      app = await build(svc, { bus });
+      const card = { number: '4111111111111111', cvv: '123', expiry_month: '12', expiry_year: '2099', cardholder_name: 'A B' };
+      const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { card } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      expect(svc.cardCalls).toEqual([{ token: 'tok', card }]);
+      expect(svc.redeemCalls).toHaveLength(0);
+      expect(bus.published).toHaveLength(1);
+      expect(JSON.stringify(bus.published[0]!.event)).not.toContain('4111');
+    });
+
+    it('POST {card} on a string token → 400', async () => {
+      app = await build(makeFakeService({ redeem: { status: 'invalid_shape' } }));
+      const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { card: { number: '4111111111111111' } } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBeTruthy();
+      expect(res.body).not.toContain('4111');
+    });
+
+    it('maps invalid_shape with a reason to that reason\'s message, and publishes nothing', async () => {
+      const bus = makeFakeBus();
+      app = await build(makeFakeService({ redeem: { status: 'invalid_shape', reason: 'number_checksum' } }), { bus });
+      const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { card: { number: '4111111111111112' } } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: CARD_VALIDATION_MESSAGES.number_checksum });
+      expect(bus.published).toHaveLength(0);
+    });
+
+    it('rejects a non-object card with 400 and never calls redeemCard', async () => {
+      const svc = makeFakeService({});
+      app = await build(svc);
+      for (const card of ['4111', ['x'], null, 5]) {
+        const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { card } });
+        expect(res.statusCode).toBe(400);
+      }
+      expect(svc.cardCalls).toHaveLength(0);
+    });
+
+    it('a value posted to a card link maps invalid_shape → 400', async () => {
+      app = await build(makeFakeService({ redeem: { status: 'invalid_shape' } }));
+      const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: '{"a":1}' } });
       expect(res.statusCode).toBe(400);
     });
 

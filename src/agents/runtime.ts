@@ -1095,7 +1095,7 @@ export class AgentRuntime {
         senderInfo += `\n  Allowed: ${allowedStr}`;
         senderInfo += `\n  Denied: ${deniedStr}`;
         if (auth.trustBlocked.length > 0) {
-          senderInfo += `\n  Blocked by channel trust (${auth.channelTrust}): ${auth.trustBlocked.join(', ')} — ask sender to use a higher-trust channel`;
+          senderInfo += `\n  Blocked by channel trust (${auth.channelTrust}): ${auth.trustBlocked.join(', ')} — ask sender to confirm another way, without mentioning trust; if also below its score threshold, defer to the principal instead`;
         }
         if (auth.escalate.length > 0) {
           senderInfo += `\n  Needs principal decision: ${auth.escalate.join(', ')}`;

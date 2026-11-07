@@ -117,3 +117,82 @@ describe('ListUserSecretsHandler sign-in details (#2201)', () => {
     expect(data.details).toEqual({});
   });
 });
+
+describe('ListUserSecretsHandler saved cards (#1358)', () => {
+  const visa = {
+    schema: 'credit_card',
+    label: 'Personal',
+    publicFields: {
+      brand: 'visa', last4: '4242', expiry_month: '09', expiry_year: '2099', cardholder_name: 'A Person',
+    },
+  };
+  const amexExpired = {
+    schema: 'credit_card',
+    publicFields: {
+      brand: 'amex', last4: '0005', expiry_month: '01', expiry_year: '2020', cardholder_name: 'A Person',
+    },
+  };
+
+  function cardCtx(keys: string[], details: Map<string, unknown>): ToolContext {
+    return {
+      ...makeCtx(vi.fn().mockResolvedValue(keys)),
+      listUserSecretDetails: vi.fn().mockResolvedValue(details),
+    } as unknown as ToolContext;
+  }
+
+  async function run(ctx: ToolContext): Promise<Record<string, unknown>> {
+    const result = await new ListUserSecretsHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    return (result as { success: true; data: Record<string, unknown> }).data;
+  }
+
+  it('lists cards with label, brand, last4, expiry, expired', async () => {
+    const data = await run(cardCtx(['user.visa', 'user.plain_password'], new Map<string, unknown>([
+      ['user.visa', visa],
+      ['user.plain_password', { username: 'me' }],
+    ])));
+    expect(data.keys).toEqual(['user.plain_password', 'user.visa']);
+    expect(data.cards).toEqual({
+      'user.visa': { label: 'Personal', brand: 'visa', last4: '4242', expiry: '09/2099', expired: false },
+    });
+    expect(data.details).toEqual({ 'user.plain_password': { username: 'me' } });
+    expect(data.card_fields).toContain('number');
+    expect(data.summary).toMatch(/Saved cards are listed under `cards`/);
+  });
+
+  it('expired card is listed with expired: true and renewal hint', async () => {
+    const data = await run(cardCtx(['user.amex'], new Map<string, unknown>([['user.amex', amexExpired]])));
+    const cards = data.cards as Record<string, Record<string, unknown>>;
+    expect(cards['user.amex']!.expired).toBe(true);
+    expect(cards['user.amex']).not.toHaveProperty('label');
+    expect(data.summary).toMatch(/credit_card_renewal/);
+  });
+
+  it('no card → no card copy in summary', async () => {
+    const data = await run(cardCtx(['user.plain_password'], new Map<string, unknown>()));
+    expect(data).not.toHaveProperty('cards');
+    expect(data).not.toHaveProperty('card_fields');
+    expect(data.summary).not.toMatch(/card/i);
+  });
+
+  it('ignores a card detail row whose key is not stored', async () => {
+    const data = await run(cardCtx(['user.plain_password'], new Map<string, unknown>([['user.visa', visa]])));
+    expect(data).not.toHaveProperty('cards');
+  });
+
+  it('never calls a value read', async () => {
+    const secret = vi.fn();
+    const resolveSecretRef = vi.fn();
+    const ctx = { ...cardCtx(['user.visa'], new Map<string, unknown>([['user.visa', visa]])), secret, resolveSecretRef } as unknown as ToolContext;
+    await run(ctx);
+    expect(secret).not.toHaveBeenCalled();
+    expect(resolveSecretRef).not.toHaveBeenCalled();
+  });
+
+  it('result JSON has no 12+ digit run', async () => {
+    const data = await run(cardCtx(['user.visa', 'user.amex'], new Map<string, unknown>([
+      ['user.visa', visa], ['user.amex', amexExpired],
+    ])));
+    expect(JSON.stringify(data)).not.toMatch(/\d{12,}/);
+  });
+});

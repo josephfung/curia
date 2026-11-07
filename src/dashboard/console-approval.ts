@@ -16,6 +16,7 @@ import type { TaskOriginator } from '../contacts/types.js';
 import type { Logger } from '../logger.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import { STALE_SEND_APPROVAL_ERROR } from '../skills/_shared/recipient-reference.js';
+import { CARD_USE_CONFIRM_TOOL, UNSHOWN_CARD_USE_ERROR, cardUseRequestIdOf, type CardUseCapability } from '../secrets/card-use-service.js';
 import { approvalNeedsDraft, approvalReviewSummary, mailboxDraftRef } from './briefing.js';
 
 export type ApprovalOutcome =
@@ -48,6 +49,8 @@ export interface ConsoleApprovalDeps {
   actionLogRepo: Pick<ActionLogRepo, 'resolveRow' | 'rejectStaleApproval' | 'insert'>;
   executionLayer?: Pick<ExecutionLayer, 'invoke' | 'confirmPinnedSendResolution'>;
   disclosureDecisions?: Pick<DisclosureDecisionRecorder, 'recordForApproval'>;
+  /** Settles a denied card-use request and resumes its conversation (#1358). */
+  cardUse?: Pick<CardUseCapability, 'decline'>;
   deleteMailboxDraft?: (account: string | undefined, draftId: string) => Promise<void>;
   /** Reads a held send-draft, searching every mailbox when account is omitted. */
   loadHeldDraft?: (account: string | undefined, draftId: string) => Promise<HeldDraftView | null>;
@@ -170,6 +173,21 @@ async function rememberDisclosure(
   await deps.disclosureDecisions.recordForApproval(row, decision, 'principal_via_coordinator');
 }
 
+/** A denied card checkout: no grant, and the agent is resumed with "declined" (#1358). */
+async function declineCardUse(deps: ConsoleApprovalDeps, row: ActionLogRow, status: 'denied' | 'expired' | 'failed' = 'denied'): Promise<void> {
+  const requestId = cardUseRequestIdOf(row);
+  if (requestId === null) return;
+  if (!deps.cardUse) {
+    deps.logger.error({ rowId: row.id, requestId }, 'console-approval: cardUse not wired — the denied card request is not settled');
+    return;
+  }
+  try {
+    await deps.cardUse.decline(requestId, status);
+  } catch (err) {
+    deps.logger.error({ err, rowId: row.id, requestId }, 'console-approval: failed to settle the denied card-use request');
+  }
+}
+
 export interface ApproveOptions {
   /** True only after the console rendered the review text for this row. */
   shown?: boolean;
@@ -194,6 +212,12 @@ export async function approveFromConsole(
   }
   if (!deps.principalContactId) {
     return { ok: false, status: 503, error: 'No principal is configured.' };
+  }
+
+  // A card checkout the principal was never sent can't be approved unseen, whatever the panel
+  // shows (#1358). Deliver it first.
+  if (row.toolName === CARD_USE_CONFIRM_TOOL && row.notificationSentAt === null) {
+    return { ok: false, status: 409, error: UNSHOWN_CARD_USE_ERROR };
   }
 
   const loaded = await payloadForReview(row, deps);
@@ -231,11 +255,21 @@ export async function approveFromConsole(
     { contactId: deps.principalContactId, role: 'ceo', channel: 'web' },
     {
       humanApproved: true,
+      approvalVia: 'console',
       sendResolution: pins ?? undefined,
       conversationId: row.conversationId ?? undefined,
       taskEventId: row.taskId,
       taskMetadata: { originator },
     },
+  );
+
+  if (!reResult.success) await declineCardUse(deps, row, 'failed');
+
+  // card-use-confirm succeeds even when the request had already expired or been resolved, and
+  // writes no grant then. Only an 'approved' outcome counts as sent.
+  const sent = reResult.success && (
+    cardUseRequestIdOf(row) === null
+    || (reResult.data as { outcome?: unknown } | undefined)?.outcome === 'approved'
   );
 
   try {
@@ -244,7 +278,7 @@ export async function approveFromConsole(
       conversationId: row.conversationId ?? undefined,
       toolName: row.toolName,
       actionRisk: row.actionRisk,
-      outcome: reResult.success ? 'success' : 'failure',
+      outcome: sent ? 'success' : 'failure',
       taskSummary: reResult.success ? undefined : reResult.error,
       parentActionId: row.id,
     });
@@ -253,8 +287,8 @@ export async function approveFromConsole(
   }
 
   await publishDecision(deps, row, 'approve');
-  deps.logger.info({ rowId: row.id, sent: reResult.success }, 'console-approval: approved');
-  return { ok: true, sent: reResult.success };
+  deps.logger.info({ rowId: row.id, sent }, 'console-approval: approved');
+  return { ok: true, sent };
 }
 
 /**
@@ -290,6 +324,7 @@ export async function denyFromConsole(
   }
 
   await rememberDisclosure(deps, row, 'no', false);
+  await declineCardUse(deps, row);
   await publishDecision(deps, row, 'deny');
   deps.logger.info({ rowId: row.id, draftDeleted: draft !== null }, 'console-approval: denied');
   return { ok: true, sent: false };

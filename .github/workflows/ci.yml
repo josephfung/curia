@@ -94,6 +94,12 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      # The saved-card fill test (tests/integration/web-browser-card-fill.test.ts) drives a real
+      # headless Chromium through Patchright and fails, not skips, without one. Dependencies
+      # install with --ignore-scripts, so the browser is fetched here.
+      - name: Install Chromium for Patchright
+        run: pnpm exec patchright install --with-deps chromium
+
       - name: Run tests
         run: pnpm test
         env:

@@ -8,7 +8,9 @@
   "outputs": {
     "keys": "string[] (user.* vault key names only, alphabetical, never values)",
     "count": "number (how many user.* keys exist)",
-    "details": "object (key → {login_url?, username?})"
+    "details": "object (key → {login_url?, username?})",
+    "cards": "object (saved cards only: key → {label?, brand, last4, expiry 'MM/YYYY', expired})",
+    "card_fields": "string[] (field names for secret_ref '<key>#<field>', present when a card exists)"
   },
   "permissions": [],
   "secrets": [],

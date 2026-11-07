@@ -303,6 +303,79 @@ describe('OutboundContentFilter', () => {
       expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(false);
     });
+
+    // #2501: the trust system stays internal.
+    describe('trust-system vocabulary', () => {
+      const oldDecline =
+        "I'm not able to do that without a higher level of verified trust with you. If you'd like, I can let Avery know you reached out.";
+
+      it('flags the old scripted decline to an external recipient', async () => {
+        const result = await createTestFilter().check({ ...BASE_INPUT, content: oldDecline });
+        expect(result.passed).toBe(false);
+        expect(result.findings).toContainEqual({
+          rule: 'internal-structure',
+          detail: 'Content contains trust-system vocabulary: "verified trust"',
+        });
+      });
+
+      it.each([
+        ['a line-wrapped phrase', 'without a higher level of verified\ntrust with you'],
+        ['the score name', 'Your messageTrustScore is too low for that.'],
+        ['the score in words', 'Your message trust score is below what I need.'],
+        ['a threshold', "That's under my trust threshold for scheduling."],
+        ['verified trust with a sender', 'Once we have verified trust with you, I can book it.'],
+        ['a trust tier paraphrase', "You haven't reached the required trust tier."],
+        ['a sender trust score', 'Your trust score is too low for this.'],
+        ['not verified', 'Unfortunately you are not verified yet.'],
+        ['not yet verified', 'Unfortunately you are not yet verified.'],
+        ['not yet been verified', "Sorry, you haven't yet been verified."],
+        ['currently not verified', "You're currently not verified."],
+        ['an LRM inside the phrase', 'a higher level of verified‎ trust with you'],
+        ['a hyphenated phrase', "That's under my trust-threshold for scheduling."],
+        ['a fullwidth phrase', 'You need a higher ｖｅｒｉｆｉｅｄ ｔｒｕｓｔ level.'],
+      ])('flags %s', async (_name, content) => {
+        const result = await createTestFilter().check({ ...BASE_INPUT, content });
+        expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(true);
+      });
+
+      it('flags it when the principal is only one of the recipients', async () => {
+        const result = await createTestFilter().check({
+          ...BASE_INPUT,
+          content: oldDecline,
+          recipients: [armin, principalRcpt],
+          principalIncluded: true,
+          principalIsSoleRecipient: false,
+        });
+        expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(true);
+      });
+
+      it('does not flag it to the principal alone', async () => {
+        const result = await createTestFilter().check({
+          content: `The sender was told: "${oldDecline}"`,
+          recipientEmail: 'ceo@example.com',
+          conversationId: 'conv-principal',
+          channelId: 'email',
+          recipientTier: 'principal',
+          principalIsSoleRecipient: true,
+        });
+        expect(result.passed).toBe(true);
+      });
+
+      it.each([
+        'Let me check with Avery and get back to you.',
+        'Their TrustScore on the review site is 4.2.',
+        'Building a higher level of trust between the teams takes time.',
+        'We have a verified account and a trust fund to discuss.',
+        'We verified trust account balances with the bank this morning.',
+        'The title company verified trust ownership of the property.',
+        'The trust threshold for distributions is set out in section 4.',
+        'The trust tier of the fund is described in the prospectus.',
+        'The vendor is not verified in our ERP yet.',
+      ])('leaves ordinary prose alone: %s', async (content) => {
+        const result = await createTestFilter().check({ ...BASE_INPUT, content });
+        expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(false);
+      });
+    });
   });
 
   describe('secret-pattern rule', () => {

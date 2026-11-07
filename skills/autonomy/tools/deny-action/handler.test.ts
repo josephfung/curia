@@ -80,6 +80,17 @@ describe('DenyActionHandler', () => {
     expect(result.success).toBe(false);
   });
 
+  it('declines the card-use request and resumes when a card-use row is denied (#1358)', async () => {
+    const cardRow = { ...PENDING_ROW, toolName: 'card-use-confirm', payload: { request_id: 'req-1' } };
+    const repo = makeMockRepo({ resolvePending: vi.fn().mockResolvedValue({ found: true, row: cardRow }) });
+    const decline = vi.fn().mockResolvedValue(undefined);
+    const result = await new DenyActionHandler().execute(makeCtx({
+      actionLogRepo: repo, bus: makeMockBus(), cardUse: { decline } as unknown as ToolContext['cardUse'],
+    }));
+    expect(result.success).toBe(true);
+    expect(decline).toHaveBeenCalledWith('req-1', 'denied', 'coordinator');
+  });
+
   it('denies a pending row and publishes human.decision', async () => {
     const repo = makeMockRepo();
     const bus = makeMockBus();

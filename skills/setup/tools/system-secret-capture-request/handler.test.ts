@@ -27,6 +27,9 @@ function fakeMinter(opts: { reject?: boolean; result?: Partial<MintResult> } = {
     async setUserSecretDetails() {
       throw new Error('user policy must not be used by the system skill');
     },
+    async setUserCardPublic() {
+      throw new Error('user policy must not be used by the system skill');
+    },
   };
 }
 
@@ -117,6 +120,7 @@ function fakeMinterWithUserCalls(over: Partial<MintResult> = {}): SecretCaptureM
     async mintUserSecret(args) { userCalls.push(args); return { rawToken: 'abc123', secretName: 'user.x', expiresAt: new Date(), ...over }; },
     async mintSystemSecret(args) { systemCalls.push(args); return { rawToken: 'abc123', secretName: 'channel.email.nylas_api_key', expiresAt: new Date(), ...over }; },
     async setUserSecretDetails() { throw new Error('not used'); },
+    async setUserCardPublic() { throw new Error('not used'); },
   };
 }
 

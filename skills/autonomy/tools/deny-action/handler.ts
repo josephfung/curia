@@ -11,6 +11,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { RESOLVED_BY, approvalLabel } from '../../../../src/autonomy/action-log-types.js';
 import { parseApprovalRefInput } from '../../../_shared/approval-ref.js';
+import { cardUseRequestIdOf } from '../../../../src/secrets/card-use-service.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 
@@ -57,6 +58,20 @@ export class DenyActionHandler implements ToolHandler {
           await ctx.disclosureDecisions.recordForApproval(row, 'no', 'principal_via_coordinator');
         } else {
           ctx.log.error({ rowId: row.id }, 'deny-action: disclosureDecisions not wired — the principal\'s no is not remembered for the thread');
+        }
+      }
+
+      // A denied card checkout: nothing is granted, and the agent is resumed with "declined" (#1358).
+      const cardRequestId = cardUseRequestIdOf(row);
+      if (cardRequestId !== null) {
+        if (ctx.cardUse) {
+          try {
+            await ctx.cardUse.decline(cardRequestId, 'denied', 'coordinator');
+          } catch (err) {
+            ctx.log.error({ err, rowId: row.id, cardRequestId }, 'deny-action: failed to settle the denied card-use request');
+          }
+        } else {
+          ctx.log.error({ rowId: row.id, cardRequestId }, 'deny-action: cardUse not wired — the denied card request is not settled');
         }
       }
 
