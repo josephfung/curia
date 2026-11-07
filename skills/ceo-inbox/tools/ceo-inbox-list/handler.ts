@@ -56,7 +56,7 @@ export class CeoInboxListHandler implements ToolHandler {
     // Drafts are a distinct Nylas resource — query `/drafts`, not `/messages`.
     if (DRAFTS_FOLDER_NAMES.has(folder.toUpperCase())) {
       ctx.log.info({ folder, limit }, 'ceo-inbox-list: listing drafts via /drafts');
-      const since = parseModifiedSince(input.modified_since);
+      const since = parseModifiedSince(input.modified_since, ctx.timezone);
       if (!since.ok) return { success: false, error: since.error };
       try {
         // Nylas /drafts has no date parameter (#2474): with a cutoff, fetch the full page
