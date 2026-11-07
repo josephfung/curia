@@ -1,0 +1,19 @@
+{
+  "name": "ceo-inbox-send-draft",
+  "description": "Send one existing draft from the principal's mailbox. Only when the principal asks on a live turn (or as the send setting allows). For two or more drafts, first tell the principal the count and each draft's recipient and subject in one sentence, ask \"send all, or go through them?\", and send only after a yes. A refusal means nothing was sent and the draft stays in their Drafts folder: relay it, and never say it was sent.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": 80,
+  "inputs": {
+    "draft_id": "string (draft ID from ceo-inbox-list/search with folder DRAFTS)"
+  },
+  "outputs": {
+    "message_id": "string",
+    "to": "string[]",
+    "subject": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["outboundGateway"]
+}
