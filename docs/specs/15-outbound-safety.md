@@ -79,6 +79,40 @@ Authority-aware PII disclosure, [ADR-054](../adr/054-authority-aware-pii-disclos
 
 **Under `gating: tier`** only the reporting applies (the redacted labels in send results). The quoted thread is not scanned.
 
+### Sends from the principal's mailbox (#2474)
+
+See [ADR-062](../adr/062-curia-sends-from-the-principals-mailbox.md). `ceo-inbox-send-draft` sends one existing draft from the principal's own mailbox (the `ceo-inbox` grant) through `OutboundGateway.sendPrincipalDraft`, the only path that sends from that mailbox. It runs `sendEmailDraft`'s checks (blocked contacts, identity gate, personal data, content filter, band review) through the shared `checkDraftSend`, with a principal-mailbox profile.
+
+**The mailbox is its own entry.** `createPrincipalMailboxResolver` (`src/channels/email/principal-mailbox-resolver.ts`) reads the grant on every call, so a re-sign-in applies without a restart; no grant or API key refuses. It is never in `nylasClients`: there the principal would be dropped from every audience and `send-draft` could find these drafts. The draft read, the pre-send re-read and the send use that one client.
+
+**Principal-address Curia accounts cannot send.** `send()` and `sendEmailDraft` refuse a Curia email account whose address is the principal's (an operator could bind one to the principal's grant), before any other step, and name `ceo-inbox-send-draft` instead. That closed a path that sent from the principal's mailbox past every rule below.
+
+**Order.** Resolve the mailbox → read `ceo_inbox/sending` for the `default` mailbox ([spec 14](14-autonomy-engine.md#sends-from-the-principals-mailbox-2474)); `off` refuses → refuse an approval replay → refuse anything not principal-directed → read the draft → refuse no recipients, or the principal alone → read authorship → `checkDraftSend` → re-read the draft → write the send-ledger marker → send (no retry) → record the message ID → promote outside recipients to contacts and emit `outbound.delivered`.
+
+**Principal-directed** (`isPrincipalDirectedMailboxSend`, `src/skills/principal-send/authority.ts`): a live principal turn, not an approval replay, and for an email-originated turn a verified sender (`TaskOriginator.authenticated`). Anything not proven is autonomous. Autonomous sends land in a follow-up PR; until then they are refused (`not_requested`).
+
+| Rule | Principal-directed send |
+|---|---|
+| Blocked contacts, content filter | As `sendEmailDraft`. The principal's own addresses on the draft are the sender's, not an audience, and are not checked |
+| Identity gate | Skipped for a principal-written draft (the principal's words naming people are theirs to send); runs for a Curia-written one |
+| Personal data | Detected in the draft's own text only: the quoted message below a reply (`gmail_quote` or Curia's reply quote) is not a disclosure. The principal's verified identities are dropped. The content filter and the audit copies still see everything, redacted |
+| Band review, principal-written draft | Not run unless personal data remains; then disclosure only |
+| Band review, Curia-written draft | Purpose and grounding, plus disclosure when personal data remains |
+| Authorship | Curia's when an audit `tool.result` of `ceo-inbox-draft-reply` / `-draft-compose` names the draft (`DraftProvenance`); an unreadable log counts as Curia's (more review) |
+| Judge brief | Adds a sender-profile line: the message goes out under the principal's name. Only this profile renders it; every other brief, Gate C's included, is byte-identical |
+| Stakes | Not gated: the principal decided |
+| Relay budget | Not applicable |
+| Draft to the principal alone | Refused: they can send it themselves |
+| Bounce | Back to the drafter once (`editable`), the draft left in place |
+| Hold, ask, block | The draft is left, a reason is returned, no approval row and no digest item: the principal is on the live turn |
+| Draft edited after the checks | Refused (`draft_changed`): only what was checked is sent |
+| Spot-check pool | Not added |
+| Contact promotion | Outside recipients only |
+
+Every refusal leaves the draft in the principal's Drafts folder and returns `leftAsDraft` with a code (`mailbox_unavailable`, `setting_off`, `not_requested`, `approval_replay`, `not_found`, `lookup_failed`, `no_recipients`, `principal_only`, `review_hold`, `draft_changed`) and the text the agent relays.
+
+**Send ledger.** Before sending, the gateway writes a create-only marker under `/scratch/principal-mailbox-sends/` (draft, thread, outside recipients, mode, time), then adds the message ID. A marker failure does not stop the send; it only loses learning evidence. `ceo-inbox-sent-observe` skips a SENT message matching a marker by ID, or by thread, recipient and a short window after the marker, for voice learning, task matching and shadow-draft pairing.
+
 ### `outbound.delivered` — the canonical wire-level audit event
 
 The gateway emits an `outbound.delivered` event after every successful send. This is the canonical "did something actually leave the building?" audit signal:
