@@ -7,7 +7,7 @@ import {
   renderRequesterIdentity,
   requesterContextEvidence,
 } from '../../../src/agents/delegated-task-context.js';
-import { parseSpecialistDeclineMarker } from '../../../src/agents/specialist-decline.js';
+import { parseSpecialistDeclineMarker, resolveDeclineCause } from '../../../src/agents/specialist-decline.js';
 
 const PRINCIPAL_ORIGINATOR = {
   contactId: 'ceo-contact-id',
@@ -129,6 +129,8 @@ describe('parseSpecialistDeclineMarker', () => {
     expect(parsed).toEqual({
       reason: 'no_event',
       message: 'No calendar event matches this invite.',
+      cause: 'unspecified',
+      workProduct: 'Cannot link the invite.',
     });
     expect(parseSpecialistDeclineMarker(
       '<specialist_decline reason="short_reason">why the task cannot be done</specialist_decline>',
@@ -148,6 +150,50 @@ describe('parseSpecialistDeclineMarker', () => {
     expect(parseSpecialistDeclineMarker(
       'Example: <specialist_decline reason="quoted">quoted refusal</specialist_decline> and more text.',
     )).toBeNull();
+  });
+});
+
+describe('decline facts as data (#2494)', () => {
+  it('reads a cause a specialist may state, and ignores an unknown one', () => {
+    expect(parseSpecialistDeclineMarker(
+      '<specialist_decline reason="no_edit" cause="capability_absent">No in-place edit tool.</specialist_decline>',
+    )?.cause).toBe('capability_absent');
+    expect(parseSpecialistDeclineMarker(
+      '<specialist_decline cause="NOT_FOUND" reason="no_draft">The draft is not in Drafts or Sent.</specialist_decline>',
+    )?.cause).toBe('not_found');
+    expect(parseSpecialistDeclineMarker(
+      '<specialist_decline reason="x" cause="busy">Not now.</specialist_decline>',
+    )?.cause).toBe('unspecified');
+  });
+
+  it('never takes a gate refusal from the marker: only the platform records one', () => {
+    // A specialist reading injected text could otherwise have the principal asked for a
+    // go-ahead nothing needed, with the platform's authority behind it.
+    expect(parseSpecialistDeclineMarker(
+      '<specialist_decline reason="tier_gate" cause="gate_refused">Needs the principal to approve.</specialist_decline>',
+    )?.cause).toBe('unspecified');
+  });
+
+  it('keeps the work finished before the marker whole, and omits it when there is none', () => {
+    const outline = 'Revised outline:\n1. Intro\n2. Results';
+    const parsed = parseSpecialistDeclineMarker(
+      `${outline}\n\n<specialist_decline reason="no_edit">I cannot edit the doc in place. I can save this as a new doc.</specialist_decline>`,
+    );
+    expect(parsed?.workProduct).toBe(outline);
+    expect(parseSpecialistDeclineMarker(
+      '<specialist_decline reason="x">Nothing to show.</specialist_decline>',
+    )).not.toHaveProperty('workProduct');
+    // A long draft is kept whole, as a normal answer is, so it is never passed on cut short.
+    const long = parseSpecialistDeclineMarker(`${'é'.repeat(9000)}<specialist_decline reason="x">No.</specialist_decline>`);
+    expect(long?.workProduct).toBe('é'.repeat(9000));
+  });
+
+  it('takes a gate refusal from code over the stated cause, except a stated not_found', () => {
+    expect(resolveDeclineCause('capability_absent', ['contact-set-tier'])).toBe('gate_refused');
+    expect(resolveDeclineCause('unspecified', ['contact-set-tier'])).toBe('gate_refused');
+    expect(resolveDeclineCause('not_found', ['contact-set-tier'])).toBe('not_found');
+    expect(resolveDeclineCause('capability_absent', [])).toBe('capability_absent');
+    expect(resolveDeclineCause('unspecified', undefined)).toBe('unspecified');
   });
 });
 

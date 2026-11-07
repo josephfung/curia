@@ -21,7 +21,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import { parseResolvedContactIds } from '../../src/agents/resolved-entities.js';
+import { parseResolvedContactIds, withoutResolvedEntitiesBlocks } from '../../src/agents/resolved-entities.js';
 import { outsiderOriginatorContactId } from '../../src/dispatch/outbound-entry-access.js';
 import {
   linkOutboundEntry,
@@ -57,8 +57,8 @@ import { DateTime } from 'luxon';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 import {
   CLARIFICATION_NEXT_STEP,
-  DECLINE_NEXT_STEP,
   PAUSED_NEXT_STEP,
+  declineNextStep,
   delegateFailureNextStep,
 } from '../../src/agents/prompts/delegate-result-guidance.js';
 import { shapeSpecialistAnswer } from '../../src/agents/specialist-answer.js';
@@ -66,6 +66,7 @@ import { buildInboundEmailIdentifierBlock, preambleAccountLabel, sanitizeNylasMe
 import { CEO_INBOX_AGENT, trackInboxCodes } from '../../src/verification/track-codes.js';
 import {
   parseSpecialistDeclineMarker,
+  resolveDeclineCause,
   SPECIALIST_DECLINE_REASON,
 } from '../../src/agents/specialist-decline.js';
 
@@ -80,6 +81,8 @@ const INTERRUPTED_WAIT_MESSAGE =
 interface SpecialistReply {
   content: string;
   sends?: string[];
+  /** Calls an access gate refused in the specialist's task (`agent.response.gateRefusals`, #2494). */
+  gateRefusals?: string[];
 }
 
 /** Rejected when a queued follow-up ends the wait (#2018). Not a specialist failure:
@@ -855,7 +858,11 @@ export class DelegateHandler implements ToolHandler {
                   }) });
                   return;
                 }
-                resolve({ content: responseEvent.payload.content, sends: responseEvent.payload.sends });
+                resolve({
+                  content: responseEvent.payload.content,
+                  sends: responseEvent.payload.sends,
+                  gateRefusals: responseEvent.payload.gateRefusals,
+                });
               }
             }
           } catch (err) {
@@ -884,7 +891,7 @@ export class DelegateHandler implements ToolHandler {
       // catch. Both leave the specialist running. A specialist that reports
       // reason 'timeout' does not, and retaining the claim would block the
       // conversation until the sweep re-delivered the answer.
-      const [{ content: response, sends }] = await Promise.all([
+      const [{ content: response, sends, gateRefusals }] = await Promise.all([
         responsePromise,
         ctx.bus.publish('dispatch', taskEvent),
       ]);
@@ -986,10 +993,31 @@ export class DelegateHandler implements ToolHandler {
       // does not reword the brief and retry.
       const decline = parseSpecialistDeclineMarker(response);
       if (decline) {
+        // The decline's facts as data (#2494): the cause, code first, and what was sent.
+        // The coordinator relays these instead of a paraphrase that can contradict them.
+        const cause = resolveDeclineCause(decline.cause, gateRefusals);
+        // The contacts a declining specialist resolved still count (#1818): the principal's
+        // go-ahead on a gate refusal needs the ID. The block is not work product.
+        const declineContactIds = parseResolvedContactIds(response);
+        const workProduct = decline.workProduct !== undefined
+          ? withoutResolvedEntitiesBlocks(decline.workProduct)
+          : '';
         ctx.log.info(
-          { targetAgent: agent, declineReason: decline.reason },
+          {
+            targetAgent: agent,
+            declineReason: decline.reason,
+            declineCause: cause,
+            statedCause: decline.cause,
+            gateRefusals: gateRefusals ?? [],
+            workProduct: workProduct.length > 0,
+          },
           'Specialist declined the delegated task',
         );
+        // A decline reaches the coordinator too, work product included, so a sign-in code
+        // in it is tracked like one in an answer (#2017).
+        if (agent === CEO_INBOX_AGENT && ctx.verification) {
+          await trackInboxCodes(ctx.verification, response, ctx.log, { targetAgent: agent });
+        }
         return {
           success: true,
           data: {
@@ -999,8 +1027,13 @@ export class DelegateHandler implements ToolHandler {
             reason: SPECIALIST_DECLINE_REASON,
             retryable: false,
             message: decline.message,
+            cause,
+            // What actually went out. Absent when the runtime did not report it.
+            ...(sends !== undefined && { sent: sends }),
+            ...(workProduct.length > 0 && { work_product: workProduct }),
+            ...(declineContactIds.length > 0 && { resolvedContactIds: declineContactIds }),
             // The fallback order (#2496): the turn goes on, so the next step is the coordinator's.
-            next_step: DECLINE_NEXT_STEP,
+            next_step: declineNextStep(cause, workProduct.length > 0),
           },
         };
       }

@@ -16,6 +16,9 @@ import { AWAITING_ANSWER_HEADER, AWAITING_ANSWER_LINES } from '../../../../src/a
 import { BULLPEN_REPLY_RULE } from '../../../../src/agents/prompts/bullpen-reply-rule.js';
 import {
   CLARIFICATION_NEXT_STEP_LINES,
+  DECLINE_CAUSE_NEXT_STEP_LINES,
+  DECLINE_NEXT_STEP_LINES,
+  DECLINE_WORK_PRODUCT_NEXT_STEP_LINES,
   DELEGATE_FAILURE_NEXT_STEP_LINES,
   DRAFT_EMAIL_NEXT_STEP_LINES,
   NOTHING_SENT_NEXT_STEP_LINES,
@@ -218,6 +221,10 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     ['delegate nothing-sent next_step', NOTHING_SENT_NEXT_STEP_LINES.join('\n')],
     ['delegate calendar-failure next_step', DELEGATE_FAILURE_NEXT_STEP_LINES['calendar']!.join('\n')],
     ['delegate contacts-failure next_step', DELEGATE_FAILURE_NEXT_STEP_LINES['contacts']!.join('\n')],
+    ['delegate decline next_step', DECLINE_NEXT_STEP_LINES.join('\n')],
+    ['delegate decline gate cause (#2494)', DECLINE_CAUSE_NEXT_STEP_LINES['gate_refused']!.join('\n')],
+    ['delegate decline not-found cause (#2494)', DECLINE_CAUSE_NEXT_STEP_LINES['not_found']!.join('\n')],
+    ['delegate decline work product (#2494)', DECLINE_WORK_PRODUCT_NEXT_STEP_LINES.join('\n')],
     ['backlog line instruction', BACKLOG_INSTRUCTION_LINES.join('\n')],
     ['backlog line principal-task answer', PRINCIPAL_TASK_ANSWER_LINES.join('\n')],
     ['awaiting answers header (#2333)', AWAITING_ANSWER_HEADER],

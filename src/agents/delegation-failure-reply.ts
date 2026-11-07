@@ -30,10 +30,16 @@
 // and returned separately for the runtime to record. Since prompt trim PR 5 the
 // dispatcher also emails it to the principal, like a note on any other reply to a
 // sender (src/agents/principal-note.ts).
+//
+// Since #2496 a decline on a principal-side turn does not end the turn, so this path
+// writes a decline reply only to an outside sender. Its cause (#2494) arrives as data,
+// never as the specialist's prose, and is not told to the sender (#2501: check with the
+// principal "without saying why"). The one thing it changes: a draft that calls a
+// gate-refused step a missing capability is rejected, since that is false.
 
 import type { TaskOriginator } from '../contacts/types.js';
 import type { Message } from './llm/provider.js';
-import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
+import { SPECIALIST_DECLINE_REASON, type DeclineCause } from './specialist-decline.js';
 import { containsRawAgentId } from './agent-display-name.js';
 import { UUID_PATTERN } from '../util/uuid.js';
 import { escapeRegExp } from '../util/escape-regexp.js';
@@ -107,6 +113,8 @@ export interface DelegationFailureReplyInput {
   agentId: string;
   reason: string;
   declined?: boolean;
+  /** A decline's cause (#2494). A gate refusal rules out drafts that deny the capability. */
+  declineCause?: DeclineCause;
   possiblySucceeded?: boolean;
   escalated: boolean;
   /**
@@ -134,7 +142,9 @@ export type DraftRejection =
   | 'off_topic'
   // A sender reply still holding a <note_for_principal> tag after complete note blocks
   // were cut out: an unclosed note, or a stray closing tag (#1990).
-  | 'note_markup';
+  | 'note_markup'
+  // A gate-refused decline told as a missing capability (#2494).
+  | 'denies_capability';
 
 // The instruction lines of the narration prompt. Kept apart from the situation lines
 // (what failed, whether a follow-up was logged) because a good reply restates those
@@ -224,7 +234,7 @@ export function delegationFailureNarrationPrompt(input: {
   escalated: boolean;
   declined?: boolean;
 }): string {
-  const situation = describeFailure(input.reason, input.declined, input.possiblySucceeded);
+  const situation = describeFailure(input);
   const followUp = input.audience === 'sender'
     ? (input.escalated ? SITUATION.escalatedForSender : SITUATION.notEscalatedForSender)
     : (input.escalated ? SITUATION.escalated : SITUATION.notEscalated);
@@ -232,11 +242,22 @@ export function delegationFailureNarrationPrompt(input: {
   return [...narrationInstructions(input.audience), situation, followUp, NARRATION_FORMAT[input.audience]].join('\n');
 }
 
-function describeFailure(reason: string, declined: boolean | undefined, possiblySucceeded: boolean | undefined): string {
-  if (reason === 'timeout') return possiblySucceeded ? SITUATION.timeoutMaybeDone : SITUATION.timeout;
-  if (reason === 'blocked') return SITUATION.blocked;
-  if (declined === true || reason === SPECIALIST_DECLINE_REASON) return SITUATION.declined;
+function describeFailure(
+  input: Pick<DelegationFailureReplyInput, 'reason' | 'declined' | 'possiblySucceeded'>,
+): string {
+  if (input.reason === 'timeout') return input.possiblySucceeded ? SITUATION.timeoutMaybeDone : SITUATION.timeout;
+  if (input.reason === 'blocked') return SITUATION.blocked;
+  if (isDecline(input)) return SITUATION.declined;
   return SITUATION.other;
+}
+
+function isDecline(input: Pick<DelegationFailureReplyInput, 'declined' | 'reason'>): boolean {
+  return input.declined === true || input.reason === SPECIALIST_DECLINE_REASON;
+}
+
+/** A gate-refused decline: no draft may call the capability missing (#2494). */
+function isGateDecline(input: Pick<DelegationFailureReplyInput, 'reason' | 'declined' | 'declineCause'>): boolean {
+  return isDecline(input) && input.declineCause === 'gate_refused';
 }
 
 /**
@@ -261,7 +282,7 @@ export function formatDelegationFailureFallback(
     if (input.possiblySucceeded) parts.push('It may still be completing in the background.');
   } else if (input.reason === 'blocked') {
     parts.push('I ran into a block and couldn\'t finish that.');
-  } else if (input.declined === true || input.reason === SPECIALIST_DECLINE_REASON) {
+  } else if (isDecline(input)) {
     parts.push("I wasn't able to take that one on.");
   } else {
     parts.push("I wasn't able to finish that.");
@@ -387,6 +408,7 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   if (input.audience === 'sender' && SENDER_INTERNAL_TERMS.test(reply)) return 'internal_note';
   if (input.audience === 'sender' && LOST_THREAD_TERMS.test(reply)) return 'lost_thread';
   if (input.audience === 'sender' && !input.escalated && FOLLOW_UP_PROMISE.test(reply)) return 'unbacked_promise';
+  if (isGateDecline(input) && CAPABILITY_DENIAL.test(reply)) return 'denies_capability';
   if (!sharesTopic(reply, input.request)) return 'off_topic';
   return { reply };
 }
@@ -414,6 +436,22 @@ const LOST_THREAD_TERMS = new RegExp([
   String.raw`\b(?:don['’]?t|do not) have (?:a|any) record\b`,
   String.raw`\b(?:couldn['’]?t|could not|can['’]?t|cannot|unable to) (?:find|locate|place|track (?:\w+ )?down)\b`,
   String.raw`\blost (?:the thread|track)\b`,
+].join('|'), 'i');
+
+// A capability denied outright: "there's no ban or blocklist capability", "I don't have
+// blocking capabilities", "that isn't supported", "I can't ban people". Wrong for a
+// gate-refused decline, where the capability exists and a permission check stopped it
+// (#2494). A false match costs only the plain fallback.
+const CAPABILITY_DENIAL = new RegExp([
+  // "means" only as "no means to": "by no means" is not a denial.
+  String.raw`\bno\s+(?:[\w-]+\s+){0,3}(?:way|ability|abilities|capability|capabilities|feature|features|function|option|tool|tools)\b`,
+  String.raw`\bno\s+means\s+to\b`,
+  String.raw`\b(?:don['’]?t|do not|doesn['’]?t|does not)\s+have\s+(?:(?:a|an|any|the)\s+)?(?:[\w-]+\s+){0,2}(?:way|ability|abilities|capability|capabilities|feature|features|function|option|tool|tools|means)\b`,
+  String.raw`\b(?:isn['’]?t|is not|aren['’]?t|are not)\s+(?:possible|supported)\b`,
+  String.raw`\b(?:is|are)\s+unavailable\b`,
+  String.raw`\b(?:lack|lacks|lacking)\s+(?:(?:a|an|any|the)\s+)?(?:[\w-]+\s+){0,2}(?:way|ability|abilities|capability|capabilities|feature|features|function|option|tool|tools|means)\b`,
+  String.raw`\b(?:isn['’]?t|is not)\s+something\s+I\s+(?:can|am able to)\b`,
+  String.raw`\b(?:I|we|Curia)\s+(?:can['’]?t|cannot|am unable to|are unable to|is unable to)\s+(?:ever\s+)?\w+\s+(?:people|anyone|contacts|senders)\b`,
 ].join('|'), 'i');
 
 // The words the prompt forbids: "specialist(s)" and any form of "delegate". Exact

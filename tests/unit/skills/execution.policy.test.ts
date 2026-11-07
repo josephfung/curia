@@ -874,7 +874,11 @@ describe('autonomy gates', () => {
       });
 
       expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toContain('live principal turn');
+      if (!result.success) {
+        expect(result.error).toContain('live principal turn');
+        // Tagged, so a specialist's decline reports a permission refusal (#2494).
+        expect(result.gate).toBe('live_principal_turn');
+      }
       expect(handler.execute).not.toHaveBeenCalled();
     });
 
@@ -4164,6 +4168,7 @@ describe('allowed_callers gate', () => {
     if (!result.success) {
       expect(result.error).toContain('restricted');
       expect(result.error).toContain('coordinator');
+      expect(result.gate).toBe('allowed_callers');
     }
   });
 
