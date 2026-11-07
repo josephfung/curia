@@ -748,8 +748,10 @@ export async function recordUnresolvedDecline(
   const causeLine = declineCauseLine(decline.declineCause);
   const sentLine = declineSentLine(decline);
   const workProductLine = declineWorkProductLine(decline, MAX_NOTE_WORK_PRODUCT);
-  // The sent line comes early: a bounded note may cut the end, and it is what stops a
-  // second send. The finished text comes last.
+  // The sent line comes early, since it is what stops a second send. The finished text's
+  // room is reserved before the rest is bounded, so the bound never cuts its excerpt or
+  // the marker saying it was cut short.
+  const tail = workProductLine.length > 0 ? ` ${workProductLine}` : '';
   const note = boundUtf16(
     `${decline.agent} ${DECLINE_NOTE_MARKER} ` +
     (causeLine !== undefined ? `${causeLine} ` : '') +
@@ -758,10 +760,9 @@ export async function recordUnresolvedDecline(
     (repeated
       ? 'It declined on an earlier wake too, so Curia has stopped retrying this until someone decides. '
       : `Otherwise: ${DECLINE_FOLLOW_UP_ACTIONS.join(' ')} `) +
-    quotedDeclineMessage(decline.message) +
-    (workProductLine.length > 0 ? ` ${workProductLine}` : ''),
-    MAX_PROGRESS_NOTE,
-  );
+    quotedDeclineMessage(decline.message),
+    Math.max(0, MAX_PROGRESS_NOTE - tail.length),
+  ) + tail;
   try {
     const result = await executionLayer.invoke(
       'task-update',

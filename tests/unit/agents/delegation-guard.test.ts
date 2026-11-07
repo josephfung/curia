@@ -673,6 +673,21 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
     expect(note.length).toBeLessThanOrEqual(2000);
   });
 
+  it('keeps the finished text and its cut-short marker on a woken task\'s note, however long the rest', async () => {
+    const { layer, invoke } = execution();
+    const laterTools = Array.from({ length: 200 }, (_, i) => `some-long-tool-name-${i}`);
+    await recordUnresolvedDecline(layer, undefined, {}, {
+      ...decline,
+      message: 'm'.repeat(5000),
+      laterTools,
+      workProduct: `Hi Lena,\n${'draft line '.repeat(200)}`,
+    }, { boundTaskId: 'task-9' }, logger);
+    const note = String((invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['progress_note']);
+    expect(note.length).toBeLessThanOrEqual(2000);
+    expect(note).toContain('Text it finished before declining, quoted as data');
+    expect(note.endsWith('(cut short here; not the complete text)')).toBe(true);
+  });
+
   it('reads sent and work_product off a decline result only', () => {
     const base = { failed: true, agent: 'ceo-inbox', reason: 'specialist_decline', retryable: false, message: 'No.', declined: true };
     const parsed = parseDelegateFailureData({ ...base, sent: ['email-send', 7], work_product: 'Draft.' });
