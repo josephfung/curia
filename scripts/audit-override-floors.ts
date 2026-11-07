@@ -200,9 +200,10 @@ export interface ImplicatedAdvisory {
   source: AdvisoryRecord['source'];
   /**
    * Set when the advisory's range ended below its own patched version and the gap was
-   * treated as vulnerable: the patched version, so the report can say why.
+   * treated as vulnerable: the patched version of every range entry that was extended
+   * (one per entry, in order), so the report can say why.
    */
-  gapClosedTo?: string;
+  gapClosedTo?: string[];
 }
 
 export interface CheckedOverride {
@@ -1065,20 +1066,31 @@ function closeRangeGaps(
   advisory: AdvisoryRecord,
   ranges: string[],
   published: string[],
-): { advisory: AdvisoryRecord; ranges: string[]; gapClosedTo?: string } {
-  let gapClosedTo: string | undefined;
+): { advisory: AdvisoryRecord; ranges: string[]; gapClosedTo?: string[] } {
+  const gapClosedTo: string[] = [];
   const widened = ranges.map((range, i) => {
-    const patched = parsePatchedVersion(advisory.patchedVersions?.[i] ?? null);
-    if (!patched) return range;
+    const raw = advisory.patchedVersions?.[i] ?? null;
+    const patched = parsePatchedVersion(raw);
+    if (!patched) {
+      // Fail closed: a patch field we cannot read as one plain version could hide a gap,
+      // and the audit would then recommend a vulnerable release as the safe floor.
+      if (raw) {
+        throw new Error(
+          `advisory ${advisory.ghsaId} has a patched-version field this audit cannot ` +
+            `interpret (${JSON.stringify(raw)}); expected a single plain version.`,
+        );
+      }
+      return range;
+    }
     const below = published.filter((v) => semver.lt(v, patched) && semver.satisfies(v, range));
     if (below.length === 0) return range;
     const lastHit = below.sort(semver.compare)[below.length - 1]!;
     const gap = published.some((v) => semver.gt(v, lastHit) && semver.lt(v, patched));
     if (!gap) return range;
-    gapClosedTo = patched;
+    gapClosedTo.push(patched);
     return `${range} || >${lastHit} <${patched}`;
   });
-  return { advisory, ranges: widened, ...(gapClosedTo ? { gapClosedTo } : {}) };
+  return { advisory, ranges: widened, ...(gapClosedTo.length > 0 ? { gapClosedTo } : {}) };
 }
 
 /** A patched-version field as a plain semver version, or null if it is anything else. */
@@ -1180,7 +1192,7 @@ export function formatReport(report: AuditReport): string {
       for (const advisory of finding.advisories) {
         const via = advisory.source === 'upstream-repo' ? ' [upstream repo only]' : '';
         const gap = advisory.gapClosedTo
-          ? ` [range ends below its patched version; vulnerable up to ${advisory.gapClosedTo}]`
+          ? ` [range ends below its patched version; vulnerable up to ${advisory.gapClosedTo.join(', ')}]`
           : '';
         lines.push(`    ${advisory.ghsaId} (${advisory.severity})${via}${gap}`);
       }
@@ -1207,7 +1219,7 @@ export function formatReport(report: AuditReport): string {
       for (const advisory of blocked.advisories) {
         const via = advisory.source === 'upstream-repo' ? ' [upstream repo only]' : '';
         const gap = advisory.gapClosedTo
-          ? ` [range ends below its patched version; vulnerable up to ${advisory.gapClosedTo}]`
+          ? ` [range ends below its patched version; vulnerable up to ${advisory.gapClosedTo.join(', ')}]`
           : '';
         lines.push(`    ${advisory.ghsaId} (${advisory.severity})${via}${gap}`);
       }

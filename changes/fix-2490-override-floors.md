@@ -4,4 +4,4 @@
 
 ### Fixed
 
-- **`audit:override-floors`** — an advisory range ending below its own patched version no longer yields a vulnerable floor. (#2490)
+- **`audit:override-floors`** — treats published versions between a range's last match and its patch as vulnerable. (#2490)

@@ -548,10 +548,58 @@ describe('upstream repo advisories', () => {
     expect(report.stale).toHaveLength(1);
     expect(report.stale[0]!.vulnerableVersions).toEqual(['6.2.4', '6.2.5']);
     expect(report.stale[0]!.safeFloor).toBe('>=6.2.6');
-    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toBe('6.2.6');
+    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toEqual(['6.2.6']);
     expect(formatReport(report)).toContain(
       'range ends below its patched version; vulnerable up to 6.2.6',
     );
+  });
+
+  it('keeps each extended range its own patched version', async () => {
+    // Two entries, each with a published version in its gap: the second patch must not
+    // overwrite the first, and each entry is extended by its own patch only.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=5.0.0'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: ['5.0.0', '5.3.1', '5.3.2', '5.3.3', '6.2.4', '6.2.5', '6.2.6'] },
+        global: {
+          foo: [
+            {
+              ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['>= 5.0.0, < 5.3.2', '>= 6.0.0, < 6.2.5']),
+              patchedVersions: ['5.3.3', '6.2.6'],
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toEqual(['5.3.3', '6.2.6']);
+    expect(report.stale[0]!.vulnerableVersions).toEqual([
+      '5.0.0', '5.3.1', '5.3.2', '6.2.4', '6.2.5',
+    ]);
+    expect(report.stale[0]!.safeFloor).toBe('>=6.2.6');
+    expect(formatReport(report)).toContain('vulnerable up to 5.3.3, 6.2.6');
+  });
+
+  it('fails the audit when a patched-version field cannot be interpreted', async () => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=6.2.4'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: ['6.2.4', '6.2.5', '6.2.6'] },
+        global: {
+          foo: [
+            {
+              ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 6.2.5']),
+              patchedVersions: ['6.2.6, 7.0.1'],
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(report.exitCode).not.toBe(0);
+    expect(report.errors.join('\n')).toContain('cannot interpret');
   });
 
   it('does not extend a range whose patched version is on another line (trap 1)', async () => {
