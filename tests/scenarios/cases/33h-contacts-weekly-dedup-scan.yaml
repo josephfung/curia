@@ -4,8 +4,9 @@
 # the agent's own `schedule:` task text.
 name: contacts weekly dedup scan reports counts
 description: >
-  The Monday dedup scan fires. contact-find-duplicates files 3 new review tasks, skips 2
-  already queued and 1 excluded pair, and fails on 1 pair (7 qualifying pairs in all). The
+  The Monday dedup scan fires. contact-find-duplicates merges 2 proven duplicates itself,
+  files 3 new review tasks, skips 2 already queued and 1 excluded pair, closes 4 settled
+  tasks, and fails on 1 pair (9 qualifying pairs in all). The
   specialist should report those counts through scheduler-report, note that the failed pair
   is retried on the next run, and not start merging or excluding pairs, even though the
   review tasks are visible in its backlog.
@@ -17,7 +18,7 @@ inbound:
 tool_stubs:
   contact-find-duplicates:
     - match: {}
-      return: { filed: 3, skipped_existing: 2, skipped_excluded: 1, capped: 0, failed: 1, total_scanned: 7 }
+      return: { auto_merged: 2, auto_merge_failed: 0, auto_merge_capped: 0, auto_merge_enabled: true, filed: 3, filed_for_principal: 1, skipped_existing: 2, skipped_excluded: 1, skipped_recently_decided: 0, skipped_merged_this_run: 0, capped: 0, failed: 1, tasks_closed: 4, tasks_handed_back: 0, tasks_unblocked: 0, total_scanned: 9 }
   scheduler-report:
     - match: {}
       return: { job_id: 1d2e3f40-5a6b-4c7d-8e9f-0a1b2c3d4e5f, recorded: true }
@@ -68,8 +69,9 @@ expected_behaviors:
   - id: report_has_counts
     weight: important
     description: >
-      The scheduler-report summary gives the counts: 3 filed, 2 already queued, 1 excluded,
-      1 failed (7 scanned), and says the failed pair will be retried on the next run.
+      The scheduler-report summary gives the counts: 2 merged automatically, 3 filed, 2
+      already queued, 1 excluded, 4 settled tasks closed, 1 failed (9 scanned), and says the
+      failed pair will be retried on the next run.
 failure_modes:
   - Starts working through the review tasks in the scan turn
   - Reports without the counts, or skips scheduler-report

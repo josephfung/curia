@@ -30,6 +30,10 @@ export class ContactDedupExcludeHandler implements ToolHandler {
     if (contactAId.toLowerCase() === contactBId.toLowerCase()) {
       return { success: false, error: 'contact_a_id and contact_b_id must be different' };
     }
+    const decider = input['decided_by'] ?? 'principal';
+    if (decider !== 'principal' && decider !== 'curia') {
+      return { success: false, error: 'decided_by must be "principal" or "curia"' };
+    }
     if (!ctx.contactService) {
       return { success: false, error: 'contactService not available' };
     }
@@ -46,11 +50,13 @@ export class ContactDedupExcludeHandler implements ToolHandler {
           'contact-dedup-exclude: ctx.memoryWriteSource absent — recording exclusion with generic provenance',
         );
       }
-      const decidedBy = writeSource || 'contacts-dedup';
+      // Who made the call leads the value (#2493): Curia now rules on pairs nobody has
+      // vouched for, and the principal's own rulings must stay distinguishable from those.
+      const decidedBy = `${decider}:${writeSource || 'contacts-dedup'}`;
       const { pair, created } = await ctx.contactService.addDedupExclusion(contactAId, contactBId, decidedBy);
 
       ctx.log.info(
-        { contactAId, contactBId, created },
+        { contactAId, contactBId, created, decidedBy },
         created
           ? 'contact-dedup-exclude: exclusion recorded'
           : 'contact-dedup-exclude: pair was already excluded (no-op)',

@@ -89,7 +89,7 @@ describe('ContactDedupExcludeHandler', () => {
     ));
 
     expect(result.success).toBe(true);
-    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'contacts-dedup');
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'principal:contacts-dedup');
     if (result.success) {
       expect(result.data).toEqual({
         contact_a_id: UUID_A,
@@ -141,7 +141,7 @@ describe('ContactDedupExcludeHandler', () => {
       { contact_a_id: UUID_B, contact_b_id: UUID_A },
       { contactService: makeContactService(addDedupExclusion) },
     ));
-    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_B, UUID_A, 'contacts-dedup');
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_B, UUID_A, 'principal:contacts-dedup');
   });
 
   it('uses ctx.memoryWriteSource as decided_by provenance when available', async () => {
@@ -156,7 +156,34 @@ describe('ContactDedupExcludeHandler', () => {
         memoryWriteSource: 'agent:contacts/task:t1/channel:signal',
       },
     ));
-    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'agent:contacts/task:t1/channel:signal');
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'principal:agent:contacts/task:t1/channel:signal');
+  });
+
+  it('records decided_by "curia" ahead of the write source when Curia made the call (#2493)', async () => {
+    const addDedupExclusion = vi.fn().mockResolvedValue({
+      pair: { contactAId: UUID_A, contactBId: UUID_B },
+      created: true,
+    });
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B, decided_by: 'curia' },
+      {
+        contactService: makeContactService(addDedupExclusion),
+        memoryWriteSource: 'agent:contacts/task:t1',
+      },
+    ));
+    expect(result.success).toBe(true);
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'curia:agent:contacts/task:t1');
+  });
+
+  it('rejects a decided_by other than "principal" or "curia" without writing', async () => {
+    const addDedupExclusion = vi.fn();
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B, decided_by: 'ceo' },
+      { contactService: makeContactService(addDedupExclusion) },
+    ));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('decided_by');
+    expect(addDedupExclusion).not.toHaveBeenCalled();
   });
 
   // -- Failure reporting (the #1624 prompt gate depends on this) --
@@ -238,7 +265,7 @@ describe('ContactDedupExcludeHandler', () => {
 
     expect(result.success).toBe(true);
     expect(warn).toHaveBeenCalled();
-    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'contacts-dedup');
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'principal:contacts-dedup');
   });
 
   it('treats a blank memoryWriteSource as missing rather than storing empty provenance', async () => {
@@ -252,7 +279,7 @@ describe('ContactDedupExcludeHandler', () => {
     ));
     // The column is NOT NULL CHECK (decided_by <> ''), so a blank would be rejected by
     // Postgres — fall back before it gets there.
-    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'contacts-dedup');
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'principal:contacts-dedup');
   });
 
   it('echoes the normalized (lowercase) ids so output matches the stored row', async () => {

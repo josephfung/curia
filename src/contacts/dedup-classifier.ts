@@ -28,9 +28,14 @@ const dedupService = new DedupService();
 // Result types
 // ---------------------------------------------------------------------------
 
+export type StructuralProof = 'identity' | 'kg_node' | 'name';
+
 export type PairClassification =
   | {
       type: 'structural';
+      /** Which structural proof matched: (a) identity, (b) kg_node, (c) name. Callers that
+       *  act on the result (the dedup scan's auto-merge) weigh these differently. */
+      proof: StructuralProof;
       /** Human-readable description of the structural proof (for logging/reporting). */
       reason: string;
     }
@@ -110,6 +115,7 @@ export function classifyPair(
     if (aIdKeys.has(key)) {
       return {
         type: 'structural',
+        proof: 'identity',
         reason: `Same ${bId.channel} identifier`,
       };
     }
@@ -123,6 +129,7 @@ export function classifyPair(
   if (a.kgNodeId !== null && b.kgNodeId !== null && a.kgNodeId === b.kgNodeId) {
     return {
       type: 'structural',
+      proof: 'kg_node',
       reason: `Same kg_node_id: ${a.kgNodeId}`,
     };
   }
@@ -159,7 +166,7 @@ export function classifyPair(
       const reason = bothOrgKinds && !hasMultipleTokens
         ? `Exact normalized name match (single-token org/automated): "${normalA}"`
         : `Exact normalized name match: "${normalA}"`;
-      return { type: 'structural', reason };
+      return { type: 'structural', proof: 'name', reason };
     }
   }
 
