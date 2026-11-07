@@ -195,21 +195,26 @@ describeIf('contact-find-duplicates scan (#2493)', () => {
     expect((await runScan([a.id, b.id]))['filed']).toBe(1);
   });
 
-  it('merges a structural pair with no task and passes the classifier reason to the audit event', async () => {
+  it('files a name-only match for review instead of merging it, even with a high autonomy score', async () => {
     const a = await makeContact('Harbourline Billing', 'automated');
     const b = await makeContact('HARBOURLINE billing', 'organization');
 
-    const summary = await runScan([a.id, b.id], 80);
-    expect(summary['auto_merged']).toBe(1);
-    expect(summary['filed']).toBe(0);
+    const summary = await runScan([a.id, b.id], 95);
+    expect(summary['auto_merged']).toBe(0);
+    expect(summary['filed']).toBe(1);
+    expect((await contactService.getContact(a.id))?.id).toBe(a.id);
+    expect((await contactService.getContact(b.id))?.id).toBe(b.id);
+  });
 
-    const survivors = await Promise.all([contactService.getContact(a.id), contactService.getContact(b.id)]);
-    expect(survivors.filter(Boolean)).toHaveLength(1);
-    const merge = merges.find(m => [a.id, b.id].includes(m.secondaryId));
-    expect(merge?.details).toEqual({
-      reason: expect.stringContaining('Exact normalized name match'),
-      mergedBy: 'dedup-scan',
-    });
+  it('refuses a scan merge, writing nothing, when the tiers differ on the locked rows', async () => {
+    const a = await makeContact('Larkfield Partners', 'organization');
+    const b = await makeContact('Larkfield Partners Ltd', 'organization', 'known');
+
+    await expect(
+      contactService.mergeContacts(a.id, b.id, false, { mergedBy: 'dedup-scan', requireSameTier: true }),
+    ).rejects.toThrow(/same tier/);
+    expect((await contactService.getContact(a.id))?.id).toBe(a.id);
+    expect((await contactService.getContact(b.id))?.id).toBe(b.id);
   });
 
   it('files the structural pair for review instead when the autonomy score is too low', async () => {

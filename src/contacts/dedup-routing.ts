@@ -92,9 +92,8 @@ export function dedupReviewRoute(a: Pick<Contact, 'kind' | 'tier'>, b: Pick<Cont
  *   addresses that Gate C and the `principal` alias trust.
  * - Never when the two tiers differ: the survivor keeps the higher tier, so the merge
  *   would hand one side's addresses a grant the principal never made for them.
- * - A name-only proof needs both sides at tier `unknown`. A display name is chosen by
- *   whoever sends the message, so a stranger writing as "Jane Doe" would otherwise be
- *   folded into the principal's Jane Doe.
+ * - Never on a name-only proof. A display name is chosen by whoever sends the message, and
+ *   namesakes are common, so the pair is filed for review instead.
  * - A shared KG node proves nothing when either side is an organization. Organization
  *   contacts share their company's node by design, and an inbound role address is linked
  *   to an existing org node by the display name its sender chose.
@@ -107,7 +106,9 @@ export function canAutoMerge(
   if (classification.type !== 'structural') return false;
   if (isStructuralContact(a) || isStructuralContact(b)) return false;
   if (a.tier !== b.tier) return false;
-  if (classification.proof === 'name') return a.tier === 'unknown';
+  // A name match alone never merges: namesakes are common, and the merge deletes a contact
+  // and combines addresses and active authorization overrides. It goes to review.
+  if (classification.proof === 'name') return false;
   if (classification.proof === 'kg_node') return a.kind !== 'organization' && b.kind !== 'organization';
   return true;
 }

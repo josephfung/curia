@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { TaskUpdateHandler } from './handler.js';
 import { BLOCKED_BY_TASK_ID_ERROR, SELF_BLOCK_ERROR } from '../../optional-ref.js';
+import { dedupPairTag } from '../../../../src/contacts/dedup-pair-key.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { TaskRepo } from '../../../../src/db/task-repo.js';
 import type { TaskRow } from '../../../../src/db/queries/tasks.js';
@@ -443,6 +444,25 @@ describe('TaskUpdateHandler', () => {
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toContain('yours to decide');
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('allows the hand-over once a contact on the pair has become known since filing', async () => {
+      const idA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const idB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      const task = makeTaskRow({ tags: ['dedup', 'contacts', 'dedup-route:curia', dedupPairTag(idA, idB)] });
+      const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(task) });
+      const contactService = {
+        getContact: vi.fn(async (id: string) => ({
+          id, kind: 'person', tier: id === idA ? 'known' : 'unknown',
+        })),
+      };
+      const result = await new TaskUpdateHandler().execute(makeCtx({
+        input: { task_id: VALID_UUID, owner: 'ceo', status: 'waiting', progress_note: 'Merge?' },
+        taskRepo,
+        contactService: contactService as never,
+      }));
+      expect(result.success).toBe(true);
+      expect(taskRepo.updateTask).toHaveBeenCalled();
     });
 
     it('refuses a tags update that drops the route tag', async () => {

@@ -25,6 +25,8 @@ import { isUuid } from '../../../../src/util/uuid.js';
 import { closeDedupTasksForMergedContact } from '../../../../src/contacts/dedup-tasks.js';
 
 const NOT_MERGED = 'Nothing was merged.';
+/** Who the contact.merged audit row names for a merge made through this skill. */
+const CONTACT_MERGE_ACTOR = 'contact-merge';
 
 export class ContactMergeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -87,11 +89,13 @@ export class ContactMergeHandler implements ToolHandler {
     );
 
     try {
-      const result = await ctx.contactService.mergeContacts(
-        primary_contact_id,
-        secondary_contact_id,
-        dryRun,
-      );
+      // A committed merge is attributed, so the merge hook leaves the review tasks to the
+      // cleanup below.
+      const result = dryRun
+        ? await ctx.contactService.mergeContacts(primary_contact_id, secondary_contact_id, true)
+        : await ctx.contactService.mergeContacts(primary_contact_id, secondary_contact_id, false, {
+          mergedBy: CONTACT_MERGE_ACTOR,
+        });
 
       const goldenRecord = result.goldenRecord;
 

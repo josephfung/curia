@@ -78,8 +78,8 @@ describe('canAutoMerge', () => {
     expect(canAutoMerge(contact(A, { kind: 'automated' }), contact(B, { kind: 'automated' }), byKgNode)).toBe(true);
   });
 
-  it('merges a name-only proof only when both sides are tier unknown', () => {
-    expect(canAutoMerge(contact(A), contact(B), byName)).toBe(true);
+  it('never merges a name-only proof, whatever the tiers (namesakes are common)', () => {
+    expect(canAutoMerge(contact(A), contact(B), byName)).toBe(false);
     expect(canAutoMerge(contact(A, { tier: 'known' }), contact(B), byName)).toBe(false);
     expect(canAutoMerge(contact(A), contact(B, { tier: 'trusted' }), byName)).toBe(false);
     expect(canAutoMerge(contact(A, { tier: 'blocked' }), contact(B), byName)).toBe(false);

@@ -1980,6 +1980,17 @@ export class ContactService {
     // changed between those reads and the write would otherwise be overwritten by values
     // computed from stale data.
     const mergedRowFrom = (locked: { primary: Contact; secondary: Contact }): MergedContactRow => {
+      if (
+        details?.requireSameTier
+        && (locked.primary.tier !== locked.secondary.tier
+          || isStructuralContact(locked.primary)
+          || isStructuralContact(locked.secondary))
+      ) {
+        // Thrown inside the transaction, so nothing is written.
+        throw new Error(
+          'Merge refused: the contacts are no longer at the same tier (or one is structural) since the pair was approved',
+        );
+      }
       const golden = this.computeGoldenRecord(locked.primary, [], [], locked.secondary, [], []);
       return {
         ...mergedCounters(locked.primary, locked.secondary),

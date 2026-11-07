@@ -608,4 +608,11 @@ export interface ContactMergedDetails {
   reason?: string;
   /** Who decided the merge, e.g. 'dedup-scan'. Absent for an agent or console merge. */
   mergedBy?: string;
+  /**
+   * Abort the merge, writing nothing, if the contacts locked inside the transaction are at
+   * different tiers or either is structural. The dedup scan sets it: it approved the pair
+   * from a snapshot, and a tier granted since would otherwise lend the grant to the other
+   * side's addresses (#2493).
+   */
+  requireSameTier?: boolean;
 }

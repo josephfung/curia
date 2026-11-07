@@ -136,7 +136,7 @@ describe('ContactMergeHandler', () => {
       { contactService: contactService as never },
     ));
     expect(result.success).toBe(true);
-    expect(contactService.mergeContacts).toHaveBeenCalledWith(VALID_UUID_A, VALID_UUID_B, false);
+    expect(contactService.mergeContacts).toHaveBeenCalledWith(VALID_UUID_A, VALID_UUID_B, false, { mergedBy: 'contact-merge' });
     if (result.success) {
       const data = result.data as { merged_at: string };
       expect(data.merged_at).toBe('2026-04-05T12:00:00.000Z');

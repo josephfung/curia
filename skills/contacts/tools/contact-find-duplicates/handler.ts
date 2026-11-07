@@ -24,6 +24,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { ChannelIdentity, Contact, DuplicatePair, TaskOriginator } from '../../../../src/contacts/types.js';
 import type { TaskRow } from '../../../../src/db/queries/tasks.js';
 import { AutonomyService } from '../../../../src/autonomy/autonomy-service.js';
+import { isStructuralContact } from '../../../../src/contacts/contact-service.js';
 import { classifyPair, type PairClassification } from '../../../../src/contacts/dedup-classifier.js';
 import {
   canonicalPairKey,
@@ -224,6 +225,7 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
     let skippedExcluded = 0;
     let skippedRecent = 0;
     let skippedMerged = 0;
+    let skippedProtected = 0;
     let capped = 0;
     let failed = 0;
     let tasksClosedByMerges = 0;
@@ -272,6 +274,25 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
         continue;
       }
 
+      // A pair with a protected contact (the principal, an agent, a system role) has no
+      // merge route: contact-merge refuses it and the console offers none, so a review
+      // task would only be one nobody can resolve. Skipped, not filed (#2493).
+      if (isStructuralContact(a) || isStructuralContact(b)) {
+        skippedProtected++;
+        continue;
+      }
+
+      // A deferred pair stays quiet for the cooldown unless either contact changed since the
+      // closed task was filed (its fingerprint no longer matches). A legacy task (no
+      // fingerprint) holds it for the full cooldown. Applies to auto-merge as well as filing,
+      // so raising the autonomy score mid-deferral does not override the deferral.
+      const fingerprint = dedupPairFingerprint(a, idsFor(pair, aId), b, idsFor(pair, bId));
+      const closed = recentlyClosed.get(key);
+      if (!excluded && closed && (closed.legacy || closed.fingerprints.has(fingerprint))) {
+        skippedRecent++;
+        continue;
+      }
+
       if (classification.type === 'structural' && !excluded && gate.enabled && canAutoMerge(a, b, classification)) {
         if (autoMerged >= DEFAULT_MAX_AUTO_MERGES) {
           autoMergeCapped++;
@@ -284,6 +305,7 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
           await contactService.mergeContacts(primary.id, secondary.id, false, {
             reason: `Dedup scan auto-merge (${classification.reason})`,
             mergedBy: AUTO_MERGE_ACTOR,
+            requireSameTier: true,
           });
           autoMerged++;
           touchedThisRun.add(primary.id.toLowerCase());
@@ -323,15 +345,6 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
       }
       if (excluded) {
         skippedExcluded++;
-        continue;
-      }
-
-      const fingerprint = dedupPairFingerprint(a, idsFor(pair, aId), b, idsFor(pair, bId));
-      const closed = recentlyClosed.get(key);
-      // Within the cooldown, a pair stays quiet unless either contact changed since the
-      // closed task was filed. A legacy task (no fingerprint) holds it for the full cooldown.
-      if (closed && (closed.legacy || closed.fingerprints.has(fingerprint))) {
-        skippedRecent++;
         continue;
       }
 
@@ -392,6 +405,7 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
       skipped_excluded: skippedExcluded,
       skipped_recently_decided: skippedRecent,
       skipped_merged_this_run: skippedMerged,
+      skipped_protected: skippedProtected,
       capped,
       failed: failed + reconciled.failed,
       tasks_closed: reconciled.closed + tasksClosedByMerges,

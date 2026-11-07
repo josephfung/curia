@@ -656,6 +656,8 @@ describe('ContactFindDuplicatesHandler', () => {
     expect(t.mergeContacts).toHaveBeenCalledWith(UUID_A, UUID_B, false, {
       reason: expect.stringContaining('Same email identifier'),
       mergedBy: 'dedup-scan',
+      // Rechecked on the rows locked inside the merge transaction.
+      requireSameTier: true,
     });
     expect(t.createTask).not.toHaveBeenCalled();
     if (result.success) {
@@ -681,16 +683,17 @@ describe('ContactFindDuplicatesHandler', () => {
     expect(t.createTask).toHaveBeenCalledOnce();
   });
 
-  it.each(['principal', 'agent'] as const)('never auto-merges a %s contact, even on a shared verified identity', async (kind) => {
+  it.each(['principal', 'agent'] as const)('skips a pair with a %s contact: no merge, and no review task nobody can resolve', async (kind) => {
     const structural = makeContact(UUID_A, 'Alice Smith', { kind, tier: kind === 'principal' ? 'principal' : 'unknown' });
     const t = scan(
       [pairOf(structural, [email(UUID_A, 'alice@example.com')], alice2, [email(UUID_B, 'alice@example.com')], 1)],
       [structural, alice2],
       { autonomyScore: 95 },
     );
-    await t.run();
+    const result = await t.run();
     expect(t.mergeContacts).not.toHaveBeenCalled();
-    expect(t.createTask).toHaveBeenCalledOnce();
+    expect(t.createTask).not.toHaveBeenCalled();
+    if (result.success) expect(result.data).toMatchObject({ skipped_protected: 1 });
   });
 
   it('does not auto-merge an exact-name pair when one side is known (a display name can be forged)', async () => {
@@ -717,12 +720,14 @@ describe('ContactFindDuplicatesHandler', () => {
     expect(task.description).not.toContain('do not ask the principal');
   });
 
-  it('auto-merges an exact-name pair when neither side has been vouched for', async () => {
+  it('files an exact-name pair for review rather than merging it, even when neither side is vouched for', async () => {
     const a = makeContact(UUID_A, 'Acme Billing', { kind: 'automated' });
     const b = makeContact(UUID_B, 'ACME billing', { kind: 'organization' });
-    const t = scan([pairOf(a, [], b, [], 1)], [a, b], { autonomyScore: 70 });
+    const t = scan([pairOf(a, [], b, [], 1)], [a, b], { autonomyScore: 95 });
     await t.run();
-    expect(t.mergeContacts).toHaveBeenCalledOnce();
+    expect(t.mergeContacts).not.toHaveBeenCalled();
+    const task = t.createTask.mock.calls[0]![0] as { tags: string[] };
+    expect(task.tags).toContain('dedup-route:curia');
   });
 
   it('does not auto-merge a structural pair that has a recorded exclusion', async () => {

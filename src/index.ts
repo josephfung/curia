@@ -83,6 +83,7 @@ import { NodeMergeService } from './kg-merge/service.js';
 import type { ChannelIdentity, Contact, PrincipalEmailRef, PrincipalPrimaryEmailRef, PrincipalProfileRef } from './contacts/types.js';
 import { ConfidencePipeline } from './contacts/confidence-pipeline.js';
 import { DedupService } from './contacts/dedup-service.js';
+import { closeDedupTasksForMergedContact } from './contacts/dedup-tasks.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
 import { createContactDuplicateDetected, createContactElevated, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
@@ -803,6 +804,27 @@ async function main(): Promise<void> {
       bus.publish('dispatch', event).catch((err: unknown) =>
         logger.error({ err }, 'Failed to publish contact.merged — audit trail may be incomplete'),
       );
+      // Console and KG-node merges leave the dedup review tasks that name the folded-away
+      // contact open until the next scan (#2493). The dedup scan and the contact-merge
+      // skill pass `mergedBy` and close their own tasks, so only an unattributed merge has
+      // nobody else to close the pair's own task.
+      if (details?.mergedBy === undefined) {
+        void (async () => {
+          const survivor = await contactService.getContact(primaryContactId);
+          await closeDedupTasksForMergedContact(
+            taskRepo,
+            {
+              survivorId: primaryContactId,
+              secondaryId: secondaryContactId,
+              survivorName: survivor?.displayName ?? primaryContactId,
+            },
+            logger,
+            { includeMergedPair: true },
+          );
+        })().catch((err: unknown) =>
+          logger.warn({ err, primaryContactId, secondaryContactId }, 'dedup-tasks: post-merge review task cleanup failed — the next scan closes them'),
+        );
+      }
     },
     onContactElevated: (contactId, reason) => {
       const event = createContactElevated({ contactId, reason });

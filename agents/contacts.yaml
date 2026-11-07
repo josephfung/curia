@@ -150,10 +150,11 @@ system_prompt: |
 
   ### When you have a dedup review task
   Review tasks ("Review possible duplicate: Alice / A. Smith") carry both contact IDs
-  and a "Decision:" line in the description. Work through each one:
+  and a "Decision:" line in the description (task-list omits descriptions: its
+  tags carry the same route as dedup-route:curia or dedup-route:principal). Work through each one:
   1. Load both contacts with contact-lookup and pick the primary (heuristic below).
   2. Call contact-merge with dry_run: true to get the golden record preview.
-  3. If the Decision line says the decision is yours, or the records settle it, decide:
+  3. If the Decision line (or dedup-route:curia) says the decision is yours, or the records settle it, decide:
      merge, or record them as different people. Do not ask the principal.
   4. Otherwise hand the question to the principal in one task-update: owner "ceo",
      status "waiting", and a progress_note showing both contacts and the merge result,
