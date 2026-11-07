@@ -6,19 +6,27 @@
 
 import type { ToolContext } from '../../src/skills/types.js';
 import { DraftProvenance } from '../../src/skills/principal-send/draft-provenance.js';
-import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
+import { toLocalIso, formatDisplayTimezone, normalizeTimestamp } from '../../src/time/timestamp.js';
 import type { NylasDraftSummary } from './ceo-nylas-client.js';
 
 export type ModifiedSince = { ok: true; seconds: number | null } | { ok: false; error: string };
 
-/** Parse the optional `modified_since` input to unix seconds. Absent/blank means no filter. */
-export function parseModifiedSince(raw: unknown): ModifiedSince {
+/**
+ * Parse the optional `modified_since` input to unix seconds. Absent/blank means no filter.
+ * An offset-less value is the principal's local time, not the server's: normalizeTimestamp reads it
+ * in `timezone` (UTC when unset), so "2026-11-07T08:00:00" cannot select the wrong drafts to send.
+ */
+export function parseModifiedSince(raw: unknown, timezone?: string): ModifiedSince {
   if (raw === undefined || raw === null || raw === '') return { ok: true, seconds: null };
-  const ms = typeof raw === 'string' ? Date.parse(raw) : NaN;
-  if (Number.isNaN(ms)) {
-    return { ok: false, error: 'modified_since must be an ISO 8601 date-time (e.g. 2026-11-07T08:00:00-05:00)' };
+  const error = { ok: false as const, error: 'modified_since must be an ISO 8601 date-time (e.g. 2026-11-07T08:00:00-05:00)' };
+  if (typeof raw !== 'string') return error;
+  try {
+    const ms = Date.parse(normalizeTimestamp(raw, timezone ?? 'UTC'));
+    return Number.isNaN(ms) ? error : { ok: true, seconds: ms / 1000 };
+  } catch {
+    // Fail closed: an unreadable cutoff is reported to the model, never guessed at.
+    return error;
   }
-  return { ok: true, seconds: ms / 1000 };
 }
 
 /** Keep drafts last changed at or after the cutoff. Draft `date` is unix seconds. */

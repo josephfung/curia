@@ -77,7 +77,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
         { queryLength: query.length, limit },
         'ceo-inbox-search: searching drafts via /drafts (client-side filter)',
       );
-      const since = parseModifiedSince(input.modified_since);
+      const since = parseModifiedSince(input.modified_since, ctx.timezone);
       if (!since.ok) return { success: false, error: since.error };
       try {
         // Paginate the full drafts collection (bounded by DRAFT_SCAN_LIMIT) so a
