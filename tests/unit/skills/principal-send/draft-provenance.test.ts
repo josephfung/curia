@@ -1,0 +1,92 @@
+import { describe, it, expect, vi } from 'vitest';
+import pino from 'pino';
+import { DraftProvenance, CURIA_DRAFT_TOOLS, PROVENANCE_LOOKBACK_DAYS } from '../../../../src/skills/principal-send/draft-provenance.js';
+import type { AuditLogRow } from '../../../../src/audit/audit-log-repo.js';
+
+const logger = pino({ level: 'silent' });
+const NOW = new Date('2026-11-07T12:00:00.000Z');
+
+function row(toolName: string, result: unknown, at = '2026-11-06T12:00:00.000Z'): AuditLogRow {
+  return {
+    id: `row-${Math.random()}`,
+    timestamp: new Date(at),
+    eventType: 'tool.result',
+    sourceLayer: 'execution',
+    sourceId: 'ceo-inbox',
+    conversationId: null,
+    taskId: null,
+    parentEventId: null,
+    payload: { toolName, result },
+    action: null, outcome: null, targetType: 'skill', targetId: toolName,
+    initiatorType: null, initiatorId: null, entryHash: null,
+  } as AuditLogRow;
+}
+
+function makeRepo(rows: AuditLogRow[]) {
+  return {
+    findToolResults: vi.fn().mockResolvedValue(rows),
+    findToolResultsForTasks: vi.fn().mockResolvedValue([]),
+  };
+}
+
+describe('DraftProvenance.createdByCuria', () => {
+  it('counts a draft-reply result that created the draft', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', already_exists: false } })]);
+    const p = new DraftProvenance(repo, logger, () => NOW);
+    expect(await p.createdByCuria(['d1', 'd2'])).toEqual(new Set(['d1']));
+    expect(repo.findToolResults).toHaveBeenCalledWith(expect.objectContaining({
+      since: new Date(NOW.getTime() - PROVENANCE_LOOKBACK_DAYS * 86_400_000),
+      until: expect.any(Date),
+      toolNames: [...CURIA_DRAFT_TOOLS],
+    }));
+  });
+
+  it('ignores a draft-reply that returned an existing draft', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', already_exists: true } })]);
+    expect(await new DraftProvenance(repo, logger, () => NOW).createdByCuria(['d1'])).toEqual(new Set());
+  });
+
+  it('ignores a failed result', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-reply', { success: false, error: 'nope', data: { draft_id: 'd1' } })]);
+    expect(await new DraftProvenance(repo, logger, () => NOW).createdByCuria(['d1'])).toEqual(new Set());
+  });
+
+  it('ignores draft-edit results', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-edit', { success: true, data: { draft_id: 'd1' } })]);
+    expect(await new DraftProvenance(repo, logger, () => NOW).createdByCuria(['d1'])).toEqual(new Set());
+  });
+
+  it('counts draft-compose, which has no already_exists field', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-compose', { success: true, data: { draft_id: 'd9' } })]);
+    expect(await new DraftProvenance(repo, logger, () => NOW).createdByCuria(['d9'])).toEqual(new Set(['d9']));
+  });
+
+  it('pages past a full result set', async () => {
+    const first = Array.from({ length: 500 }, (_, i) => row('ceo-inbox-draft-compose', { success: true, data: { draft_id: `x${i}` } }, new Date(Date.parse('2026-11-01T00:00:00.000Z') + i * 1000).toISOString()));
+    const second = [row('ceo-inbox-draft-compose', { success: true, data: { draft_id: 'late' } }, '2026-11-06T00:00:00.000Z')];
+    const repo = makeRepo([]);
+    repo.findToolResults.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    expect(await new DraftProvenance(repo, logger, () => NOW).createdByCuria(['late'])).toEqual(new Set(['late']));
+    expect(repo.findToolResults).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws rather than answer from a read it could not finish', async () => {
+    // A full page at one instant cannot be paged past by time.
+    const stuck = Array.from({ length: 500 }, () => row('ceo-inbox-draft-compose', { success: true, data: { draft_id: 'other' } }, '2026-10-08T12:00:00.000Z'));
+    const repo = makeRepo([]);
+    repo.findToolResults.mockResolvedValue(stuck);
+    await expect(new DraftProvenance(repo, logger, () => NOW).createdByCuria(['d1'])).rejects.toThrow('truncated');
+  });
+
+  it('throws when the audit read fails', async () => {
+    const repo = makeRepo([]);
+    repo.findToolResults.mockRejectedValue(new Error('db down'));
+    await expect(new DraftProvenance(repo, logger, () => NOW).createdByCuria(['d1'])).rejects.toThrow('db down');
+  });
+
+  it('reads nothing for no draft ids', async () => {
+    const repo = makeRepo([]);
+    expect(await new DraftProvenance(repo, logger, () => NOW).createdByCuria([])).toEqual(new Set());
+    expect(repo.findToolResults).not.toHaveBeenCalled();
+  });
+});
