@@ -18,7 +18,10 @@
 // typed earlier. An unverified outbound_recipient identity (recorded by the gateway
 // after a first-time send) is verified in place, after the same two checks: verifying
 // is the risky step, and the gateway records whatever address the agent typed, typos
-// included. Other unverified sources (self_claimed, sms_participant) need the principal.
+// included. Any other unverified source (agent_called, self_claimed, sms_participant, …)
+// is verified the same way on a live principal turn (#2515): the principal is vouching
+// for it right now, directly or through a synchronous delegation. Outside one it is
+// refused, and the refusal says how the principal can verify it.
 //
 // A structural contact (the principal, an agent, a system contact: isStructuralContact)
 // is never changed here — see structuralContactRefusal.
@@ -40,6 +43,7 @@ import {
 } from '../../../../src/skills/_shared/duplicate-refusal.js';
 import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
 import { identifierHasSource, unsourcedIdentifierError } from '../../../../src/skills/_shared/identifier-source.js';
+import { isLivePrincipalTurn } from '../../../../src/contacts/principal.js';
 
 const NOT_LINKED = 'Nothing was linked.';
 const NOT_VERIFIED = 'Nothing was verified.';
@@ -47,6 +51,11 @@ const NEXT_SAME_NUMBER =
   'If this number belongs to both, call contact-link-identity again with distinct_from listing every ID above.';
 const NEXT =
   'Check the address: it resembles theirs. If it is right, call contact-link-identity again with distinct_from listing every ID above.';
+// "The console" alone is ambiguous: the principal may be talking to Curia in the console's chat.
+const NEEDS_PRINCIPAL =
+  'That address is already on this contact, unverified, and only the principal can vouch for it. ' +
+  'Nothing changed. The principal can verify it by asking Curia directly in a live conversation, ' +
+  "or in the contact's identity editor in the console's Contacts screen.";
 
 /**
  * The duplicate check for one address on one contact. Returns the refusal to hand the
@@ -159,10 +168,17 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         if (existing.verified) {
           return { success: true, data: { identity_id: existing.id, verified: true, already_linked: true } };
         }
-        if (existing.source === 'outbound_recipient') {
-          // An agent typed it on a first-time send; an agent re-stating it vouches for it.
-          // The gateway recorded the address as typed, so a typo of someone else's address
-          // is exactly what this can verify: run the check a new address gets first.
+        // Who vouches for it: an agent, for an address an agent typed on a first-time send;
+        // the principal, for any other source, but only while they are giving the
+        // instruction (#2515). A woken, scheduled or bullpen task has principal lineage at
+        // most, which is not enough: the same line the `elevated` gate draws (ADR-017),
+        // including its refusal of a woken task even if a live-turn flag leaked onto it.
+        const principalDirected = isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata)
+          && ctx.taskMetadata?.['wakeContext'] === undefined;
+        if (existing.source === 'outbound_recipient' || principalDirected) {
+          // Verifying is the risky step: the gateway records an address as typed, and an
+          // address found by an agent can be a near miss of someone else's. Run the check
+          // a new address gets first, and require it to have a source in the conversation.
           const restateRefusal = await duplicateRefusal(
             ctx,
             ctx.contactService,
@@ -175,15 +191,16 @@ export class ContactLinkIdentityHandler implements ToolHandler {
           if (restateUnsourced) return { success: false, error: restateUnsourced };
           const verified = await ctx.contactService.verifyIdentity(existing.id);
           ctx.log.info(
-            { identityId: existing.id, contactId: contact_id },
-            'contact-link-identity: re-stated outbound_recipient address verified (#2041)',
+            { identityId: existing.id, contactId: contact_id, source: existing.source, principalDirected },
+            'contact-link-identity: re-stated unverified address verified (#2041, #2515)',
           );
           return { success: true, data: { identity_id: verified.id, verified: verified.verified, already_linked: true } };
         }
-        return {
-          success: false,
-          error: 'That address is already on this contact, unverified. Only the principal can verify it, in the console. Nothing changed.',
-        };
+        ctx.log.info(
+          { identityId: existing.id, contactId: contact_id, source: existing.source },
+          'contact-link-identity: refused — unverified address re-stated outside a live principal turn (#2515)',
+        );
+        return { success: false, error: NEEDS_PRINCIPAL };
       }
 
       // The number is already verified on a sibling channel of this contact: derive it.

@@ -604,7 +604,11 @@ export async function resolveRecipientReference(
     const why = onChannel.length > 0 ? ' (the ones on file are unverified, inactive, or not sendable on this channel)' : '';
     const next = isPrincipal
       ? 'Use a channel listed in Principal Contact Details.'
-      : 'Reach them on another channel, or add (or re-state) an address you are sure of with contact-link-identity.';
+      // Re-stating an unverified address on file is refused for most sources unless the
+      // principal is asking for it live (#2515). Say so, rather than send the agent round again.
+      : 'Reach them on another channel, or give contact-link-identity an address copied from a message or page in this ' +
+        'conversation. Re-stating an unverified one already on file is refused unless the principal is asking for ' +
+        'it in a live conversation.';
     return {
       ok: false,
       error: `${who} has no verified, active ${channel} address${why}. Nothing was sent. ${next}`,
