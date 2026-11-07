@@ -21,20 +21,29 @@ function isSendLevel(v: unknown): v is SendLevel {
 /**
  * Parse the stored `{ "<mailbox>": "<level>" }` JSON. Anything missing or invalid
  * falls back to on_request: it never widens autonomy beyond the default, and keeps
- * principal-directed sends working.
+ * principal-directed sends working. `malformed` is true for a stored value that is not
+ * that shape, or names an unknown level for the mailbox (final review M2): a mistyped `off`
+ * would otherwise become on_request with no trace. Unset, or no entry for the mailbox, is not.
  */
-export function parseSendLevel(raw: string | null, mailbox: string = DEFAULT_MAILBOX): SendLevel {
-  if (raw === null) return DEFAULT_SEND_LEVEL;
+export function readSendLevelValue(raw: string | null, mailbox: string = DEFAULT_MAILBOX): { level: SendLevel; malformed: boolean } {
+  const fallback = (malformed: boolean) => ({ level: DEFAULT_SEND_LEVEL, malformed });
+  if (raw === null) return fallback(false);
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    // Unparseable setting: fall back to the default level (see above); not an error path to surface.
-    return DEFAULT_SEND_LEVEL;
+    // Unparseable setting: the default level, flagged so the reader warns (see above).
+    return fallback(true);
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return DEFAULT_SEND_LEVEL;
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return fallback(true);
+  if (!Object.prototype.hasOwnProperty.call(parsed, mailbox)) return fallback(false);
   const value = (parsed as Record<string, unknown>)[mailbox];
-  return isSendLevel(value) ? value : DEFAULT_SEND_LEVEL;
+  return isSendLevel(value) ? { level: value, malformed: false } : fallback(true);
+}
+
+/** readSendLevelValue's level alone. */
+export function parseSendLevel(raw: string | null, mailbox: string = DEFAULT_MAILBOX): SendLevel {
+  return readSendLevelValue(raw, mailbox).level;
 }
 
 export type SendLevelReader = (mailbox: string) => Promise<SendLevel>;
@@ -45,7 +54,10 @@ export function createSendLevelReader(deps: {
 }): SendLevelReader {
   return async (mailbox) => {
     try {
-      return parseSendLevel(await deps.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY), mailbox);
+      const { level, malformed } = readSendLevelValue(await deps.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY), mailbox);
+      // Never the stored value: only that it could not be read as a level.
+      if (malformed) deps.logger.warn({ mailbox }, 'ceo_inbox/sending holds a malformed or unknown level; using on_request');
+      return level;
     } catch (err) {
       // Fall back to on_request: never widens autonomy, keeps principal-directed sends working.
       deps.logger.warn({ err, mailbox }, 'Could not read ceo_inbox sending level; using on_request');

@@ -37,8 +37,12 @@ export function createPrincipalMailboxResolver(deps: {
     if (!grantId) return null;
 
     const key = apiKey();
-    // Fail closed: without an API key we cannot build a client.
-    if (!key) return null;
+    // Fail closed: without an API key we cannot build a client. Warned, because the refusal
+    // then says the mailbox isn't connected while the grant is set (final review M1).
+    if (!key) {
+      logger.warn('Principal mailbox grant is set but the Nylas API key is missing; treating mailbox as unavailable');
+      return null;
+    }
 
     if (cached && cached.grantId === grantId && cached.key === key) return cached.client;
     const client = createClient(key, grantId);

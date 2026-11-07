@@ -4163,7 +4163,9 @@ export class OutboundGateway {
     const checked = await this.checkDraftSend({ profile, draftId, draftMeta, autonomy, options: checkOptions });
     if ('result' in checked) {
       if (checked.held !== undefined) return refuse('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`);
-      // A bounce goes back to the drafter to edit once and resend; the draft is still there.
+      // Every other stop leaves the draft where it is and returns its reason: a review bounce
+      // (the drafter edits once and resends), a blocked contact, the identity gate, the content
+      // filter or a redactor error.
       return { ...checked.result, leftAsDraft: true };
     }
     const { recipient, band, detectedItems, redactedBody, redactedSubject } = checked.proceed;

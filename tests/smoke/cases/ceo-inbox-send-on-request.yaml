@@ -24,15 +24,15 @@ tool_stubs:
         count: 2
         displayTimezone: "{{timezone}}"
         drafts:
-          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: 1791800000, date_local: "{{at:now-3h}}", created_by_curia: false }
-          - { id: draft-s1-other, threadId: thr-s1-other, subject: Board dinner RSVP, to: [{ name: Ruth Alder, email: ruth.alder@example.test }], cc: [], snippet: "Thank you for the invitation.", date: 1791692000, date_local: "{{at:now-30h}}", created_by_curia: false }
+          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s1-other, threadId: thr-s1-other, subject: Board dinner RSVP, to: [{ name: Ruth Alder, email: ruth.alder@example.test }], cc: [], snippet: "Thank you for the invitation.", date_local: "{{at:now-30h}}", created_by_curia: false }
     - match: { folder: DRAFTS }
       return:
         folder: DRAFTS
         count: 1
         displayTimezone: "{{timezone}}"
         drafts:
-          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: 1791800000, date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date_local: "{{at:now-3h}}", created_by_curia: false }
   ceo-inbox-search:
     - match: { folder: DRAFTS, modified_since: null }
       return:
@@ -40,20 +40,20 @@ tool_stubs:
         count: 2
         displayTimezone: "{{timezone}}"
         drafts:
-          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: 1791800000, date_local: "{{at:now-3h}}", created_by_curia: false }
-          - { id: draft-s1-other, threadId: thr-s1-other, subject: Board dinner RSVP, to: [{ name: Ruth Alder, email: ruth.alder@example.test }], cc: [], snippet: "Thank you for the invitation.", date: 1791692000, date_local: "{{at:now-30h}}", created_by_curia: false }
+          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s1-other, threadId: thr-s1-other, subject: Board dinner RSVP, to: [{ name: Ruth Alder, email: ruth.alder@example.test }], cc: [], snippet: "Thank you for the invitation.", date_local: "{{at:now-30h}}", created_by_curia: false }
     - match: { folder: DRAFTS }
       return:
         folder: DRAFTS
         count: 1
         displayTimezone: "{{timezone}}"
         drafts:
-          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date: 1791800000, date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date_local: "{{at:now-3h}}", created_by_curia: false }
   ceo-inbox-read:
     - match: { draft_id: draft-s1-venue }
-      return: { id: draft-s1-venue, threadId: thr-s1-venue, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], bcc: [], subject: Venue for the offsite, body_plain: "Jo, shall we use the Harbour Room for the offsite? Let me know.", date: 1791800000, is_draft: true }
+      return: { id: draft-s1-venue, threadId: thr-s1-venue, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], bcc: [], subject: Venue for the offsite, body_plain: "Jo, shall we use the Harbour Room for the offsite? Let me know.", is_draft: true }
     - match: { draft_id: draft-s1-other }
-      return: { id: draft-s1-other, threadId: thr-s1-other, to: [{ name: Ruth Alder, email: ruth.alder@example.test }], cc: [], bcc: [], subject: Board dinner RSVP, body_plain: "Ruth, thank you for the invitation. I will be glad to attend.", date: 1791800000, is_draft: true }
+      return: { id: draft-s1-other, threadId: thr-s1-other, to: [{ name: Ruth Alder, email: ruth.alder@example.test }], cc: [], bcc: [], subject: Board dinner RSVP, body_plain: "Ruth, thank you for the invitation. I will be glad to attend.", is_draft: true }
 
 turns:
   - role: user

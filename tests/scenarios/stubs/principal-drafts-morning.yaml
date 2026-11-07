@@ -17,7 +17,6 @@ ceo-inbox-list:
           to: [{ name: Jo Park, email: jo.park@acme.example.test }]
           cc: []
           snippet: "Jo, shall we use the Harbour Room for the offsite? Let me kn"
-          date: 1791800000
           date_local: "{{at:now-3h}}"
           created_by_curia: false
         - id: draft-30-board
@@ -26,7 +25,6 @@ ceo-inbox-list:
           to: [{ name: Ruth Alder, email: ruth.alder@northfield.example.test }]
           cc: []
           snippet: "Ruth, thank you for the invitation. I will be glad to attend"
-          date: 1791796400
           date_local: "{{at:now-4h}}"
           created_by_curia: false
         - id: draft-30-vendor
@@ -35,7 +33,6 @@ ceo-inbox-list:
           to: [{ name: Sam Kerr, email: sam.kerr@vendor.example.test }]
           cc: []
           snippet: "Sam, we would like to talk about renewal timing next month."
-          date: 1791792800
           date_local: "{{at:now-5h}}"
           created_by_curia: false
         - id: draft-30-old
@@ -44,7 +41,6 @@ ceo-inbox-list:
           to: [{ name: Lee Tan, email: lee.tan@lumen.example.test }]
           cc: []
           snippet: "Lee, following up on pricing after the demo."
-          date: 1791630000
           date_local: "{{at:now-48h}}"
           created_by_curia: false
   - match: { folder: DRAFTS }
@@ -59,7 +55,6 @@ ceo-inbox-list:
           to: [{ name: Jo Park, email: jo.park@acme.example.test }]
           cc: []
           snippet: "Jo, shall we use the Harbour Room for the offsite? Let me kn"
-          date: 1791800000
           date_local: "{{at:now-3h}}"
           created_by_curia: false
         - id: draft-30-board
@@ -68,7 +63,6 @@ ceo-inbox-list:
           to: [{ name: Ruth Alder, email: ruth.alder@northfield.example.test }]
           cc: []
           snippet: "Ruth, thank you for the invitation. I will be glad to attend"
-          date: 1791796400
           date_local: "{{at:now-4h}}"
           created_by_curia: false
         - id: draft-30-vendor
@@ -77,7 +71,6 @@ ceo-inbox-list:
           to: [{ name: Sam Kerr, email: sam.kerr@vendor.example.test }]
           cc: []
           snippet: "Sam, we would like to talk about renewal timing next month."
-          date: 1791792800
           date_local: "{{at:now-5h}}"
           created_by_curia: false
 ceo-inbox-search:
@@ -93,7 +86,6 @@ ceo-inbox-search:
           to: [{ name: Jo Park, email: jo.park@acme.example.test }]
           cc: []
           snippet: "Jo, shall we use the Harbour Room for the offsite? Let me kn"
-          date: 1791800000
           date_local: "{{at:now-3h}}"
           created_by_curia: false
         - id: draft-30-board
@@ -102,7 +94,6 @@ ceo-inbox-search:
           to: [{ name: Ruth Alder, email: ruth.alder@northfield.example.test }]
           cc: []
           snippet: "Ruth, thank you for the invitation. I will be glad to attend"
-          date: 1791796400
           date_local: "{{at:now-4h}}"
           created_by_curia: false
         - id: draft-30-vendor
@@ -111,7 +102,6 @@ ceo-inbox-search:
           to: [{ name: Sam Kerr, email: sam.kerr@vendor.example.test }]
           cc: []
           snippet: "Sam, we would like to talk about renewal timing next month."
-          date: 1791792800
           date_local: "{{at:now-5h}}"
           created_by_curia: false
         - id: draft-30-old
@@ -120,7 +110,6 @@ ceo-inbox-search:
           to: [{ name: Lee Tan, email: lee.tan@lumen.example.test }]
           cc: []
           snippet: "Lee, following up on pricing after the demo."
-          date: 1791630000
           date_local: "{{at:now-48h}}"
           created_by_curia: false
   - match: { folder: DRAFTS }
@@ -135,7 +124,6 @@ ceo-inbox-search:
           to: [{ name: Jo Park, email: jo.park@acme.example.test }]
           cc: []
           snippet: "Jo, shall we use the Harbour Room for the offsite? Let me kn"
-          date: 1791800000
           date_local: "{{at:now-3h}}"
           created_by_curia: false
         - id: draft-30-board
@@ -144,7 +132,6 @@ ceo-inbox-search:
           to: [{ name: Ruth Alder, email: ruth.alder@northfield.example.test }]
           cc: []
           snippet: "Ruth, thank you for the invitation. I will be glad to attend"
-          date: 1791796400
           date_local: "{{at:now-4h}}"
           created_by_curia: false
         - id: draft-30-vendor
@@ -153,7 +140,6 @@ ceo-inbox-search:
           to: [{ name: Sam Kerr, email: sam.kerr@vendor.example.test }]
           cc: []
           snippet: "Sam, we would like to talk about renewal timing next month."
-          date: 1791792800
           date_local: "{{at:now-5h}}"
           created_by_curia: false
 ceo-inbox-read:
@@ -166,7 +152,6 @@ ceo-inbox-read:
       bcc: []
       subject: Venue for the offsite
       body_plain: "Jo, shall we use the Harbour Room for the offsite? Let me know."
-      date: 1791800000
       date_local: "{{at:now-3h}}"
       is_draft: true
   - match: { draft_id: draft-30-board }
@@ -178,7 +163,6 @@ ceo-inbox-read:
       bcc: []
       subject: Board dinner RSVP
       body_plain: "Ruth, thank you for the invitation. I will be glad to attend."
-      date: 1791796400
       date_local: "{{at:now-4h}}"
       is_draft: true
   - match: { draft_id: draft-30-vendor }
@@ -190,7 +174,6 @@ ceo-inbox-read:
       bcc: []
       subject: Renewal timing
       body_plain: "Sam, we would like to talk about renewal timing next month."
-      date: 1791792800
       date_local: "{{at:now-5h}}"
       is_draft: true
   - match: { draft_id: draft-30-old }
@@ -202,7 +185,6 @@ ceo-inbox-read:
       bcc: []
       subject: Pricing follow-up
       body_plain: "Lee, following up on pricing after the demo."
-      date: 1791630000
       date_local: "{{at:now-48h}}"
       is_draft: true
   - match: {}

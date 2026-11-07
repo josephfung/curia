@@ -93,7 +93,7 @@ See [ADR-062](../adr/062-curia-sends-from-the-principals-mailbox.md). `ceo-inbox
 
 | Rule | Principal-directed send |
 |---|---|
-| Blocked contacts, content filter | As `sendEmailDraft`. The principal's own addresses on the draft are the sender's, not an audience, and are not checked |
+| Blocked contacts, content filter | As `sendEmailDraft`. The principal's own addresses on the draft are the sender's, not an audience: the blocked-contact checks and the band review skip them. The content filter gets every recipient, the principal's tagged as the principal |
 | Identity gate | Skipped for a principal-written draft (the principal's words naming people are theirs to send); runs for a Curia-written or Curia-edited one |
 | Personal data | Detected in the whole draft. Details in the quoted message below a reply (`gmail_quote` or Curia's reply quote) are field `quote`, dropped when every outside recipient is named in the quote's header (From/To/Cc, or Gmail's attribution line); a header naming nobody keeps them. The principal's verified identities are dropped. The content filter and the audit copies still see everything, redacted |
 | Quote the review would drop | A saved draft's quote can't be cut: the draft is left unsent (`review_hold`) |

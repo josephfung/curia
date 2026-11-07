@@ -22,16 +22,22 @@ describe('createPrincipalMailboxResolver', () => {
     expect(createClient).not.toHaveBeenCalled();
   });
 
-  it('returns null when there is no API key', async () => {
+  it('returns null when there is no API key, and warns that the grant is set but the key is not', async () => {
     const createClient = vi.fn();
+    const warnSpy = vi.fn();
+    const log = { ...logger, warn: warnSpy } as unknown as typeof logger;
     const resolve = createPrincipalMailboxResolver({
       secrets: { get: async () => 'grant-1' },
       apiKey: () => undefined,
-      logger,
+      logger: log,
       createClient,
     });
     expect(await resolve()).toBeNull();
     expect(createClient).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(String(warnSpy.mock.calls[0]!.at(-1))).toMatch(/grant is set but the Nylas API key is missing/);
+    // No secret values in the log.
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('grant-1');
   });
 
   it('returns null and logs an error when the secret read throws', async () => {

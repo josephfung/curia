@@ -45,7 +45,6 @@ tool_stubs:
             to: [{ name: Jo Park, email: jo.park@acme.example.test }]
             cc: []
             snippet: "Jo, shall we use [venue TBD] for the offsite? Let me know."
-            date: 1791800000
             date_local: "{{at:now-3h}}"
             created_by_curia: false
   ceo-inbox-search:
@@ -61,7 +60,6 @@ tool_stubs:
             to: [{ name: Jo Park, email: jo.park@acme.example.test }]
             cc: []
             snippet: "Jo, shall we use [venue TBD] for the offsite? Let me know."
-            date: 1791800000
             date_local: "{{at:now-3h}}"
             created_by_curia: false
   ceo-inbox-read:
@@ -74,7 +72,6 @@ tool_stubs:
         bcc: []
         subject: Venue for the offsite
         body_plain: "Jo, shall we use [venue TBD] for the offsite? Let me know."
-        date: 1791800000
         date_local: "{{at:now-3h}}"
         is_draft: true
     - match: {}
