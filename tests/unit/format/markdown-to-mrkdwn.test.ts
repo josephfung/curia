@@ -15,11 +15,22 @@ describe('markdownToMrkdwn', () => {
   it.each([
     ['unclosed link openers', '[a'],
     ['unclosed link destinations', '[a]('],
+    ['host-like link destinations', '[a:]('],
+    ['escaped brackets', '[\\['],
   ])('converts links after a long run of %s in linear time', (_name, unit) => {
     const started = performance.now();
     const out = markdownToMrkdwn(`See [docs](https://example.com) ${unit.repeat(50_000)}`);
     expect(performance.now() - started).toBeLessThan(1000);
     expect(out.startsWith('See <https://example.com|docs> ')).toBe(true);
+    const after = markdownToMrkdwn(`${unit.repeat(50_000)} [docs](https://example.com)`);
+    expect(after.endsWith(' <https://example.com|docs>')).toBe(true);
+  });
+
+  it('converts links with escaped brackets or IPv6 hosts', () => {
+    expect(markdownToMrkdwn('[read \\[](https://example.com)')).toBe('<https://example.com|read [>');
+    expect(markdownToMrkdwn('[a \\[b\\]](https://example.com)')).toBe('<https://example.com|a [b]>');
+    expect(markdownToMrkdwn('[site](https://[::1]/)')).toBe('<https://[::1]/|site>');
+    expect(markdownToMrkdwn('[site](http://[2001:db8::1]:8080/x)')).toBe('<http://[2001:db8::1]:8080/x|site>');
   });
 
   it('converts headings to bold lines', () => {

@@ -8,13 +8,17 @@ export const HIDDEN_PREVIEW = 'New message from Curia';
 // stay linear. A link's label and destination stop at the next `[`, and an italic
 // span stops at the next marker, and a list marker's indent never crosses a line:
 // otherwise a long run of unclosed `[`, `[a](`, ` *a` or blank lines makes each
-// match attempt scan to the end of the text (quadratic).
+// match attempt scan to the end of the text (quadratic). The one `[` a destination
+// may hold is ONE IPv6 host (`[::1]`); more would let `[a](` runs chain across the
+// whole text again. A label may hold `\[` and `\]`.
 function stripMarkdown(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`([^`]+)`/g, '$1')
-    .replace(/!\[[^[\]]*\]\([^)[]*\)/g, ' ')
-    .replace(/\[([^[\]]+)\]\([^)[]*\)/g, '$1')
+    .replace(/!\[(?:[^[\]\\]|\\.)*\]\([^)[]*(?:\[[0-9A-Fa-f:.]+\][^)[]*)?\)/g, ' ')
+    .replace(/\[((?:[^[\]\\]|\\.)+)\]\([^)[]*(?:\[[0-9A-Fa-f:.]+\][^)[]*)?\)/g, (_m, label: string) =>
+      label.replace(/\\([[\]])/g, '$1'),
+    )
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/(\*\*|__)(.*?)\1/g, '$2')
     .replace(/(^|\s)\*([^\s*](?:[^*\n]*[^\s*])?)\*(?=\s|$)/g, '$1$2')
