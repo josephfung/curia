@@ -375,6 +375,8 @@ describe('runtime turn lanes (#2018)', () => {
             return { success: true, data: { _curia_protocol: 'clarification_request', question: 'Which day?', context: 'scheduling' } };
           }),
           provenanceSourceText: () => undefined,
+          provenanceAgentInputText: () => null,
+          isAgentEchoSource: () => false,
         } as unknown as ExecutionLayer,
         provider: {
           id: 'mock',
@@ -401,6 +403,8 @@ describe('runtime turn lanes (#2018)', () => {
         executionLayer: {
           invoke,
           provenanceSourceText: () => undefined,
+          provenanceAgentInputText: () => null,
+          isAgentEchoSource: () => false,
         } as unknown as ExecutionLayer,
         provider: {
           id: 'mock',
@@ -424,6 +428,8 @@ describe('runtime turn lanes (#2018)', () => {
         executionLayer: {
           invoke: vi.fn(async () => ({ success: true, data: {} })),
           provenanceSourceText: () => undefined,
+          provenanceAgentInputText: () => null,
+          isAgentEchoSource: () => false,
         } as unknown as ExecutionLayer,
         provider: {
           id: 'mock',
@@ -444,6 +450,8 @@ describe('runtime turn lanes (#2018)', () => {
         executionLayer: {
           invoke: vi.fn(async () => ({ success: false, error: 'nope' })),
           provenanceSourceText: () => undefined,
+          provenanceAgentInputText: () => null,
+          isAgentEchoSource: () => false,
         } as unknown as ExecutionLayer,
         provider: {
           id: 'mock',
@@ -621,6 +629,8 @@ describe('runtime turn lanes (#2018)', () => {
           data: { in_flight: true, reason: 'already_in_flight', agent: 'researcher' },
         })),
         provenanceSourceText: () => undefined,
+          provenanceAgentInputText: () => null,
+          isAgentEchoSource: () => false,
       } as unknown as ExecutionLayer,
       skillToolDefs: [
         { name: 'delegate', description: 'delegate', input_schema: { type: 'object', properties: {}, required: [] } },
@@ -665,6 +675,8 @@ describe('runtime turn lanes (#2018)', () => {
           data: { in_flight: true, reason: 'already_in_flight', agent: 'researcher' },
         })),
         provenanceSourceText: () => undefined,
+          provenanceAgentInputText: () => null,
+          isAgentEchoSource: () => false,
       } as unknown as ExecutionLayer,
       skillToolDefs: [
         { name: 'delegate', description: 'delegate', input_schema: { type: 'object', properties: {}, required: [] } },
