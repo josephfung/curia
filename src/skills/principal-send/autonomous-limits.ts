@@ -35,8 +35,17 @@ function fromPrincipal(msg: NylasMessage, isPrincipal: (email: string) => boolea
 }
 
 /**
+ * The provider filed the message as sent from this mailbox (Gmail's SENT system label). A From
+ * header alone is a claim: an inbound message can forge `From: <principal>` plus any To/Cc list.
+ */
+function inSentFolder(msg: NylasMessage): boolean {
+  return msg.folders.some((f) => f.toUpperCase() === 'SENT');
+}
+
+/**
  * Who a reply on this thread may go to, lowercased (design D4.3): the principal's addresses, the
- * recipients of messages sent from the principal's address, and the From of inbound messages
+ * recipients of messages the provider shows the principal sent (From a principal address and in
+ * SENT), and the From of inbound messages
  * whose provider authenticated the sender. An inbound message's To/Cc never count: a sender can
  * list anyone there (a forged Cc of the CFO), the same rule as reply-recipient-provenance.ts.
  */
@@ -45,7 +54,10 @@ export function allowedThreadMembers(thread: readonly NylasMessage[], principalA
   const members = new Set(principalAddresses.map(lower));
   for (const msg of thread) {
     if (fromPrincipal(msg, isPrincipal)) {
-      for (const p of [...msg.to, ...msg.cc, ...msg.bcc]) members.add(lower(p.email));
+      // Fail closed: a principal-From message outside SENT may be spoofed, so it adds no one (its
+      // From is the principal, already a member). A provider without a SENT label allows fewer
+      // recipients until provider-specific sent detection exists.
+      if (inSentFolder(msg)) for (const p of [...msg.to, ...msg.cc, ...msg.bcc]) members.add(lower(p.email));
     } else if (parseSenderVerified(msg.headers)) {
       for (const p of msg.from) members.add(lower(p.email));
     }
@@ -103,8 +115,10 @@ export function checkAutonomousLimits(input: {
   if (draft.attachments.length > 0) {
     return { refusal: 'has_attachments', detail: `the draft has ${draft.attachments.length} attachment(s)` };
   }
-  // A `sending` entry is an attempt in flight (or this one); `sent` and `held` start the cooldown.
-  const blocking = recentThreadEntries.find((e) => e.outcome === 'sent' || e.outcome === 'held');
+  // Every outcome starts the cooldown. `sending` too, failing closed: a send that crashed after
+  // dispatch never became `sent` but may have gone out. The gateway checks limits before it
+  // writes its own marker, so it never meets its own in-flight entry here.
+  const blocking = recentThreadEntries[0];
   if (blocking !== undefined) {
     return { refusal: 'thread_cooldown', detail: `an autonomous send on this thread was ${blocking.outcome} at ${blocking.at}` };
   }

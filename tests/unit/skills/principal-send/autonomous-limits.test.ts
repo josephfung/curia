@@ -84,8 +84,21 @@ describe('checkAutonomousLimits', () => {
   });
 
   it('allows recipients the principal emailed on the thread', () => {
-    const sent = msg({ id: 'out1', from: [{ email: 'ceo@corp.example' }], to: [{ email: 'bob@example.net' }], cc: [{ email: 'carol@example.net' }], bcc: [{ email: 'eve@example.net' }] });
+    const sent = msg({ id: 'out1', from: [{ email: 'ceo@corp.example' }], folders: ['SENT'], to: [{ email: 'bob@example.net' }], cc: [{ email: 'carol@example.net' }], bcc: [{ email: 'eve@example.net' }] });
     expect(check({ thread: [sent], draft: { ...draft, to: [{ email: 'bob@example.net' }], cc: [{ email: 'carol@example.net' }], bcc: [{ email: 'eve@example.net' }] } })).toBeNull();
+  });
+
+  it('does not trust a principal From on a message the principal did not send (spoofed inbound)', () => {
+    const spoofed = msg({ id: 'in9', from: [{ email: 'ceo@corp.example' }], folders: ['INBOX'], to: [{ email: 'ceo@corp.example' }], cc: [{ email: 'cfo@corp.example' }] });
+    const r = check({ thread: [inboundVerified, spoofed], draft: { ...draft, to: [{ email: 'dana@example.org' }, { email: 'cfo@corp.example' }] } });
+    expect(r?.refusal).toBe('recipient_not_on_thread');
+    expect(r?.detail).toContain('cfo@corp.example');
+    expect(allowedThreadMembers([spoofed], PRINCIPAL)).toEqual(new Set(['ceo@corp.example']));
+  });
+
+  it('allows the recipients of a genuine SENT message from the principal', () => {
+    const sent = msg({ id: 'out2', from: [{ email: 'ceo@corp.example' }], folders: ['SENT'], cc: [{ email: 'cfo@corp.example' }] });
+    expect(check({ thread: [inboundVerified, sent], draft: { ...draft, to: [{ email: 'dana@example.org' }, { email: 'cfo@corp.example' }] } })).toBeNull();
   });
 
   it('does not trust an unverified From', () => {
@@ -102,14 +115,14 @@ describe('checkAutonomousLimits', () => {
 
   it('refuses more than five non-principal recipients', () => {
     const people = Array.from({ length: 6 }, (_, i) => ({ email: `p${i}@example.net` }));
-    const sent = msg({ id: 'out1', from: [{ email: 'ceo@corp.example' }], to: people });
+    const sent = msg({ id: 'out1', from: [{ email: 'ceo@corp.example' }], folders: ['SENT'], to: people });
     expect(check({ thread: [sent], draft: { ...draft, to: people } })?.refusal).toBe('too_many_recipients');
     expect(check({ thread: [sent], draft: { ...draft, to: people.slice(0, 5) } })).toBeNull();
   });
 
   it('does not count the principal toward the recipient cap', () => {
     const people = Array.from({ length: 5 }, (_, i) => ({ email: `p${i}@example.net` }));
-    const sent = msg({ id: 'out1', from: [{ email: 'ceo@corp.example' }], to: people });
+    const sent = msg({ id: 'out1', from: [{ email: 'ceo@corp.example' }], folders: ['SENT'], to: people });
     expect(check({ thread: [sent], draft: { ...draft, to: people, cc: [{ email: 'CEO@corp.example' }] } })).toBeNull();
   });
 
@@ -122,10 +135,11 @@ describe('checkAutonomousLimits', () => {
     expect(check({ draft: { ...draft, attachments: [] } })).toBeNull();
   });
 
-  it('refuses after a recent sent or held entry on the thread, not a sending one', () => {
+  it('refuses after any recent entry on the thread, a sending one included', () => {
     expect(check({ recentThreadEntries: [entry('sent')] })?.refusal).toBe('thread_cooldown');
     expect(check({ recentThreadEntries: [entry('held')] })?.refusal).toBe('thread_cooldown');
-    expect(check({ recentThreadEntries: [entry('sending')] })).toBeNull();
+    // A send that crashed after dispatch stays `sending` and may have gone out (fail closed).
+    expect(check({ recentThreadEntries: [entry('sending')] })?.refusal).toBe('thread_cooldown');
   });
 
   it('checks in the stated order', () => {
@@ -143,7 +157,7 @@ describe('checkAutonomousLimits', () => {
 
 describe('allowedThreadMembers', () => {
   it('is principal addresses, what the principal sent to, and verified senders — lowercased', () => {
-    const sent = msg({ id: 'out1', from: [{ email: 'CEO@corp.example' }], to: [{ email: 'Bob@Example.net' }] });
+    const sent = msg({ id: 'out1', from: [{ email: 'CEO@corp.example' }], folders: ['sent'], to: [{ email: 'Bob@Example.net' }] });
     const unverified = msg({ id: 'in2', from: [{ email: 'stranger@example.com' }], cc: [{ email: 'x@example.com' }] });
     expect(allowedThreadMembers([inboundVerified, sent, unverified], PRINCIPAL)).toEqual(
       new Set(['ceo@corp.example', 'dana@example.org', 'bob@example.net']),

@@ -126,16 +126,17 @@ export class PrincipalSendLedger {
   }
 
   /**
-   * Autonomous entries on `threadId` whose `at` is at or after `sinceMs` (epoch ms), for the
-   * thread cooldown (#2474 PR 2). Principal-directed sends never start a cooldown. Fails closed:
+   * Autonomous entries on `threadId` whose `at` is at or after `sinceEpochMs`, for the thread
+   * cooldown (#2474 PR 2). `sinceEpochMs` is a cutoff time in epoch milliseconds, not a duration:
+   * the gateway passes `now - AUTONOMOUS_THREAD_COOLDOWN_MS`. Principal-directed sends never start a cooldown. Fails closed:
    * an entry with an unreadable `at` counts as recent, since a broken or forged marker may only
    * block autonomous sends on its thread, never allow one. Throws on a repo failure.
    */
-  async recentForThread(threadId: string, sinceMs: number): Promise<PrincipalSendEntry[]> {
+  async recentForThread(threadId: string, sinceEpochMs: number): Promise<PrincipalSendEntry[]> {
     return (await this.list()).filter((e) => {
       if (e.mode !== 'autonomous' || e.threadId !== threadId) return false;
       const at = Date.parse(e.at);
-      return !Number.isFinite(at) || at >= sinceMs;
+      return !Number.isFinite(at) || at >= sinceEpochMs;
     });
   }
 }
