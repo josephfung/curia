@@ -16,7 +16,7 @@
     "drafts": "array of { id, threadId, subject, to, cc, snippet, date, date_local, created_by_curia (null if unknown) } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
     "count": "number of items returned",
     "has_more": "boolean — true when more unread messages remain beyond this batch (lets the caller drain the inbox in batches); absent for DRAFTS",
-    "scan_incomplete": "boolean? — true when paging stopped at the cap while more messages may remain. Absent when the scan finished. An empty batch still has has_more false, so the drain loop does not spin"
+    "scan_incomplete": "boolean? — true when paging stopped at the cap while more messages (or, for DRAFTS with modified_since, more drafts) may remain. Absent when the scan finished. An empty batch still has has_more false, so the drain loop does not spin"
   },
   "permissions": [],
   "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],

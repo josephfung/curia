@@ -414,10 +414,15 @@ export interface OutboundGatewayConfig {
   sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent'>;
 }
 
-/** Why sendPrincipalDraft left a draft unsent (#2474). Each code's text is PRINCIPAL_SEND_REFUSALS[code]. */
+/**
+ * Why sendPrincipalDraft did not confirm a send (#2474). Each code's text is
+ * PRINCIPAL_SEND_REFUSALS[code]. Every code but send_unconfirmed left the draft unsent;
+ * send_unconfirmed's outcome is unknown (the send call failed after it was made).
+ */
 export type PrincipalSendRefusal =
   | 'mailbox_unavailable' | 'setting_off' | 'not_requested' | 'approval_replay'
-  | 'not_found' | 'lookup_failed' | 'no_recipients' | 'principal_only' | 'review_hold' | 'draft_changed';
+  | 'not_found' | 'lookup_failed' | 'no_recipients' | 'principal_only' | 'review_hold' | 'draft_changed'
+  | 'send_unconfirmed';
 
 /** What the agent relays for each refusal (#2474). review_hold's is the suffix after the review's reason. */
 export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
@@ -431,6 +436,7 @@ export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
   principal_only: "That draft is addressed only to the principal. Curia doesn't send it; they can send it from their mail app.",
   review_hold: ' Nothing was sent; the draft is still in their Drafts folder.',
   draft_changed: 'The draft changed while Curia was checking it. Nothing was sent; read the latest version and ask the principal again.',
+  send_unconfirmed: "The send to the principal's mailbox didn't confirm, so it may or may not have gone out. Check the principal's Sent folder before sending again.",
 };
 
 /** sendPrincipalDraft's result (#2474). */
@@ -4182,9 +4188,11 @@ export class OutboundGateway {
       // No retry: a send that may have gone out must not go twice.
       sent = await client.sendDraft(draftId);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.log.error({ err, draftId }, 'outbound-gateway: principal-mailbox sendDraft failed');
-      return { success: false, blockedReason: `Draft send failed: ${message}` };
+      // The outcome is unknown (final review C2): a timeout or 5xx may come after the email went.
+      // So not leftAsDraft, and the text says to check Sent rather than that nothing was sent;
+      // a principal resending from their mail app would otherwise send it twice.
+      this.log.error({ err, draftId }, 'outbound-gateway: principal-mailbox sendDraft failed — outcome unknown');
+      return { success: false, refusal: 'send_unconfirmed', blockedReason: PRINCIPAL_SEND_REFUSALS.send_unconfirmed };
     }
     this.log.info({ draftId, messageId: sent.id, recipientId: redactId(primary) }, 'outbound-gateway: principal-mailbox draft sent');
     try {

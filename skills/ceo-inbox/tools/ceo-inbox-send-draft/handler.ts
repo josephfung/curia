@@ -33,7 +33,8 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
 
     if (!result.success) {
       // Never retried: a refusal is final, and a failed send may have gone out (the gateway
-      // does not retry either). A refusal leaves the draft in the principal's Drafts folder.
+      // does not retry either). Every refusal but send_unconfirmed leaves the draft in the
+      // principal's Drafts folder; send_unconfirmed's text says to check Sent.
       ctx.log.info({ draftId, refusal: result.refusal, leftAsDraft: result.leftAsDraft }, 'ceo-inbox-send-draft: not sent');
       return { success: false, error: result.blockedReason ?? 'The draft was not sent.' };
     }

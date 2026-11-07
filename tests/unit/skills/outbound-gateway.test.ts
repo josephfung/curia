@@ -6302,13 +6302,16 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(published('outbound.delivered')[0]!.payload).toMatchObject({ recipientId: 'lee@example.org' });
   });
 
-  it('does not retry a failed send and reports it', async () => {
+  it('does not retry a failed send, and says its outcome is unknown (final review C2)', async () => {
     const client = mailboxClient();
     client.sendDraft.mockRejectedValue(Object.assign(new Error('Nylas 503'), { statusCode: 503 }));
     const { gw, ledger } = make({ client });
     const r = await gw.sendPrincipalDraft('d1', opts);
-    expect(r.success).toBe(false);
-    expect(r.blockedReason).toContain('Nylas 503');
+    expect(r).toMatchObject({ success: false, refusal: 'send_unconfirmed' });
+    expect(r.blockedReason).toBe("The send to the principal's mailbox didn't confirm, so it may or may not have gone out. Check the principal's Sent folder before sending again.");
+    expect(PRINCIPAL_SEND_REFUSALS.send_unconfirmed).toBe(r.blockedReason);
+    // It may have gone: never "still a draft".
+    expect(r.leftAsDraft).toBeUndefined();
     expect(client.sendDraft).toHaveBeenCalledTimes(1);
     expect(ledger.recordSending).toHaveBeenCalledOnce();
     expect(ledger.recordSent).not.toHaveBeenCalled();
