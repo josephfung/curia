@@ -1792,6 +1792,8 @@ describe('AgentRuntime tool-use loop', () => {
             type: 'tool_use' as const,
             toolCalls: [
               { id: 'call-tier', name: 'contact-set-tier', input: { contact_id: 'c1', tier: 'blocked' } },
+              { id: 'call-tier-2', name: 'contact-set-tier', input: { contact_id: 'c1', tier: 'blocked' } },
+              { id: 'call-merge', name: 'contact-merge', input: {} },
               { id: 'call-lookup', name: 'contact-lookup', input: { name: 'Jordan' } },
             ],
             usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
@@ -1812,6 +1814,8 @@ describe('AgentRuntime tool-use loop', () => {
         if (name === 'contact-set-tier') {
           return { success: false, error: 'requires a live principal turn', gate: 'live_principal_turn' };
         }
+        // Static config no go-ahead lifts: not reported as a permission refusal.
+        if (name === 'contact-merge') return { success: false, error: 'restricted to agents: coordinator', gate: 'allowed_callers' };
         // An ordinary failure is not a gate refusal.
         return { success: false, error: 'lookup service unavailable' };
       }),
@@ -1835,7 +1839,7 @@ describe('AgentRuntime tool-use loop', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      skillToolDefs: [toolDef('contact-set-tier'), toolDef('contact-lookup')],
+      skillToolDefs: [toolDef('contact-set-tier'), toolDef('contact-merge'), toolDef('contact-lookup')],
       errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
     });
     agent.register();
@@ -1850,6 +1854,7 @@ describe('AgentRuntime tool-use loop', () => {
     }));
 
     expect(responses).toHaveLength(1);
+    // Distinct, and only the live-turn gate: an allowed_callers refusal is static config.
     expect(responses[0]!.payload.gateRefusals).toEqual(['contact-set-tier']);
   });
 
@@ -8914,7 +8919,7 @@ describe('Specialist declines: fall back before escalating (#2496)', () => {
       cause: 'gate_refused',
     });
 
-    it('writes an outside sender\'s reply from the cause, and rejects a draft that denies the capability', async () => {
+    it('rejects an outside sender\'s draft that denies the capability, without telling them why (#2501)', async () => {
       const { responses, chatCalls } = await runDeclineTurn({
         channelId: 'email',
         senderId: 'lena@example.test',
@@ -8932,10 +8937,10 @@ describe('Specialist declines: fall back before escalating (#2496)', () => {
 
       const narration = chatCalls[1]!.messages.at(-1) as { role: string; content: string };
       expect(narration.role).toBe('system');
-      expect(narration.content).toMatch(/needs approval first/);
+      expect(narration.content).not.toMatch(/permission|approval|go-ahead/);
       expect(responses).toHaveLength(1);
-      expect(responses[0]!.payload.content).toMatch(/^I can't do that without approval, so nothing has been done yet\./);
-      expect(responses[0]!.payload.content).not.toMatch(/capability|principal/i);
+      expect(responses[0]!.payload.content).toMatch(/^I wasn't able to take that one on\./);
+      expect(responses[0]!.payload.content).not.toMatch(/capability|principal|approval/i);
     });
 
     it('states the cause on a background decline\'s follow-up task', async () => {

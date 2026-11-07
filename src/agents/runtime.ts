@@ -390,6 +390,9 @@ const RETRY_BACKOFF_MS = [1000, 5000, 15000] as const;
  * principal can be added to it later in the turn (#1990). Absent when no task was
  * logged or its id could not be read.
  */
+/** Distinct gate-refused tool names one task reports on agent.response (#2494). */
+const MAX_GATE_REFUSALS = 10;
+
 type PendingDelegationEscalation = DelegationFailureInfo & {
   task: string;
   escalated: boolean;
@@ -919,8 +922,10 @@ export class AgentRuntime {
     const skillsCalled: string[] = [];
     // Successful calls that sent a message or calendar notification (#2055).
     const sends: string[] = [];
-    // Calls an execution-layer access gate refused (#2494), so a specialist's decline
-    // can be reported to the delegating agent as a permission refusal.
+    // Calls the live-principal-turn gate refused (#2494), so a specialist's decline is
+    // reported to the delegating agent as a permission refusal the principal can lift.
+    // An allowed_callers refusal is not: it is static config no go-ahead changes.
+    // Distinct names, capped, so a looping specialist cannot grow the response.
     const gateRefusals: string[] = [];
     // Skills that returned success:false — surfaced to the scheduler as
     // last_run_context.failedSkills without flipping job health (#1830).
@@ -2355,6 +2360,7 @@ export class AgentRuntime {
                     escalated: delegationGuard.isEscalated(blockKey),
                     ...(prior?.declined === true && { declined: true }),
                     // Still blocked after a decline: the fallbacks are what is left (#2496).
+                    ...(agentDecline?.declineCause !== undefined && { cause: agentDecline.declineCause }),
                     ...(agentDecline !== undefined && { next_step: declineNextStep(agentDecline.declineCause, false) }),
                   },
                 };
@@ -2846,7 +2852,13 @@ export class AgentRuntime {
           // Record for scheduler visibility (#1830) — distinct-skill cap + sanitised
           // error text (third-party bodies must not land unsanitised in last_run_context).
           recordFailedSkill(toolCall.name, result.error);
-          if (result.gate !== undefined) gateRefusals.push(toolCall.name);
+          if (
+            result.gate === 'live_principal_turn'
+            && !gateRefusals.includes(toolCall.name)
+            && gateRefusals.length < MAX_GATE_REFUSALS
+          ) {
+            gateRefusals.push(toolCall.name);
+          }
           const isDbFailure = result.errorType === 'DATABASE_UNAVAILABLE';
           const isAuthFailure = result.errorType === 'AUTH_FAILURE';
           const mismatchFromFailure = identityMismatchFromToolResult(toolCall.name, result);
@@ -3356,7 +3368,6 @@ export class AgentRuntime {
               // a promise that selection then rejects (or the reverse).
               escalated: replyInput.escalated,
               declined: esc.declined,
-              declineCause: esc.declineCause,
             }),
           },
         ];

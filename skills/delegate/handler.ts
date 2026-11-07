@@ -21,7 +21,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import { parseResolvedContactIds } from '../../src/agents/resolved-entities.js';
+import { parseResolvedContactIds, withoutResolvedEntitiesBlocks } from '../../src/agents/resolved-entities.js';
 import { outsiderOriginatorContactId } from '../../src/dispatch/outbound-entry-access.js';
 import {
   linkOutboundEntry,
@@ -996,6 +996,12 @@ export class DelegateHandler implements ToolHandler {
         // The decline's facts as data (#2494): the cause, code first, and what was sent.
         // The coordinator relays these instead of a paraphrase that can contradict them.
         const cause = resolveDeclineCause(decline.cause, gateRefusals);
+        // The contacts a declining specialist resolved still count (#1818): the principal's
+        // go-ahead on a gate refusal needs the ID. The block is not work product.
+        const declineContactIds = parseResolvedContactIds(response);
+        const workProduct = decline.workProduct !== undefined
+          ? withoutResolvedEntitiesBlocks(decline.workProduct)
+          : '';
         ctx.log.info(
           {
             targetAgent: agent,
@@ -1003,7 +1009,7 @@ export class DelegateHandler implements ToolHandler {
             declineCause: cause,
             statedCause: decline.cause,
             gateRefusals: gateRefusals ?? [],
-            workProduct: decline.workProduct !== undefined,
+            workProduct: workProduct.length > 0,
           },
           'Specialist declined the delegated task',
         );
@@ -1024,9 +1030,10 @@ export class DelegateHandler implements ToolHandler {
             cause,
             // What actually went out. Absent when the runtime did not report it.
             ...(sends !== undefined && { sent: sends }),
-            ...(decline.workProduct !== undefined && { work_product: decline.workProduct }),
+            ...(workProduct.length > 0 && { work_product: workProduct }),
+            ...(declineContactIds.length > 0 && { resolvedContactIds: declineContactIds }),
             // The fallback order (#2496): the turn goes on, so the next step is the coordinator's.
-            next_step: declineNextStep(cause, decline.workProduct !== undefined),
+            next_step: declineNextStep(cause, workProduct.length > 0),
           },
         };
       }

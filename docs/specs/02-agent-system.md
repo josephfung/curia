@@ -88,29 +88,34 @@ The routing decision a decline raises is Curia's, not the principal's.
 
 #### Relaying a decline faithfully (#2494)
 
-A decline's facts travel as data, so the reply cannot contradict them. In
+A decline's facts travel as data, so the reply has no reason to guess. In
 production a gate-refused block reached the principal as "no ban or blocklist
 capability", and a draft that did not exist as one "sitting in your Drafts".
 
 - **Cause, code first.** The execution layer tags a call its access gates refuse
   (`gate` on the tool result: `live_principal_turn` or `allowed_callers`). The
-  specialist's runtime lists those calls on `agent.response.gateRefusals`, and
-  `delegate` reports a decline whose run hit one as `cause: gate_refused`,
-  whatever the specialist wrote. Otherwise the cause is the marker's `cause`
-  attribute (`not_found`, `capability_absent`, `gate_refused`), or `unspecified`.
-  A stated `not_found` is kept even beside a gate refusal.
-- **What was done.** The decline result carries `sent` (the run's message sends)
-  and `work_product`, the specialist's text before the marker: a revised
-  outline or a drafted reply is no longer dropped.
-- **Relay.** The decline's `next_step` adds a line for the cause (never call a
-  gate refusal a missing capability; never describe a missing object as
-  existing) and for finished work (give it to the principal or use it). On the
-  narrated path the situation line states the cause, and a draft that denies the
-  capability, or never states the gate or the missing object, falls back to a
-  line that does. An outside sender hears "needs approval", never that something
-  was not found (#1978).
+  specialist's runtime lists the distinct `live_principal_turn` refusals on
+  `agent.response.gateRefusals`: those are the ones the principal can lift. A
+  decline whose run hit one is `cause: gate_refused`, unless the specialist
+  stated `not_found`. A specialist may state only `not_found` or
+  `capability_absent` in the marker's `cause` attribute; `gate_refused` comes
+  from the platform alone, so injected text cannot claim it. Otherwise
+  `unspecified`.
+- **What was done.** The decline result carries `sent` (the run's message sends),
+  `work_product` (the specialist's text before the marker, without its
+  `<resolved_entities>` block) and `resolvedContactIds`.
+- **Relay on a principal-side turn** is the coordinator's, from those fields: the
+  decline's `next_step` adds a line for the cause (never call a gate refusal a
+  missing capability; never describe a missing object as existing) and for
+  finished work (give it to the principal or use it).
+- **Relay to an outside sender** stays the narrated reply, which says nothing of
+  the cause (#2501). A draft that calls a gate-refused step a missing capability
+  is rejected for the plain fallback.
 - **Records.** The follow-up task, the woken task's note and the principal's
-  review task state the cause.
+  review task state the cause, marking a stated one as the specialist's report.
+- **Not covered:** other execution-layer refusals (autonomy score, restricted
+  mode, Gate C) are untagged, and a decline that arrives after the delegate wait
+  times out is relayed by the late-delivery path without its cause.
 
 ### Late delegation delivery (#1799)
 

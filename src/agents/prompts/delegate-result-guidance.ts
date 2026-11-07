@@ -65,7 +65,8 @@ export const DECLINE_NEXT_STEP_LINES: readonly string[] = [
   'when their input or authority is needed, with one specific question; never ask them to',
   're-scope, reassign or cancel. Report what was and was not done in your own words: do not',
   'quote `message`, and leave out the specialist and any tool, grant or ID it names.',
-  '`cause` and `sent` are facts from the platform: never report anything that contradicts them.',
+  '`sent` and a `gate_refused` cause are recorded by the platform; any other `cause` is the',
+  'specialist\'s own account. Never report anything that contradicts them.',
 ];
 
 /**
@@ -87,8 +88,9 @@ export const DECLINE_CAUSE_NEXT_STEP_LINES: Readonly<Partial<Record<DeclineCause
 
 /** Added to the decline next step when the specialist finished work before declining (#2494). */
 export const DECLINE_WORK_PRODUCT_NEXT_STEP_LINES: readonly string[] = [
-  '`work_product` is what it finished before declining. Give it to the principal or use it;',
-  'do not drop it.',
+  '`work_product` is its text before the decline. If it holds finished work (a draft, an',
+  'outline, a revision), give that to the principal or use it; do not drop it. Its tool,',
+  'agent and ID names stay out of what you tell them.',
 ];
 
 /** The next step for a decline with this cause, and with or without finished work. */

@@ -726,107 +726,57 @@ describe('narration transcript (#1860)', () => {
   });
 });
 
-// The two misreports from production (#2494): a gate-refused block relayed as "no ban or
-// blocklist capability", and a draft that did not exist relayed as sitting in Drafts.
-describe('a decline is relayed by its cause (#2494)', () => {
+// A decline reaches this path only on an outside sender's turn since #2496 (#2494). The
+// sender is not told why (#2501), but a draft may not call a gate-refused step a missing
+// capability: in production the principal heard "no ban or blocklist capability".
+describe('a gate-refused decline is never told as a missing capability (#2494)', () => {
   const block = {
-    audience: 'principal' as const,
+    audience: 'sender' as const,
     displayName: 'contacts specialist',
     agentId: 'contacts',
     reason: 'specialist_decline',
     declined: true,
     declineCause: 'gate_refused' as const,
-    escalated: false,
-    request: 'Block Jordan Lee so their messages stop reaching me.',
-  };
-  const missingDraft = {
-    audience: 'principal' as const,
-    displayName: 'ceo inbox specialist',
-    agentId: 'ceo-inbox',
-    reason: 'specialist_decline',
-    declined: true,
-    declineCause: 'not_found' as const,
-    escalated: false,
-    request: 'Send the draft to Priya about the offsite.',
+    escalated: true,
+    request: 'Please block Jordan Lee from the list.',
   };
 
-  it('rejects a gate refusal told as a missing capability, in the forms models write', () => {
+  it('rejects the denials models write', () => {
     for (const text of [
       "There's no ban or blocklist capability, so I can't block Jordan Lee.",
-      "I don't have a way to block Jordan Lee, even with your approval.",
-      'Blocking Jordan Lee is not supported, so I could not confirm it.',
+      "I don't have blocking capabilities for the list, so Jordan Lee stays on it.",
+      "I don't have a way to block Jordan Lee from the list.",
+      'Blocking Jordan Lee from the list is not supported.',
+      "I can't ban people from the list, so Jordan Lee stays.",
+      "There's no feature for blocking someone on the list.",
     ]) {
       const selected = selectDelegationFailureReply({ ...block, modelText: reply(text) });
-      expect(selected.via, text).toBe('fallback');
       expect(selected.rejected, text).toBe('denies_capability');
+      expect(selected.content).toBe("I wasn't able to take that one on. I'll follow up with you on it.");
     }
   });
 
-  it('rejects a gate refusal that never says what stopped it', () => {
-    const selected = selectDelegationFailureReply({ ...block, modelText: reply("I couldn't block Jordan Lee.") });
-    expect(selected.rejected).toBe('cause_missing');
+  it('keeps the #2501 reply: check first, without saying why', () => {
+    for (const text of [
+      "Let me check on blocking Jordan Lee from the list and I'll get back to you.",
+      "I can't block Jordan Lee from the list just yet. I'll follow up with you on it.",
+    ]) {
+      expect(selectDelegationFailureReply({ ...block, modelText: reply(text) }).via, text).toBe('model');
+    }
   });
 
-  it('keeps a draft that says the block was not applied and needs the go-ahead', () => {
-    const clean = "I haven't blocked Jordan Lee yet: that change needs your direct go-ahead. Say the word and I'll apply it.";
-    expect(selectDelegationFailureReply({ ...block, modelText: reply(clean) })).toEqual({ content: clean, via: 'model' });
+  it('tells the sender nothing about the cause', () => {
+    expect(delegationFailureNarrationPrompt(block)).not.toMatch(/permission|approval|go-ahead|unable to do/);
+    expect(formatDelegationFailureFallback(block)).toBe("I wasn't able to take that one on. I'll follow up with you on it.");
   });
 
-  it('rejects a missing draft told as one sitting in Drafts, and keeps one that says it was not found', () => {
-    const wrong = selectDelegationFailureReply({
-      ...missingDraft,
-      modelText: reply('Your draft to Priya about the offsite just sits unsent in your Drafts.'),
-    });
-    expect(wrong.rejected).toBe('cause_missing');
-    const right = "I couldn't find a draft to Priya about the offsite in Drafts or Sent, so nothing went out.";
-    expect(selectDelegationFailureReply({ ...missingDraft, modelText: reply(right) })).toEqual({ content: right, via: 'model' });
-  });
-
-  it('falls back to a line that states the cause, never a missing capability', () => {
-    const gate = formatDelegationFailureFallback(block);
-    expect(gate).toMatch(/go-ahead/);
-    expect(gate).not.toMatch(/wasn't able to take that one on|no way|not possible/i);
-    // The fallback passes the checks a draft must pass.
-    expect(selectDelegationFailureReply({ ...block, modelText: reply(`${gate} Blocking Jordan Lee is on hold.`) }).via)
-      .toBe('model');
-
-    expect(formatDelegationFailureFallback(missingDraft)).toMatch(/couldn't find/);
-    expect(formatDelegationFailureFallback({ ...block, audience: 'sender' })).toMatch(/approval/);
-    expect(formatDelegationFailureFallback({ ...block, audience: 'sender' })).not.toMatch(/principal|permission check/i);
-  });
-
-  it('gives the narration model the cause as a fact, per reader', () => {
-    const principalPrompt = delegationFailureNarrationPrompt(block);
-    expect(principalPrompt).toMatch(/a permission check stopped it/);
-    expect(principalPrompt).toMatch(/not something you are unable to do/);
-    expect(delegationFailureNarrationPrompt(missingDraft)).toMatch(/could not be found/);
-
-    const senderPrompt = delegationFailureNarrationPrompt({ ...block, audience: 'sender' });
-    expect(senderPrompt).toMatch(/needs approval first/);
-    expect(senderPrompt).not.toMatch(/permission check|their direct go-ahead/);
-    // Telling an outside sender something was not found is the #1978 disclosure.
-    expect(delegationFailureNarrationPrompt({ ...missingDraft, audience: 'sender' })).not.toMatch(/could not be found/);
-  });
-
-  it('checks a sender draft for a denied capability but not for a not-found line', () => {
-    const senderBlock = { ...block, audience: 'sender' as const, request: 'Please block Jordan Lee from the list.' };
-    expect(selectDelegationFailureReply({
-      ...senderBlock,
-      modelText: reply('Blocking Jordan Lee is not possible on my side.'),
-    }).rejected).toBe('denies_capability');
-    const ok = "I can't block Jordan Lee without approval, so nothing has changed yet.";
-    expect(selectDelegationFailureReply({ ...senderBlock, modelText: reply(ok) }).via).toBe('model');
-
-    const senderMissing = { ...missingDraft, audience: 'sender' as const, request: 'Did the offsite note go out?' };
-    expect(selectDelegationFailureReply({
-      ...senderMissing,
-      modelText: reply("I wasn't able to sort out the offsite note just now."),
-    }).via).toBe('model');
-  });
-
-  it('leaves a decline with no stated cause as it was', () => {
-    const plain = { ...block, declineCause: 'unspecified' as const };
-    expect(formatDelegationFailureFallback(plain)).toBe("I wasn't able to take that one on.");
-    expect(selectDelegationFailureReply({ ...plain, modelText: reply("I couldn't block Jordan Lee.") }).via).toBe('model');
+  it('applies no capability check to any other cause', () => {
+    for (const declineCause of ['not_found', 'capability_absent', 'unspecified'] as const) {
+      expect(selectDelegationFailureReply({
+        ...block,
+        declineCause,
+        modelText: reply("There's no way to block Jordan Lee from the list."),
+      }).via).toBe('model');
+    }
   });
 });

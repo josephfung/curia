@@ -643,7 +643,7 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
     const woken = execution();
     await recordUnresolvedDecline(woken.layer, undefined, {}, { ...decline, declineCause: 'not_found' }, { boundTaskId: 'task-9' }, logger);
     const note = String((woken.invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['progress_note']);
-    expect(note).toContain('Cause: what it was asked to act on was not found.');
+    expect(note).toContain('Cause (as the specialist reports it): what it was asked to act on was not found.');
 
     // An outside sender's decline keeps the principal's review, and the cause rides along.
     const review = execution();

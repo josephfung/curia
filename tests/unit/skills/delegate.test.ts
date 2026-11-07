@@ -852,6 +852,19 @@ describe('DelegateHandler', () => {
         // The runtime did not report sends here, so nothing is claimed either way.
         expect(data).not.toHaveProperty('sent');
       });
+
+      it('keeps the contacts it resolved, and does not count the entities block as work', async () => {
+        const id = '3f1c2a9e-4b7d-4e3a-9c51-2d8e7f0a1b34';
+        const result = await delegateTo('contacts', {
+          content: `<resolved_entities>\n<contact id="${id}" name="Jordan Lee" />\n</resolved_entities>\n`
+            + '<specialist_decline reason="no_block">Block not applied.</specialist_decline>',
+          gateRefusals: ['contact-set-tier'],
+        });
+        const data = (result as { data: DeclineData & { resolvedContactIds?: string[] } }).data;
+        expect(data.resolvedContactIds).toEqual([id]);
+        expect(data).not.toHaveProperty('work_product');
+        expect(data.next_step).toBe(declineNextStep('gate_refused', false));
+      });
     });
 
     // A timeout may have gone through, and a non-retryable failure cannot be retried:

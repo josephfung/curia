@@ -31,11 +31,11 @@
 // dispatcher also emails it to the principal, like a note on any other reply to a
 // sender (src/agents/principal-note.ts).
 //
-// A decline's cause reaches the reply as data (#2494), never as the specialist's prose.
-// Without it the model guessed from the request, and told the principal a gate-refused
-// change was a missing capability, and that a draft that did not exist sat in Drafts.
-// The cause sets the situation line and the fallback, and a draft that contradicts it
-// (denies the capability, or never says the gate or the missing target) is rejected.
+// Since #2496 a decline on a principal-side turn does not end the turn, so this path
+// writes a decline reply only to an outside sender. Its cause (#2494) arrives as data,
+// never as the specialist's prose, and is not told to the sender (#2501: check with the
+// principal "without saying why"). The one thing it changes: a draft that calls a
+// gate-refused step a missing capability is rejected, since that is false.
 
 import type { TaskOriginator } from '../contacts/types.js';
 import type { Message } from './llm/provider.js';
@@ -113,7 +113,7 @@ export interface DelegationFailureReplyInput {
   agentId: string;
   reason: string;
   declined?: boolean;
-  /** A decline's cause (#2494). Sets the situation line, the fallback and the cause checks. */
+  /** A decline's cause (#2494). A gate refusal rules out drafts that deny the capability. */
   declineCause?: DeclineCause;
   possiblySucceeded?: boolean;
   escalated: boolean;
@@ -144,9 +144,7 @@ export type DraftRejection =
   // were cut out: an unclosed note, or a stray closing tag (#1990).
   | 'note_markup'
   // A gate-refused decline told as a missing capability (#2494).
-  | 'denies_capability'
-  // A decline whose cause the draft never states: the gate, or the missing target (#2494).
-  | 'cause_missing';
+  | 'denies_capability';
 
 // The instruction lines of the narration prompt. Kept apart from the situation lines
 // (what failed, whether a follow-up was logged) because a good reply restates those
@@ -219,11 +217,6 @@ const SITUATION = {
   timeoutMaybeDone: 'It did not get done in time. The work may still be finishing in the background.',
   blocked: 'It was blocked and could not be finished.',
   declined: 'It was turned down and will not be done as asked.',
-  // A decline's cause (#2494). The gate line rules out the misreport seen in production.
-  declinedGate: 'It was not done: a permission check stopped it, so it needs their direct go-ahead. '
-    + 'It is not something you are unable to do.',
-  declinedGateForSender: 'It was not done yet because it needs approval first. It is not impossible.',
-  declinedNotFound: 'It was not done: what it refers to could not be found. It does not exist or is not where it was expected.',
   other: 'It could not be finished.',
   escalated: 'A follow-up task has already been logged.',
   notEscalated: 'A follow-up task could not be logged.',
@@ -240,7 +233,6 @@ export function delegationFailureNarrationPrompt(input: {
   possiblySucceeded?: boolean;
   escalated: boolean;
   declined?: boolean;
-  declineCause?: DeclineCause;
 }): string {
   const situation = describeFailure(input);
   const followUp = input.audience === 'sender'
@@ -251,31 +243,21 @@ export function delegationFailureNarrationPrompt(input: {
 }
 
 function describeFailure(
-  input: Pick<DelegationFailureReplyInput, 'audience' | 'reason' | 'declined' | 'declineCause' | 'possiblySucceeded'>,
+  input: Pick<DelegationFailureReplyInput, 'reason' | 'declined' | 'possiblySucceeded'>,
 ): string {
   if (input.reason === 'timeout') return input.possiblySucceeded ? SITUATION.timeoutMaybeDone : SITUATION.timeout;
   if (input.reason === 'blocked') return SITUATION.blocked;
-  if (!isDecline(input)) return SITUATION.other;
-  if (input.declineCause === 'gate_refused') {
-    return input.audience === 'sender' ? SITUATION.declinedGateForSender : SITUATION.declinedGate;
-  }
-  // Not for a sender: telling them something could not be found is the #1978 disclosure.
-  if (input.declineCause === 'not_found' && input.audience === 'principal') return SITUATION.declinedNotFound;
-  return SITUATION.declined;
+  if (isDecline(input)) return SITUATION.declined;
+  return SITUATION.other;
 }
 
 function isDecline(input: Pick<DelegationFailureReplyInput, 'declined' | 'reason'>): boolean {
   return input.declined === true || input.reason === SPECIALIST_DECLINE_REASON;
 }
 
-/** The cause a draft must state for this reader, or undefined when none is checked (#2494). */
-function requiredCause(
-  input: Pick<DelegationFailureReplyInput, 'audience' | 'reason' | 'declined' | 'declineCause'>,
-): 'gate_refused' | 'not_found' | undefined {
-  if (!isDecline(input)) return undefined;
-  if (input.declineCause === 'gate_refused') return 'gate_refused';
-  if (input.declineCause === 'not_found' && input.audience === 'principal') return 'not_found';
-  return undefined;
+/** A gate-refused decline: no draft may call the capability missing (#2494). */
+function isGateDecline(input: Pick<DelegationFailureReplyInput, 'reason' | 'declined' | 'declineCause'>): boolean {
+  return isDecline(input) && input.declineCause === 'gate_refused';
 }
 
 /**
@@ -300,13 +282,6 @@ export function formatDelegationFailureFallback(
     if (input.possiblySucceeded) parts.push('It may still be completing in the background.');
   } else if (input.reason === 'blocked') {
     parts.push('I ran into a block and couldn\'t finish that.');
-  } else if (requiredCause(input) === 'gate_refused') {
-    // A permission refusal, never a missing capability (#2494).
-    parts.push(input.audience === 'sender'
-      ? "I can't do that without approval, so nothing has been done yet."
-      : "I didn't do that: it needs your direct go-ahead first.");
-  } else if (requiredCause(input) === 'not_found') {
-    parts.push("I couldn't find what that refers to, so nothing was done.");
   } else if (isDecline(input)) {
     parts.push("I wasn't able to take that one on.");
   } else {
@@ -433,10 +408,7 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   if (input.audience === 'sender' && SENDER_INTERNAL_TERMS.test(reply)) return 'internal_note';
   if (input.audience === 'sender' && LOST_THREAD_TERMS.test(reply)) return 'lost_thread';
   if (input.audience === 'sender' && !input.escalated && FOLLOW_UP_PROMISE.test(reply)) return 'unbacked_promise';
-  const cause = requiredCause(input);
-  if (cause === 'gate_refused' && CAPABILITY_DENIAL.test(reply)) return 'denies_capability';
-  if (cause === 'gate_refused' && !PERMISSION_TERMS.test(reply)) return 'cause_missing';
-  if (cause === 'not_found' && !NOT_FOUND_TERMS.test(reply)) return 'cause_missing';
+  if (isGateDecline(input) && CAPABILITY_DENIAL.test(reply)) return 'denies_capability';
   if (!sharesTopic(reply, input.request)) return 'off_topic';
   return { reply };
 }
@@ -466,30 +438,18 @@ const LOST_THREAD_TERMS = new RegExp([
   String.raw`\blost (?:the thread|track)\b`,
 ].join('|'), 'i');
 
-// A capability denied outright: "there's no ban or blocklist capability", "I don't have a
-// way to", "that isn't supported". Wrong for a gate-refused decline, where the capability
-// exists and a permission check stopped it (#2494).
+// A capability denied outright: "there's no ban or blocklist capability", "I don't have
+// blocking capabilities", "that isn't supported", "I can't ban people". Wrong for a
+// gate-refused decline, where the capability exists and a permission check stopped it
+// (#2494). A false match costs only the plain fallback.
 const CAPABILITY_DENIAL = new RegExp([
-  String.raw`\bno\s+(?:[\w-]+\s+){0,3}(?:way|ability|capability|capabilities|feature|function|option|tool|means)\b`,
-  String.raw`\b(?:don['’]?t|do not|doesn['’]?t|does not)\s+have\s+(?:a|an|any|the)\s+(?:[\w-]+\s+){0,2}(?:way|ability|capability|feature|function|option|tool|means)\b`,
-  String.raw`\b(?:isn['’]?t|is not|not)\s+(?:possible|supported|available)\b`,
+  // "means" only as "no means to": "by no means" is not a denial.
+  String.raw`\bno\s+(?:[\w-]+\s+){0,3}(?:way|ability|abilities|capability|capabilities|feature|features|function|option|tool|tools)\b`,
+  String.raw`\bno\s+means\s+to\b`,
+  String.raw`\b(?:don['’]?t|do not|doesn['’]?t|does not)\s+have\s+(?:(?:a|an|any|the)\s+)?(?:[\w-]+\s+){0,2}(?:way|ability|abilities|capability|capabilities|feature|features|function|option|tool|tools|means)\b`,
+  String.raw`\b(?:isn['’]?t|is not|aren['’]?t|are not)\s+(?:possible|supported)\b`,
   String.raw`\b(?:isn['’]?t|is not)\s+something\s+I\s+(?:can|am able to)\b`,
-].join('|'), 'i');
-
-// A draft for a gate-refused decline must say what stopped it: a permission, an approval,
-// the principal's go-ahead or confirmation (#2494).
-const PERMISSION_TERMS =
-  /\b(?:permission|approv\w*|go[- ]ahead|authori[sz]\w*|confirm\w*|sign[- ]off|directly)\b/i;
-
-// A draft for a not-found decline must say it was not found, in any of the usual forms.
-// Straight or curly apostrophes, since models write both.
-const NOT_FOUND_TERMS = new RegExp([
-  String.raw`\b(?:couldn['’]?t|could not|can['’]?t|cannot|unable to|didn['’]?t|did not|wasn['’]?t able to)\s+(?:\w+\s+)?(?:find|locate|see)\b`,
-  String.raw`\bnot\s+(?:found|there)\b`,
-  String.raw`\bno\s+(?:sign|trace|record)\b`,
-  String.raw`\b(?:doesn['’]?t|does not|didn['’]?t|did not)\s+exist\b`,
-  String.raw`\b(?:isn['’]?t|is not|wasn['’]?t|was not)\s+(?:there|in)\b`,
-  String.raw`\bno\s+(?:[\w-]+\s+){0,2}(?:found|matching|exists?)\b`,
+  String.raw`\b(?:I|we|Curia)\s+(?:can['’]?t|cannot|am unable to|are unable to|is unable to)\s+(?:ever\s+)?\w+\s+(?:people|anyone|contacts|senders)\b`,
 ].join('|'), 'i');
 
 // The words the prompt forbids: "specialist(s)" and any form of "delegate". Exact

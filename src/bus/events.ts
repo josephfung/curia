@@ -184,9 +184,10 @@ interface AgentResponsePayload {
    */
   sends?: string[];
   /**
-   * Skills an execution-layer access gate refused during the task, in call order (`gate` on
-   * the tool result, #2494). Set beside `sends`, only when there was one. The delegate skill uses it to report a
-   * decline's cause from code: a permission refusal, not a missing capability.
+   * Distinct skills the live-principal-turn gate refused during the task, in call order
+   * (`gate` on the tool result, #2494), capped. Set beside `sends`, only when there was one.
+   * The delegate skill uses it to report a decline's cause from code: a permission refusal
+   * the principal can lift, not a missing capability.
    */
   gateRefusals?: string[];
   /**

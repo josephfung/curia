@@ -24,17 +24,21 @@ export const SPECIALIST_DECLINE_MARKER_EXAMPLE =
 
 /**
  * Why a specialist declined (#2494).
- * - `gate_refused`: a permission or approval check stopped a tool. The capability exists.
- * - `not_found`: what it was asked to act on does not exist.
- * - `capability_absent`: no tool it holds can do the step.
- * - `unspecified`: none of these was stated.
+ * - `gate_refused`: an execution-layer access gate refused one of its calls. The capability
+ *   exists. Set only from the platform's record of the refusal, never from the marker: a
+ *   model-written claim would carry the platform's authority (an injected email could have
+ *   the coordinator ask the principal for a go-ahead nothing needed).
+ * - `not_found`: what it was asked to act on does not exist (the specialist's account).
+ * - `capability_absent`: no tool it holds can do the step (the specialist's account).
+ * - `unspecified`: none of these.
  */
 export type DeclineCause = 'gate_refused' | 'not_found' | 'capability_absent' | 'unspecified';
 
-const STATED_CAUSES: ReadonlySet<string> = new Set(['gate_refused', 'not_found', 'capability_absent']);
+/** Causes a specialist may state in the marker's `cause` attribute. */
+const STATED_CAUSES: ReadonlySet<string> = new Set(['not_found', 'capability_absent']);
 
 export function isDeclineCause(value: unknown): value is DeclineCause {
-  return typeof value === 'string' && (STATED_CAUSES.has(value) || value === 'unspecified');
+  return value === 'gate_refused' || value === 'not_found' || value === 'capability_absent' || value === 'unspecified';
 }
 
 // The prompt tells the specialist to end the reply with the marker. A marker
@@ -50,7 +54,7 @@ export interface SpecialistDeclineMarker {
   /** Model-supplied reason attribute, or the stable reason when the attribute is absent. */
   reason: string;
   message: string;
-  /** The `cause` attribute when it names a known cause, else `unspecified`. */
+  /** The `cause` attribute when it names a cause a specialist may state, else `unspecified`. */
   cause: DeclineCause;
   /**
    * The reply before the marker, when there is any: work the specialist finished before it

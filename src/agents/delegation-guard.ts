@@ -601,9 +601,9 @@ export function declineCauseLine(cause: DeclineCause | undefined): string | unde
     case 'gate_refused':
       return 'Cause: a permission check refused the step, so it was not done. The capability exists; it needs the principal\'s direct go-ahead.';
     case 'not_found':
-      return 'Cause: what it was asked to act on was not found.';
+      return 'Cause (as the specialist reports it): what it was asked to act on was not found.';
     case 'capability_absent':
-      return 'Cause: none of its tools can do this step.';
+      return 'Cause (as the specialist reports it): none of its tools can do this step.';
     default:
       return undefined;
   }
