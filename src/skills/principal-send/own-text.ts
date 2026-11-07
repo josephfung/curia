@@ -1,0 +1,48 @@
+// own-text.ts — what in a principal-mailbox draft is the draft's own text (#2474, design D2).
+//
+// PII detection on a principal-mailbox send reads only the draft's own words: the quoted message
+// below a reply is someone else's (its signature phone numbers would hold almost every "Got it"),
+// and the principal's own address or phone is not a disclosure on a principal-directed send.
+// The content filter still sees the whole body.
+
+import type { DetectedPii } from '../../dispatch/pii-redactor.js';
+import { REPLY_QUOTE_HTML_OPEN } from '../_shared/reply-quote.js';
+
+const GMAIL_QUOTE_OPEN = '<div class="gmail_quote"';
+
+/** Splits at the earliest REPLY_QUOTE_HTML_OPEN or `<div class="gmail_quote"`; quote is '' when neither occurs. */
+export function splitReplyQuote(html: string): { own: string; quote: string } {
+  const at = [html.indexOf(REPLY_QUOTE_HTML_OPEN), html.indexOf(GMAIL_QUOTE_OPEN)].filter((i) => i >= 0);
+  if (at.length === 0) return { own: html, quote: '' };
+  const cut = Math.min(...at);
+  return { own: html.slice(0, cut), quote: html.slice(cut) };
+}
+
+/** Shortest digit run treated as a phone number when comparing identities. */
+const MIN_PHONE_DIGITS = 10;
+
+function digits(value: string): string {
+  return value.replace(/\D/g, '');
+}
+
+/**
+ * The same phone number: equal digits, or one is the other with a country code in front
+ * ("(416) 555-0100" against "+14165550100"). Both must be phone-length.
+ */
+function samePhone(a: string, b: string): boolean {
+  if (a.length < MIN_PHONE_DIGITS || b.length < MIN_PHONE_DIGITS) return false;
+  if (a === b) return true;
+  const [short, long] = a.length < b.length ? [a, b] : [b, a];
+  return long.endsWith(short);
+}
+
+/** Drops detected items whose matched text is one of `identities` (emails lowercased, phones compared by digits). */
+export function dropOwnIdentityItems(items: readonly DetectedPii[], identities: readonly string[]): DetectedPii[] {
+  const emails = new Set(identities.filter((i) => i.includes('@')).map((i) => i.trim().toLowerCase()));
+  const phones = identities.filter((i) => !i.includes('@')).map(digits).filter((d) => d.length >= MIN_PHONE_DIGITS);
+  return items.filter((item) => {
+    if (item.matched.includes('@')) return !emails.has(item.matched.trim().toLowerCase());
+    const d = digits(item.matched);
+    return !phones.some((p) => samePhone(p, d));
+  });
+}
