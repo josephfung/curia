@@ -437,7 +437,7 @@ export type PrincipalSendRefusal =
   | 'not_found' | 'lookup_failed' | 'no_recipients' | 'principal_only' | 'review_hold' | 'draft_changed'
   | 'send_unconfirmed'
   // An autonomous send (PR 2, design D4): Curia sending on its own under the routine / all levels.
-  | 'outsider_originated' | 'no_band_review' | 'thread_unreadable' | AutonomousLimitRefusal;
+  | 'outsider_originated' | 'no_band_review' | 'no_send_ledger' | 'thread_unreadable' | AutonomousLimitRefusal;
 
 /** How every autonomous refusal ends: the principal still has the draft. */
 const STILL_A_DRAFT = ' Nothing was sent; the draft is still in their Drafts folder.';
@@ -457,6 +457,7 @@ export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
   send_unconfirmed: "The send to the principal's mailbox didn't confirm, so it may or may not have gone out. Check the principal's Sent folder before sending again.",
   outsider_originated: `This work started from someone outside, so Curia won't send from the principal's mailbox on its own.${STILL_A_DRAFT}`,
   no_band_review: `The send review isn't running, so Curia won't send from the principal's mailbox on its own.${STILL_A_DRAFT}`,
+  no_send_ledger: `The send record isn't available, so Curia won't send from the principal's mailbox on its own.${STILL_A_DRAFT}`,
   thread_unreadable: `Couldn't read the thread to check who's on it, so Curia didn't send on its own.${STILL_A_DRAFT}`,
   not_curia_draft: `Curia sends on its own only a reply it drafted in this same pass.${STILL_A_DRAFT}`,
   draft_changed_since_curia: `The draft changed after Curia wrote it, so Curia left it for the principal.${STILL_A_DRAFT}`,
@@ -494,6 +495,35 @@ function mailboxDraftLabel(draft: NylasMessage, isPrincipal: (email: string) => 
     names.push(r.name?.trim() || r.email.trim());
   }
   return `"${draft.subject}"${names.length > 0 ? ` to ${names.join(', ')}` : ''}`;
+}
+
+/** HTML as text for comparing a quote with a thread message: whitespace collapsed, lowercased. */
+function comparableText(html: string | undefined | null): string {
+  return htmlToText(html).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * The quote's detected items an autonomous send's review must still rule on (#2474, security).
+ * The draft body is model-written, so a quote marker in it proves nothing: an injected model could
+ * put one above personal data. A quote counts as the thread's only when its quoted body (from its
+ * first <blockquote>) is, as text, inside a non-draft message on the thread. Then its body's items
+ * are exempt, and so is an address in its header that was on that message; anything else in the
+ * header (the draft's own text) is reviewed. Otherwise every item is reviewed (fail closed).
+ */
+function quoteItemsNotOnThread(
+  items: readonly DetectedPii[],
+  quote: string,
+  quoteStart: number,
+  thread: ReadonlyArray<{ text: string; participants: ReadonlySet<string> }>,
+): DetectedPii[] {
+  if (items.length === 0) return [];
+  const bodyAt = quote.search(/<blockquote\b/i);
+  if (bodyAt < 0) return [...items];
+  const quoted = comparableText(quote.slice(bodyAt));
+  const source = quoted ? thread.find((m) => m.text.includes(quoted)) : undefined;
+  if (!source) return [...items];
+  const bodyStart = quoteStart + bodyAt;
+  return items.filter((i) => i.start < bodyStart && !source.participants.has(i.matched.trim().toLowerCase()));
 }
 
 /**
@@ -776,6 +806,12 @@ interface DraftSendProfile {
   stakesCeiling?: SendStakes;
   /** Autonomous only: the message the reply answers, as the review's origin evidence. */
   origin?: { content: string; at?: string; senderVerified: boolean };
+  /**
+   * Autonomous only: the thread's non-draft messages (comparableText of each body, and who was on
+   * it). A quote is exempt from review only when the thread holds its text (security: the draft
+   * body is model-written, so a quote marker in it proves nothing).
+   */
+  threadMessages?: ReadonlyArray<{ text: string; participants: ReadonlySet<string> }>;
 }
 /** sendEmailDraft's options, passed through to the draft checks unchanged. */
 interface DraftSendOptions {
@@ -795,7 +831,8 @@ interface DraftSendOptions {
  */
 type DraftCheckOutcome =
   // held: a principal-mailbox review hold (#2474), its reason. The draft stays; nothing is queued.
-  | { result: OutboundSendResult; held?: string }
+  // bounced: the review sent it back to the drafter for one rewrite (not final).
+  | { result: OutboundSendResult; held?: string; bounced?: true }
   | {
     proceed: {
       recipient: FirstContactProbe;
@@ -4217,6 +4254,8 @@ export class OutboundGateway {
       if (this.currentGating(autonomy) !== 'band' || !this.bandReview) return stop('no_band_review');
       // Fail closed: with no task or no provenance, nothing can show Curia drafted it in this task (D4.1).
       if (!options.taskEventId || !this.draftProvenance) return stop('not_curia_draft');
+      // Fail closed: with no ledger, the thread cooldown (D4.6) can be neither read nor started.
+      if (!this.sendLedger) return stop('no_send_ledger');
     }
 
     // 4. The draft, through the same client the re-read and the send use.
@@ -4290,11 +4329,10 @@ export class OutboundGateway {
         this.log.warn({ err, draftId }, 'outbound-gateway: task draft writes unreadable — not sending on its own');
         return stop('not_curia_draft');
       }
-      // Fail closed: with no ledger, or a failed read, the thread's cooldown may be running.
-      if (!this.sendLedger) return stop('thread_cooldown');
       let recentEntries: PrincipalSendEntry[] = [];
       try {
-        if (draft.threadId) recentEntries = await this.sendLedger.recentForThread(draft.threadId, Date.now() - AUTONOMOUS_THREAD_COOLDOWN_MS);
+        // Fail closed on a failed read: the thread's cooldown may be running.
+        if (draft.threadId) recentEntries = await this.sendLedger!.recentForThread(draft.threadId, Date.now() - AUTONOMOUS_THREAD_COOLDOWN_MS);
       } catch (err) {
         this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — treating the thread as cooling down');
         return stop('thread_cooldown');
@@ -4312,6 +4350,10 @@ export class OutboundGateway {
         // routine sends only routine; all adds commitment. financial_or_legal never (#2473).
         stakesCeiling: level === 'all' ? 'commitment' : 'routine',
         ...(target ? { origin: replyOrigin(target) } : {}),
+        threadMessages: thread.map((m) => ({
+          text: comparableText(m.body),
+          participants: new Set([...m.from, ...m.to, ...m.cc].map((p) => p.email.trim().toLowerCase())),
+        })),
       };
     }
 
@@ -4327,8 +4369,18 @@ export class OutboundGateway {
       if (checked.held !== undefined) return stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`);
       // Every other stop leaves the draft where it is and returns its reason: a review bounce
       // (the drafter edits once and resends), a blocked contact, the identity gate, the content
-      // filter or a redactor error. Not final, so no marker and no digest item: a second bounce
-      // becomes a block, which holds.
+      // filter or a redactor error.
+      //
+      // On an autonomous send only a review bounce is not final (no marker, no digest item: a
+      // second bounce becomes a block, which holds). Every other stop is final: the principal
+      // hears of it even if the drafter gives up (design D9).
+      if (autonomous && checked.bounced !== true) {
+        const why = (checked.result.blockedReason ?? 'Held for the principal.').trim();
+        const reason = `${/[.!?]$/.test(why) ? why : `${why}.`}${STILL_A_DRAFT}`;
+        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, reason, options });
+        this.log.info({ draftId, rules: checked.result.blockedRules }, 'outbound-gateway: autonomous principal-mailbox draft not sent');
+        return { ...checked.result, blockedReason: reason, leftAsDraft: true };
+      }
       return { ...checked.result, leftAsDraft: true };
     }
     const { recipient, band, detectedItems, redactedBody, redactedSubject } = checked.proceed;
@@ -4425,7 +4477,8 @@ export class OutboundGateway {
     draft: NylasMessage | null;
     /** The draft read was made: a null draft is gone or unreadable, not unread. */
     lookedUp: boolean;
-    refusal: PrincipalSendRefusal;
+    /** Absent for a check's stop (a blocked contact, the content filter, …), which has no refusal code. */
+    refusal?: PrincipalSendRefusal;
     reason: string;
     options: { taskEventId?: string; conversationId?: string };
   }): Promise<void> {
@@ -4635,8 +4688,8 @@ export class OutboundGateway {
         //
         // An autonomous send (PR 2) excludes only the mailbox's own addresses: the principal's
         // phone or personal email in a reply Curia sends on its own is reviewed like any detail.
-        // Its quote is exempt outright: the D4.3 limit proved every recipient is genuinely on the
-        // thread the quote comes from (design D2).
+        // Its quote is exempt when the thread holds it: the D4.3 limit proved every recipient is
+        // genuinely on the thread (design D2). See quoteItemsNotOnThread.
         const ownIdentities = principalMailbox && options?.principalDirected === true
           ? this.principalIdentities.filter((i) => i.verified).map((i) => i.channelIdentifier)
           : autonomousMailbox ? this.principalEmailAddresses() : [];
@@ -4644,9 +4697,11 @@ export class OutboundGateway {
         const ownLength = split.own.length;
         const bodyItems = dropOwnIdentityItems(bodyFound.filter((i) => i.start < ownLength), ownIdentities);
         const quoteFound = dropOwnIdentityItems(bodyFound.filter((i) => i.start >= ownLength), ownIdentities);
-        const quoteItems = !autonomousMailbox && quoteFound.length > 0 && !this.quoteReachesOnlyItsParticipants(split.quote, audienceOf(draftEnvelope))
-          ? quoteFound
-          : [];
+        const quoteItems = autonomousMailbox
+          ? quoteItemsNotOnThread(quoteFound, split.quote, ownLength, profile.threadMessages ?? [])
+          : quoteFound.length > 0 && !this.quoteReachesOnlyItsParticipants(split.quote, audienceOf(draftEnvelope))
+            ? quoteFound
+            : [];
         const subjectItems = dropOwnIdentityItems(subjectFound, ownIdentities);
         for (const [items, field] of [[bodyItems, 'body'], [quoteItems, 'quote'], [subjectItems, 'subject']] as const) {
           for (const item of items) {
@@ -4832,7 +4887,8 @@ export class OutboundGateway {
           }
           : { editable: false }),
       });
-      if (outcome.result) return { result: outcome.result, ...(outcome.held !== undefined ? { held: outcome.held } : {}) };
+      // With the draft left on a hold, a result with no `held` is a bounce: the drafter may rewrite.
+      if (outcome.result) return { result: outcome.result, ...(outcome.held !== undefined ? { held: outcome.held } : { bounced: true as const }) };
       bandReport = outcome.report;
       bandSignals = outcome.signals;
     }

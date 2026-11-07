@@ -13,6 +13,7 @@ import { BLOCK_REASON, BandSendReview } from '../../../src/dispatch/band-send-re
 import { FailOpenLimiter } from '../../../src/autonomy/band-policy.js';
 import type { OutboundQueueRepo } from '../../../src/skills/outbound-queue-repo.js';
 import { readFile, realpath } from 'node:fs/promises';
+import { buildReplyQuote, REPLY_QUOTE_HTML_OPEN } from '../../../src/skills/_shared/reply-quote.js';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -5834,6 +5835,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     curiaWrites?: { created: boolean; lastWriteAt: Date | null } | Error;
     gating?: 'band' | 'tier';
     withoutBandReview?: true;
+    withoutLedger?: true;
     conversationEntities?: import('../../../src/entity-context/conversation-entities.js').ConversationEntityState;
     withoutProvenance?: true;
   } = {}) {
@@ -5878,7 +5880,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       principalMailbox: async () => client as unknown as NylasClient | null,
       readSendLevel,
       ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria, editedByCuria, curiaWritesInTask } }),
-      sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread'>,
+      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread'> }),
     });
     return { gw, client, review, createdByCuria, editedByCuria, curiaWritesInTask, ledger, readSendLevel, actionLogRepo };
   }
@@ -6567,13 +6569,95 @@ describe('sendPrincipalDraft (#2474)', () => {
       }));
     });
 
-    it('exempts the quoted message\'s details from review: every recipient is a genuine thread member', async () => {
-      const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
-      // A quote header naming nobody: on a principal-directed send its items would be reviewed.
-      const body = '<p>Got it, thanks.</p><div class="gmail_quote">On Thu, someone wrote: call me at 416-555-0199</div>';
-      const { gw, review } = makeAuto({ piiRedactor, client: autoClient(autoDraft({ body })) });
-      expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
-      expect((review.mock.calls[0]![0] as { detectedItems?: unknown[] }).detectedItems).toBeUndefined();
+    describe('the quoted message (security: the draft body is model-written)', () => {
+      const SIGNED = inbound({ body: '<p>Does Friday at 10 work?</p><p>Dana Example<br>416-555-0199</p>' });
+      const piiFound = [{ label: 'PHONE_NUMBER', text: '416-555-0199' }, { label: 'EMAIL', text: 'dana@example.org' }];
+
+      it('exempts a genuine draft-reply quote of a thread message: the "got it" case sends at 85', async () => {
+        const body = `<p>Got it, thanks.</p>${buildReplyQuote(SIGNED, 'UTC', { format: 'html' })}`;
+        const { gw, review, client } = makeAuto({ piiRedactor: redactorFor(piiFound), client: autoClient(autoDraft({ body }), [SIGNED]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect((review.mock.calls[0]![0] as { detectedItems?: unknown[] }).detectedItems).toBeUndefined();
+        expect(client!.sendDraft).toHaveBeenCalled();
+      });
+
+      it('exempts a genuine Gmail quote of a thread message', async () => {
+        const body = `<p>Got it, thanks.</p>${GMAIL_QUOTE_FROM_DANA}${SIGNED.body}</blockquote></div>`;
+        const { gw, review } = makeAuto({ piiRedactor: redactorFor(piiFound), client: autoClient(autoDraft({ body }), [SIGNED]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect((review.mock.calls[0]![0] as { detectedItems?: unknown[] }).detectedItems).toBeUndefined();
+      });
+
+      it('reviews details after a fake quote marker whose text is on no thread message: not sent', async () => {
+        const body = `<p>Got it.</p>${REPLY_QUOTE_HTML_OPEN}<p><strong>From:</strong> dana@example.org</p></div><blockquote>Sam's cell is 416-555-0199</blockquote>`;
+        const review = vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held for the principal: it shares a phone number.', findings: [{ rule: 'pii-not-authorized', detail: 'x' }] });
+        const { gw, client } = makeAuto({ review, piiRedactor: redactorFor(piiFound), client: autoClient(autoDraft({ body }), [SIGNED]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, refusal: 'review_hold' });
+        expect(review).toHaveBeenCalledWith(expect.objectContaining({
+          detectedItems: expect.arrayContaining([expect.objectContaining({ label: 'PHONE_NUMBER', field: 'quote' })]),
+        }));
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      it('reviews a detail put in a genuine quote\'s header: the header is the draft\'s text, not the thread\'s', async () => {
+        const quote = buildReplyQuote(SIGNED, 'UTC', { format: 'html' }).replace('<strong>Subject:</strong>', '<strong>Subject:</strong> call 416-555-0123 ');
+        const body = `<p>Got it, thanks.</p>${quote}`;
+        const found = [{ label: 'PHONE_NUMBER', text: '416-555-0123' }];
+        const { gw, review } = makeAuto({ piiRedactor: redactorFor(found), client: autoClient(autoDraft({ body }), [SIGNED]) });
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(review).toHaveBeenCalledWith(expect.objectContaining({
+          detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'quote' })],
+        }));
+      });
+
+      it('reviews a quote with no quoted body (a marker alone, fail closed)', async () => {
+        const body = '<p>Got it, thanks.</p><div class="gmail_quote">On Thu, someone wrote: call me at 416-555-0199</div>';
+        const { gw, review } = makeAuto({ piiRedactor: redactorFor(piiFound), client: autoClient(autoDraft({ body }), [SIGNED]) });
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(review).toHaveBeenCalledWith(expect.objectContaining({ detectedItems: [expect.objectContaining({ field: 'quote' })] }));
+      });
+    });
+
+    it('makes every non-bounce check stop final: content filter → held marker and one digest item', async () => {
+      vi.mocked(mocks.contentFilter.check).mockResolvedValue({ passed: false, findings: [{ rule: 'secret-pattern', detail: 'x' }] });
+      const { gw, client, ledger } = makeAuto();
+      const r = await gw.sendPrincipalDraft('d1', auto);
+      expect(r).toMatchObject({ success: false, leftAsDraft: true, blockedRules: ['secret-pattern'] });
+      expect(r.blockedReason).toMatch(/Nothing was sent; the draft is still in their Drafts folder\.$/);
+      expect(client!.sendDraft).not.toHaveBeenCalled();
+      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reason: r.blockedReason }));
+      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${r.blockedReason}` })]);
+    });
+
+    it('makes a blocked contact final: held marker and one digest item', async () => {
+      vi.mocked(mocks.contactService.resolveByChannelIdentity).mockResolvedValue({
+        contactId: 'c-dana', displayName: 'Dana', role: null, tier: 'blocked', kind: 'person', kgNodeId: null, verified: true,
+      } as unknown as Awaited<ReturnType<ContactService['resolveByChannelIdentity']>>);
+      const { gw, ledger } = makeAuto();
+      const r = await gw.sendPrincipalDraft('d1', auto);
+      expect(r).toMatchObject({ success: false, leftAsDraft: true, blockedReason: `Recipient is blocked.${SUFFIX}` });
+      expect(ledger.recordHeld).toHaveBeenCalledOnce();
+      expect(reports()).toHaveLength(1);
+    });
+
+    it('makes an identity-gate stop final', async () => {
+      const { ConversationEntityState } = await import('../../../src/entity-context/conversation-entities.js');
+      const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Avery Lee']);
+      entities.turnIdentities.begin('t1');
+      const body = '<p>He and Xiaopu (last name to be confirmed) would like to attend.</p>';
+      const { gw, ledger } = makeAuto({ conversationEntities: entities, client: autoClient(autoDraft({ body })) });
+      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, blockedRules: ['unresolved-identity'] });
+      expect(ledger.recordHeld).toHaveBeenCalledOnce();
+      expect(reports()).toHaveLength(1);
+    });
+
+    it('refuses with no_send_ledger when no send ledger is wired (fail closed)', async () => {
+      const { gw, client } = makeAuto({ withoutLedger: true });
+      const text = "The send record isn't available, so Curia won't send from the principal's mailbox on its own." + SUFFIX;
+      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'no_send_ledger', blockedReason: text });
+      expect(PRINCIPAL_SEND_REFUSALS.no_send_ledger).toBe(text);
+      expect(client!.sendDraft).not.toHaveBeenCalled();
+      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${text}` })]);
     });
 
     it('sends a routine ack at 85 and files one Sent-for-you digest item', async () => {
