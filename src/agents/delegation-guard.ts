@@ -438,7 +438,7 @@ export function parseDelegateFailureData(data: unknown, logger?: Logger): Delega
     ...(record['declined'] === true && { declined: true }),
     ...(record['declined'] === true && isDeclineCause(record['cause']) && { declineCause: record['cause'] }),
     ...(record['declined'] === true && Array.isArray(record['sent'])
-      && { sent: record['sent'].filter((s): s is string => typeof s === 'string').slice(0, MAX_RECORDED_SENDS) }),
+      && { sent: [...new Set(record['sent'].filter((s): s is string => typeof s === 'string'))].slice(0, MAX_RECORDED_SENDS) }),
     ...(record['declined'] === true && typeof record['work_product'] === 'string' && record['work_product'].length > 0
       && { workProduct: record['work_product'] }),
   };

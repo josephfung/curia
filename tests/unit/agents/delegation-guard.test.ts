@@ -697,6 +697,15 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
       .not.toHaveProperty('workProduct');
   });
 
+  it('dedupes sent tools before capping, so a later tool is not crowded out', () => {
+    const base = { failed: true, agent: 'ceo-inbox', reason: 'specialist_decline', retryable: false, message: 'No.', declined: true };
+    const repeated = Array.from({ length: 25 }, () => 'email-send');
+    expect(parseDelegateFailureData({ ...base, sent: [...repeated, 'signal-send'] })?.sent)
+      .toEqual(['email-send', 'signal-send']);
+    const many = Array.from({ length: 30 }, (_, i) => `tool-${i}`);
+    expect(parseDelegateFailureData({ ...base, sent: [...many, ...many] })?.sent).toHaveLength(20);
+  });
+
   it('adds no cause line when none was stated', async () => {
     const { layer, invoke } = execution();
     await recordUnresolvedDecline(layer, undefined, {}, { ...decline, declineCause: 'unspecified' }, {}, logger);
