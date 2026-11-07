@@ -7,6 +7,10 @@
 // from, so a page a specialist read counts when the coordinator then creates the
 // contact, and the reverse. Contact skills look identifiers up here before verifying.
 //
+// What the agent supplies to web-fetch and web-browser is recorded too (#2498), so a page
+// that repeats it (a search page showing its query, a form showing what was typed) cannot
+// verify it: such a result never contributes a key the agent supplied first.
+//
 // Process memory only. Tool results are not persisted anywhere an agent could write,
 // and losing the index (restart, TTL) only means a later write is refused and the
 // agent asks again — it never verifies anything.
@@ -16,68 +20,173 @@ import { sourceKeysInText } from '../contacts/identifier-provenance.js';
 export interface IdentifierSourceIndexOptions {
   /** How long a recorded key counts. Default 24 hours. */
   ttlMs?: number;
-  /** Keys kept per conversation; the oldest go first. Default 5 000. */
+  /** Keys kept per conversation (and per agent-input scope); the oldest go first. Default 5 000. */
   maxKeysPerConversation?: number;
   /** Conversations kept; the least recently recorded goes first. Default 500. */
   maxConversations?: number;
+  /**
+   * Agent-input scopes kept (conversations and browser sessions, #2498). Default 2 000:
+   * kept apart from the sources and larger, so heavy browsing neither evicts conversations'
+   * sources nor drops a live session's typing early. Only email and phone keys are held.
+   */
+  maxAgentInputScopes?: number;
   now?: () => number;
 }
 
+/**
+ * Keys per scope with a TTL and two caps. Map iteration order is insertion order:
+ * re-inserting moves an entry to the end, so the first entry is always the oldest, for
+ * scopes (by last record) and for the keys inside each.
+ */
+class ScopedKeys {
+  /** `lost`: a key of this scope was evicted or expired while the scope stayed live. */
+  private readonly scopes = new Map<string, { recordedAt: number; keys: Map<string, number>; lost: boolean }>();
+
+  constructor(
+    private readonly ttlMs: number,
+    private readonly maxKeys: number,
+    private readonly maxScopes: number,
+  ) {}
+
+  add(scope: string, found: ReadonlySet<string>, now: number): void {
+    // Scopes are ordered by last record, so expired ones sit at the front.
+    for (const [key, entry] of this.scopes) {
+      if (now - entry.recordedAt <= this.ttlMs) break;
+      this.scopes.delete(key);
+    }
+    const entry = this.scopes.get(scope) ?? { recordedAt: now, keys: new Map<string, number>(), lost: false };
+    entry.recordedAt = now;
+    this.scopes.delete(scope);
+    this.scopes.set(scope, entry);
+    // Keys expire one by one while the scope is kept alive by newer records.
+    for (const [key, addedAt] of entry.keys) {
+      if (now - addedAt <= this.ttlMs) break;
+      entry.keys.delete(key);
+      entry.lost = true;
+    }
+    for (const key of found) {
+      entry.keys.delete(key);
+      entry.keys.set(key, now);
+    }
+    for (const oldest of entry.keys.keys()) {
+      if (entry.keys.size <= this.maxKeys) break;
+      entry.keys.delete(oldest);
+      entry.lost = true;
+    }
+    for (const oldest of this.scopes.keys()) {
+      if (this.scopes.size <= this.maxScopes) break;
+      this.scopes.delete(oldest);
+    }
+  }
+
+  has(scope: string, key: string, now: number): boolean {
+    const addedAt = this.scopes.get(scope)?.keys.get(key);
+    return addedAt !== undefined && now - addedAt <= this.ttlMs;
+  }
+
+  /** Mark a scope's history as incomplete for good, creating the scope if it is not held. */
+  markLost(scope: string, now: number): void {
+    this.add(scope, new Set(), now);
+    const entry = this.scopes.get(scope);
+    if (entry) entry.lost = true;
+  }
+
+  /** True when the scope is live and has lost no key (evicted or expired). */
+  hasScope(scope: string, now: number): boolean {
+    const entry = this.scopes.get(scope);
+    if (entry === undefined || entry.lost || now - entry.recordedAt > this.ttlMs) return false;
+    const oldest = entry.keys.values().next();
+    return oldest.done === true || now - oldest.value <= this.ttlMs;
+  }
+
+  /** True when the scope is held and has lost a key, or one has expired since the last record. */
+  isIncomplete(scope: string, now: number): boolean {
+    const entry = this.scopes.get(scope);
+    if (entry === undefined) return false;
+    if (entry.lost) return true;
+    const oldest = entry.keys.values().next();
+    return oldest.done !== true && now - oldest.value > this.ttlMs;
+  }
+
+  get size(): number {
+    return this.scopes.size;
+  }
+}
+
 export class IdentifierSourceIndex {
-  private readonly ttlMs: number;
-  private readonly maxKeys: number;
-  private readonly maxConversations: number;
   private readonly now: () => number;
-  // Map iteration order is insertion order: re-inserting moves an entry to the end,
-  // so the first entry is always the oldest — for conversations (by last record) and
-  // for the keys inside each.
-  private readonly conversations = new Map<string, { recordedAt: number; keys: Map<string, number> }>();
+  /** Identifiers found in source-tool results, per conversation. */
+  private readonly sources: ScopedKeys;
+  /**
+   * Identifiers the agent supplied to echo-prone source tools (#2498), per conversation
+   * and per browser session: never taken from such a tool's result.
+   */
+  private readonly agentInput: ScopedKeys;
 
   constructor(options: IdentifierSourceIndexOptions = {}) {
-    this.ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
-    this.maxKeys = options.maxKeysPerConversation ?? 5_000;
-    this.maxConversations = options.maxConversations ?? 500;
+    const ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
+    const maxKeys = options.maxKeysPerConversation ?? 5_000;
+    this.sources = new ScopedKeys(ttlMs, maxKeys, options.maxConversations ?? 500);
+    this.agentInput = new ScopedKeys(ttlMs, maxKeys, options.maxAgentInputScopes ?? 2_000);
     this.now = options.now ?? Date.now;
   }
 
-  record(conversationKey: string, text: string): void {
+  /**
+   * Record the identifiers in a source-tool result under `conversationKey`. For an
+   * echo-prone tool (#2498), `excludeAgentInputOf` names the scopes (the conversation, a
+   * browser session) whose recorded agent input is left out: the result may only be
+   * repeating it.
+   */
+  record(conversationKey: string, text: string, options: { excludeAgentInputOf?: readonly string[] } = {}): void {
     const found = sourceKeysInText(text);
-    if (found.size === 0) return;
-
     const now = this.now();
-    // Conversations are ordered by last record, so expired ones sit at the front.
-    for (const [key, conversation] of this.conversations) {
-      if (now - conversation.recordedAt <= this.ttlMs) break;
-      this.conversations.delete(key);
+    // Fail closed: a scope that lost an input key can no longer say what the agent typed.
+    for (const scope of options.excludeAgentInputOf ?? []) {
+      if (this.agentInput.isIncomplete(scope, now)) return;
     }
+    for (const scope of options.excludeAgentInputOf ?? []) {
+      for (const key of found) if (this.agentInput.has(scope, key, now)) found.delete(key);
+    }
+    if (found.size === 0) return;
+    this.sources.add(conversationKey, found, now);
+  }
 
-    const conversation = this.conversations.get(conversationKey) ?? { recordedAt: now, keys: new Map<string, number>() };
-    conversation.recordedAt = now;
-    this.conversations.delete(conversationKey);
-    this.conversations.set(conversationKey, conversation);
+  /**
+   * Record what the agent supplied to an echo-prone source tool under `scopeKey` (a
+   * conversation, or a browser session's scope), before the call runs (#2498). Token keys
+   * are kept with the email and phone ones: a page repeating an agent-supplied Slack or
+   * Telegram id must not verify it either. The scope is registered even when the text holds
+   * no keys, so `hasAgentInputScope` can tell a session whose input was recorded from one
+   * that was never seen.
+   */
+  recordAgentInput(scopeKey: string, text: string): void {
+    this.agentInput.add(scopeKey, sourceKeysInText(text), this.now());
+  }
 
-    for (const key of found) {
-      conversation.keys.delete(key);
-      conversation.keys.set(key, now);
-    }
-    for (const oldest of conversation.keys.keys()) {
-      if (conversation.keys.size <= this.maxKeys) break;
-      conversation.keys.delete(oldest);
-    }
-    for (const oldest of this.conversations.keys()) {
-      if (this.conversations.size <= this.maxConversations) break;
-      this.conversations.delete(oldest);
-    }
+  /**
+   * Whether agent input has been recorded under `scopeKey` and is still held. False for a
+   * scope that was never recorded, was evicted, or expired: its exclusions are lost, so a
+   * result from that browser session cannot be trusted as a source (fail closed, #2498).
+   */
+  hasAgentInputScope(scopeKey: string): boolean {
+    return this.agentInput.hasScope(scopeKey, this.now());
+  }
+
+  /**
+   * Keep a scope untrusted for good: its earlier input is unknown (#2498). Recording more
+   * input under it later does not restore it.
+   */
+  markAgentInputLost(scopeKey: string): void {
+    this.agentInput.markLost(scopeKey, this.now());
   }
 
   has(conversationKey: string, key: string): boolean {
-    const addedAt = this.conversations.get(conversationKey)?.keys.get(key);
-    return addedAt !== undefined && this.now() - addedAt <= this.ttlMs;
+    return this.sources.has(conversationKey, key, this.now());
   }
 
   /** Conversations currently held — for tests and diagnostics. */
   get size(): number {
-    return this.conversations.size;
+    return this.sources.size;
   }
 }
 
