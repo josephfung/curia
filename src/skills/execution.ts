@@ -767,14 +767,31 @@ export class ExecutionLayer {
     const values: string[] = [];
     // Characters entered with press_key ("s", "a", "Shift+M", "Space"): consecutive ones
     // are one typed value, flushed by any other step or a non-character key (Tab, Enter).
+    // Editing keys do not end a run: Backspace removes the last character, so `sam@e.com`,
+    // five Backspaces, `x.com` leaves `sam@x.com` in the field. Keys that move the caret or
+    // delete elsewhere (Delete, arrows, Home, End, Ctrl/Meta chords) make the field
+    // unpredictable, so every substring of the raw run is recorded (fail closed).
     let keyed = '';
+    let rawKeyed = '';
+    let uncertain = false;
     const keyedRuns: string[] = [];
     const flushKeyed = (): void => {
       if (keyed !== '') {
         values.push(keyed);
         keyedRuns.push(keyed);
       }
+      if (rawKeyed !== '') {
+        keyedRuns.push(rawKeyed);
+        if (uncertain) {
+          const capped = rawKeyed.slice(0, 200);
+          for (let i = 0; i < capped.length; i++) {
+            for (let j = i + 1; j <= capped.length; j++) keyedRuns.push(capped.slice(i, j));
+          }
+        }
+      }
       keyed = '';
+      rawKeyed = '';
+      uncertain = false;
     };
     for (const step of steps) {
       if (step === null || typeof step !== 'object') {
@@ -785,8 +802,16 @@ export class ExecutionLayer {
       const key = fields['key'];
       if (typeof key === 'string') {
         const char = keyedCharacter(key);
-        if (char !== null) keyed += char;
-        else flushKeyed();
+        if (char !== null) {
+          keyed += char;
+          rawKeyed += char;
+        } else if (key === 'Backspace') {
+          keyed = [...keyed].slice(0, -1).join('');
+        } else if (/^(Delete|Arrow|Home$|End$|Page|Control\+|Meta\+|Ctrl\+|Alt\+|ControlOrMeta\+)/.test(key) && rawKeyed !== '') {
+          uncertain = true;
+        } else {
+          flushKeyed();
+        }
       } else {
         flushKeyed();
       }

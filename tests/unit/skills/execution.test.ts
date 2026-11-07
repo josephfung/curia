@@ -212,6 +212,19 @@ describe('ExecutionLayer', () => {
         }) ?? '';
         expect(shifted).toContain('Sa@typo.example');
       });
+
+      it('accounts for Backspace and caret keys edits within a press_key run', () => {
+        registry.register(makeManifest({ name: 'web-browser', provenance_source: true }), noop);
+        const press = (key: string) => ({ action: 'press_key', key });
+        const edited = execution.provenanceAgentInputText('web-browser', {
+          actions: [...[...'sam@e.com'].map(press), ...Array.from({ length: 5 }, () => press('Backspace')), ...[...'x.com'].map(press)],
+        }) ?? '';
+        expect(edited).toContain('sam@x.com');
+        const moved = execution.provenanceAgentInputText('web-browser', {
+          actions: [...[...'sam@e.com'].map(press), press('ArrowLeft'), press('Delete')],
+        }) ?? '';
+        expect(moved).toContain('am@e');
+      });
     });
   });
 
