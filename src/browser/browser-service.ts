@@ -598,8 +598,9 @@ export class BrowserService {
    */
   private sandboxLaunchError(cause: unknown): Error {
     const message =
-      'Chrome sandbox could not start: the container blocks the user namespaces it needs. ' +
-      'Run the container with the seccomp profile in docker/seccomp-chrome.json ' +
+      'Chrome sandbox could not start: the host blocks the user namespaces it needs. ' +
+      'In a container, run it with the seccomp profile in docker/seccomp-chrome.json. ' +
+      'On Ubuntu 23.10+ from source, use channel: chrome ' +
       '(see docs/dev/configuration.md).';
     this.logger.error({ err: cause }, message);
     return new Error(message, { cause });
