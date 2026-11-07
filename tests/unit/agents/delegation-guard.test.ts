@@ -613,6 +613,15 @@ describe('declines are Curia\'s to follow up (#2496)', () => {
     expect(String(input['description'])).toContain('After the decline the run called email-send:');
   });
 
+  it('bounds a long tool history and keeps the brief and the check instruction', async () => {
+    const { layer, invoke } = execution();
+    const laterTools = Array.from({ length: 200 }, (_, i) => `some-long-tool-name-${i}`);
+    await recordUnresolvedDecline(layer, undefined, {}, { ...decline, task: 'BRIEF-START ' + 'x'.repeat(5000), laterTools }, {}, logger);
+    const description = String((invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['description']);
+    expect(description).toContain('BRIEF-START');
+    expect(description).toMatch(/and \d+ more: check whether that finished the work before acting, and close this if it did\./);
+  });
+
   it('counts only the runtime\'s decline notes', () => {
     expect(countDeclineNotes({ notes: [
       { note: 'ceo-inbox declined delegated work in this run. Nothing else was called after the decline.' },

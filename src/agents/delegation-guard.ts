@@ -610,12 +610,25 @@ export interface UnresolvedDecline extends DelegationFailureInfo {
   laterTools?: string[];
 }
 
+// Cap on the tool names listed in the record's history line.
+const MAX_LATER_TOOLS_CHARS = 500;
+
 /** The record's line on what the turn did after the decline. */
 function laterToolsLine(decline: UnresolvedDecline): string {
   const tools = [...new Set(decline.laterTools ?? [])];
-  return tools.length === 0
-    ? 'Nothing else was called after the decline.'
-    : `After the decline the run called ${tools.join(', ')}: check whether that finished the work before acting, and close this if it did.`;
+  if (tools.length === 0) return 'Nothing else was called after the decline.';
+  // Bound the names separately so a long history cannot crowd out the brief or the
+  // instruction to check for finished work; say how many were left out.
+  const shown: string[] = [];
+  let used = 0;
+  for (const name of tools) {
+    if (used + name.length + 2 > MAX_LATER_TOOLS_CHARS) break;
+    shown.push(name);
+    used += name.length + 2;
+  }
+  const omitted = tools.length - shown.length;
+  const names = shown.join(', ') + (omitted > 0 ? `${shown.length > 0 ? ', ' : ''}and ${omitted} more` : '');
+  return `After the decline the run called ${names}: check whether that finished the work before acting, and close this if it did.`;
 }
 
 /**
