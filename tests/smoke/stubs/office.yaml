@@ -251,6 +251,15 @@ ceo-inbox-draft-edit:
     return: { draft_id: draft-0002 }
   - match: {}
     error: Failed to update draft in principal inbox
+# Sending a draft from the principal's mailbox (#2474). Smoke can't send (no-send gateway), so
+# this stands in for a send the gateway let through. Returns only the message id: the smoke
+# judge reads the call (which draft_id), not the return, and echoing an empty `to` would read
+# as "sent to nobody".
+ceo-inbox-send-draft:
+  - match: { draft_id: null }
+    error: "Missing required input: draft_id (string)"
+  - match: {}
+    return: { message_id: msg-sent-0001 }
 ceo-inbox-mark-read:
   - match: {}
     return: { marked_read: true }

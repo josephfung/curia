@@ -488,6 +488,37 @@ interface DraftRecord {
   body: string;
 }
 
+/** A recipient on a mailbox draft. */
+export interface DraftParticipant {
+  name?: string;
+  email: string;
+}
+
+/** A principal-mailbox draft as the case's draft writes left it (#2474). */
+export interface MailboxDraft {
+  id: string;
+  subject: string;
+  to: DraftParticipant[];
+  cc: DraftParticipant[];
+  body: string;
+}
+
+/**
+ * Told of each draft a stubbed ceo-inbox draft write leaves (#2474), so a through-gateway run
+ * can keep the principal's mailbox, which the real ceo-inbox-send-draft sends from, in step
+ * with the stubs. `curiaWrote`: a compose or reply that made a new draft, which is what the
+ * gateway's provenance counts; an edit, or a reply that found the principal's existing draft
+ * (`already_exists: true`), is not.
+ */
+export type DraftMirror = (draft: MailboxDraft, curiaWrote: boolean) => void;
+
+/** Participants as addresses. A contact ID (no `@`) is not an address, so it is dropped. */
+function mailboxParticipants(value: unknown): DraftParticipant[] {
+  return asParticipants(value)
+    .filter((p) => String(p['email']).includes('@'))
+    .map((p) => ({ ...(typeof p['name'] === 'string' ? { name: p['name'] } : {}), email: String(p['email']).trim() }));
+}
+
 /**
  * Mailbox drafts one case has created or edited. `ceo-inbox-read` of a recorded
  * `draft_id` returns the draft, so the read does not fall through to Nylas.
@@ -496,6 +527,27 @@ interface DraftRecord {
  */
 export class DraftState {
   private drafts = new Map<string, DraftRecord>();
+
+  /** @param mirror Told of each recorded write (#2474); absent outside a through-gateway run. */
+  constructor(private readonly mirror?: DraftMirror) {}
+
+  /**
+   * A draft already in the mailbox before the run (`seed.principal_mailbox`, #2474): an edit
+   * applies to it and a read returns it. Not a write, so the mirror is not told.
+   */
+  preload(draft: MailboxDraft): void {
+    this.drafts.set(draft.id, { ...draft, to: [...draft.to], cc: [...draft.cc] });
+  }
+
+  private mirrored(record: DraftRecord, curiaWrote: boolean): void {
+    this.mirror?.({
+      id: record.id,
+      subject: record.subject,
+      to: mailboxParticipants(record.to),
+      cc: mailboxParticipants(record.cc),
+      body: record.body,
+    }, curiaWrote);
+  }
 
   recordWrite(toolName: string, data: Json, input: Json): Json {
     if (toolName === 'ceo-inbox-draft-edit') return this.recordEdit(data, input);
@@ -529,7 +581,9 @@ export class DraftState {
       : typeof input['subject'] === 'string' ? input['subject']
         : prev?.subject ?? '';
     const body = typeof input['body'] === 'string' ? input['body'] : prev?.body ?? '';
-    this.drafts.set(id, { id, subject, to, cc, body });
+    const record = { id, subject, to, cc, body };
+    this.drafts.set(id, record);
+    this.mirrored(record, data['already_exists'] !== true);
     return data;
   }
 
@@ -561,6 +615,7 @@ export class DraftState {
       next.cc = uniqueByKey([...keep(prev.cc, addToKeys), ...addCc]).filter((p) => !toKeys.has(participantKey(p)));
     }
     this.drafts.set(id, next);
+    this.mirrored(next, false);
     return data;
   }
 
@@ -696,14 +751,18 @@ export class TaskState {
 
 /** Per-case write memory for every tool family whose reads should reflect its writes. */
 export class CaseToolState {
-  /** @param timezone Curia's configured timezone; see SchedulerState. */
-  constructor(timezone?: string) {
+  /**
+   * @param timezone Curia's configured timezone; see SchedulerState.
+   * @param draftMirror Told of each draft write (#2474: a through-gateway run's principal mailbox).
+   */
+  constructor(timezone?: string, draftMirror?: DraftMirror) {
     this.scheduler = new SchedulerState(timezone);
+    this.drafts = new DraftState(draftMirror);
   }
 
   readonly calendar = new CalendarState();
   readonly scheduler: SchedulerState;
-  readonly drafts = new DraftState();
+  readonly drafts: DraftState;
   readonly tasks = new TaskState();
 }
 

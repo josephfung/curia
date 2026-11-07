@@ -200,6 +200,7 @@ seeded rows, stubs, model calls and spend are found through its own case context
 | Entries a specialist changes or registers | the run-scoped outbound-context view | Every read or write outside the run's entries finds nothing. A registered entry joins the run's and is deleted with them. |
 | Standing tasks (#2312) | `seed.tasks`: an open `tasks` row with its originator, as `task-create` writes one, but no bus event and no wake job | `created_by` is `scenario-suite (#2312)`; cleanup and the sweep delete only rows carrying it. The Dispatcher's outreach link reads a task's status only for the run's own. |
 | Outreach rows (#2312) | `seed.outreach`: a `task_outreach` row, inserted as it is (not merged into another open row) | The Dispatcher's outreach link (`OutreachMatcher`) sees only the run's seeded rows and the rows its sends wrote (`scopedOutreachRepo`). Deleted after the run, with what its sends recorded. |
+| The principal's mailbox (#2474) | `seed.principal_mailbox`: drafts, their authorship and the send level, plus the run's stubbed ceo-inbox draft writes | In memory, per run (`SeedScope.principalDrafts`); only a through-gateway run's `ceo-inbox-send-draft` reads it. Nothing reaches the database or a mailbox. See [Sends through the gateway](#sends-through-the-gateway). |
 | What through-gateway sends write (#2312) | the gateway's approvals, the principal's answers to asks, outreach records | Approvals, `disclosure_decisions` and `task_outreach` rows in the run's conversations are deleted after the run; approve-action and deny-action see only the run's approvals (`scopedActionLog`). |
 | Prior history | | Withheld. *Contact recent history* (a sender's turns from other conversations) returns nothing during a run (the `wrapWorkingMemory` stack option), so a case never inherits smoke runs' or the real principal's turns from the dev database. |
 
@@ -687,7 +688,7 @@ before calling it a regression.
 
 `through_gateway: true` (#2312) runs a case's sends the way production does, up to the
 network. The send tools (`email-send`, `email-reply`, `signal-send`, `sms-send`,
-`slack-send`, `send-draft`) skip the stub table and run their real handlers, through the
+`slack-send`, `send-draft`, `ceo-inbox-send-draft`) skip the stub table and run their real handlers, through the
 ExecutionLayer's gates and production's `OutboundGateway` review: PII detection and
 redaction, the content filter, band review over the drafting turn's evidence (under the
 case's `autonomy:` fixture), holds and personal-data asks, outreach records. So do
@@ -730,6 +731,44 @@ cases' relays stay on the bus, unsent, as before. Slack and SMS relays are not w
 An `email-reply` fetches the message it answers: the fake mailbox serves the run's inbound
 email, with an Authentication-Results header that passes only when the case sets
 `inbound.email.sender_verified: true`.
+
+**The principal's mailbox** (#2474). `ceo-inbox-send-draft` sends a draft from the
+principal's own mailbox through production's `sendPrincipalDraft`: the send setting, who is
+asking, the draft's authorship and the review. Its client is a second recording fake
+(`createRecordingPrincipalMailbox`), kept apart from Curia's accounts as production keeps the
+two grants apart, so `send-draft` never finds these drafts. A send is recorded with the
+principal's address as `from` and is a delivery like any other. It holds:
+
+- the drafts `seed.principal_mailbox` seeds (below), and
+- every draft a stubbed `ceo-inbox-draft-compose` or `ceo-inbox-draft-reply` writes, as
+  Curia's; a stubbed `ceo-inbox-draft-edit` changes the stored draft (a seeded one too), and
+  leaves its author as it was. A reply stub returning `already_exists: true` is the
+  principal's existing draft, not Curia's. Recipients come from the stub's returned `to`/`cc`,
+  else the call's addresses: a contact ID is not an address and is dropped, so a compose stub
+  for a draft the case sends should return `to`.
+
+The other ceo-inbox tools stay stubbed (test mode withholds the mailbox grant). The send
+ledger is a no-op here: the real one writes working docs a real instance shares. Outside a
+through-gateway run the `ceo-inbox-mailroom` and `ceo-inbox-office` sets refuse the send in
+production's words for a send nobody asked for.
+
+```yaml
+seed:
+  principal_mailbox:
+    send_level: on_request          # optional: the run's ceo_inbox/sending level (default on_request)
+    drafts:
+      - id: draft-30v-acme
+        thread: thr-30v-acme        # optional
+        to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+        cc: []                      # optional
+        subject: Venue for the offsite
+        body: "Shall we use the Harbour Room?"
+        modified: "{{at:now-3h}}"   # optional: a date or date placeholder (default now)
+        by_curia: false             # required: whether Curia wrote it (provenance)
+```
+
+The loader rejects `principal_mailbox` on a case without `through_gateway`, unknown keys at
+every level, a duplicate draft id, an unknown `send_level` and an address outside `.test`.
 
 **Approvals.** A held send, or a tool an ExecutionLayer gate holds (through production's
 approval trigger), writes production's approval row under the run's conversation. The action

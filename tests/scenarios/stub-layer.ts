@@ -43,7 +43,7 @@ import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolRegistry } from '../../src/skills/registry.js';
 import type { ToolContext, ToolResult } from '../../src/skills/types.js';
 import { newLiveSearchTally, recordLiveCall, type LiveSearchTally } from '../shared/live-search.js';
-import { applyCaseWrites, recordedDraftRead, recordedJobRead, CaseToolState } from '../shared/tool-state.js';
+import { applyCaseWrites, recordedDraftRead, recordedJobRead, CaseToolState, type DraftMirror, type MailboxDraft } from '../shared/tool-state.js';
 import { emailAttachmentRefusal } from './attachment-guard.js';
 import { recipientReferenceRefusal } from '../shared/recipient-guard.js';
 import { matchToolStub } from './stub-matcher.js';
@@ -74,6 +74,8 @@ export const REAL_IN_DELEGATION: ReadonlySet<string> = new Set([
  * The send tools a `through_gateway` case runs for real (#2312): they skip the stub table and
  * go through production's gateway review, whose recording transports keep what passes in the
  * run. Never sent anywhere: the stack has no real transport and no outbound queue.
+ * `ceo-inbox-send-draft` (#2474) sends from the principal's own mailbox, a recording fake over
+ * the run's `seed.principal_mailbox` drafts and its stubbed draft writes (`draftMirror`).
  */
 export const THROUGH_GATEWAY_SEND_TOOLS: ReadonlySet<string> = new Set([
   'email-send',
@@ -82,6 +84,7 @@ export const THROUGH_GATEWAY_SEND_TOOLS: ReadonlySet<string> = new Set([
   'sms-send',
   'slack-send',
   'send-draft',
+  'ceo-inbox-send-draft',
 ]);
 
 /**
@@ -175,9 +178,19 @@ export interface StubController {
    * an open run. A call from a conversation with no open run — a timed-out turn from a
    * run already closed — is refused and not recorded: it must never be answered by
    * another run's stubs. `realDelegation` runs `delegate` for real (#2027); `throughGateway`
-   * runs the THROUGH_GATEWAY_TOOLS for real (#2312).
+   * runs the THROUGH_GATEWAY_TOOLS for real (#2312). `mailboxDrafts` are already in the
+   * principal's mailbox (#2474): a stubbed edit applies to them and a read returns them.
+   * `draftMirror` is told of each stubbed draft write, so the principal's mailbox the real
+   * ceo-inbox-send-draft sends from holds what the stubs wrote.
    */
-  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string, options?: { realDelegation?: boolean; throughGateway?: boolean; gatedTools?: readonly string[]; timezone?: string }): void;
+  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string, options?: {
+    realDelegation?: boolean;
+    throughGateway?: boolean;
+    gatedTools?: readonly string[];
+    timezone?: string;
+    mailboxDrafts?: readonly MailboxDraft[];
+    draftMirror?: DraftMirror;
+  }): void;
   /**
    * The registry for the stack's review layer (`wrapReviewRegistry`, #2499): the same tools,
    * except that a gated stub's call reaches its stub in place of the real handler, after the
@@ -476,11 +489,13 @@ export function createStubController(
     },
     beginRun(next, conversationId, options = {}) {
       if (runs.has(conversationId)) throw new Error(`StubController.beginRun: conversation ${conversationId} already has an open run`);
+      const tools = new CaseToolState(options.timezone, options.draftMirror);
+      for (const draft of options.mailboxDrafts ?? []) tools.drafts.preload(draft);
       runs.set(conversationId, {
         root: conversationId,
         stubs: next,
         calls: [],
-        tools: new CaseToolState(options.timezone),
+        tools,
         realDelegation: options.realDelegation === true,
         throughGateway: options.throughGateway === true,
         gatedTools: new Set(options.gatedTools ?? []),
