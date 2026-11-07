@@ -153,6 +153,35 @@ describe('BandSendReview', () => {
     expect(review.mock.calls[0]![0].questions).toEqual(['grounding']);
   });
 
+  // #2474: a principal-directed send from the principal's own mailbox.
+  describe('principal mailbox sends (#2474)', () => {
+    const mailbox: BandReviewInput = { ...base, principalDirected: true, senderProfile: 'principal-mailbox' };
+    const item: BriefDetectedItem = { id: 'P1', label: 'PHONE_NUMBER', text: '416-555-0199', field: 'body' };
+
+    it('asks no question of its own for a principal-written draft, only disclosure when items exist', async () => {
+      const { svc, review } = make([{ ok: true, disclosures: [{ id: 'P1', basis: 'directed', requested: false, reason: 'told to' }], reason: 'ok' }]);
+      await svc.review({ ...mailbox, draftAuthor: 'principal', detectedItems: [item] });
+      expect(review.mock.calls[0]![0].questions).toEqual(['disclosure']);
+      expect(review.mock.calls[0]![0].senderProfile).toBe('principal-mailbox');
+    });
+
+    it('asks purpose and grounding for a Curia-written draft', async () => {
+      const { svc, review } = make([{ ok: true, purpose: 'serving', unsupportedClaims: [], reason: 'ok' }]);
+      await svc.review({ ...mailbox, draftAuthor: 'curia' });
+      expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'grounding']);
+      expect(review.mock.calls[0]![0].senderProfile).toBe('principal-mailbox');
+    });
+
+    it('leaves every other review\'s brief without a sender profile', async () => {
+      const { svc, review } = make([clean, { ok: true, unsupportedClaims: [], reason: 'ok' }]);
+      await svc.review(base);
+      await svc.review({ ...base, principalDirected: true });
+      expect(review.mock.calls[0]![0]).not.toHaveProperty('senderProfile');
+      expect(review.mock.calls[1]![0]).not.toHaveProperty('senderProfile');
+      expect(review.mock.calls[1]![0].questions).toEqual(['grounding']);
+    });
+  });
+
   it('bounces once with the quoted claim, then blocks a second occurrence at 84 with no recheck call', async () => {
     const { svc, review } = make([
       { ...clean, unsupportedClaims: [CLAIM] }, // first send: bounce
