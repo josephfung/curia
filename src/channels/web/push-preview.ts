@@ -4,18 +4,23 @@
 const PREVIEW_CHARS = 100;
 export const HIDDEN_PREVIEW = 'New message from Curia';
 
+// The text can come from outside (an inbound message), so every pattern below must
+// stay linear. A link's label and destination stop at the next `[`, and an italic
+// span stops at the next marker, and a list marker's indent never crosses a line:
+// otherwise a long run of unclosed `[`, `[a](`, ` *a` or blank lines makes each
+// match attempt scan to the end of the text (quadratic).
 function stripMarkdown(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`([^`]+)`/g, '$1')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/!\[[^[\]]*\]\([^)[]*\)/g, ' ')
+    .replace(/\[([^[\]]+)\]\([^)[]*\)/g, '$1')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/(\*\*|__)(.*?)\1/g, '$2')
-    .replace(/(^|\s)\*(\S(?:.*?\S)?)\*(?=\s|$)/g, '$1$2')
-    .replace(/(^|\s)_(\S(?:.*?\S)?)_(?=\s|$)/g, '$1$2')
-    .replace(/^\s*[-*+]\s+/gm, '')
-    .replace(/^\s*\d+\.\s+/gm, '');
+    .replace(/(^|\s)\*([^\s*](?:[^*\n]*[^\s*])?)\*(?=\s|$)/g, '$1$2')
+    .replace(/(^|\s)_([^\s_](?:[^_\n]*[^\s_])?)_(?=\s|$)/g, '$1$2')
+    .replace(/^[^\S\n]*[-*+]\s+/gm, '')
+    .replace(/^[^\S\n]*\d+\.\s+/gm, '');
 }
 
 export function pushPreview(text: string, hidePreviews: boolean): string {

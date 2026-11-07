@@ -77,7 +77,9 @@ export function inlineMarkdownToMrkdwn(input: string): string {
   let text = input.replace(/`([^`]+)`/g, (_m, code: string) => park(`\`${code}\``));
 
   // 2. Links: [label](url) → <url|label>
-  text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) => {
+  // Label and url stop at the next `[`, so a long run of unclosed `[` or `[a](` in
+  // inbound text can't make each match attempt scan to the end (quadratic).
+  text = text.replace(/\[([^[\]]+)\]\(([^)\s[]+)\)/g, (_m, label: string, url: string) => {
     return `<${url}|${label}>`;
   });
 

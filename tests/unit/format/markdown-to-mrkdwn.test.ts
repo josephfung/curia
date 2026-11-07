@@ -12,6 +12,16 @@ describe('markdownToMrkdwn', () => {
     );
   });
 
+  it.each([
+    ['unclosed link openers', '[a'],
+    ['unclosed link destinations', '[a]('],
+  ])('converts links after a long run of %s in linear time', (_name, unit) => {
+    const started = performance.now();
+    const out = markdownToMrkdwn(`See [docs](https://example.com) ${unit.repeat(50_000)}`);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(out.startsWith('See <https://example.com|docs> ')).toBe(true);
+  });
+
   it('converts headings to bold lines', () => {
     expect(markdownToMrkdwn('## Next steps')).toBe('*Next steps*');
   });
