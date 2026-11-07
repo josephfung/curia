@@ -638,6 +638,44 @@ interface FirstContactProbe {
   /** Step 1's contact lookup threw, so contactId says nothing. */
   lookupFailed: boolean;
 }
+/** Which mailbox a draft send goes out from, and what it is recorded as (#2474). */
+interface DraftSendProfile {
+  mailbox: 'curia' | 'principal';
+  /** Recorded on the sent action and named in reports. */
+  toolName: string;
+  /** Principal mailbox only: who wrote the draft. */
+  author?: 'curia' | 'principal';
+}
+/** sendEmailDraft's options, passed through to the draft checks unchanged. */
+interface DraftSendOptions {
+  humanApproved?: boolean;
+  principalDirected?: boolean;
+  /** The principal approved this draft as written (an approval replay): sent intact (#2312). */
+  principalApproved?: boolean;
+  conversationId?: string;
+  taskEventId?: string;
+  parentEventId?: string;
+  /** What to replay on approval if band review holds this draft (#2159). */
+  holdRecipe?: SendRecipe;
+}
+/**
+ * checkDraftSend's verdict: a result that stops the send, or what Steps 3–4 need. The redacted
+ * copies and detected items ride along because the audit events must never see raw values (#2312).
+ */
+type DraftCheckOutcome =
+  | { result: OutboundSendResult }
+  | {
+    proceed: {
+      recipient: FirstContactProbe;
+      band: { report?: BandReviewReport; signals?: BandReviewSignals };
+      detectedItems: BriefDetectedItem[];
+      redactedBody: string;
+      redactedSubject: string;
+      /** The draft's full envelope (To + CC + BCC), or the primary recipient alone. */
+      envelope: string[];
+      principalIsSoleRecipient: boolean;
+    };
+  };
 /** First line, at most 80 characters: enough to recognise the message on a phone. */
 function truncatePreview(text: string): string {
   const line = text.split('\n').find((l) => l.trim() !== '')?.trim() ?? '';
@@ -3735,7 +3773,7 @@ export class OutboundGateway {
    * Nylas's drafts.send() endpoint — preserving the draft's full envelope (all To,
    * CC, BCC recipients) and removing the draft from DRAFTS after delivery.
    *
-   * Safety pipeline:
+   * Safety pipeline (Steps 1–2.5 run in checkDraftSend, #2474):
    *   0. Autonomy gate — skipped when options.humanApproved is true (principal in the loop)
    *   1. Blocked-contact check on the primary To recipient
    *   1.5 PII detection on the body and subject (#2312)
@@ -3762,17 +3800,7 @@ export class OutboundGateway {
     draftId: string,
     accountId: string | undefined,
     draftMeta: { recipientEmail: string; body: string; subject: string; allRecipients?: string[] },
-    options?: {
-      humanApproved?: boolean;
-      principalDirected?: boolean;
-      /** The principal approved this draft as written (an approval replay): sent intact (#2312). */
-      principalApproved?: boolean;
-      conversationId?: string;
-      taskEventId?: string;
-      parentEventId?: string;
-      /** What to replay on approval if band review holds this draft (#2159). */
-      holdRecipe?: SendRecipe;
-    },
+    options?: DraftSendOptions,
   ): Promise<OutboundSendResult> {
     // Closes the second outbound surface (#2474, design D1); see send(). Fail-closed.
     if (this.isPrincipalMailbox(accountId)) {
@@ -3841,6 +3869,114 @@ export class OutboundGateway {
       }
     }
 
+    const profile: DraftSendProfile = { mailbox: 'curia', toolName: 'send-draft' };
+    const checked = await this.checkDraftSend({ profile, draftId, draftMeta, autonomy, options });
+    if ('result' in checked) return checked.result;
+    const {
+      recipient: draftRecipientProbe,
+      band: { report: bandReport, signals: bandSignals },
+      detectedItems,
+      redactedBody,
+      redactedSubject,
+      envelope: draftEnvelope,
+      principalIsSoleRecipient: draftPrincipalSole,
+    } = checked.proceed;
+    const { recipientEmail } = draftMeta;
+
+    // ------------------------------------------------------------------
+    // Step 3: Dispatch via Nylas drafts.send() — sends the actual draft
+    // ------------------------------------------------------------------
+    const nylasClient = this.getNylasClient(accountId);
+    if (!nylasClient) {
+      return {
+        success: false,
+        blockedReason: `Email client not configured for account: ${accountId ?? 'primary'}`,
+      };
+    }
+
+    // The checks above read the draft as fetched, and the send is by id after a review that can
+    // take seconds. Send only if the draft is still what was checked (#2312): an edit in the
+    // meantime gets checked again on the next send, not sent unchecked.
+    if (await this.draftChangedSinceFetch(nylasClient, draftId, draftMeta)) {
+      return {
+        success: false,
+        blockedReason: 'The draft changed while it was being checked, so it was not sent. Send it again to check the current version.',
+      };
+    }
+
+    let sentMessage: NylasMessage;
+    try {
+      sentMessage = await nylasClient.sendDraft(draftId);
+      this.log.info(
+        { messageId: sentMessage.id, draftId, accountId, recipientId: redactId(recipientEmail) },
+        'outbound-gateway: draft sent successfully',
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error(
+        { err, draftId, accountId },
+        'outbound-gateway: Nylas sendDraft failed',
+      );
+      return { success: false, blockedReason: `Draft send failed: ${message}` };
+    }
+
+    // ------------------------------------------------------------------
+    // Step 4: Contact promotion (same as send())
+    // ------------------------------------------------------------------
+    // No toFromOwnMessage check here, on purpose: a draft send is principal-approved,
+    // and that approval is what makes its To `known` (ADR-047). It holds for the
+    // adapter's gated-fallback draft of a reply to Curia's own message too (#2273).
+    await this.promoteOrCreateRecipientContact('email', recipientEmail);
+
+    // Emit the audit event — sendEmailDraft() is a genuine wire send and must
+    // produce the same outbound.delivered record as send().
+    await this.publishDelivered({
+      channel: 'email',
+      recipientId: recipientEmail,
+      recipientContactId: draftRecipientProbe.contactId,
+      // Never the raw values (#2312): the redacted copy, an approved draft's included.
+      content: redactedBody,
+      messageId: sentMessage.id,
+      ...(sentMessage.threadId ? { threadId: sentMessage.threadId } : {}),
+      conversationId: options?.conversationId,
+      taskEventId: options?.taskEventId,
+      parentEventId: options?.parentEventId,
+      ...(detectedItems.length > 0 ? { disclosed: detectedItems.map(({ label, field }) => ({ label, field })) } : {}),
+    });
+    // Spot-check pool (#2159 Phase 3). Keyed on principalDirected, not humanApproved, for
+    // the reason given at the band review in checkDraftSend: send-draft sets humanApproved on every call.
+    if (options?.principalDirected !== true && !draftPrincipalSole) {
+      await this.recordSentAction({
+        channel: 'email',
+        toolName: profile.toolName,
+        recipientLabel: draftEnvelope.join(', '),
+        // The redacted copy, as in send(): the draft itself when nothing was detected (#2312).
+        preview: redactedSubject || redactedBody,
+        recipient: draftRecipientProbe,
+        band: { report: bandReport, signals: bandSignals },
+        options,
+      });
+    }
+    if (bandReport) await this.publishBandReport(bandReport, options);
+
+    // The thread, as send() returns it (#2333): one delivery contract for both.
+    return { success: true, messageId: sentMessage.id, ...(sentMessage.threadId ? { threadId: sentMessage.threadId } : {}) };
+  }
+
+  /**
+   * Steps 1–2.5 of a draft send (#2474): blocked contacts, identity gate, PII detection, content
+   * filter and band review. Factored out of sendEmailDraft so the principal-mailbox entry point
+   * runs the same checks. Returns the caller's result when a step stops the send, else what
+   * Steps 3–4 need to send it and record it.
+   */
+  private async checkDraftSend(args: {
+    profile: DraftSendProfile;
+    draftId: string;
+    draftMeta: { recipientEmail: string; body: string; subject: string; allRecipients?: string[] };
+    autonomy: AutonomyRead;
+    options: DraftSendOptions | undefined;
+  }): Promise<DraftCheckOutcome> {
+    const { draftId, draftMeta, autonomy, options } = args;
     const { recipientEmail, body } = draftMeta;
 
     // ------------------------------------------------------------------
@@ -3860,7 +3996,7 @@ export class OutboundGateway {
             { draftId, recipientId: redactId(recipientEmail), contactId: contact.contactId },
             'outbound-gateway: draft send blocked — recipient is blocked',
           );
-          return { success: false, blockedReason: 'Recipient is blocked' };
+          return { result: { success: false, blockedReason: 'Recipient is blocked' } };
         }
         recipientTierForDraft = contact.tier;
         recipientContactIdForDraft = contact.contactId; // hoisted for outbound.delivered audit
@@ -3893,7 +4029,7 @@ export class OutboundGateway {
         { draftId, recipientId: redactId(blockedOther.identifier), contactId: blockedOther.contactId },
         'outbound-gateway: draft send blocked — a recipient is blocked',
       );
-      return { success: false, blockedReason: 'Recipient is blocked' };
+      return { result: { success: false, blockedReason: 'Recipient is blocked' } };
     }
 
     // After Step 1, same rule as send() (#1818). A draft that leaves the
@@ -3922,10 +4058,12 @@ export class OutboundGateway {
       : [recipientEmail];
 
     if (identityBlock) {
-      return this.withUnmatchedRecipientNote(
-        identityBlock,
-        await this.findUnmatchedRecipients('email', draftEnvelope),
-      );
+      return {
+        result: this.withUnmatchedRecipientNote(
+          identityBlock,
+          await this.findUnmatchedRecipients('email', draftEnvelope),
+        ),
+      };
     }
 
     const { recipients: draftRecipients, principalIncluded: draftPrincipalIncluded, principalIsSoleRecipient: draftPrincipalSole } = this.buildRecipientSet(draftEnvelope);
@@ -3968,7 +4106,7 @@ export class OutboundGateway {
         redactedBody = redactor.apply(body, bodyItems, 'email', ctx, { audit: false }).content;
         if (draftMeta.subject) redactedSubject = redactor.apply(draftMeta.subject, subjectItems, 'email', ctx, { audit: false }).content;
       } catch (err) {
-        return this.blockForRedactorError(err, draftRequest, body, recipientEmail, options);
+        return { result: await this.blockForRedactorError(err, draftRequest, body, recipientEmail, options) };
       }
     }
     const gating = this.currentGating(autonomy);
@@ -3983,8 +4121,10 @@ export class OutboundGateway {
       const labels = [...new Set(detectedItems.map((d) => d.label))].join(', ');
       this.log.info({ draftId, labels }, 'outbound-gateway: draft send refused — it contains personal data that cannot be redacted in place');
       return {
-        success: false,
-        blockedReason: `Not sent: this draft contains ${labels}, which can't be sent to this recipient. Edit the draft to remove them, or ask the principal.`,
+        result: {
+          success: false,
+          blockedReason: `Not sent: this draft contains ${labels}, which can't be sent to this recipient. Edit the draft to remove them, or ask the principal.`,
+        },
       };
     }
 
@@ -4073,14 +4213,16 @@ export class OutboundGateway {
       // obeys buildBlockReasonSummary's per-rule contract — only an LLM-judge finding's
       // abstract detail is included, never a Stage-1 rule's matched fragment; blockedRules
       // carries rule names only. Mirrors the send() block path (#1051).
-      return this.withUnmatchedRecipientNote(
-        {
-          success: false,
-          blockedReason: reasonSummary,
-          blockedRules: filterFindings.map((f) => f.rule),
-        },
-        unmatched,
-      );
+      return {
+        result: this.withUnmatchedRecipientNote(
+          {
+            success: false,
+            blockedReason: reasonSummary,
+            blockedRules: filterFindings.map((f) => f.rule),
+          },
+          unmatched,
+        ),
+      };
     }
 
     // ------------------------------------------------------------------
@@ -4112,90 +4254,23 @@ export class OutboundGateway {
         options,
         editable: false,
       });
-      if (outcome.result) return outcome.result;
+      if (outcome.result) return { result: outcome.result };
       bandReport = outcome.report;
       bandSignals = outcome.signals;
     }
 
-    // ------------------------------------------------------------------
-    // Step 3: Dispatch via Nylas drafts.send() — sends the actual draft
-    // ------------------------------------------------------------------
-    const nylasClient = this.getNylasClient(accountId);
-    if (!nylasClient) {
-      return {
-        success: false,
-        blockedReason: `Email client not configured for account: ${accountId ?? 'primary'}`,
-      };
-    }
-
-    // The checks above read the draft as fetched, and the send is by id after a review that can
-    // take seconds. Send only if the draft is still what was checked (#2312): an edit in the
-    // meantime gets checked again on the next send, not sent unchecked.
-    if (await this.draftChangedSinceFetch(nylasClient, draftId, draftMeta)) {
-      return {
-        success: false,
-        blockedReason: 'The draft changed while it was being checked, so it was not sent. Send it again to check the current version.',
-      };
-    }
-
-    let sentMessage: NylasMessage;
-    try {
-      sentMessage = await nylasClient.sendDraft(draftId);
-      this.log.info(
-        { messageId: sentMessage.id, draftId, accountId, recipientId: redactId(recipientEmail) },
-        'outbound-gateway: draft sent successfully',
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.log.error(
-        { err, draftId, accountId },
-        'outbound-gateway: Nylas sendDraft failed',
-      );
-      return { success: false, blockedReason: `Draft send failed: ${message}` };
-    }
-
-    // ------------------------------------------------------------------
-    // Step 4: Contact promotion (same as send())
-    // ------------------------------------------------------------------
-    // No toFromOwnMessage check here, on purpose: a draft send is principal-approved,
-    // and that approval is what makes its To `known` (ADR-047). It holds for the
-    // adapter's gated-fallback draft of a reply to Curia's own message too (#2273).
-    await this.promoteOrCreateRecipientContact('email', recipientEmail);
-
-    // Emit the audit event — sendEmailDraft() is a genuine wire send and must
-    // produce the same outbound.delivered record as send().
-    await this.publishDelivered({
-      channel: 'email',
-      recipientId: recipientEmail,
-      recipientContactId: recipientContactIdForDraft,
-      // Never the raw values (#2312): the redacted copy, an approved draft's included.
-      content: redactedBody,
-      messageId: sentMessage.id,
-      ...(sentMessage.threadId ? { threadId: sentMessage.threadId } : {}),
-      conversationId: options?.conversationId,
-      taskEventId: options?.taskEventId,
-      parentEventId: options?.parentEventId,
-      ...(detectedItems.length > 0 ? { disclosed: detectedItems.map(({ label, field }) => ({ label, field })) } : {}),
-    });
-    // Spot-check pool (#2159 Phase 3). Keyed on principalDirected, not humanApproved, for
-    // the reason given at the band review above: send-draft sets humanApproved on every call.
-    if (options?.principalDirected !== true && !draftPrincipalSole) {
-      await this.recordSentAction({
-        channel: 'email',
-        toolName: 'send-draft',
-        recipientLabel: draftEnvelope.join(', '),
-        // The redacted copy, as in send(): the draft itself when nothing was detected (#2312).
-        preview: redactedSubject || redactedBody,
+    return {
+      proceed: {
         // A draft's recipient is always an email address, so always a person.
         recipient: { person: true, contactId: recipientContactIdForDraft, lookupFailed: recipientTierUnresolvedForDraft },
         band: { report: bandReport, signals: bandSignals },
-        options,
-      });
-    }
-    if (bandReport) await this.publishBandReport(bandReport, options);
-
-    // The thread, as send() returns it (#2333): one delivery contract for both.
-    return { success: true, messageId: sentMessage.id, ...(sentMessage.threadId ? { threadId: sentMessage.threadId } : {}) };
+        detectedItems,
+        redactedBody,
+        redactedSubject,
+        envelope: draftEnvelope,
+        principalIsSoleRecipient: draftPrincipalSole,
+      },
+    };
   }
 
   /**
