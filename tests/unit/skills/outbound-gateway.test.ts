@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
+import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, PRINCIPAL_SEND_REFUSALS, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -5785,5 +5785,405 @@ describe('spot-check pool (#2159 Phase 3)', () => {
       await gw.sendEmailDraft('d1', 'curia', draftMeta, { humanApproved: true, principalDirected: true, taskEventId: 't1' });
       expect(actionLogRepo.insertSampled).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('sendPrincipalDraft (#2474)', () => {
+  let mocks: ReturnType<typeof createMocks>;
+  beforeEach(() => {
+    mocks = createMocks();
+  });
+
+  const PRINCIPAL = 'avery@example.com';
+  const PRINCIPAL_PHONE = '+14165550100';
+  const live = { liveTurn: true, taskMetadata: { originator: { contactId: 'ceo-contact-id', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
+  const opts = { authority: live, taskEventId: 't1', conversationId: 'c1' };
+
+  function draft(over: Partial<NylasMessage> = {}): NylasMessage {
+    return {
+      id: 'd1', threadId: 'th1', subject: 'Re: Friday', from: [{ email: PRINCIPAL }],
+      to: [{ email: 'dana@example.org' }], cc: [], bcc: [],
+      body: '<p>Friday works. See you then.</p>', snippet: '', date: 0, unread: false, folders: ['DRAFTS'], attachments: [],
+      ...over,
+    } as NylasMessage;
+  }
+
+  function mailboxClient(d: NylasMessage | null = draft()) {
+    return {
+      getDraft: vi.fn().mockResolvedValue(d),
+      sendDraft: vi.fn().mockResolvedValue({ id: 'sent-1', threadId: 'th1' }),
+      listMessages: vi.fn().mockResolvedValue([]),
+    };
+  }
+
+  function make(o: {
+    client?: ReturnType<typeof mailboxClient> | null;
+    level?: 'off' | 'on_request' | 'routine' | 'all';
+    createdByCuria?: string[] | Error;
+    review?: ReturnType<typeof vi.fn>;
+    score?: number;
+    piiRedactor?: PiiRedactor;
+    actionLogRepo?: ActionLogRepo;
+    ledger?: { recordSending: ReturnType<typeof vi.fn>; recordSent: ReturnType<typeof vi.fn> };
+    conversationEntities?: import('../../../src/entity-context/conversation-entities.js').ConversationEntityState;
+    withoutProvenance?: true;
+  } = {}) {
+    const client = o.client === undefined ? mailboxClient() : o.client;
+    const review = o.review ?? vi.fn().mockResolvedValue({ kind: 'send' });
+    const createdByCuria = vi.fn(async () => {
+      if (o.createdByCuria instanceof Error) throw o.createdByCuria;
+      return new Set(o.createdByCuria ?? []);
+    });
+    const ledger = o.ledger ?? { recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined) };
+    const readSendLevel = vi.fn().mockResolvedValue(o.level ?? 'on_request');
+    const actionLogRepo = o.actionLogRepo ?? makeActionLogRepo();
+    (mocks.contactService as unknown as { createContact: ReturnType<typeof vi.fn> }).createContact = vi.fn().mockResolvedValue({ id: 'new' });
+    const gw = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [
+        makePrincipalIdentity(PRINCIPAL),
+        { ...makePrincipalIdentity(PRINCIPAL_PHONE, 'signal'), id: 'pi-signal-1' },
+      ],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(o.score ?? 84),
+      actionLogRepo,
+      gating: 'band',
+      bandReview: { review: review as unknown as BandSendReview['review'] },
+      ...(o.piiRedactor ? { piiRedactor: o.piiRedactor } : {}),
+      ...(o.conversationEntities ? { conversationEntities: o.conversationEntities } : {}),
+      principalMailbox: async () => client as unknown as NylasClient | null,
+      readSendLevel,
+      ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria } }),
+      sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent'>,
+    });
+    return { gw, client, review, createdByCuria, ledger, readSendLevel, actionLogRepo };
+  }
+
+  function published(type: string): Array<{ type: string; payload: Record<string, unknown> }> {
+    return vi.mocked(mocks.bus.publish).mock.calls
+      .map(([, event]) => event as unknown as { type: string; payload: Record<string, unknown> })
+      .filter((e) => e.type === type);
+  }
+
+  /** A redactor that detects each listed text wherever it occurs in what it is given. */
+  function redactorFor(found: Array<{ label: string; text: string }>): PiiRedactor & { detect: ReturnType<typeof vi.fn> } {
+    const detect = vi.fn((content: string) => found
+      .filter((f) => content.includes(f.text))
+      .map((f) => ({ label: f.label, matched: f.text, start: content.indexOf(f.text), end: content.indexOf(f.text) + f.text.length })));
+    return {
+      detect,
+      apply: vi.fn((content: string) => ({ content, redactions: [] })),
+      redact: vi.fn(),
+    } as unknown as PiiRedactor & { detect: ReturnType<typeof vi.fn> };
+  }
+
+  // ---- one test per step ----
+
+  it('1. refuses with mailbox_unavailable when the principal mailbox is not connected', async () => {
+    const { gw } = make({ client: null });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'mailbox_unavailable', blockedReason: PRINCIPAL_SEND_REFUSALS.mailbox_unavailable });
+  });
+
+  it('2. refuses with setting_off when sending is off for the mailbox', async () => {
+    const { gw, client, readSendLevel } = make({ level: 'off' });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'setting_off' });
+    expect(readSendLevel).toHaveBeenCalledWith('default');
+    expect(client!.getDraft).not.toHaveBeenCalled();
+  });
+
+  it('2. reads the named mailbox\'s level', async () => {
+    const { gw, readSendLevel } = make();
+    await gw.sendPrincipalDraft('d1', { ...opts, mailbox: 'work' });
+    expect(readSendLevel).toHaveBeenCalledWith('work');
+  });
+
+  it('3. refuses an approval replay with approval_replay', async () => {
+    const { gw, client } = make();
+    const r = await gw.sendPrincipalDraft('d1', { ...opts, authority: { ...live, humanApproved: true } });
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'approval_replay', blockedReason: PRINCIPAL_SEND_REFUSALS.approval_replay });
+    expect(client!.getDraft).not.toHaveBeenCalled();
+  });
+
+  it('3. refuses an autonomous call with not_requested', async () => {
+    const { gw, client } = make({ level: 'all' });
+    const system = { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } };
+    const r = await gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } });
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'not_requested', blockedReason: PRINCIPAL_SEND_REFUSALS.not_requested });
+    expect(client!.getDraft).not.toHaveBeenCalled();
+  });
+
+  it('4. refuses with not_found when the draft is gone, without retrying', async () => {
+    const client = mailboxClient(null);
+    const { gw } = make({ client });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'not_found', blockedReason: PRINCIPAL_SEND_REFUSALS.not_found });
+    expect(client.getDraft).toHaveBeenCalledTimes(1);
+    expect(client.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('4. refuses with lookup_failed when the draft read throws', async () => {
+    const client = mailboxClient();
+    client.getDraft.mockRejectedValue(new Error('503'));
+    const { gw } = make({ client });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'lookup_failed' });
+    expect(client.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('5. refuses a draft with no recipients', async () => {
+    const { gw } = make({ client: mailboxClient(draft({ to: [], cc: [], bcc: [] })) });
+    expect(await gw.sendPrincipalDraft('d1', opts)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'no_recipients' });
+  });
+
+  it('5. refuses a draft addressed only to the principal', async () => {
+    const { gw, client } = make({ client: mailboxClient(draft({ to: [{ email: 'Avery@Example.com' }], cc: [{ email: PRINCIPAL }] })) });
+    expect(await gw.sendPrincipalDraft('d1', opts)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'principal_only', blockedReason: PRINCIPAL_SEND_REFUSALS.principal_only });
+    expect(client!.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('6. treats a draft as Curia\'s when provenance is absent or throws: more review', async () => {
+    for (const setup of [{ withoutProvenance: true as const }, { createdByCuria: new Error('db down') }]) {
+      const review = vi.fn().mockResolvedValue({ kind: 'send' });
+      const { gw } = make({ ...setup, review });
+      expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+      expect(review).toHaveBeenCalledWith(expect.objectContaining({ draftAuthor: 'curia' }));
+    }
+  });
+
+  it('7. reviews through checkDraftSend with the principal-mailbox profile', async () => {
+    const { gw, review, createdByCuria } = make({ createdByCuria: ['d1'] });
+    await gw.sendPrincipalDraft('d1', opts);
+    expect(createdByCuria).toHaveBeenCalledWith(['d1']);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      senderProfile: 'principal-mailbox', draftAuthor: 'curia', principalDirected: true, recipients: ['dana@example.org'], principalRecipients: [],
+    }));
+  });
+
+  it('8. refuses with draft_changed when the draft changed during the checks', async () => {
+    const client = mailboxClient();
+    client.getDraft.mockResolvedValueOnce(draft()).mockResolvedValueOnce(draft({ body: '<p>Friday works. Bring the cheque.</p>' }));
+    const { gw, ledger } = make({ client });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'draft_changed', blockedReason: PRINCIPAL_SEND_REFUSALS.draft_changed });
+    expect(PRINCIPAL_SEND_REFUSALS.draft_changed).toBe('The draft changed while Curia was checking it. Nothing was sent; read the latest version and ask the principal again.');
+    expect(client.sendDraft).not.toHaveBeenCalled();
+    expect(ledger.recordSending).not.toHaveBeenCalled();
+  });
+
+  it('8. refuses with not_found when the draft vanished during the checks', async () => {
+    const client = mailboxClient();
+    client.getDraft.mockResolvedValueOnce(draft()).mockResolvedValueOnce(null);
+    const { gw } = make({ client });
+    expect(await gw.sendPrincipalDraft('d1', opts)).toMatchObject({ success: false, refusal: 'not_found' });
+    expect(client.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('9. writes the ledger around the send, and a ledger failure does not stop it', async () => {
+    const ledger = { recordSending: vi.fn().mockRejectedValue(new Error('db down')), recordSent: vi.fn().mockRejectedValue(new Error('db down')) };
+    const { gw, client } = make({ ledger });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r.success).toBe(true);
+    expect(ledger.recordSending).toHaveBeenCalledWith(expect.objectContaining({
+      draftId: 'd1', threadId: 'th1', recipients: ['dana@example.org'], mode: 'principal-directed', at: expect.any(String),
+    }));
+    expect(client!.sendDraft).toHaveBeenCalledWith('d1');
+    expect(ledger.recordSent).toHaveBeenCalledWith('d1', 'sent-1');
+  });
+
+  it('10. records the send and returns what went out', async () => {
+    const { gw, actionLogRepo } = make();
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toEqual({ success: true, messageId: 'sent-1', threadId: 'th1', to: ['dana@example.org'], subject: 'Re: Friday' });
+    expect(published('outbound.delivered')).toEqual([expect.objectContaining({ payload: expect.objectContaining({ messageId: 'sent-1', recipientId: 'dana@example.org' }) })]);
+    expect(vi.mocked(actionLogRepo.insertSampled).mock.calls.map((c) => (c[0] as { toolName: string }).toolName)).toEqual(['ceo-inbox-send-draft']);
+    expect(mocks.contactService.resolveByChannelIdentity).not.toHaveBeenCalledWith('email', PRINCIPAL);
+  });
+
+  it('10. publishes the band report item of a send the review let through unreviewed', async () => {
+    const review = vi.fn().mockResolvedValue({ kind: 'send', report: { source: 'sent_without_review', summary: 'Sent unreviewed.' } });
+    const { gw } = make({ review, createdByCuria: ['d1'] });
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(published('principal.report')).toEqual([expect.objectContaining({ payload: expect.objectContaining({ source: 'sent_without_review' }) })]);
+  });
+
+  // ---- behavior ----
+
+  it('never writes an approval row on a review hold', async () => {
+    const review = vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held for the principal: it claims a meeting nobody set.', findings: [{ rule: 'ungrounded-claim', detail: 'x' }] });
+    const { gw, client, actionLogRepo, ledger } = make({ review, createdByCuria: ['d1'] });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({
+      success: false, leftAsDraft: true, refusal: 'review_hold',
+      blockedReason: 'Held for the principal: it claims a meeting nobody set. Nothing was sent; the draft is still in their Drafts folder.',
+    });
+    expect(r.gated).toBeUndefined();
+    expect(actionLogRepo.insert).not.toHaveBeenCalled();
+    expect(published('principal.report')).toHaveLength(0);
+    expect(client!.sendDraft).not.toHaveBeenCalled();
+    expect(ledger.recordSending).not.toHaveBeenCalled();
+  });
+
+  it('treats an ask hold the same way: no approval, no digest item', async () => {
+    const review = vi.fn().mockResolvedValue({
+      kind: 'hold', reason: 'Held: Dana asked for the principal\'s phone number.', findings: [{ rule: 'pii-not-authorized', detail: 'x' }],
+      ask: { labels: ['PHONE_NUMBER'], requester: 'dana@example.org', counterparties: ['dana@example.org'] },
+    });
+    const { gw, actionLogRepo } = make({ review, createdByCuria: ['d1'] });
+    expect(await gw.sendPrincipalDraft('d1', opts)).toMatchObject({ success: false, refusal: 'review_hold' });
+    expect(actionLogRepo.insert).not.toHaveBeenCalled();
+    expect(published('principal.report')).toHaveLength(0);
+  });
+
+  it('treats a review block as a hold that leaves the draft', async () => {
+    const review = vi.fn().mockResolvedValue({ kind: 'block', reason: 'Not sent: x', findings: [{ rule: 'ungrounded-claim', detail: 'x' }] });
+    const { gw, client } = make({ review, createdByCuria: ['d1'] });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'review_hold' });
+    expect(r.blockedReason).toContain('ungrounded-claim');
+    expect(r.blockedReason).toMatch(/Nothing was sent; the draft is still in their Drafts folder\.$/);
+    expect(published('principal.report')).toHaveLength(0);
+    expect(published('outbound.blocked')).toHaveLength(0);
+    expect(client!.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('returns a bounce\'s findings without leaving a ledger hold', async () => {
+    const findings = [{ rule: 'ungrounded-claim', detail: 'not backed: "See you then."' }];
+    const review = vi.fn().mockResolvedValue({ kind: 'bounce', findings });
+    const { gw, client, ledger } = make({ review, createdByCuria: ['d1'] });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r).toMatchObject({ success: false, blockedRules: ['ungrounded-claim'] });
+    expect(r.blockedReason).toContain('See you then.');
+    expect(r.refusal).toBeUndefined();
+    expect(ledger.recordSending).not.toHaveBeenCalled();
+    expect(client!.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('skips review for a principal-written draft with no detected items', async () => {
+    const { gw, review, client } = make();
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(review).not.toHaveBeenCalled();
+    expect(client!.sendDraft).toHaveBeenCalled();
+  });
+
+  it('asks purpose and grounding for a Curia-written draft', async () => {
+    const { gw, review } = make({ createdByCuria: ['d1'] });
+    await gw.sendPrincipalDraft('d1', opts);
+    expect(review).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ draftAuthor: 'curia', senderProfile: 'principal-mailbox', principalDirected: true }));
+  });
+
+  it('does not flag the principal\'s own phone on a principal-directed send', async () => {
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '+1 (416) 555-0100' }, { label: 'EMAIL', text: 'Avery@Example.com' }]);
+    const body = '<p>Call me at +1 (416) 555-0100 or write to Avery@Example.com.</p>';
+    const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body })) });
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it('reviews a third party\'s detail in a principal-written draft', async () => {
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
+    const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body: '<p>Sam\'s cell is 416-555-0199.</p>' })) });
+    await gw.sendPrincipalDraft('d1', opts);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      draftAuthor: 'principal', detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'body' })],
+    }));
+  });
+
+  it('exempts the reply quote from PII detection', async () => {
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
+    const body = '<p>Got it, thanks.</p><div class="gmail_quote">On Thu, Dana wrote: call me at 416-555-0199</div>';
+    const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body })) });
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(review).not.toHaveBeenCalled();
+    expect(piiRedactor.detect.mock.calls.map((c) => c[0])).not.toContain(body);
+  });
+
+  it('still runs the content filter over the quote', async () => {
+    const body = '<p>Got it.</p><div class="gmail_quote">On Thu, Dana wrote: SECRET-QUOTE</div>';
+    const { gw } = make({ client: mailboxClient(draft({ body })) });
+    await gw.sendPrincipalDraft('d1', opts);
+    expect(mocks.contentFilter.check).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('SECRET-QUOTE') }));
+  });
+
+  it('does not block a principal-written draft naming people at the identity gate', async () => {
+    const { ConversationEntityState } = await import('../../../src/entity-context/conversation-entities.js');
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Avery Lee']);
+    entities.turnIdentities.begin('t1');
+    const body = '<p>He and Xiaopu (last name to be confirmed) would like to attend.</p>';
+    const principalWritten = make({ conversationEntities: entities, client: mailboxClient(draft({ body })) });
+    expect((await principalWritten.gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+
+    // A Curia-written draft is still checked.
+    const curiaWritten = make({ conversationEntities: entities, createdByCuria: ['d1'], client: mailboxClient(draft({ body })) });
+    expect(await curiaWritten.gw.sendPrincipalDraft('d1', opts)).toMatchObject({ success: false, blockedRules: ['unresolved-identity'] });
+  });
+
+  it('still refuses a draft to a blocked contact', async () => {
+    vi.mocked(mocks.contactService.resolveByChannelIdentity).mockResolvedValue({
+      contactId: 'c-dana', displayName: 'Dana', role: null, tier: 'blocked', kind: 'person', kgNodeId: null, verified: true,
+    } as unknown as Awaited<ReturnType<ContactService['resolveByChannelIdentity']>>);
+    const { gw, client } = make();
+    expect(await gw.sendPrincipalDraft('d1', opts)).toMatchObject({ success: false, blockedReason: 'Recipient is blocked', leftAsDraft: true });
+    expect(client!.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('send-draft still records send-draft', async () => {
+    (mocks.nylasClient as unknown as { sendDraft: ReturnType<typeof vi.fn> }).sendDraft = vi.fn().mockResolvedValue({ id: 'sent-2' });
+    const { gw, actionLogRepo } = make();
+    await gw.sendEmailDraft('d2', 'curia', { recipientEmail: 'dana@example.org', body: 'Hi Dana.', subject: 'Hello' }, { humanApproved: true, principalDirected: false, taskEventId: 't1' });
+    expect(vi.mocked(actionLogRepo.insertSampled).mock.calls.map((c) => (c[0] as { toolName: string }).toolName)).toEqual(['send-draft']);
+  });
+
+  // ---- Review Focus ----
+
+  it('keeps the principal\'s own address out of the reviewed audience', async () => {
+    const d = draft({ to: [{ email: 'dana@example.org' }], cc: [{ email: PRINCIPAL }, { email: 'sam@example.org' }] });
+    const { gw, review, client } = make({ client: mailboxClient(d), createdByCuria: ['d1'] });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r.success).toBe(true);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ recipients: ['dana@example.org', 'sam@example.org'], principalRecipients: [] }));
+    expect(r.to).toEqual(['dana@example.org', 'sam@example.org']);
+    expect(client!.sendDraft).toHaveBeenCalled();
+  });
+
+  it('falls back to cc for the primary recipient', async () => {
+    const d = draft({ to: [{ email: PRINCIPAL }], cc: [{ email: 'sam@example.org' }], bcc: [{ email: 'lee@example.org' }] });
+    const { gw } = make({ client: mailboxClient(d) });
+    expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(published('outbound.delivered')[0]!.payload).toMatchObject({ recipientId: 'sam@example.org' });
+
+    mocks = createMocks();
+    const bccOnly = draft({ to: [], cc: [], bcc: [{ email: 'lee@example.org' }] });
+    const second = make({ client: mailboxClient(bccOnly) });
+    expect((await second.gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(published('outbound.delivered')[0]!.payload).toMatchObject({ recipientId: 'lee@example.org' });
+  });
+
+  it('does not retry a failed send and reports it', async () => {
+    const client = mailboxClient();
+    client.sendDraft.mockRejectedValue(Object.assign(new Error('Nylas 503'), { statusCode: 503 }));
+    const { gw, ledger } = make({ client });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    expect(r.success).toBe(false);
+    expect(r.blockedReason).toContain('Nylas 503');
+    expect(client.sendDraft).toHaveBeenCalledTimes(1);
+    expect(ledger.recordSending).toHaveBeenCalledOnce();
+    expect(ledger.recordSent).not.toHaveBeenCalled();
+    expect(published('outbound.delivered')).toHaveLength(0);
+  });
+
+  it('matches addresses case-insensitively', async () => {
+    const d = draft({ to: [{ email: 'Dana@Example.ORG' }], cc: [{ email: 'AVERY@example.com' }, { email: 'dana@example.org' }] });
+    const client = mailboxClient(d);
+    const { gw, review } = make({ client, createdByCuria: ['d1'] });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    // The re-read returns the same mixed-case draft: not a change.
+    expect(r).toMatchObject({ success: true, to: ['dana@example.org'] });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ recipients: ['dana@example.org'] }));
   });
 });

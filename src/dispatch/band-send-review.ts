@@ -152,6 +152,10 @@ export interface BandReviewInput {
   subject?: string;
   /** Resolved contact ids by lowercased recipient id, for matching a reply-to-task link's counterparties (#2312). */
   recipientContactIds?: Readonly<Record<string, string>>;
+  /** The send goes out from the principal's own mailbox (#2474): the brief says it speaks as the principal. */
+  senderProfile?: 'principal-mailbox';
+  /** Principal mailbox only: who wrote the draft (#2474). Decides the questions on a principal-directed send. */
+  draftAuthor?: 'curia' | 'principal';
 }
 
 export type BandReviewReport = { source: 'sent_without_review'; summary: string };
@@ -609,6 +613,13 @@ export class BandSendReview {
   }
 
   private questionsFor(input: BandReviewInput): readonly BriefQuestion[] {
+    if (input.senderProfile === 'principal-mailbox' && input.principalDirected) {
+      // #2474 (design D2): the principal's own words are not fact-checked; only disclosure is
+      // asked, and only when items are detected. A Curia-written draft the principal told it to
+      // send is checked for who it serves and what it claims ("handle the easy ones" answers
+      // outsider mail on a live turn).
+      return input.draftAuthor === 'principal' ? [] : ['purpose', 'grounding'];
+    }
     return input.principalDirected ? ['grounding'] : ALL_QUESTIONS;
   }
 
@@ -653,6 +664,7 @@ export class BandSendReview {
         ...(principalDecisions.length > 0 ? { principalDecisions } : {}),
       },
       conversationId: input.conversationId ?? 'system',
+      ...(input.senderProfile ? { senderProfile: input.senderProfile } : {}),
     });
     return {
       verdict, authority: evidence.authority,
