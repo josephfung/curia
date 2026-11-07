@@ -138,7 +138,7 @@ export function keyedCharacter(key: string): string | null {
   return [...base].length === 1 ? base : null;
 }
 
-const CARET_OR_DELETE_KEY = /^(Delete|Arrow|Home$|End$|Page|Control\+|Meta\+|Ctrl\+|Alt\+|ControlOrMeta\+)/;
+const CARET_OR_DELETE_KEY = /^(Shift\+)?(Delete|Arrow|Home$|End$|Page|Control\+|Meta\+|Ctrl\+|Alt\+|ControlOrMeta\+)/;
 
 /** True for a key that moves the caret or deletes elsewhere (Delete, Arrow*, Home, End, Page*, Ctrl/Meta/Alt chords). */
 export function isCaretOrDeleteKey(key: string): boolean {

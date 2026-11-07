@@ -103,6 +103,16 @@ describe('provenance recording (#2498)', () => {
     expect(index.has('conv-a', 'email:support@book.example')).toBe(false);
   });
 
+  it('treats Shift+ selection keys as caret keys too', () => {
+    const index = new IdentifierSourceIndex();
+    const press = (key: string) => ({ action: 'press_key', key });
+    // `sam@.com`, Shift+ArrowLeft x4 selects `@.co`-side text; the typed `x` then replaces it.
+    const actions = [...[...'sam@.com'].map(press), ...Array.from({ length: 4 }, () => press('Shift+ArrowLeft')), press('x')];
+    call(index, 'conv-a', 'web-browser', { action: 'batch', actions, session_id: 's11' },
+      { session_id: 's11', content: 'Confirmation sent to sam@x.com' });
+    expect(index.has('conv-a', 'email:sam@x.com')).toBe(false);
+  });
+
   it('does the same when the session id arrives only in the result', () => {
     const index = new IdentifierSourceIndex();
     const press = (key: string) => ({ action: 'press_key', key });
