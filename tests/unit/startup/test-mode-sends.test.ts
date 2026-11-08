@@ -417,7 +417,7 @@ describe('an autonomous send through the recording gateway (#2474 PR 2)', () => 
     expect(reviews).toEqual([]);
     expect(recorder.sends).toEqual([]);
     expect(drafts.has('draft-30v-acme')).toBe(true);
-    expect(ledger).toEqual([expect.objectContaining({ draftId: 'draft-30v-acme', outcome: 'held', reason: expect.stringContaining('draft') })]);
+    expect(ledger).toEqual([expect.objectContaining({ draftId: 'draft-30v-acme', outcome: 'held', reasonCode: 'not_curia_draft' })]);
   });
 
   it('keeps each run\'s ledger apart: one run\'s send starts no cooldown in another', async () => {

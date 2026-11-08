@@ -85,12 +85,25 @@ describe('parseLedgerDoc', () => {
 });
 
 describe('PrincipalSendLedger autonomous lookups (#2474 PR 2)', () => {
-  it('recordHeld stores the reason', async () => {
+  // Final fixes B2 (security review L2): a code, never the free-text reason, in agent-readable /scratch.
+  it('recordHeld stores a reason code', async () => {
     const docs = makeDocs();
     const ledger = new PrincipalSendLedger(docs, logger);
-    await ledger.recordHeld({ ...entry, mode: 'autonomous', reason: 'thread_cooldown' });
-    expect(await ledger.list()).toEqual([{ ...entry, mode: 'autonomous', outcome: 'held', reason: 'thread_cooldown' }]);
-    expect(docs.create.mock.calls[0]![0].path.startsWith(`${PRINCIPAL_SEND_LEDGER_PREFIX}/d1-`)).toBe(true);
+    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'recipient_not_on_thread' });
+    expect(await ledger.list()).toEqual([{ ...entry, mode: 'autonomous', outcome: 'held', reasonCode: 'recipient_not_on_thread' }]);
+    const params = docs.create.mock.calls[0]![0];
+    expect(params.path.startsWith(`${PRINCIPAL_SEND_LEDGER_PREFIX}/d1-`)).toBe(true);
+    expect(params.frontmatter).toMatchObject({ reason_code: 'recipient_not_on_thread' });
+    expect(params.frontmatter).not.toHaveProperty('reason');
+  });
+
+  it('parses a PR 1 entry with no reason, and an earlier held entry\'s free-text reason without keeping it', async () => {
+    const docs = makeDocs();
+    await new PrincipalSendLedger(docs, logger).recordSending(entry);
+    const doc = [...docs.docs.values()][0]!;
+    expect(parseLedgerDoc(doc)).toEqual({ ...entry, outcome: 'sending' });
+    const legacyHeld = { ...doc, frontmatter: { ...doc.frontmatter, mode: 'autonomous', outcome: 'held', reason: 'The reply goes to bob@example.org.' } };
+    expect(parseLedgerDoc(legacyHeld)).toEqual({ ...entry, mode: 'autonomous', outcome: 'held' });
   });
 
   it('recentForThread returns only autonomous entries on that thread inside the window', async () => {
@@ -98,7 +111,7 @@ describe('PrincipalSendLedger autonomous lookups (#2474 PR 2)', () => {
     const ledger = new PrincipalSendLedger(docs, logger);
     const since = Date.parse('2026-11-06T12:00:00.000Z');
     await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: '2026-11-07T10:00:00.000Z' });
-    await ledger.recordHeld({ ...entry, draftId: 'b', mode: 'autonomous', at: '2026-11-07T11:00:00.000Z', reason: 'hold' });
+    await ledger.recordHeld({ ...entry, draftId: 'b', mode: 'autonomous', at: '2026-11-07T11:00:00.000Z', reasonCode: 'review_hold' });
     await ledger.recordSending({ ...entry, draftId: 'c', mode: 'principal-directed', at: '2026-11-07T10:00:00.000Z' });
     await ledger.recordSending({ ...entry, draftId: 'd', mode: 'autonomous', threadId: 't2', at: '2026-11-07T10:00:00.000Z' });
     await ledger.recordSending({ ...entry, draftId: 'e', mode: 'autonomous', at: '2026-11-05T10:00:00.000Z' });
@@ -108,11 +121,11 @@ describe('PrincipalSendLedger autonomous lookups (#2474 PR 2)', () => {
     expect(got.map((e) => e.draftId).sort()).toEqual(['a', 'b', 'f']);
   });
 
-  it('parseLedgerDoc rejects a non-string reason', async () => {
+  it('parseLedgerDoc rejects a non-string reason code', async () => {
     const docs = makeDocs();
-    await new PrincipalSendLedger(docs, logger).recordHeld({ ...entry, reason: 'x' });
+    await new PrincipalSendLedger(docs, logger).recordHeld({ ...entry, reasonCode: 'x' });
     const doc = [...docs.docs.values()][0]!;
-    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, reason: 7 } })).toBeNull();
+    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, reason_code: 7 } })).toBeNull();
   });
 });
 
@@ -125,7 +138,7 @@ describe('PrincipalSendLedger global lookups', () => {
     await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: '2026-11-07T10:00:00.000Z' });
     await ledger.recordSending({ ...entry, draftId: 'b', mode: 'autonomous', threadId: 't2', at: '2026-11-07T10:00:00.000Z' });
     await ledger.recordSent('b', 'msg-b');
-    await ledger.recordHeld({ ...entry, draftId: 'c', mode: 'autonomous', at: '2026-11-07T11:00:00.000Z', reason: 'hold' });
+    await ledger.recordHeld({ ...entry, draftId: 'c', mode: 'autonomous', at: '2026-11-07T11:00:00.000Z', reasonCode: 'review_hold' });
     await ledger.recordSending({ ...entry, draftId: 'd', mode: 'principal-directed', at: '2026-11-07T10:00:00.000Z' });
     await ledger.recordSending({ ...entry, draftId: 'e', mode: 'autonomous', at: '2026-11-05T10:00:00.000Z' });
     await ledger.recordSending({ ...entry, draftId: 'f', mode: 'autonomous', threadId: 't3', at: 'not a date' });

@@ -7,3 +7,5 @@
 ### Security
 
 - **Autonomous replies never share new information** — Curia's own replies sharing anything not already on the thread are held as drafts. (#2474)
+- **Autonomous reply limits** — daily cap of 10, latest message only, no bank or card details, stricter list detection. (#2474)
+- **Send ledger protection** — agents can't write the mailbox send ledger; it stores reason codes, not text. (#2474)

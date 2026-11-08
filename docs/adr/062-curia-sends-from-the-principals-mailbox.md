@@ -52,7 +52,7 @@ Missing, unreadable or unknown values read as `on_request`: that never widens au
 - The brief tells the judge the message goes out under the principal's name (a sender-profile line, added only for this profile so every other brief, Gate C's included, is unchanged).
 - Principal-directed sends are not stakes-gated (the principal decided), and are not put in the spot-check sample pool.
 
-**Holds stay drafts. Nothing on this path becomes an approval.** A band hold or ask, a content-filter block, a refusal or a changed draft leaves the draft in the principal's Drafts folder and returns a reason the agent relays. Gates A and B never queue an approval for `ceo-inbox-send-draft`; they return a plain refusal. "Send it anyway" is a new principal-directed send. The pre-send re-read refuses with `draft_changed` when the draft was edited after the checks ran, so only what was checked is sent. A review bounce goes back to the drafter once, as for any editable send.
+**Holds stay drafts. Nothing on this path becomes an approval.** A band hold or ask, a content-filter block, a refusal or a changed draft leaves the draft in the principal's Drafts folder and returns a reason the agent relays. Gates A and B never queue an approval for `ceo-inbox-send-draft`; they return a plain refusal. "Send it anyway" is a new principal-directed send. The pre-send re-read refuses with `draft_changed` when the draft was edited after the checks ran, so only what was checked is sent. On a principal-directed send a review bounce goes back to the drafter once, as for any editable send; on an autonomous send a bounce is final, like a hold.
 
 **Curia's sends are not learning evidence.** Before each send the gateway writes a create-only marker under `/scratch/principal-mailbox-sends/` (draft, thread, recipients, mode, time) and then adds the returned message ID. `ceo-inbox-sent-observe` skips SENT messages that match a marker by ID, or by thread, recipients and a short time window (the send response's ID is not documented to equal the SENT listing's on Gmail), for voice learning, task matching and shadow-draft pairing alike.
 
@@ -61,13 +61,16 @@ Missing, unreadable or unknown values read as `on_request`: that never widens au
 1. Curia drafted it in the same task (an audit `tool.result` row for `draft-reply` / `draft-compose` with this draft ID, not `already_exists`; never a `draft-edit` result or a voice-learning snapshot).
 2. The draft is unchanged since Curia wrote it.
 3. Recipients are only people genuinely on the thread: the principal's addresses, recipients of messages sent from the principal's mailbox, and the `From` of inbound messages whose sender was verified. Inbound To/Cc headers never count (a forged Cc of the CFO).
-4. At most five recipients, and no list addresses.
+4. At most five recipients, and no mailing lists: a thread message with any list header (List-Id, List-Post, List-Unsubscribe, Precedence list or bulk, a Google Group id) means no reply on its own.
 5. No attachments.
 6. At most one autonomous send per thread per day, and none for a day after a hold or refusal there (read from the send ledger).
-7. Not outsider-originated.
-8. A reply that shares information not on the thread is always held (`off-thread`, judged against the thread messages every recipient received), at every band and under any ceiling: Curia does not pass on new information without the principal.
+7. At most 10 autonomous sends a day across all threads.
+8. The reply answers the latest message on its thread, the one Curia drafted it against; a reply to an older message is left as a draft.
+9. Never bank or card details: a reply holding a card number or an IBAN, in its own words or the quoted message, is left as a draft.
+10. Only Curia's own inbox check sends on its own: not outsider-originated, and not anything whose origin can't be confirmed.
+11. A reply that shares information not on the thread is always held (`off-thread`, judged against the thread messages every recipient received), at every band and under any ceiling: Curia does not pass on new information without the principal. A quoted message must be one every recipient received; an inbound message's Cc doesn't prove that.
 
-Autonomous review asks every question with speaks-as-principal forced true in code and stakes always asked; a stakes rating above the level's ceiling holds, a judge failure holds, and an autonomous send is refused when band review is not running. Autonomous sends and holds reach the principal as digest items ("Sent for you from your mailbox: …", "Left as a draft in your mailbox: …", and "Tried to send for you from your mailbox: …" when a send did not confirm). Principal-directed sends file no digest item: the principal is on the live turn.
+Agents can't write the send ledger (`doc-write` refuses the prefix), and a reply whose marker can't be written is not sent. Autonomous review asks every question with speaks-as-principal forced true in code and stakes always asked; a stakes rating above the level's ceiling holds, a judge failure holds, and an autonomous send is refused when band review is not running. Autonomous sends and holds reach the principal as digest items ("Sent for you from your mailbox: …", "Left as a draft in your mailbox: …", and "Tried to send for you from your mailbox: …" when a send did not confirm). Principal-directed sends file no digest item: the principal is on the live turn.
 
 **Why autonomous sends drop the principal-origin gate.** Autonomous triage is system-originated by design, so gating on `isPrincipalOriginated` would rule out the mode entirely. The level, the code limits above and the band score bound it instead; Gate B refuses an autonomous call below score 80.
 

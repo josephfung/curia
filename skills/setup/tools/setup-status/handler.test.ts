@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as yaml from 'js-yaml';
-import { SetupStatusHandler } from './handler.js';
+import { SetupStatusHandler, parseCatalog } from './handler.js';
 import type { ToolContext, EmailChannelStatus } from '../../../../src/skills/types.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
 
@@ -430,6 +430,12 @@ describe('setup-status', () => {
       expect(task?.status).toBe('pending');
     });
 
+    // #2474 final fixes B3 (final review M4): the parsed object's own key decides, not a text match.
+    it('is done when the default key is written with a JSON escape', async () => {
+      const task = await inboxSending(makeCtx({ sendingValue: '{"\\u0064efault":"routine"}' }));
+      expect(task?.status).toBe('done');
+    });
+
     it('is not done, and logged, when the read throws', async () => {
       const ctx = makeCtx({ sendingReadError: new Error('kg down') });
       const task = await inboxSending(ctx);
@@ -511,5 +517,36 @@ describe('setup-status manifest covers the catalog', () => {
     expect(read.length).toBeGreaterThan(0);
     const missing = read.filter((key) => !manifest.secrets.includes(key));
     expect(missing).toEqual([]);
+  });
+});
+
+// #2474 final fixes B3: the catalog loader validates what the checks read.
+describe('setup-status catalog loading', () => {
+  it('loads the real catalog.yaml with the inbox_sending entry as the docs describe it', () => {
+    const tasks = parseCatalog(readFileSync(join(import.meta.dirname, 'catalog.yaml'), 'utf-8'));
+    expect(tasks.find(t => t.id === 'inbox_sending')).toMatchObject({
+      label: 'Replies from your mailbox',
+      tier: 'instant',
+      handoff: 'in-chat',
+      optional: true,
+      completion_check: { type: 'config_store_set', namespace: 'ceo_inbox', key: 'sending', valid_as: 'send_level' },
+      credential_how_to: null,
+      docs_url: '/core-concepts/inbox-sending',
+    });
+  });
+
+  it('fails loudly on an unknown valid_as, naming the task', () => {
+    const raw = [
+      'tasks:',
+      '  - id: inbox_sending',
+      '    label: x',
+      '    value_prop: x',
+      '    tier: instant',
+      '    handoff: in-chat',
+      '    completion_check: { type: config_store_set, namespace: ceo_inbox, key: sending, valid_as: send_levle }',
+      '    credential_how_to: null',
+      '    docs_url: null',
+    ].join('\n');
+    expect(() => parseCatalog(raw)).toThrow(/inbox_sending.*valid_as 'send_levle'/);
   });
 });

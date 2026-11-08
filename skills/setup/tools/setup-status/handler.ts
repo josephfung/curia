@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import * as yaml from 'js-yaml';
 import type { ToolHandler, ToolContext, ToolResult, EmailChannelStatus } from '../../../../src/skills/types.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
-import { readSendLevelValue } from '../../../../src/skills/principal-send/send-level.js';
+import { DEFAULT_MAILBOX, readSendLevelValue } from '../../../../src/skills/principal-send/send-level.js';
 
 // ── Catalog types ──────────────────────────────────────────────────────────
 
@@ -65,10 +65,22 @@ interface CatalogTaskWithStatus extends Omit<CatalogTask, 'completion_check' | '
 // Tests that need a fresh catalog can use vi.resetModules() if needed.
 let catalogCache: CatalogTask[] | null = null;
 
+/** The `valid_as` values a config_store_set check understands (#2474). */
+const CONFIG_VALID_AS: readonly string[] = ['send_level'];
+
 async function loadCatalog(): Promise<CatalogTask[]> {
   if (catalogCache) return catalogCache;
   const catalogPath = join(import.meta.dirname, 'catalog.yaml');
-  const raw = await readFile(catalogPath, 'utf-8');
+  catalogCache = parseCatalog(await readFile(catalogPath, 'utf-8'));
+  return catalogCache;
+}
+
+/**
+ * catalog.yaml's tasks. Throws on a bad structure, and on a config_store_set check whose
+ * `valid_as` is unknown (#2474 final fixes B3): a typo there would otherwise fall back to
+ * presence-only and count `{}` as a choice. Exported for the catalog's own tests.
+ */
+export function parseCatalog(raw: string): CatalogTask[] {
   // js-yaml v5: yaml.load() is safe by default — arbitrary-type tags (!!python/object etc.)
   // were removed in v5. safeLoad() no longer exists. See js-yaml v5 migration guide.
   const parsed = yaml.load(raw) as unknown;
@@ -83,8 +95,14 @@ async function loadCatalog(): Promise<CatalogTask[]> {
       `setup-status: catalog.yaml parsed to an unexpected structure — expected { tasks: [...] }. Got: ${JSON.stringify(parsed)?.slice(0, 200)}`,
     );
   }
-  catalogCache = (parsed as { tasks: CatalogTask[] }).tasks;
-  return catalogCache;
+  const tasks = (parsed as { tasks: CatalogTask[] }).tasks;
+  for (const task of tasks) {
+    const check = task.completion_check as { type?: unknown; valid_as?: unknown } | undefined;
+    if (check?.type === 'config_store_set' && check.valid_as !== undefined && !CONFIG_VALID_AS.includes(String(check.valid_as))) {
+      throw new Error(`setup-status: catalog.yaml task ${task.id} has an unknown valid_as '${String(check.valid_as)}' — expected one of ${CONFIG_VALID_AS.join(', ')}`);
+    }
+  }
+  return tasks;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -221,8 +239,9 @@ export class SetupStatusHandler implements ToolHandler {
           if (set && c.valid_as === 'send_level') {
             // A level counts only when "default" names one: readSendLevelValue's fallback
             // for {} or junk is on_request, which no one chose.
-            const parsed = readSendLevelValue(value);
-            set = !parsed.malformed && /"default"\s*:/.test(value as string);
+            // !malformed already means `value` parses to an object, so the parse here succeeds.
+            set = !readSendLevelValue(value).malformed
+              && Object.prototype.hasOwnProperty.call(JSON.parse(value as string) as object, DEFAULT_MAILBOX);
           }
           configSet.set(id, set);
         } catch (err) {

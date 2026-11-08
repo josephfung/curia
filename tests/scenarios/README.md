@@ -909,11 +909,11 @@ review's labels and outcome, never the values (`recordingBandReview`,
 `left_as_draft` (#2474 PR 2) reads the run's principal-mailbox digest items (`principal.report`
 events from source `principal_mailbox`, kept in the results as `gateway.mailboxDigests`). Every
 autonomous send that stops for good files exactly one, beginning "Left as a draft in your
-mailbox:" and ending with the reason ("… Nothing was sent; the draft is still in their Drafts
-folder."): a thread already cooling down and a draft with no known thread included. "Sent for
-you…" and "Tried to send for you…" (the send's outcome is unknown) items are not counted. It
-passes on an item containing every `contains` text (case-insensitive), at least one or exactly
-`count`. A review bounce is not a stop (the drafter may edit and resend). `count: 0` passes
+mailbox:" and ending with the reason in the principal's words ("… It's in your Drafts."): a
+thread already cooling down, a daily-cap stop and a review bounce included. "Sent for you…",
+"Not sent from your mailbox…" (the draft is gone or unreadable) and "Tried to send for you…"
+(the send's outcome is unknown) items are not counted. It passes on an item containing every
+`contains` text (case-insensitive), at least one or exactly `count`. `count: 0` passes
 too when no send was ever attempted, so pair it with a `called: ceo-inbox-send-draft` check.
 The send ledger stays in the results (`gateway.principalSends`) for diagnosis.
 

@@ -3,7 +3,9 @@
 // One create-only document per send attempt, so nothing read-modify-writes a shared set.
 // ceo-inbox-sent-observe (and shadow-draft pairing) read the prefix to skip messages Curia sent,
 // so they are not learned as the principal's own writing. A forged marker can only remove
-// learning evidence (and, in PR 2, block an autonomous send), never allow one.
+// learning evidence (and, in PR 2, block an autonomous send), never allow one. Rewriting an
+// existing marker could lift a thread's cooldown, so agents can't write the prefix at all:
+// doc-write refuses it (#2474 final fixes B1), and only this class writes it, through the repo.
 
 import type { WorkingDocRow, WorkingDocsRepo } from '../../db/working-docs-repo.js';
 import type { Logger } from '../../logger.js';
@@ -19,8 +21,13 @@ export interface PrincipalSendEntry {
   at: string;
   messageId?: string;
   outcome: 'sending' | 'sent' | 'held';
-  /** Why an autonomous send was held or refused (#2474 PR 2). Only on `held` entries. */
-  reason?: string;
+  /**
+   * Why an autonomous send was held or refused (#2474 PR 2), as a code: the refusal code, or the
+   * band rule ids (final fixes B2, security review L2). Never the free text: it can name
+   * recipients and paraphrase the draft, and /scratch is agent-readable. The digest carries the
+   * text to the principal. Only on `held` entries.
+   */
+  reasonCode?: string;
 }
 
 const MODES: readonly string[] = ['principal-directed', 'autonomous'];
@@ -39,19 +46,20 @@ function isStringArray(v: unknown): v is string[] {
 export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
   if (doc.type !== PRINCIPAL_SEND_DOC_TYPE) return null;
   const f = doc.frontmatter;
-  const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome, reason } = f;
+  // A held entry written before final fixes B2 carried a free-text `reason`; it is not read.
+  const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome, reason_code: reasonCode } = f;
   if (typeof draftId !== 'string' || typeof threadId !== 'string' || typeof at !== 'string') return null;
   if (!isStringArray(recipients)) return null;
   if (typeof mode !== 'string' || !MODES.includes(mode)) return null;
   if (typeof outcome !== 'string' || !OUTCOMES.includes(outcome)) return null;
   if (messageId !== undefined && typeof messageId !== 'string') return null;
-  if (reason !== undefined && typeof reason !== 'string') return null;
+  if (reasonCode !== undefined && typeof reasonCode !== 'string') return null;
   return {
     draftId, threadId, recipients, at,
     mode: mode as PrincipalSendEntry['mode'],
     outcome: outcome as PrincipalSendEntry['outcome'],
     ...(messageId !== undefined ? { messageId } : {}),
-    ...(reason !== undefined ? { reason } : {}),
+    ...(reasonCode !== undefined ? { reasonCode } : {}),
   };
 }
 
@@ -77,18 +85,18 @@ export class PrincipalSendLedger {
   }
 
   /**
-   * Records an autonomous send that was held or refused, with why (#2474 PR 2). It starts the
+   * Records an autonomous send that was held or refused, with why as a code (#2474 PR 2). It starts the
    * thread's cooldown (checkAutonomousLimits), so a resampled judge gets one try a day.
    * Create-only like recordSending. Throws on a repo failure.
    */
-  async recordHeld(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId'> & { reason: string }): Promise<void> {
+  async recordHeld(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId' | 'reasonCode'> & { reasonCode: string }): Promise<void> {
     const path = `${draftPrefix(e.draftId)}${Date.now()}.md`;
     await this.docs.create({
       path,
       type: PRINCIPAL_SEND_DOC_TYPE,
       frontmatter: {
         draft_id: e.draftId, thread_id: e.threadId, recipients: e.recipients, mode: e.mode, at: e.at,
-        outcome: 'held', reason: e.reason,
+        outcome: 'held', reason_code: e.reasonCode,
       },
       body: '',
       taskId: null,

@@ -4278,9 +4278,13 @@ export class OutboundGateway {
     // From here an autonomous stop is final (design D9): a held marker and one digest item.
     let draft: NylasMessage | null = null;
     let lookedUp = false;
-    const stop = async (refusal: PrincipalSendRefusal, blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal]): Promise<PrincipalDraftSendResult> => {
+    const stop = async (
+      refusal: PrincipalSendRefusal,
+      blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal],
+      reasonCode: string = refusal,
+    ): Promise<PrincipalDraftSendResult> => {
       if (autonomous) {
-        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, refusal, reason: blockedReason, options });
+        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, refusal, reason: blockedReason, reasonCode, options });
       }
       return refuse(refusal, blockedReason);
     };
@@ -4410,7 +4414,7 @@ export class OutboundGateway {
       // A quote must reproduce a message every recipient received (#2474 final fixes A10): a
       // model-written quote block could pass off new information as already on the thread.
       const { quote } = splitReplyQuote(draft.body);
-      if (quote && !quoteMatchesThread(quote, proofs, outside)) return stop('review_hold', QUOTE_MISMATCH_REASON);
+      if (quote && !quoteMatchesThread(quote, proofs, outside)) return stop('review_hold', QUOTE_MISMATCH_REASON, 'quote-mismatch');
       profile = {
         ...profile,
         autonomous: true,
@@ -4432,7 +4436,9 @@ export class OutboundGateway {
     };
     const checked = await this.checkDraftSend({ profile, draftId, draftMeta, autonomy: autonomy ?? await this.readAutonomy(), options: checkOptions });
     if ('result' in checked) {
-      if (checked.held !== undefined) return stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`);
+      // The marker's code is the band rules that held it (final fixes B2).
+      const rules = checked.result.blockedRules?.length ? checked.result.blockedRules.join(',') : undefined;
+      if (checked.held !== undefined) return stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`, rules ?? 'review_hold');
       // Every other stop leaves the draft where it is and returns its reason: a review bounce
       // (on a principal-directed send the drafter edits once and resends), a blocked contact, the
       // identity gate, the content filter or a redactor error.
@@ -4443,7 +4449,7 @@ export class OutboundGateway {
       if (autonomous) {
         const why = (checked.result.blockedReason ?? 'Held for the principal.').trim();
         const reason = `${/[.!?]$/.test(why) ? why : `${why}.`}${STILL_A_DRAFT}`;
-        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, reason, options });
+        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, reason, reasonCode: rules ?? 'check_stop', options });
         this.log.info({ draftId, rules: checked.result.blockedRules }, 'outbound-gateway: autonomous principal-mailbox draft not sent');
         return { ...checked.result, blockedReason: reason, leftAsDraft: true };
       }
@@ -4571,10 +4577,13 @@ export class OutboundGateway {
     lookedUp: boolean;
     /** Absent for a check's stop (a blocked contact, the content filter, …), which has no refusal code. */
     refusal?: PrincipalSendRefusal;
+    /** What the agent was told; the digest item says it in the principal's voice. */
     reason: string;
+    /** What the held marker keeps (final fixes B2): the refusal code or the band rule ids, never the text. */
+    reasonCode: string;
     options: { taskEventId?: string; conversationId?: string };
   }): Promise<void> {
-    const { draftId, refusal, reason, options } = args;
+    const { draftId, refusal, reason, reasonCode, options } = args;
     if (refusal === 'not_found' && this.sendLedger) {
       try {
         // A second send call on a draft that already went out (final review M1): "not sent"
@@ -4612,7 +4621,7 @@ export class OutboundGateway {
           recipients: [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((r) => r.email.trim().toLowerCase()))].filter((r) => r && !isPrincipal(r)),
           mode: 'autonomous',
           at: new Date().toISOString(),
-          reason,
+          reasonCode,
         });
       } catch (err) {
         // The refusal stands; only this thread's cooldown is lost.

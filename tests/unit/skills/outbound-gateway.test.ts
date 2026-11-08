@@ -6400,9 +6400,10 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(PRINCIPAL_SEND_REFUSALS.outsider_originated).toBe(text);
       expect(review).not.toHaveBeenCalled();
       expect(client!.sendDraft).not.toHaveBeenCalled();
-      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({
-        draftId: 'd1', threadId: 'th1', recipients: ['dana@example.org'], mode: 'autonomous', reason: text, at: expect.any(String),
-      }));
+      // Final fixes B2: the marker keeps the refusal code, never the free text.
+      expect(ledger.recordHeld).toHaveBeenCalledWith({
+        draftId: 'd1', threadId: 'th1', recipients: ['dana@example.org'], mode: 'autonomous', reasonCode: 'outsider_originated', at: expect.any(String),
+      });
       expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('outsider_originated'), urgency: 'digest', source: 'principal_mailbox', conversationId: 'c1' })]);
       expect(DIGEST('outsider_originated')).toBe(`${LEAD} This work started from someone outside, so Curia didn't send it on its own.${IN_DRAFTS}`);
     });
@@ -6645,7 +6646,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'review_hold', blockedReason: text });
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordSending).not.toHaveBeenCalled();
-      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reason: text }));
+      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reasonCode: 'off-thread' }));
       expect(reports()).toEqual([expect.objectContaining({
         summary: `${LEAD} Held for you: it shares information that isn't on the thread, and Curia doesn't pass on new information without you.${IN_DRAFTS}`,
         urgency: 'digest',
@@ -6697,7 +6698,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'review_hold', blockedReason: QUOTE_MISMATCH });
         expect(review).not.toHaveBeenCalled();
         expect(client!.sendDraft).not.toHaveBeenCalled();
-        expect(ledger.recordHeld).toHaveBeenCalledOnce();
+        expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: 'quote-mismatch' }));
         expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} Its quoted text doesn't match the thread.${IN_DRAFTS}` })]);
       });
 
@@ -6810,7 +6811,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(r).toMatchObject({ success: false, leftAsDraft: true, blockedRules: ['secret-pattern'] });
       expect(r.blockedReason).toMatch(/Nothing was sent; the draft is still in their Drafts folder\.$/);
       expect(client!.sendDraft).not.toHaveBeenCalled();
-      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reason: r.blockedReason }));
+      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reasonCode: 'secret-pattern' }));
       // The digest keeps the reason's lead and drops the agent's notes after it (final fixes A12).
       expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} secret-pattern.${IN_DRAFTS}` })]);
     });
@@ -6876,7 +6877,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'review_hold', blockedReason: text });
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordSending).not.toHaveBeenCalled();
-      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reason: text }));
+      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reasonCode: 'speaks-as-principal' }));
       expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} Held for you: it commits you.${IN_DRAFTS}` })]);
     });
 
@@ -6905,7 +6906,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordSending).not.toHaveBeenCalled();
       expect(ledger.recordHeld).toHaveBeenCalledOnce();
-      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous' }));
+      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reasonCode: 'ungrounded-claim' }));
       expect(reports()).toHaveLength(1);
       expect(String(reports()[0]!['summary'])).toMatch(new RegExp(`^${LEAD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} .*It's in your Drafts\\.$`));
     });

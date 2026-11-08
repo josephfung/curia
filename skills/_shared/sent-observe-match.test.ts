@@ -280,7 +280,7 @@ describe('isCuriaSend (#2474 PR 2)', () => {
   });
 
   it('never lets a held entry claim the principal\'s own reply by thread and time', () => {
-    expect(isCuriaSend(sentMsg, [{ ...base, outcome: 'held', reason: 'thread_cooldown' }])).toBe(false);
+    expect(isCuriaSend(sentMsg, [{ ...base, outcome: 'held', reasonCode: 'review_hold' }])).toBe(false);
   });
 
   it('still counts an exact message id match whatever the outcome', () => {

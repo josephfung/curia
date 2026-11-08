@@ -177,7 +177,7 @@ expected_behaviors:
     description: The principal's digest gets a "Left as a draft" item naming the commitment as the reason.
     check:
       left_as_draft: { contains: [commitment] }
-  # max 2, not 1: a review bounce invites one rewrite and resend (band-send-review.ts).
+  # max 2, not 1: one stray retry is tolerated (an autonomous bounce is final since #2474's final fixes).
   - id: no_retry
     weight: important
     description: Does not keep retrying the held send.
