@@ -561,10 +561,14 @@ export class BrowserService {
       this.logChannel(context, this.channel);
       return context;
     } catch (err) {
-      // Bundled Chromium would hit the same wall, and the fallback's "is the channel
-      // installed?" message would point the operator the wrong way.
-      if (isSandboxLaunchFailure(err)) throw this.sandboxLaunchError(err);
-      if (!this.channel) throw err; // no channel to fall back from — a genuine launch failure
+      if (!this.channel) {
+        // No channel to fall back from. A sandbox failure gets the sandbox message.
+        if (isSandboxLaunchFailure(err)) throw this.sandboxLaunchError(err);
+        throw err; // a genuine launch failure
+      }
+      // With a channel set, even a sandbox failure falls through to bundled Chromium, still
+      // sandboxed: a host policy (e.g. AppArmor) can allow one binary and deny the other.
+      // If bundled Chromium fails to sandbox too, that is reported below.
       // Configured-vs-actual divergence: the operator asked for a real browser channel
       // (the whole point of the fingerprint hardening) and we couldn't honour it — almost
       // always a missing browser in the image. Degrade to bundled Chromium so the skill
@@ -574,7 +578,7 @@ export class BrowserService {
       this.channelFallbackActive = true;
       this.logger.error(
         { err, requestedChannel: this.channel },
-        'Browser channel launch failed — DEGRADED to bundled Chromium (weaker fingerprint than configured); is the channel installed in the image?',
+        'Browser channel launch failed — DEGRADED to bundled Chromium (weaker fingerprint than configured); is the channel installed in the image, and can it start its sandbox?',
       );
       let context: BrowserContext;
       try {
@@ -598,7 +602,8 @@ export class BrowserService {
    */
   private sandboxLaunchError(cause: unknown): Error {
     const message =
-      'Chrome sandbox could not start: the host blocks the user namespaces it needs. ' +
+      'Chrome sandbox could not start: the host blocks the user namespaces it needs, ' +
+      'or Curia is running as root (Chrome refuses its sandbox as root; run as a non-root user). ' +
       'In a container, run it with the seccomp profile in docker/seccomp-chrome.json. ' +
       'On Ubuntu 23.10+ from source, use channel: chrome ' +
       '(see docs/dev/configuration.md).';
@@ -970,11 +975,12 @@ export function isXServerBinary(binary: string): boolean {
  * it only on stderr, which Playwright copies into the error message, so this matches that
  * text. "Failed to move to new namespace" is Docker's default seccomp profile refusing
  * the user namespace; "No usable sandbox" is Chromium finding neither the namespace nor
- * the setuid sandbox.
+ * the setuid sandbox. "Chromium sandboxing failed!" is Patchright's rewrite of Chrome's
+ * "Running as root without --no-sandbox is not supported" refusal.
  */
 export function isSandboxLaunchFailure(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return /Failed to move to new namespace|No usable sandbox/.test(message);
+  return /Failed to move to new namespace|No usable sandbox|Chromium sandboxing failed/i.test(message);
 }
 
 /**

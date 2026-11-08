@@ -444,13 +444,37 @@ describe('BrowserService (unit — mocked browser)', () => {
       expect(launchOptions(launch).args).not.toContain('--no-sandbox');
     });
 
-    it('fails with a sandbox error instead of falling back to bundled Chromium', async () => {
+    it('sandboxes the configured channel and passes no --no-sandbox', async () => {
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockResolvedValue(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      await svc.start();
+      expect(launchOptions(launch).channel).toBe('chrome');
+      expect(launchOptions(launch).chromiumSandbox).toBe(true);
+      expect(launchOptions(launch).args).not.toContain('--no-sandbox');
+      await svc.stop();
+    });
+
+    it('tries sandboxed bundled Chromium when the channel cannot sandbox, never unsandboxed', async () => {
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockRejectedValueOnce(sandboxFailure)
+        .mockResolvedValueOnce(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      await svc.start();
+      expect(launch).toHaveBeenCalledTimes(2);
+      expect(launchOptions(launch, 1).channel).toBeUndefined();
+      expect(launchOptions(launch, 1).chromiumSandbox).toBe(true);
+      expect(launchOptions(launch, 1).args).not.toContain('--no-sandbox');
+      await svc.stop();
+    });
+
+    it('fails with a sandbox error when the channel and bundled Chromium both cannot sandbox', async () => {
       const launch = vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(sandboxFailure);
       const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
       await expect(svc.start()).rejects.toThrow('Chrome sandbox could not start');
-      // One attempt only: no bundled-Chromium retry, and no retry without the sandbox.
-      expect(launch).toHaveBeenCalledOnce();
-      expect(svc.isChannelFallbackActive()).toBe(false);
+      // Two sandboxed attempts, none without the sandbox.
+      expect(launch).toHaveBeenCalledTimes(2);
+      for (const call of [0, 1]) expect(launchOptions(launch, call).chromiumSandbox).toBe(true);
       await svc.stop();
     });
 
@@ -765,6 +789,7 @@ describe('isSandboxLaunchFailure', () => {
   });
 
   it('ignores other launch failures', () => {
+    expect(isSandboxLaunchFailure(new Error('browserType.launchPersistentContext: Chromium sandboxing failed!'))).toBe(true);
     expect(isSandboxLaunchFailure(new Error('Chromium distribution \'chrome\' is not found at /opt/google/chrome/chrome'))).toBe(false);
     expect(isSandboxLaunchFailure(new Error('Missing X server or $DISPLAY'))).toBe(false);
     expect(isSandboxLaunchFailure('not an error')).toBe(false);
