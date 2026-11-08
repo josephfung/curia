@@ -167,7 +167,7 @@ export const SENDER_PROFILE_LINE = `Sender: this message goes out from the princ
  * logistics, or commit to what the thread already supports; passing on anything new is not its
  * scope, however accurate.
  */
-export const OFF_THREAD_LINE = `For offThread: true when the message shares any fact, figure, name, document, plan or opinion that does not already appear in the thread's earlier messages below, wherever it came from (what was looked up this turn, memory, notes, another thread or a file), even when it is accurate. Acknowledgements, thanks, and the principal's own availability or logistics the reply settles (confirming a time, "I'll bring the deck") are not off-thread. false only when everything else the message tells its recipients is already in those messages.`;
+export const OFF_THREAD_LINE = `For offThread: true when the message shares any fact, figure, name, document, plan or opinion that does not already appear in the thread's earlier messages below, wherever it came from (what was looked up this turn, memory, notes, another thread or a file), even when it is accurate. Acknowledgements, thanks, and the principal's own availability or logistics the reply settles (confirming a time, "I'll bring the deck") are not off-thread. Confirming, correcting or denying a recipient's guess counts as sharing it. false only when everything else the message tells its recipients is already in those messages.`;
 
 export interface BriefAnswers {
   purpose?: 'serving' | 'steered';

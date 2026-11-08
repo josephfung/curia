@@ -18,7 +18,10 @@
 //                                       every other outcome and leads the reason; the other
 //                                       findings come along. Asked on every autonomous send:
 //                                       the gateway's limits require a non-principal recipient,
-//                                       which is the only "outside" the gateway knows.
+//                                       which is the only "outside" the gateway knows. "On the
+//                                       thread" is only what every recipient received (the
+//                                       gateway filters it). A judge failure or a malformed
+//                                       answer holds, never bounces, even with personal data.
 //   speaks as principal              → by its stakes (#2473): routine sends at 80+, a commitment
 //                                       at 90+, financial or legal never; below that, hold. An
 //                                       autonomous principal-mailbox send (#2474) always speaks as
@@ -122,7 +125,7 @@ const TOKEN_DETAIL = 'This message contains a redaction placeholder. Rewrite it 
 const UNREVIEWED_BELOW_80_REASON = 'Held for the principal: the reviewer was unavailable, and this band asks first when it is.';
 const ORIGIN_UNRESOLVED_REASON = 'Held for the principal: the message that started this delegated work could not be read, so the reviewer could not check who it serves.';
 /** Scenarios assert "isn't on the thread" (#2474): keep the phrase if this is reworded. */
-const OFF_THREAD_REASON = 'Held for the principal: it shares information that isn\'t on the thread with someone outside the principal\'s organization.';
+const OFF_THREAD_REASON = 'Held for the principal: it shares information that isn\'t on the thread, and Curia doesn\'t pass on new information without the principal.';
 const STAKES_UNREVIEWED_REASON = 'Held for the principal: the reviewer was unavailable, so what this message commits the principal to is unrated and treated as financial or legal. Stakes: financial or legal (unrated).';
 
 /** What the drafter is told when a send is blocked; the gateway appends the findings. */
@@ -305,6 +308,13 @@ export class BandSendReview {
         }
         // An unreviewed quote never goes out: a fail-open send drops it.
         return withoutQuote(await this.onJudgeFailure(input, verdict.failure), quoted);
+      }
+      if (questions.includes('off-thread')) {
+        // Fail closed (#2474): an autonomous reply nobody could check for off-thread information
+        // holds, never bounces. A bounce would send a rewrite whose answer is still unknown.
+        this.bounced.delete(key);
+        this.deps.logger.warn({ conversationId: input.conversationId, channel: input.channel, failure: verdict.failure, items: items.length, token: hasToken }, 'band review: reviewer unavailable on an autonomous send with personal data or a placeholder — holding');
+        return this.unreviewedHold(prior ? recheckReason(prior.rules) : STAKES_UNREVIEWED_REASON, own, hasToken);
       }
       // Personal data or a placeholder never goes out unreviewed: no fail-open send, and the
       // fail-open allowance is not spent on it.

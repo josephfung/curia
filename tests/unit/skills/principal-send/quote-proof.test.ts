@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
 import type { DetectedPii } from '../../../../src/dispatch/pii-redactor.js';
 import {
-  comparableText, mailboxDraftLabel, quoteItemsToReview, replyOrigin, threadMessageProof,
+  comparableText, mailboxDraftLabel, quoteItemsToReview, replyOrigin, threadMessageProof, threadTextSeenByAll,
 } from '../../../../src/skills/principal-send/quote-proof.js';
 
 const VERIFIED = [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass smtp.mailfrom=x; dkim=pass header.d=x; dmarc=pass header.from=x' }];
@@ -80,5 +80,27 @@ describe('replyOrigin', () => {
   it('gives text, an ISO time and senderVerified from the message\'s own headers', () => {
     expect(replyOrigin(msg())).toEqual({ content: expect.stringContaining('Does Friday work?'), at: new Date(1_762_500_000_000).toISOString(), senderVerified: true });
     expect(replyOrigin(msg({ headers: undefined })).senderVerified).toBe(false);
+  });
+});
+
+// Gap fix round 1 (I1): "on the thread" means a message every recipient of this send received.
+describe('threadTextSeenByAll', () => {
+  const fromDana = msg({ body: '<p>Does Friday work?</p>' });
+  const toCfo = msg({
+    id: 'm2', from: [{ email: 'avery@example.com' }], to: [{ email: 'cfo@example.com' }], cc: [],
+    body: '<p>The multiple is 4.2x.</p>', date: 1_762_500_100, folders: ['SENT'],
+  });
+  const toBoth = msg({ id: 'm3', cc: [{ email: 'Sam@Example.org' }], body: '<p>Sam, meet Dana.</p>' });
+
+  it('keeps only messages whose From/To/Cc holds every recipient, case-insensitively', () => {
+    expect(threadTextSeenByAll([fromDana, toCfo], ['dana@example.org'])).toEqual([
+      { at: new Date(fromDana.date * 1000).toISOString(), text: 'Does Friday work?' },
+    ]);
+    expect(threadTextSeenByAll([fromDana, toBoth], ['DANA@example.org', 'sam@example.org']).map((m) => m.text)).toEqual(['Sam, meet Dana.']);
+  });
+
+  it('is empty when no message reached every recipient, or when there is no recipient (fail closed)', () => {
+    expect(threadTextSeenByAll([toCfo], ['dana@example.org'])).toEqual([]);
+    expect(threadTextSeenByAll([fromDana], [])).toEqual([]);
   });
 });

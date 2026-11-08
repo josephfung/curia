@@ -80,14 +80,25 @@ export function mailboxDraftLabel(draft: NylasMessage, isPrincipal: (email: stri
 }
 
 /**
- * A thread message as band review's `off-thread` evidence (#2474, design D10): its text as its
- * sender wrote it, with when it was sent. The review redacts, orders and bounds them.
+ * The thread as band review's `off-thread` evidence (#2474, design D10): the messages whose
+ * From/To/Cc held every one of `audience` (this send's non-principal recipients), as their text
+ * with when each was sent. A message that left any recipient out isn't on the thread for this
+ * send: a side reply to one person shows the others nothing. No audience, or no such message, is
+ * an empty thread (fail closed: new information then holds). The review redacts, orders and
+ * bounds them.
  */
-export function threadMessageText(msg: NylasMessage): { at?: string; text: string } {
-  return {
-    ...(Number.isFinite(msg.date) ? { at: new Date(msg.date * 1000).toISOString() } : {}),
-    text: htmlToText(msg.body),
-  };
+export function threadTextSeenByAll(thread: readonly NylasMessage[], audience: readonly string[]): Array<{ at?: string; text: string }> {
+  const recipients = audience.map((a) => a.trim().toLowerCase()).filter((a) => a.length > 0);
+  if (recipients.length === 0) return [];
+  return thread
+    .filter((m) => {
+      const { participants } = threadMessageProof(m);
+      return recipients.every((r) => participants.has(r));
+    })
+    .map((m) => ({
+      ...(Number.isFinite(m.date) ? { at: new Date(m.date * 1000).toISOString() } : {}),
+      text: htmlToText(m.body),
+    }));
 }
 
 /**

@@ -96,7 +96,7 @@ import {
 } from './principal-send/autonomous-limits.js';
 import { isOutsiderOriginated } from '../contacts/principal.js';
 import {
-  mailboxDraftLabel, quoteItemsToReview, replyOrigin, threadMessageProof, threadMessageText, type ThreadMessageProof,
+  mailboxDraftLabel, quoteItemsToReview, replyOrigin, threadMessageProof, threadTextSeenByAll, type ThreadMessageProof,
 } from './principal-send/quote-proof.js';
 import type { SendStakes } from '../autonomy/judge-brief.js';
 import type { CallBudget } from '../util/call-budget.js';
@@ -756,7 +756,10 @@ interface DraftSendProfile {
    * draft body is model-written, so a quote marker in it proves nothing).
    */
   threadMessages?: readonly ThreadMessageProof[];
-  /** Autonomous only: the same messages as text, for band review's off-thread question (design D10). */
+  /**
+   * Autonomous only: the messages every non-principal recipient received, as text, for band
+   * review's off-thread question (design D10).
+   */
   threadText?: ReadonlyArray<{ at?: string; text: string }>;
 }
 /** sendEmailDraft's options, passed through to the draft checks unchanged. */
@@ -4302,7 +4305,8 @@ export class OutboundGateway {
         stakesCeiling: level === 'all' ? 'commitment' : 'routine',
         ...(target ? { origin: replyOrigin(target) } : {}),
         threadMessages: thread.map(threadMessageProof),
-        threadText: thread.map(threadMessageText),
+        // `outside` is every non-principal recipient on To, Cc and Bcc.
+        threadText: threadTextSeenByAll(thread, outside),
       };
     }
 

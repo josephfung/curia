@@ -6573,6 +6573,19 @@ describe('sendPrincipalDraft (#2474)', () => {
       ]);
     });
 
+    it('leaves out of the thread evidence a side reply the recipient never received', async () => {
+      // The principal's reply-all on the same thread went to the CFO only.
+      const side = inbound({
+        id: 'm2', from: [{ email: PRINCIPAL }], to: [{ email: 'cfo@example.com' }], folders: ['SENT'],
+        body: '<p>The multiple is 4.2x.</p>', date: nowSec() - 3600,
+      });
+      const { gw, review } = makeAuto({ level: 'all', score: 100, client: autoClient(autoDraft({ body: '<p>Bob said 4.2x.</p>' }), [inbound(), side]) });
+      await gw.sendPrincipalDraft('d1', auto);
+      const input = review.mock.calls[0]![0] as { threadMessages: Array<{ text: string }> };
+      expect(input.threadMessages.map((m) => m.text)).toEqual(['Does Friday at 10 work?']);
+      expect(JSON.stringify(input.threadMessages)).not.toContain('4.2x');
+    });
+
     // Binding ruling (Task 7 review concern 3): under all at 100, a reply that passes on what the
     // thread does not show (memory, notes, another thread) is never sent.
     it('holds a reply the judge says shares information that isn\'t on the thread: held marker, digest item, not sent', async () => {
@@ -6590,7 +6603,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         level: 'all', score: 100, review: vi.fn((input) => real.review(input)), client: autoClient(autoDraft({ body })),
       });
       const r = await gw.sendPrincipalDraft('d1', auto);
-      const text = 'Held for the principal: it shares information that isn\'t on the thread with someone outside the principal\'s organization.' + SUFFIX;
+      const text = 'Held for the principal: it shares information that isn\'t on the thread, and Curia doesn\'t pass on new information without the principal.' + SUFFIX;
       expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'review_hold', blockedReason: text });
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordSending).not.toHaveBeenCalled();

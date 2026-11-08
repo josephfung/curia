@@ -204,7 +204,7 @@ describe('BandSendReview', () => {
       // Binding ruling (#2474, Task 7 review concern 3): an autonomous reply never passes on
       // information the thread does not already show, whatever the score or the ceiling.
       describe('information that isn\'t on the thread', () => {
-        const OFF = 'Held for the principal: it shares information that isn\'t on the thread with someone outside the principal\'s organization.';
+        const OFF = 'Held for the principal: it shares information that isn\'t on the thread, and Curia doesn\'t pass on new information without the principal.';
 
         it('holds a reply the judge says shares off-thread information, at 100 under all', async () => {
           const { svc, limiter } = make([{ ...rated('commitment'), offThread: true }]);
@@ -227,6 +227,18 @@ describe('BandSendReview', () => {
             const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
             expect(d.kind).toBe('hold');
             if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable']);
+          }
+        });
+
+        it('holds, never bounces, on a malformed answer or a judge failure with personal data at 80+ and no earlier bounce', async () => {
+          const item: BriefDetectedItem = { id: 'P1', label: 'PHONE_NUMBER', text: '416-555-0199', field: 'body' };
+          const ruled = { ...rated('routine'), disclosures: [{ id: 'P1', basis: 'unsupported' as const, requested: false, reason: 'x' }] };
+          delete (ruled as { offThread?: unknown }).offThread;
+          for (const verdict of [ruled, { ok: false as const, failure: 'malformed' as const }]) {
+            const { svc } = make([verdict]);
+            const d = await svc.review({ ...auto, content: 'Call 416-555-0199.', detectedItems: [item], score: 100, stakesCeiling: 'commitment' });
+            expect(d.kind).toBe('hold');
+            if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable', 'pii-not-authorized']);
           }
         });
 
