@@ -7,6 +7,7 @@ import type { InjectionDrainPoint } from '../../src/bus/events.js';
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import type { AutonomyFixture, OfficeIdentityFixture } from '../../src/startup/test-mode-stack.js';
 import type { RecordedReview } from '../../src/startup/test-mode-sends.js';
+import type { PrincipalSendEntry } from '../../src/skills/principal-send/send-ledger.js';
 import type { SendLevel } from '../../src/skills/principal-send/send-level.js';
 import type { VerificationDelivery, VerificationStatus } from '../../src/verification/types.js';
 import type { LiveSearchTally } from '../shared/live-search.js';
@@ -130,6 +131,13 @@ export type BehaviorCheck =
    */
   | { kind: 'reviewed'; label: string; outcome?: ReviewOutcome }
   /**
+   * An autonomous principal-mailbox send stopped for good this run (#2474 PR 2): a `held` marker
+   * in the run's send ledger, whose reason contains every one of `contains` (case-insensitive).
+   * At least one such marker, or exactly `count` when set. A stop that writes no marker (a
+   * thread already cooling down, a draft with no known thread) does not count.
+   */
+  | { kind: 'left_as_draft'; count?: number; contains?: string[] }
+  /**
    * Passes when any alternative passes. For a behavior the platform accepts in more
    * than one shape — e.g. delegate links an entry from `outbound_entry_id` or from its
    * id quoted in the brief (#1972).
@@ -142,7 +150,7 @@ export type TextSource = 'reply' | { tool: string; arg: string };
 export type DeliveryChannel = 'email' | 'signal' | 'slack' | 'sms';
 
 /** The check kinds that read what a through-gateway run sent (#2312). */
-export const GATEWAY_CHECK_KINDS = ['delivered', 'not_delivered', 'held', 'not_held', 'outreach_recorded', 'decision_recorded', 'reviewed'] as const;
+export const GATEWAY_CHECK_KINDS = ['delivered', 'not_delivered', 'held', 'not_held', 'outreach_recorded', 'decision_recorded', 'reviewed', 'left_as_draft'] as const;
 
 /** What a band review decided for a send. */
 export type ReviewOutcome = RecordedReview['outcome'];
@@ -316,9 +324,15 @@ export interface SeedDraftRecipient {
 }
 
 /**
+ * Who wrote a seeded principal-mailbox draft (#2474): `false` the principal; `earlier` Curia, in
+ * some earlier task (what the gateway's provenance reads: a Curia-written draft is reviewed as
+ * Curia's words); `same_task` Curia, in the run's own task, the only draft an autonomous send
+ * may send (PR 2, design D4.1).
+ */
+export type SeedDraftAuthor = false | 'same_task' | 'earlier';
+
+/**
  * A draft in the principal's own mailbox (#2474): what `ceo-inbox-send-draft` reads and sends.
- * `byCuria` says whether Curia wrote it, which the gateway's provenance reads (a Curia-written
- * draft is reviewed as Curia's words).
  */
 export interface SeedPrincipalDraft {
   id: string;
@@ -328,19 +342,49 @@ export interface SeedPrincipalDraft {
   cc: SeedDraftRecipient[];
   subject: string;
   body: string;
-  /** When it was last modified: a date or a date placeholder (`{{at:now-3h}}`). Absent: now. */
+  /** When it was last modified: a date or a date placeholder (`{{at:now-3h}}`). Absent: the run clock's now. */
   modified?: string;
-  byCuria: boolean;
+  byCuria: SeedDraftAuthor;
+}
+
+/** A party on a seeded principal-mailbox message: a recipient, or `principal` (their verified email in this database). */
+export type SeedMailParty = SeedDraftRecipient | 'principal';
+
+/**
+ * A message on a thread in the principal's mailbox (#2474 PR 2), which the autonomous limits read.
+ * One from the principal is filed in SENT, any other in INBOX. `senderVerified` sets an
+ * Authentication-Results header that passes (true) or fails (false); absent, there is none.
+ * `listId` sets a List-Id header.
+ */
+export interface SeedThreadMessage {
+  id: string;
+  from: SeedMailParty;
+  to: SeedMailParty[];
+  cc: SeedMailParty[];
+  subject: string;
+  body: string;
+  /** A date or a date placeholder (`{{at:now-2h}}`). */
+  date: string;
+  senderVerified?: boolean;
+  listId?: string;
+}
+
+/** A thread in the principal's mailbox (#2474 PR 2): `listMessages({ threadId })` serves it, with its drafts. */
+export interface SeedPrincipalThread {
+  id: string;
+  messages: SeedThreadMessage[];
 }
 
 /**
  * The principal's own mailbox for a through-gateway run (`seed.principal_mailbox`, #2474):
- * its drafts, and the run's `ceo_inbox/sending` level for the default mailbox.
+ * its drafts, the threads they reply on, and the run's `ceo_inbox/sending` level for the
+ * default mailbox.
  */
 export interface SeedPrincipalMailbox {
   /** Absent: production's default, on_request. */
   sendLevel?: SendLevel;
   drafts: SeedPrincipalDraft[];
+  threads: SeedPrincipalThread[];
 }
 
 /**
@@ -680,6 +724,11 @@ export interface GatewayOutcome {
    * saved before it existed.
    */
   reviews?: RecordedReview[];
+  /**
+   * The run's principal-mailbox send ledger (#2474 PR 2): a marker per send, and a `held` one with
+   * its reason per autonomous send that stopped for good. Absent on results saved before it existed.
+   */
+  principalSends?: PrincipalSendEntry[];
   /**
    * The band review's fail-open cap tripped in this run: its judge failed on too many sends,
    * so later sends held for want of a reviewer. The run is then an error, not a score.

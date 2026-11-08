@@ -540,6 +540,14 @@ export async function createScenarioHarness(
       curiaDraftIds: () => currentScope()?.curiaDraftIds,
       curiaEditedDraftIds: () => currentScope()?.curiaEditedDraftIds,
       sendLevel: () => currentScope()?.sendLevel,
+      // An autonomous send (#2474 PR 2): the drafts the run's own task created, last written at
+      // the run clock's now; the seeded threads they reply on; the run's own send ledger.
+      curiaTaskDrafts: () => {
+        const scope = currentScope();
+        return scope?.clockNow ? { ids: scope.curiaTaskDraftIds, now: scope.clockNow } : undefined;
+      },
+      principalThreadMessages: (threadId) => currentScope()?.principalThreads.get(threadId) ?? [],
+      principalSends: () => currentScope()?.principalSends,
       // Labels and outcome of each band review, for the `reviewed` check (#2312).
       reviewed: (review) => { currentScope()?.reviews.push(review); },
       // Relayed replies (#2312): production's adapter path, for a through-gateway run's own
@@ -1065,6 +1073,8 @@ export async function createScenarioHarness(
     // what "next week" is, and rating re-resolves the behaviors against this same instant
     // (resolveRunPlaceholders), even if it happens after midnight.
     const clock: RunClock = { now: new Date().toISOString(), timezone: stack.config.timezone };
+    // The principal mailbox dates its undated and mirrored drafts by it (#2474 PR 2).
+    scope.clockNow = new Date(clock.now);
     const resolveDates = <T>(value: T): T => resolveDatePlaceholders(value, clock.timezone, new Date(clock.now));
     const dated: ScenarioCase = {
       ...scenario,

@@ -151,6 +151,31 @@ expected_behaviors:`));
     ]);
   });
 
+  it('reads left_as_draft (#2474 PR 2): an optional count and reason texts', () => {
+    const c = load(CASE.replace('  - id: no-ask\n', `  - id: left
+    description: an autonomous reply stayed a draft
+    check:
+      left_as_draft: { count: 1, contains: [not on the thread] }
+  - id: any-left
+    description: any stop
+    check:
+      left_as_draft: true
+  - id: no-ask
+`));
+    expect(c.expectedBehaviors.map(b => b.check).slice(-3, -1)).toEqual([
+      { kind: 'left_as_draft', count: 1, contains: ['not on the thread'] },
+      { kind: 'left_as_draft' },
+    ]);
+  });
+
+  it.each([
+    ['an unknown left_as_draft filter', (s: string) => s.replace('held: true', 'left_as_draft: { reason: x }'), /unknown key\(s\) reason/],
+    ['a left_as_draft count that is not whole', (s: string) => s.replace('held: true', 'left_as_draft: { count: 1.5 }'), /'count' must be a whole number/],
+    ['left_as_draft without through_gateway', (s: string) => s.replace('held: true', 'left_as_draft: true').replace('through_gateway: true\n', ''), /check needs through_gateway: true/],
+  ])('rejects %s', (_label, edit, error) => {
+    expect(() => load(edit(CASE))).toThrow(error);
+  });
+
   it('reads a delivered check\'s turn on a case with inbound.then (#2333)', () => {
     const c = load(CASE.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: yes, channel: signal }\n').replace('count: 1 }', 'count: 1, turn: then }'));
     expect(c.expectedBehaviors.map(b => b.check).find(k => k?.kind === 'delivered' && k.turn !== undefined)).toMatchObject({ turn: 'then' });
@@ -276,7 +301,7 @@ describe('seed.principal_mailbox (#2474)', () => {
         to: [{ email: sam@older.test }]
         subject: Older
         body: Older draft
-        by_curia: true
+        by_curia: earlier
 `;
   const withMailbox = (s: string, block = MAILBOX) => s.replace('  tasks:\n', `${block}  tasks:\n`);
 
@@ -290,9 +315,74 @@ describe('seed.principal_mailbox (#2474)', () => {
           cc: [{ email: 'lee@acme.example.test' }], subject: 'Venue for the offsite', body: 'Shall we use the Harbour Room?',
           modified: '{{at:now-3h}}', byCuria: false,
         },
-        { id: 'draft-30v-older', to: [{ email: 'sam@older.test' }], cc: [], subject: 'Older', body: 'Older draft', byCuria: true },
+        { id: 'draft-30v-older', to: [{ email: 'sam@older.test' }], cc: [], subject: 'Older', body: 'Older draft', byCuria: 'earlier' },
       ],
+      threads: [],
     });
+  });
+
+  it('reads by_curia: same_task, a draft Curia wrote in the run\'s own task (PR 2)', () => {
+    const c = load(withMailbox(CASE, MAILBOX.replace('by_curia: earlier', 'by_curia: same_task')));
+    expect(c.seed.principalMailbox?.drafts[1]?.byCuria).toBe('same_task');
+  });
+
+  // PR 2: the thread a reply answers, which the autonomous limits read (who is on it, List-Id,
+  // which senders their provider authenticated).
+  const THREADS = `    threads:
+      - id: thr-30v-acme
+        messages:
+          - id: msg-30v-1
+            from: principal
+            to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+            subject: Venue for the offsite
+            body: Shall we pick a venue?
+            date: "{{at:now-24h}}"
+          - id: msg-30v-2
+            from: { name: Jo Park, email: jo.park@acme.example.test }
+            to: [principal]
+            cc: [{ email: lee@acme.example.test }]
+            subject: "Re: Venue for the offsite"
+            body: The Harbour Room is free on the 12th.
+            date: "{{at:now-2h}}"
+            sender_verified: true
+            list_id: offsite.acme.example.test
+`;
+  const withThreads = (s: string, threads = THREADS) => withMailbox(s, `${MAILBOX}${threads}`);
+
+  it('reads the threads: who wrote each message, to whom, and its headers\' inputs', () => {
+    const c = load(withThreads(CASE));
+    expect(c.seed.principalMailbox?.threads).toEqual([{
+      id: 'thr-30v-acme',
+      messages: [
+        {
+          id: 'msg-30v-1', from: 'principal', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [],
+          subject: 'Venue for the offsite', body: 'Shall we pick a venue?', date: '{{at:now-24h}}',
+        },
+        {
+          id: 'msg-30v-2', from: { name: 'Jo Park', email: 'jo.park@acme.example.test' }, to: ['principal'], cc: [{ email: 'lee@acme.example.test' }],
+          subject: 'Re: Venue for the offsite', body: 'The Harbour Room is free on the 12th.', date: '{{at:now-2h}}',
+          senderVerified: true, listId: 'offsite.acme.example.test',
+        },
+      ],
+    }]);
+  });
+
+  it.each([
+    ['by_curia: true (PR 1\'s, now earlier)', (s: string) => withMailbox(s, MAILBOX.replace('by_curia: earlier', 'by_curia: true')), /'by_curia' must be false, same_task or earlier/],
+    ['an unknown by_curia value', (s: string) => withMailbox(s, MAILBOX.replace('by_curia: earlier', 'by_curia: yesterday')), /'by_curia' must be false, same_task or earlier/],
+    ['an unknown key in a thread', (s: string) => withThreads(s, THREADS.replace('      - id: thr-30v-acme\n', '      - id: thr-30v-acme\n        folder: INBOX\n')), /threads\[0\]: unknown key\(s\) folder/],
+    ['an unknown key in a message', (s: string) => withThreads(s, THREADS.replace('            list_id:', '            bcc: []\n            list_id:')), /threads\[0\].messages\[1\]: unknown key\(s\) bcc/],
+    ['a from that is neither principal nor a recipient', (s: string) => withThreads(s, THREADS.replace('from: principal', 'from: curia')), /'from' must be principal or a recipient/],
+    ['a message on a real domain', (s: string) => withThreads(s, THREADS.replace('lee@acme.example.test', 'lee@acme.com')), /must be under a .test name/],
+    ['a recipient token other than principal', (s: string) => withThreads(s, THREADS.replace('to: [principal]', 'to: [curia]')), /'to' must be a list of recipients/],
+    ['a message date that is not a date', (s: string) => withThreads(s, THREADS.replace('"{{at:now-2h}}"', 'soon')), /'date' must be a date or a date placeholder/],
+    ['a message without a date', (s: string) => withThreads(s, THREADS.replace('            date: "{{at:now-24h}}"\n', '')), /'date' must be a non-empty string/],
+    ['a sender_verified that is not a boolean', (s: string) => withThreads(s, THREADS.replace('sender_verified: true', 'sender_verified: maybe')), /'sender_verified' must be a boolean/],
+    ['a duplicate message id', (s: string) => withThreads(s, THREADS.replace('id: msg-30v-2', 'id: msg-30v-1')), /duplicate message id 'msg-30v-1'/],
+    ['a message id that is a draft\'s', (s: string) => withThreads(s, THREADS.replace('id: msg-30v-2', 'id: draft-30v-acme')), /duplicate message id 'draft-30v-acme'/],
+    ['a duplicate thread id', (s: string) => withThreads(s, `${THREADS}      - id: thr-30v-acme\n        messages: []\n`), /duplicate thread id 'thr-30v-acme'/],
+  ])('rejects %s', (_label, edit, error) => {
+    expect(() => load(edit(CASE))).toThrow(error);
   });
 
   it('leaves the send level unset when the case does not name one', () => {
@@ -306,10 +396,10 @@ describe('seed.principal_mailbox (#2474)', () => {
   it.each([
     ['without through_gateway', (s: string) => withMailbox(s).replace('through_gateway: true\n', '').replace(/expected_behaviors:[\s\S]*$/, 'expected_behaviors:\n  - id: a\n    description: replies\n'), /principal_mailbox needs through_gateway: true/],
     ['an unknown key in the block', (s: string) => withMailbox(s, MAILBOX.replace('    drafts:\n', '    folder: DRAFTS\n    drafts:\n')), /seed.principal_mailbox: unknown key\(s\) folder/],
-    ['an unknown key in a draft', (s: string) => withMailbox(s, MAILBOX.replace('        by_curia: true\n', '        by_curia: true\n        bcc: []\n')), /seed.principal_mailbox.drafts\[1\]: unknown key\(s\) bcc/],
+    ['an unknown key in a draft', (s: string) => withMailbox(s, MAILBOX.replace('        by_curia: earlier\n', '        by_curia: earlier\n        bcc: []\n')), /seed.principal_mailbox.drafts\[1\]: unknown key\(s\) bcc/],
     ['an unknown key in a recipient', (s: string) => withMailbox(s, MAILBOX.replace('[{ email: sam@older.test }]', '[{ email: sam@older.test, role: cfo }]')), /drafts\[1\].to\[0\]: unknown key\(s\) role/],
     ['an unknown send level', (s: string) => withMailbox(s, MAILBOX.replace('send_level: on_request', 'send_level: sometimes')), /send_level must be one of off, on_request, routine, all/],
-    ['a draft without by_curia', (s: string) => withMailbox(s, MAILBOX.replace('        by_curia: true\n', '')), /'by_curia' must be true or false/],
+    ['a draft without by_curia', (s: string) => withMailbox(s, MAILBOX.replace('        by_curia: earlier\n', '')), /'by_curia' must be false, same_task or earlier/],
     ['a draft without an id', (s: string) => withMailbox(s, MAILBOX.replace('      - id: draft-30v-older\n        to:', '      - to:')), /'id' must be a non-empty string/],
     ['a duplicate draft id', (s: string) => withMailbox(s, MAILBOX.replace('id: draft-30v-older', 'id: draft-30v-acme')), /duplicate draft id 'draft-30v-acme'/],
     ['a recipient on a real domain', (s: string) => withMailbox(s, MAILBOX.replace('sam@older.test', 'sam@older.com')), /must be under a .test name/],

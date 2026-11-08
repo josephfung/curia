@@ -32,7 +32,10 @@ vi.mock('../../../src/skills/outbound-queue-repo.js', async (importOriginal) => 
 import { EventBus } from '../../../src/bus/bus.js';
 import { parseSenderVerified } from '../../../src/channels/email/message-converter.js';
 import type { NylasMessage } from '../../../src/channels/email/nylas-client.js';
+import type { AutonomyService } from '../../../src/autonomy/autonomy-service.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
+import type { ChannelIdentity } from '../../../src/contacts/types.js';
+import type { PrincipalSendEntry } from '../../../src/skills/principal-send/send-ledger.js';
 import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
 import { createLogger } from '../../../src/logger.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
@@ -91,7 +94,18 @@ function principalDraft(over: Partial<NylasMessage> = {}): NylasMessage {
   return {
     id: 'draft-30v-acme', threadId: 'thr-30v-acme', subject: 'Venue for the offsite', from: [],
     to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], bcc: [],
-    body: 'Shall we use the Harbour Room?', snippet: '', date: 0, unread: false, folders: ['DRAFTS'], attachments: [],
+    body: 'Shall we use the Harbour Room?', snippet: '', date: 0, unread: false, folders: ['DRAFT'], attachments: [],
+    ...over,
+  };
+}
+
+/** A message on the draft's thread, as `seed.principal_mailbox.threads` seeds one (#2474 PR 2): Jo, authenticated. */
+function threadMessage(over: Partial<NylasMessage> = {}): NylasMessage {
+  return {
+    id: 'msg-1', threadId: 'thr-30v-acme', subject: 'Venue for the offsite', from: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }],
+    to: [{ email: 'avery@example.test' }], cc: [], bcc: [], body: 'Which venue?', snippet: '', date: 0, unread: false, folders: ['INBOX'],
+    headers: [{ name: 'Authentication-Results', value: 'mx.example.test; spf=pass smtp.mailfrom=acme.example.test; dkim=pass header.d=acme.example.test; dmarc=pass header.from=acme.example.test' }],
+    attachments: [],
     ...over,
   };
 }
@@ -322,6 +336,96 @@ describe('the recording principal mailbox (#2474)', () => {
   it('refuses outside every run: the stack has no principal mailbox then', async () => {
     const result = await gateway(noRun, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL });
     expect(result).toMatchObject({ success: false, refusal: 'mailbox_unavailable' });
+  });
+
+  it('lists a thread as Gmail does: the run\'s seeded messages and the drafts on it, newest first', async () => {
+    const thread = [threadMessage({ id: 'msg-1', date: 100 }), threadMessage({ id: 'msg-2', date: 300 })];
+    const drafts = new Map([
+      ['draft-30v-acme', principalDraft({ date: 200 })],
+      ['draft-elsewhere', principalDraft({ id: 'draft-elsewhere', threadId: 'thr-other' })],
+    ]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts, principalThreadMessages: (id: string) => (id === 'thr-30v-acme' ? thread : []) };
+    const mailbox = createRecordingPrincipalMailbox(recorder, () => 'avery@example.test')()!;
+    const listed = await mailbox.listMessages({ threadId: 'thr-30v-acme', fields: 'include_headers', limit: 50 });
+    expect(listed.map(m => [m.id, m.folders])).toEqual([['msg-2', ['INBOX']], ['draft-30v-acme', ['DRAFT']], ['msg-1', ['INBOX']]]);
+    expect(await mailbox.listMessages({ threadId: 'thr-30v-acme', limit: 2 })).toHaveLength(2);
+    // sendPrincipalDraft lists only a thread; anything else is a misuse of the fake, loudly.
+    await expect(mailbox.listMessages({})).rejects.toThrow(/threadId/);
+  });
+});
+
+// #2474 PR 2: an autonomous send reaches band review in a scenario run. The stack builds the
+// gateway with the configured (tier) gating; the case's autonomy fixture says band on every read.
+describe('an autonomous send through the recording gateway (#2474 PR 2)', () => {
+  const NOW = Math.floor(Date.now() / 1000);
+  const SCHEDULED = { taskMetadata: { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
+  const bandFixture = {
+    getConfig: async () => ({ score: 85, band: 'act', updatedAt: new Date(0), updatedBy: 'scenario-fixture', gating: 'band' }),
+  } as unknown as AutonomyService;
+
+  function setup(over: { taskDrafts?: string[]; ledger?: PrincipalSendEntry[]; draft?: Partial<NylasMessage> } = {}) {
+    const drafts = new Map([['draft-30v-acme', principalDraft({ date: NOW, ...over.draft })]]);
+    const ledger = over.ledger ?? [];
+    const recorder: SendRecorder & { sends: RecordedSend[] } = {
+      ...runRecorder(),
+      principalDrafts: () => drafts,
+      curiaDraftIds: () => new Set(['draft-30v-acme']),
+      curiaTaskDrafts: () => ({ ids: new Set(over.taskDrafts ?? ['draft-30v-acme']), now: new Date(NOW * 1000) }),
+      principalThreadMessages: (id: string) => (id === 'thr-30v-acme' ? [threadMessage({ id: 'msg-1', date: NOW - 3600 })] : []),
+      principalSends: () => ledger,
+      sendLevel: () => 'routine' as const,
+    };
+    const reviews: string[] = [];
+    const gw = createRecordingOutboundGateway({
+      recorder,
+      emailAccounts: [{ name: 'curia', selfEmail: 'curia@example.test' }],
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockResolvedValue(null), getContact: vi.fn().mockResolvedValue(null),
+        createContact: vi.fn().mockResolvedValue({ id: 'contact-new' }), linkIdentity: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ContactService,
+      bus: new EventBus(logger),
+      logger,
+      principalIdentities: [{ channel: 'email', channelIdentifier: 'avery@example.test', verified: true } as unknown as ChannelIdentity],
+      autonomyService: bandFixture,
+      principalMailbox: createRecordingPrincipalMailbox(recorder, () => 'avery@example.test'),
+      review: {
+        contentFilter: new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' }),
+        bandReview: { review: vi.fn(async () => { reviews.push('reviewed'); return { kind: 'send' as const }; }) },
+        gating: 'tier',
+      },
+    });
+    return { gw, recorder, drafts, ledger, reviews };
+  }
+
+  it('sends a reply Curia drafted in this task, past band review, from the principal', async () => {
+    const { gw, recorder, ledger, reviews } = setup();
+    const result = await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' });
+    expect(result).toMatchObject({ success: true, to: ['jo.park@acme.example.test'] });
+    expect(reviews).toEqual(['reviewed']);
+    expect(recorder.sends.map(s => [s.kind, s.from])).toEqual([['send', 'avery@example.test']]);
+    // The run's own ledger: the send's marker, now sent, starts the thread's cooldown.
+    expect(ledger).toEqual([expect.objectContaining({ draftId: 'draft-30v-acme', threadId: 'thr-30v-acme', mode: 'autonomous', outcome: 'sent' })]);
+  });
+
+  it('leaves a draft Curia wrote in an earlier task, and records why in the run\'s ledger', async () => {
+    const { gw, recorder, drafts, ledger, reviews } = setup({ taskDrafts: [] });
+    const result = await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' });
+    expect(result).toMatchObject({ success: false, leftAsDraft: true, refusal: 'not_curia_draft' });
+    expect(reviews).toEqual([]);
+    expect(recorder.sends).toEqual([]);
+    expect(drafts.has('draft-30v-acme')).toBe(true);
+    expect(ledger).toEqual([expect.objectContaining({ draftId: 'draft-30v-acme', outcome: 'held', reason: expect.stringContaining('draft') })]);
+  });
+
+  it('keeps each run\'s ledger apart: one run\'s send starts no cooldown in another', async () => {
+    const first = setup();
+    expect((await first.gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).success).toBe(true);
+    // Another attempt of the same case reuses the thread id, with a ledger of its own.
+    const second = setup();
+    expect((await second.gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-2' })).success).toBe(true);
+    // Within one run the cooldown holds.
+    const again = setup({ ledger: first.ledger });
+    expect(await again.gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-3' })).toMatchObject({ refusal: 'thread_cooldown' });
   });
 });
 

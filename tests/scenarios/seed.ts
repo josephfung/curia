@@ -39,9 +39,12 @@ import { buildInitialTaskProgress } from '../../src/db/task-repo.js';
 import { FailOpenLimiter } from '../../src/autonomy/band-policy.js';
 import type { TaskOutreachRepo, TaskOutreachRow } from '../../src/dispatch/task-outreach.js';
 import type { RecordedReview, RecordedSend } from '../../src/startup/test-mode-sends.js';
+import type { PrincipalSendEntry } from '../../src/skills/principal-send/send-ledger.js';
 import type { SendLevel } from '../../src/skills/principal-send/send-level.js';
-import type { MailboxDraft } from '../shared/tool-state.js';
-import type { GatewayOutcome, ScenarioCase, SeedContact, SeedOutreach, SeedPinned, SeedPrincipalIdentity, SeedTask } from './types.js';
+import type { DraftParticipant, MailboxDraft } from '../shared/tool-state.js';
+import type {
+  GatewayOutcome, ScenarioCase, SeedContact, SeedMailParty, SeedOutreach, SeedPinned, SeedPrincipalIdentity, SeedTask, SeedThreadMessage,
+} from './types.js';
 
 /**
  * Stamped into `notes` on every seeded contact — contacts have no source column, and
@@ -127,12 +130,31 @@ export class SeedScope {
    * Curia accounts' mailbox, as production keeps the two grants apart.
    */
   readonly principalDrafts = new Map<string, NylasMessage>();
-  /** Which of principalDrafts Curia wrote (#2474): what the gateway's provenance reads. */
+  /** Which of principalDrafts Curia wrote (#2474), in any task: what the gateway's review provenance reads. */
   readonly curiaDraftIds = new Set<string>();
+  /**
+   * Which of principalDrafts Curia created in the run's own task (#2474 PR 2): `same_task` seeds
+   * and the run's stubbed composes and replies. The only drafts an autonomous send may send.
+   */
+  readonly curiaTaskDraftIds = new Set<string>();
   /** Which of principalDrafts Curia edited (#2474 final review S1): reviewed as curia-edited. */
   readonly curiaEditedDraftIds = new Set<string>();
   /** The run's ceo_inbox/sending level (`seed.principal_mailbox.send_level`, #2474); unset: on_request. */
   sendLevel: SendLevel | undefined;
+  /** Threads in the principal's mailbox (`seed.principal_mailbox.threads`, #2474 PR 2): their non-draft messages, by thread id. */
+  readonly principalThreads = new Map<string, NylasMessage[]>();
+  /** The run's principal-mailbox send ledger (#2474 PR 2): what the `left_as_draft` check reads. */
+  readonly principalSends: PrincipalSendEntry[] = [];
+  /** Email addresses of the run's seeded email contacts, by contact id: how a mirrored compose's contact IDs resolve. */
+  readonly contactAddresses = new Map<string, string>();
+  /** The principal's verified email in this database, when it has one: `principal` in a mailbox seed or a compose. */
+  principalAddress: string | undefined;
+  /**
+   * The run clock's now (harness.ts sets it as the run begins): the date a mirrored draft
+   * carries and when Curia last wrote a draft of its task (#2474 PR 2), so they agree with the
+   * case's `{{at:…}}` dates rather than drift with the wall clock.
+   */
+  clockNow: Date | undefined;
   /** Action-log row ids the run wrote or read as its own (#2312): the only ids its delivery may claim. */
   readonly approvalRowIds = new Set<number>();
   /**
@@ -169,8 +191,14 @@ export class SeedScope {
     this.drafts.clear();
     this.principalDrafts.clear();
     this.curiaDraftIds.clear();
+    this.curiaTaskDraftIds.clear();
     this.curiaEditedDraftIds.clear();
     this.sendLevel = undefined;
+    this.principalThreads.clear();
+    this.principalSends.length = 0;
+    this.contactAddresses.clear();
+    this.principalAddress = undefined;
+    this.clockNow = undefined;
     this.errors.length = 0;
   }
 }
@@ -189,23 +217,112 @@ function principalDraftMessage(draft: MailboxDraft, threadId: string, date: numb
     snippet: draft.body.slice(0, 120),
     date,
     unread: false,
-    folders: ['DRAFTS'],
+    // Gmail's draft label (#2474 PR 2): a thread listing serves drafts too, and the gateway drops
+    // them by it.
+    folders: ['DRAFT'],
     attachments: [],
   };
 }
 
+/** The run clock's now (SeedScope.clockNow), required: a mirrored or undated draft must agree with the case's dates. */
+function runNow(scope: SeedScope): Date {
+  if (!scope.clockNow) throw new Error('scenario seed: no run clock for the principal mailbox (SeedScope.clockNow is unset)');
+  return scope.clockNow;
+}
+
+/** The thread a seeded principal-mailbox message is on, or undefined when the case seeded none with that id. */
+function threadOfMessage(scope: SeedScope, messageId: string): string | undefined {
+  for (const [threadId, messages] of scope.principalThreads) {
+    if (messages.some((m) => m.id === messageId)) return threadId;
+  }
+  return undefined;
+}
+
+/**
+ * Recipients a write named by contact ID (or `principal`), as addresses: the run's seeded email
+ * contacts and the principal's verified email. A `#label` hint is dropped. One that resolves to
+ * nothing fails the run (SeedScope.errors) instead of quietly mirroring a draft to no one.
+ */
+function resolveContactIds(scope: SeedScope, ids: readonly string[], draftId: string): DraftParticipant[] {
+  return ids.flatMap((raw) => {
+    const id = raw.split('#')[0]!.trim();
+    const email = id === 'principal' ? scope.principalAddress : scope.contactAddresses.get(id);
+    if (email) return [{ email }];
+    scope.errors.push(`a stubbed draft write (${draftId}) named recipient '${raw}', which is no seeded email contact and not the principal's verified email`);
+    return [];
+  });
+}
+
 /**
  * Keep the run's principal mailbox in step with a stubbed ceo-inbox draft write (#2474; the
- * stub layer's DraftMirror). The draft is added or replaced, keeping the thread it was in;
- * `curiaWrote` (a new compose or reply) marks it Curia's; `edited` (a draft-edit) leaves its
- * creator as it was and marks it edited, so the send reviews it as curia-edited (final review
- * S1). PR 2 extends this with the thread a reply lands on.
+ * stub layer's DraftMirror). The draft is added or replaced, dated by the run clock, on the
+ * thread of the seeded message it replies to (PR 2), else the thread it was in. `curiaWrote` (a
+ * new compose or reply) marks it Curia's, in the run's own task; `edited` (a draft-edit) leaves
+ * its creator as it was and marks it edited, so the send reviews it as curia-edited (final
+ * review S1). Recipients named by contact ID resolve through the run's contacts.
  */
 export function mirrorPrincipalDraft(scope: SeedScope, draft: MailboxDraft, curiaWrote: boolean, edited?: true): void {
   const prev = scope.principalDrafts.get(draft.id);
-  scope.principalDrafts.set(draft.id, principalDraftMessage(draft, prev?.threadId ?? '', Math.floor(Date.now() / 1000)));
-  if (curiaWrote) scope.curiaDraftIds.add(draft.id);
+  const threadId = (draft.replyTo !== undefined ? threadOfMessage(scope, draft.replyTo) : undefined) ?? prev?.threadId ?? '';
+  const resolved: MailboxDraft = {
+    ...draft,
+    to: [...draft.to, ...resolveContactIds(scope, draft.contactIds?.to ?? [], draft.id)],
+    cc: [...draft.cc, ...resolveContactIds(scope, draft.contactIds?.cc ?? [], draft.id)],
+  };
+  scope.principalDrafts.set(draft.id, principalDraftMessage(resolved, threadId, Math.floor(runNow(scope).getTime() / 1000)));
+  if (curiaWrote) {
+    scope.curiaDraftIds.add(draft.id);
+    scope.curiaTaskDraftIds.add(draft.id);
+  }
   if (edited) scope.curiaEditedDraftIds.add(draft.id);
+}
+
+/**
+ * A party on a seeded principal-mailbox message, as an address. `principal` needs the
+ * principal's verified email in this database; without one the seed fails loudly.
+ */
+function mailParty(party: SeedMailParty, principalAddress: string | undefined): DraftParticipant {
+  if (party !== 'principal') return { ...party };
+  if (!principalAddress) throw new Error('scenario seed: principal_mailbox names the principal, but the principal has no verified email identity in this database');
+  return { email: principalAddress };
+}
+
+/** An Authentication-Results header that passes (or fails) for `email`'s domain, as parseSenderVerified reads it. */
+function authenticationResults(email: string, pass: boolean): { name: string; value: string } {
+  const domain = email.slice(email.lastIndexOf('@') + 1);
+  const verdict = pass ? 'pass' : 'fail';
+  return {
+    name: 'Authentication-Results',
+    value: `mx.example.test; spf=${verdict} smtp.mailfrom=${domain}; dkim=${verdict} header.d=${domain}; dmarc=${verdict} header.from=${domain}`,
+  };
+}
+
+/**
+ * A seeded thread message as the principal's mailbox lists it (#2474 PR 2), with headers. One
+ * from the principal is filed in SENT (the autonomous limits trust its recipients only there),
+ * any other in INBOX. `date` is already resolved against the run clock.
+ */
+function principalThreadMessage(m: SeedThreadMessage, threadId: string, principalAddress: string | undefined): NylasMessage {
+  const from = mailParty(m.from, principalAddress);
+  return {
+    id: m.id,
+    threadId,
+    subject: m.subject,
+    from: [from],
+    to: m.to.map((p) => mailParty(p, principalAddress)),
+    cc: m.cc.map((p) => mailParty(p, principalAddress)),
+    bcc: [],
+    body: m.body,
+    snippet: m.body.slice(0, 120),
+    date: Math.floor(Date.parse(m.date) / 1000),
+    unread: false,
+    folders: m.from === 'principal' ? ['SENT'] : ['INBOX'],
+    headers: [
+      ...(m.senderVerified !== undefined ? [authenticationResults(from.email, m.senderVerified)] : []),
+      ...(m.listId !== undefined ? [{ name: 'List-Id', value: m.listId }] : []),
+    ],
+    attachments: [],
+  };
 }
 
 /** The run's principal-mailbox drafts as the stub layer preloads them (#2474), so an edit applies to them. */
@@ -664,12 +781,21 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
   // The principal's own mailbox (#2474): in memory only, nothing to clean up.
   const mailbox = scenario.seed.principalMailbox;
   scope.sendLevel = mailbox?.sendLevel;
+  // The principal's verified email as the gateway reads it (principalIdentities): `principal` in a
+  // thread message or a mirrored compose.
+  scope.principalAddress = (stack.principalIdentities ?? [])
+    .find((i) => i.channel === 'email' && i.verified)?.channelIdentifier;
   for (const d of mailbox?.drafts ?? []) {
-    const date = Math.floor((d.modified !== undefined ? Date.parse(d.modified) : Date.now()) / 1000);
+    const date = Math.floor((d.modified !== undefined ? Date.parse(d.modified) : runNow(scope).getTime()) / 1000);
     scope.principalDrafts.set(d.id, principalDraftMessage(
       { id: d.id, subject: d.subject, to: d.to, cc: d.cc, body: d.body }, d.thread ?? '', date,
     ));
-    if (d.byCuria) scope.curiaDraftIds.add(d.id);
+    // Both are Curia's words for the review; only same_task may be sent on Curia's own (PR 2).
+    if (d.byCuria !== false) scope.curiaDraftIds.add(d.id);
+    if (d.byCuria === 'same_task') scope.curiaTaskDraftIds.add(d.id);
+  }
+  for (const t of mailbox?.threads ?? []) {
+    scope.principalThreads.set(t.id, t.messages.map((m) => principalThreadMessage(m, t.id, scope.principalAddress)));
   }
   try {
     for (const identity of scenario.seed.principalIdentities) {
@@ -682,6 +808,7 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
       const created = await seedContact(stack, contact);
       seeded.contacts.push(created);
       seeded.refs.set(`contact:${contact.key}`, created.id);
+      if (contact.channel === 'email') scope.contactAddresses.set(created.id, contact.identifier.trim());
       if (contact.principalWrote) scope.principalWroteTo.add(contact.identifier.trim().toLowerCase());
     }
 
@@ -1329,6 +1456,7 @@ export async function readGatewayOutcome(stack: TestModeStack, scenario: Scenari
       ...(d.quotedBody !== undefined ? { quotedBody: d.quotedBody } : {}),
     })),
     reviews: scope.reviews.map(r => ({ labels: [...r.labels], quoteLabels: [...r.quoteLabels], outcome: r.outcome })),
+    principalSends: scope.principalSends.map(e => ({ ...e, recipients: [...e.recipients] })),
     holds: holds.rows.map(r => {
       const shown = scope.approvalDisplays.get(r.short_ref);
       return {

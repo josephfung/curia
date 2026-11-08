@@ -11,6 +11,7 @@
 // names an `agent` (or `any`).
 import { isDeepStrictEqual } from 'node:util';
 import { detectPii } from '../../src/pii/scrubber.js';
+import type { PrincipalSendEntry } from '../../src/skills/principal-send/send-ledger.js';
 import { argsMatch } from './stub-matcher.js';
 import {
   ANY_AGENT, COORDINATOR, type BehaviorCheck, type CapturedToolCall, type CheckAgent, type GATEWAY_CHECK_KINDS,
@@ -203,6 +204,7 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
     case 'outreach_recorded':
     case 'decision_recorded':
     case 'reviewed':
+    case 'left_as_draft':
       return evaluateGatewayCheck(check, run);
     case 'any_of': {
       const ratings = check.checks.map(alt => evaluateCheck(alt, run, ctx));
@@ -354,6 +356,20 @@ function evaluateGatewayCheck(check: GatewayCheck, run: ScenarioRun): RunRating 
       return hit
         ? pass(`band review ruled on ${check.label} (${hit.outcome})`)
         : miss(`no band review ruled on ${check.label}${check.outcome ? ` with outcome ${check.outcome}` : ''} in a send's own text: the path was not exercised. Reviews: ${seen}`);
+    }
+    case 'left_as_draft': {
+      // A result saved before the ledger was recorded has nothing to read: a miss, not a pass.
+      if (!outcome.principalSends) return miss('no principal-mailbox send ledger for this run');
+      const held = outcome.principalSends.filter(e => e.outcome === 'held');
+      const reason = (e: PrincipalSendEntry): string => (e.reason ?? '').toLowerCase();
+      const matching = held.filter(e => (check.contains ?? []).every(s => reason(e).includes(s.toLowerCase())));
+      const ok = check.count === undefined ? matching.length > 0 : matching.length === check.count;
+      const wanted = JSON.stringify({ contains: termCount(check.contains), count: check.count });
+      // The gateway's reasons can name recipients; detected personal details are masked.
+      const shown = held.map(e => `${e.draftId}: ${maskPii(e.reason ?? '(no reason)').slice(0, 120)}`).join(' | ');
+      return ok
+        ? pass(`${matching.length} draft(s) left matching ${wanted}`)
+        : miss(`expected ${check.count ?? '1+'} draft(s) left matching ${wanted}; got ${matching.length}. ${held.length === 0 ? 'nothing was left as a draft' : `Left: ${shown}`}`);
     }
   }
 }

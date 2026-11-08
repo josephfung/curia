@@ -136,6 +136,23 @@ export interface SendRecorder {
   curiaEditedDraftIds?(): ReadonlySet<string> | undefined;
   /** The calling run's ceo_inbox/sending level (#2474). Undefined: the default, on_request. */
   sendLevel?(): SendLevel | undefined;
+  /**
+   * The drafts Curia created in the calling run's own task, and the run clock's now, which is
+   * when Curia last wrote them (#2474 PR 2: the autonomous D4.1 check). Undefined: no run
+   * record, so no draft reads as created in the task.
+   */
+  curiaTaskDrafts?(): { ids: ReadonlySet<string>; now: Date } | undefined;
+  /**
+   * The non-draft messages of a thread in the principal's mailbox for the calling run (#2474 PR 2),
+   * with their headers: what the autonomous limits read. Absent: none.
+   */
+  principalThreadMessages?(threadId: string): NylasMessage[];
+  /**
+   * Where the principal-mailbox send ledger keeps the calling run's entries (#2474 PR 2), so a
+   * case can read them and one run's thread cooldown never holds another's (attempts of one case
+   * reuse its thread ids). Absent or undefined: one store for the stack.
+   */
+  principalSends?(): PrincipalSendEntry[] | undefined;
 }
 
 /**
@@ -322,7 +339,8 @@ export function createRecordingTransports(recorder: SendRecorder, accountNames: 
  * `principalAddress()` as the sender. Null when the calling run has none: the gateway then
  * refuses (mailbox_unavailable), as production does with no grant. Like the other fakes it is
  * a plain object with only the methods sendPrincipalDraft calls (getDraft for the read and the
- * re-read, sendDraft); nothing here can reach a network.
+ * re-read, listMessages for an autonomous send's thread, sendDraft); nothing here can reach a
+ * network.
  */
 export function createRecordingPrincipalMailbox(recorder: SendRecorder, principalAddress: () => string): () => NylasClient | null {
   return () => {
@@ -330,6 +348,17 @@ export function createRecordingPrincipalMailbox(recorder: SendRecorder, principa
     if (!drafts) return null;
     const mailbox = {
       getDraft: async (draftId: string): Promise<NylasMessage | null> => drafts.get(draftId) ?? null,
+      // A thread as Gmail lists it (#2474 PR 2): its messages and the drafts on it (folder DRAFT,
+      // which the gateway drops), newest first. The run's seeded messages carry their headers.
+      listMessages: async (options?: ListMessagesOptions): Promise<NylasMessage[]> => {
+        const threadId = options?.threadId;
+        // sendPrincipalDraft lists only a thread; any other listing is a misuse of this fake.
+        if (!threadId) throw new Error('the test-mode principal mailbox lists only a thread (threadId)');
+        const onThread = [...drafts.values()].filter(d => d.threadId === threadId);
+        return [...(recorder.principalThreadMessages?.(threadId) ?? []), ...onThread]
+          .sort((a, b) => b.date - a.date)
+          .slice(0, options?.limit ?? 50);
+      },
       sendDraft: async (draftId: string): Promise<NylasMessage> => {
         const draft = drafts.get(draftId);
         if (!draft) throw new ScenarioMailboxNotFound(`Draft ${draftId}`);
@@ -340,7 +369,7 @@ export function createRecordingPrincipalMailbox(recorder: SendRecorder, principa
         return sent;
       },
     };
-    // Cast: sendPrincipalDraft calls only the two methods above on this client.
+    // Cast: sendPrincipalDraft calls only the methods above on this client.
     return mailbox as unknown as NylasClient;
   };
 }
@@ -426,34 +455,41 @@ export function createRecordingOutboundGateway(deps: {
               // Fail toward more review, as above.
               return new Set(edited ? draftIds.filter(id => edited.has(id)) : draftIds);
             },
-            // An autonomous send's D4.1 check (#2474 PR 2), from the same record: written now, so
-            // only a draft edited after Curia's write reads as changed. No record proves nothing,
-            // so nothing reads as Curia's (fail closed, unlike the review default above).
+            // An autonomous send's D4.1 check (#2474 PR 2): only a draft the run's own task created
+            // (a `same_task` seed, or a stubbed compose or reply this run), last written at the run
+            // clock's now, so only a draft dated after that reads as changed. A draft Curia wrote in
+            // an earlier task is not one. No record proves nothing, so nothing reads as created in
+            // the task (fail closed, unlike the review default above).
             curiaWritesInTask: async (draftId: string) => {
-              const created = recorder.curiaDraftIds?.()?.has(draftId) === true;
-              return { created, lastWriteAt: created ? new Date() : null };
+              const task = recorder.curiaTaskDrafts?.();
+              if (!task?.ids.has(draftId)) return { created: false, lastWriteAt: null };
+              return { created: true, lastWriteAt: task.now };
             },
           },
-          // In memory: the real ledger writes working docs, which a real instance's sent-observe
-          // shares, for a send that never left (the same reason there is no outbound queue). The
-          // autonomous thread cooldown still holds within the run.
-          sendLedger: inMemorySendLedger(),
+          // In memory, in the calling run's store: the real ledger writes working docs, which a real
+          // instance's sent-observe shares, for a send that never left (the same reason there is no
+          // outbound queue). The autonomous thread cooldown still holds within the run.
+          sendLedger: inMemorySendLedger(() => recorder.principalSends?.()),
         }
       : {}),
   });
 }
 
-/** The principal-mailbox send ledger for one recording gateway (#2474): markers in memory only. */
-function inMemorySendLedger(): NonNullable<ConstructorParameters<typeof OutboundGateway>[0]['sendLedger']> {
-  const entries: PrincipalSendEntry[] = [];
+/**
+ * The principal-mailbox send ledger for one recording gateway (#2474): markers in memory only, in
+ * the calling run's store (`runStore`), else one for the stack.
+ */
+function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefined): NonNullable<ConstructorParameters<typeof OutboundGateway>[0]['sendLedger']> {
+  const shared: PrincipalSendEntry[] = [];
+  const entries = (): PrincipalSendEntry[] => runStore() ?? shared;
   return {
-    recordSending: async (e) => { entries.push({ ...e, outcome: 'sending' }); },
+    recordSending: async (e) => { entries().push({ ...e, outcome: 'sending' }); },
     recordSent: async (draftId, messageId) => {
-      const latest = [...entries].reverse().find(e => e.draftId === draftId && e.outcome === 'sending');
+      const latest = [...entries()].reverse().find(e => e.draftId === draftId && e.outcome === 'sending');
       if (latest) Object.assign(latest, { outcome: 'sent', messageId });
     },
-    recordHeld: async (e) => { entries.push({ ...e, outcome: 'held' }); },
-    recentForThread: async (threadId, sinceEpochMs) => entries.filter(e => e.mode === 'autonomous' && e.threadId === threadId && Date.parse(e.at) >= sinceEpochMs),
+    recordHeld: async (e) => { entries().push({ ...e, outcome: 'held' }); },
+    recentForThread: async (threadId, sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.threadId === threadId && Date.parse(e.at) >= sinceEpochMs),
   };
 }
 
