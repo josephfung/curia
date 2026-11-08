@@ -86,7 +86,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
 
 const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
-const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts', 'threads'] as const;
+const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts', 'threads', 'expect_no_band_review'] as const;
 const PRINCIPAL_DRAFT_KEYS = ['id', 'thread', 'to', 'cc', 'subject', 'body', 'modified', 'by_curia'] as const;
 /** `by_curia` values (#2474 PR 2). PR 1's `true` is now `earlier`, and is refused so a stale case is not misread. */
 const DRAFT_AUTHORS: readonly SeedDraftAuthor[] = [false, 'same_task', 'earlier'];
@@ -796,6 +796,11 @@ function parsePrincipalThreads(block: Raw, file: string, where: string, ids: Set
       const from: SeedMailParty = fromRaw === 'principal' ? 'principal' : parseDraftRecipient(fromRaw as Raw, file, `${mAt}.from`);
       const date = str(m, 'date', file, mAt);
       checkSeedDate(date, 'date', file, mAt);
+      // A message dated after the run clock would postdate the draft replying to it. Resolved
+      // against the load clock, so `{{at:now+…}}` and a literal future date both fail here.
+      if (Date.parse(resolveDatePlaceholders(date, 'UTC')) > Date.now()) {
+        throw new CaseError(file, `${mAt}: 'date' must not be in the future (a thread message predates the run)`);
+      }
       const senderVerified = optBool(m, 'sender_verified', file, mAt);
       const listId = optStr(m, 'list_id', file, mAt);
       return {
@@ -851,7 +856,14 @@ function parsePrincipalMailbox(raw: Raw, file: string): SeedPrincipalMailbox | u
     };
   });
   const threads = parsePrincipalThreads(block, file, where, seen);
-  return { ...(level !== undefined ? { sendLevel: level as SendLevel } : {}), drafts, threads };
+  const noBandReview = optBool(block, 'expect_no_band_review', file, where);
+  if (noBandReview === false) throw new CaseError(file, `${where}: 'expect_no_band_review' is true or absent`);
+  return {
+    ...(level !== undefined ? { sendLevel: level as SendLevel } : {}),
+    drafts,
+    threads,
+    ...(noBandReview ? { expectNoBandReview: true as const } : {}),
+  };
 }
 
 /** `seed.backlog`: each count a whole number, absent ones zero, at least one positive. */
@@ -1268,6 +1280,16 @@ function validateThroughGateway(scenario: ScenarioCase, file: string): void {
   // Only the review layer's gateway has the principal's mailbox (#2474); elsewhere the send is a stub.
   if (scenario.seed.principalMailbox && !scenario.throughGateway) {
     throw new CaseError(file, `seed.principal_mailbox needs through_gateway: true (only a real ceo-inbox-send-draft reads it)`);
+  }
+  // #2474 PR 2: an autonomous send needs band review, so without a band fixture every one stops at
+  // no_band_review, which a case author would otherwise learn only from a paid run.
+  const mailbox = scenario.seed.principalMailbox;
+  const bandGated = scenario.autonomy?.gating === 'band';
+  if (mailbox && (mailbox.sendLevel === 'routine' || mailbox.sendLevel === 'all') && !bandGated && !mailbox.expectNoBandReview) {
+    throw new CaseError(file, `seed.principal_mailbox: send_level ${mailbox.sendLevel} needs autonomy: { gating: band } (or expect_no_band_review: true for a case about no_band_review)`);
+  }
+  if (mailbox?.expectNoBandReview && bandGated) {
+    throw new CaseError(file, `seed.principal_mailbox: expect_no_band_review contradicts autonomy gating: band`);
   }
   // approve-action replays a held call outside the gated call it came from, so it would reach
   // the real handler, which test mode cannot serve. Not supported yet.

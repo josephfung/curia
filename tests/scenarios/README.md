@@ -744,16 +744,19 @@ principal's address as `from` and is a delivery like any other. It holds:
   Curia's, in the run's own task; a stubbed `ceo-inbox-draft-edit` changes the stored draft
   (a seeded one too), and leaves its author as it was. A reply stub returning
   `already_exists: true` is the principal's existing draft, not Curia's. A reply lands on the
-  thread of the seeded message its `reply_to_message_id` names (none: no thread). Recipients
+  thread of the seeded message its `reply_to_message_id` names; one naming a message no
+  `threads` entry has fails the run (unless the draft is already on a thread). Recipients
   come from the stub's returned `to`/`cc`, else the call's: an address as written, a contact
-  ID (or `principal`) resolved through the run's seeded email contacts and the principal's
-  verified email. A contact ID that resolves to nothing fails the run. A mirrored draft is
+  ID (`principal`, or the principal's own contact UUID, means the principal) resolved through
+  the run's seeded email contacts and the principal's verified email. A contact ID that
+  resolves to nothing fails the run. A mirrored draft is
   dated by the run clock, the same instant `{{at:…}}` dates resolve against.
 
 **Autonomous sends** (#2474 PR 2). At `send_level: routine` or `all`, a send nobody asked for
 (the ceo-inbox triage agent's own) runs production's autonomous checks: band review, so the case
 needs `autonomy: { gating: band }` (the gateway reads it per send from the fixture; under tier
-it refuses with `no_band_review`); a draft Curia created in this task; the thread's
+it refuses with `no_band_review`, and the loader rejects the level without the fixture unless
+`principal_mailbox.expect_no_band_review: true` says that refusal is what the case tests); a draft Curia created in this task; the thread's
 participants, List-Id and attachments; the thread's 24-hour cooldown. The fake mailbox serves
 `listMessages({ threadId })` from `threads` (below) plus the drafts on that thread, which carry
 the `DRAFT` folder the gateway drops. A message from the principal is filed in SENT, any other
@@ -763,7 +766,7 @@ written at the run clock's now; `earlier` and `false` never do.
 
 The other ceo-inbox tools stay stubbed (test mode withholds the mailbox grant). The send
 ledger is in memory, per run: the real one writes working docs a real instance shares. It
-still starts a thread's cooldown within the run, and the `left_as_draft` check reads it.
+still starts a thread's cooldown within the run.
 Outside a through-gateway run the `ceo-inbox-mailroom` and `ceo-inbox-office` sets refuse the
 send in production's words for a send nobody asked for.
 
@@ -789,7 +792,7 @@ seed:
             cc: []                  # optional
             subject: Venue for the offsite
             body: Shall we pick a venue?
-            date: "{{at:now-24h}}"  # required: a date or date placeholder
+            date: "{{at:now-24h}}"  # required: a date or date placeholder, not in the future
           - id: msg-30v-2
             from: { name: Jo Park, email: jo.park@acme.example.test }
             to: [principal]
@@ -802,8 +805,8 @@ seed:
 
 The loader rejects `principal_mailbox` on a case without `through_gateway`, unknown keys at
 every level, a duplicate draft, thread or message id, an unknown `send_level` or `by_curia`
-(PR 1's `by_curia: true` is now `earlier`), a message date that is not a date, and an address
-outside `.test`. A message naming `principal` needs the principal's verified email in the
+(PR 1's `by_curia: true` is now `earlier`), a message date that is not a date or is in the
+future, an autonomous `send_level` without a band fixture (above), and an address outside `.test`. A message naming `principal` needs the principal's verified email in the
 database; the seed fails without one.
 
 **Approvals.** A held send, or a tool an ExecutionLayer gate holds (through production's
@@ -897,12 +900,16 @@ the drafter reaches for an item is the model's choice. The recording gateway rec
 review's labels and outcome, never the values (`recordingBandReview`,
 `src/startup/test-mode-sends.ts`).
 
-`left_as_draft` (#2474 PR 2) reads the run's principal-mailbox send ledger: an autonomous send
-that stopped for good writes a `held` marker with the reason its "Left as a draft" digest item
-gives (ending "Nothing was sent; the draft is still in their Drafts folder."). It passes on a marker whose reason contains every
-`contains` text (case-insensitive), at least one or exactly `count`. A stop that writes no
-marker does not count: a thread already cooling down (that would extend the cooldown) and a
-draft whose thread is unknown. A review bounce is not a stop (the drafter may edit and resend).
+`left_as_draft` (#2474 PR 2) reads the run's principal-mailbox digest items (`principal.report`
+events from source `principal_mailbox`, kept in the results as `gateway.mailboxDigests`). Every
+autonomous send that stops for good files exactly one, beginning "Left as a draft in your
+mailbox:" and ending with the reason ("… Nothing was sent; the draft is still in their Drafts
+folder."): a thread already cooling down and a draft with no known thread included. "Sent for
+you…" and "Tried to send for you…" (the send's outcome is unknown) items are not counted. It
+passes on an item containing every `contains` text (case-insensitive), at least one or exactly
+`count`. A review bounce is not a stop (the drafter may edit and resend). `count: 0` passes
+too when no send was ever attempted, so pair it with a `called: ceo-inbox-send-draft` check.
+The send ledger stays in the results (`gateway.principalSends`) for diagnosis.
 
 These checks are allowed only on `through_gateway` cases.
 

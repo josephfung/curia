@@ -149,6 +149,13 @@ export class SeedScope {
   readonly contactAddresses = new Map<string, string>();
   /** The principal's verified email in this database, when it has one: `principal` in a mailbox seed or a compose. */
   principalAddress: string | undefined;
+  /** The principal's contact UUID in this database: a compose naming it means the principal. */
+  principalContactId: string | undefined;
+  /**
+   * The run's principal-mailbox digest items (#2474 PR 2): the summaries of `principal.report`
+   * events with source `principal_mailbox`, what the `left_as_draft` check reads.
+   */
+  readonly mailboxDigests: string[] = [];
   /**
    * The run clock's now (harness.ts sets it as the run begins): the date a mirrored draft
    * carries and when Curia last wrote a draft of its task (#2474 PR 2), so they agree with the
@@ -198,6 +205,8 @@ export class SeedScope {
     this.principalSends.length = 0;
     this.contactAddresses.clear();
     this.principalAddress = undefined;
+    this.principalContactId = undefined;
+    this.mailboxDigests.length = 0;
     this.clockNow = undefined;
     this.errors.length = 0;
   }
@@ -246,7 +255,9 @@ function threadOfMessage(scope: SeedScope, messageId: string): string | undefine
 function resolveContactIds(scope: SeedScope, ids: readonly string[], draftId: string): DraftParticipant[] {
   return ids.flatMap((raw) => {
     const id = raw.split('#')[0]!.trim();
-    const email = id === 'principal' ? scope.principalAddress : scope.contactAddresses.get(id);
+    // The alias and the principal's own contact UUID both name the principal, as the real compose takes them.
+    const isPrincipal = id === 'principal' || (scope.principalContactId !== undefined && id === scope.principalContactId);
+    const email = isPrincipal ? scope.principalAddress : scope.contactAddresses.get(id);
     if (email) return [{ email }];
     scope.errors.push(`a stubbed draft write (${draftId}) named recipient '${raw}', which is no seeded email contact and not the principal's verified email`);
     return [];
@@ -263,7 +274,13 @@ function resolveContactIds(scope: SeedScope, ids: readonly string[], draftId: st
  */
 export function mirrorPrincipalDraft(scope: SeedScope, draft: MailboxDraft, curiaWrote: boolean, edited?: true): void {
   const prev = scope.principalDrafts.get(draft.id);
-  const threadId = (draft.replyTo !== undefined ? threadOfMessage(scope, draft.replyTo) : undefined) ?? prev?.threadId ?? '';
+  const replyThread = draft.replyTo !== undefined ? threadOfMessage(scope, draft.replyTo) : undefined;
+  // A reply to a message the case never seeded is a case error (a typo in a stub's message id),
+  // not a thread-less draft whose autonomous send then stops for a reason the case never meant.
+  if (draft.replyTo !== undefined && replyThread === undefined && !prev?.threadId) {
+    scope.errors.push(`a stubbed draft-reply (${draft.id}) answers message '${draft.replyTo}', which no seed.principal_mailbox.threads message has`);
+  }
+  const threadId = replyThread ?? prev?.threadId ?? '';
   const resolved: MailboxDraft = {
     ...draft,
     to: [...draft.to, ...resolveContactIds(scope, draft.contactIds?.to ?? [], draft.id)],
@@ -781,6 +798,7 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
   // The principal's own mailbox (#2474): in memory only, nothing to clean up.
   const mailbox = scenario.seed.principalMailbox;
   scope.sendLevel = mailbox?.sendLevel;
+  scope.principalContactId = stack.principalContactId ?? undefined;
   // The principal's verified email as the gateway reads it (principalIdentities): `principal` in a
   // thread message or a mirrored compose.
   scope.principalAddress = (stack.principalIdentities ?? [])
@@ -1457,6 +1475,7 @@ export async function readGatewayOutcome(stack: TestModeStack, scenario: Scenari
     })),
     reviews: scope.reviews.map(r => ({ labels: [...r.labels], quoteLabels: [...r.quoteLabels], outcome: r.outcome })),
     principalSends: scope.principalSends.map(e => ({ ...e, recipients: [...e.recipients] })),
+    mailboxDigests: [...scope.mailboxDigests],
     holds: holds.rows.map(r => {
       const shown = scope.approvalDisplays.get(r.short_ref);
       return {

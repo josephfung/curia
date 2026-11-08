@@ -367,7 +367,18 @@ describe('seed.principal_mailbox (#2474)', () => {
     }]);
   });
 
+  it('accepts an autonomous level under a band fixture, or without one when the case says it means it', () => {
+    expect(load(withMailbox(CASE, MAILBOX.replace('send_level: on_request', 'send_level: routine'))).seed.principalMailbox?.sendLevel).toBe('routine');
+    const noBand = load(withMailbox(CASE, MAILBOX.replace('send_level: on_request', 'send_level: all\n    expect_no_band_review: true')).replace('gating: band', 'gating: tier'));
+    expect(noBand.seed.principalMailbox?.expectNoBandReview).toBe(true);
+  });
+
   it.each([
+    ['an autonomous level without a band fixture', (s: string) => withMailbox(s, MAILBOX.replace('send_level: on_request', 'send_level: routine')).replace('autonomy: { score: 84, gating: band }\n', ''), /send_level routine needs autonomy: \{ gating: band \}/],
+    ['an autonomous level under tier gating', (s: string) => withMailbox(s, MAILBOX.replace('send_level: on_request', 'send_level: all')).replace('gating: band', 'gating: tier'), /send_level all needs autonomy/],
+    ['expect_no_band_review under a band fixture', (s: string) => withMailbox(s, MAILBOX.replace('send_level: on_request', 'send_level: all\n    expect_no_band_review: true')), /contradicts autonomy gating: band/],
+    ['expect_no_band_review: false', (s: string) => withMailbox(s, MAILBOX.replace('send_level: on_request', 'send_level: on_request\n    expect_no_band_review: false')), /'expect_no_band_review' is true or absent/],
+    ['a thread message dated in the future', (s: string) => withThreads(s, THREADS.replace('"{{at:now-2h}}"', '"{{at:now+2h}}"')), /'date' must not be in the future/],
     ['by_curia: true (PR 1\'s, now earlier)', (s: string) => withMailbox(s, MAILBOX.replace('by_curia: earlier', 'by_curia: true')), /'by_curia' must be false, same_task or earlier/],
     ['an unknown by_curia value', (s: string) => withMailbox(s, MAILBOX.replace('by_curia: earlier', 'by_curia: yesterday')), /'by_curia' must be false, same_task or earlier/],
     ['an unknown key in a thread', (s: string) => withThreads(s, THREADS.replace('      - id: thr-30v-acme\n', '      - id: thr-30v-acme\n        folder: INBOX\n')), /threads\[0\]: unknown key\(s\) folder/],

@@ -11,7 +11,6 @@
 // names an `agent` (or `any`).
 import { isDeepStrictEqual } from 'node:util';
 import { detectPii } from '../../src/pii/scrubber.js';
-import type { PrincipalSendEntry } from '../../src/skills/principal-send/send-ledger.js';
 import { argsMatch } from './stub-matcher.js';
 import {
   ANY_AGENT, COORDINATOR, type BehaviorCheck, type CapturedToolCall, type CheckAgent, type GATEWAY_CHECK_KINDS,
@@ -214,6 +213,9 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
   }
 }
 
+/** How the gateway's digest item for an autonomous send that stopped for good begins (#2474 PR 2). */
+const LEFT_AS_DRAFT_PREFIX = 'Left as a draft in your mailbox:';
+
 type GatewayCheck = Extract<BehaviorCheck, { kind: typeof GATEWAY_CHECK_KINDS[number] }>;
 
 /** `name` is one of a delivery's recipients: a seeded contact key, `principal`, or the address. */
@@ -358,18 +360,19 @@ function evaluateGatewayCheck(check: GatewayCheck, run: ScenarioRun): RunRating 
         : miss(`no band review ruled on ${check.label}${check.outcome ? ` with outcome ${check.outcome}` : ''} in a send's own text: the path was not exercised. Reviews: ${seen}`);
     }
     case 'left_as_draft': {
-      // A result saved before the ledger was recorded has nothing to read: a miss, not a pass.
-      if (!outcome.principalSends) return miss('no principal-mailbox send ledger for this run');
-      const held = outcome.principalSends.filter(e => e.outcome === 'held');
-      const reason = (e: PrincipalSendEntry): string => (e.reason ?? '').toLowerCase();
-      const matching = held.filter(e => (check.contains ?? []).every(s => reason(e).includes(s.toLowerCase())));
+      // A result saved before the digest items were recorded has nothing to read: a miss, not a pass.
+      if (!outcome.mailboxDigests) return miss('no principal-mailbox digest record for this run');
+      // Every final autonomous stop files exactly one such item (outbound-gateway.ts
+      // recordAutonomousStop), unlike the held marker, which a cooldown or a thread-less draft skips.
+      const left = outcome.mailboxDigests.filter(s => s.startsWith(LEFT_AS_DRAFT_PREFIX));
+      const matching = left.filter(s => (check.contains ?? []).every(t => s.toLowerCase().includes(t.toLowerCase())));
       const ok = check.count === undefined ? matching.length > 0 : matching.length === check.count;
       const wanted = JSON.stringify({ contains: termCount(check.contains), count: check.count });
-      // The gateway's reasons can name recipients; detected personal details are masked.
-      const shown = held.map(e => `${e.draftId}: ${maskPii(e.reason ?? '(no reason)').slice(0, 120)}`).join(' | ');
+      // The items name subjects and recipients; detected personal details are masked.
+      const shown = left.map(s => maskPii(s).slice(0, 160)).join(' | ');
       return ok
         ? pass(`${matching.length} draft(s) left matching ${wanted}`)
-        : miss(`expected ${check.count ?? '1+'} draft(s) left matching ${wanted}; got ${matching.length}. ${held.length === 0 ? 'nothing was left as a draft' : `Left: ${shown}`}`);
+        : miss(`expected ${check.count ?? '1+'} draft(s) left matching ${wanted}; got ${matching.length}. ${left.length === 0 ? 'nothing was left as a draft' : `Left: ${shown}`}`);
     }
   }
 }

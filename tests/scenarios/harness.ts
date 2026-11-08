@@ -35,7 +35,7 @@
 import { randomUUID } from 'node:crypto';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import { BAND_GATE_C_UNREVIEWED_REASON } from '../../src/skills/execution.js';
-import { createAgentDiscuss, createAgentTask, createInboundMessage, type AgentErrorEvent, type AgentResponseEvent, type AgentTaskEvent, type InjectionDrainPoint } from '../../src/bus/events.js';
+import { createAgentDiscuss, createAgentTask, createInboundMessage, type AgentErrorEvent, type AgentResponseEvent, type AgentTaskEvent, type InjectionDrainPoint, type PrincipalReportEvent } from '../../src/bus/events.js';
 import { stampOriginator } from '../../src/contacts/stamp-originator.js';
 import {
   buildInboundEmailIdentifierBlock,
@@ -589,6 +589,13 @@ export async function createScenarioHarness(
         scope.followOnConversations.add(conversationId);
         controller.attach(scope.rootConversation, conversationId);
         if (lateCapture) scope.wakeTurns.push(lateCapture.waitFor(conversationId, RUN_TIMEOUT_MS, COORDINATOR));
+      });
+      // The principal-mailbox digest items an autonomous send files (#2474 PR 2): the "Left as a
+      // draft" item is the one record of every final stop, a cooldown's included.
+      bus.subscribe('principal.report', 'system', (event) => {
+        const scope = currentScope();
+        const { source, summary } = (event as PrincipalReportEvent).payload;
+        if (scope?.throughGateway && source === 'principal_mailbox') scope.mailboxDigests.push(summary);
       });
       // How the run's relays ended, so a rewrite turn's wait stops at its relay's outcome.
       for (const type of ['outbound.delivered', 'outbound.blocked'] as const) {

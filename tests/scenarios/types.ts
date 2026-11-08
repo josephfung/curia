@@ -131,10 +131,10 @@ export type BehaviorCheck =
    */
   | { kind: 'reviewed'; label: string; outcome?: ReviewOutcome }
   /**
-   * An autonomous principal-mailbox send stopped for good this run (#2474 PR 2): a `held` marker
-   * in the run's send ledger, whose reason contains every one of `contains` (case-insensitive).
-   * At least one such marker, or exactly `count` when set. A stop that writes no marker (a
-   * thread already cooling down, a draft with no known thread) does not count.
+   * An autonomous principal-mailbox send stopped for good this run (#2474 PR 2): a "Left as a
+   * draft in your mailbox:" digest item, which every final stop files (a cooldown and a draft
+   * with no known thread included), containing every one of `contains` (case-insensitive). At
+   * least one such item, or exactly `count` when set.
    */
   | { kind: 'left_as_draft'; count?: number; contains?: string[] }
   /**
@@ -385,6 +385,11 @@ export interface SeedPrincipalMailbox {
   sendLevel?: SendLevel;
   drafts: SeedPrincipalDraft[];
   threads: SeedPrincipalThread[];
+  /**
+   * The case tests an autonomous send with no band review (`no_band_review`), so a `routine`
+   * or `all` level without `autonomy: { gating: band }` is meant. Otherwise the loader refuses it.
+   */
+  expectNoBandReview?: true;
 }
 
 /**
@@ -729,6 +734,12 @@ export interface GatewayOutcome {
    * its reason per autonomous send that stopped for good. Absent on results saved before it existed.
    */
   principalSends?: PrincipalSendEntry[];
+  /**
+   * The run's principal-mailbox digest items (#2474 PR 2): one per autonomous send that went
+   * ("Sent for you…"), stopped for good ("Left as a draft…") or may have gone ("Tried to send…").
+   * Absent on results saved before it existed.
+   */
+  mailboxDigests?: string[];
   /**
    * The band review's fail-open cap tripped in this run: its judge failed on too many sends,
    * so later sends held for want of a reviewer. The run is then an error, not a score.

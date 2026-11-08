@@ -2,6 +2,7 @@
 // outreach_recorded, decision_recorded. Each passes and fails on the recorded outcome alone.
 import { describe, expect, it } from 'vitest';
 import { emptyBreakdown } from '../../shared/usage.js';
+import { PRINCIPAL_SEND_REFUSALS } from '../../../src/skills/outbound-gateway.js';
 import { evaluateCheck } from '../../scenarios/assertions.js';
 import type { GatewayOutcome, RecordedDelivery, ScenarioRun } from '../../scenarios/types.js';
 
@@ -289,37 +290,37 @@ describe('reviewed', () => {
   });
 });
 
-// #2474 PR 2: an autonomous principal-mailbox send that stopped for good leaves the draft and
-// writes a held ledger marker with the reason; left_as_draft reads those markers.
+// #2474 PR 2: every autonomous principal-mailbox send that stops for good files one "Left as a
+// draft in your mailbox:" digest item, a cooldown and a thread-less draft included (neither writes
+// a held marker); left_as_draft reads those items.
 describe('left_as_draft', () => {
-  const entry = (outcome: 'sending' | 'sent' | 'held', reason?: string) => ({
-    draftId: `draft-${outcome}`, threadId: 'thr-1', recipients: ['jo.park@acme.example.test'], mode: 'autonomous' as const,
-    at: '2026-11-07T15:00:00.000Z', outcome, ...(reason !== undefined ? { reason } : {}),
-  });
+  const left = (what: string, refusal: 'thread_cooldown' | 'not_a_reply') => `Left as a draft in your mailbox: ${what}. ${PRINCIPAL_SEND_REFUSALS[refusal]}`;
   const r = run({
-    principalSends: [
-      entry('sent'),
-      entry('held', 'sam@other.test is not on the thread. Nothing was sent; the draft is still in their Drafts folder.'),
-      entry('held', 'The thread is a mailing list. Nothing was sent; the draft is still in their Drafts folder.'),
+    mailboxDigests: [
+      'Sent for you from your mailbox: Re: Venue to Jo Park.',
+      left('Re: Venue to Jo Park', 'thread_cooldown'),
+      left('Agenda to Sam Lee', 'not_a_reply'),
+      `Tried to send for you from your mailbox: Re: Budget to Lee. ${PRINCIPAL_SEND_REFUSALS.send_unconfirmed}`,
     ],
   });
 
-  it('passes on a held marker whose reason has every text, and counts them when asked', () => {
+  it('passes on a left-as-draft item with every text, a cooldown and a thread-less stop included', () => {
     expect(evaluateCheck({ kind: 'left_as_draft' }, r, ctx).rating).toBe('PASS');
-    expect(evaluateCheck({ kind: 'left_as_draft', contains: ['NOT ON THE THREAD'] }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'left_as_draft', contains: ['ALREADY REPLIED', 'Jo Park'], count: 1 }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'left_as_draft', contains: ['existing thread'], count: 1 }, r, ctx).rating).toBe('PASS');
+    // The sent and the may-have-gone items are not left as drafts.
     expect(evaluateCheck({ kind: 'left_as_draft', count: 2 }, r, ctx).rating).toBe('PASS');
-    expect(evaluateCheck({ kind: 'left_as_draft', contains: ['mailing list'], count: 1 }, r, ctx).rating).toBe('PASS');
   });
 
-  it('misses on no matching marker, a wrong count, or a send that went', () => {
+  it('misses on no matching item, a wrong count, or a send that went', () => {
     expect(evaluateCheck({ kind: 'left_as_draft', contains: ['attachment'] }, r, ctx).rating).toBe('MISS');
     expect(evaluateCheck({ kind: 'left_as_draft', count: 1 }, r, ctx).rating).toBe('MISS');
-    const sentOnly = evaluateCheck({ kind: 'left_as_draft' }, run({ principalSends: [entry('sent')] }), ctx);
+    const sentOnly = evaluateCheck({ kind: 'left_as_draft' }, run({ mailboxDigests: ['Sent for you from your mailbox: Re: Venue to Jo Park.'] }), ctx);
     expect(sentOnly.rating).toBe('MISS');
     expect(sentOnly.justification).toContain('nothing was left as a draft');
     // count 0: nothing may be left.
-    expect(evaluateCheck({ kind: 'left_as_draft', count: 0 }, run({ principalSends: [entry('sent')] }), ctx).rating).toBe('PASS');
-    // A result saved before the ledger was recorded has nothing to read.
+    expect(evaluateCheck({ kind: 'left_as_draft', count: 0 }, run({ mailboxDigests: [] }), ctx).rating).toBe('PASS');
+    // A result saved before the digest items were recorded has nothing to read.
     expect(evaluateCheck({ kind: 'left_as_draft' }, run({}), ctx).rating).toBe('MISS');
   });
 });
