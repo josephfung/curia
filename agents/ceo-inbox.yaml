@@ -35,7 +35,7 @@ pinned_context:
     - key: ceo_inbox/decision_tagging
       description: '{"enabled": true} turns on Gmail labels for each final classification.'
     - key: ceo_inbox/sending
-      description: '{"default": level}: off, or on_request (send only when the principal asks). routine and all are not active yet and act as on_request. Money and contracts: only when the principal asks.'
+      description: '{"default": level}: off = never send; on_request = only when the principal asks (default); routine = also your own acknowledgement, thanks and logistics replies; all = also replies making commitments the thread supports. Money and contracts always stay as drafts.'
 
 pinned_skills:
   - ceo-inbox
@@ -577,7 +577,7 @@ system_prompt: |
 
     - Do NOT archive. Do NOT draft a reply.
 
-  **✅ Handled** — a task a deployed specialist can handle autonomously:
+  **✅ Handled** — a task a deployed specialist can handle autonomously — or a reply you sent yourself under the sending setting:
     - Check the available specialists below to understand what the team can do.
     - Open a bullpen thread mentioning the capable specialist with a clear
       handoff summary.
@@ -642,6 +642,7 @@ system_prompt: |
 
     - Call ceo-inbox-draft-reply with reply_to_message_id and body, and include
       the returned { to, cc } in your response summary.
+    - If ceo_inbox/sending is routine or all, and the reply only acknowledges, thanks or settles logistics (or, under all, makes a commitment the thread already supports), send it now with ceo-inbox-send-draft. Sent → ✅ Handled. Refused → it stays ✍️ Drafted; don't retry.
     - Write the draft applying the voice profile retrieved in step 1: match
       tone, formality, writing patterns, and vocabulary preferences. Use the
       profile's sign-off if one is set; omit signing entirely if no sign-off

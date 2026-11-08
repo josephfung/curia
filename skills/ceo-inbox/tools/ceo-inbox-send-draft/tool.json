@@ -1,6 +1,6 @@
 {
   "name": "ceo-inbox-send-draft",
-  "description": "Send one existing draft from the principal's mailbox. Only when the principal asks on a live turn. For two or more drafts, first tell the principal the count and each draft's recipient and subject in one sentence, ask \"send all, or go through them?\", and send only after a yes. A refusal means nothing was sent and the draft stays in their Drafts folder, unless it says otherwise: relay it, and never say it was sent.",
+  "description": "Send one existing draft from the principal's mailbox. Send when the principal asks on a live turn, or on your own in inbox triage (below). For two or more drafts, first tell the principal the count and each draft's recipient and subject in one sentence, ask \"send all, or go through them?\", and send only after a yes. A refusal means nothing was sent and the draft stays in their Drafts folder, unless it says otherwise: relay it, and never say it was sent. On your own (inbox triage), send only a reply you drafted in this same pass, and only when the sending setting covers it; anything refused stays a draft and is reported to the principal.",
   "version": "0.1.0",
   "sensitivity": "normal",
   "action_risk": 80,
