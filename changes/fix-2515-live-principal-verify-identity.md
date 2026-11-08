@@ -6,3 +6,5 @@
 ### Security
 
 - **`delegate`** — never forwards a live-turn flag from a woken task to the specialist. (#2515)
+- **`delegate`** — a specialist's live turn ends when the coordinator stops waiting for it. (#2515)
+- **Contact identifiers** — a scrubbed sign-in code placeholder is refused as an address. (#2515)

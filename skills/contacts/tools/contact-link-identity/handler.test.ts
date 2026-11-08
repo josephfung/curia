@@ -252,6 +252,20 @@ describe('ContactLinkIdentityHandler', () => {
       expect(await isVerified()).toBe(true);
     });
 
+    it('refuses an approved replay whose identifier was scrubbed to the sign-in code placeholder', async () => {
+      // The code was tracked after the call was queued: the approval covered the address, not
+      // the placeholder, so a row holding that text is neither verified nor is anything linked.
+      await contacts.linkIdentity({
+        contactId: acmeId, channel: 'telegram', channelIdentifier: '[sign-in code]', source: 'self_claimed', verified: false,
+      });
+      const result = await restate(
+        { ...LIVE, liveTurn: false, humanApproved: true },
+        { channel: 'telegram', identifier: '[sign-in code]' },
+      );
+      expect(result.success).toBe(false);
+      expect(await isVerified()).toBe(false);
+    });
+
     describe('refuses, and leaves it unverified', () => {
       beforeEach(async () => {
         await contacts.linkIdentity({

@@ -54,6 +54,7 @@ import {
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
 import { DateTime } from 'luxon';
+import { issueLiveTurnGrant } from '../../src/autonomy/live-turn-grants.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 import {
   CLARIFICATION_NEXT_STEP,
@@ -701,6 +702,16 @@ export class DelegateHandler implements ToolHandler {
     }
     // ctx.taskMetadata is the effective standing, which keeps the wake marker (#1125).
     const wokenTurn = ctx.taskMetadata?.['wakeContext'] !== undefined;
+    // The specialist's live turn lasts as long as this wait (#2515): a timeout or an
+    // interrupted wait leaves it running, and from then on nobody is live in its exchange.
+    // A grant revoked when the wait ends bounds it; inside a voice hand-off it also ends
+    // with that call's grant. A lapsed grant still lets the specialist ask for confirmation.
+    const waitGrant = !wokenTurn && ctx.liveTurn === true
+      ? issueLiveTurnGrant({
+        ttlMs: specialistTimeoutMs,
+        ...(ctx.liveTurnGrantId !== undefined ? { parentId: ctx.liveTurnGrantId } : {}),
+      })
+      : undefined;
 
     // Publish an agent.task event for the specialist.
     // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
@@ -729,9 +740,11 @@ export class DelegateHandler implements ToolHandler {
       // A woken task is never live, and delegationMetadata carries no wakeContext, so a flag
       // leaked onto a wake would become a live turn here: drop it (#2515).
       liveTurn: wokenTurn ? undefined : ctx.liveTurn,
-      // A voice hand-off's grant (#2495) rides along, so the specialist's live turn ends when
-      // the grant does, and a lapsed one still asks the principal to confirm.
-      ...(!wokenTurn && ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
+      // A live turn carries the wait's grant. A voice hand-off's lapsed grant (#2495) rides
+      // along on a turn that is no longer live, so the specialist still asks to confirm.
+      ...(waitGrant
+        ? { liveTurnGrantId: waitGrant.id }
+        : !wokenTurn && ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
       // When this wait ends (#2371): the reasoning watchdog positions its time trigger
       // against it. A distinct field, never cancelling the specialist's turn.
       turnDeadlineAt: Date.now() + specialistTimeoutMs,
@@ -1101,6 +1114,7 @@ export class DelegateHandler implements ToolHandler {
       // Always clean up the timeout on any exit path. Unset when we returned
       // before the listener was armed (claim conflict, acquire failure).
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      waitGrant?.revoke();
       if (acquiredDelegateEventId && !retainRunningClaim && ctx.openDelegationLookup?.releaseRunning) {
         try {
           await ctx.openDelegationLookup.releaseRunning(acquiredDelegateEventId);
