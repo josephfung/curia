@@ -624,6 +624,53 @@ describe('upstream repo advisories', () => {
     expect(report.stale).toHaveLength(0);
   });
 
+  it('ignores a cross-line gap the floor admits nothing of', async () => {
+    // An old advisory whose ambiguous gap sits wholly below the floor cannot change the
+    // verdict, so it must not hold the audit red on every run.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  undici: '>=8.12.4'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { undici: ['5.2.9', '5.3.0', '5.3.1', '6.0.0', '8.12.4', '8.13.0'] },
+        global: {
+          undici: [{ ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 5.3.0']), patchedVersions: ['6.0.0'] }],
+        },
+      }),
+    });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale).toEqual([]);
+    expect(report.exitCode).toBe(0);
+  });
+
+  it.each([
+    { name: 'a cross-line gap', patched: '6.0.0' },
+    { name: 'an uninterpretable patched field', patched: '6.0.0, 5.4.0' },
+  ])('lets the allowlist clear an advisory with $name', async (c) => {
+    // Both cases fail closed when the advisory is not allowlisted; once a human has
+    // recorded a decision, the audit must be able to accept it.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=5.2.9'`),
+      policy: {
+        allowlist: [{ package: 'foo', ghsa: 'GHSA-aaaa-bbbb-cccc', reason: 'read the advisory' }],
+        noAdvisoryExpected: [],
+        globalDbOnly: [],
+      },
+      source: fakeSource({
+        versions: { foo: ['5.2.9', '5.3.0', '6.0.0'] },
+        global: {
+          foo: [{ ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 5.3.0']), patchedVersions: [c.patched] }],
+        },
+      }),
+    });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale).toEqual([]);
+    expect(report.exitCode).toBe(0);
+    // It would have fired, so the suppression is in use, not stale housekeeping.
+    expect(report.unusedAllowlist).toEqual([]);
+  });
+
   it('extends a gap within one 0.x line', async () => {
     const report = await auditOverrideFloors({
       workspaceYaml: yamlWith(`  foo: '>=0.4.1'`),

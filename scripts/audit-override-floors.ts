@@ -834,26 +834,46 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
         );
       }
 
-      // Validate every range up front so a format surprise is reported against this
-      // override by name rather than mutating the verdict.
       const stablePublished = published.filter(
         (v) => semver.valid(v) !== null && semver.prerelease(v) === null,
       );
-      const validated = advisories.map((advisory) =>
-        closeRangeGaps(advisory, toSemverRanges(advisory, override.subject), stablePublished),
-      );
+      const resolveRanges = (advisory: AdvisoryRecord) =>
+        closeRangeGaps(
+          advisory,
+          toSemverRanges(advisory, override.subject),
+          stablePublished,
+          admitted,
+        );
 
-      const effective = validated.filter(({ advisory, ranges }) => {
+      // The allowlist is applied BEFORE validation: an advisory a human has already
+      // judged must not be able to fail the audit through a range or patch field this
+      // script cannot read, or the error would have no way to be cleared.
+      const remaining: AdvisoryRecord[] = [];
+      for (const advisory of advisories) {
         const match = policy.allowlist.find(
           (e) =>
             e.package === override.subject &&
             e.ghsa.toUpperCase() === advisory.ghsaId.toUpperCase(),
         );
-        if (!match) return true;
-        // Only count the suppression as "used" if it would otherwise have fired.
-        if (admitted.some((v) => matchesAny(v, ranges))) usedAllowlist.add(match);
-        return false;
-      });
+        if (!match) {
+          remaining.push(advisory);
+          continue;
+        }
+        // Only count the suppression as "used" if it would otherwise have fired. An
+        // advisory this audit cannot interpret would have fired as an error, so it counts.
+        let fires: boolean;
+        try {
+          const { ranges } = resolveRanges(advisory);
+          fires = admitted.some((v) => matchesAny(v, ranges));
+        } catch {
+          fires = true;
+        }
+        if (fires) usedAllowlist.add(match);
+      }
+
+      // Validate every remaining range up front so a format surprise is reported against
+      // this override by name rather than mutating the verdict.
+      const effective = remaining.map(resolveRanges);
 
       const record: CheckedOverride = {
         key: override.key,
@@ -1060,12 +1080,15 @@ function toSemverRanges(advisory: AdvisoryRecord, pkg: string): string[] {
  * extends one range entry upward over published versions that sit strictly between that
  * entry's highest matching release and the patch. A range that matches no published
  * version below its patch has no anchor, so it is left alone. A patched field that is not
- * a single plain version, or a gap that crosses a release line, fails the audit instead.
+ * a single plain version fails the audit instead, and so does a gap that crosses a release
+ * line when the override admits a version inside it. A cross-line gap entirely outside
+ * `admitted` cannot change the verdict, so the range is left as published.
  */
 function closeRangeGaps(
   advisory: AdvisoryRecord,
   ranges: string[],
   published: string[],
+  admitted: string[],
 ): { advisory: AdvisoryRecord; ranges: string[]; gapClosedTo?: string[] } {
   const gapClosedTo: string[] = [];
   const widened = ranges.map((range, i) => {
@@ -1085,13 +1108,16 @@ function closeRangeGaps(
     const below = published.filter((v) => semver.lt(v, patched) && semver.satisfies(v, range));
     if (below.length === 0) return range;
     const lastHit = below.sort(semver.compare)[below.length - 1]!;
-    const gap = published.some((v) => semver.gt(v, lastHit) && semver.lt(v, patched));
-    if (!gap) return range;
+    const inGap = (v: string) => semver.gt(v, lastHit) && semver.lt(v, patched);
+    if (!published.some(inGap)) return range;
     // A gap that crosses a release line is ambiguous: a range ending at 5.2.9 with its
     // patch on 6.0.0 may mean every later 5.x is vulnerable, or that the 5.x line was
     // fixed in a release the advisory does not name. Assuming either could report a
-    // false stale floor or hide a real one, so a human has to read the advisory.
+    // false stale floor or hide a real one, so a human has to read the advisory. That
+    // only matters when the override admits a gap version; otherwise neither reading
+    // changes the verdict, and failing would hold the audit red over an old advisory.
     if (releaseLine(lastHit) !== releaseLine(patched)) {
+      if (!admitted.some(inGap)) return range;
       throw new Error(
         `advisory ${advisory.ghsaId} range \`${range}\` ends at ${lastHit} but its patched ` +
           `version ${patched} is on another release line, so this audit cannot tell ` +
