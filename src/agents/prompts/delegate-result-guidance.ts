@@ -8,6 +8,8 @@
 // Hard-wrapped so prompt-exfiltration marker extraction (one marker per line) covers it.
 // Joined with spaces for the tool result.
 
+import type { DeclineCause } from '../specialist-decline.js';
+
 /** A specialist stopped to ask the principal something (`needs_clarification: true`). */
 export const CLARIFICATION_NEXT_STEP_LINES: readonly string[] = [
   'The specialist paused mid-task and needs the principal\'s judgment to continue.',
@@ -63,7 +65,45 @@ export const DECLINE_NEXT_STEP_LINES: readonly string[] = [
   'when their input or authority is needed, with one specific question; never ask them to',
   're-scope, reassign or cancel. Report what was and was not done in your own words: do not',
   'quote `message`, and leave out the specialist and any tool, grant or ID it names.',
+  '`sent` and a `gate_refused` cause are recorded by the platform; any other `cause` is the',
+  'specialist\'s own account. Never report anything that contradicts them.',
 ];
+
+/**
+ * Added to the decline next step for the cause it names (#2494). Each corrects a
+ * misreport seen in production: a permission refusal relayed as a missing capability,
+ * and a missing draft relayed as one sitting in Drafts.
+ */
+export const DECLINE_CAUSE_NEXT_STEP_LINES: Readonly<Partial<Record<DeclineCause, readonly string[]>>> = {
+  gate_refused: [
+    'Cause: a permission or approval check refused the step, so it was not done. The',
+    'capability exists: never say there is no way to do it. Say it was not done and that it',
+    'needs the principal\'s direct go-ahead.',
+  ],
+  not_found: [
+    'Cause: what it was asked to act on was not found. Say so; never describe it as existing,',
+    'saved or waiting anywhere.',
+  ],
+};
+
+/** Added to the decline next step when the specialist finished work before declining (#2494). */
+export const DECLINE_WORK_PRODUCT_NEXT_STEP_LINES: readonly string[] = [
+  '`work_product` is its text before the decline. If it holds finished work (a draft, an',
+  'outline, a revision), give that to the principal or use it; do not drop it. Its tool,',
+  'agent and ID names stay out of what you tell them.',
+];
+
+/** The next step for a decline with this cause, and with or without finished work. */
+export function declineNextStep(cause: DeclineCause | undefined, hasWorkProduct: boolean): string {
+  const causeLines = cause !== undefined && Object.hasOwn(DECLINE_CAUSE_NEXT_STEP_LINES, cause)
+    ? DECLINE_CAUSE_NEXT_STEP_LINES[cause] ?? []
+    : [];
+  return [
+    ...DECLINE_NEXT_STEP_LINES,
+    ...causeLines,
+    ...(hasWorkProduct ? DECLINE_WORK_PRODUCT_NEXT_STEP_LINES : []),
+  ].join(' ');
+}
 
 /**
  * A delegation to a specialist that failed and may be retried: a retryable failure, or a

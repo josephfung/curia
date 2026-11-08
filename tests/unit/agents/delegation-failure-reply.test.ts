@@ -725,3 +725,60 @@ describe('narration transcript (#1860)', () => {
     expect(JSON.stringify(narrated)).not.toContain('tool_result');
   });
 });
+
+// A decline reaches this path only on an outside sender's turn since #2496 (#2494). The
+// sender is not told why (#2501), but a draft may not call a gate-refused step a missing
+// capability: in production the principal heard "no ban or blocklist capability".
+describe('a gate-refused decline is never told as a missing capability (#2494)', () => {
+  const block = {
+    audience: 'sender' as const,
+    displayName: 'contacts specialist',
+    agentId: 'contacts',
+    reason: 'specialist_decline',
+    declined: true,
+    declineCause: 'gate_refused' as const,
+    escalated: true,
+    request: 'Please block Jordan Lee from the list.',
+  };
+
+  it('rejects the denials models write', () => {
+    for (const text of [
+      "There's no ban or blocklist capability, so I can't block Jordan Lee.",
+      "I don't have blocking capabilities for the list, so Jordan Lee stays on it.",
+      "I don't have a way to block Jordan Lee from the list.",
+      'Blocking Jordan Lee from the list is not supported.',
+      "I can't ban people from the list, so Jordan Lee stays.",
+      "There's no feature for blocking someone on the list.",
+      'I lack the ability to block Jordan Lee from the list.',
+      'Blocking on the list is unavailable, so Jordan Lee stays.',
+    ]) {
+      const selected = selectDelegationFailureReply({ ...block, modelText: reply(text) });
+      expect(selected.rejected, text).toBe('denies_capability');
+      expect(selected.content).toBe("I wasn't able to take that one on. I'll follow up with you on it.");
+    }
+  });
+
+  it('keeps the #2501 reply: check first, without saying why', () => {
+    for (const text of [
+      "Let me check on blocking Jordan Lee from the list and I'll get back to you.",
+      "I can't block Jordan Lee from the list just yet. I'll follow up with you on it.",
+    ]) {
+      expect(selectDelegationFailureReply({ ...block, modelText: reply(text) }).via, text).toBe('model');
+    }
+  });
+
+  it('tells the sender nothing about the cause', () => {
+    expect(delegationFailureNarrationPrompt(block)).not.toMatch(/permission|approval|go-ahead|unable to do/);
+    expect(formatDelegationFailureFallback(block)).toBe("I wasn't able to take that one on. I'll follow up with you on it.");
+  });
+
+  it('applies no capability check to any other cause', () => {
+    for (const declineCause of ['not_found', 'capability_absent', 'unspecified'] as const) {
+      expect(selectDelegationFailureReply({
+        ...block,
+        declineCause,
+        modelText: reply("There's no way to block Jordan Lee from the list."),
+      }).via).toBe('model');
+    }
+  });
+});

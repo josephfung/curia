@@ -114,7 +114,7 @@ import {
   type DelegationFailureInfo,
   type UnresolvedDecline,
 } from './delegation-guard.js';
-import { DECLINE_NEXT_STEP } from './prompts/delegate-result-guidance.js';
+import { declineNextStep } from './prompts/delegate-result-guidance.js';
 import {
   delegationOriginAgentId,
   delegationOriginConversationId,
@@ -381,6 +381,9 @@ export interface AgentConfig {
 
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
 const RETRY_BACKOFF_MS = [1000, 5000, 15000] as const;
+
+/** Distinct gate-refused tool names one task reports on agent.response (#2494). */
+const MAX_GATE_REFUSALS = 10;
 
 /**
  * A non-retryable delegation failure waiting for its reply at the end of the turn.
@@ -920,6 +923,11 @@ export class AgentRuntime {
     const skillsCalled: string[] = [];
     // Successful calls that sent a message or calendar notification (#2055).
     const sends: string[] = [];
+    // Calls the live-principal-turn gate refused (#2494), so a specialist's decline is
+    // reported to the delegating agent as a permission refusal the principal can lift.
+    // An allowed_callers refusal is not: it is static config no go-ahead changes.
+    // Distinct names, capped, so a looping specialist cannot grow the response.
+    const gateRefusals: string[] = [];
     // Skills that returned success:false — surfaced to the scheduler as
     // last_run_context.failedSkills without flipping job health (#1830).
     // Cap to distinct skill names so a flailing DB/API loop cannot bloat the
@@ -2363,7 +2371,8 @@ export class AgentRuntime {
                     escalated: delegationGuard.isEscalated(blockKey),
                     ...(prior?.declined === true && { declined: true }),
                     // Still blocked after a decline: the fallbacks are what is left (#2496).
-                    ...(agentDecline !== undefined && { next_step: DECLINE_NEXT_STEP }),
+                    ...(agentDecline?.declineCause !== undefined && { cause: agentDecline.declineCause }),
+                    ...(agentDecline !== undefined && { next_step: declineNextStep(agentDecline.declineCause, false) }),
                   },
                 };
               } else {
@@ -2855,6 +2864,13 @@ export class AgentRuntime {
           // Record for scheduler visibility (#1830) — distinct-skill cap + sanitised
           // error text (third-party bodies must not land unsanitised in last_run_context).
           recordFailedSkill(toolCall.name, result.error);
+          if (
+            result.gate === 'live_principal_turn'
+            && !gateRefusals.includes(toolCall.name)
+            && gateRefusals.length < MAX_GATE_REFUSALS
+          ) {
+            gateRefusals.push(toolCall.name);
+          }
           const isDbFailure = result.errorType === 'DATABASE_UNAVAILABLE';
           const isAuthFailure = result.errorType === 'AUTH_FAILURE';
           const mismatchFromFailure = identityMismatchFromToolResult(toolCall.name, result);
@@ -3160,6 +3176,7 @@ export class AgentRuntime {
       ...(prepared.suppressDelivery && { suppressDelivery: true }),
       skillsCalled,
       ...(!isResponseError && { sends }),
+      ...(!isResponseError && gateRefusals.length > 0 && { gateRefusals }),
       channelId: turnChannelId,
       ...(principalNote !== undefined && { principalNote }),
       ...failedSkillsPayload(),
@@ -3333,6 +3350,7 @@ export class AgentRuntime {
       agentId: esc.agent,
       reason: esc.reason,
       declined: esc.declined,
+      declineCause: esc.declineCause,
       possiblySucceeded: esc.possiblySucceeded,
       // For a sender, "escalated" licenses a follow-up promise, which holds only when the
       // review task records them as waiting (#1978). For the principal it reports the task.

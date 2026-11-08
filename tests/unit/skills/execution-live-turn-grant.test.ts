@@ -101,6 +101,8 @@ describe('elevated gate under a live-turn grant (#2495)', () => {
       taskMetadata: principalMetadata,
     });
     expect(result.success).toBe(false);
+    // Still a live-turn refusal the principal can lift, so a decline reports it as one (#2494).
+    if (!result.success) expect(result.gate).toBe('live_principal_turn');
     expect(execute).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
   });
@@ -260,7 +262,28 @@ describe('elevated gate under a live-turn grant (#2495)', () => {
       taskMetadata: principalMetadata,
     });
     expect(result.success).toBe(false);
+    if (!result.success) expect(result.gate).toBe('live_principal_turn');
     expect(execute).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('tags the bare refusal when the grant lapses before the handler and nothing can be filed', async () => {
+    const registry = new ToolRegistry();
+    const execute = vi.fn<ToolHandler['execute']>(async () => ({ success: true, data: 'tier set' }));
+    registry.register(makeManifest(), { execute });
+    const grant = issueLiveTurnGrant({ voiceSessionId: 's1', ttlMs: 60_000 });
+    const autonomyService = { getConfig: vi.fn(async () => { grant.revoke(); return null; }) };
+    const layer = new ExecutionLayer(registry, logger, { autonomyService: autonomyService as never });
+    const result = await layer.invoke('contact-set-tier', { tier: 'blocked' }, undefined, {
+      taskEventId: 'task-5',
+      agentId: 'coordinator',
+      liveTurn: true,
+      liveTurnGrantId: grant.id,
+      // No principal lineage: the recheck's bare refusal, not a confirmation.
+      taskMetadata: { originator: { contactId: 'c-9', systemRole: 'external', channel: 'voice', tier: 'known' } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.gate).toBe('live_principal_turn');
+    expect(execute).not.toHaveBeenCalled();
   });
 });
