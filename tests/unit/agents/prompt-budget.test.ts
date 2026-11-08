@@ -147,8 +147,8 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // 45,471 over 45 local tools.
   // #2474 ceo-inbox-send-draft (+450 bytes after trims), approved by the maintainer: 45,921 over 46 local tools.
   // #2474 ceo-inbox-list/search DRAFTS modified_since + created_by_curia/date_local (+370 bytes): 46,291 over 46 local tools.
-  // #2474 PR 2 ceo-inbox-send-draft describes triage sends (+221 bytes), approved by the maintainer: 46,512 over 46 local tools.
-  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 46_512, allowMcpPins: false },
+  // #2474 PR 2 ceo-inbox-send-draft describes triage sends (+236 bytes), approved by the maintainer: 46,527 over 46 local tools.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 46_527, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
   // 35,311 bytes over its local tools.
   { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_400, allowMcpPins: false },

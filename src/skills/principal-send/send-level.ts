@@ -2,8 +2,9 @@ import type { Logger } from '../../logger.js';
 
 /**
  * How freely Curia may send from the principal's mailbox (#2474).
- * off: never; on_request: only when the principal asked; routine/all: reserved
- * for autonomous sends (refused in PR 1).
+ * off: never; on_request: only when the principal asked; routine: also the
+ * agent's own acknowledgement, thanks and logistics replies; all: also replies
+ * making commitments the thread supports (limits enforced in the gateway).
  */
 export type SendLevel = 'off' | 'on_request' | 'routine' | 'all';
 
