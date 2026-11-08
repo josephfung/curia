@@ -41,6 +41,11 @@ export interface LiveTurnGrant {
   readonly id: string;
   /** End the grant. Idempotent. */
   revoke(): void;
+  /**
+   * Restart the TTL at `ttlMs` from now, for a wait that starts after the grant is issued.
+   * A revoked or expired grant stays ended.
+   */
+  renew(ttlMs: number): void;
 }
 
 /**
@@ -65,6 +70,15 @@ export function issueLiveTurnGrant(opts: {
     id,
     revoke: () => {
       activeGrants.delete(id);
+    },
+    renew: (ttlMs: number) => {
+      const entry = activeGrants.get(id);
+      if (!entry) return;
+      if (now() >= entry.expiresAt) {
+        activeGrants.delete(id);
+        return;
+      }
+      entry.expiresAt = now() + Math.max(0, ttlMs);
     },
   };
 }

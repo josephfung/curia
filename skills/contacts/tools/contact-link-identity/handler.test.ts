@@ -7,6 +7,7 @@ import { ContactLinkIdentityHandler } from './handler.js';
 import { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import { sourceKeyFor, sourceKeysInText, type IdentifierSources } from '../../../../src/contacts/identifier-provenance.js';
+import { issueLiveTurnGrant } from '../../../../src/autonomy/live-turn-grants.js';
 
 const silentLog = pino({ level: 'silent' });
 
@@ -243,6 +244,31 @@ describe('ContactLinkIdentityHandler', () => {
       expect((await contacts.getContactWithIdentities(acmeId))!.identities[0]).toMatchObject({ source, verified: true });
     });
 
+    it('verifies an agent-entered address even when the live turn ends during the checks', async () => {
+      // An agent vouches for an address an agent typed: that does not need the live turn.
+      await contacts.linkIdentity({
+        contactId: acmeId, channel: 'email', channelIdentifier: 'office@acme.example', source: 'agent_stated', verified: false,
+      });
+      const grant = issueLiveTurnGrant({ ttlMs: 60_000 });
+      const sources = LIVE.identifierSources!;
+      const result = await restate({
+        ...LIVE,
+        liveTurnGrantId: grant.id,
+        identifierSources: { has: async (c, i) => { grant.revoke(); return sources.has(c, i); } },
+      });
+      expect(result).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
+    });
+
+    it('verifies on a live turn whose delegated grant is still active', async () => {
+      await contacts.linkIdentity({
+        contactId: acmeId, channel: 'email', channelIdentifier: 'office@acme.example', source: 'self_claimed', verified: false,
+      });
+      const grant = issueLiveTurnGrant({ ttlMs: 60_000 });
+      const result = await restate({ ...LIVE, liveTurnGrantId: grant.id });
+      expect(result).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
+      grant.revoke();
+    });
+
     it('verifies on a replay the principal approved, after the voice grant lapsed', async () => {
       await contacts.linkIdentity({
         contactId: acmeId, channel: 'email', channelIdentifier: 'office@acme.example', source: 'self_claimed', verified: false,
@@ -280,6 +306,31 @@ describe('ContactLinkIdentityHandler', () => {
         ['no task metadata at all', { taskMetadata: undefined }],
       ] as const)('%s', async (_label, override) => {
         const result = await restate({ ...LIVE, ...override });
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error).toMatch(/Only the principal can vouch for it/);
+        expect(await isVerified()).toBe(false);
+      });
+
+      it('a delegated live turn whose wait already ended', async () => {
+        const grant = issueLiveTurnGrant({ ttlMs: 60_000 });
+        grant.revoke();
+        const result = await restate({ ...LIVE, liveTurnGrantId: grant.id });
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error).toMatch(/Only the principal can vouch for it/);
+        expect(await isVerified()).toBe(false);
+      });
+
+      it('a delegated live turn whose wait ends while the checks run', async () => {
+        const grant = issueLiveTurnGrant({ ttlMs: 60_000 });
+        const ctx = { ...LIVE, liveTurnGrantId: grant.id };
+        const sources = ctx.identifierSources!;
+        ctx.identifierSources = {
+          has: async (channel, identifier) => {
+            grant.revoke();
+            return sources.has(channel, identifier);
+          },
+        };
+        const result = await restate(ctx);
         expect(result.success).toBe(false);
         if (!result.success) expect(result.error).toMatch(/Only the principal can vouch for it/);
         expect(await isVerified()).toBe(false);

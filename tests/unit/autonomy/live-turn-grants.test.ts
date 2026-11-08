@@ -62,6 +62,25 @@ describe('live-turn grants', () => {
     expect(isLiveTurnGrantActive(call2.id, () => now)).toBe(true);
   });
 
+  it('renew restarts the TTL, but never revives a revoked or expired grant (#2515)', () => {
+    let now = 1_000;
+    const grant = issueLiveTurnGrant({ ttlMs: 500, now: () => now });
+    now = 1_400;
+    grant.renew(500);
+    now = 1_800;
+    expect(isLiveTurnGrantActive(grant.id, () => now)).toBe(true);
+
+    const expired = issueLiveTurnGrant({ ttlMs: 500, now: () => now });
+    now = 2_300;
+    expired.renew(500);
+    expect(isLiveTurnGrantActive(expired.id, () => now)).toBe(false);
+
+    const revoked = issueLiveTurnGrant({ ttlMs: 500, now: () => now });
+    revoked.revoke();
+    revoked.renew(500);
+    expect(isLiveTurnGrantActive(revoked.id, () => now)).toBe(false);
+  });
+
   it('a grant under a lapsed or unknown parent is never active (#2515)', () => {
     const wait = issueLiveTurnGrant({ parentId: lapsedLiveTurnGrantId(), ttlMs: 60_000 });
     expect(isLiveTurnGrantActive(wait.id)).toBe(false);

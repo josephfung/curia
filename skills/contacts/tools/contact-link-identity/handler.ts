@@ -45,6 +45,7 @@ import {
 import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
 import { identifierHasSource, unsourcedIdentifierError } from '../../../../src/skills/_shared/identifier-source.js';
 import { isLivePrincipalTurn } from '../../../../src/contacts/principal.js';
+import { isLiveTurnGrantActive } from '../../../../src/autonomy/live-turn-grants.js';
 
 const NOT_LINKED = 'Nothing was linked.';
 const NOT_VERIFIED = 'Nothing was verified.';
@@ -70,6 +71,18 @@ function needsPrincipal(source: IdentitySource): string {
   return `That address is already on this contact, unverified, and ${principalOnlyReason(source)}. ` +
     'Only the principal can vouch for it. Nothing changed. The principal can verify it by asking Curia ' +
     "directly in a live conversation, or in the contact's identity editor in the console's Contacts screen.";
+}
+
+/**
+ * Whether the principal vouches for this call right now: a replay they approved, or a live
+ * turn that is not a wake and whose live-turn grant, if it has one, is still active (#2515).
+ * Read at the decision and again at the write, since the grant can end in between.
+ */
+function principalVouchesNow(ctx: ToolContext): boolean {
+  if (ctx.humanApproved === true) return true;
+  return isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata)
+    && ctx.taskMetadata?.['wakeContext'] === undefined
+    && (ctx.liveTurnGrantId === undefined || isLiveTurnGrantActive(ctx.liveTurnGrantId));
 }
 
 /**
@@ -191,9 +204,9 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         // flag leaked onto it. A replay the principal approved (`humanApproved`, set only by
         // approve-action and reaction approvals) is the principal vouching for this exact call,
         // even when the voice grant it was directed under has since lapsed.
-        const principalDirected = ctx.humanApproved === true
-          || (isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata) && ctx.taskMetadata?.['wakeContext'] === undefined);
-        if (AGENT_ENTERED_SOURCES.has(existing.source) || principalDirected) {
+        const agentEntered = AGENT_ENTERED_SOURCES.has(existing.source);
+        const principalDirected = principalVouchesNow(ctx);
+        if (agentEntered || principalDirected) {
           // Verifying is the risky step: those rows hold the address as typed, and an address
           // found by an agent can be a near miss of someone else's. Run the checks a new
           // address gets first, and require it to have a source in the conversation.
@@ -207,6 +220,15 @@ export class ContactLinkIdentityHandler implements ToolHandler {
           if (restateRefusal) return { success: false, error: restateRefusal };
           const restateUnsourced = await unsourcedRefusal(ctx, channel, normalized.identifier, NOT_VERIFIED);
           if (restateUnsourced) return { success: false, error: restateUnsourced };
+          // The checks above wait on the database. A delegate wait that ended meanwhile
+          // ended the live turn, so the principal's authority is read again at the write.
+          if (!agentEntered && !principalVouchesNow(ctx)) {
+            ctx.log.info(
+              { identityId: existing.id, contactId: contact_id, source: existing.source },
+              'contact-link-identity: refused — the live principal turn ended during the checks (#2515)',
+            );
+            return { success: false, error: needsPrincipal(existing.source) };
+          }
           const verified = await ctx.contactService.verifyIdentity(existing.id);
           ctx.log.info(
             { identityId: existing.id, contactId: contact_id, source: existing.source, principalDirected },

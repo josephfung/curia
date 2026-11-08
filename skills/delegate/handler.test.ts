@@ -219,6 +219,43 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     }
   });
 
+  it('keeps the grant for the whole wait when the claim is slow (#2515)', async () => {
+    vi.useFakeTimers();
+    try {
+      let grantId: string | undefined;
+      const bus = {
+        subscribe() {},
+        publish(_layer: string, event: BusEvent) {
+          if (event.type === 'agent.task') grantId = (event as AgentTaskEvent).payload.liveTurnGrantId;
+          return new Promise<void>(() => {});
+        },
+      } as unknown as EventBus;
+      const ctx = makeCtx(bus, {
+        liveTurn: true,
+        senderId: 'ceo',
+        openDelegationLookup: {
+          findInFlight: async () => null,
+          // The claim takes 40s of a 60s wait.
+          acquireRunning: () => new Promise((resolve) => {
+            setTimeout(() => resolve({ acquired: true, claim: { delegateEventId: 'd-1' } }), 40_000);
+          }),
+          releaseRunning: async () => {},
+        },
+      } as unknown as Partial<ToolContext>);
+      ctx.input = { agent: 'research-analyst', task: 'find the acquisition comps', timeout_ms: 60_000 };
+      const pending = new DelegateHandler().execute(ctx);
+      await vi.advanceTimersByTimeAsync(40_000);
+      // 30s into the wait (70s after the grant was issued) the specialist is still live.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(isLiveTurnGrantActive(grantId)).toBe(true);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await pending;
+      expect(isLiveTurnGrantActive(grantId)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('issues no grant for a turn that is not live (#2515)', async () => {
     const { bus, published } = makeBus();
     await new DelegateHandler().execute(makeCtx(bus, { liveTurn: undefined }));

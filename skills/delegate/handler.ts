@@ -789,6 +789,9 @@ export class DelegateHandler implements ToolHandler {
       const responsePromise = new Promise<SpecialistReply>((resolve, reject) => {
         let settled = false;
 
+        // The wait starts here, after the claim: restart the grant's TTL with the timer so
+        // a slow claim does not end the live turn before the wait does. Its parent still bounds it.
+        waitGrant?.renew(specialistTimeoutMs);
         timeoutHandle = setTimeout(() => {
           if (!settled) {
             settled = true;
