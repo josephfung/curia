@@ -450,3 +450,4 @@ Estimated ~950–1,150 non-test lines, over XL, so split (each half ships alone)
 - Batch read-back: one sentence, enforced by description and scenario, not code (D6).
 - Tier gating is near end of life: design for band only (D2).
 - ceo-inbox tool-definition budget raise approved for this feature.
+- An autonomous reply never shares information that is not already on the thread (controller ruling, 2026-11-07, from the PR 2 Task 7 review): band review asks `off-thread` on every autonomous send, with the thread's messages as evidence, and a yes holds at any score and under any ceiling. The principal's own availability and the logistics the reply settles do not count. A missing or malformed answer holds (D2, D10).

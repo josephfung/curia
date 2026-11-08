@@ -96,7 +96,7 @@ import {
 } from './principal-send/autonomous-limits.js';
 import { isOutsiderOriginated } from '../contacts/principal.js';
 import {
-  mailboxDraftLabel, quoteItemsToReview, replyOrigin, threadMessageProof, type ThreadMessageProof,
+  mailboxDraftLabel, quoteItemsToReview, replyOrigin, threadMessageProof, threadMessageText, type ThreadMessageProof,
 } from './principal-send/quote-proof.js';
 import type { SendStakes } from '../autonomy/judge-brief.js';
 import type { CallBudget } from '../util/call-budget.js';
@@ -756,6 +756,8 @@ interface DraftSendProfile {
    * draft body is model-written, so a quote marker in it proves nothing).
    */
   threadMessages?: readonly ThreadMessageProof[];
+  /** Autonomous only: the same messages as text, for band review's off-thread question (design D10). */
+  threadText?: ReadonlyArray<{ at?: string; text: string }>;
 }
 /** sendEmailDraft's options, passed through to the draft checks unchanged. */
 interface DraftSendOptions {
@@ -2475,6 +2477,8 @@ export class OutboundGateway {
     stakesCeiling?: SendStakes;
     /** An autonomous principal-mailbox send: the message the reply answers, as origin evidence. */
     origin?: { content: string; at?: string; senderVerified: boolean };
+    /** An autonomous principal-mailbox send: the thread's messages, for the off-thread question. */
+    threadMessages?: ReadonlyArray<{ at?: string; text: string }>;
     /**
      * A hold, an ask or a block leaves the draft unsent and returns `held` (#2474, design D5): no
      * approval row and no digest item. The principal-mailbox path never raises approvals.
@@ -2509,6 +2513,7 @@ export class OutboundGateway {
         ...(args.draftAuthor ? { draftAuthor: args.draftAuthor } : {}),
         ...(args.stakesCeiling ? { stakesCeiling: args.stakesCeiling } : {}),
         ...(args.origin ? { origin: args.origin } : {}),
+        ...(args.threadMessages ? { threadMessages: args.threadMessages } : {}),
       });
     } catch (err) {
       // BandSendReview is not meant to throw; if it does, the send was not reviewed. Hold.
@@ -4297,6 +4302,7 @@ export class OutboundGateway {
         stakesCeiling: level === 'all' ? 'commitment' : 'routine',
         ...(target ? { origin: replyOrigin(target) } : {}),
         threadMessages: thread.map(threadMessageProof),
+        threadText: thread.map(threadMessageText),
       };
     }
 
@@ -4829,9 +4835,11 @@ export class OutboundGateway {
         ...(principalMailbox
           ? {
             editable: true, senderProfile: 'principal-mailbox' as const, draftAuthor: author, leaveDraftOnHold: true,
-            // Autonomous only (PR 2): the level's ceiling, and the message the reply answers.
+            // Autonomous only (PR 2): the level's ceiling, the message the reply answers, and the
+            // thread the off-thread question judges the reply against.
             ...(profile.stakesCeiling ? { stakesCeiling: profile.stakesCeiling } : {}),
             ...(profile.origin ? { origin: profile.origin } : {}),
+            ...(profile.threadText ? { threadMessages: profile.threadText } : {}),
           }
           : { editable: false }),
       });

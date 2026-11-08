@@ -80,6 +80,17 @@ export function mailboxDraftLabel(draft: NylasMessage, isPrincipal: (email: stri
 }
 
 /**
+ * A thread message as band review's `off-thread` evidence (#2474, design D10): its text as its
+ * sender wrote it, with when it was sent. The review redacts, orders and bounds them.
+ */
+export function threadMessageText(msg: NylasMessage): { at?: string; text: string } {
+  return {
+    ...(Number.isFinite(msg.date) ? { at: new Date(msg.date * 1000).toISOString() } : {}),
+    text: htmlToText(msg.body),
+  };
+}
+
+/**
  * The message an autonomous reply answers, as band review's origin (#2474, design D2). The sender
  * counts as verified only when its own headers say so (fail closed).
  */

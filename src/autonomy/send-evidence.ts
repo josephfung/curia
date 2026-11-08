@@ -174,6 +174,44 @@ export function replyTargetEvidence(text: string): string {
   return clipMiddle(redactSecrets(text), EVIDENCE_ORIGIN_MAX_CHARS);
 }
 
+/**
+ * An autonomous reply's thread (#2474), the most the judge reads of it. Each message is clipped
+ * like a reply target, so roughly the four newest always fit.
+ */
+export const EVIDENCE_THREAD_MAX_CHARS = 16_000;
+
+/**
+ * An autonomous principal-mailbox reply's thread as `off-thread` evidence (#2474): newest first
+ * (undated last), credentials redacted, each message trimmed from the middle, and older messages
+ * left out past EVIDENCE_THREAD_MAX_CHARS. Leaving a message out fails closed: what only it said
+ * reads as not on the thread, so the reply holds.
+ */
+export function threadEvidence(messages: ReadonlyArray<{ at?: string; text: string }>): {
+  threadMessages: Array<{ at?: string; text: string }>;
+  threadMessagesOlderLeftOut?: true;
+} {
+  const time = (at: string | undefined): number => {
+    const ms = at === undefined ? Number.NaN : Date.parse(at);
+    return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
+  };
+  // Compared, not subtracted: two undated messages would give -Infinity - -Infinity = NaN.
+  const newestFirst = [...messages].sort((a, b) => {
+    const [ta, tb] = [time(a.at), time(b.at)];
+    return ta === tb ? 0 : tb > ta ? 1 : -1;
+  });
+  const out: Array<{ at?: string; text: string }> = [];
+  let used = 0;
+  for (const m of newestFirst) {
+    const text = clipMiddle(redactSecrets(m.text), EVIDENCE_ORIGIN_MAX_CHARS);
+    if (used + text.length > EVIDENCE_THREAD_MAX_CHARS) {
+      return { threadMessages: out, threadMessagesOlderLeftOut: true };
+    }
+    used += text.length;
+    out.push({ ...(m.at !== undefined ? { at: m.at } : {}), text });
+  }
+  return { threadMessages: out };
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }

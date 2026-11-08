@@ -6557,6 +6557,49 @@ describe('sendPrincipalDraft (#2474)', () => {
       const input = review.mock.calls[0]![0] as Record<string, unknown>;
       expect(input).not.toHaveProperty('stakesCeiling');
       expect(input).not.toHaveProperty('origin');
+      expect(input).not.toHaveProperty('threadMessages');
+    });
+
+    it('passes the thread\'s non-draft messages to the review as text, with when each was sent', async () => {
+      const sent = inbound({ id: 'm0', from: [{ email: PRINCIPAL }], to: [{ email: 'dana@example.org' }], folders: ['SENT'], body: '<p>Shall we meet this week?</p>', date: nowSec() - 9000 });
+      const unsent = autoDraft({ id: 'd-old', folders: ['DRAFTS'], body: '<p>An unsent draft.</p>' });
+      const { gw, review } = makeAuto({ client: autoClient(autoDraft(), [sent, inbound(), unsent]) });
+      await gw.sendPrincipalDraft('d1', auto);
+      // The review orders and bounds them (threadEvidence); the gateway passes what it read.
+      const input = review.mock.calls[0]![0] as { threadMessages: Array<{ at?: string; text: string }> };
+      expect(input.threadMessages).toEqual([
+        { at: new Date(sent.date * 1000).toISOString(), text: 'Shall we meet this week?' },
+        { at: new Date(inbound().date * 1000).toISOString(), text: 'Does Friday at 10 work?' },
+      ]);
+    });
+
+    // Binding ruling (Task 7 review concern 3): under all at 100, a reply that passes on what the
+    // thread does not show (memory, notes, another thread) is never sent.
+    it('holds a reply the judge says shares information that isn\'t on the thread: held marker, digest item, not sent', async () => {
+      const judgeReview = vi.fn().mockResolvedValue({
+        ok: true, purpose: 'serving', stakes: 'commitment', stakesReason: 'Shares a deal term.',
+        unsupportedClaims: [], unnecessaryItems: [], offThread: true, reason: 'The multiple is not on the thread.',
+      });
+      const real = new BandSendReview({
+        judge: { review: judgeReview, isEnabled: () => true },
+        evidence: { collect: vi.fn().mockResolvedValue({ unavailable: false, toolResults: [], principalBlock: null }) },
+        limiter: new FailOpenLimiter(), onLimiterTripped: vi.fn(), contactTier: vi.fn(), logger: createLogger('error'),
+      });
+      const body = '<p>Bob said the multiple is 4.2x.</p>';
+      const { gw, client, ledger } = makeAuto({
+        level: 'all', score: 100, review: vi.fn((input) => real.review(input)), client: autoClient(autoDraft({ body })),
+      });
+      const r = await gw.sendPrincipalDraft('d1', auto);
+      const text = 'Held for the principal: it shares information that isn\'t on the thread with someone outside the principal\'s organization.' + SUFFIX;
+      expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'review_hold', blockedReason: text });
+      expect(client!.sendDraft).not.toHaveBeenCalled();
+      expect(ledger.recordSending).not.toHaveBeenCalled();
+      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reason: text }));
+      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${text}`, urgency: 'digest' })]);
+      // The judge was asked, with the thread's text beside the draft.
+      const brief = judgeReview.mock.calls[0]![0] as { questions: string[]; evidence: { threadMessages: Array<{ text: string }> } };
+      expect(brief.questions).toContain('off-thread');
+      expect(brief.evidence.threadMessages.map((m) => m.text)).toEqual(['Does Friday at 10 work?']);
     });
 
     it('does not exclude the principal\'s phone from detection on an autonomous send', async () => {
