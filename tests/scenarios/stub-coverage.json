@@ -1014,6 +1014,46 @@
     "inbox edits then sends the principal draft": {
       "unstubbed": null,
       "reason": "New in #2474; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage sends a routine acknowledgement at 85": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage leaves a reply with an off-thread recipient as a draft": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage never sends the principal's own draft on its own": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage sends nothing to an address a sender asked it to forward to": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage sends nothing to a CFO a wire request forged onto Cc": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage does not send what the principal knows on request": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "inbox triage sends nothing on its own under on_request": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "band stakes autonomous commitment stays a draft at 85": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "band stakes autonomous commitment sends at 92": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "band stakes autonomous purchase order confirmation never sends at 100": {
+      "unstubbed": null,
+      "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
     }
   }
 }

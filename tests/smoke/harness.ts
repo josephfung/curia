@@ -217,6 +217,17 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
         return (await bullpen.getPendingThreadsForAgent(agentId, windowMinutes)).filter(t => threads?.has(t.threadId) === true);
       },
     }),
+    // A case's `config` settings (#2474) reach its agents' pinned context from turn 1. Held per
+    // case rather than written to the database copy, which concurrent cases share; every other
+    // setting reads the copy as before.
+    wrapPinnedContextReader: (reader) => ({
+      warnChars: reader.warnChars,
+      readDoc: (path) => reader.readDoc(path),
+      readConfig: async (namespace, key) => {
+        const own = context.current()?.configs.get(`${namespace}/${key}`);
+        return own !== undefined ? own : reader.readConfig(namespace, key);
+      },
+    }),
   });
   const { bus, logger, contactResolver } = stack;
 

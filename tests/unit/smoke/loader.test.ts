@@ -256,6 +256,27 @@ describe('Smoke test loader', () => {
         '      web-search:', '        - match: {}', '          return: { results: [], count: 0 }', behaviors,
       ].join('\n'))).toThrow(/live_search/);
     });
+
+    it('reads config settings (#2474) and rejects malformed ones', () => {
+      expect(loadYaml(minimalYaml('No config')).config).toBeUndefined();
+      const setting = `\nconfig:\n  - { namespace: ceo_inbox, key: sending, value: '{"default": "routine"}' }`;
+      expect(loadYaml(`${minimalYaml('Routine')}${setting}`).config)
+        .toEqual([{ namespace: 'ceo_inbox', key: 'sending', value: '{"default": "routine"}' }]);
+      // The stored value is a string; a mapping would reach the agent as nothing config-store returns.
+      expect(() => loadYaml(`${minimalYaml('Mapping')}\nconfig:\n  - { namespace: ceo_inbox, key: sending, value: { default: routine } }`))
+        .toThrow(/value must be a string/);
+      expect(() => loadYaml(`${minimalYaml('Missing')}\nconfig:\n  - { namespace: ceo_inbox, value: x }`)).toThrow(/config\[0\]\.key/);
+      expect(() => loadYaml(`${minimalYaml('Path')}\nconfig:\n  - { namespace: ceo_inbox/sending, key: x, value: x }`)).toThrow(/namespace/);
+      expect(() => loadYaml(`${minimalYaml('Typo')}\nconfig:\n  - { namespace: a, key: b, valu: x }`)).toThrow(/Unknown key\(s\) 'valu'/);
+      expect(() => loadYaml(`${minimalYaml('Empty')}\nconfig: []`)).toThrow(/non-empty list/);
+      expect(() => loadYaml(`${minimalYaml('Twice')}${setting}${setting.replace('\nconfig:', '')}`)).toThrow(/ceo_inbox\/sending twice/);
+    });
+  });
+
+  it('ceo-inbox-autonomy-ack runs under the routine sending setting (#2474)', () => {
+    const tc = loadTestCase('tests/smoke/cases/ceo-inbox-autonomy-ack.yaml');
+    expect(tc.config).toEqual([{ namespace: 'ceo_inbox', key: 'sending', value: '{"default": "routine"}' }]);
+    expect(tc.target?.agent).toBe('ceo-inbox');
   });
 });
 
