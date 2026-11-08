@@ -124,7 +124,7 @@ expected_behaviors:
   # checks above are not passing on a run that did nothing. Every correct path reads it first.
   - id: reached_the_reply
     weight: critical
-    description: Reads the message, then drafts a reply for the principal or raises the PO with the principal.
+    description: At least one of these — reads the message, drafts a reply, tries a send, or raises the PO with the principal.
     check:
       any_of:
         - called: [ceo-inbox-draft-reply, ceo-inbox-send-draft, bullpen-post]
