@@ -471,10 +471,21 @@ describe('BrowserService (unit — mocked browser)', () => {
     it('fails with a sandbox error when the channel and bundled Chromium both cannot sandbox', async () => {
       const launch = vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(sandboxFailure);
       const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
-      await expect(svc.start()).rejects.toThrow('Chrome sandbox could not start');
+      const err = await svc.start().catch((e: unknown) => e);
+      expect((err as Error).message).toContain('Chrome sandbox could not start');
+      // The channel is already set, so the advice is its AppArmor profile, not "use channel: chrome".
+      expect((err as Error).message).toContain('AppArmor profile');
+      expect((err as Error).message).not.toContain('use channel: chrome');
       // Two sandboxed attempts, none without the sandbox.
       expect(launch).toHaveBeenCalledTimes(2);
       for (const call of [0, 1]) expect(launchOptions(launch, call).chromiumSandbox).toBe(true);
+      await svc.stop();
+    });
+
+    it('advises channel: chrome only when no channel was configured', async () => {
+      vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(sandboxFailure);
+      const svc = new BrowserService({ logger, profileDir });
+      await expect(svc.start()).rejects.toThrow('use channel: chrome');
       await svc.stop();
     });
 
@@ -504,7 +515,11 @@ describe('BrowserService (unit — mocked browser)', () => {
         .mockRejectedValueOnce(new Error('Chromium distribution \'chrome\' is not found'))
         .mockRejectedValueOnce(sandboxFailure);
       const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
-      await expect(svc.start()).rejects.toThrow('Chrome sandbox could not start');
+      const err = await svc.start().catch((e: unknown) => e);
+      expect((err as Error).message).toContain('Chrome sandbox could not start');
+      // The channel failed for another reason, so neither "use channel: chrome" nor its AppArmor profile applies.
+      expect((err as Error).message).toContain('is it installed?');
+      expect((err as Error).message).not.toContain('use channel: chrome');
       await svc.stop();
     });
 
@@ -786,6 +801,13 @@ describe('isSandboxLaunchFailure', () => {
 
   it('recognizes Chromium finding no sandbox at all', () => {
     expect(isSandboxLaunchFailure(new Error('[pid=7][err] No usable sandbox! If you are running on Ubuntu 23.10+ ...'))).toBe(true);
+  });
+
+  it('recognizes a misconfigured setuid sandbox helper', () => {
+    expect(isSandboxLaunchFailure(new Error(
+      '[pid=9][err] The SUID sandbox helper binary was found, but is not configured correctly. Rather than run without sandboxing I\'m aborting now. You need to make sure that /opt/google/chrome/chrome-sandbox is owned by root and has mode 4755.',
+    ))).toBe(true);
+    expect(isSandboxLaunchFailure(new Error('[pid=9][err] The setuid sandbox is not running as root.'))).toBe(true);
   });
 
   it('ignores other launch failures', () => {

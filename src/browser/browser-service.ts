@@ -587,7 +587,9 @@ export class BrowserService {
           baseOptions,
         ) as unknown as BrowserContext;
       } catch (fallbackErr) {
-        if (isSandboxLaunchFailure(fallbackErr)) throw this.sandboxLaunchError(fallbackErr);
+        if (isSandboxLaunchFailure(fallbackErr)) {
+          throw this.sandboxLaunchError(fallbackErr, { channel: this.channel, sandboxFailure: isSandboxLaunchFailure(err) });
+        }
         throw fallbackErr;
       }
       this.logChannel(context, undefined);
@@ -599,13 +601,32 @@ export class BrowserService {
    * The error for a launch that died because Chrome could not set up its sandbox. Never
    * retried without the sandbox: the web-browser skill is unavailable until the host
    * allows it. (#2521)
+   *
+   * `channelAttempt` is set when a configured channel was tried first: the advice to use
+   * `channel: chrome` would then be no help, so the message says what that launch hit.
    */
-  private sandboxLaunchError(cause: unknown): Error {
+  private sandboxLaunchError(
+    cause: unknown,
+    channelAttempt?: { channel: string; sandboxFailure: boolean },
+  ): Error {
+    let hostAdvice: string;
+    if (!channelAttempt) {
+      hostAdvice = 'On Ubuntu 23.10+ from source, use channel: chrome ';
+    } else if (channelAttempt.sandboxFailure) {
+      hostAdvice =
+        `channel: ${channelAttempt.channel} could not sandbox either: on Ubuntu 23.10+ from source, ` +
+        "check that the host's AppArmor profile for that browser allows user namespaces ";
+    } else {
+      hostAdvice =
+        `channel: ${channelAttempt.channel} did not start (see the earlier error; is it installed?), ` +
+        'and bundled Chromium could not sandbox ';
+    }
     const message =
       'Chrome sandbox could not start: the host blocks the user namespaces it needs, ' +
       'or Curia is running as root (Chrome refuses its sandbox as root; run as a non-root user). ' +
+      'A setuid sandbox (chrome-sandbox) error means the same: Chrome falls back to it when namespaces are blocked. ' +
       'In a container, run it with the seccomp profile in docker/seccomp-chrome.json. ' +
-      'On Ubuntu 23.10+ from source, use channel: chrome ' +
+      hostAdvice +
       '(see docs/dev/configuration.md).';
     this.logger.error({ err: cause }, message);
     return new Error(message, { cause });
@@ -976,11 +997,14 @@ export function isXServerBinary(binary: string): boolean {
  * text. "Failed to move to new namespace" is Docker's default seccomp profile refusing
  * the user namespace; "No usable sandbox" is Chromium finding neither the namespace nor
  * the setuid sandbox. "Chromium sandboxing failed!" is Patchright's rewrite of Chrome's
- * "Running as root without --no-sandbox is not supported" refusal.
+ * "Running as root without --no-sandbox is not supported" refusal. The setuid patterns
+ * cover Chromium falling back to a setuid helper that is missing its root/4755 setup
+ * ("The SUID sandbox helper binary was found, but is not configured correctly", "The
+ * setuid sandbox is not running as root").
  */
 export function isSandboxLaunchFailure(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return /Failed to move to new namespace|No usable sandbox|Chromium sandboxing failed/i.test(message);
+  return /Failed to move to new namespace|No usable sandbox|Chromium sandboxing failed|SUID sandbox helper|setuid sandbox/i.test(message);
 }
 
 /**
