@@ -204,9 +204,10 @@ describe('resolveRecipientReference', () => {
     }
   });
 
-  // Every structural classification isStructuralContact covers: a system role, an agent, the principal tier.
+  // Every structural classification isStructuralContact covers.
   it.each([
     ['a system role', { systemRole: 'principal' }],
+    ['kind principal', { kind: 'principal' }],
     ['kind agent', { kind: 'agent' }],
     ['tier principal', { tier: 'principal' }],
   ] as const)('gives console advice, not re-statement, for a structural contact (%s)', async (_label, change) => {
