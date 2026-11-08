@@ -602,6 +602,44 @@ describe('upstream repo advisories', () => {
     expect(report.errors.join('\n')).toContain('cannot interpret');
   });
 
+  it.each([
+    // A major line: is 5.3.x vulnerable, or fixed in a 5.x release the advisory omits?
+    { ranges: ['< 5.3.0'], patched: '6.0.0', versions: ['5.2.9', '5.3.0', '6.0.0'] },
+    // Below 1.0.0 each minor is its own line.
+    { ranges: ['< 0.4.0'], patched: '0.5.0', versions: ['0.3.9', '0.4.0', '0.5.0'] },
+  ])('fails the audit when a gap crosses a release line ($patched)', async (c) => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=${c.versions[0]}'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: c.versions },
+        global: {
+          foo: [{ ...adv('GHSA-aaaa-bbbb-cccc', 'medium', c.ranges), patchedVersions: [c.patched] }],
+        },
+      }),
+    });
+
+    expect(report.exitCode).not.toBe(0);
+    expect(report.errors.join('\n')).toContain('another release line');
+    expect(report.stale).toHaveLength(0);
+  });
+
+  it('extends a gap within one 0.x line', async () => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=0.4.1'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: ['0.4.1', '0.4.2', '0.4.3'] },
+        global: {
+          foo: [{ ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 0.4.2']), patchedVersions: ['0.4.3'] }],
+        },
+      }),
+    });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale[0]!.safeFloor).toBe('>=0.4.3');
+  });
+
   it('does not extend a range whose patched version is on another line (trap 1)', async () => {
     // Per-entry patched versions: the 7.x entry's patch must not condemn anything on 8.x,
     // and a range that starts mid-line (>= 7.15.0) has no gap below its own last hit.

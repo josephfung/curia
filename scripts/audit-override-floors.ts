@@ -1059,8 +1059,8 @@ function toSemverRanges(advisory: AdvisoryRecord, pkg: string): string[] {
  * This does NOT reintroduce trap 1. The patched version is never used as a floor; it only
  * extends one range entry upward over published versions that sit strictly between that
  * entry's highest matching release and the patch. A range that matches no published
- * version below its patch has no anchor, so it is left alone, as is a patched field that
- * is not a single plain version.
+ * version below its patch has no anchor, so it is left alone. A patched field that is not
+ * a single plain version, or a gap that crosses a release line, fails the audit instead.
  */
 function closeRangeGaps(
   advisory: AdvisoryRecord,
@@ -1087,10 +1087,27 @@ function closeRangeGaps(
     const lastHit = below.sort(semver.compare)[below.length - 1]!;
     const gap = published.some((v) => semver.gt(v, lastHit) && semver.lt(v, patched));
     if (!gap) return range;
+    // A gap that crosses a release line is ambiguous: a range ending at 5.2.9 with its
+    // patch on 6.0.0 may mean every later 5.x is vulnerable, or that the 5.x line was
+    // fixed in a release the advisory does not name. Assuming either could report a
+    // false stale floor or hide a real one, so a human has to read the advisory.
+    if (releaseLine(lastHit) !== releaseLine(patched)) {
+      throw new Error(
+        `advisory ${advisory.ghsaId} range \`${range}\` ends at ${lastHit} but its patched ` +
+          `version ${patched} is on another release line, so this audit cannot tell ` +
+          'whether the releases between them are vulnerable.',
+      );
+    }
     gapClosedTo.push(patched);
     return `${range} || >${lastHit} <${patched}`;
   });
   return { advisory, ranges: widened, ...(gapClosedTo.length > 0 ? { gapClosedTo } : {}) };
+}
+
+/** The release line a version belongs to: its major, or major.minor below 1.0.0. */
+function releaseLine(version: string): string {
+  const major = semver.major(version);
+  return major === 0 ? `0.${semver.minor(version)}` : `${major}`;
 }
 
 /** A patched-version field as a plain semver version, or null if it is anything else. */
