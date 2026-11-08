@@ -340,6 +340,7 @@ Under `band` the outbound filter's `contact-data-leak` rule and Stage 2.5 are of
 | Send | Questions |
 |---|---|
 | Principal-directed (a live principal turn) | grounding |
+| Autonomous, from the principal's mailbox (#2474) | purpose, stakes, grounding, necessity, **off-thread**; speaks-as-principal is forced true in code |
 | Everything else, at every band | purpose, speaks as principal, stakes, grounding, necessity |
 | Any send with detected personal details | plus **disclosure**, principal-directed sends included |
 
@@ -395,10 +396,20 @@ See [ADR-062](../adr/062-curia-sends-from-the-principals-mailbox.md); the gatewa
 |---|---|
 | `off` | nothing |
 | `on_request` (default) | only principal-directed sends |
-| `routine` | plus autonomous sends rated `routine`, at 80+ |
-| `all` | plus autonomous `commitment` sends, at 90+; `financial_or_legal` never goes out autonomously |
+| `routine` | plus autonomous replies rated `routine`, at 80+ |
+| `all` | plus autonomous replies rated `routine` or `commitment`, at 80+ and 90+; `financial_or_legal` never goes out autonomously |
 
-Missing, unreadable or unknown values read as `on_request`, which never widens autonomy and keeps principal-directed sends working. The gateway reads the setting itself (`createSendLevelReader`, `src/skills/principal-send/send-level.ts`), always for the `default` mailbox until #2475 adds named ones. The setting is pinned into ceo-inbox's context. Autonomous sends land in a follow-up PR; until then `routine` and `all` behave as `on_request`, and any send that is not principal-directed is refused.
+The autonomous row of the band table, by setting and the review's stakes rating (the score gates are the stakes table above; an autonomous send also needs the gateway's limits in [spec 15](15-outbound-safety.md#sends-from-the-principals-mailbox-2474) to pass first):
+
+| Setting | `routine` | `commitment` | `financial_or_legal` |
+|---|---|---|---|
+| `off`, `on_request` | no autonomous send | no autonomous send | no autonomous send |
+| `routine` | sends at 80+ | held (above the ceiling) | held |
+| `all` | sends at 80+ | sends at 90+ | held |
+
+A hold, a refused limit or a failed review leaves the reply a draft and files one "Left as a draft in your mailbox" digest item with the reason. A reply that shares information not on the thread is held at every band, under every setting and rating (the `off-thread` question; the reason reads "Held for the principal: it shares information that isn't on the thread, and Curia doesn't pass on new information without the principal.").
+
+Missing, unreadable or unknown values read as `on_request`, which never widens autonomy and keeps principal-directed sends working. The gateway reads the setting itself (`createSendLevelReader`, `src/skills/principal-send/send-level.ts`), always for the `default` mailbox until #2475 adds named ones. The setting is pinned into ceo-inbox's context. Autonomous sends under `routine` and `all` shipped in the second half of #2474. Under `off` and `on_request` an autonomous attempt is refused (`setting_off`, `not_requested`) and files no digest item.
 
 - **Principal-directed** means a live principal turn, not an approval replay, and for an email-originated turn a verified sender. These sends are not stakes-gated (the principal decided), are not put in the spot-check sample pool, and are reviewed as spec 15 describes: a principal-written draft only for personal data that remains, a Curia-edited one for purpose, a Curia-written one for purpose and grounding.
 - **Gates.** `ceo-inbox-send-draft` is in `HUMAN_SEND_SKILLS`, so band Gate C leaves its review to the gateway. Gates A and B never file an approval for it (`NO_QUEUED_APPROVAL_TOOLS`, `src/skills/execution.ts`): a blocked call is refused with "No approval request was created", and the draft stays where it is. A principal-originated call skips A and B as any other does.

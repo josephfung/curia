@@ -35,7 +35,7 @@ Three things had to be settled:
 | `routine` | plus autonomous sends rated `routine`, at score 80+ |
 | `all` | plus autonomous `commitment` sends, at 90+. `financial_or_legal` never goes out autonomously (#2473) |
 
-In PR 1 (#2474's first half), `routine` and `all` behave as `on_request`.
+Autonomous sends under `routine` and `all` shipped in PR 2 of #2474; PR 1 shipped principal-directed sends, and there `routine` and `all` behaved as `on_request`.
 
 Missing, unreadable or unknown values read as `on_request`: that never widens autonomy, and keeps principal-directed sends working. `sendPrincipalDraft` reads the setting itself through an injected reader, so no caller can skip it. Until #2475 the only key is `default`, and the gateway always reads the default mailbox's level (a caller-chosen key could read another mailbox's level than the grant it sends from). The setting is pinned into ceo-inbox's context and changed like any config-store setting, in conversation or the console.
 
@@ -56,7 +56,7 @@ Missing, unreadable or unknown values read as `on_request`: that never widens au
 
 **Curia's sends are not learning evidence.** Before each send the gateway writes a create-only marker under `/scratch/principal-mailbox-sends/` (draft, thread, recipients, mode, time) and then adds the returned message ID. `ceo-inbox-sent-observe` skips SENT messages that match a marker by ID, or by thread, recipients and a short time window (the send response's ID is not documented to equal the SENT listing's on Gmail), for voice learning, task matching and shadow-draft pairing alike.
 
-**Autonomous sends: decided here, built in the follow-up PR.** PR 1 of #2474 ships principal-directed sends only; any other call is refused (`not_requested`), whatever the level. The follow-up PR adds the autonomous path under these rules, enforced in `sendPrincipalDraft` before band review, whatever the score:
+**Autonomous sends: shipped in PR 2.** PR 1 of #2474 shipped principal-directed sends only. PR 2 adds the autonomous path under these rules, enforced in `sendPrincipalDraft` before band review, whatever the score:
 
 1. Curia drafted it in the same task (an audit `tool.result` row for `draft-reply` / `draft-compose` with this draft ID, not `already_exists`; never a `draft-edit` result or a voice-learning snapshot).
 2. The draft is unchanged since Curia wrote it.
@@ -66,7 +66,9 @@ Missing, unreadable or unknown values read as `on_request`: that never widens au
 6. At most one autonomous send per thread per day, and none for a day after a hold or refusal there (read from the send ledger).
 7. Not outsider-originated.
 
-Autonomous review asks every question with speaks-as-principal forced true in code and stakes always asked; a stakes rating above the level's ceiling holds, a judge failure holds, and an autonomous send is refused when band review is not running. Autonomous sends and holds reach the principal as digest items ("Sent for you: …", "Left as a draft: …"). Principal-directed sends file no digest item: the principal is on the live turn.
+8. A reply that shares information not on the thread is always held (`off-thread`, judged against the thread messages every recipient received), at every band and under any ceiling: Curia does not pass on new information without the principal.
+
+Autonomous review asks every question with speaks-as-principal forced true in code and stakes always asked; a stakes rating above the level's ceiling holds, a judge failure holds, and an autonomous send is refused when band review is not running. Autonomous sends and holds reach the principal as digest items ("Sent for you from your mailbox: …", "Left as a draft in your mailbox: …", and "Tried to send for you from your mailbox: …" when a send did not confirm). Principal-directed sends file no digest item: the principal is on the live turn.
 
 **Why autonomous sends drop the principal-origin gate.** Autonomous triage is system-originated by design, so gating on `isPrincipalOriginated` would rule out the mode entirely. The level, the code limits above and the band score bound it instead; Gate B refuses an autonomous call below score 80.
 

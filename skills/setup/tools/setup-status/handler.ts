@@ -14,7 +14,10 @@ type CompletionCheck =
   | { type: 'principal_profile' }
   | { type: 'vault_secrets_all'; keys: string[] }
   | { type: 'paired_push_subscription' }
-  | { type: 'email_channel_ready' };
+  | { type: 'email_channel_ready' }
+  // Done once ConfigStore holds a non-empty value for the key (#2474). Presence only: the
+  // setting has a working default, so "set" means the principal has made a choice.
+  | { type: 'config_store_set'; namespace: string; key: string };
 
 /** A credential that improves a task that already works without it (#2445). Setup never
  *  asks for it; the wizard offers it on request. */
@@ -200,6 +203,27 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
+      // config_store_set tasks: read each distinct namespace/key once (#2474). A failed read
+      // reports pending and logs, like the other live checks: setup state is non-critical UX.
+      const configSet = new Map<string, boolean>();
+      const configStore = new ConfigStore(ctx.entityMemory, ctx.log);
+      for (const task of tasks) {
+        const c = task.completion_check as CompletionCheck | undefined;
+        if (c?.type !== 'config_store_set') continue;
+        const id = `${c.namespace}/${c.key}`;
+        if (configSet.has(id)) continue;
+        try {
+          const value = await configStore.get(c.namespace, c.key);
+          configSet.set(id, typeof value === 'string' && value.trim() !== '');
+        } catch (err) {
+          ctx.log.warn(
+            { err, namespace: c.namespace, key: c.key },
+            'setup-status: failed to read config-store setting — reporting pending',
+          );
+          configSet.set(id, false);
+        }
+      }
+
       const annotated: CatalogTaskWithStatus[] = tasks.map(task => {
         let done = false;
         let restartRequired = false;
@@ -230,6 +254,9 @@ export class SetupStatusHandler implements ToolHandler {
             case 'email_channel_ready':
               done = emailStatus === 'running';
               restartRequired = emailStatus === 'restart_required';
+              break;
+            case 'config_store_set':
+              done = configSet.get(`${check.namespace}/${check.key}`) ?? false;
               break;
           }
         } else {

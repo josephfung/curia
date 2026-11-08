@@ -25,7 +25,10 @@ type MinimalEntityMemory = Pick<EntityMemory, 'findEntities' | 'getFacts' | 'sto
  *   findEntities('config:setup_wizard') → anchor node
  *   getFacts(anchor.id) → fact node with label='deferrals', properties.value=<json>
  */
-function makeEntityMemory(existingDeferrals?: string): MinimalEntityMemory {
+function makeEntityMemory(
+  existingDeferrals?: string,
+  extra?: { sendingValue?: string; readError?: Error },
+): MinimalEntityMemory {
   const anchorNode = {
     id: 'anchor-1',
     label: 'config:setup_wizard',
@@ -59,9 +62,31 @@ function makeEntityMemory(existingDeferrals?: string): MinimalEntityMemory {
         }
       : undefined;
 
+  // The ceo_inbox/sending setting (#2474). The double returns every fact for any anchor, so
+  // a deferrals read sees this one too and ignores it (it matches on properties.key).
+  const sendingNode =
+    extra?.sendingValue !== undefined
+      ? {
+          ...anchorNode,
+          id: 'fact-sending',
+          label: 'sending',
+          type: 'fact' as const,
+          properties: { key: 'sending', value: extra.sendingValue, namespace: 'ceo_inbox' },
+        }
+      : undefined;
+  const facts = [factNode, sendingNode].filter((f) => f !== undefined);
+
+  // A read failure is scoped to the ceo_inbox namespace so the deferrals read still works.
+  const findEntities = extra?.readError
+    ? vi.fn(async (label: string) => {
+        if (label === 'config:ceo_inbox') throw extra.readError;
+        return [anchorNode];
+      })
+    : vi.fn().mockResolvedValue([anchorNode]);
+
   return {
-    findEntities: vi.fn().mockResolvedValue([anchorNode]),
-    getFacts: vi.fn().mockResolvedValue(factNode ? [factNode] : []),
+    findEntities: findEntities as unknown as MinimalEntityMemory['findEntities'],
+    getFacts: vi.fn().mockResolvedValue(facts),
     storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created' }),
     createEntity: vi.fn().mockResolvedValue({ entity: anchorNode, created: false }),
   };
@@ -88,6 +113,8 @@ const CATALOG_VAULT_KEYS = catalog.tasks.flatMap(t => [
 function makeCtx(overrides: Partial<{
   secrets: Record<string, string>;
   existingDeferrals: string;
+  sendingValue: string;
+  sendingReadError: Error;
   behavioralPreferences: string[];
   activeJobs: Array<{ intentAnchor?: string | null; status?: string }>;
   secretError: Error;
@@ -99,7 +126,10 @@ function makeCtx(overrides: Partial<{
   const secrets = overrides.secrets ?? {};
   return {
     input: {},
-    entityMemory: makeEntityMemory(overrides.existingDeferrals) as unknown as EntityMemory,
+    entityMemory: makeEntityMemory(overrides.existingDeferrals, {
+      ...(overrides.sendingValue !== undefined ? { sendingValue: overrides.sendingValue } : {}),
+      ...(overrides.sendingReadError ? { readError: overrides.sendingReadError } : {}),
+    }) as unknown as EntityMemory,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ToolContext['log'],
     secret: vi.fn((name: string) => {
       if (!DECLARED.has(name)) {
@@ -374,6 +404,35 @@ describe('setup-status', () => {
       });
       const result = await handler.execute(ctx);
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe('config_store_set (#2474)', () => {
+    async function inboxSending(ctx: ToolContext): Promise<{ status: string; docs_url: string | null } | undefined> {
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      return (result as { success: true; data: { tasks: Array<{ id: string; status: string; docs_url: string | null }> } })
+        .data.tasks.find(t => t.id === 'inbox_sending');
+    }
+
+    it('is done when the key has a value', async () => {
+      const task = await inboxSending(makeCtx({ sendingValue: '{"default":"routine"}' }));
+      expect(task?.status).toBe('done');
+    });
+
+    it('is not done when the key is absent', async () => {
+      const task = await inboxSending(makeCtx());
+      expect(task?.status).toBe('pending');
+    });
+
+    it('is not done, and logged, when the read throws', async () => {
+      const ctx = makeCtx({ sendingReadError: new Error('kg down') });
+      const task = await inboxSending(ctx);
+      expect(task?.status).toBe('pending');
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ namespace: 'ceo_inbox', key: 'sending' }),
+        expect.stringContaining('config-store'),
+      );
     });
   });
 

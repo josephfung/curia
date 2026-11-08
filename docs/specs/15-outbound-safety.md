@@ -87,9 +87,9 @@ See [ADR-062](../adr/062-curia-sends-from-the-principals-mailbox.md). `ceo-inbox
 
 **Principal-address Curia accounts cannot send.** `send()` and `sendEmailDraft` refuse a Curia email account whose address is the principal's (an operator could bind one to the principal's grant), before any other step, and name `ceo-inbox-send-draft` instead. That closed a path that sent from the principal's mailbox past every rule below.
 
-**Order.** Resolve the mailbox → read `ceo_inbox/sending` for the `default` mailbox ([spec 14](14-autonomy-engine.md#sends-from-the-principals-mailbox-2474)); `off` refuses → refuse an approval replay → refuse anything not principal-directed → read the draft → refuse no recipients, or the principal alone → read authorship → `checkDraftSend` → re-read the draft → write the send-ledger marker → send (no retry) → record the message ID → promote outside recipients to contacts and emit `outbound.delivered`.
+**Order.** Resolve the mailbox → read `ceo_inbox/sending` for the `default` mailbox ([spec 14](14-autonomy-engine.md#sends-from-the-principals-mailbox-2474)); `off` refuses → refuse an approval replay → refuse anything not principal-directed unless the level is `routine` or `all` (then it is autonomous, below) → read the draft → refuse no recipients, or the principal alone → read authorship → `checkDraftSend` → re-read the draft → write the send-ledger marker → send (no retry) → record the message ID → promote outside recipients to contacts and emit `outbound.delivered`.
 
-**Principal-directed** (`isPrincipalDirectedMailboxSend`, `src/skills/principal-send/authority.ts`): a live principal turn, not an approval replay, and for an email-originated turn a verified sender (`TaskOriginator.authenticated`). Anything not proven is autonomous. Autonomous sends land in a follow-up PR; until then they are refused (`not_requested`).
+**Principal-directed** (`isPrincipalDirectedMailboxSend`, `src/skills/principal-send/authority.ts`): a live principal turn, not an approval replay, and for an email-originated turn a verified sender (`TaskOriginator.authenticated`). Anything not proven is autonomous, and sends only under `routine` or `all` (see **Autonomous sends** below).
 
 | Rule | Principal-directed send |
 |---|---|
@@ -111,7 +111,33 @@ See [ADR-062](../adr/062-curia-sends-from-the-principals-mailbox.md). `ceo-inbox
 | Spot-check pool | Not added |
 | Contact promotion | Outside recipients only |
 
-Every refusal leaves the draft in the principal's Drafts folder and returns `leftAsDraft` with a code (`mailbox_unavailable`, `setting_off`, `not_requested`, `approval_replay`, `not_found`, `lookup_failed`, `no_recipients`, `principal_only`, `review_hold`, `draft_changed`) and the text the agent relays.
+Every refusal leaves the draft in the principal's Drafts folder and returns `leftAsDraft` with a code (`mailbox_unavailable`, `setting_off`, `not_requested`, `approval_replay`, `not_found`, `lookup_failed`, `no_recipients`, `principal_only`, `review_hold`, `draft_changed`, `send_unconfirmed`, plus the autonomous codes below) and the text the agent relays. `send_unconfirmed` is the one outcome that is not "left as a draft": the send call failed after it was made, so the message may have gone.
+
+**Autonomous sends (`routine`, `all`; #2474).** A call that is not principal-directed runs these steps in `sendPrincipalDraft`, before band review and whatever the score. Every one fails closed, and a refusal leaves the draft a draft:
+
+1. Not outsider-originated (`outsider_originated`): an outsider writing to Curia's own address does not start a send from the principal's mailbox.
+2. Curia drafted it in this task: an audit `tool.result` of `ceo-inbox-draft-reply` / `-draft-compose` for this draft ID, not `already_exists` (`not_curia_draft`); and the draft's provider timestamp is no later than Curia's last write plus 60 seconds (`draft_changed_since_curia`).
+3. It replies on a thread (`not_a_reply`); the thread is read with headers, a full page of 50 is refused (`thread_unreadable`), and drafts are not part of the thread.
+4. No `List-Id` on any thread message (`mailing_list`).
+5. Every recipient is genuinely on the thread (`recipient_not_on_thread`): the principal's addresses, recipients of messages in the principal's SENT folder, and the `From` of a single-address inbound message whose provider authenticated the sender. An inbound message's To/Cc never counts, so a forged Cc vouches for no one. At least one recipient must be outside the principal's addresses.
+6. At most five non-principal recipients (`too_many_recipients`) and no attachments (`has_attachments`).
+7. A 24-hour cooldown per thread (`thread_cooldown`), read from the send ledger. Every autonomous outcome (`sending`, `sent`, `held`) starts it; an unreadable ledger counts as cooling down.
+8. Band review (`checkDraftSend`) with `autonomous`, a stakes ceiling (`routine` under the `routine` level, `commitment` under `all`), and the origin evidence below. It is refused when band review is not running (`no_band_review`) or the send ledger is absent (`no_send_ledger`).
+
+**Origin evidence.** The review's origin is the latest thread message not from a principal address (`replyTarget`), with its time and whether its own headers verify the sender (`senderVerified`, fail closed). The delegation walk's origin is used when it finds one; this one is the fallback, because a triage turn reads many messages and the one answered can fall out of the evidence window.
+
+**The off-thread rule.** The review also asks `off-thread`: does the reply share information that is not on the thread? It is judged against `threadText`, the text of only those thread messages whose From/To/Cc held every non-principal recipient of this send (`threadTextSeenByAll`): a side reply to one person shows the others nothing. No such message reads as an empty thread, so new information holds. An unanswered `off-thread` question is a reviewer failure and holds. The hold applies at every band, under any ceiling and after any rewrite: "Held for the principal: it shares information that isn't on the thread, and Curia doesn't pass on new information without the principal." Principal-directed sends are never asked.
+
+**Outcomes.** Each autonomous send files one digest item (`source: principal_mailbox`, urgency `digest`) and nothing else; principal-directed sends file none, because the principal is on the live turn.
+
+| Outcome | Draft | Marker | Digest item |
+|---|---|---|---|
+| Sent | gone | `sending`, then `sent` | "Sent for you from your mailbox: …" |
+| Any limit, hold, block or refusal after the setting check | still in Drafts | `held` (starts the cooldown); a cooldown refusal adds no marker | "Left as a draft in your mailbox: … <reason>" |
+| Send call failed | unknown | `sending` stands (starts the cooldown) | "Tried to send for you from your mailbox: … <check Sent>" |
+| `off` / `on_request` setting | still in Drafts | none | none |
+
+A review bounce is not final: the drafter edits once and resends, with no marker or item for the first bounce. A second bounce becomes a block, which holds. A draft with no known thread (gone or unreadable) gets the digest item but no marker. Autonomous sends are not recorded as principal-directed contacts, and they join the spot-check pool under the profile's tool name.
 
 **Send ledger.** Before sending, the gateway writes a create-only marker under `/scratch/principal-mailbox-sends/` (draft, thread, outside recipients, mode, time), then adds the message ID. A marker failure does not stop the send; it only loses learning evidence. `ceo-inbox-sent-observe` skips a SENT message matching a marker by ID, or by thread, recipient and a short window after the marker, for voice learning, task matching and shadow-draft pairing.
 
