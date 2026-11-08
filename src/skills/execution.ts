@@ -2408,8 +2408,11 @@ export class ExecutionLayer {
             // Note: `input` here is post-timestamp-normalization (mutated in-place above).
             // The stored payload in autonomy_action_log will contain normalized timestamps,
             // which is correct — re-normalization on approve-action re-invocation is a no-op.
+            // The digest guard in buildGateError must see the same standing the gate used: a woken
+            // task the ladder demoted from principal is refused here and must still be reported (#2474).
+            const gateOptions = { ...options, taskMetadata: effectiveTaskMetadata };
             const gateAError = await this.buildGateError(
-              toolName, input, currentScore, 60, manifest.action_risk, options, skillLogger, sendPins,
+              toolName, input, currentScore, 60, manifest.action_risk, gateOptions, skillLogger, sendPins,
             );
             return {
               success: false,
@@ -2438,8 +2441,9 @@ export class ExecutionLayer {
               });
             }
             // Note: same post-normalization `input` as Gate A — see comment above.
+            const gateOptions = { ...options, taskMetadata: effectiveTaskMetadata };
             const gateBError = await this.buildGateError(
-              toolName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger, sendPins,
+              toolName, input, currentScore, requiredScore, manifest.action_risk, gateOptions, skillLogger, sendPins,
             );
             return {
               success: false,

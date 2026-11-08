@@ -95,15 +95,33 @@ describe('gate blocks on ceo-inbox-send-draft queue no approval (#2474)', () => 
     });
   });
 
-  it('files none for a principal-originated call', async () => {
-    const { layer, publish } = setup('ceo-inbox-send-draft', 65);
+  it('a live principal turn skips the gates, so no refusal and no digest item', async () => {
+    const { layer, execute, publish } = setup('ceo-inbox-send-draft', 65);
     const principal = {
       taskEventId: 'task-1',
       taskMetadata: { originator: { contactId: 'p-1', systemRole: 'principal', channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'principal' } },
     };
     await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, principal);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(publish.mock.calls.filter((c) => (c[1] as { type: string }).type === 'principal.report')).toHaveLength(0);
+  });
+
+  it('files one digest item when the ladder demotes a woken principal task and Gate B refuses', async () => {
+    const { layer, execute, publish } = setup('ceo-inbox-send-draft', 65);
+    // Raw lineage says principal, but a heartbeat wake with a score below the ladder threshold
+    // is demoted to agent, so the gate refuses it.
+    const woken = {
+      taskEventId: 'task-1',
+      taskMetadata: {
+        wakeContext: { derived: false },
+        originator: { contactId: 'p-1', systemRole: 'principal', channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'principal' },
+      },
+    };
+    const result = await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, woken);
+    expect(result.success).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
     const reports = publish.mock.calls.filter((c) => (c[1] as { type: string }).type === 'principal.report');
-    expect(reports).toHaveLength(0);
+    expect(reports).toHaveLength(1);
   });
 
   it('a failed digest publish is logged and the gate error is unchanged', async () => {
