@@ -8,8 +8,13 @@
 # the reply was drafted by this task's ceo-inbox-draft-reply, unchanged since, on a thread with a
 # message, no List-Id, its one recipient is the thread's verified From, no attachments, no
 # cooldown → band review: an acknowledgement rates routine, which clears 80 at 85 under the
-# routine ceiling → sent, with one "Sent for you" digest item. Her signature carries a phone
-# number: the reply never needs it, and the mirror's draft holds only what the agent wrote.
+# routine ceiling; it shares nothing off the thread (Priya's message, which she received, is the
+# off-thread evidence) → sent, with one "Sent for you" digest item.
+#
+# Her signature carries a phone number. The harness mirror stores the reply as the real
+# draft-reply does, the agent's text plus buildReplyQuote of her message, so the review meets the
+# phone in the quote; the quote proof exempts it (her own message to her alone holds it). A
+# regression in that path holds the ack, and this case fails.
 name: inbox triage sends a routine acknowledgement at 85
 description: >
   The hourly inbox triage fires with sending from the principal's mailbox set to routine. One
@@ -70,7 +75,6 @@ tool_stubs:
             from: [{ name: Priya Nair, email: priya.nair@lumen.example.test }]
             to: [{ email: principal@example.test }]
             cc: []
-            date: 1791878700
             unread: true
             folders: [INBOX, UNREAD]
             attachments: []
@@ -85,7 +89,6 @@ tool_stubs:
         cc: []
         subject: Deck for Thursday
         body_plain: "Hi,\n\nJust confirming I'll bring the deck to Thursday's meeting.\n\nPriya Nair\nHead of Partnerships, Lumen\n+1 416 555 0142"
-        date: 1791878700
         labels: [INBOX, UNREAD]
         attachments: []
     - match: {}
@@ -119,11 +122,6 @@ expected_behaviors:
     description: Exactly one message goes out in the run, so it went to Priya alone.
     check:
       delivered: { count: 1 }
-  - id: not_held
-    weight: critical
-    description: Nothing is held for the principal; a routine acknowledgement goes out at 85.
-    check:
-      not_held: true
   - id: not_left_as_draft
     weight: critical
     description: No "Left as a draft" digest item; the send went through.

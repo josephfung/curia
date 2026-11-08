@@ -6,6 +6,11 @@ import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 import type { ActionLogRow, ResolveResult } from '../../../src/autonomy/action-log-types.js';
 import { parseSenderVerified } from '../../../src/channels/email/message-converter.js';
 import type { TaskOutreachRepo, TaskOutreachRow } from '../../../src/dispatch/task-outreach.js';
+import { markdownToHtml } from '../../../src/format/markdown-to-html.js';
+import { buildReplyQuote } from '../../../src/skills/_shared/reply-quote.js';
+import type { DetectedPii } from '../../../src/dispatch/pii-redactor.js';
+import { splitReplyQuote } from '../../../src/skills/principal-send/own-text.js';
+import { quoteItemsToReview, threadMessageProof } from '../../../src/skills/principal-send/quote-proof.js';
 import type { TestModeStack } from '../../../src/startup/test-mode-stack.js';
 import { createCaseContext, newAttempt, type CaseAttempt } from '../../shared/case-scope.js';
 import { inboundNylasMessage } from '../../scenarios/harness.js';
@@ -497,7 +502,7 @@ describe('the run\'s principal mailbox (#2474)', () => {
 
   it('keeps a known thread when a later write repeats an unseeded reply id', () => {
     const scope = clocked();
-    mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'A', to: [], cc: [], body: 'B' }, false);
+    mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'A', to: [], cc: [], body: 'B' }, true);
     scope.principalDrafts.get('draft-30z-acme')!.threadId = 'thr-30z-acme';
     mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'A', to: [], cc: [], body: 'C', replyTo: 'msg-unknown' }, false, true);
     expect(scope.principalDrafts.get('draft-30z-acme')).toMatchObject({ threadId: 'thr-30z-acme' });
@@ -546,6 +551,46 @@ describe('the run\'s principal mailbox (#2474)', () => {
     mirrorPrincipalDraft(scope, { id: 'draft-0003', subject: 'A', to: [], cc: [], body: 'B' }, false);
     expect(scope.curiaEditedDraftIds.size).toBe(0);
     expect(scope.curiaTaskDraftIds.size).toBe(0);
+    // No seeded draft has that id: the stub claims a draft the mailbox never held.
+    expect(scope.principalDrafts.has('draft-0003')).toBe(false);
+    expect(scope.errors).toEqual([expect.stringMatching(/already_exists.*draft-0003/)]);
+  });
+
+  it('leaves a seeded draft\'s body, recipients and date as they were on an already_exists reply', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scope = clocked();
+    await seedRun(seededCase(false), { stack, outboundContext: {} as never, scope });
+    const before = { ...scope.principalDrafts.get('draft-30z-acme')! };
+    mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'Re: X', to: [{ email: 'other@acme.example.test' }], cc: [], body: 'Curia wrote this.', replyTo: 'msg-unknown' }, false);
+    expect(scope.principalDrafts.get('draft-30z-acme')).toEqual(before);
+    expect(scope.curiaTaskDraftIds.has('draft-30z-acme')).toBe(false);
+    expect(scope.errors).toEqual([]);
+  });
+
+  it('gives a new reply the quote the real draft-reply appends, so the review meets it', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scope = clocked();
+    scope.clockTimezone = 'America/Toronto';
+    await seedRun(seededCase(false, {
+      threads: [{ id: 'thr-q', messages: [{ id: 'msg-q', from: { name: 'Jo Park', email: 'jo.park@acme.example.test' }, to: ['principal'], cc: [], subject: 'Deck', body: "I'll bring the deck.\n\nJo Park\n+1 416 555 0142", date: '2026-11-07T13:00:00.000Z', senderVerified: true }] }],
+    }), { stack, outboundContext: {} as never, scope });
+    mirrorPrincipalDraft(scope, { id: 'draft-q', subject: 'Re: Deck', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'Thanks, Jo.', replyTo: 'msg-q' }, true);
+    const original = scope.principalThreads.get('thr-q')![0]!;
+    const stored = scope.principalDrafts.get('draft-q')!;
+    expect(stored.body).toBe(markdownToHtml('Thanks, Jo.', { wrap: true }) + buildReplyQuote(original, 'America/Toronto', { format: 'html' }));
+    expect(stored.body).toContain('<blockquote');
+    expect(stored.body).toContain('+1 416 555 0142');
+    // The gateway's own helpers find the quote and prove the sender already had the phone.
+    const split = splitReplyQuote(stored.body);
+    expect(split.quote).toContain('+1 416 555 0142');
+    const phone = { label: 'phone_us', start: 0, end: 0, matched: '+1 416 555 0142' } as DetectedPii;
+    expect(quoteItemsToReview([phone], split.quote, [threadMessageProof(original)], ['jo.park@acme.example.test'])).toEqual([]);
+    // An edit that changes only recipients keeps the quote; one that rewrites the text drops it,
+    // as the real edit replaces the whole body.
+    mirrorPrincipalDraft(scope, { id: 'draft-q', subject: 'Re: Deck', to: [{ email: 'jo.park@acme.example.test' }, { email: 'lee@acme.example.test' }], cc: [], body: 'Thanks, Jo.', replyTo: 'msg-q' }, false, true);
+    expect(scope.principalDrafts.get('draft-q')!.body).toBe(stored.body);
+    mirrorPrincipalDraft(scope, { id: 'draft-q', subject: 'Re: Deck', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'Thanks!', replyTo: 'msg-q' }, false, true);
+    expect(scope.principalDrafts.get('draft-q')!.body).toBe('Thanks!');
   });
 
   it('refuses to mirror without the run clock', () => {

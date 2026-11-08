@@ -12,6 +12,8 @@ import { randomUUID } from 'node:crypto';
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import type { PinnedContextReader } from '../../src/agents/pinned-context.js';
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
+import { markdownToHtml } from '../../src/format/markdown-to-html.js';
+import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
 import {
   OutboundContextService,
   isEntryAddressedTo,
@@ -162,6 +164,13 @@ export class SeedScope {
    * case's `{{at:…}}` dates rather than drift with the wall clock.
    */
   clockNow: Date | undefined;
+  /** The run clock's timezone: the date line of the quote a mirrored reply carries (#2474 PR 2). */
+  clockTimezone: string | undefined;
+  /**
+   * The agent's own text of each reply the mirror stored with a quote (#2474 PR 2), by draft id:
+   * a later edit carrying the same text changed only recipients or subject, so the quote stays.
+   */
+  readonly mirroredReplyText = new Map<string, string>();
   /** Action-log row ids the run wrote or read as its own (#2312): the only ids its delivery may claim. */
   readonly approvalRowIds = new Set<number>();
   /**
@@ -208,6 +217,8 @@ export class SeedScope {
     this.principalContactId = undefined;
     this.mailboxDigests.length = 0;
     this.clockNow = undefined;
+    this.clockTimezone = undefined;
+    this.mirroredReplyText.clear();
     this.errors.length = 0;
   }
 }
@@ -239,12 +250,25 @@ function runNow(scope: SeedScope): Date {
   return scope.clockNow;
 }
 
-/** The thread a seeded principal-mailbox message is on, or undefined when the case seeded none with that id. */
-function threadOfMessage(scope: SeedScope, messageId: string): string | undefined {
-  for (const [threadId, messages] of scope.principalThreads) {
-    if (messages.some((m) => m.id === messageId)) return threadId;
+/** The seeded principal-mailbox message with this id, or undefined when the case seeded none. */
+function seededMessage(scope: SeedScope, messageId: string): NylasMessage | undefined {
+  for (const messages of scope.principalThreads.values()) {
+    const found = messages.find((m) => m.id === messageId);
+    if (found) return found;
   }
   return undefined;
+}
+
+/**
+ * A new reply's body as the real ceo-inbox-draft-reply stores it (#2474 PR 2): the agent's text
+ * as HTML, then the quote of the message it answers (handler.ts: markdownToHtml + buildReplyQuote,
+ * under the same 50,000-character guard). So an autonomous send's review meets the quote, and the
+ * sender's own details in it, as it does in production.
+ */
+function replyBodyWithQuote(body: string, original: NylasMessage, timezone: string | undefined): string {
+  const htmlBody = markdownToHtml(body, { wrap: true });
+  const htmlQuote = buildReplyQuote(original, timezone, { format: 'html' });
+  return htmlBody.length + htmlQuote.length <= 50_000 ? htmlBody + htmlQuote : htmlBody;
 }
 
 /**
@@ -274,7 +298,17 @@ function resolveContactIds(scope: SeedScope, ids: readonly string[], draftId: st
  */
 export function mirrorPrincipalDraft(scope: SeedScope, draft: MailboxDraft, curiaWrote: boolean, edited?: true): void {
   const prev = scope.principalDrafts.get(draft.id);
-  const replyThread = draft.replyTo !== undefined ? threadOfMessage(scope, draft.replyTo) : undefined;
+  // A draft-reply that found an existing draft (already_exists: true) writes nothing in the real
+  // tool (ceo-inbox-draft-reply/handler.ts returns the existing draft): leave the stored draft's
+  // body, recipients and date as they were. Not curiaWrote and not an edit is exactly that case.
+  if (!curiaWrote && edited !== true) {
+    if (prev === undefined) {
+      scope.errors.push(`a stubbed draft-reply returned already_exists for '${draft.id}', which no seed.principal_mailbox.drafts entry has`);
+    }
+    return;
+  }
+  const original = draft.replyTo !== undefined ? seededMessage(scope, draft.replyTo) : undefined;
+  const replyThread = original?.threadId;
   // A reply to a message the case never seeded is a case error (a typo in a stub's message id),
   // not a thread-less draft whose autonomous send then stops for a reason the case never meant.
   if (draft.replyTo !== undefined && replyThread === undefined && !prev?.threadId) {
@@ -283,10 +317,18 @@ export function mirrorPrincipalDraft(scope: SeedScope, draft: MailboxDraft, curi
   const threadId = replyThread ?? prev?.threadId ?? '';
   const resolved: MailboxDraft = {
     ...draft,
+    // Only a new reply carries the quote; a draft-edit's body replaces the whole body, as the
+    // real edit does (no quote).
+    // An edit that left the text alone (recipients or subject only) keeps the stored body, quote
+    // included, as the real edit sends no body then.
+    ...(curiaWrote && original ? { body: replyBodyWithQuote(draft.body, original, scope.clockTimezone) } : {}),
+    ...(!curiaWrote && prev && scope.mirroredReplyText.get(draft.id) === draft.body ? { body: prev.body } : {}),
     to: [...draft.to, ...resolveContactIds(scope, draft.contactIds?.to ?? [], draft.id)],
     cc: [...draft.cc, ...resolveContactIds(scope, draft.contactIds?.cc ?? [], draft.id)],
   };
   scope.principalDrafts.set(draft.id, principalDraftMessage(resolved, threadId, Math.floor(runNow(scope).getTime() / 1000)));
+  if (curiaWrote && original) scope.mirroredReplyText.set(draft.id, draft.body);
+  else if (scope.mirroredReplyText.get(draft.id) !== draft.body) scope.mirroredReplyText.delete(draft.id);
   if (curiaWrote) {
     scope.curiaDraftIds.add(draft.id);
     scope.curiaTaskDraftIds.add(draft.id);

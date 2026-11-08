@@ -47,9 +47,9 @@ tool_stubs:
         count: 2
   ceo-inbox-read:
     - match: { message_id: 19a3c1d5e7f2b801 }
-      return: { id: 19a3c1d5e7f2b801, threadId: 19a3c1d5e7f2b801, from: [{ name: Nadia Brooks, email: nadia.brooks@lumenworks.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Deck for Thursday, body_plain: "Hi {{principal:first}},\n\nJust confirming I'll bring the deck to Thursday's meeting.\n\nNadia", date: 0, labels: [INBOX, UNREAD], attachments: [] }
+      return: { id: 19a3c1d5e7f2b801, threadId: 19a3c1d5e7f2b801, from: [{ name: Nadia Brooks, email: nadia.brooks@lumenworks.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Deck for Thursday, body_plain: "Hi {{principal:first}},\n\nJust confirming I'll bring the deck to Thursday's meeting.\n\nNadia", labels: [INBOX, UNREAD], attachments: [] }
     - match: { message_id: 19a3c2e6f8a3c902 }
-      return: { id: 19a3c2e6f8a3c902, threadId: 19a3c2e6f8a3c902, from: [{ name: Theo Grant, email: theo.grant@harborview.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Partnership kickoff, body_plain: "Hi {{principal:first}},\n\nGreat talking last week. Can we lock in the March 3 date for the kickoff? I'd like to send the invites to my team.\n\nTheo", date: 0, labels: [INBOX, UNREAD], attachments: [] }
+      return: { id: 19a3c2e6f8a3c902, threadId: 19a3c2e6f8a3c902, from: [{ name: Theo Grant, email: theo.grant@harborview.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Partnership kickoff, body_plain: "Hi {{principal:first}},\n\nGreat talking last week. Can we lock in the March 3 date for the kickoff? I'd like to send the invites to my team.\n\nTheo", labels: [INBOX, UNREAD], attachments: [] }
   # The real skill reports the reply-all recipients; a bare `to: []` reads as "addressed to nobody".
   ceo-inbox-draft-reply:
     - match: { reply_to_message_id: 19a3c1d5e7f2b801 }

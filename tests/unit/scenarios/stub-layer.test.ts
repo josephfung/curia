@@ -927,6 +927,19 @@ describe('principal-mailbox drafts (#2474)', () => {
     controller.endRun('scenario-1');
   });
 
+  it('leaves the principal\'s existing draft as it was when a reply finds it (already_exists)', async () => {
+    const { layer, controller, mirrored, draftMirror } = draftSetup();
+    const seeded: MailboxDraft = { id: 'draft-theirs', subject: 'Re: Venue', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], body: 'Jo, the Harbour Room works and' };
+    const stubs = { 'ceo-inbox-draft-reply': [{ match: {}, return: { draft_id: 'draft-theirs', subject: 'Re: Venue', to: [{ email: 'jo.park@acme.example.test' }], cc: [], already_exists: true } }] };
+    controller.beginRun(stubs, 'scenario-1', { throughGateway: true, draftMirror, mailboxDrafts: [seeded] });
+    await layer.invoke('ceo-inbox-draft-reply', { reply_to_message_id: 'm1', body: 'Curia wrote this.' }, undefined, coordinatorCall);
+    // The real tool writes nothing: the read and the mirror keep the principal's text.
+    expect(mirrored).toEqual([{ draft: seeded, curiaWrote: false }]);
+    const read = await layer.invoke('ceo-inbox-read', { draft_id: 'draft-theirs' }, undefined, coordinatorCall);
+    expect(read).toMatchObject({ success: true, data: { body_plain: 'Jo, the Harbour Room works and' } });
+    controller.endRun('scenario-1');
+  });
+
   it('mirrors nothing for a run without a mirror', async () => {
     const { layer, controller, stubs, mirrored } = draftSetup();
     controller.beginRun(stubs, 'scenario-1');

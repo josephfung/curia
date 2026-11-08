@@ -1082,6 +1082,7 @@ export async function createScenarioHarness(
     const clock: RunClock = { now: new Date().toISOString(), timezone: stack.config.timezone };
     // The principal mailbox dates its undated and mirrored drafts by it (#2474 PR 2).
     scope.clockNow = new Date(clock.now);
+    scope.clockTimezone = clock.timezone;
     const resolveDates = <T>(value: T): T => resolveDatePlaceholders(value, clock.timezone, new Date(clock.now));
     const dated: ScenarioCase = {
       ...scenario,

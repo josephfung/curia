@@ -49,7 +49,7 @@ import {
   type ToolStub,
 } from './types.js';
 import type { AutonomyFixture } from '../../src/startup/test-mode-stack.js';
-import type { SendLevel } from '../../src/skills/principal-send/send-level.js';
+import { DEFAULT_SEND_LEVEL, readSendLevelValue, type SendLevel } from '../../src/skills/principal-send/send-level.js';
 
 const WEIGHTS: readonly BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
 // 'trusted' is a grant made after creation (createContact refuses it); seeding sets it then.
@@ -94,6 +94,8 @@ const PRINCIPAL_THREAD_KEYS = ['id', 'messages'] as const;
 const THREAD_MESSAGE_KEYS = ['id', 'from', 'to', 'cc', 'subject', 'body', 'date', 'sender_verified', 'list_id'] as const;
 const DRAFT_RECIPIENT_KEYS = ['name', 'email'] as const;
 const SEND_LEVELS: readonly SendLevel[] = ['off', 'on_request', 'routine', 'all'];
+/** The pinned config key the agent reads its sending level from (#2474, design D3). */
+const SENDING_CONFIG = 'ceo_inbox/sending';
 const PINNED_KEYS = ['docs', 'configs', 'unavailable'] as const;
 const TASK_KEYS = ['key', 'title', 'intent', 'originator', 'agent'] as const;
 const OUTREACH_KEYS = ['key', 'task', 'via', 'org_name', 'domains', 'addresses', 'contacts', 'summary', 'confirmed'] as const;
@@ -1290,6 +1292,22 @@ function validateThroughGateway(scenario: ScenarioCase, file: string): void {
   }
   if (mailbox?.expectNoBandReview && bandGated) {
     throw new CaseError(file, `seed.principal_mailbox: expect_no_band_review contradicts autonomy gating: band`);
+  }
+  // The gateway reads send_level; the agent reads ceo_inbox/sending from its pinned context. They
+  // must agree, or the agent decides under one level while the gateway enforces another (#2474).
+  // Absent on either side is production's default, on_request; the pinned value is read the way
+  // the gateway reads the stored setting (readSendLevelValue: malformed is on_request too).
+  const pinnedSending = scenario.seed.pinned?.configs[SENDING_CONFIG];
+  if (mailbox || pinnedSending !== undefined) {
+    const gatewayLevel = mailbox?.sendLevel ?? DEFAULT_SEND_LEVEL;
+    const { level: agentLevel, malformed } = readSendLevelValue(pinnedSending ?? null);
+    // A mistyped value reads as on_request with no trace: refuse it rather than guess.
+    if (malformed) {
+      throw new CaseError(file, `seed.pinned.configs ${SENDING_CONFIG} must be JSON like {"default": "routine"} naming off, on_request, routine or all`);
+    }
+    if (gatewayLevel !== agentLevel) {
+      throw new CaseError(file, `seed.principal_mailbox.send_level (${gatewayLevel}) and seed.pinned.configs ${SENDING_CONFIG} (${agentLevel}) disagree: set both to the same level`);
+    }
   }
   // approve-action replays a held call outside the gated call it came from, so it would reach
   // the real handler, which test mode cannot serve. Not supported yet.

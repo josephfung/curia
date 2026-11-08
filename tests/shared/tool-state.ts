@@ -584,6 +584,12 @@ export class DraftState {
     const id = str(data['draft_id']);
     if (!id) return data;
     const prev = this.drafts.get(id);
+    // A reply that found an existing draft (already_exists: true) writes nothing in the real tool:
+    // the draft keeps its own body and recipients, so a later read returns the principal's text.
+    if (data['already_exists'] === true && prev) {
+      this.mirrored(prev, false);
+      return data;
+    }
     // Returned fields win, then the call's arguments, then whatever this id already held.
     // A compose names recipients by contact ID (to, cc) and by address (to_addresses,
     // cc_addresses), so the draft holds both, as written (#2053).

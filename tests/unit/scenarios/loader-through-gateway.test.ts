@@ -367,10 +367,34 @@ describe('seed.principal_mailbox (#2474)', () => {
     }]);
   });
 
+  // The agent's pinned ceo_inbox/sending, which must agree with send_level (#2474).
+  const pinnedSending = (value: string) => `  pinned:\n    configs:\n      ceo_inbox/sending: '${value}'\n`;
+  const atLevel = (level: string, extra = '') =>
+    withMailbox(CASE, `${pinnedSending(`{"default": "${level}"}`)}${MAILBOX.replace('send_level: on_request', `send_level: ${level}${extra}`)}`);
+
   it('accepts an autonomous level under a band fixture, or without one when the case says it means it', () => {
-    expect(load(withMailbox(CASE, MAILBOX.replace('send_level: on_request', 'send_level: routine'))).seed.principalMailbox?.sendLevel).toBe('routine');
-    const noBand = load(withMailbox(CASE, MAILBOX.replace('send_level: on_request', 'send_level: all\n    expect_no_band_review: true')).replace('gating: band', 'gating: tier'));
+    expect(load(atLevel('routine')).seed.principalMailbox?.sendLevel).toBe('routine');
+    const noBand = load(atLevel('all', '\n    expect_no_band_review: true').replace('gating: band', 'gating: tier'));
     expect(noBand.seed.principalMailbox?.expectNoBandReview).toBe(true);
+  });
+
+  it('accepts send_level and the pinned setting at the same level, absent on both sides meaning on_request', () => {
+    expect(load(atLevel('all')).seed.pinned?.configs['ceo_inbox/sending']).toBe('{"default": "all"}');
+    expect(load(withMailbox(CASE, MAILBOX.replace('    send_level: on_request\n', ''))).seed.principalMailbox?.sendLevel).toBeUndefined();
+    expect(load(withMailbox(CASE, `${pinnedSending('{"default": "on_request"}')}${MAILBOX.replace('    send_level: on_request\n', '')}`)).seed.principalMailbox?.sendLevel).toBeUndefined();
+    // Compared as parsed JSON, not as text.
+    expect(load(withMailbox(CASE, `${pinnedSending('{ "default":"routine" }')}${MAILBOX.replace('send_level: on_request', 'send_level: routine')}`)).seed.principalMailbox?.sendLevel).toBe('routine');
+  });
+
+  it.each([
+    ['send_level routine with no pinned setting', () => withMailbox(CASE, MAILBOX.replace('send_level: on_request', 'send_level: routine')), /send_level \(routine\) and seed.pinned.configs ceo_inbox\/sending \(on_request\) disagree/],
+    ['a pinned setting with no send_level', () => withMailbox(CASE, `${pinnedSending('{"default": "all"}')}${MAILBOX.replace('    send_level: on_request\n', '')}`), /send_level \(on_request\) and seed.pinned.configs ceo_inbox\/sending \(all\) disagree/],
+    ['two different levels', () => withMailbox(CASE, `${pinnedSending('{"default": "routine"}')}${MAILBOX.replace('send_level: on_request', 'send_level: all')}`), /send_level \(all\) and seed.pinned.configs ceo_inbox\/sending \(routine\) disagree/],
+    ['a pinned setting with no principal mailbox', () => CASE.replace('  tasks:\n', `${pinnedSending('{"default": "routine"}')}  tasks:\n`), /send_level \(on_request\) and seed.pinned.configs ceo_inbox\/sending \(routine\) disagree/],
+    ['a malformed pinned setting', () => withMailbox(CASE, `${pinnedSending('routine')}${MAILBOX}`), /ceo_inbox\/sending must be JSON like/],
+    ['a pinned setting naming an unknown level', () => withMailbox(CASE, `${pinnedSending('{"default": "sometimes"}')}${MAILBOX}`), /ceo_inbox\/sending must be JSON like/],
+  ])('rejects %s', (_label, body, error) => {
+    expect(() => load(body())).toThrow(error);
   });
 
   it.each([

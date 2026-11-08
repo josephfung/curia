@@ -376,10 +376,8 @@ describe('coordinator scenario cases', () => {
         expect(c.throughGateway, prefix).toBe(true);
         expect(c.releaseGate, prefix).not.toBe(false);
         expect(c.autonomy, prefix).toEqual({ score: want.score, gating: 'band' });
+        // The loader holds the agent's pinned ceo_inbox/sending to this same level.
         expect(c.seed.principalMailbox?.sendLevel, prefix).toBe(want.level);
-        // The gateway reads send_level; the agent reads its pinned context. They must agree,
-        // or the agent decides under one setting and the gateway enforces another.
-        expect(c.seed.pinned?.configs['ceo_inbox/sending'], prefix).toBe(`{"default": "${want.level}"}`);
         expect(c.inbound.from, prefix).toBe('scheduler');
         expect(c.inbound.content.trim(), prefix).toBe(hourly);
       }
@@ -387,10 +385,17 @@ describe('coordinator scenario cases', () => {
 
     it("match left_as_draft only on text the gateway's digest items carry", () => {
       // D4 refusals are PRINCIPAL_SEND_REFUSALS; a band review hold names its stakes label
-      // (STAKES_LABEL in band-send-review.ts, not exported, so read from the source).
+      // (STAKES_LABEL) or is the off-thread hold (OFF_THREAD_REASON). Neither is exported from
+      // band-send-review.ts, so both are read from the source.
       const reviewSource = readFileSync(path.resolve(SCENARIOS_DIR, '../../src/dispatch/band-send-review.ts'), 'utf-8');
       const labels = /const STAKES_LABEL[^{]*\{([^}]*)\}/.exec(reviewSource)?.[1] ?? '';
-      const reasons = [...Object.values(PRINCIPAL_SEND_REFUSALS), ...[...labels.matchAll(/'([^']+)'/g)].map(m => `Stakes: ${m[1]!}.`)];
+      const offThread = /const OFF_THREAD_REASON = '((?:[^'\\]|\\.)*)';/.exec(reviewSource)?.[1]?.replace(/\\'/g, "'");
+      expect(offThread).toContain("isn't on the thread");
+      const reasons = [
+        ...Object.values(PRINCIPAL_SEND_REFUSALS),
+        ...[...labels.matchAll(/'([^']+)'/g)].map(m => `Stakes: ${m[1]!}.`),
+        offThread!,
+      ];
       expect(reasons.some(r => r.includes('Stakes: financial or legal.'))).toBe(true);
       const used = Object.keys(TABLE).flatMap(prefix => byPrefix(prefix).expectedBehaviors
         .flatMap(b => (b.check ? leafChecks(b.check) : []))

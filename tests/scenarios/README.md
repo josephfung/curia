@@ -743,7 +743,11 @@ principal's address as `from` and is a delivery like any other. It holds:
 - every draft a stubbed `ceo-inbox-draft-compose` or `ceo-inbox-draft-reply` writes, as
   Curia's, in the run's own task; a stubbed `ceo-inbox-draft-edit` changes the stored draft
   (a seeded one too), and leaves its author as it was. A reply stub returning
-  `already_exists: true` is the principal's existing draft, not Curia's. A reply lands on the
+  `already_exists: true` is the principal's existing draft, not Curia's: as in the real tool it
+  writes nothing, so the seeded draft keeps its body, recipients and date (one no `drafts` entry
+  has fails the run). A new reply is stored as the real tool stores it, the agent's text as HTML
+  followed by `buildReplyQuote` of the seeded message it answers, so a review meets the quote
+  (and the sender's signature in it) as in production. A reply lands on the
   thread of the seeded message its `reply_to_message_id` names; one naming a message no
   `threads` entry has fails the run (unless the draft is already on a thread). Recipients
   come from the stub's returned `to`/`cc`, else the call's: an address as written, a contact
@@ -806,7 +810,9 @@ seed:
 The loader rejects `principal_mailbox` on a case without `through_gateway`, unknown keys at
 every level, a duplicate draft, thread or message id, an unknown `send_level` or `by_curia`
 (PR 1's `by_curia: true` is now `earlier`), a message date that is not a date or is in the
-future, an autonomous `send_level` without a band fixture (above), and an address outside `.test`. A message naming `principal` needs the principal's verified email in the
+future, an autonomous `send_level` without a band fixture (above), a `send_level` that differs
+from the agent's pinned `ceo_inbox/sending` (`seed.pinned.configs`, compared as parsed JSON; absent
+on either side is on_request, and a malformed pinned value is refused), and an address outside `.test`. A message naming `principal` needs the principal's verified email in the
 database; the seed fails without one.
 
 **Approvals.** A held send, or a tool an ExecutionLayer gate holds (through production's
