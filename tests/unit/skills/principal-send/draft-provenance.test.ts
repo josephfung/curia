@@ -133,17 +133,17 @@ describe('DraftProvenance.curiaWritesInTask (#2474 PR 2)', () => {
   it('created only for draft-reply with already_exists false in this task', async () => {
     const created = taskRepo([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', already_exists: false } }, '2026-11-07T11:00:00.000Z')]);
     const p = new DraftProvenance(created, logger, () => NOW);
-    expect(await p.curiaWritesInTask('d1', 'task-1')).toEqual({ created: true, lastWriteAt: new Date('2026-11-07T11:00:00.000Z') });
+    expect(await p.curiaWritesInTask('d1', 'task-1')).toEqual({ created: true, lastWriteAt: new Date('2026-11-07T11:00:00.000Z'), replyToMessageId: null });
     expect(created.findToolResultsForTasks).toHaveBeenCalledWith(['task-1'], 500);
 
     const existing = taskRepo([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', already_exists: true } })]);
-    expect(await new DraftProvenance(existing, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).toEqual({ created: false, lastWriteAt: null });
+    expect(await new DraftProvenance(existing, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).toEqual({ created: false, lastWriteAt: null, replyToMessageId: null });
 
     const failed = taskRepo([row('ceo-inbox-draft-reply', { success: false, error: 'x', data: { draft_id: 'd1' } })]);
-    expect(await new DraftProvenance(failed, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).toEqual({ created: false, lastWriteAt: null });
+    expect(await new DraftProvenance(failed, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).toEqual({ created: false, lastWriteAt: null, replyToMessageId: null });
 
     const other = taskRepo([row('ceo-inbox-draft-compose', { success: true, data: { draft_id: 'd2' } })]);
-    expect(await new DraftProvenance(other, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).toEqual({ created: false, lastWriteAt: null });
+    expect(await new DraftProvenance(other, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).toEqual({ created: false, lastWriteAt: null, replyToMessageId: null });
   });
 
   it('lastWriteAt includes a same-task draft-edit', async () => {
@@ -154,7 +154,7 @@ describe('DraftProvenance.curiaWritesInTask (#2474 PR 2)', () => {
       row('ceo-inbox-draft-compose', { success: true, data: { draft_id: 'd1' } }, '2026-11-07T11:00:00.000Z'),
     ]);
     expect(await new DraftProvenance(repo, logger, () => NOW).curiaWritesInTask('d1', 'task-1'))
-      .toEqual({ created: true, lastWriteAt: new Date('2026-11-07T11:30:00.000Z') });
+      .toEqual({ created: true, lastWriteAt: new Date('2026-11-07T11:30:00.000Z'), replyToMessageId: null });
   });
 
   it('a draft created in another task is not created', async () => {
@@ -164,6 +164,19 @@ describe('DraftProvenance.curiaWritesInTask (#2474 PR 2)', () => {
     const result = await new DraftProvenance(repo, logger, () => NOW).curiaWritesInTask('d1', 'task-2');
     expect(result.created).toBe(false);
     expect(repo.findToolResults).not.toHaveBeenCalled();
+  });
+
+  // Final fixes A5 (security review M2): the message the creating draft-reply answered.
+  it('returns the reply_to_message_id of the draft-reply that created the draft', async () => {
+    const repo = taskRepo([
+      row('ceo-inbox-draft-edit', { success: true, data: { draft_id: 'd1', reply_to_message_id: 'forged' } }, '2026-11-07T11:30:00.000Z'),
+      row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', already_exists: false, reply_to_message_id: 'm-latest' } }, '2026-11-07T11:00:00.000Z'),
+    ]);
+    expect(await new DraftProvenance(repo, logger, () => NOW).curiaWritesInTask('d1', 'task-1'))
+      .toEqual({ created: true, lastWriteAt: new Date('2026-11-07T11:30:00.000Z'), replyToMessageId: 'm-latest' });
+    // Never from a result that did not create the draft.
+    const existing = taskRepo([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', already_exists: true, reply_to_message_id: 'm-old' } })]);
+    expect((await new DraftProvenance(existing, logger, () => NOW).curiaWritesInTask('d1', 'task-1')).replyToMessageId).toBeNull();
   });
 
   it('throws when the audit read fails', async () => {

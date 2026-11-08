@@ -115,3 +115,39 @@ describe('PrincipalSendLedger autonomous lookups (#2474 PR 2)', () => {
     expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, reason: 7 } })).toBeNull();
   });
 });
+
+// Final fixes A4 (security review M2) and A12 (final review M1).
+describe('PrincipalSendLedger global lookups', () => {
+  it('recentAutonomousSends counts autonomous sending and sent entries on every thread inside the window', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    const since = Date.parse('2026-11-06T12:00:00.000Z');
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'b', mode: 'autonomous', threadId: 't2', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSent('b', 'msg-b');
+    await ledger.recordHeld({ ...entry, draftId: 'c', mode: 'autonomous', at: '2026-11-07T11:00:00.000Z', reason: 'hold' });
+    await ledger.recordSending({ ...entry, draftId: 'd', mode: 'principal-directed', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'e', mode: 'autonomous', at: '2026-11-05T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'f', mode: 'autonomous', threadId: 't3', at: 'not a date' });
+    const got = await ledger.recentAutonomousSends(since);
+    // Held markers are not sends; an unreadable time counts (fail closed).
+    expect(got.map((e) => e.draftId).sort()).toEqual(['a', 'b', 'f']);
+  });
+
+  it('recentAutonomousSends throws on a repo failure (the gateway fails closed)', async () => {
+    const docs = makeDocs();
+    docs.listByPrefix.mockRejectedValue(new Error('db down'));
+    await expect(new PrincipalSendLedger(docs, logger).recentAutonomousSends(0)).rejects.toThrow('db down');
+  });
+
+  it('sentForDraft is true only once a send of that draft was recorded as sent', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, mode: 'autonomous' });
+    expect(await ledger.sentForDraft('d1')).toBe(false);
+    await ledger.recordSent('d1', 'msg-1');
+    expect(await ledger.sentForDraft('d1')).toBe(true);
+    // A draft whose id shares the prefix is another draft.
+    expect(await ledger.sentForDraft('d')).toBe(false);
+  });
+});

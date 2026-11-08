@@ -870,10 +870,20 @@ function isAutonomousMailbox(input: BandReviewInput): boolean {
  * The hold for an autonomous reply that shares information not on the thread (#2474). It leads;
  * whatever else the review found comes along, so the principal sees every reason. An ask is
  * dropped, like any hold beside one: a yes to the requester would not make the reply sendable.
+ *
+ * The reason the digest shows carries the others too (#2474 final fixes A11, final review M3): a
+ * stakes finding's rating and why ("Stakes: financial or legal. Why: …"), any other finding by
+ * its rule name. Otherwise a reply that is both off-thread and financial reaches the principal
+ * as off-thread only.
  */
 function offThreadHold(d: BandReviewDecision): BandReviewDecision {
   const others = d.kind === 'send' ? [] : [...d.findings, ...(d.kind === 'hold' ? [] : d.heldBeside ?? [])];
-  return { kind: 'hold', reason: OFF_THREAD_REASON, findings: [{ rule: BAND_RULES.offThread, detail: OFF_THREAD_REASON }, ...others] };
+  const also = [...new Set(others.map((f) => {
+    const stakesAt = f.rule === BAND_RULES.speaksAsPrincipal ? f.detail.indexOf('Stakes: ') : -1;
+    return stakesAt >= 0 ? f.detail.slice(stakesAt).trim() : f.rule;
+  }))];
+  const reason = also.length > 0 ? `${OFF_THREAD_REASON} Also: ${also.join('; ')}${/[.!?…]$/.test(also[also.length - 1]!) ? '' : '.'}` : OFF_THREAD_REASON;
+  return { kind: 'hold', reason, findings: [{ rule: BAND_RULES.offThread, detail: OFF_THREAD_REASON }, ...others] };
 }
 
 /** A bounce with a personal-details finding: the drafter must rewrite without an item (#2333). */

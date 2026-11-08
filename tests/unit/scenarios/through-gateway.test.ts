@@ -495,6 +495,8 @@ describe('the run\'s principal mailbox (#2474)', () => {
     mirrorPrincipalDraft(scope, { id: 'draft-r1', subject: 'Re: Q', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'A.', replyTo: 'msg-9' }, true);
     expect(scope.principalDrafts.get('draft-r1')).toMatchObject({ threadId: 'thr-other' });
     expect(scope.errors).toEqual([]);
+    // #2474 final fixes A5: the run records which message the reply answers, as the audit row does.
+    expect(scope.curiaTaskReplyTo.get('draft-r1')).toBe('msg-9');
     // A reply to a message the case did not seed is a case error (a typo in the stub's id).
     mirrorPrincipalDraft(scope, { id: 'draft-r2', subject: 'Re: ?', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'A.', replyTo: 'msg-unknown' }, true);
     expect(scope.errors).toEqual([expect.stringMatching(/draft-r2.*msg-unknown/)]);
@@ -584,7 +586,7 @@ describe('the run\'s principal mailbox (#2474)', () => {
     const split = splitReplyQuote(stored.body);
     expect(split.quote).toContain('+1 416 555 0142');
     const phone = { label: 'phone_us', start: 0, end: 0, matched: '+1 416 555 0142' } as DetectedPii;
-    expect(quoteItemsToReview([phone], split.quote, [threadMessageProof(original)], ['jo.park@acme.example.test'])).toEqual([]);
+    expect(quoteItemsToReview([phone], split.quote, [threadMessageProof(original, [scope.principalAddress ?? 'avery@example.test'])], ['jo.park@acme.example.test'])).toEqual([]);
     // An edit that changes only recipients keeps the quote; one that rewrites the text drops it,
     // as the real edit replaces the whole body.
     mirrorPrincipalDraft(scope, { id: 'draft-q', subject: 'Re: Deck', to: [{ email: 'jo.park@acme.example.test' }, { email: 'lee@acme.example.test' }], cc: [], body: 'Thanks, Jo.', replyTo: 'msg-q' }, false, true);

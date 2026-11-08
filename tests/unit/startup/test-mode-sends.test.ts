@@ -363,14 +363,17 @@ describe('an autonomous send through the recording gateway (#2474 PR 2)', () => 
     getConfig: async () => ({ score: 85, band: 'act', updatedAt: new Date(0), updatedBy: 'scenario-fixture', gating: 'band' }),
   } as unknown as AutonomyService;
 
-  function setup(over: { taskDrafts?: string[]; ledger?: PrincipalSendEntry[]; draft?: Partial<NylasMessage> } = {}) {
+  function setup(over: { taskDrafts?: string[]; ledger?: PrincipalSendEntry[]; draft?: Partial<NylasMessage>; replyTo?: Map<string, string> } = {}) {
     const drafts = new Map([['draft-30v-acme', principalDraft({ date: NOW, ...over.draft })]]);
     const ledger = over.ledger ?? [];
     const recorder: SendRecorder & { sends: RecordedSend[] } = {
       ...runRecorder(),
       principalDrafts: () => drafts,
       curiaDraftIds: () => new Set(['draft-30v-acme']),
-      curiaTaskDrafts: () => ({ ids: new Set(over.taskDrafts ?? ['draft-30v-acme']), now: new Date(NOW * 1000) }),
+      curiaTaskDrafts: () => ({
+        ids: new Set(over.taskDrafts ?? ['draft-30v-acme']), now: new Date(NOW * 1000),
+        replyTo: over.replyTo ?? new Map([['draft-30v-acme', 'msg-1']]),
+      }),
       principalThreadMessages: (id: string) => (id === 'thr-30v-acme' ? [threadMessage({ id: 'msg-1', date: NOW - 3600 })] : []),
       principalSends: () => ledger,
       sendLevel: () => 'routine' as const,
@@ -426,6 +429,31 @@ describe('an autonomous send through the recording gateway (#2474 PR 2)', () => 
     // Within one run the cooldown holds.
     const again = setup({ ledger: first.ledger });
     expect(await again.gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-3' })).toMatchObject({ refusal: 'thread_cooldown' });
+  });
+
+  // Final fixes A13 (final review M6): the fake counts as production does.
+  it('counts a ledger entry with an unreadable time as recent, as production does (fail closed)', async () => {
+    const broken: PrincipalSendEntry = { draftId: 'old', threadId: 'thr-30v-acme', recipients: [], mode: 'autonomous', at: 'not a date', outcome: 'held' };
+    const { gw } = setup({ ledger: [broken] });
+    expect(await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).toMatchObject({ refusal: 'thread_cooldown' });
+  });
+
+  // Final fixes A4: the global cap reads the run's own ledger.
+  it('refuses past the daily cap of autonomous sends across threads', async () => {
+    const at = new Date().toISOString();
+    const sent: PrincipalSendEntry[] = Array.from({ length: 10 }, (_, i) => ({
+      draftId: `d${i}`, threadId: `other-${i}`, recipients: [], mode: 'autonomous' as const, at, outcome: 'sent' as const,
+    }));
+    const { gw, recorder } = setup({ ledger: sent });
+    expect(await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).toMatchObject({ refusal: 'daily_cap' });
+    expect(recorder.sends).toEqual([]);
+  });
+
+  // Final fixes A5: the run records which message each stubbed reply answered.
+  it('refuses a reply whose answered message the run did not record (fail closed)', async () => {
+    const { gw, recorder } = setup({ replyTo: new Map() });
+    expect(await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).toMatchObject({ refusal: 'not_latest_message' });
+    expect(recorder.sends).toEqual([]);
   });
 });
 

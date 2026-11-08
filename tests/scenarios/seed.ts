@@ -139,6 +139,12 @@ export class SeedScope {
    * and the run's stubbed composes and replies. The only drafts an autonomous send may send.
    */
   readonly curiaTaskDraftIds = new Set<string>();
+  /**
+   * The message each stubbed reply in the run's own task answered (#2474 final fixes A5), as the
+   * draft-reply result's audit row records it. A same_task seed has none, so an autonomous send
+   * of it refuses as not_latest_message.
+   */
+  readonly curiaTaskReplyTo = new Map<string, string>();
   /** Which of principalDrafts Curia edited (#2474 final review S1): reviewed as curia-edited. */
   readonly curiaEditedDraftIds = new Set<string>();
   /** The run's ceo_inbox/sending level (`seed.principal_mailbox.send_level`, #2474); unset: on_request. */
@@ -208,6 +214,7 @@ export class SeedScope {
     this.principalDrafts.clear();
     this.curiaDraftIds.clear();
     this.curiaTaskDraftIds.clear();
+    this.curiaTaskReplyTo.clear();
     this.curiaEditedDraftIds.clear();
     this.sendLevel = undefined;
     this.principalThreads.clear();
@@ -332,6 +339,7 @@ export function mirrorPrincipalDraft(scope: SeedScope, draft: MailboxDraft, curi
   if (curiaWrote) {
     scope.curiaDraftIds.add(draft.id);
     scope.curiaTaskDraftIds.add(draft.id);
+    if (draft.replyTo !== undefined) scope.curiaTaskReplyTo.set(draft.id, draft.replyTo);
   }
   if (edited) scope.curiaEditedDraftIds.add(draft.id);
 }

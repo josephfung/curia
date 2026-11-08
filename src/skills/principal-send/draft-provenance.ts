@@ -31,6 +31,12 @@ export interface CuriaDraftWrites {
   created: boolean;
   /** The latest such create, or successful draft-edit of the draft, in the same task. */
   lastWriteAt: Date | null;
+  /**
+   * The message the creating draft-reply answered (its result's `reply_to_message_id`, #2474
+   * final fixes A5), or null: no create, a compose, or a result without one. Only the create's
+   * row counts; an edit cannot rebind a draft to another message.
+   */
+  replyToMessageId: string | null;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -75,13 +81,18 @@ export class DraftProvenance {
     }
     let created = false;
     let lastWriteAt: Date | null = null;
+    let replyToMessageId: string | null = null;
     for (const row of rows) {
       const isCreate = resultDraftId(row, CURIA_DRAFT_TOOLS, true) === draftId;
       if (!isCreate && resultDraftId(row, CURIA_EDIT_TOOLS, false) !== draftId) continue;
-      if (isCreate) created = true;
+      if (isCreate) {
+        created = true;
+        const replied = record(record(row.payload['result'])?.['data'])?.['reply_to_message_id'];
+        if (typeof replied === 'string' && replied.length > 0) replyToMessageId = replied;
+      }
       if (lastWriteAt === null || row.timestamp.getTime() > lastWriteAt.getTime()) lastWriteAt = row.timestamp;
     }
-    return { created, lastWriteAt };
+    return { created, lastWriteAt, replyToMessageId };
   }
 
   /**

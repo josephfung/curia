@@ -92,12 +92,16 @@ import { dropOwnIdentityItems, quoteHeaderParticipants, splitReplyQuote } from '
 import { PROVENANCE_LOOKBACK_DAYS, type CuriaDraftWrites, type DraftProvenance } from './principal-send/draft-provenance.js';
 import type { PrincipalSendEntry, PrincipalSendLedger } from './principal-send/send-ledger.js';
 import {
-  AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, replyTarget, type AutonomousLimitRefusal,
+  AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, repliedToLatest,
+  type AutonomousLimitRefusal,
 } from './principal-send/autonomous-limits.js';
 import { isOutsiderOriginated } from '../contacts/principal.js';
 import {
-  mailboxDraftLabel, quoteItemsToReview, replyOrigin, threadMessageProof, threadTextSeenByAll, type ThreadMessageProof,
+  mailboxDraftLabel, quoteItemsToReview, quoteMatchesThread, replyOrigin, threadMessageProof, threadTextSeenByAll,
+  type ThreadMessageProof,
 } from './principal-send/quote-proof.js';
+import { hasFinancialDetails } from './principal-send/financial-details.js';
+import { htmlToText } from '../channels/email/html-to-text.js';
 import type { SendStakes } from '../autonomy/judge-brief.js';
 import type { CallBudget } from '../util/call-budget.js';
 import { nylasMessageFailure } from '../channels/email/nylas-message-id.js';
@@ -422,10 +426,11 @@ export interface OutboundGatewayConfig {
    */
   draftProvenance?: Pick<DraftProvenance, 'createdByCuria' | 'editedByCuria' | 'curiaWritesInTask'>;
   /**
-   * Per-send markers sent-observe skips (#2474, design D8), and the autonomous thread cooldown
-   * (D4.6). Absent: no markers, and an autonomous send is refused (thread_cooldown).
+   * Per-send markers sent-observe skips (#2474, design D8), the autonomous thread cooldown (D4.6)
+   * and the daily cap (final fixes A4). Absent: no markers, and an autonomous send is refused
+   * (no_send_ledger).
    */
-  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread'>;
+  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentAutonomousSends' | 'sentForDraft'>;
 }
 
 /**
@@ -438,7 +443,10 @@ export type PrincipalSendRefusal =
   | 'not_found' | 'lookup_failed' | 'no_recipients' | 'principal_only' | 'review_hold' | 'draft_changed'
   | 'send_unconfirmed'
   // An autonomous send (PR 2, design D4): Curia sending on its own under the routine / all levels.
-  | 'outsider_originated' | 'no_band_review' | 'no_send_ledger' | 'thread_unreadable' | AutonomousLimitRefusal;
+  | 'outsider_originated' | 'no_band_review' | 'no_send_ledger' | 'thread_unreadable' | AutonomousLimitRefusal
+  // The final fix wave (#2474 PR 2): origin allowlist (A9), latest-message binding (A5), bank
+  // and card backstop (A3). The daily cap (A4) is an AutonomousLimitRefusal.
+  | 'origin_unknown' | 'not_latest_message' | 'financial_details';
 
 /** How every autonomous refusal ends: the principal still has the draft. */
 const STILL_A_DRAFT = ' Nothing was sent; the draft is still in their Drafts folder.';
@@ -469,7 +477,87 @@ export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
   too_many_recipients: `The reply goes to more than five people, so Curia left it for the principal.${STILL_A_DRAFT}`,
   has_attachments: `The reply has attachments, so Curia left it for the principal.${STILL_A_DRAFT}`,
   thread_cooldown: `Curia already replied or held a reply on this thread in the last day.${STILL_A_DRAFT}`,
+  daily_cap: `Curia already sent ${AUTONOMOUS_DAILY_CAP} replies on its own in the last day, its daily limit.${STILL_A_DRAFT}`,
+  origin_unknown: `Curia couldn't confirm this work came from its own inbox check, so it didn't send on its own.${STILL_A_DRAFT}`,
+  not_latest_message: `The reply doesn't answer the latest message on its thread, so Curia didn't send it on its own.${STILL_A_DRAFT}`,
+  financial_details: `It contains bank or card details, which Curia never sends on its own.${STILL_A_DRAFT}`,
 };
+
+/** How every principal-facing digest reason ends (#2474 final fixes A12). */
+const IN_YOUR_DRAFTS = "It's in your Drafts.";
+
+/** Refusals whose stop files a "Left as a draft" digest item (not_found and lookup_failed lead differently). */
+type DigestRefusal = Exclude<PrincipalSendRefusal,
+  'mailbox_unavailable' | 'setting_off' | 'not_requested' | 'approval_replay' | 'send_unconfirmed' | 'not_found' | 'lookup_failed'>;
+
+/**
+ * What the principal's digest item says for each refusal (#2474 final fixes A12, final review
+ * M1): PRINCIPAL_SEND_REFUSALS is written for the agent ("their Drafts folder"), and
+ * report-fallback-digest renders an item verbatim. Second person, ending "It's in your Drafts."
+ */
+export const PRINCIPAL_SEND_DIGEST_REASONS: Record<DigestRefusal, string> = {
+  no_recipients: `The draft has no recipients. ${IN_YOUR_DRAFTS}`,
+  principal_only: `The draft is addressed only to you. ${IN_YOUR_DRAFTS}`,
+  // A review hold's own reason is used; this is the fallback.
+  review_hold: `Held for you. ${IN_YOUR_DRAFTS}`,
+  draft_changed: `The draft changed while Curia was checking it, so it wasn't sent. ${IN_YOUR_DRAFTS}`,
+  outsider_originated: `This work started from someone outside, so Curia didn't send it on its own. ${IN_YOUR_DRAFTS}`,
+  origin_unknown: `Curia couldn't confirm this work came from its own inbox check, so it didn't send it on its own. ${IN_YOUR_DRAFTS}`,
+  no_band_review: `The send review isn't running, so Curia didn't send it on its own. ${IN_YOUR_DRAFTS}`,
+  no_send_ledger: `The send record isn't available, so Curia didn't send it on its own. ${IN_YOUR_DRAFTS}`,
+  thread_unreadable: `Curia couldn't read the thread to check who's on it, so it didn't send on its own. ${IN_YOUR_DRAFTS}`,
+  not_curia_draft: `Curia sends on its own only a reply it drafted in this same pass. ${IN_YOUR_DRAFTS}`,
+  draft_changed_since_curia: `The draft changed after Curia wrote it, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
+  not_a_reply: `Curia sends on its own only replies on an existing thread. ${IN_YOUR_DRAFTS}`,
+  mailing_list: `The thread is a mailing list, so Curia didn't reply on its own. ${IN_YOUR_DRAFTS}`,
+  recipient_not_on_thread: `The reply goes to someone who isn't genuinely on the thread. ${IN_YOUR_DRAFTS}`,
+  too_many_recipients: `The reply goes to more than five people, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
+  has_attachments: `The reply has attachments, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
+  thread_cooldown: `Curia already replied or held a reply on this thread in the last day. ${IN_YOUR_DRAFTS}`,
+  daily_cap: `Curia already sent ${AUTONOMOUS_DAILY_CAP} replies on its own in the last day, its daily limit. ${IN_YOUR_DRAFTS}`,
+  not_latest_message: `The reply doesn't answer the latest message on its thread, so Curia didn't send it on its own. ${IN_YOUR_DRAFTS}`,
+  financial_details: `It contains bank or card details, which Curia never sends on its own. ${IN_YOUR_DRAFTS}`,
+};
+
+/** The "Tried to send" digest item's reason (#2474 final fixes A12): send_unconfirmed, for the principal. */
+const SEND_UNCONFIRMED_DIGEST = "The send didn't confirm, so it may or may not have gone out. Check your Sent folder before sending it again.";
+
+/** An autonomous reply whose quote is not a thread message every recipient received (final fixes A10). */
+const QUOTE_MISMATCH_REASON = `Its quoted text doesn't match the thread.${STILL_A_DRAFT}`;
+
+function isDigestRefusal(refusal: PrincipalSendRefusal): refusal is DigestRefusal {
+  return Object.prototype.hasOwnProperty.call(PRINCIPAL_SEND_DIGEST_REASONS, refusal);
+}
+
+/**
+ * A stop's agent-facing reason as the principal reads it (#2474 final fixes A12): its lead
+ * paragraph only (a check stop appends notes for the drafter after a blank line, such as how to
+ * address a recipient), the STILL_A_DRAFT tail swapped for "It's in your Drafts.", and the
+ * principal named as "you". For reasons with no fixed digest text: a review hold, a check stop, a
+ * reason naming its detail.
+ */
+function principalFacing(reason: string): string {
+  const own = reason.endsWith(STILL_A_DRAFT) ? reason.slice(0, -STILL_A_DRAFT.length) : reason;
+  const voiced = own.split(/\n\s*\n/)[0]!.trim()
+    .replace(/\bThe principal's\b/g, 'Your').replace(/\bthe principal's\b/g, 'your')
+    .replace(/\bThe principal\b/g, 'You').replace(/\bthe principal\b/g, 'you');
+  return `${/[.!?…]$/.test(voiced) ? voiced : `${voiced}.`} ${IN_YOUR_DRAFTS}`;
+}
+
+/**
+ * The task lineage that may send from the principal's mailbox on Curia's own (#2474 final fixes
+ * A9, security review B3). The hourly inbox check is a declarative scheduled job, stamped
+ * `systemRole: 'system'` (makeSystemOriginator); its woken drain task can be downgraded to
+ * `'agent'` by the bypass ladder (computeEffectiveTaskMetadata), and the gateway reads the
+ * effective metadata. Nothing else qualifies: no metadata or no originator (fail closed), an
+ * outsider, or principal lineage on a task that is not a live turn (a live one is
+ * principal-directed and never reaches this check).
+ */
+function isAutonomousSendOrigin(taskMetadata: Record<string, unknown> | undefined): boolean {
+  // Only systemRole is read, and compared to literals; cast through unknown per repo policy.
+  const originator = taskMetadata?.['originator'] as unknown as TaskOriginator | undefined;
+  return originator?.systemRole === 'system' || originator?.systemRole === 'agent';
+}
 
 /** recipient_not_on_thread's text, naming who (the limit's detail). */
 function recipientNotOnThread(detail: string): string {
@@ -4142,8 +4230,9 @@ export class OutboundGateway {
    *
    * Autonomous (PR 2: levels routine / all, anything not principal-directed): only a reply Curia
    * drafted in this task, past the code-enforced limits (D4), reviewed with every question and the
-   * level's stakes ceiling. A final stop leaves the draft, writes a held marker (the thread's
-   * cooldown) and files one digest item; a send files one too. A review bounce is not final.
+   * level's stakes ceiling. Every stop is final: it leaves the draft, writes a held marker (the
+   * thread's cooldown) and files one digest item; a send files one too. A review bounce is final
+   * here too (#2474 final fixes A1): triage never retries a refused send.
    */
   async sendPrincipalDraft(draftId: string, options: {
     authority: SendAuthorityInput;
@@ -4200,6 +4289,10 @@ export class OutboundGateway {
     if (autonomous) {
       // An outsider writing to Curia's own address does not start a send from the principal's (D4.7).
       if (isOutsiderOriginated(options.authority.taskMetadata)) return stop('outsider_originated');
+      // Only the inbox check's own lineage sends on Curia's own (#2474 final fixes A9, security
+      // review B3): an allowlist, not "not an outsider", so missing metadata or a missing
+      // originator (a bullpen wake with none, a resumed task) refuses (fail closed).
+      if (!isAutonomousSendOrigin(options.authority.taskMetadata)) return stop('origin_unknown');
       // Fail closed: with no band review running, the draft would send unreviewed (design D2). The
       // autonomy config can set one send's gating, so this read is the one the checks use.
       autonomy = await this.readAutonomy();
@@ -4270,10 +4363,12 @@ export class OutboundGateway {
         }
         // Fail closed: a full first page may not hold every participant.
         if (thread.length >= AUTONOMOUS_THREAD_READ_LIMIT) return stop('thread_unreadable');
-        // The limits rule on messages someone received: no draft (this one included) counts.
-        // Recognises Google's DRAFT label only: other providers' draft folder ids are opaque and
-        // not recognised (the principal grant is Google today).
-        thread = thread.filter((m) => m.id !== draftId && !m.folders.some((f) => /^DRAFTS?$/i.test(f)));
+        // The limits rule on messages someone received: no draft (this one included) counts, nor
+        // anything in Spam or Trash (#2474 final fixes A8, security review B2): a verified sender
+        // the principal trashed, or Gmail filed as spam, is no thread member, evidence or origin.
+        // Recognises Google's DRAFT/SPAM/TRASH labels only: other providers' folder ids are opaque
+        // and not recognised (the principal grant is Google today).
+        thread = thread.filter((m) => m.id !== draftId && !m.folders.some((f) => /^(DRAFTS?|SPAM|TRASH)$/i.test(f)));
       }
       let curiaWrites: CuriaDraftWrites;
       try {
@@ -4291,22 +4386,40 @@ export class OutboundGateway {
         this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — treating the thread as cooling down');
         return stop('thread_cooldown');
       }
-      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries });
+      let sendsInWindow: number;
+      try {
+        sendsInWindow = (await this.sendLedger!.recentAutonomousSends(Date.now() - AUTONOMOUS_DAILY_CAP_WINDOW_MS)).length;
+      } catch (err) {
+        // Fail closed (#2474 final fixes A4): the daily cap can't be checked.
+        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — the daily cap cannot be checked, not sending on its own');
+        return stop('no_send_ledger');
+      }
+      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, autonomousSendsInWindow: sendsInWindow });
       if (limit) {
         return stop(limit.refusal, limit.refusal === 'recipient_not_on_thread' ? recipientNotOnThread(limit.detail) : PRINCIPAL_SEND_REFUSALS[limit.refusal]);
       }
-      // The message being answered, as the review's origin (design D2): a triage turn reads many,
-      // and the one replied to can fall out of the evidence window.
-      const target = replyTarget(thread, principalAddresses);
+      // The message being answered, bound to the one the draft-reply that created the draft
+      // answered (#2474 final fixes A5): it must be the thread's latest outside message, and it
+      // is the review's origin (design D2). A draft steered to an older message refuses.
+      const target = repliedToLatest(thread, principalAddresses, curiaWrites.replyToMessageId);
+      if (!target) return stop('not_latest_message');
+      // Bank or card details never go out on Curia's own (#2474 final fixes A3): checked on the
+      // whole draft, quote included, whatever the review would rule.
+      if (this.hasFinancialDetails(draft, primary, draftId)) return stop('financial_details');
+      const proofs = thread.map((m) => threadMessageProof(m, principalAddresses));
+      // A quote must reproduce a message every recipient received (#2474 final fixes A10): a
+      // model-written quote block could pass off new information as already on the thread.
+      const { quote } = splitReplyQuote(draft.body);
+      if (quote && !quoteMatchesThread(quote, proofs, outside)) return stop('review_hold', QUOTE_MISMATCH_REASON);
       profile = {
         ...profile,
         autonomous: true,
         // routine sends only routine; all adds commitment. financial_or_legal never (#2473).
         stakesCeiling: level === 'all' ? 'commitment' : 'routine',
-        ...(target ? { origin: replyOrigin(target) } : {}),
-        threadMessages: thread.map(threadMessageProof),
+        origin: replyOrigin(target),
+        threadMessages: proofs,
         // `outside` is every non-principal recipient on To, Cc and Bcc.
-        threadText: threadTextSeenByAll(thread, outside),
+        threadText: threadTextSeenByAll(thread, outside, principalAddresses),
       };
     }
 
@@ -4321,13 +4434,13 @@ export class OutboundGateway {
     if ('result' in checked) {
       if (checked.held !== undefined) return stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`);
       // Every other stop leaves the draft where it is and returns its reason: a review bounce
-      // (the drafter edits once and resends), a blocked contact, the identity gate, the content
-      // filter or a redactor error.
+      // (on a principal-directed send the drafter edits once and resends), a blocked contact, the
+      // identity gate, the content filter or a redactor error.
       //
-      // On an autonomous send only a review bounce is not final (no marker, no digest item: a
-      // second bounce becomes a block, which holds). Every other stop is final: the principal
-      // hears of it even if the drafter gives up (design D9).
-      if (autonomous && checked.bounced !== true) {
+      // On an autonomous send every stop is final, a bounce included (#2474 final fixes A1,
+      // final review I1): triage never retries a refused send, so a bounce left waiting for a
+      // rewrite would never be reported. The principal hears of each one (design D9).
+      if (autonomous) {
         const why = (checked.result.blockedReason ?? 'Held for the principal.').trim();
         const reason = `${/[.!?]$/.test(why) ? why : `${why}.`}${STILL_A_DRAFT}`;
         await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, reason, options });
@@ -4344,14 +4457,19 @@ export class OutboundGateway {
     if (state === 'failed') return stop('lookup_failed');
     if (state === 'changed') return stop('draft_changed');
 
-    // 9. The marker, the send, the message id. A marker failure is not fatal: it only loses
-    // learning evidence (sent-observe may learn this message as the principal's writing) and, for
-    // an autonomous send, this send's cooldown entry.
+    // 9. The marker, the send, the message id. On a principal-directed send a marker failure is
+    // not fatal: it only loses learning evidence (sent-observe may learn this message as the
+    // principal's writing). On an autonomous send the marker is the thread's cooldown and counts
+    // toward the daily cap, so no marker means no send (#2474 final fixes A7, fail closed).
     try {
       await this.sendLedger?.recordSending({
         draftId, threadId: draft.threadId, recipients: outside, mode: autonomous ? 'autonomous' : 'principal-directed', at: new Date().toISOString(),
       });
     } catch (err) {
+      if (autonomous) {
+        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger marker not written — not sending on its own');
+        return stop('no_send_ledger');
+      }
       this.log.warn({ err, draftId }, 'outbound-gateway: send ledger marker not written — sending anyway');
     }
     let sent: NylasMessage;
@@ -4365,7 +4483,7 @@ export class OutboundGateway {
       this.log.error({ err, draftId }, 'outbound-gateway: principal-mailbox sendDraft failed — outcome unknown');
       // Not "left as a draft": it may have gone. The `sending` marker already starts the cooldown.
       if (autonomous) {
-        await this.publishMailboxDigest(`Tried to send for you from your mailbox: ${mailboxDraftLabel(draft, isPrincipal)}. ${PRINCIPAL_SEND_REFUSALS.send_unconfirmed}`, options);
+        await this.publishMailboxDigest(`Tried to send for you from your mailbox: ${mailboxDraftLabel(draft, isPrincipal)}. ${SEND_UNCONFIRMED_DIGEST}`, options);
       }
       return { success: false, refusal: 'send_unconfirmed', blockedReason: PRINCIPAL_SEND_REFUSALS.send_unconfirmed };
     }
@@ -4419,9 +4537,30 @@ export class OutboundGateway {
   }
 
   /**
+   * Bank or card details anywhere in the draft (#2474 final fixes A3): the redactor's financial
+   * labels on the body (quote included) and subject, or an IBAN. A detector error is logged and
+   * not decided here: checkDraftSend runs the same detector next and blocks on its error.
+   */
+  private hasFinancialDetails(draft: NylasMessage, primary: string, draftId: string): boolean {
+    let items: DetectedPii[] = [];
+    if (this.piiRedactor) {
+      try {
+        const ctx = { recipientId: primary, principalIsSoleRecipient: false };
+        items = [...this.piiRedactor.detect(draft.body, 'email', ctx), ...(draft.subject ? this.piiRedactor.detect(draft.subject, 'email', ctx) : [])];
+      } catch (err) {
+        // Fail closed downstream: checkDraftSend's own detect() throws too and blocks the send.
+        this.log.warn({ err, draftId }, 'outbound-gateway: PII detection failed in the financial-details check — the send review blocks on it');
+      }
+    }
+    return hasFinancialDetails(items, [draft.body, htmlToText(draft.body), draft.subject ?? '']);
+  }
+
+  /**
    * Records an autonomous principal-mailbox send that stopped for good (#2474, design D4.6, D9): a
-   * held marker, which starts the thread's 24h cooldown, and one "Left as a draft" digest item. A
-   * cooldown refusal files the item only, so it does not extend the cooldown. Never throws: the
+   * held marker, which starts the thread's 24h cooldown, and one digest item in the principal's
+   * voice (final fixes A12). A cooldown or daily-cap refusal files the item only, so it does not
+   * extend the thread's cooldown. A draft that is gone or unreadable is reported as not sent, not
+   * "left as a draft"; one the ledger shows as already sent files nothing. Never throws: the
    * refusal stands whatever is recorded.
    */
   private async recordAutonomousStop(args: {
@@ -4436,6 +4575,19 @@ export class OutboundGateway {
     options: { taskEventId?: string; conversationId?: string };
   }): Promise<void> {
     const { draftId, refusal, reason, options } = args;
+    if (refusal === 'not_found' && this.sendLedger) {
+      try {
+        // A second send call on a draft that already went out (final review M1): "not sent"
+        // would contradict the "Sent for you" item filed a moment ago.
+        if (await this.sendLedger.sentForDraft(draftId)) {
+          this.log.info({ draftId }, 'outbound-gateway: autonomous send of a draft already sent — nothing to report');
+          return;
+        }
+      } catch (err) {
+        // Fail toward telling the principal: file the item.
+        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — reporting the gone draft');
+      }
+    }
     let draft = args.draft;
     if (!draft && !args.lookedUp) {
       // Refused before the draft was read: read it once, only to name it and its thread.
@@ -4446,8 +4598,9 @@ export class OutboundGateway {
       }
     }
     const isPrincipal = (email: string) => this.isPrincipalOnChannel('email', email);
-    if (refusal === 'thread_cooldown') {
-      // Not extended: the cooldown refusal files the digest item only.
+    if (refusal === 'thread_cooldown' || refusal === 'daily_cap') {
+      // Not extended: a cooldown or cap refusal files the digest item only. A cap stop's marker
+      // would start a cooldown on a thread that never had a reply judged.
     } else if (!draft?.threadId) {
       // No thread (the draft is gone or unreadable): there is no cooldown to start.
       this.log.info({ draftId, refusal }, 'outbound-gateway: autonomous stop on a draft with no known thread — no held marker');
@@ -4467,7 +4620,19 @@ export class OutboundGateway {
       }
     }
     const what = draft ? mailboxDraftLabel(draft, isPrincipal) : 'a reply Curia drafted';
-    await this.publishMailboxDigest(`Left as a draft in your mailbox: ${what}. ${reason}`, options);
+    if (refusal === 'not_found' || refusal === 'lookup_failed') {
+      const why = refusal === 'not_found'
+        ? "It isn't in your Drafts any more (sent, deleted or replaced)."
+        : "Curia couldn't read the draft just now; check your Drafts.";
+      await this.publishMailboxDigest(`Not sent from your mailbox: ${what}. ${why}`, options);
+      return;
+    }
+    // The fixed text for a refusal stated as is; anything else (a review hold, a check stop, a
+    // reason naming its detail) in the principal's voice.
+    const said = refusal !== undefined && isDigestRefusal(refusal) && reason === PRINCIPAL_SEND_REFUSALS[refusal]
+      ? PRINCIPAL_SEND_DIGEST_REASONS[refusal]
+      : principalFacing(reason);
+    await this.publishMailboxDigest(`Left as a draft in your mailbox: ${what}. ${said}`, options);
   }
 
   /** One digest item for an autonomous principal-mailbox send (#2474, design D9). A failure is logged; the outcome stands. */

@@ -138,10 +138,12 @@ export interface SendRecorder {
   sendLevel?(): SendLevel | undefined;
   /**
    * The drafts Curia created in the calling run's own task, and the run clock's now, which is
-   * when Curia last wrote them (#2474 PR 2: the autonomous D4.1 check). Undefined: no run
-   * record, so no draft reads as created in the task.
+   * when Curia last wrote them (#2474 PR 2: the autonomous D4.1 check). `replyTo` maps each
+   * stubbed reply to the message it answered, as the draft-reply result's audit row does (final
+   * fixes A5); a draft with no entry has none, and an autonomous send of it refuses. Undefined: no
+   * run record, so no draft reads as created in the task.
    */
-  curiaTaskDrafts?(): { ids: ReadonlySet<string>; now: Date } | undefined;
+  curiaTaskDrafts?(): { ids: ReadonlySet<string>; now: Date; replyTo?: ReadonlyMap<string, string> } | undefined;
   /**
    * The non-draft messages of a thread in the principal's mailbox for the calling run (#2474 PR 2),
    * with their headers: what the autonomous limits read. Absent: none.
@@ -462,8 +464,8 @@ export function createRecordingOutboundGateway(deps: {
             // the task (fail closed, unlike the review default above).
             curiaWritesInTask: async (draftId: string) => {
               const task = recorder.curiaTaskDrafts?.();
-              if (!task?.ids.has(draftId)) return { created: false, lastWriteAt: null };
-              return { created: true, lastWriteAt: task.now };
+              if (!task?.ids.has(draftId)) return { created: false, lastWriteAt: null, replyToMessageId: null };
+              return { created: true, lastWriteAt: task.now, replyToMessageId: task.replyTo?.get(draftId) ?? null };
             },
           },
           // In memory, in the calling run's store: the real ledger writes working docs, which a real
@@ -489,8 +491,17 @@ function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefined): N
       if (latest) Object.assign(latest, { outcome: 'sent', messageId });
     },
     recordHeld: async (e) => { entries().push({ ...e, outcome: 'held' }); },
-    recentForThread: async (threadId, sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.threadId === threadId && Date.parse(e.at) >= sinceEpochMs),
+    // As production counts (#2474 final fixes A13): an unreadable `at` is recent (fail closed).
+    recentForThread: async (threadId, sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.threadId === threadId && recent(e, sinceEpochMs)),
+    recentAutonomousSends: async (sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.outcome !== 'held' && recent(e, sinceEpochMs)),
+    sentForDraft: async (draftId) => entries().some(e => e.draftId === draftId && e.outcome === 'sent'),
   };
+}
+
+/** PrincipalSendLedger's window test: at or after the cutoff, or an unreadable `at`. */
+function recent(e: PrincipalSendEntry, sinceEpochMs: number): boolean {
+  const at = Date.parse(e.at);
+  return !Number.isFinite(at) || at >= sinceEpochMs;
 }
 
 /**

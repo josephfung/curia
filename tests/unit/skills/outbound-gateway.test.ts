@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, PRINCIPAL_SEND_REFUSALS, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
+import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -5830,9 +5830,10 @@ describe('sendPrincipalDraft (#2474)', () => {
     ledger?: {
       recordSending: ReturnType<typeof vi.fn>; recordSent: ReturnType<typeof vi.fn>;
       recordHeld?: ReturnType<typeof vi.fn>; recentForThread?: ReturnType<typeof vi.fn>;
+      recentAutonomousSends?: ReturnType<typeof vi.fn>; sentForDraft?: ReturnType<typeof vi.fn>;
     };
     /** What curiaWritesInTask returns (PR 2), or an error it throws. */
-    curiaWrites?: { created: boolean; lastWriteAt: Date | null } | Error;
+    curiaWrites?: { created: boolean; lastWriteAt: Date | null; replyToMessageId: string | null } | Error;
     gating?: 'band' | 'tier';
     withoutBandReview?: true;
     withoutLedger?: true;
@@ -5851,11 +5852,14 @@ describe('sendPrincipalDraft (#2474)', () => {
     });
     const curiaWritesInTask = vi.fn(async () => {
       if (o.curiaWrites instanceof Error) throw o.curiaWrites;
-      return o.curiaWrites ?? { created: true, lastWriteAt: new Date() };
+      // Replying to m1, the autonomous tests' default latest message (final fixes A5).
+      return o.curiaWrites ?? { created: true, lastWriteAt: new Date(), replyToMessageId: 'm1' };
     });
     const ledger = {
       recordHeld: vi.fn().mockResolvedValue(undefined),
       recentForThread: vi.fn().mockResolvedValue([]),
+      recentAutonomousSends: vi.fn().mockResolvedValue([]),
+      sentForDraft: vi.fn().mockResolvedValue(false),
       ...(o.ledger ?? { recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined) }),
     };
     const readSendLevel = vi.fn().mockResolvedValue(o.level ?? 'on_request');
@@ -5880,7 +5884,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       principalMailbox: async () => client as unknown as NylasClient | null,
       readSendLevel,
       ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria, editedByCuria, curiaWritesInTask } }),
-      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread'> }),
+      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentAutonomousSends' | 'sentForDraft'> }),
     });
     return { gw, client, review, createdByCuria, editedByCuria, curiaWritesInTask, ledger, readSendLevel, actionLogRepo };
   }
@@ -6354,6 +6358,9 @@ describe('sendPrincipalDraft (#2474)', () => {
     const VERIFIED = [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass smtp.mailfrom=x; dkim=pass header.d=x; dmarc=pass header.from=x' }];
     const SUFFIX = ' Nothing was sent; the draft is still in their Drafts folder.';
     const LEAD = 'Left as a draft in your mailbox: "Re: Friday" to Dana Example.';
+    /** The principal's digest item for a coded stop (final fixes A12): second person, ending "It's in your Drafts." */
+    const DIGEST = (code: keyof typeof PRINCIPAL_SEND_DIGEST_REASONS) => `${LEAD} ${PRINCIPAL_SEND_DIGEST_REASONS[code]}`;
+    const IN_DRAFTS = " It's in your Drafts.";
     const nowSec = () => Math.floor(Date.now() / 1000);
 
     /** Dana's verified message the draft answers. */
@@ -6396,7 +6403,8 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({
         draftId: 'd1', threadId: 'th1', recipients: ['dana@example.org'], mode: 'autonomous', reason: text, at: expect.any(String),
       }));
-      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${text}`, urgency: 'digest', source: 'principal_mailbox', conversationId: 'c1' })]);
+      expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('outsider_originated'), urgency: 'digest', source: 'principal_mailbox', conversationId: 'c1' })]);
+      expect(DIGEST('outsider_originated')).toBe(`${LEAD} This work started from someone outside, so Curia didn't send it on its own.${IN_DRAFTS}`);
     });
 
     it('3. refuses with no_band_review when band review is not running (fail closed)', async () => {
@@ -6435,7 +6443,37 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
       // No thread to cool down: no held marker, only the digest item.
       expect(ledger.recordHeld).not.toHaveBeenCalled();
-      expect(reports()).toEqual([expect.objectContaining({ summary: `Left as a draft in your mailbox: a reply Curia drafted. ${PRINCIPAL_SEND_REFUSALS.not_found}` })]);
+      // Final fixes A12: not "Left as a draft" (it isn't one any more), and in the second person.
+      expect(reports()).toEqual([expect.objectContaining({
+        summary: "Not sent from your mailbox: a reply Curia drafted. It isn't in your Drafts any more (sent, deleted or replaced).",
+      })]);
+      expect(ledger.sentForDraft).toHaveBeenCalledWith('d1');
+    });
+
+    // Final fixes A12 (final review M1): a second send call on a draft that already went out.
+    it('5. files nothing for a gone draft the ledger shows as sent', async () => {
+      const { gw, ledger } = makeAuto({ client: autoClient(null) });
+      ledger.sentForDraft.mockResolvedValue(true);
+      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
+      expect(reports()).toHaveLength(0);
+      expect(ledger.recordHeld).not.toHaveBeenCalled();
+    });
+
+    it('5. files the item when the ledger cannot say whether the gone draft was sent (fail toward telling)', async () => {
+      const { gw, ledger } = makeAuto({ client: autoClient(null) });
+      ledger.sentForDraft.mockRejectedValue(new Error('db down'));
+      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
+      expect(reports()).toHaveLength(1);
+    });
+
+    it('5. a draft that cannot be read is reported without the "Left as a draft" lead', async () => {
+      const client = autoClient();
+      client.getDraft.mockRejectedValue(new Error('503'));
+      const { gw } = makeAuto({ client });
+      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'lookup_failed' });
+      expect(reports()).toEqual([expect.objectContaining({
+        summary: "Not sent from your mailbox: a reply Curia drafted. Curia couldn't read the draft just now; check your Drafts.",
+      })]);
     });
 
     it('6. refuses with thread_unreadable when the thread read throws', async () => {
@@ -6446,7 +6484,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_unreadable', blockedReason: text });
       expect(client.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordHeld).toHaveBeenCalledOnce();
-      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${text}` })]);
+      expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('thread_unreadable') })]);
     });
 
     it('requests up to 50 messages with headers', async () => {
@@ -6469,13 +6507,13 @@ describe('sendPrincipalDraft (#2474)', () => {
     });
 
     it('7. refuses with not_curia_draft when Curia did not create the draft in this task', async () => {
-      const { gw, client } = makeAuto({ curiaWrites: { created: false, lastWriteAt: null } });
+      const { gw, client } = makeAuto({ curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } });
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_curia_draft' });
       expect(client!.sendDraft).not.toHaveBeenCalled();
     });
 
     it('7. refuses with draft_changed_since_curia when the draft changed after Curia wrote it', async () => {
-      const { gw } = makeAuto({ curiaWrites: { created: true, lastWriteAt: new Date(Date.now() - 2 * 3600_000) } });
+      const { gw } = makeAuto({ curiaWrites: { created: true, lastWriteAt: new Date(Date.now() - 2 * 3600_000), replyToMessageId: 'm1' } });
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({
         refusal: 'draft_changed_since_curia', blockedReason: 'The draft changed after Curia wrote it, so Curia left it for the principal.' + SUFFIX,
       });
@@ -6500,7 +6538,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(client!.sendDraft).not.toHaveBeenCalled();
       // Not extended: no held marker for a cooldown refusal.
       expect(ledger.recordHeld).not.toHaveBeenCalled();
-      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${text}` })]);
+      expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('thread_cooldown') })]);
     });
 
     it('refuses a second autonomous send on the thread within 24h', async () => {
@@ -6608,7 +6646,10 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordSending).not.toHaveBeenCalled();
       expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reason: text }));
-      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${text}`, urgency: 'digest' })]);
+      expect(reports()).toEqual([expect.objectContaining({
+        summary: `${LEAD} Held for you: it shares information that isn't on the thread, and Curia doesn't pass on new information without you.${IN_DRAFTS}`,
+        urgency: 'digest',
+      })]);
       // The judge was asked, with the thread's text beside the draft.
       const brief = judgeReview.mock.calls[0]![0] as { questions: string[]; evidence: { threadMessages: Array<{ text: string }> } };
       expect(brief.questions).toContain('off-thread');
@@ -6645,14 +6686,27 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect((review.mock.calls[0]![0] as { detectedItems?: unknown[] }).detectedItems).toBeUndefined();
       });
 
-      it('reviews details after a fake quote marker whose text is on no thread message: not sent', async () => {
+      // Final fixes A10 (security review B4): a quote whose text is on no message every recipient
+      // received is held before the review, whatever its personal data or the judge would say.
+      const QUOTE_MISMATCH = "Its quoted text doesn't match the thread." + SUFFIX;
+
+      it('holds a fake quote marker whose text is on no thread message, without asking the judge', async () => {
         const body = `<p>Got it.</p>${REPLY_QUOTE_HTML_OPEN}<p><strong>From:</strong> dana@example.org</p></div><blockquote>Sam's cell is 416-555-0199</blockquote>`;
-        const review = vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held for the principal: it shares a phone number.', findings: [{ rule: 'pii-not-authorized', detail: 'x' }] });
-        const { gw, client } = makeAuto({ review, piiRedactor: redactorFor(piiFound), client: autoClient(autoDraft({ body }), [SIGNED]) });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, refusal: 'review_hold' });
-        expect(review).toHaveBeenCalledWith(expect.objectContaining({
-          detectedItems: expect.arrayContaining([expect.objectContaining({ label: 'PHONE_NUMBER', field: 'quote' })]),
-        }));
+        const review = vi.fn().mockResolvedValue({ kind: 'send' });
+        const { gw, client, ledger } = makeAuto({ review, piiRedactor: redactorFor(piiFound), client: autoClient(autoDraft({ body }), [SIGNED]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'review_hold', blockedReason: QUOTE_MISMATCH });
+        expect(review).not.toHaveBeenCalled();
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(ledger.recordHeld).toHaveBeenCalledOnce();
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} Its quoted text doesn't match the thread.${IN_DRAFTS}` })]);
+      });
+
+      it('holds a forged quote carrying an off-thread figure and no personal data, without the judge', async () => {
+        const body = `<p>Thanks, noted.</p>${GMAIL_QUOTE_FROM_DANA}<p>Does Friday at 10 work? The multiple is 4.2x.</p></blockquote></div>`;
+        const review = vi.fn().mockResolvedValue({ kind: 'send' });
+        const { gw, client } = makeAuto({ level: 'all', score: 100, review, client: autoClient(autoDraft({ body })) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold', blockedReason: QUOTE_MISMATCH });
+        expect(review).not.toHaveBeenCalled();
         expect(client!.sendDraft).not.toHaveBeenCalled();
       });
 
@@ -6689,35 +6743,63 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(client!.sendDraft).not.toHaveBeenCalled();
       });
 
-      it('reviews a quote of an earlier message that Bob, now a recipient, was not on', async () => {
+      it('holds a quote of an earlier message that Bob, now a recipient, never received', async () => {
         const bob = inbound({ id: 'm2', from: [{ name: 'Bob', email: 'bob@example.org' }], body: '<p>Count me in.</p>', date: nowSec() - 3600 });
         const body = `<p>Got it, thanks.</p>${buildReplyQuote(SIGNED, 'UTC', { format: 'html' })}`;
         const { gw, review } = makeAuto({
           piiRedactor: redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]),
           client: autoClient(autoDraft({ body, cc: [{ email: 'bob@example.org' }] }), [SIGNED, bob]),
+          curiaWrites: { created: true, lastWriteAt: new Date(), replyToMessageId: 'm2' },
         });
-        await gw.sendPrincipalDraft('d1', auto);
-        expect(review).toHaveBeenCalledWith(expect.objectContaining({ detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'quote' })] }));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold', blockedReason: QUOTE_MISMATCH });
+        expect(review).not.toHaveBeenCalled();
       });
 
-      it('exempts a genuine quote whose message held the phone and had every recipient on it: sent at 85', async () => {
-        const toBoth = inbound({ cc: [{ email: 'bob@example.org' }], body: SIGNED.body });
+      // Final fixes A2: a principal SENT message counts as received by each of its recipients.
+      it('exempts a genuine quote of the principal\'s SENT message to every recipient: sent at 85', async () => {
+        const toBoth = inbound({
+          id: 'm0', from: [{ email: PRINCIPAL }], to: [{ email: 'dana@example.org' }], cc: [{ email: 'bob@example.org' }],
+          folders: ['SENT'], headers: [], body: SIGNED.body, date: nowSec() - 9000,
+        });
         const bob = inbound({ id: 'm2', from: [{ name: 'Bob', email: 'bob@example.org' }], body: '<p>Count me in.</p>', date: nowSec() - 3600 });
         const body = `<p>Got it, thanks.</p>${buildReplyQuote(toBoth, 'UTC', { format: 'html' })}`;
         const { gw, review, client } = makeAuto({
           piiRedactor: redactorFor(piiFound),
           client: autoClient(autoDraft({ body, cc: [{ email: 'bob@example.org' }] }), [toBoth, bob]),
+          curiaWrites: { created: true, lastWriteAt: new Date(), replyToMessageId: 'm2' },
         });
         expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
         expect((review.mock.calls[0]![0] as { detectedItems?: unknown[] }).detectedItems).toBeUndefined();
         expect(client!.sendDraft).toHaveBeenCalled();
       });
 
-      it('reviews a quote with no quoted body (a marker alone, fail closed)', async () => {
+      // Final fixes A2 (security review M3): a forged inbound Cc is no proof of receipt.
+      it('does not count a forged inbound Cc as received: the quote holds and the message is not evidence', async () => {
+        const intro = inbound({
+          id: 'm0', from: [{ email: PRINCIPAL }], to: [{ email: 'dana@example.org' }, { email: 'cfo@example.org' }],
+          folders: ['SENT'], headers: [], body: '<p>Dana, meet our CFO.</p>', date: nowSec() - 9000,
+        });
+        const forged = inbound({ cc: [{ email: 'cfo@example.org' }], body: '<p>Updated details: call 416-555-0199 to confirm.</p>' });
+        const quoted = `<p>Thanks, received.</p>${buildReplyQuote(forged, 'UTC', { format: 'html' })}`;
+        const held = makeAuto({
+          piiRedactor: redactorFor(piiFound),
+          client: autoClient(autoDraft({ body: quoted, cc: [{ email: 'cfo@example.org' }] }), [intro, forged]),
+        });
+        expect(await held.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold', blockedReason: QUOTE_MISMATCH });
+        expect(held.review).not.toHaveBeenCalled();
+
+        mocks = createMocks();
+        const plain = makeAuto({ client: autoClient(autoDraft({ body: '<p>Thanks, received.</p>', cc: [{ email: 'cfo@example.org' }] }), [intro, forged]) });
+        await plain.gw.sendPrincipalDraft('d1', auto);
+        const input = plain.review.mock.calls[0]![0] as { threadMessages: Array<{ text: string }> };
+        expect(input.threadMessages.map((m) => m.text)).toEqual(['Dana, meet our CFO.']);
+      });
+
+      it('holds a quote marker with no quoted body (fail closed)', async () => {
         const body = '<p>Got it, thanks.</p><div class="gmail_quote">On Thu, someone wrote: call me at 416-555-0199</div>';
         const { gw, review } = makeAuto({ piiRedactor: redactorFor(piiFound), client: autoClient(autoDraft({ body }), [SIGNED]) });
-        await gw.sendPrincipalDraft('d1', auto);
-        expect(review).toHaveBeenCalledWith(expect.objectContaining({ detectedItems: [expect.objectContaining({ field: 'quote' })] }));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold', blockedReason: QUOTE_MISMATCH });
+        expect(review).not.toHaveBeenCalled();
       });
     });
 
@@ -6729,7 +6811,8 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(r.blockedReason).toMatch(/Nothing was sent; the draft is still in their Drafts folder\.$/);
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reason: r.blockedReason }));
-      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${r.blockedReason}` })]);
+      // The digest keeps the reason's lead and drops the agent's notes after it (final fixes A12).
+      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} secret-pattern.${IN_DRAFTS}` })]);
     });
 
     it('makes a blocked contact final: held marker and one digest item', async () => {
@@ -6760,7 +6843,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'no_send_ledger', blockedReason: text });
       expect(PRINCIPAL_SEND_REFUSALS.no_send_ledger).toBe(text);
       expect(client!.sendDraft).not.toHaveBeenCalled();
-      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${text}` })]);
+      expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('no_send_ledger') })]);
     });
 
     it('sends a routine ack at 85 and files one Sent-for-you digest item', async () => {
@@ -6794,7 +6877,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordSending).not.toHaveBeenCalled();
       expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reason: text }));
-      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${text}` })]);
+      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} Held for you: it commits you.${IN_DRAFTS}` })]);
     });
 
     it('files exactly one Left-as-a-draft item per held send', async () => {
@@ -6812,15 +6895,28 @@ describe('sendPrincipalDraft (#2474)', () => {
       }
     });
 
-    it('9. a bounce is not final: its findings go back, with no ledger entry and no digest item', async () => {
+    // Final fixes A1 (final review I1): triage never retries a refused send, so a bounce is final.
+    it('9. a bounce is final: one held marker and one digest item with its findings, not sent', async () => {
       const review = vi.fn().mockResolvedValue({ kind: 'bounce', findings: [{ rule: 'ungrounded-claim', detail: 'not backed: "See you then."' }] });
       const { gw, client, ledger } = makeAuto({ review });
       const r = await gw.sendPrincipalDraft('d1', auto);
       expect(r).toMatchObject({ success: false, leftAsDraft: true, blockedRules: ['ungrounded-claim'] });
-      expect(r.refusal).toBeUndefined();
+      expect(r.blockedReason).toMatch(/Nothing was sent; the draft is still in their Drafts folder\.$/);
+      expect(client!.sendDraft).not.toHaveBeenCalled();
+      expect(ledger.recordSending).not.toHaveBeenCalled();
+      expect(ledger.recordHeld).toHaveBeenCalledOnce();
+      expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous' }));
+      expect(reports()).toHaveLength(1);
+      expect(String(reports()[0]!['summary'])).toMatch(new RegExp(`^${LEAD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} .*It's in your Drafts\\.$`));
+    });
+
+    it('9. a principal-directed bounce is unchanged: no marker, no digest item', async () => {
+      const review = vi.fn().mockResolvedValue({ kind: 'bounce', findings: [{ rule: 'ungrounded-claim', detail: 'x' }] });
+      const { gw, client, ledger } = make({ review, createdByCuria: ['d1'] });
+      const r = await gw.sendPrincipalDraft('d1', opts);
+      expect(r).toMatchObject({ success: false, leftAsDraft: true, blockedRules: ['ungrounded-claim'] });
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordHeld).not.toHaveBeenCalled();
-      expect(ledger.recordSending).not.toHaveBeenCalled();
       expect(reports()).toHaveLength(0);
     });
 
@@ -6836,7 +6932,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     });
 
     it('9. a held-marker write failure does not change the refusal', async () => {
-      const { gw, ledger } = makeAuto({ curiaWrites: { created: false, lastWriteAt: null } });
+      const { gw, ledger } = makeAuto({ curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } });
       ledger.recordHeld.mockRejectedValue(new Error('db down'));
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_curia_draft' });
       expect(reports()).toHaveLength(1);
@@ -6877,8 +6973,180 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'send_unconfirmed' });
       expect(ledger.recordHeld).not.toHaveBeenCalled();
       expect(reports()).toEqual([expect.objectContaining({
-        summary: `Tried to send for you from your mailbox: "Re: Friday" to Dana Example. ${PRINCIPAL_SEND_REFUSALS.send_unconfirmed}`,
+        summary: `Tried to send for you from your mailbox: "Re: Friday" to Dana Example. The send didn't confirm, so it may or may not have gone out. Check your Sent folder before sending it again.`,
       })]);
+    });
+
+    // ---- Final fix wave (#2474 PR 2): code-enforced limits the reviews asked for ----
+
+    describe('final fixes', () => {
+      const IBAN = 'DE89 3704 0044 0532 0130 00';
+
+      // A3 (security review M3 backstop): bank or card details never go out on Curia's own.
+      it('A3. refuses a draft with an IBAN as financial_details: held marker, digest item, no review', async () => {
+        const { gw, client, ledger, review } = makeAuto({ client: autoClient(autoDraft({ body: `<p>Noted: IBAN ${IBAN}.</p>` })) });
+        const text = 'It contains bank or card details, which Curia never sends on its own.' + SUFFIX;
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'financial_details', blockedReason: text });
+        expect(PRINCIPAL_SEND_REFUSALS.financial_details).toBe(text);
+        expect(review).not.toHaveBeenCalled();
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(ledger.recordHeld).toHaveBeenCalledOnce();
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} It contains bank or card details, which Curia never sends on its own.${IN_DRAFTS}` })]);
+      });
+
+      it('A3. refuses a card number the redactor detects, even inside a genuine, exempt quote', async () => {
+        const signed = inbound({ body: '<p>Does Friday at 10 work?</p><p>Card on file 4111 1111 1111 1111</p>' });
+        const body = `<p>Got it, thanks.</p>${buildReplyQuote(signed, 'UTC', { format: 'html' })}`;
+        const piiRedactor = redactorFor([{ label: 'credit_card', text: '4111 1111 1111 1111' }]);
+        const { gw, client, review } = makeAuto({ piiRedactor, client: autoClient(autoDraft({ body }), [signed]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'financial_details' });
+        expect(review).not.toHaveBeenCalled();
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      it('A3. leaves a principal-directed send with bank details to the review, as before', async () => {
+        const { gw } = make({ createdByCuria: ['d1'], level: 'routine', client: mailboxClient(draft({ body: `<p>Our IBAN is ${IBAN}.</p>` })) });
+        const r = await gw.sendPrincipalDraft('d1', opts);
+        expect(r.refusal).not.toBe('financial_details');
+      });
+
+      // A4 (security review M2): at most 10 autonomous sends a day across every thread.
+      it('A4. refuses past the daily cap: digest item, no held marker, not sent', async () => {
+        const { gw, client, ledger, review } = makeAuto();
+        const at = new Date().toISOString();
+        ledger.recentAutonomousSends.mockResolvedValue(Array.from({ length: 10 }, (_, i) => ({
+          draftId: `x${i}`, threadId: `t${i}`, recipients: [], mode: 'autonomous', at, outcome: 'sent',
+        })));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'daily_cap' });
+        expect(ledger.recentAutonomousSends).toHaveBeenCalledWith(expect.any(Number));
+        const since = ledger.recentAutonomousSends.mock.calls[0]![0] as number;
+        expect(Date.now() - since).toBeGreaterThanOrEqual(24 * 3600_000 - 1000);
+        expect(review).not.toHaveBeenCalled();
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        // A cap stop does not extend this thread's cooldown.
+        expect(ledger.recordHeld).not.toHaveBeenCalled();
+        expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('daily_cap') })]);
+      });
+
+      it('A4. sends at nine earlier sends', async () => {
+        const { gw, ledger } = makeAuto();
+        const at = new Date().toISOString();
+        ledger.recentAutonomousSends.mockResolvedValue(Array.from({ length: 9 }, (_, i) => ({
+          draftId: `x${i}`, threadId: `t${i}`, recipients: [], mode: 'autonomous', at, outcome: 'sent',
+        })));
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+      });
+
+      it('A4. refuses with no_send_ledger when the cap cannot be read (fail closed)', async () => {
+        const { gw, client, ledger } = makeAuto();
+        ledger.recentAutonomousSends.mockRejectedValue(new Error('db down'));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'no_send_ledger' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      // A5 (security review M2 + B6): bound to the message being triaged.
+      it('A5. refuses a reply to an older message on the thread with not_latest_message', async () => {
+        const later = inbound({ id: 'm2', body: '<p>Also, Saturday?</p>', date: nowSec() - 600 });
+        const { gw, client, review, ledger } = makeAuto({ client: autoClient(autoDraft(), [inbound(), later]) });
+        const text = "The reply doesn't answer the latest message on its thread, so Curia didn't send it on its own." + SUFFIX;
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'not_latest_message', blockedReason: text });
+        expect(review).not.toHaveBeenCalled();
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(ledger.recordHeld).toHaveBeenCalledOnce();
+        expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('not_latest_message') })]);
+      });
+
+      it('A5. refuses when the task recorded no answered message (fail closed)', async () => {
+        const { gw, client } = makeAuto({ curiaWrites: { created: true, lastWriteAt: new Date(), replyToMessageId: null } });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_latest_message' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      it('A5. reviews a reply to the latest message with that message as the origin', async () => {
+        const later = inbound({ id: 'm2', body: '<p>Also, Saturday?</p>', date: nowSec() - 600 });
+        const { gw, review } = makeAuto({
+          client: autoClient(autoDraft(), [inbound(), later]),
+          curiaWrites: { created: true, lastWriteAt: new Date(), replyToMessageId: 'm2' },
+        });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect(review).toHaveBeenCalledWith(expect.objectContaining({
+          origin: expect.objectContaining({ content: expect.stringContaining('Also, Saturday?') }),
+        }));
+      });
+
+      // A7 (security review L1): the marker is the cooldown, so no marker means no autonomous send.
+      it('A7. refuses with no_send_ledger before sending when the sending marker cannot be written', async () => {
+        const { gw, client, ledger } = makeAuto();
+        ledger.recordSending.mockRejectedValue(new Error('db down'));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'no_send_ledger' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('no_send_ledger') })]);
+      });
+
+      // A8 (security review B2): Spam and Trash are not the thread.
+      it('A8. drops Spam and Trash messages from membership, evidence and the origin', async () => {
+        const spam = inbound({ id: 'm-spam', from: [{ email: 'sam@example.org' }], folders: ['SPAM'], body: '<p>Spam text.</p>', date: nowSec() - 100 });
+        const trash = inbound({ id: 'm-trash', folders: ['Trash'], body: '<p>Trashed text.</p>', date: nowSec() - 50 });
+        // Sam wrote only in Spam: not a member.
+        const stranger = makeAuto({ client: autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] }), [inbound(), spam, trash]) });
+        expect(await stranger.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
+
+        // The trashed message is newest but neither the latest message nor evidence.
+        mocks = createMocks();
+        const ok = makeAuto({ client: autoClient(autoDraft(), [inbound(), spam, trash]) });
+        expect((await ok.gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        const input = ok.review.mock.calls[0]![0] as { threadMessages: Array<{ text: string }>; origin: { content: string } };
+        expect(input.threadMessages.map((m) => m.text)).toEqual(['Does Friday at 10 work?']);
+        expect(input.origin.content).toContain('Does Friday at 10 work?');
+      });
+
+      // A9 (security review B3): only the inbox check's own lineage may send on Curia's own.
+      describe('A9. origin allowlist', () => {
+        const at = '2026-11-07T10:00:00.000Z';
+        const text = "Curia couldn't confirm this work came from its own inbox check, so it didn't send on its own." + SUFFIX;
+
+        it.each([
+          ['no task metadata', undefined],
+          ['metadata with no originator', {}],
+          ['a bullpen wake with no originator', { taskOrigin: 'bullpen', threadId: 'bp-1' }],
+          ['principal lineage on a task that is not a live turn', { originator: { contactId: 'ceo', systemRole: 'principal', channel: 'scheduler', initiatedAt: at } }],
+        ])('refuses %s with origin_unknown', async (_name, taskMetadata) => {
+          const { gw, client, ledger } = makeAuto();
+          const r = await gw.sendPrincipalDraft('d1', { ...auto, authority: { taskMetadata: taskMetadata as Record<string, unknown> | undefined } });
+          expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'origin_unknown', blockedReason: text });
+          expect(client!.sendDraft).not.toHaveBeenCalled();
+          expect(ledger.recordHeld).toHaveBeenCalledOnce();
+          expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('origin_unknown') })]);
+        });
+
+        it('refuses a bullpen wake carrying an outsider\'s lineage with outsider_originated', async () => {
+          const { gw, client } = makeAuto();
+          const taskMetadata = { taskOrigin: 'bullpen', originator: { contactId: 'c-x', systemRole: null, channel: 'email', initiatedAt: at } };
+          expect(await gw.sendPrincipalDraft('d1', { ...auto, authority: { taskMetadata } })).toMatchObject({ refusal: 'outsider_originated' });
+          expect(client!.sendDraft).not.toHaveBeenCalled();
+        });
+
+        it('sends for the scheduled inbox check and for its woken drain task downgraded to agent lineage', async () => {
+          const { computeEffectiveTaskMetadata } = await import('../../../src/autonomy/effective-standing.js');
+          const woken = computeEffectiveTaskMetadata(
+            { ...SYSTEM, wakeContext: { derived: true } }, 85, { sameTaskThreshold: 70, derivedChildThreshold: 90 },
+          );
+          expect((woken?.['originator'] as { systemRole: string }).systemRole).toBe('agent');
+          for (const taskMetadata of [SYSTEM, woken]) {
+            mocks = createMocks();
+            const { gw } = makeAuto();
+            expect((await gw.sendPrincipalDraft('d1', { ...auto, authority: { taskMetadata } })).success).toBe(true);
+          }
+        });
+      });
+
+      // A12 (final review M1): digest items are written for the principal.
+      it('A12. no digest reason speaks of the principal in the third person', () => {
+        for (const [code, text] of Object.entries(PRINCIPAL_SEND_DIGEST_REASONS)) {
+          expect(text, code).not.toMatch(/the principal|their Drafts|ask the principal again/i);
+          expect(text, code).toMatch(/It's in your Drafts\.$/);
+        }
+      });
     });
   });
 });

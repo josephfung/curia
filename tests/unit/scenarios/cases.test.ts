@@ -12,7 +12,7 @@ import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js'
 import { createLogger } from '../../../src/logger.js';
 import { BullpenService } from '../../../src/memory/bullpen.js';
 import type { ToolContext } from '../../../src/skills/types.js';
-import { PRINCIPAL_SEND_REFUSALS } from '../../../src/skills/outbound-gateway.js';
+import { PRINCIPAL_SEND_DIGEST_REASONS } from '../../../src/skills/outbound-gateway.js';
 import { leafChecks } from '../../scenarios/assertions.js';
 import { loadScenarioCase, loadScenarioCases } from '../../scenarios/loader.js';
 import { matchToolStub } from '../../scenarios/stub-matcher.js';
@@ -384,7 +384,8 @@ describe('coordinator scenario cases', () => {
     });
 
     it("match left_as_draft only on text the gateway's digest items carry", () => {
-      // D4 refusals are PRINCIPAL_SEND_REFUSALS; a band review hold names its stakes label
+      // D4 refusals file PRINCIPAL_SEND_DIGEST_REASONS (the principal-facing texts, #2474 final
+      // fixes A12); a band review hold names its stakes label
       // (STAKES_LABEL) or is the off-thread hold (OFF_THREAD_REASON). Neither is exported from
       // band-send-review.ts, so both are read from the source.
       const reviewSource = readFileSync(path.resolve(SCENARIOS_DIR, '../../src/dispatch/band-send-review.ts'), 'utf-8');
@@ -392,7 +393,7 @@ describe('coordinator scenario cases', () => {
       const offThread = /const OFF_THREAD_REASON = '((?:[^'\\]|\\.)*)';/.exec(reviewSource)?.[1]?.replace(/\\'/g, "'");
       expect(offThread).toContain("isn't on the thread");
       const reasons = [
-        ...Object.values(PRINCIPAL_SEND_REFUSALS),
+        ...Object.values(PRINCIPAL_SEND_DIGEST_REASONS),
         ...[...labels.matchAll(/'([^']+)'/g)].map(m => `Stakes: ${m[1]!}.`),
         offThread!,
       ];

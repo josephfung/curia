@@ -133,10 +133,32 @@ export class PrincipalSendLedger {
    * block autonomous sends on its thread, never allow one. Throws on a repo failure.
    */
   async recentForThread(threadId: string, sinceEpochMs: number): Promise<PrincipalSendEntry[]> {
-    return (await this.list()).filter((e) => {
-      if (e.mode !== 'autonomous' || e.threadId !== threadId) return false;
-      const at = Date.parse(e.at);
-      return !Number.isFinite(at) || at >= sinceEpochMs;
-    });
+    return (await this.list()).filter((e) => e.mode === 'autonomous' && e.threadId === threadId && atOrAfter(e, sinceEpochMs));
   }
+
+  /**
+   * Autonomous sends (`sending` or `sent`, on any thread) whose `at` is at or after `sinceEpochMs`,
+   * for the global daily cap (#2474 final fixes A4). A held marker is not a send. An unreadable
+   * `at` counts, as in recentForThread (fail closed). Throws on a repo failure.
+   */
+  async recentAutonomousSends(sinceEpochMs: number): Promise<PrincipalSendEntry[]> {
+    return (await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'held' && atOrAfter(e, sinceEpochMs));
+  }
+
+  /**
+   * Whether a send of this draft was recorded as `sent` (#2474 final fixes A12): a second send
+   * call on a draft that already went out finds it gone, which is no news for the principal.
+   * Throws on a repo failure.
+   */
+  async sentForDraft(draftId: string): Promise<boolean> {
+    return (await this.docs.listByPrefix(draftPrefix(draftId)))
+      .map(parseLedgerDoc)
+      .some((e) => e?.draftId === draftId && e.outcome === 'sent');
+  }
+}
+
+/** The entry is at or after the cutoff; an unreadable `at` counts as recent (fail closed). */
+function atOrAfter(e: PrincipalSendEntry, sinceEpochMs: number): boolean {
+  const at = Date.parse(e.at);
+  return !Number.isFinite(at) || at >= sinceEpochMs;
 }

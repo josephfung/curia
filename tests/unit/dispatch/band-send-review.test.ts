@@ -247,7 +247,8 @@ describe('BandSendReview', () => {
           const d = await svc.review({ ...auto, content: base.content, score: 100, stakesCeiling: 'commitment' });
           expect(d.kind).toBe('hold');
           if (d.kind === 'hold') {
-            expect(d.reason).toBe(OFF);
+            // Final fixes A11 (final review M3): the other findings are named after the lead.
+            expect(d.reason).toBe(`${OFF} Also: ungrounded-claim.`);
             expect(d.findings.map((f) => f.rule)).toEqual(['off-thread', 'ungrounded-claim']);
           }
         });
@@ -257,8 +258,20 @@ describe('BandSendReview', () => {
           const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
           expect(d.kind).toBe('hold');
           if (d.kind === 'hold') {
-            expect(d.reason).toBe(OFF);
+            expect(d.reason.startsWith(OFF)).toBe(true);
             expect(d.findings.map((f) => f.rule)).toEqual(['off-thread', 'speaks-as-principal']);
+          }
+        });
+
+        // Final fixes A11 (final review M3): a financial finding still reaches the digest.
+        it('carries the stakes rating and its reason into the off-thread hold\'s reason', async () => {
+          const { svc } = make([{ ...rated('financial_or_legal'), stakesReason: 'Confirms new bank details.', offThread: true }]);
+          const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
+          expect(d.kind).toBe('hold');
+          if (d.kind === 'hold') {
+            expect(d.reason).toBe(`${OFF} Also: Stakes: financial or legal. Why: Confirms new bank details.`);
+            // The off-thread finding's own detail is unchanged.
+            expect(d.findings[0]).toEqual({ rule: 'off-thread', detail: OFF });
           }
         });
 

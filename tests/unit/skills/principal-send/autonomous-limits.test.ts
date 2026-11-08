@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  AUTONOMOUS_MAX_RECIPIENTS, AUTONOMOUS_THREAD_COOLDOWN_MS, CURIA_WRITE_SKEW_SEC,
-  allowedThreadMembers, checkAutonomousLimits, replyTarget,
+  AUTONOMOUS_DAILY_CAP, AUTONOMOUS_MAX_RECIPIENTS, AUTONOMOUS_THREAD_COOLDOWN_MS, CURIA_WRITE_SKEW_SEC,
+  allowedThreadMembers, checkAutonomousLimits, receivedBy, repliedToLatest, replyTarget,
 } from '../../../../src/skills/principal-send/autonomous-limits.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
 import type { PrincipalSendEntry } from '../../../../src/skills/principal-send/send-ledger.js';
@@ -22,11 +22,12 @@ function msg(over: Partial<NylasMessage> = {}): NylasMessage {
 
 const inboundVerified = msg({ id: 'in1', from: [{ email: 'dana@example.org' }], to: [{ email: 'ceo@corp.example' }], headers: VERIFIED });
 const draft = msg({ id: 'd1', date: WRITE_SEC, from: [{ email: 'ceo@corp.example' }], to: [{ email: 'dana@example.org' }] });
-const writes: CuriaDraftWrites = { created: true, lastWriteAt: WRITE_AT };
+const writes: CuriaDraftWrites = { created: true, lastWriteAt: WRITE_AT, replyToMessageId: 'in1' };
 
 function check(over: Partial<Parameters<typeof checkAutonomousLimits>[0]> = {}) {
   return checkAutonomousLimits({
-    draft, thread: [inboundVerified], principalAddresses: PRINCIPAL, curiaWrites: writes, recentThreadEntries: [], ...over,
+    draft, thread: [inboundVerified], principalAddresses: PRINCIPAL, curiaWrites: writes, recentThreadEntries: [],
+    autonomousSendsInWindow: 0, ...over,
   });
 }
 
@@ -39,6 +40,8 @@ describe('constants', () => {
     expect(AUTONOMOUS_MAX_RECIPIENTS).toBe(5);
     expect(AUTONOMOUS_THREAD_COOLDOWN_MS).toBe(86_400_000);
     expect(CURIA_WRITE_SKEW_SEC).toBe(60);
+    // Final fixes A4 (security review M2): a global cap across every thread.
+    expect(AUTONOMOUS_DAILY_CAP).toBe(10);
   });
 });
 
@@ -48,7 +51,7 @@ describe('checkAutonomousLimits', () => {
   });
 
   it('refuses a draft Curia did not create in this task', () => {
-    expect(check({ curiaWrites: { created: false, lastWriteAt: null } })?.refusal).toBe('not_curia_draft');
+    expect(check({ curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } })?.refusal).toBe('not_curia_draft');
   });
 
   it('refuses a draft changed after Curia last wrote it', () => {
@@ -57,7 +60,7 @@ describe('checkAutonomousLimits', () => {
   });
 
   it('refuses as changed when there is no write time (fail closed)', () => {
-    expect(check({ curiaWrites: { created: true, lastWriteAt: null } })?.refusal).toBe('draft_changed_since_curia');
+    expect(check({ curiaWrites: { created: true, lastWriteAt: null, replyToMessageId: 'in1' } })?.refusal).toBe('draft_changed_since_curia');
   });
 
   it('refuses as changed when the draft date or the write time is not a finite number (fail closed)', () => {
@@ -65,7 +68,7 @@ describe('checkAutonomousLimits', () => {
     const undated = { ...draft } as Partial<NylasMessage>;
     delete undated.date;
     expect(check({ draft: undated as NylasMessage })?.refusal).toBe('draft_changed_since_curia');
-    expect(check({ curiaWrites: { created: true, lastWriteAt: new Date('not a date') } })?.refusal).toBe('draft_changed_since_curia');
+    expect(check({ curiaWrites: { created: true, lastWriteAt: new Date('not a date'), replyToMessageId: 'in1' } })?.refusal).toBe('draft_changed_since_curia');
   });
 
   it('refuses a draft with no recipient but the principal', () => {
@@ -167,7 +170,7 @@ describe('checkAutonomousLimits', () => {
     // Not created beats everything else that is also wrong.
     const att = { id: 'a1', filename: 'x.pdf', contentType: 'application/pdf', size: 10 };
     expect(check({
-      curiaWrites: { created: false, lastWriteAt: null }, thread: [],
+      curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null }, thread: [],
       draft: { ...draft, attachments: [att] }, recentThreadEntries: [entry('sent')],
     })?.refusal).toBe('not_curia_draft');
     // A list beats a stranger recipient.
@@ -194,5 +197,76 @@ describe('replyTarget', () => {
     expect(replyTarget([newer, mine, older], PRINCIPAL)?.id).toBe('b');
     expect(replyTarget([mine], PRINCIPAL)).toBeNull();
     expect(replyTarget([], PRINCIPAL)).toBeNull();
+  });
+});
+
+// Final fixes A6 (security review M4): a list copy without List-Id still carries other list headers.
+describe('mailing-list headers', () => {
+  it.each([
+    ['List-Post', '<mailto:team@lists.example.org>'],
+    ['List-Unsubscribe', '<mailto:leave@lists.example.org>'],
+    ['Precedence', 'list'],
+    ['Precedence', ' Bulk '],
+    ['precedence', 'JUNK'],
+    ['X-Google-Group-Id', '123456'],
+    ['Mailing-list', 'list team@lists.example.org'],
+  ])('refuses a thread message carrying %s: %s', (name, value) => {
+    const listed = { ...inboundVerified, headers: [...VERIFIED, { name, value }] };
+    expect(check({ thread: [listed] })?.refusal).toBe('mailing_list');
+  });
+
+  it('does not read another Precedence value as a list', () => {
+    const p = { ...inboundVerified, headers: [...VERIFIED, { name: 'Precedence', value: 'first-class' }] };
+    expect(check({ thread: [p] })).toBeNull();
+  });
+});
+
+// Final fixes A4 (security review M2): at most AUTONOMOUS_DAILY_CAP autonomous sends a day.
+describe('daily cap', () => {
+  it('refuses at the cap', () => {
+    expect(check({ autonomousSendsInWindow: AUTONOMOUS_DAILY_CAP - 1 })).toBeNull();
+    expect(check({ autonomousSendsInWindow: AUTONOMOUS_DAILY_CAP })?.refusal).toBe('daily_cap');
+  });
+
+  it('comes after the thread cooldown, so a cooling thread reads as cooling', () => {
+    expect(check({ autonomousSendsInWindow: AUTONOMOUS_DAILY_CAP, recentThreadEntries: [entry('sent')] })?.refusal).toBe('thread_cooldown');
+  });
+});
+
+// Final fixes A5 (security review M2/B6): the draft answers the thread's latest outside message.
+describe('repliedToLatest', () => {
+  const older = msg({ id: 'a', from: [{ email: 'dana@example.org' }], date: 100 });
+  const newer = msg({ id: 'b', from: [{ email: 'bob@example.net' }], date: 300 });
+  const mine = msg({ id: 'c', from: [{ email: 'ceo@corp.example' }], date: 500 });
+
+  it('is that message when the draft replies to the latest non-principal message', () => {
+    expect(repliedToLatest([older, newer, mine], PRINCIPAL, 'b')?.id).toBe('b');
+  });
+
+  it('is null for a reply to an older message, no reply id, or no outside message (fail closed)', () => {
+    expect(repliedToLatest([older, newer], PRINCIPAL, 'a')).toBeNull();
+    expect(repliedToLatest([older, newer], PRINCIPAL, null)).toBeNull();
+    expect(repliedToLatest([mine], PRINCIPAL, 'c')).toBeNull();
+    expect(repliedToLatest([], PRINCIPAL, 'b')).toBeNull();
+  });
+});
+
+// Final fixes A2 (security review M3): who demonstrably received a thread message.
+describe('receivedBy', () => {
+  it('is a principal SENT message\'s To/Cc/Bcc plus the principal, lowercased', () => {
+    const sent = msg({ id: 'out1', from: [{ email: 'ceo@corp.example' }], folders: ['SENT'], to: [{ email: 'Bob@Example.net' }], cc: [{ email: 'carol@example.net' }], bcc: [{ email: 'eve@example.net' }] });
+    expect(receivedBy(sent, PRINCIPAL)).toEqual(new Set(['ceo@corp.example', 'bob@example.net', 'carol@example.net', 'eve@example.net']));
+  });
+
+  it('is an inbound message\'s single verified From plus the principal, never its To/Cc', () => {
+    const forgedCc = { ...inboundVerified, cc: [{ email: 'cfo@corp.example' }] };
+    expect(receivedBy(forgedCc, PRINCIPAL)).toEqual(new Set(['ceo@corp.example', 'dana@example.org']));
+  });
+
+  it('is the principal alone for an unverified sender, a multi-address From, or a spoofed principal From', () => {
+    const unverified = { ...inboundVerified, headers: [] };
+    const multi = { ...inboundVerified, from: [{ email: 'dana@example.org' }, { email: 'x@example.org' }] };
+    const spoofed = msg({ from: [{ email: 'ceo@corp.example' }], folders: ['INBOX'], to: [{ email: 'cfo@corp.example' }] });
+    for (const m of [unverified, multi, spoofed]) expect(receivedBy(m, PRINCIPAL)).toEqual(new Set(['ceo@corp.example']));
   });
 });

@@ -2,7 +2,7 @@
 // outreach_recorded, decision_recorded. Each passes and fails on the recorded outcome alone.
 import { describe, expect, it } from 'vitest';
 import { emptyBreakdown } from '../../shared/usage.js';
-import { PRINCIPAL_SEND_REFUSALS } from '../../../src/skills/outbound-gateway.js';
+import { PRINCIPAL_SEND_DIGEST_REASONS } from '../../../src/skills/outbound-gateway.js';
 import { evaluateCheck } from '../../scenarios/assertions.js';
 import type { GatewayOutcome, RecordedDelivery, ScenarioRun } from '../../scenarios/types.js';
 
@@ -294,13 +294,13 @@ describe('reviewed', () => {
 // draft in your mailbox:" digest item, a cooldown and a thread-less draft included (neither writes
 // a held marker); left_as_draft reads those items.
 describe('left_as_draft', () => {
-  const left = (what: string, refusal: 'thread_cooldown' | 'not_a_reply') => `Left as a draft in your mailbox: ${what}. ${PRINCIPAL_SEND_REFUSALS[refusal]}`;
+  const left = (what: string, refusal: 'thread_cooldown' | 'not_a_reply') => `Left as a draft in your mailbox: ${what}. ${PRINCIPAL_SEND_DIGEST_REASONS[refusal]}`;
   const r = run({
     mailboxDigests: [
       'Sent for you from your mailbox: Re: Venue to Jo Park.',
       left('Re: Venue to Jo Park', 'thread_cooldown'),
       left('Agenda to Sam Lee', 'not_a_reply'),
-      `Tried to send for you from your mailbox: Re: Budget to Lee. ${PRINCIPAL_SEND_REFUSALS.send_unconfirmed}`,
+      'Tried to send for you from your mailbox: Re: Budget to Lee. The send didn\'t confirm, so it may or may not have gone out. Check your Sent folder before sending it again.',
     ],
   });
 

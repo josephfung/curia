@@ -544,7 +544,7 @@ export async function createScenarioHarness(
       // the run clock's now; the seeded threads they reply on; the run's own send ledger.
       curiaTaskDrafts: () => {
         const scope = currentScope();
-        return scope?.clockNow ? { ids: scope.curiaTaskDraftIds, now: scope.clockNow } : undefined;
+        return scope?.clockNow ? { ids: scope.curiaTaskDraftIds, now: scope.clockNow, replyTo: scope.curiaTaskReplyTo } : undefined;
       },
       principalThreadMessages: (threadId) => currentScope()?.principalThreads.get(threadId) ?? [],
       principalSends: () => currentScope()?.principalSends,
