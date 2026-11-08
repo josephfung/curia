@@ -425,6 +425,11 @@ describe('setup-status', () => {
       expect(task?.status).toBe('pending');
     });
 
+    it.each(['{}', 'routine', '{"default":"bogus"}', '{"Default":"off"}'])('is not done when the value is %s', async (v) => {
+      const task = await inboxSending(makeCtx({ sendingValue: v }));
+      expect(task?.status).toBe('pending');
+    });
+
     it('is not done, and logged, when the read throws', async () => {
       const ctx = makeCtx({ sendingReadError: new Error('kg down') });
       const task = await inboxSending(ctx);

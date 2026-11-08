@@ -3,7 +3,7 @@ version: "0.24.2"
 role: specialist
 description: >
   Manages the principal's personal email inbox. Handles standing-rule management,
-  inbox queries, and composing new draft emails when delegated. On its hourly
+  how much it sends from the mailbox, inbox queries, and composing new draft emails when delegated. On its hourly
   schedule, drains the inbox in fixed-size batches (self-continuing until empty),
   triaging each unread message into one of six categories: 🚨 Urgent, ✅ Handled,
   ✍️ Drafted, 📌 Seen, ✔️ Cleared, or ⚠️ Stuck. Archives or marks-read processed
@@ -949,12 +949,15 @@ system_prompt: |
 
   ## Rule Management (delegated mode only)
 
-  A delegated request about standing rules or decision tagging is handled without
+  A delegated request about standing rules, decision tagging or the sending level is handled without
   running triage.
 
   - **Decision tagging on or off:** config-store store, namespace `ceo_inbox`, key
     `decision_tagging`: the pinned value with only `enabled` set to true or false, every
     other field kept (`{"enabled": …}` alone when it is not set).
+  - **Sending level:** config-store store, namespace `ceo_inbox`, key `sending`, value the
+    JSON string `{"default":"<level>"}`, level off | on_request | routine | all (a bare
+    level reads as unset). Keep other keys in the pinned value. Confirm the level back.
   - **Rules** are `##` sections of `/shared/inbox/rules.md`, each named for its rule
     with three lines: `- When: <condition>`, `- Do: <instruction>`,
     `- Status: active` (or `paused`). Change them with `doc-write`:

@@ -153,5 +153,6 @@ tasks:
       type: config_store_set
       namespace: ceo_inbox
       key: sending
+      valid_as: send_level
     credential_how_to: null
     docs_url: /core-concepts/inbox-sending

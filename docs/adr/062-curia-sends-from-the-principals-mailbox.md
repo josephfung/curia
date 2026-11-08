@@ -37,7 +37,7 @@ Three things had to be settled:
 
 Autonomous sends under `routine` and `all` shipped in PR 2 of #2474; PR 1 shipped principal-directed sends, and there `routine` and `all` behaved as `on_request`.
 
-Missing, unreadable or unknown values read as `on_request`: that never widens autonomy, and keeps principal-directed sends working. `sendPrincipalDraft` reads the setting itself through an injected reader, so no caller can skip it. Until #2475 the only key is `default`, and the gateway always reads the default mailbox's level (a caller-chosen key could read another mailbox's level than the grant it sends from). The setting is pinned into ceo-inbox's context and changed like any config-store setting, in conversation or the console.
+Missing, unreadable or unknown values read as `on_request`: that never widens autonomy, and keeps principal-directed sends working. `sendPrincipalDraft` reads the setting itself through an injected reader, so no caller can skip it. Until #2475 the only key is `default`, and the gateway always reads the default mailbox's level (a caller-chosen key could read another mailbox's level than the grant it sends from). The setting is pinned into ceo-inbox's context and changed like any config-store setting, in conversation. The console has no screen for it.
 
 **Principal-directed means a live principal turn, authenticated.** `isPrincipalDirectedMailboxSend` (`src/skills/principal-send/authority.ts`) requires `isLivePrincipalTurn`, and for an email-originated turn an adapter-verified sender (`TaskOriginator.authenticated`); an unverified email "principal" turn counts as autonomous. An approval replay (`humanApproved`) is never principal-directed and is refused outright. Voice, Signal, Slack, web, CLI and console count as they do elsewhere.
 
@@ -65,7 +65,6 @@ Missing, unreadable or unknown values read as `on_request`: that never widens au
 5. No attachments.
 6. At most one autonomous send per thread per day, and none for a day after a hold or refusal there (read from the send ledger).
 7. Not outsider-originated.
-
 8. A reply that shares information not on the thread is always held (`off-thread`, judged against the thread messages every recipient received), at every band and under any ceiling: Curia does not pass on new information without the principal.
 
 Autonomous review asks every question with speaks-as-principal forced true in code and stakes always asked; a stakes rating above the level's ceiling holds, a judge failure holds, and an autonomous send is refused when band review is not running. Autonomous sends and holds reach the principal as digest items ("Sent for you from your mailbox: …", "Left as a draft in your mailbox: …", and "Tried to send for you from your mailbox: …" when a send did not confirm). Principal-directed sends file no digest item: the principal is on the live turn.
@@ -81,7 +80,7 @@ Autonomous review asks every question with speaks-as-principal forced true in co
 - A held or refused send costs nothing: the draft is where the principal expects it, and no approval clutters "Waiting on you".
 - An operator who bound a Curia email account to the principal's address loses sending through it; the refusal names the tool to use instead.
 - [ADR-047](047-send-skills-address-recipients-by-reference.md)'s "Curia cannot send these drafts" paragraph no longer holds. The principal is no longer always the last check on a principal-mailbox recipient; on a principal-directed send they asked for it, and autonomous sends get the limits above.
-- Provider neutrality: the send uses Nylas draft send, thread messages and the send response only. Draft-ID and thread-link stability across a draft update are undocumented for Gmail, so a one-time live check on a real grant precedes the autonomous PR. Everything fails closed if an ID or thread link changes.
+- Provider neutrality: the send uses Nylas draft send, thread messages and the send response only. Draft-ID and thread-link stability across a draft update are undocumented for Gmail, so a one-time live check on a real grant is owed before release. Everything fails closed if an ID or thread link changes.
 
 **Accepted risks:**
 

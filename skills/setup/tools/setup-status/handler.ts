@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import * as yaml from 'js-yaml';
 import type { ToolHandler, ToolContext, ToolResult, EmailChannelStatus } from '../../../../src/skills/types.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
+import { readSendLevelValue } from '../../../../src/skills/principal-send/send-level.js';
 
 // ── Catalog types ──────────────────────────────────────────────────────────
 
@@ -17,7 +18,9 @@ type CompletionCheck =
   | { type: 'email_channel_ready' }
   // Done once ConfigStore holds a non-empty value for the key (#2474). Presence only: the
   // setting has a working default, so "set" means the principal has made a choice.
-  | { type: 'config_store_set'; namespace: string; key: string };
+  // `valid_as` also requires the value to hold a real choice: `{}` or malformed JSON reads as
+  // the default, so it is not done.
+  | { type: 'config_store_set'; namespace: string; key: string; valid_as?: 'send_level' };
 
 /** A credential that improves a task that already works without it (#2445). Setup never
  *  asks for it; the wizard offers it on request. */
@@ -214,7 +217,14 @@ export class SetupStatusHandler implements ToolHandler {
         if (configSet.has(id)) continue;
         try {
           const value = await configStore.get(c.namespace, c.key);
-          configSet.set(id, typeof value === 'string' && value.trim() !== '');
+          let set = typeof value === 'string' && value.trim() !== '';
+          if (set && c.valid_as === 'send_level') {
+            // A level counts only when "default" names one: readSendLevelValue's fallback
+            // for {} or junk is on_request, which no one chose.
+            const parsed = readSendLevelValue(value);
+            set = !parsed.malformed && /"default"\s*:/.test(value as string);
+          }
+          configSet.set(id, set);
         } catch (err) {
           ctx.log.warn(
             { err, namespace: c.namespace, key: c.key },
