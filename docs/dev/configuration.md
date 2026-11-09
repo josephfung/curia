@@ -77,6 +77,35 @@ browser:
   settleCapMs: 35000      # Longest web-browser waits for a page to finish redirecting before reading it (ms). Max 90000.
 ```
 
+#### Chrome's sandbox
+
+Chrome always runs its own sandbox: renderer processes, which run page code, get their own user and PID namespaces, a network namespace and a seccomp-BPF filter. A page that exploits a renderer bug then still needs a second bug to reach Curia's files. Two things the sandbox does not cover:
+
+- **The network.** A compromised renderer can still ask Chrome's network service to load a page from an internal address, so the sandbox is not an egress firewall. Restrict what the container can reach at the network level (Docker network rules, host firewall).
+- **Inherited environment values.** Chrome is started with Curia's `process.env`, and a native renderer exploit can read what the renderer process inherited. Do not rely on the sandbox to keep those values secret.
+
+There is no setting to turn it off. Without the sandbox the same exploit would run with everything the Curia process has, and an off switch is the first thing anyone tries when the sandbox fails to start.
+
+The sandbox needs to create user namespaces. Docker's default seccomp profile blocks that, so a container that runs Chrome needs the profile in [`docker/seccomp-chrome.json`](../../docker/seccomp-chrome.json):
+
+```yaml
+services:
+  curia:
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp-chrome.json
+```
+
+Copy `docker/seccomp-chrome.json` from this repo next to your compose file (or point `seccomp=` at wherever you keep it). Compose reads the file itself and resolves a relative path against the project directory (the compose file's folder unless `--project-directory` says otherwise). A missing file stops the container from starting. The profile is Docker's default ([moby/profiles](https://github.com/moby/profiles/blob/6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef/seccomp/default.json) at `6fe7deb`) with two changes: `clone` and `unshare` are allowed with namespace flags (Docker's default otherwise allows them only with `CAP_SYS_ADMIN`), and `chroot` is allowed without `CAP_SYS_CHROOT` in the container's capability set, so the sandbox still starts under `cap_drop: [ALL]`. The kernel still checks the capability inside Chrome's own user namespace. The grant covers the whole container, not just Chrome: the Node process and anything it runs can also create user, mount and other namespaces, which widens the kernel attack surface (a separate Chrome user and container, tracked in #2521, is the longer-term fix). The container still runs without that capability and with `no-new-privileges`. Chrome's setuid sandbox is not an option, because `no-new-privileges` stops it from gaining root.
+
+**Run Curia as a non-root user.** Chrome refuses to start its sandbox as root, and no seccomp profile changes the process UID. Give that user write access to the browser profile directory (`profileDir`).
+
+**Upgrading an existing deployment:** install `seccomp-chrome.json` and add the `seccomp=` line to the Compose file *before* you pull the release that contains this change. A Chrome container still on Docker's default profile cannot start the sandbox, and the `web-browser` skill stays unavailable until the profile is in place.
+
+On Ubuntu 23.10 and later, the host also restricts unprivileged user namespaces through AppArmor (`kernel.apparmor_restrict_unprivileged_userns`). Docker's `docker-default` AppArmor profile allows them (checked on Ubuntu 24.04 with Docker 29), so containers need no AppArmor change. Running from source on such a host, Ubuntu's AppArmor profile for Google Chrome (`/opt/google/chrome/chrome`) allows them, but Playwright's bundled Chromium has no profile, so use `channel: chrome` there.
+
+If Chrome cannot set up its sandbox, the browser fails to start with an error that names the profile, and the `web-browser` skill is unavailable until the host allows the sandbox. `chrome://sandbox` in the running browser lists both layers.
+
 `settleCapMs` bounds the adaptive settle (#2244): an ordinary page is read at once, and the wait runs only while a page is blank, still changing URL, or on a sign-in handoff. Air Canada's sign-in chain takes up to ~28s. It must be a positive integer of at most 90000, so one wait stays inside the skill's 120s timeout.
 
 Raise `sessionTtlMs` if skills that open browser sessions are timing out mid-task. Lower it to free resources faster on memory-constrained deployments. `sessionTtlMs` and `sweepIntervalMs` are validated at startup (a non-positive value is a hard failure); `profileDir`, `channel`, and `locale` must be strings, and `languages` a list of language tags.

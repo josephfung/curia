@@ -59,8 +59,8 @@ importers:
         specifier: ^10.1.7
         version: 10.1.7
       '@ghostery/adblocker-playwright':
-        specifier: ^2.20.1
-        version: 2.20.1(playwright@1.64.1)
+        specifier: ^2.20.3
+        version: 2.20.3(playwright@1.64.1)
       '@livekit/rtc-node':
         specifier: ^1.2.1
         version: 1.2.1
@@ -1119,19 +1119,19 @@ packages:
   '@fastify/static@10.1.7':
     resolution: {integrity: sha512-7+lUiPRraENCiULgjhcqZyWSW6qnwIT87Is0u3c2Z3iGEEEGB45wJhYxzrSdzu12gHM4qcviEYcPEiCe4J6MCQ==}
 
-  '@ghostery/adblocker-content@2.20.1':
-    resolution: {integrity: sha512-1vBDzEzoi4ZE9xjL3akAn0PiIA2KIeQ1K0JCpRIjPPWy8GoqN1saV2Md2jRSZPuXv9iENMKRPn1TetEE0MbUXw==}
+  '@ghostery/adblocker-content@2.20.3':
+    resolution: {integrity: sha512-tuV4T5wPbfVdcY6dnM1dfaXSazpStx7ZI54bd2l9r93yPZfZoVsHR1Uxf/A8ETBMXJPQ92JMDQzmV8hOgpyq+w==}
 
-  '@ghostery/adblocker-extended-selectors@2.20.1':
-    resolution: {integrity: sha512-PCnELdIoylSQ8hsRXQUkiSnch6WwHTNYxu8iAthmbOD+44WoXnmjR+Zfgdut3Lh3xUZmvv1uojslNIhYrJX9rA==}
+  '@ghostery/adblocker-extended-selectors@2.20.3':
+    resolution: {integrity: sha512-cwloe8GXCoiLor685fOCsx3PyDFvsVnYdCO/MMAyZ4Dr5q8cgSHijqqYSU2fWgoWfz1Fhfepj7mGbQnrvUR37w==}
 
-  '@ghostery/adblocker-playwright@2.20.1':
-    resolution: {integrity: sha512-nc4aXKE+6k1Te6WZv88H98T/iHVkFkBrFo3gHX1mPMEp/MjiKOt1x23aQ8QLv3S0zodPSv6gdpODMgmLQrfGaA==}
+  '@ghostery/adblocker-playwright@2.20.3':
+    resolution: {integrity: sha512-rYxIr/pWQq4al3djqH2wZXxXf04V4Yaq2VD3Vnk1NFmZ512hh0wgifQx2maneeZQ0t21n/l6+u/j+kePneKxOg==}
     peerDependencies:
       playwright: ^1.x
 
-  '@ghostery/adblocker@2.20.1':
-    resolution: {integrity: sha512-1ghCrMnWRf/CWQ5PMw7ZxL4W0U390gmko8kPXhwm7zi+4GDOR49JlHVvmCke90E2hCpBIoNdS5jtNlIKalp2Ww==}
+  '@ghostery/adblocker@2.20.3':
+    resolution: {integrity: sha512-Wxv+RiqfD+xYVij9gkudU6nDb+eqbfu2roDZa0rtqVw2qIm0ICxEnkrsgUyfZw7+L+3PfI2PszHZQeoCkR1CuA==}
 
   '@ghostery/url-parser@1.3.1':
     resolution: {integrity: sha512-QKqGi+7aDQ4RcyHyCwgEk6B9vWnsBP4Q7htaN0zPJV3ATqTKEQDtSTb9c/AN586oJUDs24YXKcwFYwNweY/YjQ==}
@@ -7062,23 +7062,23 @@ snapshots:
       fastq: 1.20.3
       glob: 13.0.6
 
-  '@ghostery/adblocker-content@2.20.1':
+  '@ghostery/adblocker-content@2.20.3':
     dependencies:
-      '@ghostery/adblocker-extended-selectors': 2.20.1
+      '@ghostery/adblocker-extended-selectors': 2.20.3
 
-  '@ghostery/adblocker-extended-selectors@2.20.1': {}
+  '@ghostery/adblocker-extended-selectors@2.20.3': {}
 
-  '@ghostery/adblocker-playwright@2.20.1(playwright@1.64.1)':
+  '@ghostery/adblocker-playwright@2.20.3(playwright@1.64.1)':
     dependencies:
-      '@ghostery/adblocker': 2.20.1
-      '@ghostery/adblocker-content': 2.20.1
+      '@ghostery/adblocker': 2.20.3
+      '@ghostery/adblocker-content': 2.20.3
       playwright: 1.64.1
       tldts-experimental: 7.4.19
 
-  '@ghostery/adblocker@2.20.1':
+  '@ghostery/adblocker@2.20.3':
     dependencies:
-      '@ghostery/adblocker-content': 2.20.1
-      '@ghostery/adblocker-extended-selectors': 2.20.1
+      '@ghostery/adblocker-content': 2.20.3
+      '@ghostery/adblocker-extended-selectors': 2.20.3
       '@ghostery/url-parser': 1.3.1
       '@remusao/guess-url-type': 2.1.0
       '@remusao/small': 2.1.0

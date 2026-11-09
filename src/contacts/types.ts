@@ -103,6 +103,18 @@ export type IdentitySource =
   // is recorded in derived_from_identity_id. Structural contacts never derive.
   | 'derived';
 
+/**
+ * Sources of rows an agent typed. contact-link-identity verifies an unverified one in place
+ * when an agent re-states it and the duplicate and provenance checks pass (#2041, #2498);
+ * any other unverified source needs the principal (#2515). The send skills' advice reads
+ * the same set, so it never sends an agent round to a re-statement that will be refused.
+ */
+export const AGENT_ENTERED_SOURCES: ReadonlySet<IdentitySource> = new Set<IdentitySource>([
+  'outbound_recipient',
+  'agent_called',
+  'agent_stated',
+]);
+
 // -- Identity status --
 // active: address is believed to be valid and usable (default)
 // defunct: address is known to be no longer in use (e.g. left the company)
