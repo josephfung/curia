@@ -66,7 +66,7 @@
     "@ghostery/adblocker-playwright": "^2.20.3",
     "@livekit/rtc-node": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "@slack/socket-mode": "^3.1.0",
+    "@slack/socket-mode": "^3.1.1",
     "@slack/web-api": "^8.2.0",
     "ajv": "^8.20.0",
     "chokidar": "^6.0.0",
