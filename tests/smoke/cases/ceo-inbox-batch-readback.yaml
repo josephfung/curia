@@ -18,6 +18,16 @@ judge_tool_calls: true
 
 tool_stubs:
   ceo-inbox-list:
+    # After a send the agent checks Sent. The stubs can't change between turns, so Sent always
+    # holds the two; without this it finds Sent empty and re-sends until the case times out.
+    - match: { folder: SENT }
+      return:
+        folder: SENT
+        count: 2
+        has_more: false
+        messages:
+          - { id: sent-s2-venue, threadId: thr-s2-venue, subject: Venue for the offsite, from: [{ email: principal@curiatech.example }], to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], unread: false, folders: [SENT], attachments: [], snippet: "Jo, shall we use the Harbour Room for the offsite?" }
+          - { id: sent-s2-renewal, threadId: thr-s2-renewal, subject: Renewal timing, from: [{ email: principal@curiatech.example }], to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], unread: false, folders: [SENT], attachments: [], snippet: "Sam, we would like to talk about renewal timing next month." }
     - match: { folder: DRAFTS, modified_since: null }
       return:
         folder: DRAFTS
@@ -54,6 +64,10 @@ tool_stubs:
           - { id: draft-s2-venue, threadId: thr-s2-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date_local: "{{at:now-3h}}", created_by_curia: false }
           - { id: draft-s2-renewal, threadId: thr-s2-renewal, subject: Renewal timing, to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], snippet: "Sam, we would like to talk about renewal timing.", date_local: "{{at:now-4h}}", created_by_curia: false }
   ceo-inbox-read:
+    - match: { message_id: sent-s2-venue }
+      return: { id: sent-s2-venue, threadId: thr-s2-venue, from: [{ email: principal@curiatech.example }], to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], subject: Venue for the offsite, body_plain: "Jo, shall we use the Harbour Room for the offsite?", labels: [SENT], attachments: [] }
+    - match: { message_id: sent-s2-renewal }
+      return: { id: sent-s2-renewal, threadId: thr-s2-renewal, from: [{ email: principal@curiatech.example }], to: [{ name: Sam Kerr, email: sam.kerr@vendor.example }], cc: [], subject: Renewal timing, body_plain: "Sam, we would like to talk about renewal timing next month.", labels: [SENT], attachments: [] }
     - match: { draft_id: draft-s2-venue }
       return: { id: draft-s2-venue, threadId: thr-s2-venue, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], bcc: [], subject: Venue for the offsite, body_plain: "Jo, shall we use the Harbour Room for the offsite? Let me know.", is_draft: true }
     - match: { draft_id: draft-s2-renewal }
