@@ -47,7 +47,7 @@ function describePlanStepProblem(raw: unknown, index: number): string | null {
   return null;
 }
 
-export function parsePlanStepInput(raw: unknown): PlanStepInput | null {
+function parsePlanStepInput(raw: unknown): PlanStepInput | null {
   if (describePlanStepProblem(raw, 0) !== null) return null;
   const obj = raw as Record<string, unknown>;
   const step: PlanStepInput = {
@@ -131,11 +131,6 @@ export function parsePlanStepsDetailed(raw: unknown): ParsePlanStepsResult {
   const graphError = validatePlanStepsGraph(steps);
   if (graphError !== null) return { ok: false, error: graphError };
   return { ok: true, steps };
-}
-
-export function parsePlanStepsInput(raw: unknown): PlanStepInput[] | null {
-  const result = parsePlanStepsDetailed(raw);
-  return result.ok ? result.steps : null;
 }
 
 /** Resolve blocked_by_step_id to a child task UUID using the step-id → task-id map. */
