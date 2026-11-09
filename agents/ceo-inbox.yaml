@@ -35,7 +35,7 @@ pinned_context:
     - key: ceo_inbox/decision_tagging
       description: '{"enabled": true} turns on Gmail labels for each final classification.'
     - key: ceo_inbox/sending
-      description: '{"default": level}: off, or on_request (send only when the principal asks). routine and all are not active yet and act as on_request. Money and contracts always stay as drafts.'
+      description: '{"default": level}: off, or on_request (send only when the principal asks). routine and all are not active yet and act as on_request. Money and contracts: only when the principal asks.'
 
 pinned_skills:
   - ceo-inbox
