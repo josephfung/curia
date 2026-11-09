@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'patchright';
 import {
-  BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isXServerBinary, SCREEN_SIZE, WINDOW_SIZE,
+  BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isSandboxLaunchFailure, isXServerBinary, SCREEN_SIZE, WINDOW_SIZE,
 } from '../../../src/browser/browser-service.js';
 import pino from 'pino';
 
@@ -410,6 +410,166 @@ describe('BrowserService (unit — mocked browser)', () => {
     });
   });
 
+  // #2521: Playwright adds --no-sandbox unless chromiumSandbox is true, so that option is
+  // what must be asserted, and --no-sandbox must never be passed by hand.
+  describe('Chrome sandbox (#2521)', () => {
+    let profileDir: string;
+    beforeEach(() => {
+      profileDir = mkdtempSync(join(tmpdir(), 'curia-profile-'));
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+      rmSync(profileDir, { recursive: true, force: true });
+    });
+
+    // The stderr Playwright copies into the error when Docker's default seccomp profile
+    // blocks the namespace sandbox (captured from a real launch).
+    const sandboxFailure = new Error(
+      'browserType.launchPersistentContext: Target page, context or browser has been closed\n' +
+      '[pid=19][err] Failed to move to new namespace: PID namespaces supported, Network namespace supported, but failed: errno = Operation not permitted\n' +
+      '[pid=19][err] [19:19:1107/222520.002992:FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:228] Zygote process exited prematurely with exit code 1',
+    );
+
+    function launchOptions(launch: { mock: { calls: unknown[][] } }, call = 0): { args: string[]; chromiumSandbox?: unknown; channel?: unknown } {
+      return launch.mock.calls[call]![1] as { args: string[]; chromiumSandbox?: unknown; channel?: unknown };
+    }
+
+    it('always runs Chrome sandboxed', async () => {
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockResolvedValue(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
+      const svc = new BrowserService({ logger, profileDir });
+      await svc.start();
+      await svc.stop();
+      expect(launchOptions(launch).chromiumSandbox).toBe(true);
+      expect(launchOptions(launch).args).not.toContain('--no-sandbox');
+    });
+
+    it('sandboxes the configured channel and passes no --no-sandbox', async () => {
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockResolvedValue(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      await svc.start();
+      expect(launchOptions(launch).channel).toBe('chrome');
+      expect(launchOptions(launch).chromiumSandbox).toBe(true);
+      expect(launchOptions(launch).args).not.toContain('--no-sandbox');
+      await svc.stop();
+    });
+
+    it('tries sandboxed bundled Chromium when the channel cannot sandbox, never unsandboxed', async () => {
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockRejectedValueOnce(sandboxFailure)
+        .mockResolvedValueOnce(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      await svc.start();
+      expect(launch).toHaveBeenCalledTimes(2);
+      expect(launchOptions(launch, 1).channel).toBeUndefined();
+      expect(launchOptions(launch, 1).chromiumSandbox).toBe(true);
+      expect(launchOptions(launch, 1).args).not.toContain('--no-sandbox');
+      await svc.stop();
+    });
+
+    it('fails with a sandbox error when the channel and bundled Chromium both cannot sandbox', async () => {
+      const launch = vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(sandboxFailure);
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      const err = await svc.start().catch((e: unknown) => e);
+      expect((err as Error).message).toContain('Chrome sandbox could not start');
+      // The channel is already set, so the advice is its AppArmor profile, not "use channel: chrome".
+      expect((err as Error).message).toContain('AppArmor profile');
+      expect((err as Error).message).not.toContain('use channel: chrome');
+      // Two sandboxed attempts, none without the sandbox.
+      expect(launch).toHaveBeenCalledTimes(2);
+      for (const call of [0, 1]) expect(launchOptions(launch, call).chromiumSandbox).toBe(true);
+      await svc.stop();
+    });
+
+    it('advises channel: chrome only when no channel was configured', async () => {
+      vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(sandboxFailure);
+      const svc = new BrowserService({ logger, profileDir });
+      await expect(svc.start()).rejects.toThrow('use channel: chrome');
+      await svc.stop();
+    });
+
+    it('fails with a sandbox error when bundled Chromium is the only browser', async () => {
+      const launch = vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(sandboxFailure);
+      const svc = new BrowserService({ logger, profileDir });
+      await expect(svc.start()).rejects.toThrow('docker/seccomp-chrome.json');
+      expect(launch).toHaveBeenCalledOnce();
+      await svc.stop();
+    });
+
+    it('still falls back to bundled Chromium when the channel fails for another reason', async () => {
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockRejectedValueOnce(new Error('Chromium distribution \'chrome\' is not found'))
+        .mockResolvedValueOnce(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      await svc.start();
+      expect(launch).toHaveBeenCalledTimes(2);
+      expect(launchOptions(launch, 1).channel).toBeUndefined();
+      expect(launchOptions(launch, 1).chromiumSandbox).toBe(true);
+      expect(svc.isChannelFallbackActive()).toBe(true);
+      await svc.stop();
+    });
+
+    it('reports a sandbox failure in the bundled-Chromium fallback as one', async () => {
+      vi.spyOn(chromium, 'launchPersistentContext')
+        .mockRejectedValueOnce(new Error('Chromium distribution \'chrome\' is not found'))
+        .mockRejectedValueOnce(sandboxFailure);
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      const err = await svc.start().catch((e: unknown) => e);
+      expect((err as Error).message).toContain('Chrome sandbox could not start');
+      // The channel failed for another reason, so neither "use channel: chrome" nor its AppArmor profile applies.
+      expect((err as Error).message).toContain('is it installed?');
+      expect((err as Error).message).not.toContain('use channel: chrome');
+      await svc.stop();
+    });
+
+    // Whatever stops the fallback, the channel's sandbox failure is what the operator can fix.
+    it.each([
+      ['is not installed', "Executable doesn't exist at /ms-playwright/chromium-1187/chrome-linux/chrome"],
+      ['cannot use the profile', 'Failed to create a ProcessSingleton for your profile directory'],
+    ])('keeps the sandbox diagnosis when the channel cannot sandbox and bundled Chromium %s', async (_name, fallbackMessage) => {
+      const fallbackFailure = new Error(fallbackMessage);
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockRejectedValueOnce(sandboxFailure)
+        .mockRejectedValueOnce(fallbackFailure);
+      const errorLog = vi.spyOn(logger, 'error');
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      const err = await svc.start().catch((e: unknown) => e) as Error;
+      expect(launch).toHaveBeenCalledTimes(2);
+      expect(err.message).toContain('docker/seccomp-chrome.json');
+      expect(err.message).toContain('channel: chrome could not sandbox, and bundled Chromium did not start');
+      expect(err.message).toContain('AppArmor profile');
+      expect(err.message).not.toContain('use channel: chrome');
+      expect(err.cause).toBe(sandboxFailure);
+      // The fallback's own failure is not in the message, so it has to reach the log.
+      expect(errorLog).toHaveBeenCalledWith({ err: fallbackFailure }, expect.any(String));
+      await svc.stop();
+    });
+
+    it('rethrows the fallback failure when neither launch hit the sandbox', async () => {
+      const fallbackFailure = new Error("Executable doesn't exist at /ms-playwright/chromium-1187/chrome-linux/chrome");
+      vi.spyOn(chromium, 'launchPersistentContext')
+        .mockRejectedValueOnce(new Error('Chromium distribution \'chrome\' is not found'))
+        .mockRejectedValueOnce(fallbackFailure);
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      await expect(svc.start()).rejects.toBe(fallbackFailure);
+      await svc.stop();
+    });
+
+    // The error must point only at the fix. An off switch named here would be the first
+    // thing anyone tried. (#2521)
+    it('names the profile and offers no way to run unsandboxed', async () => {
+      vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(sandboxFailure);
+      const svc = new BrowserService({ logger, profileDir });
+      const err = await svc.start().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain('docker/seccomp-chrome.json');
+      expect((err as Error).message).not.toMatch(/no-sandbox|sandbox: false|unsandboxed/);
+      expect((err as Error).cause).toBe(sandboxFailure);
+      await svc.stop();
+    });
+  });
+
   it('does not restart the browser when a disconnect fires after stop()', async () => {
     // Dedicated instance with a counting factory so we can assert no relaunch happens.
     const page = makeMockPage();
@@ -660,6 +820,34 @@ describe('isXServerBinary', () => {
     for (const binary of ['node', 'bash', 'xterm', 'Xfce4-session', 'chrome']) {
       expect(isXServerBinary(binary)).toBe(false);
     }
+  });
+});
+
+// --- isSandboxLaunchFailure (Chrome sandbox setup failure detection, #2521) ---
+
+describe('isSandboxLaunchFailure', () => {
+  it('recognizes a namespace sandbox blocked by seccomp', () => {
+    expect(isSandboxLaunchFailure(new Error(
+      '[pid=19][err] Failed to move to new namespace: PID namespaces supported, Network namespace supported, but failed: errno = Operation not permitted',
+    ))).toBe(true);
+  });
+
+  it('recognizes Chromium finding no sandbox at all', () => {
+    expect(isSandboxLaunchFailure(new Error('[pid=7][err] No usable sandbox! If you are running on Ubuntu 23.10+ ...'))).toBe(true);
+  });
+
+  it('recognizes a misconfigured setuid sandbox helper', () => {
+    expect(isSandboxLaunchFailure(new Error(
+      '[pid=9][err] The SUID sandbox helper binary was found, but is not configured correctly. Rather than run without sandboxing I\'m aborting now. You need to make sure that /opt/google/chrome/chrome-sandbox is owned by root and has mode 4755.',
+    ))).toBe(true);
+    expect(isSandboxLaunchFailure(new Error('[pid=9][err] The setuid sandbox is not running as root.'))).toBe(true);
+  });
+
+  it('ignores other launch failures', () => {
+    expect(isSandboxLaunchFailure(new Error('browserType.launchPersistentContext: Chromium sandboxing failed!'))).toBe(true);
+    expect(isSandboxLaunchFailure(new Error('Chromium distribution \'chrome\' is not found at /opt/google/chrome/chrome'))).toBe(false);
+    expect(isSandboxLaunchFailure(new Error('Missing X server or $DISPLAY'))).toBe(false);
+    expect(isSandboxLaunchFailure('not an error')).toBe(false);
   });
 });
 
