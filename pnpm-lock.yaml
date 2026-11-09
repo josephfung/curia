@@ -128,8 +128,8 @@ importers:
         specifier: ^8.4.0
         version: 8.4.0
       openai:
-        specifier: ^7.39.0
-        version: 7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
+        specifier: ^7.47.0
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
       openredaction:
         specifier: ^1.1.5
         version: 1.1.5(express@5.3.0)(pdf-parse@2.4.5)(react@19.3.1)
@@ -4650,13 +4650,14 @@ packages:
       zod:
         optional: true
 
-  openai@7.39.0:
-    resolution: {integrity: sha512-iEA9ndbrj32vhYZwJg2v9BQVuztGUOb2SBQU16ZcWNkQHWEBjtarxjqR9c6d5PbWMG0Eyfhk66OZ0iJ8XpFjyw==}
+  openai@7.47.0:
+    resolution: {integrity: sha512-BYa2RYgocAv9WjPUJmNu8fICuA1fFhkTBEpiR3sC5L1K6v8Hnhc8pcnQEhu8l/+W1XKA+JUaBa7HpT+AK1s77w==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
       '@smithy/hash-node': '>=4.3.0 <5'
       '@smithy/signature-v4': '>=5.4.0 <6'
+      google-auth-library: '>=9.15.1 <12'
       undici: '>=8.12.4'
       ws: '>=8.21.0'
       zod: '>=4.6.6'
@@ -4666,6 +4667,8 @@ packages:
       '@smithy/hash-node':
         optional: true
       '@smithy/signature-v4':
+        optional: true
+      google-auth-library:
         optional: true
       undici:
         optional: true
@@ -6471,7 +6474,7 @@ snapshots:
       tslib: 2.9.1
     optional: true
 
-  '@azure/ai-projects@2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(zod@4.6.7)':
+  '@azure/ai-projects@2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(zod@4.6.7)':
     dependencies:
       '@azure-rest/core-client': 2.9.0
       '@azure/abort-controller': 2.2.0
@@ -6486,7 +6489,7 @@ snapshots:
       '@azure/storage-blob': 12.34.0
       '@opentelemetry/api': 1.10.0
       https-proxy-agent: 9.1.0
-      openai: 7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
+      openai: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
       tslib: 2.9.1
       ws: 8.22.1
     transitivePeerDependencies:
@@ -6494,6 +6497,7 @@ snapshots:
       - '@smithy/hash-node'
       - '@smithy/signature-v4'
       - bufferutil
+      - google-auth-library
       - kerberos
       - supports-color
       - undici
@@ -10581,11 +10585,12 @@ snapshots:
       zod: 4.6.7
     optional: true
 
-  openai@7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7):
+  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.92
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.5
+      google-auth-library: 11.3.2
       undici: 8.12.4
       ws: 8.22.1
       zod: 4.6.7
@@ -10981,7 +10986,7 @@ snapshots:
       mathjs: 15.2.0
       minimatch: 10.2.6
       nunjucks: 3.2.4(chokidar@5.0.0)
-      openai: 7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
+      openai: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
       opener: 1.5.2
       ora: 9.4.1
       parse5: 8.1.0
@@ -11011,7 +11016,7 @@ snapshots:
       '@aws-sdk/client-sagemaker-runtime': 3.1161.0
       '@aws-sdk/credential-provider-sso': 3.973.24
       '@aws/bedrock-token-generator': 1.1.0
-      '@azure/ai-projects': 2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(zod@4.6.7)
+      '@azure/ai-projects': 2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(zod@4.6.7)
       '@azure/identity': 4.14.1
       '@azure/msal-node': 7.1.2
       '@azure/storage-blob': 12.34.0
