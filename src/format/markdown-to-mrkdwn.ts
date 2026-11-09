@@ -77,9 +77,14 @@ export function inlineMarkdownToMrkdwn(input: string): string {
   let text = input.replace(/`([^`]+)`/g, (_m, code: string) => park(`\`${code}\``));
 
   // 2. Links: [label](url) → <url|label>
-  text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) => {
-    return `<${url}|${label}>`;
-  });
+  // Label and url stop at the next `[`, so a long run of unclosed `[` or `[a](` in
+  // inbound text can't make each match attempt scan to the end (quadratic).
+  // A label may hold `\[` / `\]`; a url may hold ONE bracketed IPv6 host (`[::1]`).
+  // Only one: repeated hosts would let `[a](` runs chain across the whole text again.
+  text = text.replace(
+    /(?<!\\)\[((?:[^[\]\\]|\\.)+)\]\(([^)\s[]+(?:\[[0-9A-Fa-f:.]+\][^)\s[]*)?|\[[0-9A-Fa-f:.]+\][^)\s[]*)\)/g,
+    (_m, label: string, url: string) => `<${url}|${label.replace(/\\([[\]])/g, '$1')}>`,
+  );
 
   // 3. Bold ** / __ → Slack *bold*, then park so italic pass leaves them alone.
   text = text.replace(/\*\*([^*]+)\*\*/g, (_m, inner: string) => park(`*${inner}*`));

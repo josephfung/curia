@@ -184,6 +184,13 @@ interface AgentResponsePayload {
    */
   sends?: string[];
   /**
+   * Distinct skills the live-principal-turn gate refused during the task, in call order
+   * (`gate` on the tool result, #2494), capped. Set beside `sends`, only when there was one.
+   * The delegate skill uses it to report a decline's cause from code: a permission refusal
+   * the principal can lift, not a missing capability.
+   */
+  gateRefusals?: string[];
+  /**
    * The channel of the agent.task this answers. Set on responses that carry reply text:
    * the end of the tool-use loop and the delegation-failure reply, not the structured
    * clarification pause. The dispatcher reads it to tell a scheduler turn, whose reply

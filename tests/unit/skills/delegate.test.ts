@@ -7,6 +7,7 @@ import {
   DRAFT_EMAIL_NEXT_STEP,
   NOTHING_SENT_NEXT_STEP,
   PAUSED_NEXT_STEP,
+  declineNextStep,
   delegateFailureNextStep,
 } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
@@ -802,6 +803,68 @@ describe('DelegateHandler', () => {
       const data = (result as { data: { declined?: boolean; next_step?: string } }).data;
       expect(data.declined).toBe(true);
       expect(data.next_step).toBe(DECLINE_NEXT_STEP);
+    });
+
+    // The decline's facts as data (#2494): the coordinator relays these, not a paraphrase.
+    describe('decline facts (#2494)', () => {
+      type DeclineData = {
+        cause?: string;
+        sent?: string[];
+        work_product?: string;
+        message?: string;
+        next_step?: string;
+      };
+
+      it('reports a gate refusal from the specialist run as the cause, whatever it wrote', async () => {
+        const result = await delegateTo('contacts', {
+          content: '<specialist_decline reason="no_block" cause="capability_absent">Block not applied.</specialist_decline>',
+          sends: [],
+          gateRefusals: ['contact-set-tier', 'contact-set-tier'],
+        });
+        const data = (result as { data: DeclineData }).data;
+        expect(data.cause).toBe('gate_refused');
+        expect(data.sent).toEqual([]);
+        expect(data.next_step).toBe(declineNextStep('gate_refused', false));
+        expect(data.next_step).toMatch(/never say there is no way to do it/);
+      });
+
+      it('carries a stated not_found cause and its next step', async () => {
+        const result = await delegateTo('ceo-inbox', {
+          content: '<specialist_decline reason="no_draft" cause="not_found">No such draft in Drafts or Sent.</specialist_decline>',
+          sends: [],
+        });
+        const data = (result as { data: DeclineData }).data;
+        expect(data.cause).toBe('not_found');
+        expect(data.next_step).toMatch(/never describe it as existing/);
+      });
+
+      it('returns the work finished before the marker and says not to drop it', async () => {
+        const result = await delegateTo('writing-scout', {
+          content: 'Revised outline:\n1. Intro\n2. Results\n<specialist_decline reason="no_edit" cause="capability_absent">'
+            + 'I cannot edit the doc in place. I can save the outline as a new doc.</specialist_decline>',
+        });
+        const data = (result as { data: DeclineData }).data;
+        expect(data.cause).toBe('capability_absent');
+        expect(data.work_product).toBe('Revised outline:\n1. Intro\n2. Results');
+        expect(data.message).toBe('I cannot edit the doc in place. I can save the outline as a new doc.');
+        expect(data.next_step).toBe(declineNextStep('capability_absent', true));
+        expect(data.next_step).toMatch(/do not drop it/);
+        // The runtime did not report sends here, so nothing is claimed either way.
+        expect(data).not.toHaveProperty('sent');
+      });
+
+      it('keeps the contacts it resolved, and does not count the entities block as work', async () => {
+        const id = '3f1c2a9e-4b7d-4e3a-9c51-2d8e7f0a1b34';
+        const result = await delegateTo('contacts', {
+          content: `<resolved_entities>\n<contact id="${id}" name="Jordan Lee" />\n</resolved_entities>\n`
+            + '<specialist_decline reason="no_block">Block not applied.</specialist_decline>',
+          gateRefusals: ['contact-set-tier'],
+        });
+        const data = (result as { data: DeclineData & { resolvedContactIds?: string[] } }).data;
+        expect(data.resolvedContactIds).toEqual([id]);
+        expect(data).not.toHaveProperty('work_product');
+        expect(data.next_step).toBe(declineNextStep('gate_refused', false));
+      });
     });
 
     // A timeout may have gone through, and a non-retryable failure cannot be retried:

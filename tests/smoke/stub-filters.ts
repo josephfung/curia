@@ -9,8 +9,14 @@
 // They also fill `{{input:<arg>}}` in a stubbed result with the call's own argument, so a
 // stubbed write (calendar-create-event, task-create) echoes back what was asked for.
 // Writes the case has already made are replayed by CaseToolState (tests/shared/tool-state.ts).
+//
+// A stubbed delegate decline gets the next_step the delegate skill attaches for its cause
+// (#2494), so a case replays what the coordinator sees in production. The case writes only
+// the facts: `cause`, `message`, `work_product`.
 
 import { applyCaseWrites, type CaseToolState } from '../shared/tool-state.js';
+import { declineNextStep } from '../../src/agents/prompts/delegate-result-guidance.js';
+import { isDeclineCause } from '../../src/agents/specialist-decline.js';
 
 type Json = Record<string, unknown>;
 
@@ -167,6 +173,15 @@ export function shapeStubResult(toolName: string, data: unknown, input: Json, st
     shaped = applyCaseWrites(toolName, shaped, input, state);
     if (toolName === 'calendar-list-events') shaped = state.calendar.replayOnto(shaped);
   }
+  if (toolName === 'delegate') shaped = withDeclineNextStep(shaped);
   const filter = FILTERS[toolName];
   return filter ? filter(shaped, input) : shaped;
+}
+
+/** A stubbed decline as the delegate skill returns it: with the next step for its cause. */
+function withDeclineNextStep(data: Json): Json {
+  if (data['declined'] !== true || data['next_step'] !== undefined) return data;
+  const cause = isDeclineCause(data['cause']) ? data['cause'] : undefined;
+  const workProduct = typeof data['work_product'] === 'string' && data['work_product'].length > 0;
+  return { ...data, next_step: declineNextStep(cause, workProduct) };
 }
