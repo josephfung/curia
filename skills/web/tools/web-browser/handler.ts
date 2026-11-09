@@ -803,24 +803,32 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       const clickTarget = scopedClick.locator;
       const clickMark = activity.mark();
       // A label click lands at the label's centre, which can be a link inside it
-      // ("I agree to the <a>Terms</a>"): the link is followed and the box stays as it was.
-      const checkedBefore = scopedClick.retargetedFrom
-        ? await scopedClick.retargetedFrom.evaluate((el) => (el as HTMLInputElement).checked).catch(() => null)
-        : null;
-      // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
-      // scores natural pointer paths as more human-like than direct .click(). (#1053)
-      await humanClick(page, clickTarget, { log: ctx.log });
-      if (scopedClick.retargetedFrom && checkedBefore !== null) {
-        const input = scopedClick.retargetedFrom;
-        const checkedAfter = await input.evaluate((el) => (el as HTMLInputElement).checked).catch(() => null);
-        const isRadio = await input.evaluate((el) => (el as HTMLInputElement).type === 'radio').catch(() => false);
-        // A checked radio stays checked when clicked, so only the other cases signal a miss.
-        if (checkedAfter === checkedBefore && !(isRadio && checkedBefore)) {
-          // Click the input itself: same events as a click on its label, and no link to follow.
-          // If the page navigated away the input is gone, and the action says so.
-          const toggled = await input.evaluate((el) => { (el as HTMLInputElement).click(); return true; }).catch(() => false);
-          if (!toggled) {
-            return { ok: false, error: 'Clicking the label did not change the checkbox/radio (a link inside the label may have been followed). Call get_content and check the page.' };
+      // ("I agree to the <a>Terms</a>"): the link would be followed and the box stay as it was.
+      // So a label holding a link is never clicked; the input is clicked instead (same events,
+      // nothing to follow). The short timeouts keep a vanished element from costing 30s.
+      const input = scopedClick.retargetedFrom;
+      const quick = { timeout: 1500 };
+      const labelHasLink = input
+        ? await clickTarget.evaluate((el) => el.querySelector('a[href]') !== null, undefined, quick).catch(() => false)
+        : false;
+      if (input && labelHasLink) {
+        await input.evaluate((el) => { (el as HTMLInputElement).click(); }, undefined, quick);
+      } else {
+        const checkedBefore = input
+          ? await input.evaluate((el) => (el as HTMLInputElement).checked, undefined, quick).catch(() => null)
+          : null;
+        // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
+        // scores natural pointer paths as more human-like than direct .click(). (#1053)
+        await humanClick(page, clickTarget, { log: ctx.log });
+        if (input && checkedBefore !== null) {
+          // Anything else under the label's centre (a button, a script) can also swallow the click.
+          const state = await input.evaluate((el) => ({ checked: (el as HTMLInputElement).checked, radio: (el as HTMLInputElement).type === 'radio' }), undefined, quick).catch(() => null);
+          if (!state) {
+            return { ok: false, error: 'The page changed after clicking the label, so the checkbox/radio could not be checked. Call get_content and check the page.' };
+          }
+          // A checked radio stays checked when clicked, so only the other cases signal a miss.
+          if (state.checked === checkedBefore && !(state.radio && checkedBefore)) {
+            await input.evaluate((el) => { (el as HTMLInputElement).click(); }, undefined, quick);
           }
         }
       }
