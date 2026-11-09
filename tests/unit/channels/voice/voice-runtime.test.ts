@@ -53,8 +53,9 @@ async function waitForPublishedFrame(
   transport: { publishedFrames: unknown[] },
   timeoutMs = 2_000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (transport.publishedFrames.length === 0 && Date.now() < deadline) {
+  // performance.now, not Date: callers may have frozen Date before the turn starts.
+  const deadline = performance.now() + timeoutMs;
+  while (transport.publishedFrames.length === 0 && performance.now() < deadline) {
     await delay(10);
   }
 }
@@ -3971,9 +3972,10 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
   }
 
   async function speakingSession(overrides: Partial<Parameters<typeof makeRuntime>[0]> = {}) {
-    // Build on the real clock even when an earlier session in this test froze it,
-    // so waitForPublishedFrame's deadline can still lapse.
-    vi.useRealTimers();
+    // Freeze Date before the turn starts, so the first published frame stays audible
+    // however long the runner pauses afterwards. An earlier session in this test may
+    // already have frozen it.
+    if (!vi.isFakeTimers()) freezeClock();
     const spy = spyLogger();
     const llm = new FakeStreamProvider([replyScript('This is a fairly long spoken answer.'), replyScript('Okay.')], 3);
     // One-second frames keep Curia audible well past the first publish, however
@@ -3991,7 +3993,6 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     rig.stt.emit({ text: 'tell me a long story', isFinal: true, speechFinal: true });
     await waitForPublishedFrame(rig.transport);
     expect(rig.transport.publishedFrames.length).toBeGreaterThan(0);
-    freezeClock();
     return { ...rig, ...spy, tts };
   }
 
@@ -4228,10 +4229,11 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
         caller: principalCaller(),
         openingGreeting: false,
       });
+      // Frozen before the turn, so the playout latency cannot lapse while the runner
+      // is paused; then the reply's few ms of audio are moved past the estimate.
+      freezeClock();
       rig.stt.emit({ text: 'quick one', isFinal: true, speechFinal: true });
       await rig.runtime.awaitIdle('tail');
-      // The reply's few ms of audio are past the real-time estimate.
-      freezeClock();
       vi.setSystemTime(Date.now() + 50);
       return { ...rig, ...spy };
     }
