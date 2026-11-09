@@ -3904,7 +3904,7 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
   // These tests decide outcomes by comparing timestamps (is Curia still audible,
   // which inbound audio is after the onset) and by the onset/confirm timers. None
   // of that may ride on how fast the runner is (#2539), so each test freezes the
-  // clock once its session is speaking; the two timer windows are advanced by hand.
+  // clock before its turn starts; the two timer windows are advanced by hand.
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -4149,7 +4149,8 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
   });
 
   it('warns when an onset barge-in is not followed by words, and not when it is', async () => {
-    // Build every session on the real clock first; the clock is taken over after.
+    // The first session freezes Date before its turn starts, so all four are built on a
+    // frozen Date; the timers are taken over only after, to advance the windows by hand.
     const unconfirmed = await speakingSession();
     const confirmed = await speakingSession();
     const shortReply = await speakingSession();
@@ -4199,6 +4200,9 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
       caller: principalCaller(),
       openingGreeting: false,
     });
+    // Frozen before the turn, so the two seconds of audio stay ahead of the clock
+    // however long the runner pauses before the interim below.
+    freezeClock();
     stt.emit({ text: 'quick one', isFinal: true, speechFinal: true });
     // The turn is over, but two seconds of its audio are still ahead of the clock.
     await runtime.awaitIdle('tail');
