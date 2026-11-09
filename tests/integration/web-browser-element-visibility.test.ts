@@ -33,6 +33,8 @@ const FIXTURE = `<!doctype html><html><head><title>Shop</title></head><body>
   <label>Row A Yes <input type="checkbox" id="ya" aria-label="Yes" style="display:none"></label>
   <label>Row B Yes <input type="checkbox" id="yb" aria-label="Yes" style="display:none"></label>
   <div id="menu" style="display:none"><a href="/x" style="display:contents">Menu link</a></div>
+  <div><a href="/y" style="display:contents"><span>Contents card link</span></a></div>
+  <label style="display:block;width:300px"><input type="checkbox" id="consent" aria-label="Consent" style="display:none"><a href="/terms" style="display:block;width:300px">Terms</a></label>
   <div style="height:6000px">Long content</div>
   <button onclick="document.title='far clicked'">Far below the fold</button>
 </body></html>`;
@@ -148,6 +150,20 @@ describe('web-browser element list on a real page', { timeout: 60_000 }, () => {
   it('leaves out a display:contents link inside a closed menu', async () => {
     const { content } = await run({ action: 'navigate', url: `${SHOP}/page` });
     expect(content.split('--- Interactable elements ---')[1] ?? '').not.toContain('Menu link');
+  });
+
+  it('lists a display:contents link inside a visible container', async () => {
+    const { content } = await run({ action: 'navigate', url: `${SHOP}/page` });
+    expect(content.split('--- Interactable elements ---')[1] ?? '').toContain('link "Contents card link"');
+  });
+
+  it('checks a hidden checkbox whose label is covered by a link', async () => {
+    const opened = await run({ action: 'navigate', url: `${SHOP}/page` });
+    const line = opened.content.split('\n').find((l) => l.includes('checkbox "Consent" (hidden)'))!;
+    const ref = line.slice(1, line.indexOf(']'));
+    await run({ action: 'click', selector: `[${ref}]`, session_id: opened.session_id });
+    const page = service.getSession(opened.session_id)!.page;
+    await expect(page.evaluate(() => (document.getElementById('consent') as HTMLInputElement).checked)).resolves.toBe(true);
   });
 
   it('lists a drawer button once the drawer opens', async () => {

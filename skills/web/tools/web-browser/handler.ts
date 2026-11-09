@@ -799,11 +799,31 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       if (!selector || typeof selector !== 'string') {
         return { ok: false, error: 'click requires selector (string — describe the element in natural language)' };
       }
-      const clickTarget = await resolveLocator(page, selector, ctx.log);
+      const scopedClick = await resolveLocatorWithScope(page, selector, ctx.log);
+      const clickTarget = scopedClick.locator;
       const clickMark = activity.mark();
+      // A label click lands at the label's centre, which can be a link inside it
+      // ("I agree to the <a>Terms</a>"): the link is followed and the box stays as it was.
+      const checkedBefore = scopedClick.retargetedFrom
+        ? await scopedClick.retargetedFrom.evaluate((el) => (el as HTMLInputElement).checked).catch(() => null)
+        : null;
       // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
       // scores natural pointer paths as more human-like than direct .click(). (#1053)
       await humanClick(page, clickTarget, { log: ctx.log });
+      if (scopedClick.retargetedFrom && checkedBefore !== null) {
+        const input = scopedClick.retargetedFrom;
+        const checkedAfter = await input.evaluate((el) => (el as HTMLInputElement).checked).catch(() => null);
+        const isRadio = await input.evaluate((el) => (el as HTMLInputElement).type === 'radio').catch(() => false);
+        // A checked radio stays checked when clicked, so only the other cases signal a miss.
+        if (checkedAfter === checkedBefore && !(isRadio && checkedBefore)) {
+          // Click the input itself: same events as a click on its label, and no link to follow.
+          // If the page navigated away the input is gone, and the action says so.
+          const toggled = await input.evaluate((el) => { (el as HTMLInputElement).click(); return true; }).catch(() => false);
+          if (!toggled) {
+            return { ok: false, error: 'Clicking the label did not change the checkbox/radio (a link inside the label may have been followed). Call get_content and check the page.' };
+          }
+        }
+      }
       // Adaptive settle: a click may trigger navigation or an in-page update. Wait
       // briefly for the DOM to settle, but don't fail the action if nothing navigates.
       await settleAfterInteraction(page, ctx, sessionId);
@@ -1371,6 +1391,8 @@ interface ScopedLocator {
   locator: Locator;
   /** Where the element lives; `scope.url()` is that document's URL, not necessarily the top page's. */
   scope: Page | Frame;
+  /** Set when the locator is a hidden input's label (#2546): the input the label stands in for. */
+  retargetedFrom?: Locator;
 }
 
 /**
@@ -1390,7 +1412,11 @@ async function retargetHiddenInputToLabel(target: ScopedLocator, refToken: strin
       return true;
     }, refToken);
     if (!tagged) return target;
-    return { locator: target.scope.locator(`[data-curia-label-for="${refToken}"]`).first(), scope: target.scope };
+    return {
+      locator: target.scope.locator(`[data-curia-label-for="${refToken}"]`).first(),
+      scope: target.scope,
+      retargetedFrom: target.locator,
+    };
   } catch (err) {
     log.debug({ err, refToken }, 'Could not retarget a hidden input to its label — using the input');
     return target;
