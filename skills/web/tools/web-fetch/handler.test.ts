@@ -71,6 +71,22 @@ describe('web-fetch', () => {
       if (result.success) expect((result.data as { note?: string }).note).toMatch(/no readable text.*web-browser/is);
     });
 
+    it('flags a JS shell that has a title and a noscript message', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+        html('<html><head><title>App</title></head><body><noscript>You need to enable JavaScript</noscript><div id="root"></div></body></html>'),
+      ));
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/'));
+      expect(result.success).toBe(true);
+      if (result.success) expect((result.data as { note?: string }).note).toMatch(/no readable text/);
+    });
+
+    it('words the note for an agent that has no web-browser', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(html('<div id="root"></div>')));
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/'));
+      expect(result.success).toBe(true);
+      if (result.success) expect((result.data as { note?: string }).note).toMatch(/if you have it, otherwise report/);
+    });
+
     it('flags a body whose text was cut off by max_length, ignoring the truncation marker', async () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(html(`<script>${'x'.repeat(500)}</script><p>Real text after</p>`)));
       const ctx = { input: { url: 'https://example.com/', max_length: 100 }, log: logger } as unknown as ToolContext;

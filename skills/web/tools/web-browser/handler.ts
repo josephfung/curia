@@ -1225,11 +1225,6 @@ async function trackTypedCode(
   ctx.log.info({ sessionId, verificationIds: matching.map((v) => v.id) }, 'Typed sign-in code tracked for its verification(s)');
 }
 
-/**
- * The one-line note added to the content when a page had not settled by the cap (#2244),
- * or null when it had. On a sign-in handoff the note says what leaving costs: the agent
- * that navigated away from one left the profile half-signed-in.
- */
 const NO_PAGE_OPEN_NOTE = '[Note: no page is open in this session, so nothing was read and this says nothing about any site. Call navigate with a url first.]';
 
 /** Models pad optional arguments with an empty string, so that counts as not given. */
@@ -1237,6 +1232,11 @@ function isUrlGiven(url: unknown): boolean {
   return url !== undefined && url !== null && url !== '';
 }
 
+/**
+ * The one-line note added to the content when a page had not settled by the cap (#2244),
+ * or null when it had. On a sign-in handoff the note says what leaving costs: the agent
+ * that navigated away from one left the profile half-signed-in.
+ */
 function settleNote(settle: SettleResult): string | null {
   if (settle.settled) return null;
   const waited = `${Math.round(settle.waitedMs / 1000)}s`;
@@ -1374,6 +1374,30 @@ interface ScopedLocator {
 }
 
 /**
+ * A ref to a hidden native radio or checkbox (listed '(hidden)', #2546) can't be clicked: it has
+ * no box, so Playwright waits out its timeout. The visible control is its label, so aim at that.
+ * The label is tagged with the input's ref, which keeps a repeated row's choice unambiguous.
+ * Anything else, or an input with no label, is returned as it was.
+ */
+async function retargetHiddenInputToLabel(target: ScopedLocator, refToken: string, log: ToolContext['log']): Promise<ScopedLocator> {
+  try {
+    if (await target.locator.isVisible()) return target;
+    const tagged = await target.locator.evaluate((el, ref) => {
+      if (!(el instanceof HTMLInputElement) || (el.type !== 'radio' && el.type !== 'checkbox')) return false;
+      const label = el.labels?.[0];
+      if (!label) return false;
+      label.setAttribute('data-curia-label-for', ref);
+      return true;
+    }, refToken);
+    if (!tagged) return target;
+    return { locator: target.scope.locator(`[data-curia-label-for="${refToken}"]`).first(), scope: target.scope };
+  } catch (err) {
+    log.debug({ err, refToken }, 'Could not retarget a hidden input to its label — using the input');
+    return target;
+  }
+}
+
+/**
  * resolveLocator, also returning the scope the match was found in. The sign-in code guard
  * (#2017) needs it: a field resolved into a child frame (an identity provider, or a chat
  * or ad widget) belongs to that frame's domain, not the top page's.
@@ -1416,7 +1440,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
         log.debug({ err }, 'Skipping scope during ref resolution (detached/error)');
       }
     }
-    if (total === 1 && sole) return sole;
+    if (total === 1 && sole) return retargetHiddenInputToLabel(sole, refToken, log);
     // Fail FAST, not slow. Previously we returned a guaranteed-miss locator here, but the
     // caller's boundingBox()/click()/waitFor() then waited out the full Playwright timeout
     // (~40s: 30s boundingBox + 10s click) on an element that can never appear — the dominant
@@ -1439,7 +1463,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
 
   // Main frame first (the common case, and the cheapest).
   const top = await resolveInScope(page, selector, log);
-  if (top) return { locator: top, scope: page };
+  if (top) return retargetHiddenInputToLabel({ locator: top, scope: page }, `sel${Date.now()}`, log);
 
   // Child frames eligible for interaction (exclude the main frame and private/internal
   // hosts). This is what lets click/type/hover/wait_for reach into legitimate iframes.
@@ -1450,7 +1474,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
   for (const frame of childFrames) {
     try {
       const inFrame = await resolveInScope(frame, selector, log);
-      if (inFrame) return { locator: inFrame, scope: frame };
+      if (inFrame) return retargetHiddenInputToLabel({ locator: inFrame, scope: frame }, `sel${Date.now()}`, log);
     } catch (err) {
       log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during selector resolution (detached/error)');
     }

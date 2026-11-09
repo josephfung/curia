@@ -29,6 +29,10 @@ const FIXTURE = `<!doctype html><html><head><title>Shop</title></head><body>
   <button style="width:0;height:0;padding:0;border:0" aria-label="Zero size button"></button>
   <button style="opacity:0" onclick="document.title='opacity clicked'">Transparent button</button>
   <label>Agree <input type="radio" name="a" aria-label="Styled radio" style="display:none"></label>
+  <label>Disagree <input type="radio" name="a" id="dis" aria-label="Other radio" style="display:none"></label>
+  <label>Row A Yes <input type="checkbox" id="ya" aria-label="Yes" style="display:none"></label>
+  <label>Row B Yes <input type="checkbox" id="yb" aria-label="Yes" style="display:none"></label>
+  <div id="menu" style="display:none"><a href="/x" style="display:contents">Menu link</a></div>
   <div style="height:6000px">Long content</div>
   <button onclick="document.title='far clicked'">Far below the fold</button>
 </body></html>`;
@@ -116,6 +120,34 @@ describe('web-browser element list on a real page', { timeout: 60_000 }, () => {
   it('keeps a hidden native radio, tagged (hidden)', async () => {
     const { content } = await run({ action: 'navigate', url: `${SHOP}/page` });
     expect(content).toContain('radio "Styled radio" (hidden)');
+  });
+
+  it('clicks a hidden radio through its label, by ref and by name', async () => {
+    const opened = await run({ action: 'navigate', url: `${SHOP}/page` });
+    const line = opened.content.split('\n').find((l) => l.includes('radio "Styled radio" (hidden)'))!;
+    const ref = line.slice(1, line.indexOf(']'));
+    const byRef = await run({ action: 'click', selector: `[${ref}]`, session_id: opened.session_id });
+    expect(byRef.action_error).toBeUndefined();
+    const page = service.getSession(opened.session_id)!.page;
+    await expect(page.evaluate(() => (document.querySelector('input[aria-label="Styled radio"]') as HTMLInputElement).checked)).resolves.toBe(true);
+    const byName = await run({ action: 'click', selector: 'Other radio', session_id: opened.session_id });
+    expect(byName.action_error).toBeUndefined();
+    await expect(page.evaluate(() => (document.getElementById('dis') as HTMLInputElement).checked)).resolves.toBe(true);
+  });
+
+  it('keeps repeated hidden checkboxes apart by ref', async () => {
+    const opened = await run({ action: 'navigate', url: `${SHOP}/page` });
+    const lines = opened.content.split('\n').filter((l) => l.includes('"Yes" (hidden)'));
+    expect(lines).toHaveLength(2);
+    const ref = lines[1]!.slice(1, lines[1]!.indexOf(']'));
+    await run({ action: 'click', selector: `[${ref}]`, session_id: opened.session_id });
+    const page = service.getSession(opened.session_id)!.page;
+    await expect(page.evaluate(() => [(document.getElementById('ya') as HTMLInputElement).checked, (document.getElementById('yb') as HTMLInputElement).checked])).resolves.toEqual([false, true]);
+  });
+
+  it('leaves out a display:contents link inside a closed menu', async () => {
+    const { content } = await run({ action: 'navigate', url: `${SHOP}/page` });
+    expect(content.split('--- Interactable elements ---')[1] ?? '').not.toContain('Menu link');
   });
 
   it('lists a drawer button once the drawer opens', async () => {

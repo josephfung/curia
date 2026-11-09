@@ -128,10 +128,14 @@ export function extractFrameContent(opts: ExtractOpts): string {
     const style = getComputedStyle(el);
     const box = el.getBoundingClientRect();
     // checkVisibility (Chrome 105+) covers ancestors' display:none and content-visibility.
-    const rendered = style.visibility !== 'hidden' && style.visibility !== 'collapse' && (
-      style.display === 'contents'
-      || ((typeof el.checkVisibility !== 'function' || el.checkVisibility()) && box.width > 0 && box.height > 0)
-    );
+    // A display:contents element has no box, so its nearest ancestor with one stands in for it
+    // (a display:contents link inside a closed display:none menu is not reachable).
+    let boxed: Element = el;
+    while (getComputedStyle(boxed).display === 'contents' && boxed.parentElement) boxed = boxed.parentElement;
+    const boxedRect = boxed === el ? box : boxed.getBoundingClientRect();
+    const rendered = style.visibility !== 'hidden' && style.visibility !== 'collapse'
+      && (typeof el.checkVisibility !== 'function' || el.checkVisibility())
+      && boxedRect.width > 0 && boxedRect.height > 0;
     if (rendered) return true;
     const type = (el.getAttribute('type') ?? '').toLowerCase();
     if (el.tagName === 'INPUT' && (type === 'radio' || type === 'checkbox' || type === 'file')) {

@@ -12,10 +12,19 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLanding } from '../../../../src/skills/_shared/google-workspace-url.js';
 import { WEB_FETCH_NOT_FOUND_LINES } from '../../../../src/agents/prompts/dead-end-guidance.js';
-import { sanitizeOutput } from '../../../../src/skills/sanitize.js';
+import sanitizeHtml from 'sanitize-html';
 
 const WEB_FETCH_NOT_FOUND = WEB_FETCH_NOT_FOUND_LINES.join(' ');
-const NO_READABLE_TEXT_NOTE = 'This fetch returned no readable text, which usually means the page is rendered by JavaScript or max_length cut it off. It says nothing about what the site offers. Use web-browser to read it.';
+const NO_READABLE_TEXT_NOTE = 'This fetch returned no readable text, which usually means the page is rendered by JavaScript or max_length cut it off. It says nothing about what the site offers. A real browser is needed: use web-browser if you have it, otherwise report that the page could not be read.';
+
+// Elements whose text is not page content. sanitize-html's nonTextTags drops them with their text.
+const NON_CONTENT_TAGS = ['script', 'style', 'textarea', 'option', 'xmp', 'iframe', 'object', 'embed', 'applet', 'head', 'title', 'noscript'];
+
+/** The text a reader would see in the page body: markup, head, title and noscript removed. */
+function readableText(html: string): string {
+  return sanitizeHtml(html, { allowedTags: [], allowedAttributes: {}, nonTextTags: NON_CONTENT_TAGS })
+    .replace(/&nbsp;|\s/g, '');
+}
 
 // Default max body length: 50KB. Enough for most web pages when truncated.
 const DEFAULT_MAX_LENGTH = 50000;
@@ -123,8 +132,9 @@ export class WebFetchHandler implements ToolHandler {
 
       // The execution layer strips markup after this returns, so raw HTML with no text in it
       // (a JS-rendered shell, or a max_length that ended inside <head>) reaches the model as
-      // bare whitespace. Run the same sanitizer here to see what the model will get (#2546).
-      const hasReadableText = sanitizeOutput(body).trim().length > 0;
+      // bare whitespace. A shell's <title> and <noscript> message are not page content either,
+      // so judge the text without head, title and noscript (#2546).
+      const hasReadableText = readableText(body).length > 0;
       if (truncated) body += '[truncated]';
 
       return {
