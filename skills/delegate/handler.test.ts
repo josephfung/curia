@@ -219,14 +219,14 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     }
   });
 
-  it('keeps the grant for the whole wait when the claim is slow (#2515)', async () => {
-    vi.useFakeTimers();
-    try {
-      let grantId: string | undefined;
+  describe('a slow dispatch claim (#2515)', () => {
+    /** A specialist that never answers, behind a claim that takes `claimMs`. */
+    function slowClaim(claimMs: number, over: Partial<ToolContext> = {}) {
+      const seen: { task?: AgentTaskEvent } = {};
       const bus = {
         subscribe() {},
         publish(_layer: string, event: BusEvent) {
-          if (event.type === 'agent.task') grantId = (event as AgentTaskEvent).payload.liveTurnGrantId;
+          if (event.type === 'agent.task') seen.task = event as AgentTaskEvent;
           return new Promise<void>(() => {});
         },
       } as unknown as EventBus;
@@ -235,25 +235,57 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
         senderId: 'ceo',
         openDelegationLookup: {
           findInFlight: async () => null,
-          // The claim takes 40s of a 60s wait.
           acquireRunning: () => new Promise((resolve) => {
-            setTimeout(() => resolve({ acquired: true, claim: { delegateEventId: 'd-1' } }), 40_000);
+            setTimeout(() => resolve({ acquired: true, claim: { delegateEventId: 'd-1' } }), claimMs);
           }),
           releaseRunning: async () => {},
         },
+        ...over,
       } as unknown as Partial<ToolContext>);
       ctx.input = { agent: 'research-analyst', task: 'find the acquisition comps', timeout_ms: 60_000 };
+      return { ctx, seen };
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // 70s is the claim that outlasts the wait: a TTL started before it would already be spent.
+    it.each([40_000, 60_000, 70_000])('keeps the grant for the whole wait after a %dms claim', async (claimMs) => {
+      vi.useFakeTimers();
+      const { ctx, seen } = slowClaim(claimMs);
       const pending = new DelegateHandler().execute(ctx);
-      await vi.advanceTimersByTimeAsync(40_000);
-      // 30s into the wait (70s after the grant was issued) the specialist is still live.
+      await vi.advanceTimersByTimeAsync(claimMs);
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(isLiveTurnGrantActive(grantId)).toBe(true);
+      expect(isLiveTurnGrantActive(seen.task!.payload.liveTurnGrantId)).toBe(true);
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       await pending;
-      expect(isLiveTurnGrantActive(grantId)).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+      expect(isLiveTurnGrantActive(seen.task!.payload.liveTurnGrantId)).toBe(false);
+    });
+
+    it('does not outlive a parent grant that ended during the claim', async () => {
+      vi.useFakeTimers();
+      const voice = issueLiveTurnGrant({ ttlMs: 60_000 });
+      const { ctx, seen } = slowClaim(70_000, { liveTurnGrantId: voice.id });
+      const pending = new DelegateHandler().execute(ctx);
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(seen.task!.payload.liveTurnGrantId).not.toBe(voice.id);
+      expect(isLiveTurnGrantActive(seen.task!.payload.liveTurnGrantId)).toBe(false);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await pending;
+    });
+
+    it('sets the turn deadline from when the wait starts (#2371)', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-29T12:00:00Z'));
+      const start = Date.now();
+      const { ctx, seen } = slowClaim(40_000, { liveTurn: undefined });
+      const pending = new DelegateHandler().execute(ctx);
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(seen.task!.payload.turnDeadlineAt).toBe(start + 40_000 + 60_000);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await pending;
+    });
   });
 
   it('issues no grant for a turn that is not live (#2515)', async () => {

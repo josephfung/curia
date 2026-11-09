@@ -54,7 +54,7 @@ import {
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
 import { DateTime } from 'luxon';
-import { issueLiveTurnGrant } from '../../src/autonomy/live-turn-grants.js';
+import { issueLiveTurnGrant, type LiveTurnGrant } from '../../src/autonomy/live-turn-grants.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 import {
   CLARIFICATION_NEXT_STEP,
@@ -702,22 +702,10 @@ export class DelegateHandler implements ToolHandler {
     }
     // ctx.taskMetadata is the effective standing, which keeps the wake marker (#1125).
     const wokenTurn = ctx.taskMetadata?.['wakeContext'] !== undefined;
-    // The specialist's live turn lasts as long as this wait (#2515): a timeout or an
-    // interrupted wait leaves it running, and from then on nobody is live in its exchange.
-    // A grant revoked when the wait ends bounds it; inside a voice hand-off it also ends
-    // with that call's grant. A lapsed grant still lets the specialist ask for confirmation.
-    const waitGrant = !wokenTurn && ctx.liveTurn === true
-      ? issueLiveTurnGrant({
-        ttlMs: specialistTimeoutMs,
-        ...(ctx.liveTurnGrantId !== undefined ? { parentId: ctx.liveTurnGrantId } : {}),
-      })
-      : undefined;
-
+    let waitGrant: LiveTurnGrant | undefined;
     let acquiredDelegateEventId: string | undefined;
     let retainRunningClaim = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
-    // Everything after the grant is issued runs inside the try, so its finally revokes
-    // the grant on every exit, a throw while building the task included.
     try {
       // Publish an agent.task event for the specialist.
       // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
@@ -746,14 +734,9 @@ export class DelegateHandler implements ToolHandler {
         // A woken task is never live, and delegationMetadata carries no wakeContext, so a flag
         // leaked onto a wake would become a live turn here: drop it (#2515).
         liveTurn: wokenTurn ? undefined : ctx.liveTurn,
-        // A live turn carries the wait's grant. A voice hand-off's lapsed grant (#2495) rides
-        // along on a turn that is no longer live, so the specialist still asks to confirm.
-        ...(waitGrant
-          ? { liveTurnGrantId: waitGrant.id }
-          : !wokenTurn && ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
-        // When this wait ends (#2371): the reasoning watchdog positions its time trigger
-        // against it. A distinct field, never cancelling the specialist's turn.
-        turnDeadlineAt: Date.now() + specialistTimeoutMs,
+        // A voice hand-off's lapsed grant (#2495) rides along on a turn that is no longer
+        // live, so the specialist still asks to confirm. A live turn's is replaced below.
+        ...(!wokenTurn && ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
         parentEventId: `delegate-${randomUUID()}`,
       });
       onTaskCreated(taskEvent.id);
@@ -780,6 +763,23 @@ export class DelegateHandler implements ToolHandler {
         ctx.delegationGuard.recordInvocation(dKey);
       }
 
+      // The wait starts here, after the claim, so both clocks on it start now: however
+      // long the claim took, the specialist gets the whole wait.
+      // The specialist's live turn lasts as long as this wait (#2515): a timeout or an
+      // interrupted wait leaves it running, and from then on nobody is live in its exchange.
+      // A grant revoked when the wait ends bounds it; inside a voice hand-off it also ends
+      // with that call's grant. A lapsed grant still lets the specialist ask for confirmation.
+      if (!wokenTurn && ctx.liveTurn === true) {
+        waitGrant = issueLiveTurnGrant({
+          ttlMs: specialistTimeoutMs,
+          ...(ctx.liveTurnGrantId !== undefined ? { parentId: ctx.liveTurnGrantId } : {}),
+        });
+        taskEvent.payload.liveTurnGrantId = waitGrant.id;
+      }
+      // When this wait ends (#2371): the reasoning watchdog positions its time trigger
+      // against it. A distinct field, never cancelling the specialist's turn.
+      taskEvent.payload.turnDeadlineAt = Date.now() + specialistTimeoutMs;
+
       // Set up a one-time listener for the specialist's response BEFORE
       // publishing the task, so we don't miss a fast response.
       // TODO: The EventBus has no unsubscribe mechanism, so this subscriber
@@ -789,9 +789,6 @@ export class DelegateHandler implements ToolHandler {
       const responsePromise = new Promise<SpecialistReply>((resolve, reject) => {
         let settled = false;
 
-        // The wait starts here, after the claim: restart the grant's TTL with the timer so
-        // a slow claim does not end the live turn before the wait does. Its parent still bounds it.
-        waitGrant?.renew(specialistTimeoutMs);
         timeoutHandle = setTimeout(() => {
           if (!settled) {
             settled = true;
