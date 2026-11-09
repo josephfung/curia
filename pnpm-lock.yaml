@@ -41,8 +41,8 @@ importers:
         specifier: ^1.3.0
         version: 1.3.0(zod@4.6.7)
       '@aws-sdk/client-bedrock-runtime':
-        specifier: ^3.1157.0
-        version: 3.1157.0
+        specifier: ^3.1161.0
+        version: 3.1161.0
       '@curia/shared-types':
         specifier: workspace:*
         version: link:packages/shared-types
@@ -129,7 +129,7 @@ importers:
         version: 8.4.0
       openai:
         specifier: ^7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
       openredaction:
         specifier: ^1.1.5
         version: 1.1.5(express@5.3.0)(pdf-parse@2.4.5)(react@19.3.1)
@@ -217,7 +217,7 @@ importers:
         version: 13.2.0
       promptfoo:
         specifier: ^0.125.1
-        version: 0.125.1(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@1.3.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))(zod@4.6.7))(@aws-sdk/credential-provider-node@3.972.92)(@aws-sdk/credential-providers@3.1161.0)(@cfworker/json-schema@4.1.1)(@huggingface/transformers@4.3.0(@types/node@26.6.6))(@ibm-cloud/watsonx-ai@1.7.16)(@langfuse/client@5.11.1(@opentelemetry/api@1.10.0))(@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7))(@openai/codex-sdk@0.156.1)(@slack/web-api@8.2.0)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(@types/json-schema@7.0.15)(@types/node@26.6.6)(@types/pg@8.23.1)(ibm-cloud-sdk-core@5.6.2)(pg@8.23.1)(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))(playwright@1.64.1)(puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)))(socks@2.8.10)
+        version: 0.125.1(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@1.3.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))(zod@4.6.7))(@aws-sdk/credential-provider-node@3.972.94)(@aws-sdk/credential-providers@3.1161.0)(@cfworker/json-schema@4.1.1)(@huggingface/transformers@4.3.0(@types/node@26.6.6))(@ibm-cloud/watsonx-ai@1.7.16)(@langfuse/client@5.11.1(@opentelemetry/api@1.10.0))(@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7))(@openai/codex-sdk@0.156.1)(@slack/web-api@8.2.0)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(@types/json-schema@7.0.15)(@types/node@26.6.6)(@types/pg@8.23.1)(ibm-cloud-sdk-core@5.6.2)(pg@8.23.1)(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))(playwright@1.64.1)(puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)))(socks@2.8.10)
       semver:
         specifier: ^7.8.5
         version: 7.8.5
@@ -412,8 +412,8 @@ packages:
     resolution: {integrity: sha512-Yeg9zUbSlz2H5unM5apKqYiG5bSrgUiJtQy3rTB28xF/0z8+sdBJAM6nLmZ5qnDX4J9r9z6zWNLYU71/NvB8zg==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-bedrock-runtime@3.1157.0':
-    resolution: {integrity: sha512-LWP6KhXZJlGXFcbfi7jL1WMzaDZ2GJoaaQge0JsUer1pNkvCozvftvOSbprvHoPY4YvqdrszH8CU5ub6cHTNQA==}
+  '@aws-sdk/client-bedrock-runtime@3.1161.0':
+    resolution: {integrity: sha512-kkH/bDt2AbEN+qpSNUstEbxY4KIsA2z70vGkA4w3f843sU/j998gyPkrMrAvkQDgzHCbfIgHvc1k+U+O37pc7w==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-s3@3.1161.0':
@@ -422,10 +422,6 @@ packages:
 
   '@aws-sdk/client-sagemaker-runtime@3.1161.0':
     resolution: {integrity: sha512-ULyo2GGfRSUCLWIjNhZo3fppGj+U2TKgDF+KwJ8LAvRofO0bkrhxRvTLnoshawIr1IAsRwC37inbaR5roszt9g==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/core@3.979.1':
-    resolution: {integrity: sha512-ayOlV1VhLNMiq8PW9ZkVobG4gkldnUoHjG69yy2b8j+VYFlhz/uAL7ZdYQAoQ+eShtGUdNDnnG5rxDg6yUJrOg==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.980.1':
@@ -452,8 +448,8 @@ packages:
     resolution: {integrity: sha512-5kcIZkMMs6eYvU6psqZkmeWsS3EGES53S6xUJFCC6eoJak3BQCCaF8yLU1bN6LTAOr2a9RWw+m1XBGen7Jcq+Q==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-node@3.972.92':
-    resolution: {integrity: sha512-jC3zmOo7Qxlk+oBivvSsS1Ph7sFGm0QfuhqDGbqgRXi4cxUYMG+dWtBwS2XYYXgc8TIVXJiwgQ65sbNpbYupTA==}
+  '@aws-sdk/credential-provider-node@3.972.94':
+    resolution: {integrity: sha512-qZzjRq45j0S0rI4XjHKGL63gGSFGPDYRe18Crp7l4Zk3Yr6PG4PjIixZEtsGIliOjtZ/h+ATExgjE54JQJeZMQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-process@3.972.82':
@@ -488,8 +484,8 @@ packages:
     resolution: {integrity: sha512-Kyl2G6zhIS9qFoeLdlxvXFrWyc6g9D9ZCIRJnGkkfX6JZhxCZB5ebXBc7GKEeetrnhXcail6ALZT0lKbojcaNA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/middleware-websocket@3.972.62':
-    resolution: {integrity: sha512-pNkKv8TlxEBpL26J8zpeHLzW//As72QapCPfciTs7k7H+ppFZxE/zVteAH9zdFI83Xx7Ki5rE0hJjVh+TmOH7g==}
+  '@aws-sdk/middleware-websocket@3.972.64':
+    resolution: {integrity: sha512-qhsyjMHfYZ+G7ejfs/Sq5P/ZUCi9SPVN/UpgeYxWvVa3WVjuFXPHTSKSxgXhLuRAUUcamFYEVUM7iQ4EPqtyig==}
     engines: {node: '>= 14.0.0'}
 
   '@aws-sdk/nested-clients@3.997.54':
@@ -502,10 +498,6 @@ packages:
 
   '@aws-sdk/signature-v4-multi-region@3.996.51':
     resolution: {integrity: sha512-+aHvUugVBuMPXxgkPfWnTMyGdE/yWS8GHi5+qQ37HowS0YqzrbuaDLznj+Dtmtu5jgCdqz36gXmujOToUhNNWw==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/token-providers@3.1157.0':
-    resolution: {integrity: sha512-AeAzcwWRP2uANO2TjFpKjRdvOCzgfIu6YQl9Ceibd6E0gnq5dfOzujFnq2aeqgbLg4wRtXbUZE4gekCCPrz/OQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/token-providers@3.1161.0':
@@ -2239,20 +2231,12 @@ packages:
     resolution: {integrity: sha512-Y1XfSefHIOub9762qm3ShafdlEE/Va8h3kLUeMq765fNeWeNLcOP2YUPr86H1SlyGwZTOqQ67RlBZPZ3k9Djgg==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/core@3.38.1':
-    resolution: {integrity: sha512-U/mB2XiwTLaf+NSgLSWwJfptsMT/H8aBi0aTAA/E5e2/TagFeGCqAyhKGG0w0A9IWTkm4qYEmLoD/HB6aYfnRA==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/core@3.39.0':
     resolution: {integrity: sha512-JJ/46AWQ4ipS1N2eZmUj7yzIhH8NhQIfAE+dce7NSB6dmFh+7hvD4pbofcoT4I0Xzfy/LNhZx3V2QhwYyAiqdg==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/credential-provider-imds@4.5.2':
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}
-    engines: {node: '>=18.0.0'}
-
-  '@smithy/fetch-http-handler@5.8.0':
-    resolution: {integrity: sha512-ycSJu3tFAQ4v04CBB0agqFMVsSQ1iG3yw+SpgxRqKfaURpQD4CZ8Wn0zPMmSnOuTpTh65Vz+EA0rMrw089wvkA==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/fetch-http-handler@5.8.1':
@@ -6132,77 +6116,66 @@ snapshots:
 
   '@aws-sdk/checksums@3.1002.1':
     dependencies:
-      '@aws-sdk/core': 3.979.1
+      '@aws-sdk/core': 3.980.1
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
 
   '@aws-sdk/client-bedrock-agent-runtime@3.1161.0':
     dependencies:
-      '@aws-sdk/core': 3.979.1
-      '@aws-sdk/credential-provider-node': 3.972.92
+      '@aws-sdk/core': 3.980.1
+      '@aws-sdk/credential-provider-node': 3.972.94
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.14.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/fetch-http-handler': 5.8.1
+      '@smithy/node-http-handler': 4.14.2
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
 
-  '@aws-sdk/client-bedrock-runtime@3.1157.0':
+  '@aws-sdk/client-bedrock-runtime@3.1161.0':
     dependencies:
-      '@aws-sdk/core': 3.979.1
-      '@aws-sdk/credential-provider-node': 3.972.92
+      '@aws-sdk/core': 3.980.1
+      '@aws-sdk/credential-provider-node': 3.972.94
       '@aws-sdk/eventstream-handler-node': 3.972.40
       '@aws-sdk/middleware-eventstream': 3.972.36
-      '@aws-sdk/middleware-websocket': 3.972.62
-      '@aws-sdk/token-providers': 3.1157.0
+      '@aws-sdk/middleware-websocket': 3.972.64
+      '@aws-sdk/token-providers': 3.1161.0
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.14.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/fetch-http-handler': 5.8.1
+      '@smithy/node-http-handler': 4.14.2
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
 
   '@aws-sdk/client-s3@3.1161.0':
     dependencies:
       '@aws-sdk/checksums': 3.1002.1
-      '@aws-sdk/core': 3.979.1
-      '@aws-sdk/credential-provider-node': 3.972.92
+      '@aws-sdk/core': 3.980.1
+      '@aws-sdk/credential-provider-node': 3.972.94
       '@aws-sdk/middleware-sdk-s3': 3.972.85
       '@aws-sdk/signature-v4-multi-region': 3.996.51
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.14.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/fetch-http-handler': 5.8.1
+      '@smithy/node-http-handler': 4.14.2
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
 
   '@aws-sdk/client-sagemaker-runtime@3.1161.0':
     dependencies:
-      '@aws-sdk/core': 3.979.1
-      '@aws-sdk/credential-provider-node': 3.972.92
+      '@aws-sdk/core': 3.980.1
+      '@aws-sdk/credential-provider-node': 3.972.94
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.14.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/fetch-http-handler': 5.8.1
+      '@smithy/node-http-handler': 4.14.2
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
-
-  '@aws-sdk/core@3.979.1':
-    dependencies:
-      '@aws-sdk/types': 3.975.0
-      '@aws-sdk/xml-builder': 3.972.42
-      '@aws/lambda-invoke-store': 0.3.0
-      '@smithy/core': 3.38.1
-      '@smithy/signature-v4': 5.7.5
-      '@smithy/types': 4.19.0
-      bowser: 2.15.0
-      tslib: 2.9.1
 
   '@aws-sdk/core@3.980.1':
     dependencies:
@@ -6267,7 +6240,7 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/credential-provider-node@3.972.92':
+  '@aws-sdk/credential-provider-node@3.972.94':
     dependencies:
       '@aws-sdk/credential-provider-env': 3.972.82
       '@aws-sdk/credential-provider-http': 3.972.84
@@ -6291,12 +6264,12 @@ snapshots:
 
   '@aws-sdk/credential-provider-sso@3.973.24':
     dependencies:
-      '@aws-sdk/core': 3.979.1
+      '@aws-sdk/core': 3.980.1
       '@aws-sdk/nested-clients': 3.997.54
       '@aws-sdk/token-providers': 3.1161.0
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
 
@@ -6327,7 +6300,7 @@ snapshots:
       '@aws-sdk/credential-provider-http': 3.972.84
       '@aws-sdk/credential-provider-ini': 3.973.27
       '@aws-sdk/credential-provider-login': 3.972.89
-      '@aws-sdk/credential-provider-node': 3.972.92
+      '@aws-sdk/credential-provider-node': 3.972.94
       '@aws-sdk/credential-provider-process': 3.972.82
       '@aws-sdk/credential-provider-sso': 3.973.26
       '@aws-sdk/credential-provider-web-identity': 3.972.88
@@ -6342,47 +6315,48 @@ snapshots:
   '@aws-sdk/eventstream-handler-node@3.972.40':
     dependencies:
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
 
   '@aws-sdk/middleware-eventstream@3.972.36':
     dependencies:
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
 
   '@aws-sdk/middleware-sdk-s3@3.972.85':
     dependencies:
-      '@aws-sdk/core': 3.979.1
+      '@aws-sdk/core': 3.980.1
       '@aws-sdk/signature-v4-multi-region': 3.996.51
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
 
-  '@aws-sdk/middleware-websocket@3.972.62':
+  '@aws-sdk/middleware-websocket@3.972.64':
     dependencies:
-      '@aws-sdk/core': 3.979.1
+      '@aws-sdk/core': 3.980.1
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/core': 3.39.0
+      '@smithy/fetch-http-handler': 5.8.1
       '@smithy/signature-v4': 5.7.5
-      '@smithy/types': 4.19.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
 
   '@aws-sdk/nested-clients@3.997.54':
     dependencies:
-      '@aws-sdk/core': 3.979.1
+      '@aws-sdk/core': 3.980.1
       '@aws-sdk/signature-v4-multi-region': 3.996.51
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.14.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/fetch-http-handler': 5.8.1
+      '@smithy/node-http-handler': 4.14.2
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
+    optional: true
 
   '@aws-sdk/nested-clients@3.998.1':
     dependencies:
@@ -6402,24 +6376,14 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/token-providers@3.1157.0':
-    dependencies:
-      '@aws-sdk/core': 3.979.1
-      '@aws-sdk/nested-clients': 3.997.54
-      '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
-      tslib: 2.9.1
-
   '@aws-sdk/token-providers@3.1161.0':
     dependencies:
-      '@aws-sdk/core': 3.979.1
-      '@aws-sdk/nested-clients': 3.997.54
+      '@aws-sdk/core': 3.980.1
+      '@aws-sdk/nested-clients': 3.998.1
       '@aws-sdk/types': 3.975.0
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
-    optional: true
 
   '@aws-sdk/token-providers@3.1164.0':
     dependencies:
@@ -6432,18 +6396,18 @@ snapshots:
 
   '@aws-sdk/types@3.975.0':
     dependencies:
-      '@smithy/types': 4.19.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
 
   '@aws-sdk/util-format-url@3.972.56':
     dependencies:
-      '@aws-sdk/core': 3.979.1
+      '@aws-sdk/core': 3.980.1
       tslib: 2.9.1
     optional: true
 
   '@aws-sdk/xml-builder@3.972.42':
     dependencies:
-      '@smithy/types': 4.19.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
 
   '@aws/bedrock-token-generator@1.1.0':
@@ -6456,7 +6420,7 @@ snapshots:
       '@smithy/node-config-provider': 4.6.2
       '@smithy/protocol-http': 5.6.2
       '@smithy/signature-v4': 5.7.5
-      '@smithy/types': 4.19.0
+      '@smithy/types': 4.20.0
     optional: true
 
   '@aws/lambda-invoke-store@0.3.0': {}
@@ -6478,7 +6442,7 @@ snapshots:
       tslib: 2.9.1
     optional: true
 
-  '@azure/ai-projects@2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(zod@4.6.7)':
+  '@azure/ai-projects@2.10.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(zod@4.6.7)':
     dependencies:
       '@azure-rest/core-client': 2.9.0
       '@azure/abort-controller': 2.2.0
@@ -6493,7 +6457,7 @@ snapshots:
       '@azure/storage-blob': 12.34.0
       '@opentelemetry/api': 1.10.0
       https-proxy-agent: 9.1.0
-      openai: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
+      openai: 7.47.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
       tslib: 2.9.1
       ws: 8.22.1
     transitivePeerDependencies:
@@ -7592,10 +7556,10 @@ snapshots:
 
   '@nodable/entities@3.1.0': {}
 
-  '@openai/agents-core@0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)':
+  '@openai/agents-core@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)':
     dependencies:
       debug: 4.4.3
-      openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
+      openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7)
       zod: 4.6.7
@@ -7608,11 +7572,11 @@ snapshots:
       - ws
     optional: true
 
-  '@openai/agents-openai@0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)':
+  '@openai/agents-openai@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)':
     dependencies:
-      '@openai/agents-core': 0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
+      '@openai/agents-core': 0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
       debug: 4.4.3
-      openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
+      openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
       zod: 4.6.7
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -7623,9 +7587,9 @@ snapshots:
       - ws
     optional: true
 
-  '@openai/agents-realtime@0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(zod@4.6.7)':
+  '@openai/agents-realtime@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(zod@4.6.7)':
     dependencies:
-      '@openai/agents-core': 0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
+      '@openai/agents-core': 0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
       '@types/ws': 8.18.2
       debug: 4.4.3
       ws: 8.22.1
@@ -7640,13 +7604,13 @@ snapshots:
       - utf-8-validate
     optional: true
 
-  '@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)':
+  '@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)':
     dependencies:
-      '@openai/agents-core': 0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
-      '@openai/agents-openai': 0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
-      '@openai/agents-realtime': 0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(zod@4.6.7)
+      '@openai/agents-core': 0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
+      '@openai/agents-openai': 0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
+      '@openai/agents-realtime': 0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(zod@4.6.7)
       debug: 4.4.3
-      openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
+      openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
       zod: 4.6.7
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -8060,14 +8024,9 @@ snapshots:
 
   '@smithy/config-resolver@4.7.2':
     dependencies:
-      '@smithy/core': 3.38.1
+      '@smithy/core': 3.39.0
       tslib: 2.9.1
     optional: true
-
-  '@smithy/core@3.38.1':
-    dependencies:
-      '@smithy/types': 4.19.0
-      tslib: 2.9.1
 
   '@smithy/core@3.39.0':
     dependencies:
@@ -8078,12 +8037,6 @@ snapshots:
     dependencies:
       '@smithy/core': 3.39.0
       '@smithy/types': 4.20.0
-      tslib: 2.9.1
-
-  '@smithy/fetch-http-handler@5.8.0':
-    dependencies:
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
       tslib: 2.9.1
 
   '@smithy/fetch-http-handler@5.8.1':
@@ -8100,21 +8053,22 @@ snapshots:
 
   '@smithy/invalid-dependency@4.5.2':
     dependencies:
-      '@smithy/core': 3.38.1
+      '@smithy/core': 3.39.0
       tslib: 2.9.1
     optional: true
 
   '@smithy/node-config-provider@4.6.2':
     dependencies:
-      '@smithy/core': 3.38.1
+      '@smithy/core': 3.39.0
       tslib: 2.9.1
     optional: true
 
   '@smithy/node-http-handler@4.14.1':
     dependencies:
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.39.0
+      '@smithy/types': 4.20.0
       tslib: 2.9.1
+    optional: true
 
   '@smithy/node-http-handler@4.14.2':
     dependencies:
@@ -8124,7 +8078,7 @@ snapshots:
 
   '@smithy/protocol-http@5.6.2':
     dependencies:
-      '@smithy/core': 3.38.1
+      '@smithy/core': 3.39.0
       tslib: 2.9.1
     optional: true
 
@@ -10586,18 +10540,18 @@ snapshots:
       wsl-utils: 1.0.1
     optional: true
 
-  openai@6.49.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7):
+  openai@6.49.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7):
     optionalDependencies:
-      '@aws-sdk/credential-provider-node': 3.972.92
+      '@aws-sdk/credential-provider-node': 3.972.94
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.5
       ws: 8.22.1
       zod: 4.6.7
     optional: true
 
-  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7):
+  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7):
     optionalDependencies:
-      '@aws-sdk/credential-provider-node': 3.972.92
+      '@aws-sdk/credential-provider-node': 3.972.94
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.5
       google-auth-library: 11.3.2
@@ -10940,7 +10894,7 @@ snapshots:
 
   promise-limit@2.7.0: {}
 
-  promptfoo@0.125.1(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@1.3.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))(zod@4.6.7))(@aws-sdk/credential-provider-node@3.972.92)(@aws-sdk/credential-providers@3.1161.0)(@cfworker/json-schema@4.1.1)(@huggingface/transformers@4.3.0(@types/node@26.6.6))(@ibm-cloud/watsonx-ai@1.7.16)(@langfuse/client@5.11.1(@opentelemetry/api@1.10.0))(@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7))(@openai/codex-sdk@0.156.1)(@slack/web-api@8.2.0)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(@types/json-schema@7.0.15)(@types/node@26.6.6)(@types/pg@8.23.1)(ibm-cloud-sdk-core@5.6.2)(pg@8.23.1)(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))(playwright@1.64.1)(puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)))(socks@2.8.10):
+  promptfoo@0.125.1(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@1.3.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))(zod@4.6.7))(@aws-sdk/credential-provider-node@3.972.94)(@aws-sdk/credential-providers@3.1161.0)(@cfworker/json-schema@4.1.1)(@huggingface/transformers@4.3.0(@types/node@26.6.6))(@ibm-cloud/watsonx-ai@1.7.16)(@langfuse/client@5.11.1(@opentelemetry/api@1.10.0))(@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7))(@openai/codex-sdk@0.156.1)(@slack/web-api@8.2.0)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(@types/json-schema@7.0.15)(@types/node@26.6.6)(@types/pg@8.23.1)(ibm-cloud-sdk-core@5.6.2)(pg@8.23.1)(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))(playwright@1.64.1)(puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)))(socks@2.8.10):
     dependencies:
       '@anthropic-ai/sdk': 0.133.0(zod@4.6.7)
       '@apidevtools/json-schema-ref-parser': 16.0.5(@types/json-schema@7.0.15)
@@ -10996,7 +10950,7 @@ snapshots:
       mathjs: 15.2.0
       minimatch: 10.2.6
       nunjucks: 3.2.4(chokidar@5.0.0)
-      openai: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
+      openai: 7.47.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
       opener: 1.5.2
       ora: 9.4.1
       parse5: 8.1.0
@@ -11021,12 +10975,12 @@ snapshots:
     optionalDependencies:
       '@anthropic-ai/claude-agent-sdk': 0.3.283(@anthropic-ai/sdk@1.3.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))(zod@4.6.7)
       '@aws-sdk/client-bedrock-agent-runtime': 3.1161.0
-      '@aws-sdk/client-bedrock-runtime': 3.1157.0
+      '@aws-sdk/client-bedrock-runtime': 3.1161.0
       '@aws-sdk/client-s3': 3.1161.0
       '@aws-sdk/client-sagemaker-runtime': 3.1161.0
       '@aws-sdk/credential-provider-sso': 3.973.24
       '@aws/bedrock-token-generator': 1.1.0
-      '@azure/ai-projects': 2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(zod@4.6.7)
+      '@azure/ai-projects': 2.10.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.2)(undici@8.12.4)(zod@4.6.7)
       '@azure/identity': 4.14.1
       '@azure/msal-node': 7.1.2
       '@azure/storage-blob': 12.34.0
@@ -11037,7 +10991,7 @@ snapshots:
       '@langfuse/client': 5.11.1(@opentelemetry/api@1.10.0)
       '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7)
       '@modelcontextprotocol/server-filesystem': 2026.8.31(@cfworker/json-schema@4.1.1)(zod@4.6.7)
-      '@openai/agents': 0.11.8(@aws-sdk/credential-provider-node@3.972.92)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
+      '@openai/agents': 0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.22.1)(zod@4.6.7)
       '@openai/codex-sdk': 0.156.1
       '@opencode-ai/sdk': 1.19.5
       '@slack/web-api': 8.2.0
