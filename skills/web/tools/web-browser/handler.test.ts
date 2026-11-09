@@ -1712,6 +1712,64 @@ describe('web-browser batched actions (multi-action per call)', () => {
   });
 });
 
+describe('web-browser url handling (#2546)', () => {
+  async function runFor(input: Record<string, unknown>, pageUrl?: string) {
+    const { ctx, page } = makeToolContext({ input, pageContent: '', pageUrl });
+    const getOrCreateSession = vi.mocked(ctx.browserService!.getOrCreateSession);
+    const result = await new WebBrowserHandler().execute(ctx);
+    return { result, page, getOrCreateSession };
+  }
+
+  it.each(['get_content', 'click', 'type', 'scroll', 'screenshot'])('refuses url on %s and touches no browser', async (action) => {
+    const { result, getOrCreateSession } = await runFor({ action, url: 'https://example.com', selector: '#a', text: 'x' });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/navigate/);
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses url on a non-navigate batch step, naming the step', async () => {
+    const { result, getOrCreateSession } = await runFor({
+      actions: [{ action: 'navigate', url: 'https://example.com' }, { action: 'get_content', url: 'https://example.com' }],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/actions\[1\].*navigate/);
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses a top-level url alongside actions', async () => {
+    const { result, getOrCreateSession } = await runFor({ url: 'https://example.com', actions: [{ action: 'get_content' }] });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/navigate/);
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('treats an empty url as absent', async () => {
+    const { result } = await runFor({ action: 'get_content', url: '' });
+    expect(result.success).toBe(true);
+  });
+
+  it('still navigates with a url, alone and as a batch step', async () => {
+    const single = await runFor({ action: 'navigate', url: 'https://example.com' });
+    expect(single.result.success).toBe(true);
+    expect(single.page.goto).toHaveBeenCalledOnce();
+    const batch = await runFor({ actions: [{ action: 'navigate', url: 'https://example.com' }, { action: 'get_content' }] });
+    expect(batch.result.success).toBe(true);
+    expect(batch.page.goto).toHaveBeenCalledOnce();
+  });
+
+  it('says no page is open when a read lands on about:blank', async () => {
+    const { result } = await runFor({ action: 'get_content' }, 'about:blank');
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as { content: string }).content).toMatch(/no page is open.*navigate/is);
+  });
+
+  it('adds nothing when a real page is open', async () => {
+    const { result } = await runFor({ action: 'get_content' });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as { content: string }).content).not.toMatch(/no page is open/i);
+  });
+});
+
 describe('web-browser session_reused signal', () => {
   function ctxWithSession(input: Record<string, unknown>, returnedSessionId: string) {
     const page = makeMockPage('page', vi.fn(), 'https://example.com/');

@@ -59,6 +59,34 @@ describe('web-fetch', () => {
     expect(result).toEqual({ success: false, error: 'HTTP 503: Service Unavailable' });
   });
 
+  describe('pages with no readable text (#2546)', () => {
+    const html = (body: string) => new Response(body, { status: 200, headers: { 'content-type': 'text/html' } });
+
+    it('points to web-browser when only scripts and markup come back', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+        html('<html><head><script>window.app = "x";</script><style>a{}</style></head><body>\n  <div id="root"></div>\n</body></html>'),
+      ));
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/'));
+      expect(result.success).toBe(true);
+      if (result.success) expect((result.data as { note?: string }).note).toMatch(/no readable text.*web-browser/is);
+    });
+
+    it('flags a body whose text was cut off by max_length, ignoring the truncation marker', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(html(`<script>${'x'.repeat(500)}</script><p>Real text after</p>`)));
+      const ctx = { input: { url: 'https://example.com/', max_length: 100 }, log: logger } as unknown as ToolContext;
+      const result = await new WebFetchHandler().execute(ctx);
+      expect(result.success).toBe(true);
+      if (result.success) expect((result.data as { note?: string }).note).toMatch(/web-browser/);
+    });
+
+    it('leaves a page with readable text unchanged', async () => {
+      const page = '<html><body><p>Open daily</p></body></html>';
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(html(page)));
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/'));
+      expect(result).toEqual({ success: true, data: { body: page, status: 200, content_type: 'text/html' } });
+    });
+  });
+
   it('still refuses private addresses first', async () => {
     const result = await new WebFetchHandler().execute(ctxFor('http://127.0.0.1/'));
     expect(result.success).toBe(false);

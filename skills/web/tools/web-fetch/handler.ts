@@ -12,8 +12,10 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLanding } from '../../../../src/skills/_shared/google-workspace-url.js';
 import { WEB_FETCH_NOT_FOUND_LINES } from '../../../../src/agents/prompts/dead-end-guidance.js';
+import { sanitizeOutput } from '../../../../src/skills/sanitize.js';
 
 const WEB_FETCH_NOT_FOUND = WEB_FETCH_NOT_FOUND_LINES.join(' ');
+const NO_READABLE_TEXT_NOTE = 'This fetch returned no readable text, which usually means the page is rendered by JavaScript or max_length cut it off. It says nothing about what the site offers. Use web-browser to read it.';
 
 // Default max body length: 50KB. Enough for most web pages when truncated.
 const DEFAULT_MAX_LENGTH = 50000;
@@ -116,9 +118,14 @@ export class WebFetchHandler implements ToolHandler {
       let body = await response.text();
       const contentType = response.headers.get('content-type') ?? 'unknown';
 
-      if (body.length > maxLength) {
-        body = body.slice(0, maxLength) + '[truncated]';
-      }
+      const truncated = body.length > maxLength;
+      if (truncated) body = body.slice(0, maxLength);
+
+      // The execution layer strips markup after this returns, so raw HTML with no text in it
+      // (a JS-rendered shell, or a max_length that ended inside <head>) reaches the model as
+      // bare whitespace. Run the same sanitizer here to see what the model will get (#2546).
+      const hasReadableText = sanitizeOutput(body).trim().length > 0;
+      if (truncated) body += '[truncated]';
 
       return {
         success: true,
@@ -126,6 +133,7 @@ export class WebFetchHandler implements ToolHandler {
           body,
           status: response.status,
           content_type: contentType,
+          ...(hasReadableText ? {} : { note: NO_READABLE_TEXT_NOTE }),
         },
       };
     } catch (err) {

@@ -114,7 +114,32 @@ export function extractFrameContent(opts: ExtractOpts): string {
   // the keepNames regression test in dom-extract.test.ts guards it. Anonymous forEach/arrow
   // callbacks are fine — keepNames only wraps functions bound to a name.
 
-  const interactables = Array.from(document.querySelectorAll(INTERACTABLE_SELECTOR));
+  // Offer only what a click can reach (#2546), using the test Playwright applies before a click:
+  // a non-empty box and not visibility:hidden. Where an element sits relative to the viewport is
+  // deliberately no part of this, because Playwright scrolls to a below-the-fold element; opacity
+  // isn't either, because Playwright can click a transparent one. display:contents has no box of
+  // its own but its children render, so it is kept. Filtering before the cap below stops closed
+  // menus and drawers spending list slots.
+  //
+  // Hidden native radios, checkboxes and file inputs stay, tagged, because custom-styled controls
+  // hide the real input and the agent needs to know the control exists.
+  const hiddenNativeInputs = new Set<Element>();
+  const interactables = Array.from(document.querySelectorAll(INTERACTABLE_SELECTOR)).filter((el) => {
+    const style = getComputedStyle(el);
+    const box = el.getBoundingClientRect();
+    // checkVisibility (Chrome 105+) covers ancestors' display:none and content-visibility.
+    const rendered = style.visibility !== 'hidden' && style.visibility !== 'collapse' && (
+      style.display === 'contents'
+      || ((typeof el.checkVisibility !== 'function' || el.checkVisibility()) && box.width > 0 && box.height > 0)
+    );
+    if (rendered) return true;
+    const type = (el.getAttribute('type') ?? '').toLowerCase();
+    if (el.tagName === 'INPUT' && (type === 'radio' || type === 'checkbox' || type === 'file')) {
+      hiddenNativeInputs.add(el);
+      return true;
+    }
+    return false;
+  });
   const shown = Math.min(interactables.length, maxRefs);
   const refLines: string[] = [];
   for (let i = 0; i < shown; i++) {
@@ -171,7 +196,8 @@ export function extractFrameContent(opts: ExtractOpts): string {
 
     const legend = el.closest('fieldset')?.querySelector('legend')?.textContent?.trim();
     const group = legend ? ` (group: "${legend.slice(0, 120)}")` : '';
-    refLines.push(`[${ref}] ${role} "${name}"${group}`);
+    const hiddenTag = hiddenNativeInputs.has(el) ? ' (hidden)' : '';
+    refLines.push(`[${ref}] ${role} "${name}"${hiddenTag}${group}`);
   }
   const overflow = interactables.length > maxRefs
     ? `\n(${interactables.length - maxRefs} more interactable elements not shown; scroll or refine)`

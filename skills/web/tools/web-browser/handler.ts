@@ -267,6 +267,15 @@ export class WebBrowserHandler implements ToolHandler {
       if (isBatch && STANDALONE_ACTIONS.has(stepAction)) {
         return { success: false, error: `actions[${i}]: ${stepAction} cannot be used inside a batch — call it as a single action` };
       }
+      // Only navigate opens a URL. Anything else would run against whatever page is already
+      // open (often about:blank) and report success, so refuse rather than go somewhere
+      // implicitly: a read must never change the page (#2546).
+      if (stepAction !== 'navigate' && isUrlGiven(steps[i]!.url)) {
+        return { success: false, error: `${isBatch ? `actions[${i}]: ` : ''}url only applies to navigate, so nothing was done. Call navigate with the url first, then ${stepAction}.` };
+      }
+    }
+    if (isBatch && isUrlGiven(url)) {
+      return { success: false, error: 'A top-level url is not used with actions, so nothing was done. Add a navigate step with the url to actions.' };
     }
 
     // --- close_session: single, terminal action; no page interaction needed ---
@@ -562,6 +571,9 @@ export class WebBrowserHandler implements ToolHandler {
 
     const note = settleNote(settle);
     if (note) content = content ? `${content}\n${note}` : note;
+    // A fresh session sits on about:blank. Empty content there means nothing was loaded, not
+    // that a site came back empty or blocked the read (#2546).
+    if (currentUrl === 'about:blank') content = content ? `${content}\n${NO_PAGE_OPEN_NOTE}` : NO_PAGE_OPEN_NOTE;
 
     const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl, settled: settle.settled };
     // The main-frame URLs the page passed through, when it moved (#2244). Scrubbed like
@@ -1218,6 +1230,13 @@ async function trackTypedCode(
  * or null when it had. On a sign-in handoff the note says what leaving costs: the agent
  * that navigated away from one left the profile half-signed-in.
  */
+const NO_PAGE_OPEN_NOTE = '[Note: no page is open in this session, so nothing was read and this says nothing about any site. Call navigate with a url first.]';
+
+/** Models pad optional arguments with an empty string, so that counts as not given. */
+function isUrlGiven(url: unknown): boolean {
+  return url !== undefined && url !== null && url !== '';
+}
+
 function settleNote(settle: SettleResult): string | null {
   if (settle.settled) return null;
   const waited = `${Math.round(settle.waitedMs / 1000)}s`;

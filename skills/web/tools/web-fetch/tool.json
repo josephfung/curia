@@ -12,7 +12,8 @@
   "outputs": {
     "body": "string",
     "status": "number",
-    "content_type": "string"
+    "content_type": "string",
+    "note": "string? (present when the page had no readable text)"
   },
   "permissions": ["network:https"],
   "secrets": [],
