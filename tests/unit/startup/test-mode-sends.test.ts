@@ -51,6 +51,7 @@ import {
   type RecordedSend,
   type SendRecorder,
 } from '../../../src/startup/test-mode-sends.js';
+import { scheduledJobTask } from '../../scenarios/harness.js';
 
 const logger = createLogger('error');
 
@@ -358,7 +359,9 @@ describe('the recording principal mailbox (#2474)', () => {
 // gateway with the configured (tier) gating; the case's autonomy fixture says band on every read.
 describe('an autonomous send through the recording gateway (#2474 PR 2)', () => {
   const NOW = Math.floor(Date.now() / 1000);
-  const SCHEDULED = { taskMetadata: { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
+  // The metadata the scenario harness's `from: scheduler` task really carries (addendum R1), so
+  // these runs prove that task passes the gateway's origin allowlist.
+  const SCHEDULED = { taskMetadata: scheduledJobTask('ceo-inbox', 'c-1', 'triage').payload.metadata };
   const bandFixture = {
     getConfig: async () => ({ score: 85, band: 'act', updatedAt: new Date(0), updatedBy: 'scenario-fixture', gating: 'band' }),
   } as unknown as AutonomyService;

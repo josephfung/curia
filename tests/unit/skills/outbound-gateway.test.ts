@@ -6400,10 +6400,8 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(PRINCIPAL_SEND_REFUSALS.outsider_originated).toBe(text);
       expect(review).not.toHaveBeenCalled();
       expect(client!.sendDraft).not.toHaveBeenCalled();
-      // Final fixes B2: the marker keeps the refusal code, never the free text.
-      expect(ledger.recordHeld).toHaveBeenCalledWith({
-        draftId: 'd1', threadId: 'th1', recipients: ['dana@example.org'], mode: 'autonomous', reasonCode: 'outsider_originated', at: expect.any(String),
-      });
+      // Addendum: an origin stop isn't a judgement on the thread, so no marker burns its cooldown.
+      expect(ledger.recordHeld).not.toHaveBeenCalled();
       expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('outsider_originated'), urgency: 'digest', source: 'principal_mailbox', conversationId: 'c1' })]);
       expect(DIGEST('outsider_originated')).toBe(`${LEAD} This work started from someone outside, so Curia didn't send it on its own.${IN_DRAFTS}`);
     });
@@ -6812,8 +6810,8 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(r.blockedReason).toMatch(/Nothing was sent; the draft is still in their Drafts folder\.$/);
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reasonCode: 'secret-pattern' }));
-      // The digest keeps the reason's lead and drops the agent's notes after it (final fixes A12).
-      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} secret-pattern.${IN_DRAFTS}` })]);
+      // Addendum R3: plain words, no rule name and none of the agent's notes.
+      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} Curia's content check stopped it.${IN_DRAFTS}` })]);
     });
 
     it('makes a blocked contact final: held marker and one digest item', async () => {
@@ -6902,13 +6900,108 @@ describe('sendPrincipalDraft (#2474)', () => {
       const { gw, client, ledger } = makeAuto({ review });
       const r = await gw.sendPrincipalDraft('d1', auto);
       expect(r).toMatchObject({ success: false, leftAsDraft: true, blockedRules: ['ungrounded-claim'] });
-      expect(r.blockedReason).toMatch(/Nothing was sent; the draft is still in their Drafts folder\.$/);
+      expect(r.blockedReason).toBe(`The send review stopped this reply, and the stop is final: don't edit it or send it again. The principal will see why in their digest.${SUFFIX}`);
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordSending).not.toHaveBeenCalled();
       expect(ledger.recordHeld).toHaveBeenCalledOnce();
       expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'th1', mode: 'autonomous', reasonCode: 'ungrounded-claim' }));
-      expect(reports()).toHaveLength(1);
-      expect(String(reports()[0]!['summary'])).toMatch(new RegExp(`^${LEAD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} .*It's in your Drafts\\.$`));
+      expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} It says things about you that Curia couldn't confirm.${IN_DRAFTS}` })]);
+    });
+
+    // Addendum R3: the real review's finding detail is drafter instructions; none of it reaches the digest.
+    describe('a real bounce reaches the principal in plain words', () => {
+      function realReview(answer: Record<string, unknown>) {
+        const real = new BandSendReview({
+          judge: {
+            review: vi.fn().mockResolvedValue({ ok: true, purpose: 'serving', stakes: 'routine', stakesReason: 'Routine.', unsupportedClaims: [], unnecessaryItems: [], offThread: false, reason: 'x', ...answer }),
+            isEnabled: () => true,
+          },
+          evidence: { collect: vi.fn().mockResolvedValue({ unavailable: false, toolResults: [], principalBlock: null }) },
+          limiter: new FailOpenLimiter(), onLimiterTripped: vi.fn(), contactTier: vi.fn(), logger: createLogger('error'),
+        });
+        return vi.fn((input) => real.review(input));
+      }
+      const body = '<p>The board approved it.</p>';
+
+      it('a grounding bounce', async () => {
+        const { gw } = makeAuto({ review: realReview({ unsupportedClaims: ['The board approved it.'] }), client: autoClient(autoDraft({ body })) });
+        const r = await gw.sendPrincipalDraft('d1', auto);
+        expect(r.blockedRules).toEqual(['ungrounded-claim']);
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} It says things about you that Curia couldn't confirm.${IN_DRAFTS}` })]);
+        // The agent is told the stop is final; nothing invites the rewrite the prompt forbids.
+        expect(r.blockedReason).not.toMatch(/verify|remove them|rewrite/i);
+        expect(r.blockedReason).toMatch(/final/);
+      });
+
+      it('an unneeded-detail bounce, and both reasons together with no rule names', async () => {
+        const unneeded = makeAuto({ review: realReview({ unnecessaryItems: ['The board approved it.'] }), client: autoClient(autoDraft({ body })) });
+        await unneeded.gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} It includes details the reply didn't need.${IN_DRAFTS}` })]);
+
+        mocks = createMocks();
+        const both = makeAuto({ review: realReview({ unsupportedClaims: ['The board approved it.'], unnecessaryItems: ['The board approved it.'] }), client: autoClient(autoDraft({ body })) });
+        await both.gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} It says things about you that Curia couldn't confirm. It includes details the reply didn't need.${IN_DRAFTS}` })]);
+      });
+
+      it('any other bounced rule reads as a general reason', async () => {
+        const { gw } = makeAuto({ review: vi.fn().mockResolvedValue({ kind: 'bounce', findings: [{ rule: 'redaction-token', detail: 'Rewrite it with the real content.' }] }) });
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} Curia's review wasn't confident enough to send it.${IN_DRAFTS}` })]);
+      });
+    });
+
+    // Addendum R3: every other way a check or review reaches the digest.
+    describe('no rule names or drafter voice in any digest item', () => {
+      it.each([
+        ['a block after a rewrite', { kind: 'block', reason: 'Not sent: x', findings: [{ rule: 'ungrounded-claim', detail: 'Verify them with your tools.' }] }, "It says things about you that Curia couldn't confirm."],
+        ['a personal-data hold', { kind: 'hold', reason: "Held for the principal: it shares personal details (phone number) for a task the principal set, not at their request in this conversation, and this band asks first.", findings: [{ rule: 'pii-not-authorized', detail: 'x' }] }, 'It shares personal details that need your OK first.'],
+        ['a dropped quote', { kind: 'send', dropQuote: { labels: ['PHONE_NUMBER'] } }, 'It shares personal details that need your OK first.'],
+      ])('%s', async (_name, decision, text) => {
+        const { gw } = makeAuto({ review: vi.fn().mockResolvedValue(decision) });
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${text}${IN_DRAFTS}` })]);
+      });
+
+      it('a blocked recipient, an unresolved name and a redactor error', async () => {
+        vi.mocked(mocks.contactService.resolveByChannelIdentity).mockResolvedValue({
+          contactId: 'c-dana', displayName: 'Dana', role: null, tier: 'blocked', kind: 'person', kgNodeId: null, verified: true,
+        } as unknown as Awaited<ReturnType<ContactService['resolveByChannelIdentity']>>);
+        const blocked = makeAuto();
+        await blocked.gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} One of the recipients is blocked.${IN_DRAFTS}` })]);
+
+        mocks = createMocks();
+        const { ConversationEntityState } = await import('../../../src/entity-context/conversation-entities.js');
+        const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Avery Lee']);
+        entities.turnIdentities.begin('t1');
+        const named = makeAuto({ conversationEntities: entities, client: autoClient(autoDraft({ body: '<p>He and Xiaopu (last name to be confirmed) would like to attend.</p>' })) });
+        await named.gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} It names someone Curia couldn't identify.${IN_DRAFTS}` })]);
+
+        mocks = createMocks();
+        const broken = redactorFor([]);
+        broken.detect.mockImplementation(() => { throw new Error('boom'); });
+        const failed = makeAuto({ piiRedactor: broken });
+        await failed.gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} Curia couldn't check it for personal details.${IN_DRAFTS}` })]);
+      });
+
+      it('an off-thread hold beside a grounding finding names it in plain words', async () => {
+        const real = new BandSendReview({
+          judge: {
+            review: vi.fn().mockResolvedValue({ ok: true, purpose: 'serving', stakes: 'routine', stakesReason: 'x', unsupportedClaims: ['Bob said 4.2x.'], unnecessaryItems: [], offThread: true, reason: 'x' }),
+            isEnabled: () => true,
+          },
+          evidence: { collect: vi.fn().mockResolvedValue({ unavailable: false, toolResults: [], principalBlock: null }) },
+          limiter: new FailOpenLimiter(), onLimiterTripped: vi.fn(), contactTier: vi.fn(), logger: createLogger('error'),
+        });
+        const { gw } = makeAuto({ level: 'all', score: 100, review: vi.fn((input) => real.review(input)), client: autoClient(autoDraft({ body: '<p>Bob said 4.2x.</p>' })) });
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({
+          summary: `${LEAD} Held for you: it shares information that isn't on the thread, and Curia doesn't pass on new information without you. It says things about you that Curia couldn't confirm.${IN_DRAFTS}`,
+        })]);
+      });
     });
 
     it('9. a principal-directed bounce is unchanged: no marker, no digest item', async () => {
@@ -7002,6 +7095,18 @@ describe('sendPrincipalDraft (#2474)', () => {
         const { gw, client, review } = makeAuto({ piiRedactor, client: autoClient(autoDraft({ body }), [signed]) });
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'financial_details' });
         expect(review).not.toHaveBeenCalled();
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      // Addendum: the backstop doesn't depend on outbound_redaction config.
+      it.each([
+        ['redaction disabled', { enabled: false, default: 'block' as const, channel_policies: {} }],
+        ['credit_card allowed on email', { enabled: true, default: 'block' as const, channel_policies: { email: { allow: ['email', 'credit_card'] } } }],
+      ])('A3. refuses a card number with %s', async (_name, config) => {
+        const { PiiRedactor: RealRedactor } = await import('../../../src/dispatch/pii-redactor.js');
+        const piiRedactor = new RealRedactor({ config: config as import('../../../src/dispatch/pii-redactor.js').OutboundRedactionConfig, bus: mocks.bus, logger: mocks.logger, extraPatterns: [] });
+        const { gw, client } = makeAuto({ piiRedactor, client: autoClient(autoDraft({ body: '<p>Card on file 4111 1111 1111 1111.</p>' })) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'financial_details' });
         expect(client!.sendDraft).not.toHaveBeenCalled();
       });
 
@@ -7116,7 +7221,8 @@ describe('sendPrincipalDraft (#2474)', () => {
           const r = await gw.sendPrincipalDraft('d1', { ...auto, authority: { taskMetadata: taskMetadata as Record<string, unknown> | undefined } });
           expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'origin_unknown', blockedReason: text });
           expect(client!.sendDraft).not.toHaveBeenCalled();
-          expect(ledger.recordHeld).toHaveBeenCalledOnce();
+          // Addendum: no marker, so a task of unknown origin can't burn the thread's cooldown.
+          expect(ledger.recordHeld).not.toHaveBeenCalled();
           expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('origin_unknown') })]);
         });
 

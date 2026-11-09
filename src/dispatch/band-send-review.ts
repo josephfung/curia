@@ -128,6 +128,21 @@ const ORIGIN_UNRESOLVED_REASON = 'Held for the principal: the message that start
 const OFF_THREAD_REASON = 'Held for the principal: it shares information that isn\'t on the thread, and Curia doesn\'t pass on new information without the principal.';
 const STAKES_UNREVIEWED_REASON = 'Held for the principal: the reviewer was unavailable, so what this message commits the principal to is unrated and treated as financial or legal. Stakes: financial or legal (unrated).';
 
+/** The principal-facing words for a review finding on an autonomous reply (#2474 addendum R3). */
+const PLAIN_REVIEW_REASON: Readonly<Record<string, string>> = {
+  'ungrounded-claim': "It says things about the principal that Curia couldn't confirm.",
+  'unneeded-disclosure': "It includes details the reply didn't need.",
+};
+const PLAIN_REVIEW_FALLBACK = "Curia's review wasn't confident enough to send it.";
+
+/**
+ * Review findings in plain words, once each, never a rule name or a finding's detail: a detail
+ * is written for the drafter ("Verify them with your tools or remove them").
+ */
+export function plainReviewReasons(rules: readonly string[]): string[] {
+  return rules.length === 0 ? [PLAIN_REVIEW_FALLBACK] : [...new Set(rules.map((r) => PLAIN_REVIEW_REASON[r] ?? PLAIN_REVIEW_FALLBACK))];
+}
+
 /** What the drafter is told when a send is blocked; the gateway appends the findings. */
 export const BLOCK_REASON = 'Not sent: after one rewrite it still has the problems below. Rewrite it again without them, or tell the principal.';
 
@@ -872,17 +887,18 @@ function isAutonomousMailbox(input: BandReviewInput): boolean {
  * dropped, like any hold beside one: a yes to the requester would not make the reply sendable.
  *
  * The reason the digest shows carries the others too (#2474 final fixes A11, final review M3): a
- * stakes finding's rating and why ("Stakes: financial or legal. Why: …"), any other finding by
- * its rule name. Otherwise a reply that is both off-thread and financial reaches the principal
- * as off-thread only.
+ * stakes finding's rating and why ("Stakes: financial or legal. Why: …"), any other finding in
+ * plain words. Otherwise a reply that is both off-thread and financial reaches the principal as
+ * off-thread only.
  */
 function offThreadHold(d: BandReviewDecision): BandReviewDecision {
   const others = d.kind === 'send' ? [] : [...d.findings, ...(d.kind === 'hold' ? [] : d.heldBeside ?? [])];
   const also = [...new Set(others.map((f) => {
     const stakesAt = f.rule === BAND_RULES.speaksAsPrincipal ? f.detail.indexOf('Stakes: ') : -1;
-    return stakesAt >= 0 ? f.detail.slice(stakesAt).trim() : f.rule;
+    const said = stakesAt >= 0 ? f.detail.slice(stakesAt).trim() : plainReviewReasons([f.rule])[0]!;
+    return /[.!?…]$/.test(said) ? said : `${said}.`;
   }))];
-  const reason = also.length > 0 ? `${OFF_THREAD_REASON} Also: ${also.join('; ')}${/[.!?…]$/.test(also[also.length - 1]!) ? '' : '.'}` : OFF_THREAD_REASON;
+  const reason = [OFF_THREAD_REASON, ...also].join(' ');
   return { kind: 'hold', reason, findings: [{ rule: BAND_RULES.offThread, detail: OFF_THREAD_REASON }, ...others] };
 }
 

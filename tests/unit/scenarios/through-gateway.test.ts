@@ -13,7 +13,16 @@ import { splitReplyQuote } from '../../../src/skills/principal-send/own-text.js'
 import { quoteItemsToReview, threadMessageProof } from '../../../src/skills/principal-send/quote-proof.js';
 import type { TestModeStack } from '../../../src/startup/test-mode-stack.js';
 import { createCaseContext, newAttempt, type CaseAttempt } from '../../shared/case-scope.js';
-import { inboundNylasMessage } from '../../scenarios/harness.js';
+import { inboundNylasMessage, scheduledJobTask } from '../../scenarios/harness.js';
+import { loadScenarioCase } from '../../scenarios/loader.js';
+import path from 'node:path';
+import type { AutonomyService } from '../../../src/autonomy/autonomy-service.js';
+import { EventBus } from '../../../src/bus/bus.js';
+import type { ContactService } from '../../../src/contacts/contact-service.js';
+import type { ChannelIdentity } from '../../../src/contacts/types.js';
+import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
+import { createLogger } from '../../../src/logger.js';
+import { createRecordingOutboundGateway, createRecordingPrincipalMailbox, type SendRecorder } from '../../../src/startup/test-mode-sends.js';
 import {
   cleanupRun,
   mailboxDraftsOf,
@@ -500,6 +509,54 @@ describe('the run\'s principal mailbox (#2474)', () => {
     // A reply to a message the case did not seed is a case error (a typo in the stub's id).
     mirrorPrincipalDraft(scope, { id: 'draft-r2', subject: 'Re: ?', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'A.', replyTo: 'msg-unknown' }, true);
     expect(scope.errors).toEqual([expect.stringMatching(/draft-r2.*msg-unknown/)]);
+  });
+
+  // #2474 addendum R1: the positive release-gate cases, as loaded from their files, reach the
+  // review and send through the real gateway. Each limit is real; only the review's answer and
+  // the transport are not. Its absence let every autonomous case stop at origin_unknown unseen.
+  it.each([
+    ['30aa-inbox-auto-ack-sends-85.yaml', 'draft-30aa-reply', 'msg-30aa-deck', { name: 'Priya Nair', email: 'priya.nair@lumen.example.test' }, 'Thanks, Priya. See you Thursday.', 85],
+    ['45f-band-stakes-auto-commitment-sends-92.yaml', 'draft-45f-reply', 'msg-45f-2', { name: 'Owen Park', email: 'owen.park@calloway.example.test' }, "Confirmed, you'll have it by then.", 92],
+  ])('%s reaches the review and sends', async (file, draftId, replyTo, recipient, text, score) => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scenario = loadScenarioCase(path.join(import.meta.dirname, '../../scenarios/cases', file));
+    const scope = clocked();
+    scope.clockNow = new Date();
+    scope.clockTimezone = 'America/Toronto';
+    // The case's mailbox only: its contacts need a database, and the gateway fails open without them.
+    const mailboxOnly = { seed: { ...seededCase(false).seed, principalMailbox: scenario.seed.principalMailbox } } as unknown as ScenarioCase;
+    await seedRun(mailboxOnly, { stack, outboundContext: {} as never, scope });
+    mirrorPrincipalDraft(scope, { id: draftId, subject: 'Re: x', to: [recipient], cc: [], body: text, replyTo }, true);
+    expect(scope.errors).toEqual([]);
+    const review = vi.fn(async () => ({ kind: 'send' as const }));
+    const recorder: SendRecorder = {
+      record: () => undefined,
+      message: () => undefined,
+      principalDrafts: () => scope.principalDrafts,
+      curiaDraftIds: () => scope.curiaDraftIds,
+      curiaEditedDraftIds: () => scope.curiaEditedDraftIds,
+      curiaTaskDrafts: () => ({ ids: scope.curiaTaskDraftIds, now: scope.clockNow!, replyTo: scope.curiaTaskReplyTo }),
+      principalThreadMessages: (id) => scope.principalThreads.get(id) ?? [],
+      principalSends: () => scope.principalSends,
+      sendLevel: () => scope.sendLevel,
+    };
+    const logger = createLogger('error');
+    const gateway = createRecordingOutboundGateway({
+      recorder,
+      emailAccounts: [{ name: 'curia', selfEmail: 'curia@example.test' }],
+      contactService: { resolveByChannelIdentity: vi.fn().mockResolvedValue(null), getContact: vi.fn().mockResolvedValue(null) } as unknown as ContactService,
+      bus: new EventBus(logger),
+      logger,
+      principalIdentities: stack.principalIdentities as ChannelIdentity[],
+      autonomyService: { getConfig: async () => ({ score, band: 'act', updatedAt: new Date(0), updatedBy: 'x', gating: 'band' }) } as unknown as AutonomyService,
+      principalMailbox: createRecordingPrincipalMailbox(recorder, () => 'avery@example.test'),
+      review: { contentFilter: new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' }), bandReview: { review }, gating: 'tier' },
+    });
+    const task = scheduledJobTask('ceo-inbox', 'conv', 'triage');
+    const result = await gateway.sendPrincipalDraft(draftId, { authority: { taskMetadata: task.payload.metadata }, taskEventId: task.id });
+    expect(result).toMatchObject({ success: true, to: [recipient.email] });
+    expect(review).toHaveBeenCalledOnce();
+    expect(scope.principalSends).toEqual([expect.objectContaining({ draftId, mode: 'autonomous', outcome: 'sent' })]);
   });
 
   it('keeps a known thread when a later write repeats an unseeded reply id', () => {

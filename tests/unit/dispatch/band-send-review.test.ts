@@ -247,8 +247,8 @@ describe('BandSendReview', () => {
           const d = await svc.review({ ...auto, content: base.content, score: 100, stakesCeiling: 'commitment' });
           expect(d.kind).toBe('hold');
           if (d.kind === 'hold') {
-            // Final fixes A11 (final review M3): the other findings are named after the lead.
-            expect(d.reason).toBe(`${OFF} Also: ungrounded-claim.`);
+            // Final fixes A11 + addendum R3: the other findings follow the lead in plain words.
+            expect(d.reason).toBe(`${OFF} It says things about the principal that Curia couldn't confirm.`);
             expect(d.findings.map((f) => f.rule)).toEqual(['off-thread', 'ungrounded-claim']);
           }
         });
@@ -269,7 +269,7 @@ describe('BandSendReview', () => {
           const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
           expect(d.kind).toBe('hold');
           if (d.kind === 'hold') {
-            expect(d.reason).toBe(`${OFF} Also: Stakes: financial or legal. Why: Confirms new bank details.`);
+            expect(d.reason).toBe(`${OFF} Stakes: financial or legal. Why: Confirms new bank details.`);
             // The off-thread finding's own detail is unchanged.
             expect(d.findings[0]).toEqual({ rule: 'off-thread', detail: OFF });
           }

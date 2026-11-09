@@ -7,7 +7,7 @@
 // goes. The principal sends it if it should.
 
 /**
- * Redactor labels that are financial details. The scrubber's built-in patterns emit only
+ * PII-detector labels that are financial details. The scrubber's built-in patterns emit only
  * `credit_card` among them (src/pii/scrubber.ts); deployment extra patterns are named `extra_N`
  * and cannot be told apart by label. Compared lowercased.
  */

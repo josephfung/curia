@@ -10,6 +10,7 @@
 // "Had" means received (#2474 final fixes A2, security review M3): an inbound message's To/Cc
 // are its sender's claim, so receivedBy counts only what the mailbox can vouch for.
 
+import sanitizeHtml from 'sanitize-html';
 import type { NylasMessage } from '../../channels/email/nylas-client.js';
 import { parseSenderVerified } from '../../channels/email/message-converter.js';
 import { htmlToText } from '../../channels/email/html-to-text.js';
@@ -24,9 +25,21 @@ export interface ThreadMessageProof {
   receivedBy: ReadonlySet<string>;
 }
 
-/** HTML as text for comparing a quote with a thread message: whitespace collapsed, lowercased. */
+/**
+ * Every HTML entity in already-extracted text, decoded (#2474 final fixes addendum R2). htmlToText
+ * decodes six, while a real reply quote went through sanitize-html, which decodes them all, so an
+ * Outlook `&#8217;` or `&eacute;` left the two sides different. The same decoder here: `<` is
+ * escaped first so the text is never read as markup, and sanitize-html's own re-escaping is undone.
+ */
+function decodeEntities(text: string): string {
+  if (!text.includes('&')) return text;
+  return sanitizeHtml(text.replace(/</g, '&lt;'), { allowedTags: [], allowedAttributes: {}, nonTextTags: [] })
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+}
+
+/** HTML as text for comparing a quote with a thread message: entities decoded, whitespace collapsed, lowercased. */
 export function comparableText(html: string | undefined | null): string {
-  return htmlToText(html).replace(/\s+/g, ' ').trim().toLowerCase();
+  return decodeEntities(htmlToText(html)).replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 /** A thread message as the quote proof needs it. */

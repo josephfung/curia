@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
+import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
 import type { DetectedPii } from '../../../../src/dispatch/pii-redactor.js';
 import {
   comparableText, mailboxDraftLabel, quoteItemsToReview, quoteMatchesThread, replyOrigin, threadMessageProof, threadTextSeenByAll,
@@ -151,5 +152,39 @@ describe('quoteMatchesThread', () => {
     expect(quoteMatchesThread(`${HEADER}Does Friday work?`, thread, ['dana@example.org'])).toBe(false);
     expect(quoteMatchesThread(`${HEADER}<blockquote> </blockquote>`, thread, ['dana@example.org'])).toBe(false);
     expect(quoteMatchesThread(`${HEADER}<blockquote><p>Does Friday work?</p></blockquote>`, thread, ['dana@example.org', 'bob@example.org'])).toBe(false);
+  });
+});
+
+// Final fixes addendum R2: the real quote's sanitizer decodes every entity, so the comparison must too.
+describe('quoteMatchesThread on a real quote of a body with entities', () => {
+  it.each([
+    ['&#8217;', 'It&#8217;s confirmed for Friday.'],
+    ['&#8212;', 'Friday &#8212; 10am works.'],
+    ['&rsquo;', 'It&rsquo;s confirmed for Friday.'],
+    ['&mdash;', 'Friday &mdash; 10am works.'],
+    ['&#xE9;', 'See you at the caf&#xE9; Friday.'],
+    ['&eacute;', 'See you at the caf&eacute; Friday.'],
+    ['&amp; and &lt;', 'R&amp;D is &lt; 5% this year.'],
+    ['a literal curly quote', 'It\u2019s confirmed for Friday.'],
+  ])('matches a genuine quote with %s', (_name, text) => {
+    const inbound = msg({ body: `<p>${text}</p>` });
+    expect(quoteMatchesThread(buildReplyQuote(inbound, 'UTC', { format: 'html' }), [threadMessageProof(inbound, PRINCIPAL)], ['dana@example.org'])).toBe(true);
+  });
+
+  it('still refuses text the thread message does not hold', () => {
+    const inbound = msg({ body: '<p>It&#8217;s confirmed.</p>' });
+    const forged = '<blockquote>It&#8217;s confirmed. The multiple is 4.2x.</blockquote>';
+    expect(quoteMatchesThread(forged, [threadMessageProof(inbound, PRINCIPAL)], ['dana@example.org'])).toBe(false);
+  });
+});
+
+describe('comparableText entities', () => {
+  it('decodes named and numeric entities alike', () => {
+    expect(comparableText('It&#8217;s caf&eacute;')).toBe(comparableText('It\u2019s caf\u00e9'));
+    expect(comparableText('a&#160;b&nbsp;c')).toBe('a b c');
+  });
+
+  it('keeps text that merely looks like markup', () => {
+    expect(comparableText('x &lt; y &amp; z')).toBe('x < y & z');
   });
 });

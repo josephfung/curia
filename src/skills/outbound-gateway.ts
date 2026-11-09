@@ -64,7 +64,7 @@ import type { AutonomyGating } from '../autonomy/band-policy.js';
 import { budgetedOriginator, type RelayBudget } from '../autonomy/relay-budget.js';
 import { isUuid } from '../util/uuid.js';
 import {
-  BAND_RULES, describePiiLabels, type BandReviewAsk, type BandReviewReport, type BandReviewSignals, type BandSendReview,
+  BAND_RULES, describePiiLabels, plainReviewReasons, type BandReviewAsk, type BandReviewReport, type BandReviewSignals, type BandSendReview,
   type DraftAuthor,
 } from '../dispatch/band-send-review.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
@@ -72,7 +72,7 @@ import { askPreamble, displayName, normalizeCounterparty, type DisclosureAsk } f
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText, stripModelSignOff } from '../channels/email/signature.js';
 import type { AgentPersona } from './types.js';
-import { scrubPii } from '../pii/scrubber.js';
+import { detectPii, scrubPii } from '../pii/scrubber.js';
 import type { ExportControlService } from '../security/export-controls.js';
 import {
   ExportControlService as ExportControlServiceClass,
@@ -525,6 +525,12 @@ const SEND_UNCONFIRMED_DIGEST = "The send didn't confirm, so it may or may not h
 /** An autonomous reply whose quote is not a thread message every recipient received (final fixes A10). */
 const QUOTE_MISMATCH_REASON = `Its quoted text doesn't match the thread.${STILL_A_DRAFT}`;
 
+/**
+ * What the agent is told when the review bounced an autonomous reply (#2474 addendum R3): the
+ * findings ask for a rewrite, but a bounce is final here and the prompt says not to retry.
+ */
+const AUTONOMOUS_BOUNCE_REASON = `The send review stopped this reply, and the stop is final: don't edit it or send it again. The principal will see why in their digest.${STILL_A_DRAFT}`;
+
 function isDigestRefusal(refusal: PrincipalSendRefusal): refusal is DigestRefusal {
   return Object.prototype.hasOwnProperty.call(PRINCIPAL_SEND_DIGEST_REASONS, refusal);
 }
@@ -542,6 +548,34 @@ function principalFacing(reason: string): string {
     .replace(/\bThe principal's\b/g, 'Your').replace(/\bthe principal's\b/g, 'your')
     .replace(/\bThe principal\b/g, 'You').replace(/\bthe principal\b/g, 'you');
   return `${/[.!?…]$/.test(voiced) ? voiced : `${voiced}.`} ${IN_YOUR_DRAFTS}`;
+}
+
+/** A bounced autonomous reply's digest reason: plain words, never the finding detail (#2474 addendum R3). */
+function bounceDigest(rules: readonly string[]): string {
+  return principalFacing(plainReviewReasons(rules).join(' '));
+}
+
+/**
+ * A review hold's digest reason (#2474 addendum R3). A rewrite finding (a block) reads as a bounce;
+ * a personal-data hold's text speaks of a turn the principal never had, and leads with a fixed
+ * sentence. Every other hold's reason is already written for the principal.
+ */
+function reviewHoldDigest(rules: readonly string[], held: string): string {
+  const first = rules[0];
+  if (first === BAND_RULES.pii) return `It shares personal details that need your OK first. ${IN_YOUR_DRAFTS}`;
+  if (first === BAND_RULES.ungrounded || first === BAND_RULES.unneeded || first === BAND_RULES.token) return bounceDigest(rules);
+  return principalFacing(held);
+}
+
+/** The digest reason for a stop before the review: the contact check, identity gate, redactor or content filter. */
+function checkStopDigest(result: OutboundSendResult): string {
+  const rules = result.blockedRules ?? [];
+  const said = result.blockedReason === 'Recipient is blocked' ? 'One of the recipients is blocked.'
+    : rules.includes('unresolved-identity') ? "It names someone Curia couldn't identify."
+      : result.blockedReason?.startsWith('pii_redactor_error') ? "Curia couldn't check it for personal details."
+        : rules.length > 0 ? "Curia's content check stopped it."
+          : "Curia's checks stopped it.";
+  return `${said} ${IN_YOUR_DRAFTS}`;
 }
 
 /**
@@ -4282,9 +4316,10 @@ export class OutboundGateway {
       refusal: PrincipalSendRefusal,
       blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal],
       reasonCode: string = refusal,
+      digest?: string,
     ): Promise<PrincipalDraftSendResult> => {
       if (autonomous) {
-        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, refusal, reason: blockedReason, reasonCode, options });
+        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, refusal, reason: blockedReason, reasonCode, ...(digest !== undefined ? { digest } : {}), options });
       }
       return refuse(refusal, blockedReason);
     };
@@ -4409,7 +4444,7 @@ export class OutboundGateway {
       if (!target) return stop('not_latest_message');
       // Bank or card details never go out on Curia's own (#2474 final fixes A3): checked on the
       // whole draft, quote included, whatever the review would rule.
-      if (this.hasFinancialDetails(draft, primary, draftId)) return stop('financial_details');
+      if (this.hasFinancialDetails(draft, draftId)) return stop('financial_details');
       const proofs = thread.map((m) => threadMessageProof(m, principalAddresses));
       // A quote must reproduce a message every recipient received (#2474 final fixes A10): a
       // model-written quote block could pass off new information as already on the thread.
@@ -4437,8 +4472,9 @@ export class OutboundGateway {
     const checked = await this.checkDraftSend({ profile, draftId, draftMeta, autonomy: autonomy ?? await this.readAutonomy(), options: checkOptions });
     if ('result' in checked) {
       // The marker's code is the band rules that held it (final fixes B2).
-      const rules = checked.result.blockedRules?.length ? checked.result.blockedRules.join(',') : undefined;
-      if (checked.held !== undefined) return stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`, rules ?? 'review_hold');
+      const ruleList = checked.result.blockedRules ?? [];
+      const rules = ruleList.length > 0 ? ruleList.join(',') : undefined;
+      if (checked.held !== undefined) return stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`, rules ?? 'review_hold', reviewHoldDigest(ruleList, checked.held));
       // Every other stop leaves the draft where it is and returns its reason: a review bounce
       // (on a principal-directed send the drafter edits once and resends), a blocked contact, the
       // identity gate, the content filter or a redactor error.
@@ -4448,8 +4484,10 @@ export class OutboundGateway {
       // rewrite would never be reported. The principal hears of each one (design D9).
       if (autonomous) {
         const why = (checked.result.blockedReason ?? 'Held for the principal.').trim();
-        const reason = `${/[.!?]$/.test(why) ? why : `${why}.`}${STILL_A_DRAFT}`;
-        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, reason, reasonCode: rules ?? 'check_stop', options });
+        const bounced = checked.bounced === true;
+        const reason = bounced ? AUTONOMOUS_BOUNCE_REASON : `${/[.!?]$/.test(why) ? why : `${why}.`}${STILL_A_DRAFT}`;
+        const digest = bounced ? bounceDigest(ruleList) : checkStopDigest(checked.result);
+        await this.recordAutonomousStop({ mailbox, draftId, draft, lookedUp, reason, reasonCode: rules ?? 'check_stop', digest, options });
         this.log.info({ draftId, rules: checked.result.blockedRules }, 'outbound-gateway: autonomous principal-mailbox draft not sent');
         return { ...checked.result, blockedReason: reason, leftAsDraft: true };
       }
@@ -4543,22 +4581,19 @@ export class OutboundGateway {
   }
 
   /**
-   * Bank or card details anywhere in the draft (#2474 final fixes A3): the redactor's financial
-   * labels on the body (quote included) and subject, or an IBAN. A detector error is logged and
-   * not decided here: checkDraftSend runs the same detector next and blocks on its error.
+   * Bank or card details anywhere in the draft (#2474 final fixes A3): the scrubber's financial
+   * labels, or an IBAN, on the body (quote included) and subject. The bare detector, not the
+   * redactor: `outbound_redaction` must not be able to turn this off. A detector error refuses
+   * (fail closed).
    */
-  private hasFinancialDetails(draft: NylasMessage, primary: string, draftId: string): boolean {
-    let items: DetectedPii[] = [];
-    if (this.piiRedactor) {
-      try {
-        const ctx = { recipientId: primary, principalIsSoleRecipient: false };
-        items = [...this.piiRedactor.detect(draft.body, 'email', ctx), ...(draft.subject ? this.piiRedactor.detect(draft.subject, 'email', ctx) : [])];
-      } catch (err) {
-        // Fail closed downstream: checkDraftSend's own detect() throws too and blocks the send.
-        this.log.warn({ err, draftId }, 'outbound-gateway: PII detection failed in the financial-details check — the send review blocks on it');
-      }
+  private hasFinancialDetails(draft: NylasMessage, draftId: string): boolean {
+    const texts = [draft.body, htmlToText(draft.body), draft.subject ?? ''];
+    try {
+      return hasFinancialDetails(texts.flatMap((t) => detectPii(t)), texts);
+    } catch (err) {
+      this.log.error({ err, draftId }, 'outbound-gateway: PII detection failed in the financial-details check — not sending on its own');
+      return true;
     }
-    return hasFinancialDetails(items, [draft.body, htmlToText(draft.body), draft.subject ?? '']);
   }
 
   /**
@@ -4581,6 +4616,8 @@ export class OutboundGateway {
     reason: string;
     /** What the held marker keeps (final fixes B2): the refusal code or the band rule ids, never the text. */
     reasonCode: string;
+    /** The digest reason, when the caller has plain words for it (#2474 addendum R3). */
+    digest?: string;
     options: { taskEventId?: string; conversationId?: string };
   }): Promise<void> {
     const { draftId, refusal, reason, reasonCode, options } = args;
@@ -4607,9 +4644,9 @@ export class OutboundGateway {
       }
     }
     const isPrincipal = (email: string) => this.isPrincipalOnChannel('email', email);
-    if (refusal === 'thread_cooldown' || refusal === 'daily_cap') {
-      // Not extended: a cooldown or cap refusal files the digest item only. A cap stop's marker
-      // would start a cooldown on a thread that never had a reply judged.
+    if (refusal === 'thread_cooldown' || refusal === 'daily_cap' || refusal === 'outsider_originated' || refusal === 'origin_unknown') {
+      // No marker: these file the digest item only. A cap or origin stop says nothing about this
+      // thread's reply, so it must not burn the thread's 24h autonomous window.
     } else if (!draft?.threadId) {
       // No thread (the draft is gone or unreadable): there is no cooldown to start.
       this.log.info({ draftId, refusal }, 'outbound-gateway: autonomous stop on a draft with no known thread — no held marker');
@@ -4638,9 +4675,9 @@ export class OutboundGateway {
     }
     // The fixed text for a refusal stated as is; anything else (a review hold, a check stop, a
     // reason naming its detail) in the principal's voice.
-    const said = refusal !== undefined && isDigestRefusal(refusal) && reason === PRINCIPAL_SEND_REFUSALS[refusal]
+    const said = args.digest ?? (refusal !== undefined && isDigestRefusal(refusal) && reason === PRINCIPAL_SEND_REFUSALS[refusal]
       ? PRINCIPAL_SEND_DIGEST_REASONS[refusal]
-      : principalFacing(reason);
+      : principalFacing(reason));
     await this.publishMailboxDigest(`Left as a draft in your mailbox: ${what}. ${said}`, options);
   }
 
