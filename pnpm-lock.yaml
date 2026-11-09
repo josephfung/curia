@@ -56,8 +56,8 @@ importers:
         specifier: ^11.2.1
         version: 11.2.1
       '@fastify/static':
-        specifier: ^10.1.7
-        version: 10.1.7
+        specifier: ^10.1.8
+        version: 10.1.8
       '@ghostery/adblocker-playwright':
         specifier: ^2.20.3
         version: 2.20.3(playwright@1.64.1)
@@ -1113,11 +1113,11 @@ packages:
   '@fastify/rate-limit@11.2.1':
     resolution: {integrity: sha512-uTQjii3tJUnb6ZyEMcunuvKE3FDKNZEaPpxdyWADDgthHnUV1swdvwuiZfi3DDDgxm1iBrhOkQ/w0yDBQ8qJtA==}
 
-  '@fastify/send@4.2.0':
-    resolution: {integrity: sha512-B5Hr+IFsPbqJJQu6FHE2MFpnHfbPlCOVQUPTdm6PxCcilYGrEQsulbO0z9blgbjndIyLJwa2NWFIIjXpPhbwUg==}
+  '@fastify/send@4.2.1':
+    resolution: {integrity: sha512-zOB8L9z444PnGbd1Nd7gNXPz/7bnDR8Z4KNTNSwLVQuE3cTGsU9qUj1N4SjXKK0Tq4cauZYTwB+tqvlqosuKsw==}
 
-  '@fastify/static@10.1.7':
-    resolution: {integrity: sha512-7+lUiPRraENCiULgjhcqZyWSW6qnwIT87Is0u3c2Z3iGEEEGB45wJhYxzrSdzu12gHM4qcviEYcPEiCe4J6MCQ==}
+  '@fastify/static@10.1.8':
+    resolution: {integrity: sha512-3CbgWOXJX8f46xxsuOgQl9h0lyQQiABMG40kxRF5PWJk4LyBW5m3mLZoW5glnm2TUTC1gVFCBnqOt5S6zIIIrg==}
 
   '@ghostery/adblocker-content@2.20.3':
     resolution: {integrity: sha512-tuV4T5wPbfVdcY6dnM1dfaXSazpStx7ZI54bd2l9r93yPZfZoVsHR1Uxf/A8ETBMXJPQ92JMDQzmV8hOgpyq+w==}
@@ -3774,6 +3774,10 @@ packages:
 
   glob@13.0.6:
     resolution: {integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==}
+    engines: {node: 18 || 20 || >=22}
+
+  glob@13.0.7:
+    resolution: {integrity: sha512-wfsFgXQ8A3SEI9XGf7Nl3Y9l7ffSrGh7SUCT7vU/2CzYPep9kjxAn1S40F9OPKxAMGCVl7HtNlJhrCJUeUq83g==}
     engines: {node: 18 || 20 || >=22}
 
   glob@7.2.3:
@@ -7056,7 +7060,7 @@ snapshots:
       ip-address: 10.7.4
       toad-cache: 3.7.4
 
-  '@fastify/send@4.2.0':
+  '@fastify/send@4.2.1':
     dependencies:
       '@lukeed/ms': 2.0.2
       escape-html: 1.0.3
@@ -7064,15 +7068,15 @@ snapshots:
       http-errors: 2.0.1
       mime: 3.0.0
 
-  '@fastify/static@10.1.7':
+  '@fastify/static@10.1.8':
     dependencies:
       '@fastify/accept-negotiator': 2.1.2
       '@fastify/error': 4.2.1
-      '@fastify/send': 4.2.0
+      '@fastify/send': 4.2.1
       content-disposition: 3.0.0
       fastify-plugin: 6.0.1
       fastq: 1.20.3
-      glob: 13.0.6
+      glob: 13.0.7
 
   '@ghostery/adblocker-content@2.20.3':
     dependencies:
@@ -7525,7 +7529,7 @@ snapshots:
     dependencies:
       '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7)
       diff: 8.0.4
-      glob: 13.0.6
+      glob: 13.0.7
       minimatch: 10.2.6
     transitivePeerDependencies:
       - '@cfworker/json-schema'
@@ -9655,6 +9659,12 @@ snapshots:
       is-glob: 4.0.3
 
   glob@13.0.6:
+    dependencies:
+      minimatch: 10.2.6
+      minipass: 7.1.3
+      path-scurry: 2.0.2
+
+  glob@13.0.7:
     dependencies:
       minimatch: 10.2.6
       minipass: 7.1.3
