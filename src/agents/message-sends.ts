@@ -11,6 +11,15 @@
 
 import { isHumanReplySkill } from '../dispatch/origin-turn-reply.js';
 
+/**
+ * True for a send that delivers an email or message. A send from the principal's mailbox (#2474)
+ * counts, but stays out of the human-reply skills: those are refused on a delegated turn whose
+ * originating turn owns the reply, and this tool is normally reached by delegation.
+ */
+export function isEmailOrMessageSend(toolName: string): boolean {
+  return isHumanReplySkill(toolName) || toolName === 'ceo-inbox-send-draft';
+}
+
 function inputRecord(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null && !Array.isArray(input)
     ? (input as Record<string, unknown>)
@@ -24,7 +33,7 @@ function hasGuests(record: Record<string, unknown>): boolean {
 
 /** True when a successful call to `toolName` with `input` sent a message or calendar notification. */
 export function isMessageSend(toolName: string, input: unknown): boolean {
-  if (isHumanReplySkill(toolName)) return true;
+  if (isEmailOrMessageSend(toolName)) return true;
   const record = inputRecord(input);
   // Google and EWS honour notifyAttendees=false; Microsoft rejects it (the call fails); iCloud
   // notifies anyway, which this undercounts. The skill's own warnings say so to the specialist.
