@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeAgentIdentifier } from '../../../src/contacts/agent-identifier.js';
+import { CODE_REPLACEMENT } from '../../../src/verification/code-tracker.js';
 
 describe('normalizeAgentIdentifier', () => {
   it('lowercases and trims an email address', () => {
@@ -57,5 +58,17 @@ describe('normalizeAgentIdentifier', () => {
   it('passes other channels through trimmed, and refuses a blank value', () => {
     expect(normalizeAgentIdentifier('telegram', ' patp ')).toEqual({ ok: true, identifier: 'patp' });
     expect(normalizeAgentIdentifier('email', '   ').ok).toBe(false);
+  });
+
+  // An approved replay's input is scrubbed when a code was tracked after it was queued
+  // (#2515). Every channel refuses the placeholder, including the pass-through ones.
+  it.each([
+    ['telegram', CODE_REPLACEMENT],
+    ['telegram', `@${CODE_REPLACEMENT}`],
+    ['signal', CODE_REPLACEMENT],
+    ['email', `x${CODE_REPLACEMENT}@example.com`],
+  ])('refuses a scrubbed sign-in code on %s (%s)', (channel, value) => {
+    const result = normalizeAgentIdentifier(channel, value);
+    expect(result.ok).toBe(false);
   });
 });
