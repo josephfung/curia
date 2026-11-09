@@ -28,17 +28,32 @@ export interface PlanChildRowSnapshot {
 
 const PLACEHOLDER_TASK_ID_PREFIX = '00000000-0000-4000-8000-';
 
-export function parsePlanStepInput(raw: unknown): PlanStepInput | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+/** Why a step failed to parse, naming the step (index + id when known) and the field. */
+function describePlanStepProblem(raw: unknown, index: number): string | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return `steps[${index}]: must be an object with id, title and target_agent_id`;
+  }
   const obj = raw as Record<string, unknown>;
-  if (typeof obj.id !== 'string' || !obj.id.trim()) return null;
-  if (typeof obj.title !== 'string' || !obj.title.trim()) return null;
-  if (typeof obj.target_agent_id !== 'string' || !obj.target_agent_id.trim()) return null;
+  const label =
+    typeof obj.id === 'string' && obj.id.trim()
+      ? `steps[${index}] (id "${obj.id.trim()}")`
+      : `steps[${index}]`;
+  for (const field of ['id', 'title', 'target_agent_id'] as const) {
+    const value = obj[field];
+    if (typeof value !== 'string' || !value.trim()) {
+      return `${label}: missing ${field} (non-empty string required)`;
+    }
+  }
+  return null;
+}
 
+export function parsePlanStepInput(raw: unknown): PlanStepInput | null {
+  if (describePlanStepProblem(raw, 0) !== null) return null;
+  const obj = raw as Record<string, unknown>;
   const step: PlanStepInput = {
-    id: obj.id.trim(),
-    title: obj.title.trim(),
-    target_agent_id: obj.target_agent_id.trim(),
+    id: (obj.id as string).trim(),
+    title: (obj.title as string).trim(),
+    target_agent_id: (obj.target_agent_id as string).trim(),
   };
 
   if (typeof obj.description === 'string') step.description = obj.description;
@@ -89,18 +104,38 @@ export function validatePlanStepsGraph(steps: readonly PlanStepInput[]): string 
   return null;
 }
 
-export function parsePlanStepsInput(raw: unknown): PlanStepInput[] | null {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
+export type ParsePlanStepsResult =
+  | { ok: true; steps: PlanStepInput[] }
+  | { ok: false; error: string | null };
+
+/**
+ * Parse the steps array, reporting why it failed. `error: null` means the array itself
+ * is missing or empty (the caller keeps its generic message); otherwise the error names
+ * the offending step and field so the model can fix it rather than retry blind.
+ */
+export function parsePlanStepsDetailed(raw: unknown): ParsePlanStepsResult {
+  if (!Array.isArray(raw) || raw.length === 0) return { ok: false, error: null };
   const steps: PlanStepInput[] = [];
   const seen = new Set<string>();
-  for (const item of raw) {
+  for (const [index, item] of raw.entries()) {
     const step = parsePlanStepInput(item);
-    if (!step || seen.has(step.id)) return null;
+    if (!step) {
+      return { ok: false, error: describePlanStepProblem(item, index) };
+    }
+    if (seen.has(step.id)) {
+      return { ok: false, error: `steps[${index}]: duplicate step id "${step.id}"` };
+    }
     seen.add(step.id);
     steps.push(step);
   }
-  if (validatePlanStepsGraph(steps) !== null) return null;
-  return steps;
+  const graphError = validatePlanStepsGraph(steps);
+  if (graphError !== null) return { ok: false, error: graphError };
+  return { ok: true, steps };
+}
+
+export function parsePlanStepsInput(raw: unknown): PlanStepInput[] | null {
+  const result = parsePlanStepsDetailed(raw);
+  return result.ok ? result.steps : null;
 }
 
 /** Resolve blocked_by_step_id to a child task UUID using the step-id → task-id map. */
