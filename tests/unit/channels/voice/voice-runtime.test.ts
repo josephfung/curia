@@ -3971,6 +3971,9 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
   }
 
   async function speakingSession(overrides: Partial<Parameters<typeof makeRuntime>[0]> = {}) {
+    // Build on the real clock even when an earlier session in this test froze it,
+    // so waitForPublishedFrame's deadline can still lapse.
+    vi.useRealTimers();
     const spy = spyLogger();
     const llm = new FakeStreamProvider([replyScript('This is a fairly long spoken answer.'), replyScript('Okay.')], 3);
     // One-second frames keep Curia audible well past the first publish, however
@@ -4026,7 +4029,7 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     const { runtime, stt, transport, tts, info } = await speakingSession();
     // Each published frame adds a second of audio; the timers stop publishing once
     // faked, so queue enough that Curia is still audible when the window lapses.
-    await vi.waitFor(() => expect(transport.publishedFrames.length).toBeGreaterThanOrEqual(4));
+    await vi.waitFor(() => expect(transport.publishedFrames.length).toBeGreaterThanOrEqual(4), { timeout: 4_000 });
     takeOverClock();
 
     stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
@@ -4103,13 +4106,19 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     const gate = new Promise<void>(resolve => {
       release = resolve;
     });
-    // The model is still thinking: nothing is audible yet.
+    // The model is still thinking: nothing is audible yet. The latch fires when the
+    // turn has reached the model, so the turn is active before the onset lands.
+    let streamStarted: () => void = () => {};
+    const started = new Promise<void>(resolve => {
+      streamStarted = resolve;
+    });
     const llm: LLMProvider = {
       id: 'held',
       async chat() {
         throw new Error('unused');
       },
       async *stream() {
+        streamStarted();
         await gate;
         yield* replyScript('Done.');
       },
@@ -4125,7 +4134,9 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     });
     stt.emit({ text: 'what is on today', isFinal: true, speechFinal: true });
 
-    // The held model has published nothing, so nothing is audible whenever the onset lands.
+    await started;
+
+    // The turn is active and the held model has published nothing: only the audioQueued guard stops a cancel.
     stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
     emitInbound(transport, LOUD, 10);
     expect(bargeIns(spy.info)).toEqual([]);
