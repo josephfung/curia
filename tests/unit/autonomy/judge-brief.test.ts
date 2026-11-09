@@ -168,7 +168,7 @@ describe('buildBriefUserPrompt', () => {
     const lines = buildBriefUserPrompt({ ...input, senderProfile: 'principal-mailbox' }).split('\n');
     const taskAt = lines.findIndex((l) => l.startsWith('What the turn was answering:'));
     expect(lines[taskAt + 1]).toBe(SENDER_PROFILE_LINE);
-    expect(SENDER_PROFILE_LINE).toBe('Sender: this message goes out from the principal\'s own mailbox under the principal\'s name. Every statement in it speaks for the principal; first-person statements are the principal\'s, and no assistant speaks as itself. For stakes: a reply that shares information not already in the thread is at least "commitment"; acknowledging or agreeing to a request about money, payment details, access or credentials is "financial_or_legal".');
+    expect(SENDER_PROFILE_LINE).toBe('Sender: this message goes out from the principal\'s own mailbox under the principal\'s name. Every statement in it speaks for the principal; first-person statements are the principal\'s, and no assistant speaks as itself. For stakes: a reply that shares information not already in the thread is at least "commitment"; acknowledging or agreeing to a request about money, payment details, access or credentials is "financial_or_legal". Confirming or repeating a promise, date or deliverable is "commitment" even when the thread already stated it.');
     expect(buildBriefUserPrompt(input)).not.toContain('Sender:');
   });
 

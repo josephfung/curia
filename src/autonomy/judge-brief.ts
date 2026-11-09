@@ -159,7 +159,7 @@ export interface BriefInput {
 }
 
 /** The brief line for a send from the principal's own mailbox (#2474, design D2): it speaks as the principal. */
-export const SENDER_PROFILE_LINE = `Sender: this message goes out from the principal's own mailbox under the principal's name. Every statement in it speaks for the principal; first-person statements are the principal's, and no assistant speaks as itself. For stakes: a reply that shares information not already in the thread is at least "commitment"; acknowledging or agreeing to a request about money, payment details, access or credentials is "financial_or_legal".`;
+export const SENDER_PROFILE_LINE = `Sender: this message goes out from the principal's own mailbox under the principal's name. Every statement in it speaks for the principal; first-person statements are the principal's, and no assistant speaks as itself. For stakes: a reply that shares information not already in the thread is at least "commitment"; acknowledging or agreeing to a request about money, payment details, access or credentials is "financial_or_legal". Confirming or repeating a promise, date or deliverable is "commitment" even when the thread already stated it.`;
 
 /**
  * What `off-thread` asks (#2474, design D10): in the user prompt, only when asked, so every other
