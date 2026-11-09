@@ -518,11 +518,15 @@ export class BrowserService {
 
     const baseOptions = {
       headless: false,
+      // Chrome always runs its own sandbox, so a renderer exploit still needs a second bug to
+      // reach this process's files, environment or network. Playwright adds --no-sandbox
+      // unless this is true. Deliberately not configurable: an off switch is the first thing
+      // tried when the sandbox fails to start, and the fix is the seccomp profile. (#2521)
+      chromiumSandbox: true,
       args: [
         // Patchright owns the navigator.webdriver / AutomationControlled surface, so we no
         // longer pass --disable-blink-features=AutomationControlled (stacking a flag it
-        // manages is a documented anti-pattern). These two are container requirements. (#1053)
-        '--no-sandbox',
+        // manages is a documented anti-pattern). A container requirement. (#1053)
         '--disable-dev-shm-usage',
         // When egressing through a proxy, force WebRTC to only use proxied UDP so a STUN
         // candidate can't leak the real (datacenter) IP behind the residential exit. This is
@@ -557,7 +561,14 @@ export class BrowserService {
       this.logChannel(context, this.channel);
       return context;
     } catch (err) {
-      if (!this.channel) throw err; // no channel to fall back from — a genuine launch failure
+      if (!this.channel) {
+        // No channel to fall back from. A sandbox failure gets the sandbox message.
+        if (isSandboxLaunchFailure(err)) throw this.sandboxLaunchError(err);
+        throw err; // a genuine launch failure
+      }
+      // With a channel set, even a sandbox failure falls through to bundled Chromium, still
+      // sandboxed: a host policy (e.g. AppArmor) can allow one binary and deny the other.
+      // If bundled Chromium fails to sandbox too, that is reported below.
       // Configured-vs-actual divergence: the operator asked for a real browser channel
       // (the whole point of the fingerprint hardening) and we couldn't honour it — almost
       // always a missing browser in the image. Degrade to bundled Chromium so the skill
@@ -567,15 +578,71 @@ export class BrowserService {
       this.channelFallbackActive = true;
       this.logger.error(
         { err, requestedChannel: this.channel },
-        'Browser channel launch failed — DEGRADED to bundled Chromium (weaker fingerprint than configured); is the channel installed in the image?',
+        'Browser channel launch failed — DEGRADED to bundled Chromium (weaker fingerprint than configured); is the channel installed in the image, and can it start its sandbox?',
       );
-      const context = await chromium.launchPersistentContext(
-        this.profileDir,
-        baseOptions,
-      ) as unknown as BrowserContext;
+      let context: BrowserContext;
+      try {
+        context = await chromium.launchPersistentContext(
+          this.profileDir,
+          baseOptions,
+        ) as unknown as BrowserContext;
+      } catch (fallbackErr) {
+        const channelSandboxFailure = isSandboxLaunchFailure(err);
+        const fallbackSandboxFailure = isSandboxLaunchFailure(fallbackErr);
+        if (!channelSandboxFailure && !fallbackSandboxFailure) throw fallbackErr;
+        // A sandbox failure on either launch is the one the operator can act on, whatever
+        // else stopped the other launch, so it is the one reported.
+        if (!fallbackSandboxFailure) {
+          this.logger.error({ err: fallbackErr }, 'Bundled Chromium fallback failed to launch');
+        }
+        throw this.sandboxLaunchError(fallbackSandboxFailure ? fallbackErr : err, {
+          channel: this.channel,
+          channelSandboxFailure,
+          fallbackSandboxFailure,
+        });
+      }
       this.logChannel(context, undefined);
       return context;
     }
+  }
+
+  /**
+   * The error for a launch that died because Chrome could not set up its sandbox. Never
+   * retried without the sandbox: the web-browser skill is unavailable until the host
+   * allows it. (#2521)
+   *
+   * `channelAttempt` is set when a configured channel was tried first: the advice to use
+   * `channel: chrome` would then be no help, so the message says what that launch hit.
+   */
+  private sandboxLaunchError(
+    cause: unknown,
+    channelAttempt?: { channel: string; channelSandboxFailure: boolean; fallbackSandboxFailure: boolean },
+  ): Error {
+    const appArmorAdvice =
+      "on Ubuntu 23.10+ from source, check that the host's AppArmor profile for that browser allows user namespaces ";
+    let hostAdvice: string;
+    if (!channelAttempt) {
+      hostAdvice = 'On Ubuntu 23.10+ from source, use channel: chrome ';
+    } else if (channelAttempt.channelSandboxFailure && channelAttempt.fallbackSandboxFailure) {
+      hostAdvice = `channel: ${channelAttempt.channel} could not sandbox either: ${appArmorAdvice}`;
+    } else if (channelAttempt.channelSandboxFailure) {
+      hostAdvice =
+        `channel: ${channelAttempt.channel} could not sandbox, and bundled Chromium did not start ` +
+        `(see the earlier error; is it installed?): ${appArmorAdvice}`;
+    } else {
+      hostAdvice =
+        `channel: ${channelAttempt.channel} did not start (see the earlier error; is it installed?), ` +
+        'and bundled Chromium could not sandbox ';
+    }
+    const message =
+      'Chrome sandbox could not start: the host blocks the user namespaces it needs, ' +
+      'or Curia is running as root (Chrome refuses its sandbox as root; run as a non-root user). ' +
+      'A setuid sandbox (chrome-sandbox) error means the same: Chrome falls back to it when namespaces are blocked. ' +
+      'In a container, run it with the seccomp profile in docker/seccomp-chrome.json. ' +
+      hostAdvice +
+      '(see docs/dev/configuration.md).';
+    this.logger.error({ err: cause }, message);
+    return new Error(message, { cause });
   }
 
   /** Log the resolved channel + real browser version for observability (UA traceability). */
@@ -935,6 +1002,22 @@ const X_SERVER_BINARIES = new Set(['X', 'Xvfb', 'Xorg', 'Xwayland', 'Xephyr', 'X
  */
 export function isXServerBinary(binary: string): boolean {
   return X_SERVER_BINARIES.has(binary) || /^X[a-z][A-Za-z0-9]*$/.test(binary);
+}
+
+/**
+ * True if a launch error is Chrome failing to set up its sandbox (#2521). Chrome reports
+ * it only on stderr, which Playwright copies into the error message, so this matches that
+ * text. "Failed to move to new namespace" is Docker's default seccomp profile refusing
+ * the user namespace; "No usable sandbox" is Chromium finding neither the namespace nor
+ * the setuid sandbox. "Chromium sandboxing failed!" is Patchright's rewrite of Chrome's
+ * "Running as root without --no-sandbox is not supported" refusal. The setuid patterns
+ * cover Chromium falling back to a setuid helper that is missing its root/4755 setup
+ * ("The SUID sandbox helper binary was found, but is not configured correctly", "The
+ * setuid sandbox is not running as root").
+ */
+export function isSandboxLaunchFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /Failed to move to new namespace|No usable sandbox|Chromium sandboxing failed|SUID sandbox helper|setuid sandbox/i.test(message);
 }
 
 /**
