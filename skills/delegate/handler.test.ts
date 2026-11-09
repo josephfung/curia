@@ -10,6 +10,7 @@ import { encodeResumeToken } from '../../src/agents/resume-token.js';
 import { DelegationGuard, delegationKey } from '../../src/agents/delegation-guard.js';
 import type { VerificationRuntime } from '../../src/verification/index.js';
 import type { Verification } from '../../src/verification/types.js';
+import { isLiveTurnGrantActive, issueLiveTurnGrant } from '../../src/autonomy/live-turn-grants.js';
 
 /** Fake bus that, when an agent.task is published, immediately delivers a successful
  *  agent.response parented to it so DelegateHandler's await resolves. */
@@ -149,12 +150,149 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     expect(task.payload.liveTurn).toBeUndefined();
   });
 
-  it('forwards a voice hand-off\'s live-turn grant with the live signal, off the metadata bag (#2495)', async () => {
+  it('bounds the specialist\'s live turn to a voice hand-off\'s grant, off the metadata bag (#2495, #2515)', async () => {
+    const voice = issueLiveTurnGrant({ ttlMs: 60_000 });
+    let grantId: string | undefined;
+    let activeDuringWait = false;
+    const { bus } = makeBus();
+    const publish = bus.publish.bind(bus);
+    bus.publish = (async (layer: string, event: BusEvent) => {
+      if (event.type === 'agent.task') {
+        const task = event as AgentTaskEvent;
+        grantId = task.payload.liveTurnGrantId;
+        expect(task.payload.metadata).not.toHaveProperty('liveTurnGrantId');
+        activeDuringWait = isLiveTurnGrantActive(grantId);
+        voice.revoke();
+        // The call ended mid-wait: the specialist's grant ends with it.
+        expect(isLiveTurnGrantActive(grantId)).toBe(false);
+      }
+      return publish(layer as never, event);
+    }) as EventBus['publish'];
+    await new DelegateHandler().execute(makeCtx(bus, { liveTurn: true, liveTurnGrantId: voice.id }));
+    expect(grantId).toMatch(/^ltg-/);
+    expect(grantId).not.toBe(voice.id);
+    expect(activeDuringWait).toBe(true);
+  });
+
+  it('ends the specialist\'s live turn when the wait ends (#2515)', async () => {
+    // Answered, timed out or interrupted: once the coordinator stops waiting, nobody is live
+    // in the specialist's exchange, so a later verification or elevated call is not live.
+    let grantId: string | undefined;
+    let activeDuringWait = false;
+    const { bus } = makeBus();
+    const publish = bus.publish.bind(bus);
+    bus.publish = (async (layer: string, event: BusEvent) => {
+      if (event.type === 'agent.task') {
+        grantId = (event as AgentTaskEvent).payload.liveTurnGrantId;
+        activeDuringWait = isLiveTurnGrantActive(grantId);
+      }
+      return publish(layer as never, event);
+    }) as EventBus['publish'];
+    const result = await new DelegateHandler().execute(makeCtx(bus, { liveTurn: true }));
+    expect(result.success).toBe(true);
+    expect(activeDuringWait).toBe(true);
+    expect(isLiveTurnGrantActive(grantId)).toBe(false);
+  });
+
+  it('ends the specialist\'s live turn when the wait times out, while it keeps running (#2515)', async () => {
+    vi.useFakeTimers();
+    try {
+      let grantId: string | undefined;
+      const bus = {
+        subscribe() {},
+        // The specialist never answers: publish stays pending, as a running turn does.
+        publish(_layer: string, event: BusEvent) {
+          if (event.type === 'agent.task') grantId = (event as AgentTaskEvent).payload.liveTurnGrantId;
+          return new Promise<void>(() => {});
+        },
+      } as unknown as EventBus;
+      const ctx = makeCtx(bus, { liveTurn: true });
+      ctx.input = { agent: 'research-analyst', task: 'find the acquisition comps', timeout_ms: 60_000 };
+      const pending = new DelegateHandler().execute(ctx);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(isLiveTurnGrantActive(grantId)).toBe(true);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await pending;
+      expect(isLiveTurnGrantActive(grantId)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe('a slow dispatch claim (#2515)', () => {
+    /** A specialist that never answers, behind a claim that takes `claimMs`. */
+    function slowClaim(claimMs: number, over: Partial<ToolContext> = {}) {
+      const seen: { task?: AgentTaskEvent } = {};
+      const bus = {
+        subscribe() {},
+        publish(_layer: string, event: BusEvent) {
+          if (event.type === 'agent.task') seen.task = event as AgentTaskEvent;
+          return new Promise<void>(() => {});
+        },
+      } as unknown as EventBus;
+      const ctx = makeCtx(bus, {
+        liveTurn: true,
+        senderId: 'ceo',
+        openDelegationLookup: {
+          findInFlight: async () => null,
+          acquireRunning: () => new Promise((resolve) => {
+            setTimeout(() => resolve({ acquired: true, claim: { delegateEventId: 'd-1' } }), claimMs);
+          }),
+          releaseRunning: async () => {},
+        },
+        ...over,
+      } as unknown as Partial<ToolContext>);
+      ctx.input = { agent: 'research-analyst', task: 'find the acquisition comps', timeout_ms: 60_000 };
+      return { ctx, seen };
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // 70s is the claim that outlasts the wait: a TTL started before it would already be spent.
+    it.each([40_000, 60_000, 70_000])('keeps the grant for the whole wait after a %dms claim', async (claimMs) => {
+      vi.useFakeTimers();
+      const { ctx, seen } = slowClaim(claimMs);
+      const pending = new DelegateHandler().execute(ctx);
+      await vi.advanceTimersByTimeAsync(claimMs);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(isLiveTurnGrantActive(seen.task!.payload.liveTurnGrantId)).toBe(true);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await pending;
+      expect(isLiveTurnGrantActive(seen.task!.payload.liveTurnGrantId)).toBe(false);
+    });
+
+    it('does not outlive a parent grant that ended during the claim', async () => {
+      vi.useFakeTimers();
+      const voice = issueLiveTurnGrant({ ttlMs: 60_000 });
+      const { ctx, seen } = slowClaim(70_000, { liveTurnGrantId: voice.id });
+      const pending = new DelegateHandler().execute(ctx);
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(seen.task!.payload.liveTurnGrantId).not.toBe(voice.id);
+      expect(isLiveTurnGrantActive(seen.task!.payload.liveTurnGrantId)).toBe(false);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await pending;
+    });
+
+    it('sets the turn deadline from when the wait starts (#2371)', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-29T12:00:00Z'));
+      const start = Date.now();
+      const { ctx, seen } = slowClaim(40_000, { liveTurn: undefined });
+      const pending = new DelegateHandler().execute(ctx);
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(seen.task!.payload.turnDeadlineAt).toBe(start + 40_000 + 60_000);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await pending;
+    });
+  });
+
+  it('issues no grant for a turn that is not live (#2515)', async () => {
     const { bus, published } = makeBus();
-    await new DelegateHandler().execute(makeCtx(bus, { liveTurn: true, liveTurnGrantId: 'ltg-1' }));
+    await new DelegateHandler().execute(makeCtx(bus, { liveTurn: undefined }));
     const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
-    expect(task.payload.liveTurnGrantId).toBe('ltg-1');
-    expect(task.payload.metadata).not.toHaveProperty('liveTurnGrantId');
+    expect(task.payload.liveTurnGrantId).toBeUndefined();
   });
 
   it('forwards a lapsed grant id even when the turn is no longer live (#2495)', async () => {
@@ -163,6 +301,25 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
     expect(task.payload.liveTurn).toBe(false);
     expect(task.payload.liveTurnGrantId).toBe('ltg-lapsed-1');
+  });
+
+  it('drops a live signal and grant that leaked onto a woken task (#2515)', async () => {
+    // The specialist's metadata carries no wakeContext, so forwarding the flag would turn a
+    // wake into a live principal turn there: the elevated gate and contact-link-identity's
+    // principal re-statement would both pass.
+    const { bus, published } = makeBus();
+    await new DelegateHandler().execute(makeCtx(bus, {
+      liveTurn: true,
+      liveTurnGrantId: 'ltg-1',
+      taskMetadata: {
+        originator: { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' },
+        wakeContext: { derived: false },
+      },
+    }));
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    expect(task.payload.liveTurn).toBeUndefined();
+    expect(task.payload.liveTurnGrantId).toBeUndefined();
+    expect(task.payload.metadata).not.toHaveProperty('wakeContext');
   });
 });
 

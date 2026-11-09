@@ -14,7 +14,7 @@ overrides:
   ws: '>=8.21.0'
   form-data: '>=4.0.6'
   esbuild: '>=0.28.1'
-  undici: '>=8.12.2'
+  undici: '>=8.12.4'
   '@opentelemetry/core': '>=2.8.0'
   onnxruntime-web>protobufjs: '>=7.6.5 <8'
   adm-zip: '>=0.6.1'
@@ -30,7 +30,7 @@ overrides:
   smol-toml: '>=1.9.0'
   source-map-js: '>=1.2.2'
   fast-copy: '>=4.1.0'
-  get-uri>basic-ftp: '>=6.2.4'
+  get-uri>basic-ftp: '>=6.2.6'
   zod: '>=4.6.6'
 
 importers:
@@ -69,7 +69,7 @@ importers:
         version: 1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7)
       '@slack/socket-mode':
         specifier: ^3.1.0
-        version: 3.1.0(undici@8.12.3)
+        version: 3.1.0(undici@8.12.4)
       '@slack/web-api':
         specifier: ^8.2.0
         version: 8.2.0
@@ -129,7 +129,7 @@ importers:
         version: 8.4.0
       openai:
         specifier: ^7.39.0
-        version: 7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.1)(zod@4.6.7)
+        version: 7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
       openredaction:
         specifier: ^1.1.5
         version: 1.1.5(express@5.3.0)(pdf-parse@2.4.5)(react@19.3.1)
@@ -2201,7 +2201,7 @@ packages:
     resolution: {integrity: sha512-F9T+FKbtsYRKV23X8l6WW1fx7ncqsMufg+HLA4ffHf/MvZSCvPunFw576ekmY0Q03kgTAIByTKDJxnM+wn1okg==}
     engines: {node: '>=20', npm: '>=9.6.4'}
     peerDependencies:
-      undici: '>=8.12.2'
+      undici: '>=8.12.4'
 
   '@slack/types@3.2.0':
     resolution: {integrity: sha512-IN4gdtlzQt8UJoj+1v+qAHeR4TxHO0KMlIs841SFfDQAcFFnsrWaGsEAE4goxVt8O/JOAFaGGdrFTzhNBop/Fg==}
@@ -2728,8 +2728,8 @@ packages:
     engines: {node: '>=6.0.0'}
     hasBin: true
 
-  basic-ftp@6.2.5:
-    resolution: {integrity: sha512-JJKYwxdbJM6Z4jFO+ciaIUejHRCyIg6oJ9hoAzuZ0EMlJsHDT07h6vZt4NH8G61DLzddrDKvjoRqfewnPzDSJA==}
+  basic-ftp@6.2.6:
+    resolution: {integrity: sha512-0EjZCaodOz6yiokv2JA1VyKGNdGxULZ+GGlPgG9tm4d+T/bHtX1hUch8CumDneBfpIbiSdn7TaCGwpM+gwsOlw==}
     engines: {node: '>=10.0.0'}
 
   big-integer@1.6.52:
@@ -4613,7 +4613,7 @@ packages:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
       '@smithy/hash-node': '>=4.3.0 <5'
       '@smithy/signature-v4': '>=5.4.0 <6'
-      undici: '>=8.12.2'
+      undici: '>=8.12.4'
       ws: '>=8.21.0'
       zod: '>=4.6.6'
     peerDependenciesMeta:
@@ -5673,8 +5673,8 @@ packages:
   undici-types@8.9.0:
     resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
 
-  undici@8.12.3:
-    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
+  undici@8.12.4:
+    resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
 
   universalify@0.2.0:
@@ -6007,7 +6007,7 @@ snapshots:
       '@ai-sdk/provider': 3.0.19
       '@standard-schema/spec': 1.1.0
       eventsource-parser: 3.1.1
-      undici: 8.12.3
+      undici: 8.12.4
       zod: 4.6.7
 
   '@ai-sdk/provider@3.0.19':
@@ -6379,7 +6379,7 @@ snapshots:
       tslib: 2.9.1
     optional: true
 
-  '@azure/ai-projects@2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(zod@4.6.7)':
+  '@azure/ai-projects@2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(zod@4.6.7)':
     dependencies:
       '@azure-rest/core-client': 2.9.0
       '@azure/abort-controller': 2.2.0
@@ -6394,7 +6394,7 @@ snapshots:
       '@azure/storage-blob': 12.34.0
       '@opentelemetry/api': 1.10.0
       https-proxy-agent: 9.1.0
-      openai: 7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.1)(zod@4.6.7)
+      openai: 7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
       tslib: 2.9.1
       ws: 8.22.1
     transitivePeerDependencies:
@@ -7924,13 +7924,13 @@ snapshots:
     dependencies:
       '@types/node': 26.0.1
 
-  '@slack/socket-mode@3.1.0(undici@8.12.3)':
+  '@slack/socket-mode@3.1.0(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.2.0
       '@types/node': 26.0.1
       eventemitter3: 5.0.4
-      undici: 8.12.3
+      undici: 8.12.4
 
   '@slack/types@3.2.0': {}
 
@@ -8491,7 +8491,7 @@ snapshots:
 
   baseline-browser-mapping@2.11.20: {}
 
-  basic-ftp@6.2.5: {}
+  basic-ftp@6.2.6: {}
 
   big-integer@1.6.52:
     optional: true
@@ -9514,7 +9514,7 @@ snapshots:
 
   get-uri@8.0.1:
     dependencies:
-      basic-ftp: 6.2.5
+      basic-ftp: 6.2.6
       data-uri-to-buffer: 8.0.0
       debug: 4.4.3
     transitivePeerDependencies:
@@ -10453,12 +10453,12 @@ snapshots:
       zod: 4.6.7
     optional: true
 
-  openai@7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.1)(zod@4.6.7):
+  openai@7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.92
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.5
-      undici: 8.12.3
+      undici: 8.12.4
       ws: 8.22.1
       zod: 4.6.7
 
@@ -10853,7 +10853,7 @@ snapshots:
       mathjs: 15.2.0
       minimatch: 10.2.6
       nunjucks: 3.2.4(chokidar@5.0.0)
-      openai: 7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.1)(zod@4.6.7)
+      openai: 7.39.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.1)(zod@4.6.7)
       opener: 1.5.2
       ora: 9.4.1
       parse5: 8.1.0
@@ -10871,7 +10871,7 @@ snapshots:
       socket.io-client: 4.8.4
       text-extensions: 3.1.0
       tsx: 4.23.15
-      undici: 8.12.3
+      undici: 8.12.4
       winston: 3.19.0
       ws: 8.22.1
       zod: 4.6.7
@@ -10883,7 +10883,7 @@ snapshots:
       '@aws-sdk/client-sagemaker-runtime': 3.1161.0
       '@aws-sdk/credential-provider-sso': 3.973.24
       '@aws/bedrock-token-generator': 1.1.0
-      '@azure/ai-projects': 2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(zod@4.6.7)
+      '@azure/ai-projects': 2.10.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(zod@4.6.7)
       '@azure/identity': 4.14.1
       '@azure/msal-node': 7.1.2
       '@azure/storage-blob': 12.34.0
@@ -11745,7 +11745,7 @@ snapshots:
 
   undici-types@8.9.0: {}
 
-  undici@8.12.3: {}
+  undici@8.12.4: {}
 
   universalify@0.2.0:
     optional: true

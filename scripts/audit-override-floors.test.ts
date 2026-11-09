@@ -527,6 +527,192 @@ describe('upstream repo advisories', () => {
     );
   });
 
+  it('treats versions between a range and its own patched version as vulnerable', async () => {
+    // The real case (#2490): basic-ftp GHSA-2w5v-vj22-jp27 says `< 6.2.5` but names 6.2.6
+    // as patched, and 6.2.5 only changed release tooling. Trusting the range alone
+    // recommended `>=6.2.5`, a floor that still admits the vulnerable 6.2.5.
+    const ftpAdvisory: AdvisoryRecord = {
+      ...adv('GHSA-2w5v-vj22-jp27', 'medium', ['< 6.2.5'], 'upstream-repo'),
+      patchedVersions: ['6.2.6'],
+    };
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  'get-uri>basic-ftp': '>=6.2.4'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { 'basic-ftp': ['6.2.3', '6.2.4', '6.2.5', '6.2.6'] },
+        repos: { 'basic-ftp': 'patrickjuchli/basic-ftp' },
+        repoAdvisories: { 'patrickjuchli/basic-ftp': { 'basic-ftp': [ftpAdvisory] } },
+      }),
+    });
+
+    expect(report.stale).toHaveLength(1);
+    expect(report.stale[0]!.vulnerableVersions).toEqual(['6.2.4', '6.2.5']);
+    expect(report.stale[0]!.safeFloor).toBe('>=6.2.6');
+    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toEqual(['6.2.6']);
+    expect(formatReport(report)).toContain(
+      'range ends below its patched version; vulnerable up to 6.2.6',
+    );
+  });
+
+  it('keeps each extended range its own patched version', async () => {
+    // Two entries, each with a published version in its gap: the second patch must not
+    // overwrite the first, and each entry is extended by its own patch only.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=5.0.0'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: ['5.0.0', '5.3.1', '5.3.2', '5.3.3', '6.2.4', '6.2.5', '6.2.6'] },
+        global: {
+          foo: [
+            {
+              ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['>= 5.0.0, < 5.3.2', '>= 6.0.0, < 6.2.5']),
+              patchedVersions: ['5.3.3', '6.2.6'],
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toEqual(['5.3.3', '6.2.6']);
+    expect(report.stale[0]!.vulnerableVersions).toEqual([
+      '5.0.0', '5.3.1', '5.3.2', '6.2.4', '6.2.5',
+    ]);
+    expect(report.stale[0]!.safeFloor).toBe('>=6.2.6');
+    expect(formatReport(report)).toContain('vulnerable up to 5.3.3, 6.2.6');
+  });
+
+  it('fails the audit when a patched-version field cannot be interpreted', async () => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=6.2.4'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: ['6.2.4', '6.2.5', '6.2.6'] },
+        global: {
+          foo: [
+            {
+              ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 6.2.5']),
+              patchedVersions: ['6.2.6, 7.0.1'],
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(report.exitCode).not.toBe(0);
+    expect(report.errors.join('\n')).toContain('cannot interpret');
+  });
+
+  it.each([
+    // A major line: is 5.3.x vulnerable, or fixed in a 5.x release the advisory omits?
+    { ranges: ['< 5.3.0'], patched: '6.0.0', versions: ['5.2.9', '5.3.0', '6.0.0'] },
+    // Below 1.0.0 each minor is its own line.
+    { ranges: ['< 0.4.0'], patched: '0.5.0', versions: ['0.3.9', '0.4.0', '0.5.0'] },
+  ])('fails the audit when a gap crosses a release line ($patched)', async (c) => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=${c.versions[0]}'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: c.versions },
+        global: {
+          foo: [{ ...adv('GHSA-aaaa-bbbb-cccc', 'medium', c.ranges), patchedVersions: [c.patched] }],
+        },
+      }),
+    });
+
+    expect(report.exitCode).not.toBe(0);
+    expect(report.errors.join('\n')).toContain('another release line');
+    expect(report.stale).toHaveLength(0);
+  });
+
+  it('ignores a cross-line gap the floor admits nothing of', async () => {
+    // An old advisory whose ambiguous gap sits wholly below the floor cannot change the
+    // verdict, so it must not hold the audit red on every run.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  undici: '>=8.12.4'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { undici: ['5.2.9', '5.3.0', '5.3.1', '6.0.0', '8.12.4', '8.13.0'] },
+        global: {
+          undici: [{ ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 5.3.0']), patchedVersions: ['6.0.0'] }],
+        },
+      }),
+    });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale).toEqual([]);
+    expect(report.exitCode).toBe(0);
+  });
+
+  it.each([
+    { name: 'a cross-line gap', patched: '6.0.0' },
+    { name: 'an uninterpretable patched field', patched: '6.0.0, 5.4.0' },
+  ])('lets the allowlist clear an advisory with $name', async (c) => {
+    // Both cases fail closed when the advisory is not allowlisted; once a human has
+    // recorded a decision, the audit must be able to accept it.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=5.2.9'`),
+      policy: {
+        allowlist: [{ package: 'foo', ghsa: 'GHSA-aaaa-bbbb-cccc', reason: 'read the advisory' }],
+        noAdvisoryExpected: [],
+        globalDbOnly: [],
+      },
+      source: fakeSource({
+        versions: { foo: ['5.2.9', '5.3.0', '6.0.0'] },
+        global: {
+          foo: [{ ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 5.3.0']), patchedVersions: [c.patched] }],
+        },
+      }),
+    });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale).toEqual([]);
+    expect(report.exitCode).toBe(0);
+    // It would have fired, so the suppression is in use, not stale housekeeping.
+    expect(report.unusedAllowlist).toEqual([]);
+  });
+
+  it('extends a gap within one 0.x line', async () => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=0.4.1'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: ['0.4.1', '0.4.2', '0.4.3'] },
+        global: {
+          foo: [{ ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 0.4.2']), patchedVersions: ['0.4.3'] }],
+        },
+      }),
+    });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale[0]!.safeFloor).toBe('>=0.4.3');
+  });
+
+  it('does not extend a range whose patched version is on another line (trap 1)', async () => {
+    // Per-entry patched versions: the 7.x entry's patch must not condemn anything on 8.x,
+    // and a range that starts mid-line (>= 7.15.0) has no gap below its own last hit.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  undici: '>=7.30.2'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { undici: ['7.14.0', '7.30.1', '7.30.2', '8.0.0', '8.12.4'] },
+        global: {
+          undici: [
+            {
+              ...adv('GHSA-r4pc-4jcp-7pqc', 'medium', [
+                '>= 7.15.0, < 7.30.2',
+                '>= 8.0.0, < 8.12.4',
+              ]),
+              patchedVersions: ['7.30.2', '8.12.4'],
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(report.stale[0]!.vulnerableVersions).toEqual(['8.0.0']);
+    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toBeUndefined();
+  });
+
   it('ignores a sibling package advisory from the same monorepo', async () => {
     // Real false positive this caught: open-telemetry/opentelemetry-js publishes
     // GHSA-45rx-2jwx-cxfr, which affects @opentelemetry/propagator-jaeger — NOT
@@ -594,6 +780,38 @@ describe('toAdvisoryRecords', () => {
         ranges: ['< 2.9.0'],
         source: 'upstream-repo',
       },
+    ]);
+  });
+
+  it('carries each entry\'s patched version from either API shape', () => {
+    const raw: RawAdvisory[] = [
+      {
+        ghsa_id: 'GHSA-2w5v-vj22-jp27',
+        severity: 'medium',
+        state: 'published',
+        vulnerabilities: [
+          {
+            package: { ecosystem: 'npm', name: 'basic-ftp' },
+            vulnerable_version_range: '< 6.2.5',
+            patched_versions: '6.2.6',
+          },
+          {
+            package: { ecosystem: 'npm', name: 'basic-ftp' },
+            vulnerable_version_range: '< 5.3.2',
+            first_patched_version: '5.3.2',
+          },
+          {
+            package: { ecosystem: 'npm', name: 'basic-ftp' },
+            vulnerable_version_range: '< 4.0.0',
+          },
+        ],
+      },
+    ];
+
+    expect(toAdvisoryRecords(raw, 'basic-ftp', 'upstream-repo')[0]!.patchedVersions).toEqual([
+      '6.2.6',
+      '5.3.2',
+      null,
     ]);
   });
 
