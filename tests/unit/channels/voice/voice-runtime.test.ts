@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { EventBus } from '../../../../src/bus/bus.js';
 import type { BusEvent } from '../../../../src/bus/events.js';
 import type { OutboundContextRow } from '../../../../src/dispatch/outbound-context.js';
@@ -3900,6 +3900,30 @@ describe('VoiceRuntime audio timing telemetry (#2379)', () => {
 });
 
 describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
+  // These tests decide outcomes by comparing timestamps (is Curia still audible,
+  // which inbound audio is after the onset) and by the onset/confirm timers. None
+  // of that may ride on how fast the runner is (#2539), so each test freezes the
+  // clock once its session is speaking; the two timer windows are advanced by hand.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Freeze Date.now() so the audibility and onset arithmetic is exact. */
+  function freezeClock(): void {
+    vi.useFakeTimers({ toFake: ['Date'] });
+  }
+
+  /** Freeze Date.now() and take over the timers, for tests that wait out a window. */
+  function takeOverClock(): void {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  }
+
+  /** Release the fake clock and let any TTS loop stalled on a faked timer finish. */
+  async function releaseClock(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(5_000);
+    vi.useRealTimers();
+  }
+
   function spyLogger(): { logger: Logger; info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } {
     const info = vi.fn();
     const warn = vi.fn();
@@ -3949,7 +3973,9 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
   async function speakingSession(overrides: Partial<Parameters<typeof makeRuntime>[0]> = {}) {
     const spy = spyLogger();
     const llm = new FakeStreamProvider([replyScript('This is a fairly long spoken answer.'), replyScript('Okay.')], 3);
-    const tts = (overrides.tts ?? new SlowTtsProvider(50, 5)) as SlowTtsProvider;
+    // One-second frames keep Curia audible well past the first publish, however
+    // slowly the runner schedules the test (short frames lapse within ~7 ms).
+    const tts = (overrides.tts ?? new LongFrameTtsProvider(50, 5)) as SlowTtsProvider;
     const rig = makeRuntime({ llm, logger: spy.logger, ...overrides, tts });
     await rig.runtime.startSession({
       sessionId: 'onset',
@@ -3962,6 +3988,7 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     rig.stt.emit({ text: 'tell me a long story', isFinal: true, speechFinal: true });
     await waitForPublishedFrame(rig.transport);
     expect(rig.transport.publishedFrames.length).toBeGreaterThan(0);
+    freezeClock();
     return { ...rig, ...spy, tts };
   }
 
@@ -3996,23 +4023,26 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
 
   it('ignores an onset when the caller\'s audio stays at echo level (echo guard)', async () => {
     // Long frames keep Curia audible past the onset window, so the ignored onset is logged.
-    const { runtime, stt, transport, tts, info } = await speakingSession({ tts: new LongFrameTtsProvider(50, 5) });
+    const { runtime, stt, transport, tts, info } = await speakingSession();
+    // Each published frame adds a second of audio; the timers stop publishing once
+    // faked, so queue enough that Curia is still audible when the window lapses.
+    await vi.waitFor(() => expect(transport.publishedFrames.length).toBeGreaterThanOrEqual(4));
+    takeOverClock();
 
     stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
     emitInbound(transport, ECHO, 40);
-    await delay(20);
 
     expect(tts.cancelled.size).toBe(0);
     expect(transport.clearQueuedAudioCount).toBe(0);
     expect(bargeIns(info)).toEqual([]);
-    // The ignored onset logs the caller's level, for tuning the threshold.
-    await vi.waitFor(() => {
-      const ignored = info.mock.calls.filter(([, msg]) => msg === 'voice speech onset below barge-in level; Curia kept talking');
-      expect(ignored.map(([fields]) => fields)).toEqual([
-        expect.objectContaining({ 'voice.speech_start_caller_dbfs': -56.3, minDbfs: -35 }),
-      ]);
-    }, { timeout: 2_000 });
-    await runtime.awaitIdle('onset');
+    // The onset window lapses: the ignored onset logs the caller's level, for tuning the threshold.
+    await vi.advanceTimersByTimeAsync(1_000);
+    const ignored = info.mock.calls.filter(([, msg]) => msg === 'voice speech onset below barge-in level; Curia kept talking');
+    expect(ignored.map(([fields]) => fields)).toEqual([
+      expect.objectContaining({ 'voice.speech_start_caller_dbfs': -56.3, minDbfs: -35 }),
+    ]);
+    expect(tts.cancelled.size).toBe(0);
+    await releaseClock();
     await runtime.endSession('onset', 'test');
   });
 
@@ -4020,7 +4050,7 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
     const { runtime, stt, transport, tts } = await speakingSession();
 
     emitInbound(transport, LOUD, 10);
-    await delay(50);
+    vi.setSystemTime(Date.now() + 50);
     stt.emitSpeechStarted({ startedAgoMs: 0 });
     emitInbound(transport, ECHO, 10);
 
@@ -4094,8 +4124,8 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
       openingGreeting: false,
     });
     stt.emit({ text: 'what is on today', isFinal: true, speechFinal: true });
-    await delay(20);
 
+    // The held model has published nothing, so nothing is audible whenever the onset lands.
     stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
     emitInbound(transport, LOUD, 10);
     expect(bargeIns(spy.info)).toEqual([]);
@@ -4107,36 +4137,43 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
   });
 
   it('warns when an onset barge-in is not followed by words, and not when it is', async () => {
+    // Build every session on the real clock first; the clock is taken over after.
     const unconfirmed = await speakingSession();
+    const confirmed = await speakingSession();
+    const shortReply = await speakingSession();
+    const echoFragment = await speakingSession();
+    takeOverClock();
+
     unconfirmed.stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
     emitInbound(unconfirmed.transport, LOUD, 5);
 
-    const confirmed = await speakingSession();
     confirmed.stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
     emitInbound(confirmed.transport, LOUD, 5);
     confirmed.stt.emit({ text: 'hold on a second', isFinal: false, confidence: 0.9 });
 
     // A reply too short to start a barge-in still confirms one: it was the caller.
-    const shortReply = await speakingSession();
     shortReply.stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
     emitInbound(shortReply.transport, LOUD, 5);
     shortReply.stt.emit({ text: 'no', isFinal: true, confidence: 0.9 });
 
     // A low-confidence fragment does not: echo can produce one.
-    const echoFragment = await speakingSession();
     echoFragment.stt.emitSpeechStarted({ startedAgoMs: ONSET_LAG_MS });
     emitInbound(echoFragment.transport, LOUD, 5);
     echoFragment.stt.emit({ text: 'no', isFinal: false, confidence: 0.1 });
 
-    await delay(2_100);
+    // Just short of the confirm window nothing has warned yet; past it, the unconfirmed ones do.
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(unconfirmed.warn.mock.calls.filter(([, msg]) => msg === UNCONFIRMED_LOG)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
     const unconfirmedWarnings = (rig: { warn: ReturnType<typeof vi.fn> }) =>
       rig.warn.mock.calls.filter(([, msg]) => msg === UNCONFIRMED_LOG);
     expect(unconfirmedWarnings(unconfirmed)).toHaveLength(1);
     expect(unconfirmedWarnings(confirmed)).toHaveLength(0);
     expect(unconfirmedWarnings(shortReply)).toHaveLength(0);
     expect(unconfirmedWarnings(echoFragment)).toHaveLength(1);
+    await releaseClock();
     for (const rig of [unconfirmed, confirmed, shortReply, echoFragment]) await rig.runtime.endSession('onset', 'test');
-  }, 15_000); // waits out the real 2 s confirm window
+  });
 
   it('drops a finished reply\'s queued tail on barge-in', async () => {
     const spy = spyLogger();
@@ -4183,7 +4220,8 @@ describe('VoiceRuntime barge-in on speech onset (#2401)', () => {
       rig.stt.emit({ text: 'quick one', isFinal: true, speechFinal: true });
       await rig.runtime.awaitIdle('tail');
       // The reply's few ms of audio are past the real-time estimate.
-      await delay(50);
+      freezeClock();
+      vi.setSystemTime(Date.now() + 50);
       return { ...rig, ...spy };
     }
 
