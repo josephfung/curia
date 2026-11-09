@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isMessageSend } from '../../../src/agents/message-sends.js';
+import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js';
 
 describe('isMessageSend (#2055)', () => {
   it.each(['email-send', 'email-reply', 'send-draft', 'signal-send', 'sms-send', 'slack-send'])(
@@ -8,6 +9,10 @@ describe('isMessageSend (#2055)', () => {
       expect(isMessageSend(tool, { body: 'hi' })).toBe(true);
     },
   );
+
+  it('counts a send from the principal\'s mailbox (#2474)', () => {
+    expect(isMessageSend('ceo-inbox-send-draft', { draft_id: 'd1' })).toBe(true);
+  });
 
   it('does not count a saved draft or a read', () => {
     expect(isMessageSend('email-draft-save', { body: 'hi' })).toBe(false);
@@ -45,5 +50,11 @@ describe('isMessageSend (#2055)', () => {
   it('tolerates a non-object input', () => {
     expect(isMessageSend('calendar-create-event', null)).toBe(false);
     expect(isMessageSend('email-send', 'oops')).toBe(true);
+  });
+
+  it('does not say nothing went out after a send from the principal\'s mailbox (#2474)', () => {
+    const answer = shapeSpecialistAnswer('Both drafts sent.', ['ceo-inbox-send-draft'], 'send the two drafts');
+    expect(answer.next_step).toBeUndefined();
+    expect(answer.sent).toEqual(['ceo-inbox-send-draft']);
   });
 });
