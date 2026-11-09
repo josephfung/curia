@@ -47,6 +47,48 @@ function makeCtx(input: Record<string, unknown>, opts: {
 
 const UNTIL_RULE = ['RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20261231T235959Z'];
 
+describe('CalendarUpdateEventHandler -- conferencing (#2536)', () => {
+  it('sends Nylas autocreate: {} and the canonical provider', async () => {
+    const updateEvent = vi.fn().mockResolvedValue(makeEvent({ id: 'evt' }));
+    const ctx = makeCtx(
+      { calendarId: 'cal-work', eventId: 'evt', conferencing: { provider: 'Meet', autocreate: true } },
+      { updateEvent },
+    );
+
+    const result = await new CalendarUpdateEventHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(updateEvent.mock.calls[0]![2].conferencing).toEqual({ provider: 'Google Meet', autocreate: {} });
+  });
+
+  it('refuses Zoom auto-creation with one clean error and no Nylas call', async () => {
+    const updateEvent = vi.fn();
+    const ctx = makeCtx(
+      { calendarId: 'cal-work', eventId: 'evt', conferencing: { provider: 'Zoom', autocreate: true } },
+      { updateEvent },
+    );
+
+    const result = await new CalendarUpdateEventHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('no Zoom account is connected');
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it('refuses null, since no removal path exists and dropping it would report a false success', async () => {
+    const updateEvent = vi.fn();
+    const ctx = makeCtx(
+      { calendarId: 'cal-work', eventId: 'evt', title: 'New title', conferencing: null },
+      { updateEvent },
+    );
+
+    const result = await new CalendarUpdateEventHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+});
+
 describe('CalendarUpdateEventHandler -- recurrence', () => {
   it('updates the rule on a series master, sending the configured timezone', async () => {
     const updateEvent = vi.fn().mockResolvedValue(makeEvent({ id: 'master', recurrence: UNTIL_RULE }));

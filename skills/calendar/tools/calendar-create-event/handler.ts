@@ -15,6 +15,7 @@ import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
 import { holdHasAttendees, isHoldEvent, eventsOverlap } from '../../../../src/channels/calendar/holds.js';
 import { parseRecurrence } from '../../../../src/channels/calendar/recurrence-input.js';
+import { parseConferencing } from '../../../../src/channels/calendar/conferencing-input.js';
 import { undeclaredInputError } from '../../../../src/skills/_shared/undeclared-input-guard.js';
 
 // Mirrors tool.json `inputs`. Anything else is refused rather than silently dropped (#2385).
@@ -39,7 +40,7 @@ export class CalendarCreateEventHandler implements ToolHandler {
       description?: string;
       location?: string;
       attendees?: unknown;
-      conferencing?: Record<string, unknown>;
+      conferencing?: unknown;
       recurrence?: unknown;
     };
 
@@ -80,6 +81,13 @@ export class CalendarCreateEventHandler implements ToolHandler {
       if (!parsed.ok) return { success: false, error: parsed.error };
       parsedRecurrence = parsed.recurrence;
     }
+    let parsedConferencing: CreateEventInput['conferencing'];
+    // null is an omitted optional here: a new event simply has no conferencing.
+    if (conferencing !== undefined && conferencing !== null) {
+      const parsed = parseConferencing(conferencing);
+      if (!parsed.ok) return { success: false, error: parsed.error };
+      parsedConferencing = parsed.conferencing;
+    }
 
     try {
       // Read-only check: if the calendar is registered and marked read-only, refuse.
@@ -96,7 +104,7 @@ export class CalendarCreateEventHandler implements ToolHandler {
       if (description) eventData.description = description;
       if (location) eventData.location = location;
       if (parsedAttendees) eventData.attendees = parsedAttendees;
-      if (conferencing) eventData.conferencing = conferencing;
+      if (parsedConferencing) eventData.conferencing = parsedConferencing;
       if (parsedRecurrence) {
         eventData.recurrence = parsedRecurrence;
         eventData.timezone = ctx.timezone;

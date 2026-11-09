@@ -18,6 +18,7 @@ import {
 import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
 import { parseRecurrence } from '../../../../src/channels/calendar/recurrence-input.js';
+import { parseConferencing } from '../../../../src/channels/calendar/conferencing-input.js';
 import { undeclaredInputError } from '../../../../src/skills/_shared/undeclared-input-guard.js';
 
 // Mirrors tool.json `inputs`. Anything else is refused rather than silently dropped (#2385).
@@ -44,7 +45,7 @@ export class CalendarUpdateEventHandler implements ToolHandler {
       description?: string;
       location?: string;
       attendees?: unknown;
-      conferencing?: Record<string, unknown>;
+      conferencing?: unknown;
       recurrence?: unknown;
       notifyAttendees?: unknown;
     };
@@ -85,7 +86,11 @@ export class CalendarUpdateEventHandler implements ToolHandler {
         if (!parsed.ok) return { success: false, error: parsed.error };
         changes.attendees = parsed.attendees;
       }
-      if (conferencing !== undefined) changes.conferencing = conferencing;
+      if (conferencing !== undefined) {
+        const parsed = parseConferencing(conferencing);
+        if (!parsed.ok) return { success: false, error: parsed.error };
+        changes.conferencing = parsed.conferencing;
+      }
       if (recurrence !== undefined) {
         if (!ctx.timezone) {
           return { success: false, error: 'Cannot change a recurrence rule: no timezone is configured for Curia' };
