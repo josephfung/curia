@@ -54,6 +54,7 @@ import {
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
 import { DateTime } from 'luxon';
+import { issueLiveTurnGrant, type LiveTurnGrant } from '../../src/autonomy/live-turn-grants.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 import {
   CLARIFICATION_NEXT_STEP,
@@ -702,50 +703,51 @@ export class DelegateHandler implements ToolHandler {
     if (ctx.taskMetadata?.originator) {
       delegationMetadata.originator = ctx.taskMetadata.originator;
     }
-
-    // Publish an agent.task event for the specialist.
-    // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
-    // to the Coordinator's tool.invoke event, but ToolContext doesn't currently
-    // carry the invoking event's ID. TODO: Add invokeEventId to ToolContext so
-    // capability-gated skills can maintain the full audit causal chain.
-    const taskEvent = createAgentTask({
-      agentId: agent,
-      conversationId,
-      channelId: 'internal',
-      senderId: 'coordinator',
-      // The entry note goes on this run's content only, not on delegationOrigin's
-      // originalTask, which seeds a later resume_token for a different exchange.
-      content: link
-        ? effectiveTask + outboundEntryNote(link.entryId, outsiderOriginatorContactId(ctx.taskMetadata) !== null)
-        : effectiveTask,
-      metadata: delegationMetadata,
-      // Forward the live-principal-turn signal (#1126) across this SYNCHRONOUS delegation: a
-      // specialist acting inside the principal's live turn (e.g. the contacts specialist running
-      // contact-set-tier, or the setup-wizard minting a secret-capture link) inherits live-ness
-      // and can satisfy the elevated gate. This is safe precisely because delegation is
-      // ephemeral request/response — the sub-task is a bus event, never a persisted/wakeable row,
-      // and `liveTurn` is a distinct field no persistence skill copies. It is "live" only for the
-      // duration of this synchronous call; the moment work crosses an async boundary
-      // (scheduler-create, task wake_at, a persisted bullpen thread) the signal is gone.
-      liveTurn: ctx.liveTurn,
-      // A voice hand-off's grant (#2495) rides along, so the specialist's live turn ends when
-      // the grant does, and a lapsed one still asks the principal to confirm.
-      ...(ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
-      // When this wait ends (#2371): the reasoning watchdog positions its time trigger
-      // against it. A distinct field, never cancelling the specialist's turn.
-      turnDeadlineAt: Date.now() + specialistTimeoutMs,
-      parentEventId: `delegate-${randomUUID()}`,
-    });
-    onTaskCreated(taskEvent.id);
-
-    // Claim before subscribing. A refusal returns before the response listener
-    // and its timer exist, so a busy conversation does not accumulate subscribers
-    // that never settle. The call stays inside the try: a throw while arming the
-    // listener still releases a claim this call acquired.
+    // ctx.taskMetadata is the effective standing, which keeps the wake marker (#1125).
+    const wokenTurn = ctx.taskMetadata?.['wakeContext'] !== undefined;
+    let waitGrant: LiveTurnGrant | undefined;
     let acquiredDelegateEventId: string | undefined;
     let retainRunningClaim = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
     try {
+      // Publish an agent.task event for the specialist.
+      // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
+      // to the Coordinator's tool.invoke event, but ToolContext doesn't currently
+      // carry the invoking event's ID. TODO: Add invokeEventId to ToolContext so
+      // capability-gated skills can maintain the full audit causal chain.
+      const taskEvent = createAgentTask({
+        agentId: agent,
+        conversationId,
+        channelId: 'internal',
+        senderId: 'coordinator',
+        // The entry note goes on this run's content only, not on delegationOrigin's
+        // originalTask, which seeds a later resume_token for a different exchange.
+        content: link
+          ? effectiveTask + outboundEntryNote(link.entryId, outsiderOriginatorContactId(ctx.taskMetadata) !== null)
+          : effectiveTask,
+        metadata: delegationMetadata,
+        // Forward the live-principal-turn signal (#1126) across this SYNCHRONOUS delegation: a
+        // specialist acting inside the principal's live turn (e.g. the contacts specialist running
+        // contact-set-tier, or the setup-wizard minting a secret-capture link) inherits live-ness
+        // and can satisfy the elevated gate. This is safe precisely because delegation is
+        // ephemeral request/response — the sub-task is a bus event, never a persisted/wakeable row,
+        // and `liveTurn` is a distinct field no persistence skill copies. It is "live" only for the
+        // duration of this synchronous call; the moment work crosses an async boundary
+        // (scheduler-create, task wake_at, a persisted bullpen thread) the signal is gone.
+        // A woken task is never live, and delegationMetadata carries no wakeContext, so a flag
+        // leaked onto a wake would become a live turn here: drop it (#2515).
+        liveTurn: wokenTurn ? undefined : ctx.liveTurn,
+        // A voice hand-off's lapsed grant (#2495) rides along on a turn that is no longer
+        // live, so the specialist still asks to confirm. A live turn's is replaced below.
+        ...(!wokenTurn && ctx.liveTurnGrantId !== undefined ? { liveTurnGrantId: ctx.liveTurnGrantId } : {}),
+        parentEventId: `delegate-${randomUUID()}`,
+      });
+      onTaskCreated(taskEvent.id);
+
+      // Claim before subscribing. A refusal returns before the response listener
+      // and its timer exist, so a busy conversation does not accumulate subscribers
+      // that never settle. The call stays inside the try: a throw while arming the
+      // listener still releases a claim this call acquired.
       const claim = await acquireDispatchClaim(
         ctx,
         agent,
@@ -763,6 +765,23 @@ export class DelegateHandler implements ToolHandler {
       if (ctx.delegationGuard && !hasResumeToken) {
         ctx.delegationGuard.recordInvocation(dKey);
       }
+
+      // The wait starts here, after the claim, so both clocks on it start now: however
+      // long the claim took, the specialist gets the whole wait.
+      // The specialist's live turn lasts as long as this wait (#2515): a timeout or an
+      // interrupted wait leaves it running, and from then on nobody is live in its exchange.
+      // A grant revoked when the wait ends bounds it; inside a voice hand-off it also ends
+      // with that call's grant. A lapsed grant still lets the specialist ask for confirmation.
+      if (!wokenTurn && ctx.liveTurn === true) {
+        waitGrant = issueLiveTurnGrant({
+          ttlMs: specialistTimeoutMs,
+          ...(ctx.liveTurnGrantId !== undefined ? { parentId: ctx.liveTurnGrantId } : {}),
+        });
+        taskEvent.payload.liveTurnGrantId = waitGrant.id;
+      }
+      // When this wait ends (#2371): the reasoning watchdog positions its time trigger
+      // against it. A distinct field, never cancelling the specialist's turn.
+      taskEvent.payload.turnDeadlineAt = Date.now() + specialistTimeoutMs;
 
       // Set up a one-time listener for the specialist's response BEFORE
       // publishing the task, so we don't miss a fast response.
@@ -1130,6 +1149,7 @@ export class DelegateHandler implements ToolHandler {
       // Always clean up the timeout on any exit path. Unset when we returned
       // before the listener was armed (claim conflict, acquire failure).
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      waitGrant?.revoke();
       if (acquiredDelegateEventId && !retainRunningClaim && ctx.openDelegationLookup?.releaseRunning) {
         try {
           await ctx.openDelegationLookup.releaseRunning(acquiredDelegateEventId);

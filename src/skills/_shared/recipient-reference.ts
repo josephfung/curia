@@ -36,9 +36,9 @@
 // raw-address inputs are refused, never ignored.
 
 import { cleanedIdentityLabel, visibleIdentityLabel } from '../../agents/principal-contact-block.js';
-import type { ContactService } from '../../contacts/contact-service.js';
+import { isStructuralContact, type ContactService } from '../../contacts/contact-service.js';
 import { hasPresentValue } from '../../contacts/principal-carveout-parse.js';
-import type { ChannelIdentity, Contact } from '../../contacts/types.js';
+import { AGENT_ENTERED_SOURCES, type ChannelIdentity, type Contact } from '../../contacts/types.js';
 import { findPrincipalChannelRules } from '../../contacts/principal-channel-registry.js';
 import {
   DERIVED_IDENTITY_SOURCE,
@@ -602,9 +602,39 @@ export async function resolveRecipientReference(
     // retype it into another field, which is the failure this design removes.
     const who = isPrincipal ? 'The principal' : contactWho(found.contact);
     const why = onChannel.length > 0 ? ' (the ones on file are unverified, inactive, or not sendable on this channel)' : '';
+    // contact-link-identity verifies a re-stated address an agent entered (AGENT_ENTERED_SOURCES)
+    // on any turn, but any other unverified source only while the principal is asking for it
+    // live (#2515). Say which, rather than send the agent round to a re-statement that will be
+    // refused. Only an active, sendable address is worth re-stating: verifying leaves the
+    // address as it is, so a bounced, defunct or unsendable one (a Slack W… ID) stays unusable.
+    // A structural contact's addresses are never agent-managed, so no re-statement helps.
+    const unverified = onChannel.filter((identity) => !identity.verified);
+    const worthRestating = unverified.filter(
+      (identity) => identity.status === 'active' && (!sendable || sendable.test(identity.channelIdentifier)),
+    );
+    const restatable = worthRestating.some((identity) => AGENT_ENTERED_SOURCES.has(identity.source));
+    const needsPrincipalLive = worthRestating.some((identity) => !AGENT_ENTERED_SOURCES.has(identity.source));
     const next = isPrincipal
       ? 'Use a channel listed in Principal Contact Details.'
-      : 'Reach them on another channel, or add (or re-state) an address you are sure of with contact-link-identity.';
+      : isStructuralContact(found.contact)
+        ? 'Reach them on another channel. A system contact\'s addresses are managed by the principal in the console.'
+        : restatable && needsPrincipalLive
+          ? 'Reach them on another channel. Re-stating an address with contact-link-identity, copied from a message or ' +
+            'page in this conversation, verifies one an agent entered earlier (a send, contact registration); any other ' +
+            'unverified one is refused unless the principal is asking for it in a live conversation.'
+          : restatable
+            ? 'Reach them on another channel, or re-state the address with contact-link-identity, copied from a message ' +
+              'or page in this conversation.'
+            : needsPrincipalLive
+              ? 'Reach them on another channel, or give contact-link-identity an address copied from a message or page in ' +
+                'this conversation. Re-stating an unverified one already on file is refused unless the principal is ' +
+                'asking for it in a live conversation.'
+              : unverified.length > 0
+                ? `Reach them on another channel, or give contact-link-identity a sendable ${channel} address copied ` +
+                  'from a message or page in this conversation. The one on file is inactive (bounced or defunct) or not ' +
+                  `sendable on ${channel}, so re-stating it would not make it usable; the principal can review it in the console.`
+                : 'Reach them on another channel, or give contact-link-identity an address copied from a message or page ' +
+                  'in this conversation.';
     return {
       ok: false,
       error: `${who} has no verified, active ${channel} address${why}. Nothing was sent. ${next}`,

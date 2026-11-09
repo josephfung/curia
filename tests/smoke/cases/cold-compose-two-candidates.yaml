@@ -26,8 +26,9 @@ tool_stubs:
     - match: { to: ["3f6e2d1c-9b8a-4c7d-8e6f-5a4b3c2d1e0f"] }
       error: >-
         to entry 1: Contact 3f6e2d1c-9b8a-4c7d-8e6f-5a4b3c2d1e0f has no verified, active email address. Nothing was sent.
-        Reach them on another channel, or add (or re-state) an address you are sure of with
-        contact-link-identity. No draft was saved. Someone with no verified email on file can
+        Reach them on another channel, or give contact-link-identity an address copied from a
+        message or page in this conversation. Re-stating an unverified one already on file is
+        refused unless the principal is asking for it in a live conversation. No draft was saved. Someone with no verified email on file can
         be addressed in to_addresses, with the address copied exactly from the principal's mail.
   ceo-inbox-search:
     - match: { folder: DRAFTS }

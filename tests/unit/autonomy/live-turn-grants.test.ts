@@ -41,6 +41,32 @@ describe('live-turn grants', () => {
     expect(isLiveTurnGrantActive(other.id)).toBe(true);
   });
 
+  it('a grant that narrows another ends with it, and on its own revoke or TTL (#2515)', () => {
+    let now = 1_000;
+    const call = issueLiveTurnGrant({ voiceSessionId: 's1', ttlMs: 60_000, now: () => now });
+    const wait = issueLiveTurnGrant({ parentId: call.id, ttlMs: 500, now: () => now });
+    expect(isLiveTurnGrantActive(wait.id, () => now)).toBe(true);
+    // The call ends: the delegated wait's grant ends with it.
+    revokeLiveTurnGrantsForVoiceSession('s1');
+    expect(isLiveTurnGrantActive(wait.id, () => now)).toBe(false);
+
+    const call2 = issueLiveTurnGrant({ voiceSessionId: 's2', ttlMs: 60_000, now: () => now });
+    const wait2 = issueLiveTurnGrant({ parentId: call2.id, ttlMs: 500, now: () => now });
+    now = 1_500;
+    expect(isLiveTurnGrantActive(wait2.id, () => now)).toBe(false);
+    expect(isLiveTurnGrantActive(call2.id, () => now)).toBe(true);
+
+    const wait3 = issueLiveTurnGrant({ parentId: call2.id, ttlMs: 60_000, now: () => now });
+    wait3.revoke();
+    expect(isLiveTurnGrantActive(wait3.id, () => now)).toBe(false);
+    expect(isLiveTurnGrantActive(call2.id, () => now)).toBe(true);
+  });
+
+  it('a grant under a lapsed or unknown parent is never active (#2515)', () => {
+    const wait = issueLiveTurnGrant({ parentId: lapsedLiveTurnGrantId(), ttlMs: 60_000 });
+    expect(isLiveTurnGrantActive(wait.id)).toBe(false);
+  });
+
   it('never treats a lapsed id, an unknown id or no id as active', () => {
     expect(isLiveTurnGrantActive(lapsedLiveTurnGrantId())).toBe(false);
     expect(isLiveTurnGrantActive('ltg-made-up')).toBe(false);
