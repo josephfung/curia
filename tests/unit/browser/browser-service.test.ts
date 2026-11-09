@@ -523,6 +523,39 @@ describe('BrowserService (unit — mocked browser)', () => {
       await svc.stop();
     });
 
+    // Whatever stops the fallback, the channel's sandbox failure is what the operator can fix.
+    it.each([
+      ['is not installed', "Executable doesn't exist at /ms-playwright/chromium-1187/chrome-linux/chrome"],
+      ['cannot use the profile', 'Failed to create a ProcessSingleton for your profile directory'],
+    ])('keeps the sandbox diagnosis when the channel cannot sandbox and bundled Chromium %s', async (_name, fallbackMessage) => {
+      const fallbackFailure = new Error(fallbackMessage);
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockRejectedValueOnce(sandboxFailure)
+        .mockRejectedValueOnce(fallbackFailure);
+      const errorLog = vi.spyOn(logger, 'error');
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      const err = await svc.start().catch((e: unknown) => e) as Error;
+      expect(launch).toHaveBeenCalledTimes(2);
+      expect(err.message).toContain('docker/seccomp-chrome.json');
+      expect(err.message).toContain('channel: chrome could not sandbox, and bundled Chromium did not start');
+      expect(err.message).toContain('AppArmor profile');
+      expect(err.message).not.toContain('use channel: chrome');
+      expect(err.cause).toBe(sandboxFailure);
+      // The fallback's own failure is not in the message, so it has to reach the log.
+      expect(errorLog).toHaveBeenCalledWith({ err: fallbackFailure }, expect.any(String));
+      await svc.stop();
+    });
+
+    it('rethrows the fallback failure when neither launch hit the sandbox', async () => {
+      const fallbackFailure = new Error("Executable doesn't exist at /ms-playwright/chromium-1187/chrome-linux/chrome");
+      vi.spyOn(chromium, 'launchPersistentContext')
+        .mockRejectedValueOnce(new Error('Chromium distribution \'chrome\' is not found'))
+        .mockRejectedValueOnce(fallbackFailure);
+      const svc = new BrowserService({ logger, profileDir, channel: 'chrome' });
+      await expect(svc.start()).rejects.toBe(fallbackFailure);
+      await svc.stop();
+    });
+
     // The error must point only at the fix. An off switch named here would be the first
     // thing anyone tried. (#2521)
     it('names the profile and offers no way to run unsandboxed', async () => {

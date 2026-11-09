@@ -587,10 +587,19 @@ export class BrowserService {
           baseOptions,
         ) as unknown as BrowserContext;
       } catch (fallbackErr) {
-        if (isSandboxLaunchFailure(fallbackErr)) {
-          throw this.sandboxLaunchError(fallbackErr, { channel: this.channel, sandboxFailure: isSandboxLaunchFailure(err) });
+        const channelSandboxFailure = isSandboxLaunchFailure(err);
+        const fallbackSandboxFailure = isSandboxLaunchFailure(fallbackErr);
+        if (!channelSandboxFailure && !fallbackSandboxFailure) throw fallbackErr;
+        // A sandbox failure on either launch is the one the operator can act on, whatever
+        // else stopped the other launch, so it is the one reported.
+        if (!fallbackSandboxFailure) {
+          this.logger.error({ err: fallbackErr }, 'Bundled Chromium fallback failed to launch');
         }
-        throw fallbackErr;
+        throw this.sandboxLaunchError(fallbackSandboxFailure ? fallbackErr : err, {
+          channel: this.channel,
+          channelSandboxFailure,
+          fallbackSandboxFailure,
+        });
       }
       this.logChannel(context, undefined);
       return context;
@@ -607,15 +616,19 @@ export class BrowserService {
    */
   private sandboxLaunchError(
     cause: unknown,
-    channelAttempt?: { channel: string; sandboxFailure: boolean },
+    channelAttempt?: { channel: string; channelSandboxFailure: boolean; fallbackSandboxFailure: boolean },
   ): Error {
+    const appArmorAdvice =
+      "on Ubuntu 23.10+ from source, check that the host's AppArmor profile for that browser allows user namespaces ";
     let hostAdvice: string;
     if (!channelAttempt) {
       hostAdvice = 'On Ubuntu 23.10+ from source, use channel: chrome ';
-    } else if (channelAttempt.sandboxFailure) {
+    } else if (channelAttempt.channelSandboxFailure && channelAttempt.fallbackSandboxFailure) {
+      hostAdvice = `channel: ${channelAttempt.channel} could not sandbox either: ${appArmorAdvice}`;
+    } else if (channelAttempt.channelSandboxFailure) {
       hostAdvice =
-        `channel: ${channelAttempt.channel} could not sandbox either: on Ubuntu 23.10+ from source, ` +
-        "check that the host's AppArmor profile for that browser allows user namespaces ";
+        `channel: ${channelAttempt.channel} could not sandbox, and bundled Chromium did not start ` +
+        `(see the earlier error; is it installed?): ${appArmorAdvice}`;
     } else {
       hostAdvice =
         `channel: ${channelAttempt.channel} did not start (see the earlier error; is it installed?), ` +
