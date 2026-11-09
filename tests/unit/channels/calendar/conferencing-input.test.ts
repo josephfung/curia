@@ -86,14 +86,30 @@ describe('parseConferencing', () => {
       });
     });
 
-    it.each([[{}], ['https://x.example'], [null], [[]]])('refuses details of %j', (details) => {
+    it.each([
+      [{}], ['https://x.example'], [null], [[]],
+      [{ link: 'https://x.example' }], [{ url: '' }], [{ url: '   ' }], [{ url: 42 }], [{ password: 'pw' }],
+    ])('refuses details of %j', (details) => {
       expect(expectError({ provider: 'Google Meet', details })).toContain('details');
+    });
+
+    it('trims the url', () => {
+      expect(parseConferencing({ provider: 'Zoom', details: { url: ' https://x.example ', password: 'pw' } })).toEqual({
+        ok: true,
+        conferencing: { provider: 'Zoom Meeting', details: { url: 'https://x.example', password: 'pw' } },
+      });
     });
   });
 
   describe('malformed input', () => {
-    it.each([[null], ['Google Meet'], [true], [[]]])('refuses a non-object %j', (raw) => {
+    it.each([['Google Meet'], [true], [[]]])('refuses a non-object %j', (raw) => {
       expect(expectError(raw)).toContain('conferencing must be an object');
+    });
+
+    it('refuses null with a message that says removal is unsupported', () => {
+      const error = expectError(null);
+      expect(error).toContain('removing a video link is not supported');
+      expect(error).toContain('Nothing was created or changed');
     });
 
     it('requires a provider', () => {

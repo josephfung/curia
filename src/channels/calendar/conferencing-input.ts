@@ -39,6 +39,14 @@ export function parseConferencing(
 ): { ok: true; conferencing: Record<string, unknown> } | { ok: false; error: string } {
   const invalid = (reason: string) => ({ ok: false as const, error: `Invalid input: ${reason} ${SHAPE_HINT}` });
 
+  if (raw === null) {
+    return {
+      ok: false,
+      error:
+        'conferencing cannot be null: removing a video link is not supported. ' +
+        `${NOTHING_CHANGED} Omit conferencing to leave it as it is. ${SHAPE_HINT}`,
+    };
+  }
   if (!isRecord(raw)) return invalid('conferencing must be an object.');
 
   const unknownKey = Object.keys(raw).find((key) => !KNOWN_KEYS.has(key));
@@ -88,8 +96,8 @@ export function parseConferencing(
   if (details === undefined) {
     return invalid('conferencing needs autocreate: true or details.');
   }
-  if (!isRecord(details) || Object.keys(details).length === 0) {
-    return invalid('conferencing.details must be an object with the meeting url.');
+  if (!isRecord(details) || typeof details.url !== 'string' || details.url.trim() === '') {
+    return invalid('conferencing.details must be an object with the meeting url as a non-empty "url" string.');
   }
-  return { ok: true, conferencing: { provider, details } };
+  return { ok: true, conferencing: { provider, details: { ...details, url: details.url.trim() } } };
 }

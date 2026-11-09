@@ -85,6 +85,7 @@ describe('CalendarUpdateEventHandler -- conferencing (#2536)', () => {
     const result = await new CalendarUpdateEventHandler().execute(ctx);
 
     expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('removing a video link is not supported');
     expect(updateEvent).not.toHaveBeenCalled();
   });
 });
