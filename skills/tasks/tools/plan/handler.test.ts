@@ -401,6 +401,63 @@ describe('PlanHandler', () => {
     );
   });
 
+  describe('step validation errors', () => {
+    async function run(steps: unknown): Promise<string> {
+      const taskRepo = {
+        getTask: vi.fn().mockResolvedValue(makeTaskRow()),
+        createTask: vi.fn(),
+        updateTask: vi.fn(),
+        setPlanBlock: vi.fn(),
+      } as unknown as TaskRepo;
+      const result = await new PlanHandler().execute(makeCtx({
+        taskRepo,
+        agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
+        input: { task_id: PARENT_ID, steps, deliverable_step_id: null, next: 'Go' },
+      }));
+      expect(result.success).toBe(false);
+      expect(taskRepo.createTask).not.toHaveBeenCalled();
+      return result.success ? '' : result.error;
+    }
+
+    it('names the step and field when target_agent_id is missing', async () => {
+      const error = await run([
+        { id: 'ok', title: 'Fine', target_agent_id: 'coordinator' },
+        { id: 'audit-config', title: 'Audit' },
+      ]);
+      expect(error).toBe('steps[1] (id "audit-config"): missing target_agent_id (non-empty string required)');
+    });
+
+    it('names the step when id is missing', async () => {
+      const error = await run([{ title: 'No id', target_agent_id: 'coordinator' }]);
+      expect(error).toMatch(/^steps\[0\]: missing id/);
+    });
+
+    it('names the step when title is missing', async () => {
+      const error = await run([{ id: 'x', target_agent_id: 'coordinator' }]);
+      expect(error).toMatch(/^steps\[0\] \(id "x"\): missing title/);
+    });
+
+    it('reports a non-object step', async () => {
+      const error = await run(['nope']);
+      expect(error).toMatch(/^steps\[0\]: must be an object/);
+    });
+
+    it('reports duplicate step ids', async () => {
+      const error = await run([
+        { id: 'x', title: 'A', target_agent_id: 'coordinator' },
+        { id: 'x', title: 'B', target_agent_id: 'coordinator' },
+      ]);
+      expect(error).toBe('steps[1]: duplicate step id "x"');
+    });
+
+    it('keeps the generic message for a missing or empty steps array', async () => {
+      const generic = 'Missing or invalid required input: steps (non-empty array)';
+      expect(await run(undefined)).toBe(generic);
+      expect(await run([])).toBe(generic);
+      expect(await run('not-an-array')).toBe(generic);
+    });
+  });
+
   it('rejects cyclic dependency graphs', async () => {
     const taskRepo = {
       getTask: vi.fn().mockResolvedValue(makeTaskRow()),

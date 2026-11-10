@@ -17,13 +17,11 @@ import {
   countMaterializationKinds,
   existingTaskIdForStep,
   findRemovedChildTaskIds,
-  parsePlanStepInput,
-  parsePlanStepsInput,
+  parsePlanStepsDetailed,
   planStepDriftsFromChild,
   preflightPlanBlockWrite,
   resolveBlockedByTaskId,
   validateDeliverableStepId,
-  validatePlanStepsGraph,
   type PlanStepInput,
 } from '../../../../src/agents/plan-execution.js';
 import { computePlanRollup, readPlanBlock } from '../../../../src/db/plan-progress.js';
@@ -54,20 +52,14 @@ export class PlanHandler implements ToolHandler {
       return { success: false, error: 'task_id must be a valid UUID' };
     }
 
-    const steps = parsePlanStepsInput(input.steps);
-    if (!steps) {
-      const rawSteps = Array.isArray(input.steps) ? input.steps : [];
-      const parsedSteps: PlanStepInput[] = [];
-      for (const item of rawSteps) {
-        const step = parsePlanStepInput(item);
-        if (step) parsedSteps.push(step);
-      }
-      const graphError = parsedSteps.length > 0 ? validatePlanStepsGraph(parsedSteps) : null;
-      if (graphError) {
-        return { success: false, error: graphError };
-      }
-      return { success: false, error: 'Missing or invalid required input: steps (non-empty array)' };
+    const parsed = parsePlanStepsDetailed(input.steps);
+    if (!parsed.ok) {
+      return {
+        success: false,
+        error: parsed.error ?? 'Missing or invalid required input: steps (non-empty array)',
+      };
     }
+    const steps = parsed.steps;
 
     const deliverableStepId = validateDeliverableStepId(input.deliverable_step_id, steps);
     if (deliverableStepId === undefined) {
