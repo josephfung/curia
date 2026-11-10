@@ -35,7 +35,8 @@ function ibanChecksumValid(iban: string): boolean {
  * length from the start of the candidate is tried; the mod-97 check keeps ordinary text out.
  */
 export function containsIban(text: string): boolean {
-  for (const match of text.matchAll(IBAN_CANDIDATE)) {
+  // Case-insensitive: an IBAN is the same account however the drafter capitalises it.
+  for (const match of text.toUpperCase().matchAll(IBAN_CANDIDATE)) {
     const compact = match[0].replace(/ /g, '');
     for (let len = Math.min(compact.length, IBAN_MAX); len >= IBAN_MIN; len--) {
       if (ibanChecksumValid(compact.slice(0, len))) return true;

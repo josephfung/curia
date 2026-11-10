@@ -1298,7 +1298,8 @@ function validateThroughGateway(scenario: ScenarioCase, file: string): void {
   // Absent on either side is production's default, on_request; the pinned value is read the way
   // the gateway reads the stored setting (readSendLevelValue: malformed is on_request too).
   const pinnedSending = scenario.seed.pinned?.configs[SENDING_CONFIG];
-  if (mailbox || pinnedSending !== undefined) {
+  // Only a gateway case has a gateway level to disagree with.
+  if (scenario.throughGateway && (mailbox || pinnedSending !== undefined)) {
     const gatewayLevel = mailbox?.sendLevel ?? DEFAULT_SEND_LEVEL;
     const { level: agentLevel, malformed } = readSendLevelValue(pinnedSending ?? null);
     // A mistyped value reads as on_request with no trace: refuse it rather than guess.

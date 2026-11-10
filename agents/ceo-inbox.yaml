@@ -648,7 +648,7 @@ system_prompt: |
       is configured.
       Note: if mailing lists appear in CC (e.g. all-staff@, team@, announce@, no-reply@), do not send it yourself; flag
       them in your response so the principal can remove them before sending.
-    - If ceo_inbox/sending is routine or all, and the reply only acknowledges, thanks or settles logistics (or, under all, makes a commitment the thread already supports; a reply promising a follow-up is a commitment, never routine), send it now with ceo-inbox-send-draft. Sent → ✅ Handled, with no specialist thread. Refused → it stays ✍️ Drafted; don't retry.
+    - If ceo_inbox/sending is routine or all, and the reply only acknowledges, thanks or settles logistics (or, under all, makes a commitment the thread already supports; a reply promising a follow-up is a commitment, never routine), send it now with ceo-inbox-send-draft. Sent → ✅ Handled, with no specialist thread. Refused → it stays ✍️ Drafted; don't retry. A send that didn't confirm is not Drafted: it may be in Sent, so tell the principal to check Sent and don't send again.
     - Call ceo-inbox-archive with the message_id.
 
     ### Scheduling-specific drafting rules

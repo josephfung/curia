@@ -915,6 +915,7 @@ export class ExecutionLayer {
     options: InvokeOptions | undefined,
     skillLogger: Logger,
     sendResolution?: readonly SendRecipientPin[],
+    sendingThreshold: number = requiredScore,
   ): Promise<string> {
     const baseMsg =
       `Tool '${toolName}' blocked — autonomy score is ${currentScore}, ` +
@@ -927,7 +928,9 @@ export class ExecutionLayer {
       // An outsider-originated call is skipped: the gateway files nothing for it either, and
       // an outsider repeating the call must not be able to add digest noise.
       if (!isPrincipalOriginated(options?.taskMetadata) && !isOutsiderOriginated(options?.taskMetadata)) {
-        await this.publishPrincipalMailboxRefusal(currentScore, requiredScore, options, skillLogger);
+        // The digest names what sending needs (the tool's own threshold), which can exceed the
+        // 60 Gate A refuses at: the principal must not read 60 as enough when Gate B would refuse.
+        await this.publishPrincipalMailboxRefusal(currentScore, sendingThreshold, options, skillLogger);
       }
       return baseMsg + NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND;
     }
@@ -2415,6 +2418,7 @@ export class ExecutionLayer {
             const gateOptions = { ...options, taskMetadata: effectiveTaskMetadata };
             const gateAError = await this.buildGateError(
               toolName, input, currentScore, 60, manifest.action_risk, gateOptions, skillLogger, sendPins,
+              Math.max(60, requiredScore),
             );
             return {
               success: false,

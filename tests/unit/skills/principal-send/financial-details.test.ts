@@ -7,6 +7,10 @@ describe('containsIban', () => {
   it('finds a checksum-valid IBAN, spaced, compact or followed by more text', () => {
     expect(containsIban('Updated remittance details: IBAN DE89 3704 0044 0532 0130 00, please confirm.')).toBe(true);
     expect(containsIban('GB82WEST12345698765432')).toBe(true);
+    // however the drafter capitalises it
+    expect(containsIban('iban de89 3704 0044 0532 0130 00 thanks')).toBe(true);
+    expect(containsIban('gb82west12345698765432')).toBe(true);
+    expect(containsIban('De89 3704 0044 0532 0130 00')).toBe(true);
     expect(containsIban('<p>DE89 3704 0044 0532 0130 00 THANKS</p>')).toBe(true);
   });
 

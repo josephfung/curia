@@ -95,6 +95,18 @@ describe('gate blocks on ceo-inbox-send-draft queue no approval (#2474)', () => 
     });
   });
 
+  it('Gate A digest names the tool\'s full threshold, not Gate A\'s 60', async () => {
+    const { layer, publish } = setup('ceo-inbox-send-draft', 50);
+    await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, { taskEventId: 'task-1' });
+    const reports = publish.mock.calls
+      .map((c) => c[1] as { type: string; payload: Record<string, unknown> })
+      .filter((e) => e.type === 'principal.report');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.payload['summary']).toBe(
+      'Left as a draft in your mailbox: a reply Curia wanted to send on its own. Autonomy is 50; sending on its own needs 80.',
+    );
+  });
+
   it('files no digest item when an outsider-originated call is refused at Gate B', async () => {
     const { layer, publish } = setup('ceo-inbox-send-draft', 65);
     const outsider = {
