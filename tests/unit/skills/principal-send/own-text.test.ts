@@ -32,6 +32,36 @@ describe('splitReplyQuote', () => {
     expect(splitReplyQuote(html)).toEqual({ own: html, quote: '' });
   });
 
+  it('does not split on gmail_quote outside a div\'s own class attribute', () => {
+    // Another attribute named like class, and class= text inside another attribute's value.
+    for (const tag of [
+      '<div data-class="gmail_quote">',
+      '<div title=\'class="gmail_quote"\'>',
+      '<div title="x" data-x=\'a class="gmail_quote"\'>',
+      '<span class="gmail_quote">',
+    ]) {
+      const html = `<div>Ok, call 416-555-0199.</div>${tag}later text</div>`;
+      expect(splitReplyQuote(html), tag).toEqual({ own: html, quote: '' });
+    }
+  });
+
+  it('does not split on a quote marker inside an attribute value, a comment or a raw-text element', () => {
+    for (const wrapped of [
+      '<img alt=\'<div class="gmail_quote">\'>',
+      `<img alt='${REPLY_QUOTE_HTML_OPEN}'>`,
+      '<!-- <div class="gmail_quote"> -->',
+      '<style>/* <div class="gmail_quote"> */</style>',
+    ]) {
+      const html = `<p>Ok, call 416-555-0199.</p>${wrapped}<p>more</p>`;
+      expect(splitReplyQuote(html), wrapped).toEqual({ own: html, quote: '' });
+    }
+  });
+
+  it('still splits on a real quote after an attribute that mentions it', () => {
+    const html = '<div title=\'class="gmail_quote"\'>Ok.</div><div class=\'gmail_quote\'>On Fri, Dana wrote:</div>';
+    expect(splitReplyQuote(html).own).toBe('<div title=\'class="gmail_quote"\'>Ok.</div>');
+  });
+
   it('splits at the earliest marker when both occur', () => {
     const html = `<p>Yes.</p><div class="gmail_quote">older</div>${REPLY_QUOTE_HTML_OPEN}newer</div>`;
     expect(splitReplyQuote(html).own).toBe('<p>Yes.</p>');
@@ -96,5 +126,7 @@ describe('quoteHeaderParticipants (#2474 final review S2)', () => {
     expect(quoteHeaderParticipants('<div class="gmail_quote"><div class="gmail_attr">On Thu, Dana wrote:</div><blockquote>x</blockquote></div>')).toBeNull();
     expect(quoteHeaderParticipants('')).toBeNull();
     expect(quoteHeaderParticipants(`${REPLY_QUOTE_HTML_OPEN}<p>no header</p>`)).toBeNull();
+    // Not a Gmail quote container: no attribution is read from it.
+    expect(quoteHeaderParticipants('<div data-class="gmail_quote">On Thu, dana@example.org wrote:<blockquote>x</blockquote></div>')).toBeNull();
   });
 });
