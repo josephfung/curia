@@ -28,7 +28,7 @@ import type { LearnedDescriberRepo } from './learned-describer-repo.js';
 import { describerHash, signalEffect, type ToolEffect, type ToolFacts } from './learned-describers.js';
 import { lookupPrefixPhrase } from './projection.js';
 import { scrubContactDetails } from './scrub.js';
-import { escapeForTag } from './summarizer.js';
+import { escapeForAttr, escapeForTag } from './summarizer.js';
 
 export interface DescriberLearnerConfig {
   bus: EventBus;
@@ -255,7 +255,7 @@ export class DescriberLearner {
           {
             role: 'user',
             content:
-              `<tool name="${escapeForTag(facts.name)}">${escapeForTag(clip(facts.description, MAX_DESCRIPTION_CHARS))}</tool>\n` +
+              `<tool name="${escapeForAttr(facts.name)}">${escapeForTag(clip(facts.description, MAX_DESCRIPTION_CHARS))}</tool>\n` +
               `<inputs>${escapeForTag(clip(schemaText(facts.inputSchema), MAX_SCHEMA_CHARS))}</inputs>\n` +
               `<agent>${escapeForTag(clip(agent, MAX_AGENT_CHARS))}</agent>${known}`,
           },

@@ -28,6 +28,7 @@ const TOOLS: Record<string, ToolFacts> = {
   'tool-a': { name: 'tool-a', description: 'Append a row', inputSchema: {}, actionRisk: 'none', mcp: true },
   'tool-b': { name: 'tool-b', description: 'Append a row', inputSchema: {}, actionRisk: 'none', mcp: true },
   'tool-c': { name: 'tool-c', description: 'Append a row', inputSchema: {}, actionRisk: 'none', mcp: true },
+  'quote"tool': { name: 'quote"tool', description: 'Append a row', inputSchema: {}, actionRisk: 'none', mcp: true },
 };
 
 function setup(llmResults: Array<LLMResponse | Error>, existing: LearnedDescriber[] = [], agentContext?: (agentId: string) => string | null) {
@@ -104,6 +105,13 @@ describe('DescriberLearner', () => {
     expect(user).toContain('Append a row to a spreadsheet');
     // Call data (the amount in the result) never reaches the prompt.
     expect(user).not.toContain('42');
+  });
+
+  it('escapes a double quote in the tool name so it cannot end the name attribute', async () => {
+    const { chat, learner } = setup([textResponse(GOOD)]);
+    await learner.handleResult(result('quote"tool'));
+    const user = chat.mock.calls[0]![0].messages[1].content as string;
+    expect(user).toContain('<tool name="quote&quot;tool">');
   });
 
   it('keeps a deterministic effect over the model\'s answer and records it as a hint', async () => {
