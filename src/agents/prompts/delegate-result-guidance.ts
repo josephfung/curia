@@ -32,12 +32,16 @@ export const PAUSED_NEXT_STEP_LINES: readonly string[] = [
   'Never attribute the pause to an external cause such as an API timeout or outage.',
 ];
 
-/** The specialist's result carries composed email (`draft_emails`, #2055). */
+/**
+ * The specialist's result carries composed email (`draft_emails`, #2055). A specialist that
+ * signed its draft anyway is caught here: the gateway signs and never edits the body (#2554).
+ */
 export const DRAFT_EMAIL_NEXT_STEP_LINES: readonly string[] = [
   'The specialist composed the draft email in this result but did not send it, whatever',
   'its text says. If the principal asked for it to go out, send it yourself with',
   'email-send and report the send from that result. Otherwise tell the principal it is',
-  'drafted and has not been sent.',
+  'drafted and has not been sent. The signature is added on send: send the body without',
+  'any name, title or signature block at its end.',
 ];
 
 /** No email or message went out, and the result or brief talks about sending (#2055). */

@@ -1,0 +1,100 @@
+# Case 15d (#2554): code owns the email signature. The gateway appends the configured
+# signature and never edits the body, so a sign-off the model writes goes out above it and
+# the email is signed twice. Calendar composes the meeting request in a <scheduling_email>
+# block and, as in production, signs it with a name and title. The delegate result carries
+# it as `draft_emails` with DRAFT_EMAIL_NEXT_STEP, which says the signature is added on
+# send; email-send's body description says the same. The coordinator sends the draft
+# without the sign-off block. email-send is stubbed, so this scores the body the
+# coordinator wrote; the gateway's signing is covered by its unit tests.
+name: delegated draft sent unsigned
+description: >
+  The principal asks for a meeting request to go out to an external contact. Calendar
+  composes it and signs it with a name and title. The coordinator sends it with the body
+  ending at the message or a valediction, with no name, title or signature block.
+tags: [delegation, calendar, email, signature]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: jamie
+      display_name: Jamie Rodriguez
+      tier: known
+      channel: email
+      identifier: jamie@stripe.example.test
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Email Jamie Rodriguez at Stripe a request for a 30-minute intro call next week and
+    offer her a couple of times. Go ahead and send it.
+tool_stubs:
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: |
+          Jamie Rodriguez is a known contact at Stripe. Her verified email is
+          jamie@stripe.example.test.
+
+          <resolved_entities>
+            <contact name="Jamie Rodriguez" id="{{contact:jamie}}"/>
+          </resolved_entities>
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        response: |
+          Two open 30-minute slots next week: Tuesday October 13 at 10:30 AM ET and
+          Wednesday October 14 at 11:00 AM ET. The meeting request is drafted below.
+
+          Rules: loaded 0 active (0 total); applied: none
+        sent: []
+        draft_emails:
+          - subject: Intro call - 30 minutes next week
+            body: |-
+              Hi Jamie,
+
+              I'd love to find 30 minutes next week for an intro call. Would either of these work for you?
+
+              - Tuesday October 13 at 10:30 AM ET
+              - Wednesday October 14 at 11:00 AM ET
+
+              Best,
+              Alex Curia
+              Executive Assistant to the CEO
+        next_step: >-
+          The specialist composed the draft email in this result but did not send it, whatever
+          its text says. If the principal asked for it to go out, send it yourself with
+          email-send and report the send from that result. Otherwise tell the principal it is
+          drafted and has not been sent. The signature is added on send: send the body without
+          any name, title or signature block at its end.
+  email-send:
+    - match: {}
+      return: { message_id: scenario-out-1, to: jamie@stripe.example.test, subject: Intro call - 30 minutes next week }
+  contact-create:
+    - match: {}
+      return:
+        contact_id: 2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091
+        display_name: Jamie Rodriguez
+        role: null
+        kg_node_id: null
+        identities_added: 0
+expected_behaviors:
+  - id: sends_the_request
+    weight: critical
+    description: Sends the meeting request to Jamie with email-send.
+    check:
+      called: email-send
+  - id: body_not_signed
+    weight: critical
+    description: >
+      The email-send body carries no name, title or signature block at its end: not the
+      draft's "Alex Curia" / "Executive Assistant to the CEO" lines, nor any other name or
+      title of the assistant. A valediction alone ("Best,") passes.
+    check:
+      text: { tool: email-send, arg: body }
+      excludes: ['Alex Curia', 'Executive Assistant', '\bDigital EA\b', '\n\s*(Alex|Curia)\s*$']
+  - id: keeps_the_times
+    weight: important
+    description: The email still offers Tuesday October 13 at 10:30 AM ET and Wednesday October 14 at 11:00 AM ET.
+failure_modes:
+  - Sends the draft verbatim, with the name and title block at the end
+  - Replaces the draft's sign-off with a different name or title line

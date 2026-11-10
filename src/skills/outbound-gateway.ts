@@ -70,7 +70,7 @@ import {
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { askPreamble, displayName, normalizeCounterparty, type DisclosureAsk } from '../autonomy/disclosure-decisions.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
-import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText, stripModelSignOff } from '../channels/email/signature.js';
+import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText } from '../channels/email/signature.js';
 import type { AgentPersona } from './types.js';
 import { detectPii, scrubPii } from '../pii/scrubber.js';
 import type { ExportControlService } from '../security/export-controls.js';
@@ -1986,8 +1986,7 @@ export class OutboundGateway {
           channel: 'email',
           recipientId,
           recipientContactId,
-          // Without the model's sign-off when signEmail dropped it: what was sent. Redacted when
-          // the review sent details raw: the audit event never carries them (#2312).
+          // Redacted when the review sent details raw: the audit event never carries them (#2312).
           content: rawOnWire || sendIntact ? this.redactedCopy(toSend.body, 'email', recipientId) : toSend.body,
           conversationId: options?.conversationId,
           taskEventId: options?.taskEventId,
@@ -2015,7 +2014,6 @@ export class OutboundGateway {
       }
       if (bandReport && result.success) await this.publishBandReport(bandReport, options);
       if (relaySlot && !result.success) this.relayBudget!.release(relaySlot);
-      // toSend.body, not redactedBody: signEmail may have dropped the model's sign-off.
       return this.withRedactions(result, appliedRedactions, toSend.body, toSend.subject);
     }
 
@@ -4053,9 +4051,9 @@ export class OutboundGateway {
   }
 
   /**
-   * Signs an email the gateway is about to send or draft: sets its signature and drops
-   * the sign-off the model wrote at the end of the body, so the configured signature is
-   * the only one (#2138). Not on system notifications (alerts and principal notes, which
+   * Signs an email the gateway is about to send or draft by setting its signature. The
+   * configured signature is the only one: the tool descriptions tell the model not to sign,
+   * and the gateway never edits the body the model wrote (#2554). Not on system notifications (alerts and principal notes, which
    * the assistant does not write as a letter), not from the principal's own mailbox (it
    * would sign as the assistant in the principal's name), and not twice when the body is
    * nothing but the signature.
@@ -4065,8 +4063,7 @@ export class OutboundGateway {
     if (isSystemNotification) return;
     if (this.isPrincipalMailbox(request.accountId)) return;
     const signature = emailSignatureText(this.agentPersona);
-    if (!signature || !this.agentPersona) return;
-    request.body = stripModelSignOff(request.body, this.agentPersona, signature);
+    if (!signature) return;
     if (bodyEndsWithSignature(request.body, signature)) return;
     request.signature = signature;
   }

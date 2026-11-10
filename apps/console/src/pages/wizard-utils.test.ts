@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 // The seed a fresh install loads, imported so the warm template cannot drift from it.
 import { DEFAULT_OFFICE_IDENTITY } from '../../../../src/identity/defaults.js';
 import { TONE_STYLE_MAX_LENGTH as SERVER_TONE_STYLE_MAX_LENGTH } from '../../../../src/identity/types.js';
+import { emailSignatureText } from '../../../../src/channels/email/signature.js';
 import { DETAIL_BANDS, LENGTH_ROWS, LENGTH_ROW_LABELS, detailBand } from '../../../../src/identity/length.js';
 import {
   lengthPreview,
@@ -18,6 +19,7 @@ import {
   buildIdentityPayload,
   assistantFullName,
   defaultSignature,
+  fallbackEmailSignature,
   DEFAULT_WIZARD_STATE,
   detectBrowserTimezone,
   validateProfileEmail,
@@ -319,5 +321,21 @@ describe('autonomyChange', () => {
     expect(autonomyChange(84, 'full')).toEqual({ score: 90, reason: 'Set via onboarding wizard' });
     expect(autonomyChange(84, 'approval-required')).toEqual({ score: 70, reason: 'Set via onboarding wizard' });
     expect(autonomyChange(75, 'restricted')).toEqual({ score: 0, reason: 'Set via onboarding wizard' });
+  });
+});
+
+// #2554: the console shows what the gateway sends when the signature field is empty.
+describe('fallbackEmailSignature', () => {
+  it.each([
+    ['Alex Curia', 'Digital EA'],
+    ['  Alex Curia ', ''],
+    ['', 'Digital EA'],
+  ])('matches the gateway fallback for name %j and title %j', (name, title) => {
+    const gateway = emailSignatureText({ displayName: name, title, emailSignature: '' }) ?? '';
+    expect(fallbackEmailSignature(name, title)).toBe(gateway);
+  });
+
+  it('puts the name over the title', () => {
+    expect(fallbackEmailSignature('Alex Curia', 'Digital EA')).toBe('Alex Curia\nDigital EA');
   });
 });

@@ -157,7 +157,12 @@ describe('coordinator scenario cases', () => {
     for (const r of withSent) {
       // The stub has no brief, so this mirrors the handler on the response alone. A stub whose
       // note would come only from the brief's wording is not caught here.
-      const shaped = shapeSpecialistAnswer(String(r['response']), r['sent'] as string[], '');
+      // Drafts go back into the text as the <scheduling_email> blocks they were lifted from.
+      const drafts = (r['draft_emails'] ?? []) as Array<{ subject?: string; body: string }>;
+      const content = [String(r['response']), ...drafts.map(d =>
+        `<scheduling_email${d.subject !== undefined ? ` subject="${d.subject}"` : ''}>\n${d.body}\n</scheduling_email>`)].join('\n');
+      const shaped = shapeSpecialistAnswer(content, r['sent'] as string[], '');
+      expect(r['draft_emails'], String(r['response']).slice(0, 60)).toEqual(shaped.draft_emails);
       expect(r['next_step'], String(r['response']).slice(0, 60)).toBe(shaped.next_step);
     }
   });

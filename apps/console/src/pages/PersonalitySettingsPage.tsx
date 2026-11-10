@@ -8,7 +8,7 @@ import {
   errorMessage,
   type ConfigHistoryEntry,
 } from '../components/settings/ConfigHistory';
-import type { LocalIdentity } from './wizard-utils';
+import { fallbackEmailSignature, type LocalIdentity } from './wizard-utils';
 import { validateNonEmptyName, validateToneStyle, type LengthLimits } from './wizard-utils';
 
 interface VersionMeta {
@@ -204,11 +204,18 @@ function PersonalitySection() {
             <textarea
               id="asst-signature"
               value={identity.assistant.emailSignature}
+              // Empty, the gateway signs with name over title: show that (#2554).
+              placeholder={fallbackEmailSignature(identity.assistant.name, identity.assistant.title)}
               onChange={e => setIdentity({
                 ...identity,
                 assistant: { ...identity.assistant, emailSignature: e.target.value },
               })}
             />
+            {identity.assistant.emailSignature.trim() === '' && (
+              <p className="settings-muted-hint">
+                Left empty, emails are signed with the name and title shown above.
+              </p>
+            )}
           </div>
 
           <ToneStyleField
