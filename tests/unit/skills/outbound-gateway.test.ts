@@ -2280,7 +2280,8 @@ describe('PII redaction pipeline step', () => {
     // marker rather than an exact string match.
     const sendCall = (nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(JSON.stringify(sendCall)).toContain('[REDACTED:');
-    expect(JSON.stringify(sendCall)).not.toContain('4111');
+    // Full number, not a prefix, so a generated ID can't match by chance (#2548).
+    expect(JSON.stringify(sendCall)).not.toContain('4111111111111111');
   });
 
   it('does NOT redact PII for CEO recipients (trust_override bypasses redaction)', async () => {

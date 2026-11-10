@@ -1198,7 +1198,9 @@ describe('vault routes', () => {
       expect(secrets.cardReplaces).toEqual([{ name: CARD_KEY, change: { cvv: '456' } }]);
       expect(secrets.cardPatches).toEqual([]);
       expect(changes(published)).toEqual(['set:requested', 'set:completed']);
-      expect(JSON.stringify(published)).not.toContain('456');
+      // Standalone-word match: published events carry random UUIDs whose hex digits can
+      // spell "456" by chance, but a UUID group is never exactly three characters (#2548).
+      expect(JSON.stringify(published)).not.toMatch(/\b456\b/);
       expect(res.body).not.toContain('456');
       expect((await patch(app, CARD_KEY, { cvv: '4567' })).json()).toEqual({ error: CARD_VALIDATION_MESSAGES.cvv_format });
     });
@@ -1213,7 +1215,7 @@ describe('vault routes', () => {
       expect(secrets.cardReplaces).toEqual([]);
       expect(secrets.cardPatches).toEqual([]);
       expect(changes(published)).toEqual(['set:requested', 'set:completed']);
-      expect(JSON.stringify(published)).not.toContain('456');
+      expect(JSON.stringify(published)).not.toMatch(/\b456\b/);
 
       published.length = 0;
       await patch(app, CARD_KEY, { cvv: '456', expiry_year: 2100, label: 'Everyday' });

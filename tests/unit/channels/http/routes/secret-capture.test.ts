@@ -229,7 +229,8 @@ describe('secret-capture routes', () => {
       expect(svc.cardCalls).toEqual([{ token: 'tok', card }]);
       expect(svc.redeemCalls).toHaveLength(0);
       expect(bus.published).toHaveLength(1);
-      expect(JSON.stringify(bus.published[0]!.event)).not.toContain('4111');
+      // Full number, not a prefix: the event's random UUIDs can contain "4111" by chance (#2548).
+      expect(JSON.stringify(bus.published[0]!.event)).not.toContain('4111111111111111');
     });
 
     it('POST {card} on a string token → 400', async () => {
