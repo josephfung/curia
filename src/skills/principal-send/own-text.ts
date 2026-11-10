@@ -81,8 +81,15 @@ function findReplyQuoteOpen(html: string): number {
       i = close + 3;
       continue;
     }
+    if (html[lt + 1] === '/' && /[a-z]/i.test(html[lt + 2] ?? '')) {
+      // An end tag: browsers read attributes in it too, so a '>' inside a quoted value does
+      // not close it. Same quote-aware scan as a start tag, read from the '/'.
+      i = readStartTag(html, lt + 1).end;
+      continue;
+    }
     if (!/[a-z]/i.test(html[lt + 1] ?? '')) {
-      // An end tag, doctype or stray '<': skip to its '>' (a stray '<' just advances).
+      // A doctype, bogus comment or stray '<': the first '>' closes the first two whatever
+      // the quotes (a stray '<' just advances).
       const gt = html.indexOf('>', lt + 1);
       i = html[lt + 1] === '/' || html[lt + 1] === '!' ? (gt < 0 ? html.length : gt + 1) : lt + 1;
       continue;
@@ -92,9 +99,12 @@ function findReplyQuoteOpen(html: string): number {
     if (isGmailQuoteOpen(tag)) return lt;
     i = tag.end;
     if (RAW_TEXT_ELEMENTS.has(tag.name)) {
-      const close = html.toLowerCase().indexOf(`</${tag.name}`, i);
-      if (close < 0) return -1;
-      i = close;
+      // Only `</name` followed by whitespace, '/' or '>' ends it: `</scriptx>` is still text.
+      const closer = new RegExp(`</${tag.name}(?=[\\s/>]|$)`, 'ig');
+      closer.lastIndex = i;
+      const close = closer.exec(html);
+      if (!close) return -1;
+      i = close.index;
     }
   }
   return -1;

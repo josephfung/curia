@@ -51,6 +51,12 @@ describe('splitReplyQuote', () => {
       `<img alt='${REPLY_QUOTE_HTML_OPEN}'>`,
       '<!-- <div class="gmail_quote"> -->',
       '<style>/* <div class="gmail_quote"> */</style>',
+      // End tags carry attributes too: a '>' inside their quoted value does not close them.
+      '</p x=\'<div class="gmail_quote">\'>',
+      '</p x=\'>\'<div class="gmail_quote"><div class="gmail_attr">On Thu, Dana &lt;dana@example.org&gt; wrote:</div><blockquote>x</blockquote></div>\'>',
+      `</span title=">${REPLY_QUOTE_HTML_OPEN}">`,
+      // A raw-text element ends only at its own end tag, not at a longer name.
+      '<script>x</scriptx><div class="gmail_quote"></script>',
     ]) {
       const html = `<p>Ok, call 416-555-0199.</p>${wrapped}<p>more</p>`;
       expect(splitReplyQuote(html), wrapped).toEqual({ own: html, quote: '' });
@@ -60,6 +66,13 @@ describe('splitReplyQuote', () => {
   it('still splits on a real quote after an attribute that mentions it', () => {
     const html = '<div title=\'class="gmail_quote"\'>Ok.</div><div class=\'gmail_quote\'>On Fri, Dana wrote:</div>';
     expect(splitReplyQuote(html).own).toBe('<div title=\'class="gmail_quote"\'>Ok.</div>');
+  });
+
+  it('still splits on a real quote after an end tag with a quoted attribute', () => {
+    const html = '<p>Ok.</p x=\'>\'><div class="gmail_quote">On Fri, Dana wrote:</div>';
+    expect(splitReplyQuote(html).own).toBe('<p>Ok.</p x=\'>\'>');
+    const raw = '<style>p{}</style ><div class="gmail_quote">On Fri</div>';
+    expect(splitReplyQuote(raw).own).toBe('<style>p{}</style >');
   });
 
   it('splits at the earliest marker when both occur', () => {

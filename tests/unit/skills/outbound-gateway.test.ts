@@ -6243,6 +6243,17 @@ describe('sendPrincipalDraft (#2474)', () => {
     }
   });
 
+  it('reviews details as the draft\'s own text when a quote marker sits inside an end tag\'s attribute', async () => {
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
+    // The '>' inside the quoted value does not close </p>, so the gmail_quote after it is text.
+    const body = '<p>Call 416-555-0199.</p x=\'>\'<div class="gmail_quote"><div class="gmail_attr">On Thu, Dana &lt;dana@example.org&gt; wrote:</div><blockquote>x</blockquote></div>\'>';
+    const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body })) });
+    await gw.sendPrincipalDraft('d1', opts);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'body' })],
+    }));
+  });
+
   it('reviews quoted details when the quote header names nobody (fail closed)', async () => {
     const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
     const body = '<p>Got it.</p><div class="gmail_quote">On Thu, Dana wrote: call me at 416-555-0199</div>';
