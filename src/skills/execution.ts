@@ -189,6 +189,11 @@ const MAX_SEND_REFERENCES = 25;
 // reaches the LLM context window.
 const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 
+// Error texts are cut at no fewer characters than this, whatever skillOutput.maxLength says.
+// Many carry an instruction the agent must read whole (ceo-inbox-send-draft's "don't send this
+// draft again", a gate's refusal), and a small configured limit would cut it off (#2474).
+export const SKILL_ERROR_MIN_LENGTH = 4_000;
+
 // Secret-by-reference resolution (#973) — see ctx.resolveSecretRef.
 //
 // Only `user.*` references may be resolved by reference. The `user.` namespace is the
@@ -856,7 +861,8 @@ export class ExecutionLayer {
     // Strip dangerous tags and redact secrets from the error message itself before
     // wrapping — error messages can contain user-supplied values (e.g., timestamp
     // inputs) or external content (e.g., HTTP response bodies) that are injection risks.
-    const sanitized = sanitizeOutput(message, { maxLength: this.skillOutputMaxLength });
+    const maxLength = Math.max(this.skillOutputMaxLength, SKILL_ERROR_MIN_LENGTH);
+    const sanitized = sanitizeOutput(message, { maxLength });
     return `<skill_error>${sanitized}</skill_error>`;
   }
 
