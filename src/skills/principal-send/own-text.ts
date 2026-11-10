@@ -9,12 +9,16 @@
 import type { DetectedPii } from '../../dispatch/pii-redactor.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../_shared/reply-quote.js';
 
-// Elements whose content is raw text: a tag written inside one is not a tag. `noscript` is raw
-// text only with scripting on; reading it as raw text either way can only hide a marker, never
-// invent one (fail closed). `plaintext` never ends.
+// Elements whose content is raw text: a tag written inside one is not a tag.
 const RAW_TEXT_ELEMENTS = new Set([
-  'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript', 'plaintext',
+  'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes',
 ]);
+
+// Elements after which the scanner cannot tell how a browser reads the rest, so it stops
+// (fail closed): `plaintext` never ends; `noscript` is raw text with scripting on and markup with
+// it off (mail clients), and each reading fails open on some input; inside `svg` and `math`,
+// CDATA, raw-text elements and HTML integration points (`<svg><title>`) follow other rules.
+const UNREADABLE_AFTER = new Set(['plaintext', 'noscript', 'svg', 'math']);
 
 interface StartTag {
   start: number;
@@ -80,9 +84,12 @@ function findReplyQuoteOpen(html: string): number {
     const lt = html.indexOf('<', i);
     if (lt < 0) return -1;
     if (html.startsWith('<!--', lt)) {
-      const close = html.indexOf('-->', lt + 4);
-      if (close < 0) return -1;
-      i = close + 3;
+      // As browsers read it: '<!-->' and '<!--->' are whole comments, and a comment ends at the
+      // first '-->' or '--!>' ('<!--!>' is not one: its dashes are the opener's).
+      const dashes = html.indexOf('-->', lt + 2);
+      const bang = html.indexOf('--!>', lt + 4);
+      if (dashes < 0 && bang < 0) return -1;
+      i = bang >= 0 && (dashes < 0 || bang < dashes) ? bang + 4 : dashes + 3;
       continue;
     }
     if (html[lt + 1] === '/' && /[a-z]/i.test(html[lt + 2] ?? '')) {
@@ -91,16 +98,9 @@ function findReplyQuoteOpen(html: string): number {
       i = readStartTag(html, lt + 1).end;
       continue;
     }
-    if (html.startsWith('<![CDATA[', lt)) {
-      // CDATA (in SVG/MathML) runs to ']]>'; elsewhere it is a bogus comment that ends at the
-      // first '>'. Skipping to ']]>' can only hide more, so it holds either way.
-      const close = html.indexOf(']]>', lt + 9);
-      if (close < 0) return -1;
-      i = close + 3;
-      continue;
-    }
     if (!/[a-z]/i.test(html[lt + 1] ?? '')) {
-      // A doctype or bogus comment (`<!`, `<?`, `</` not followed by a letter): the first '>'
+      // A doctype or bogus comment (`<!`, `<?`, `</` not followed by a letter, and `<![CDATA[`,
+      // which runs to ']]>' only in SVG/MathML, where the scan has already stopped): the first '>'
       // closes it whatever the quotes. Any other '<' is a stray character and just advances.
       const gt = html.indexOf('>', lt + 1);
       i = '/!?'.includes(html[lt + 1] ?? 'x') ? (gt < 0 ? html.length : gt + 1) : lt + 1;
@@ -109,9 +109,9 @@ function findReplyQuoteOpen(html: string): number {
     if (html.startsWith(REPLY_QUOTE_HTML_OPEN, lt)) return lt;
     const tag = readStartTag(html, lt);
     if (isGmailQuoteOpen(tag)) return lt;
+    if (UNREADABLE_AFTER.has(tag.name)) return -1;
     i = tag.end;
     if (RAW_TEXT_ELEMENTS.has(tag.name)) {
-      if (tag.name === 'plaintext') return -1;
       // Only `</name` followed by whitespace, '/' or '>' ends it: `</scriptx>` is still text.
       const closer = new RegExp(`</${tag.name}(?=[\\s/>]|$)`, 'ig');
       closer.lastIndex = i;
