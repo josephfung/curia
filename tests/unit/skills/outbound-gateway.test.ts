@@ -6237,6 +6237,21 @@ describe('sendPrincipalDraft (#2474)', () => {
     }));
   });
 
+  it('treats Gmail\'s compound quote class (gmail_quote gmail_quote_container) as the quote', async () => {
+    const compound = GMAIL_QUOTE_FROM_DANA.replace('<div class="gmail_quote">', '<div class="gmail_quote gmail_quote_container">');
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
+    // Every recipient was on the quoted message: exempt, no review.
+    const onQuote = make({ piiRedactor, client: mailboxClient(draft({ body: `<p>Got it.</p>${compound}call me at 416-555-0199</blockquote></div>` })) });
+    expect((await onQuote.gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+    expect(onQuote.review).not.toHaveBeenCalled();
+    // Sam was not on it: reviewed as field quote, not as the draft's own text.
+    const offQuote = make({ piiRedactor, client: mailboxClient(draft({ body: `<p>Looping in Sam.</p>${compound}call me at 416-555-0199</blockquote></div>`, cc: [{ email: 'sam@example.org' }] })) });
+    await offQuote.gw.sendPrincipalDraft('d1', opts);
+    expect(offQuote.review).toHaveBeenCalledWith(expect.objectContaining({
+      detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'quote' })],
+    }));
+  });
+
   it('reviews quoted details when the quote header names nobody (fail closed)', async () => {
     const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
     const body = '<p>Got it.</p><div class="gmail_quote">On Thu, Dana wrote: call me at 416-555-0199</div>';

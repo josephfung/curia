@@ -24,7 +24,7 @@ Three things had to be settled:
 
 **The principal's mailbox is its own gateway entry.** It is resolved per call by `createPrincipalMailboxResolver` (`src/channels/email/principal-mailbox-resolver.ts`), so a re-sign-in (#2361) takes effect without a restart. It is never a `nylasClients` / `emailAccountAddresses` entry: registered there, the gateway would drop the principal from every audience and `send-draft` could find these drafts. A missing grant or API key refuses (fail closed). The draft read, the pre-send re-read and the send all go through that one client, so the re-read comparison is not fooled by two clients normalizing differently.
 
-**Closing the existing second surface.** `send()` and `sendEmailDraft` now refuse a Curia email account whose address is the principal's, and point at `ceo-inbox-send-draft`. Before this an operator who configured such an account let `email-reply` and `send-draft` send from the principal's mailbox past every rule below.
+**Closing the existing second surface.** `send()` and `sendEmailDraft` now refuse a Curia email account whose address is the principal's, and point at `ceo-inbox-send-draft`. Before this an operator who configured such an account let `email-reply` and `send-draft` send from the principal's mailbox past every rule below. One exception: a system notification on email addressed to the principal alone (the review-cap notice, `emailPrincipal`, an approval email) still goes out through such an account. It reaches no third party, and refusing it would silence Curia's alerts when its primary account is the principal's. A notification with anyone else on it is refused.
 
 **A per-mailbox setting, enforced in the gateway.** Config-store key `ceo_inbox/sending`, value string-encoded JSON `{ "<mailbox>": "<level>" }`:
 
@@ -78,7 +78,7 @@ Agents can't write the send ledger (`doc-write` refuses the prefix), and a reply
 
 ## Consequences
 
-- Every send from the principal's mailbox passes the same checks as Curia's own sends, and a later outbound fix lands once.
+- Every send from the principal's mailbox to anyone but the principal passes the same checks as Curia's own sends, and a later outbound fix lands once. (A system notice to the principal alone, above, is the one send from it that does not.)
 - The principal chooses per mailbox how far Curia goes, and the default (`on_request`) is what an EA does without standing permission. #2475 adds named mailboxes to the same key without reshaping anything.
 - A held or refused send costs nothing: the draft is where the principal expects it, and no approval clutters "Waiting on you".
 - An operator who bound a Curia email account to the principal's address loses sending through it; the refusal names the tool to use instead.
