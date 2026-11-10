@@ -113,6 +113,8 @@ See [ADR-062](../adr/062-curia-sends-from-the-principals-mailbox.md). `ceo-inbox
 
 Every refusal leaves the draft in the principal's Drafts folder and returns `leftAsDraft` with a code (`mailbox_unavailable`, `setting_off`, `not_requested`, `approval_replay`, `not_found`, `lookup_failed`, `no_recipients`, `principal_only`, `review_hold`, `draft_changed`) and the text the agent relays.
 
+Two outcomes are not that clean. A timeout while sending returns `send_unconfirmed` without `leftAsDraft`: the message may already have gone. `not_found` does not establish that the draft is still in Drafts (it may have been sent or deleted already). In both cases check the Sent folder before retrying; never resend blindly.
+
 **Send ledger.** Before sending, the gateway writes a create-only marker under `/scratch/principal-mailbox-sends/` (draft, thread, outside recipients, mode, time), then adds the message ID. A marker failure does not stop the send; it only loses learning evidence. `ceo-inbox-sent-observe` skips a SENT message matching a marker by ID, or by thread, recipient and a short window after the marker, for voice learning, task matching and shadow-draft pairing.
 
 ### `outbound.delivered` — the canonical wire-level audit event
