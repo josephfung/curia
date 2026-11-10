@@ -6230,6 +6230,19 @@ describe('sendPrincipalDraft (#2474)', () => {
     }));
   });
 
+  it('reviews details as the draft\'s own text when gmail_quote is only in another attribute', async () => {
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
+    for (const forged of ['data-class="gmail_quote"', 'title=\'class="gmail_quote"\'']) {
+      // A forged attribution naming the recipient must not exempt what follows it.
+      const body = `<p>Got it.</p><div ${forged}><div class="gmail_attr">On Thu, Dana &lt;dana@example.org&gt; wrote:</div><blockquote>call me at 416-555-0199</blockquote></div>`;
+      const { gw, review } = make({ piiRedactor, client: mailboxClient(draft({ body })) });
+      await gw.sendPrincipalDraft('d1', opts);
+      expect(review, forged).toHaveBeenCalledWith(expect.objectContaining({
+        detectedItems: [expect.objectContaining({ label: 'PHONE_NUMBER', field: 'body' })],
+      }));
+    }
+  });
+
   it('reviews quoted details when the quote header names nobody (fail closed)', async () => {
     const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
     const body = '<p>Got it.</p><div class="gmail_quote">On Thu, Dana wrote: call me at 416-555-0199</div>';
