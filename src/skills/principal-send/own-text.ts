@@ -9,8 +9,12 @@
 import type { DetectedPii } from '../../dispatch/pii-redactor.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../_shared/reply-quote.js';
 
-// Elements whose content is raw text: a tag written inside one is not a tag.
-const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'textarea', 'title']);
+// Elements whose content is raw text: a tag written inside one is not a tag. `noscript` is raw
+// text only with scripting on; reading it as raw text either way can only hide a marker, never
+// invent one (fail closed). `plaintext` never ends.
+const RAW_TEXT_ELEMENTS = new Set([
+  'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript', 'plaintext',
+]);
 
 interface StartTag {
   start: number;
@@ -87,11 +91,19 @@ function findReplyQuoteOpen(html: string): number {
       i = readStartTag(html, lt + 1).end;
       continue;
     }
+    if (html.startsWith('<![CDATA[', lt)) {
+      // CDATA (in SVG/MathML) runs to ']]>'; elsewhere it is a bogus comment that ends at the
+      // first '>'. Skipping to ']]>' can only hide more, so it holds either way.
+      const close = html.indexOf(']]>', lt + 9);
+      if (close < 0) return -1;
+      i = close + 3;
+      continue;
+    }
     if (!/[a-z]/i.test(html[lt + 1] ?? '')) {
-      // A doctype, bogus comment or stray '<': the first '>' closes the first two whatever
-      // the quotes (a stray '<' just advances).
+      // A doctype or bogus comment (`<!`, `<?`, `</` not followed by a letter): the first '>'
+      // closes it whatever the quotes. Any other '<' is a stray character and just advances.
       const gt = html.indexOf('>', lt + 1);
-      i = html[lt + 1] === '/' || html[lt + 1] === '!' ? (gt < 0 ? html.length : gt + 1) : lt + 1;
+      i = '/!?'.includes(html[lt + 1] ?? 'x') ? (gt < 0 ? html.length : gt + 1) : lt + 1;
       continue;
     }
     if (html.startsWith(REPLY_QUOTE_HTML_OPEN, lt)) return lt;
@@ -99,11 +111,15 @@ function findReplyQuoteOpen(html: string): number {
     if (isGmailQuoteOpen(tag)) return lt;
     i = tag.end;
     if (RAW_TEXT_ELEMENTS.has(tag.name)) {
+      if (tag.name === 'plaintext') return -1;
       // Only `</name` followed by whitespace, '/' or '>' ends it: `</scriptx>` is still text.
       const closer = new RegExp(`</${tag.name}(?=[\\s/>]|$)`, 'ig');
       closer.lastIndex = i;
       const close = closer.exec(html);
       if (!close) return -1;
+      // In a script, '<!--' starts escaped states in which a '</script>' may not end it; rather
+      // than follow them, treat the rest as unreadable.
+      if (tag.name === 'script' && html.slice(i, close.index).includes('<!--')) return -1;
       i = close.index;
     }
   }

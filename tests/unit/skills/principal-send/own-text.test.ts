@@ -57,6 +57,20 @@ describe('splitReplyQuote', () => {
       `</span title=">${REPLY_QUOTE_HTML_OPEN}">`,
       // A raw-text element ends only at its own end tag, not at a longer name.
       '<script>x</scriptx><div class="gmail_quote"></script>',
+      // Bogus comments end at the first '>', so a marker's own '>' closes them around it.
+      '<?x <div class="gmail_quote">',
+      `<?x ${REPLY_QUOTE_HTML_OPEN}`,
+      '</ <div class="gmail_quote">',
+      '<!x <div class="gmail_quote">',
+      '<svg><![CDATA[ > <div class="gmail_quote"> ]]></svg>',
+      // Every raw-text element, not only the common ones.
+      ...['xmp', 'iframe', 'noembed', 'noframes', 'noscript', 'textarea', 'title'].map(
+        (el) => `<${el}><div class="gmail_quote"></${el}>`,
+      ),
+      // plaintext never ends, even at a '</plaintext>'.
+      '<plaintext>x</plaintext><div class="gmail_quote">',
+      // A script's '<!--' escape can carry it past a '</script>'.
+      '<script><!--<script></script><div class="gmail_quote"></script>',
     ]) {
       const html = `<p>Ok, call 416-555-0199.</p>${wrapped}<p>more</p>`;
       expect(splitReplyQuote(html), wrapped).toEqual({ own: html, quote: '' });
@@ -73,6 +87,8 @@ describe('splitReplyQuote', () => {
     expect(splitReplyQuote(html).own).toBe('<p>Ok.</p x=\'>\'>');
     const raw = '<style>p{}</style ><div class="gmail_quote">On Fri</div>';
     expect(splitReplyQuote(raw).own).toBe('<style>p{}</style >');
+    const bogus = '<?xml x?><iframe>y</iframe><div class="gmail_quote">On Fri</div>';
+    expect(splitReplyQuote(bogus).own).toBe('<?xml x?><iframe>y</iframe>');
   });
 
   it('splits at the earliest marker when both occur', () => {
