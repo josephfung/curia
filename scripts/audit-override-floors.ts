@@ -55,6 +55,13 @@ export interface AllowlistEntry {
   ghsa: string;
   /** Why it is accepted. Required — an exception with no rationale is a silent hole. */
   reason: string;
+  /**
+   * Optional semver range the reason holds for. When set, the advisory is suppressed
+   * only if EVERY version the override admits lies inside it; one admitted version
+   * outside (a widened floor, a second override for the same package) and the advisory
+   * fires again. Omit it only when the reason holds for every version of the package.
+   */
+  range?: string;
 }
 
 export interface NoAdvisoryExpectedEntry {
@@ -110,6 +117,9 @@ export const DEFAULT_POLICY: AuditPolicy = {
         '(2026-11-06, after 14.0.4) backports it: its dist/esm/walker.js abort branches ' +
         'return cb() exactly as 14.0.2 does, where 13.0.6 falls through. The `glob@13` ' +
         "override's >=13.0.7 <14 floor admits only backported releases (curia-deploy#403).",
+      // Any other glob override (glob@10, glob@11, a widened floor) admits versions the
+      // backport does not cover, so the advisory fires for it again.
+      range: '>=13.0.7 <14',
     },
   ],
   // Empty: all 23 pinned packages currently resolve a GitHub repo whose advisory list
@@ -718,6 +728,9 @@ function validatePolicy(policy: AuditPolicy): string[] {
     if (!entry.reason?.trim()) {
       errors.push(`${where}: \`reason\` is required — an unexplained exception is a silent hole`);
     }
+    if (entry.range !== undefined && semver.validRange(entry.range) === null) {
+      errors.push(`${where}: \`range\` must be a valid semver range (got \`${entry.range}\`)`);
+    }
   });
 
   policy.noAdvisoryExpected.forEach((entry, i) => {
@@ -863,7 +876,10 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
         const match = policy.allowlist.find(
           (e) =>
             e.package === override.subject &&
-            e.ghsa.toUpperCase() === advisory.ghsaId.toUpperCase(),
+            e.ghsa.toUpperCase() === advisory.ghsaId.toUpperCase() &&
+            // An entry scoped to a range covers the override only when every admitted
+            // version is inside it; otherwise the exception's reason does not apply.
+            (e.range === undefined || admitted.every((v) => semver.satisfies(v, e.range!))),
         );
         if (!match) {
           remaining.push(advisory);
