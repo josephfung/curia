@@ -11,6 +11,7 @@ import type { EventBus } from '../../../../../src/bus/bus.js';
 import type { BusEvent, Layer } from '../../../../../src/bus/events.js';
 import { CARD_VALIDATION_MESSAGES } from '../../../../../src/secrets/structured-secret-schema.js';
 import { createSilentLogger } from '../../../../../src/logger.js';
+import { serializeForLeakCheck } from '../../../../helpers/leak-check.js';
 
 /** A scripted fake: returns the configured metadata/redeem outcome and records redeem calls. */
 function makeFakeService(opts: {
@@ -229,10 +230,9 @@ describe('secret-capture routes', () => {
       expect(svc.cardCalls).toEqual([{ token: 'tok', card }]);
       expect(svc.redeemCalls).toHaveLength(0);
       expect(bus.published).toHaveLength(1);
-      // Strip the event's random UUIDs first: they can contain "4111" by chance (#2548). What is
-      // left is checked for the prefix, so a partial card-number leak still fails.
-      const withoutIds = JSON.stringify(bus.published[0]!.event).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '');
-      expect(withoutIds).not.toContain('4111');
+      // The event's random id can contain "4111" by chance (#2548): blank only the envelope's
+      // generated id/timestamp, then check the rest for the prefix, so a partial leak still fails.
+      expect(serializeForLeakCheck(bus.published[0]!.event)).not.toContain('4111');
     });
 
     it('POST {card} on a string token → 400', async () => {
