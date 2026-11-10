@@ -20,6 +20,18 @@ describe('splitReplyQuote', () => {
     });
   });
 
+  it('splits on Gmail\'s compound quote class, wherever the token sits in the class list', () => {
+    const compound = '<div>Sounds good.</div><div class="gmail_quote gmail_quote_container">On Fri, Dana wrote:</div>';
+    expect(splitReplyQuote(compound).own).toBe('<div>Sounds good.</div>');
+    const later = '<div>Ok.</div><div dir="ltr" class="x gmail_quote">On Fri, Dana wrote:</div>';
+    expect(splitReplyQuote(later).own).toBe('<div>Ok.</div>');
+  });
+
+  it('does not split on a class that only starts with gmail_quote', () => {
+    const html = '<div>Ok.</div><div class="gmail_quoted">not a quote</div>';
+    expect(splitReplyQuote(html)).toEqual({ own: html, quote: '' });
+  });
+
   it('splits at the earliest marker when both occur', () => {
     const html = `<p>Yes.</p><div class="gmail_quote">older</div>${REPLY_QUOTE_HTML_OPEN}newer</div>`;
     expect(splitReplyQuote(html).own).toBe('<p>Yes.</p>');
@@ -71,6 +83,11 @@ describe('quoteHeaderParticipants (#2474 final review S2)', () => {
 
   it('reads the sender from a Gmail attribution line', () => {
     const quote = '<div class="gmail_quote"><div dir="ltr" class="gmail_attr">On Thu, Nov 6, 2026 at 9:00 AM Dana &lt;<a href="mailto:dana@example.org">dana@example.org</a>&gt; wrote:<br></div><blockquote class="gmail_quote">Call me: 416-555-0199. cc bob@example.net</blockquote></div>';
+    expect(quoteHeaderParticipants(quote)).toEqual(['dana@example.org']);
+  });
+
+  it('reads the sender from a compound-class Gmail quote', () => {
+    const quote = '<div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">On Thu, Dana &lt;<a href="mailto:dana@example.org">dana@example.org</a>&gt; wrote:<br></div><blockquote class="gmail_quote">Call me: 416-555-0199</blockquote></div>';
     expect(quoteHeaderParticipants(quote)).toEqual(['dana@example.org']);
   });
 

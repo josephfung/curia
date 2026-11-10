@@ -62,18 +62,9 @@ tool_stubs:
             snippet: "Jo, shall we use [venue TBD] for the offsite? Let me know."
             date_local: "{{at:now-3h}}"
             created_by_curia: false
+  # No draft_id stub: a read of draft-30-acme is served from the seeded draft's run state, so a
+  # re-read after the edit shows the venue (a draft_id stub would always return the placeholder).
   ceo-inbox-read:
-    - match: { draft_id: draft-30-acme }
-      return:
-        id: draft-30-acme
-        threadId: thr-30-acme
-        to: [{ name: Jo Park, email: jo.park@acme.example.test }]
-        cc: []
-        bcc: []
-        subject: Venue for the offsite
-        body_plain: "Jo, shall we use [venue TBD] for the offsite? Let me know."
-        date_local: "{{at:now-3h}}"
-        is_draft: true
     - match: {}
       error: "Failed to read principal inbox message: not found"
 expected_behaviors:

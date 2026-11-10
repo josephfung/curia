@@ -9,11 +9,13 @@
 import type { DetectedPii } from '../../dispatch/pii-redactor.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../_shared/reply-quote.js';
 
-const GMAIL_QUOTE_OPEN = '<div class="gmail_quote"';
+// Gmail's quote container: a <div> whose class list has the token `gmail_quote`, alone or with
+// others (`gmail_quote gmail_quote_container`). A prefix such as `gmail_quoted` is not it.
+const GMAIL_QUOTE_OPEN = /<div\b[^>]*?\bclass\s*=\s*["'](?:[^"']*\s)?gmail_quote(?=["'\s])/i;
 
-/** Splits at the earliest REPLY_QUOTE_HTML_OPEN or `<div class="gmail_quote"`; quote is '' when neither occurs. */
+/** Splits at the earliest REPLY_QUOTE_HTML_OPEN or Gmail quote container; quote is '' when neither occurs. */
 export function splitReplyQuote(html: string): { own: string; quote: string } {
-  const at = [html.indexOf(REPLY_QUOTE_HTML_OPEN), html.indexOf(GMAIL_QUOTE_OPEN)].filter((i) => i >= 0);
+  const at = [html.indexOf(REPLY_QUOTE_HTML_OPEN), html.search(GMAIL_QUOTE_OPEN)].filter((i) => i >= 0);
   if (at.length === 0) return { own: html, quote: '' };
   const cut = Math.min(...at);
   return { own: html.slice(0, cut), quote: html.slice(cut) };
@@ -38,7 +40,7 @@ export function quoteHeaderParticipants(quote: string): string[] | null {
     const end = quote.indexOf('</div>');
     const block = end >= 0 ? quote.slice(0, end) : quote;
     header = block.split(/<\/p>/i).filter((line) => HEADER_LINE.test(line)).join(' ');
-  } else if (quote.startsWith(GMAIL_QUOTE_OPEN)) {
+  } else if (quote.search(GMAIL_QUOTE_OPEN) === 0) {
     // Gmail's attribution ("On …, Dana <dana@…> wrote:") comes before the first <blockquote>.
     const end = quote.search(/<blockquote/i);
     if (end >= 0) header = quote.slice(0, end);
