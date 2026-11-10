@@ -10,3 +10,4 @@
 ### Security
 
 - **Browser isolation** — Chrome runs without Curia's secrets or database route; only its container relaxes seccomp. (#2541)
+- **`web-browser`** — navigation and redirects now refuse single-label and `.internal`/`.local` hosts. (#2541)
