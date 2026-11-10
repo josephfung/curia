@@ -57,6 +57,33 @@ describe('splitReplyQuote', () => {
       `</span title=">${REPLY_QUOTE_HTML_OPEN}">`,
       // A raw-text element ends only at its own end tag, not at a longer name.
       '<script>x</scriptx><div class="gmail_quote"></script>',
+      // Bogus comments end at the first '>', so a marker's own '>' closes them around it.
+      '<?x <div class="gmail_quote">',
+      `<?x ${REPLY_QUOTE_HTML_OPEN}`,
+      '</ <div class="gmail_quote">',
+      '<!x <div class="gmail_quote">',
+      '<svg><![CDATA[ > <div class="gmail_quote"> ]]></svg>',
+      // Every raw-text element, not only the common ones.
+      ...['xmp', 'iframe', 'noembed', 'noframes', 'noscript', 'textarea', 'title'].map(
+        (el) => `<${el}><div class="gmail_quote"></${el}>`,
+      ),
+      // Outside SVG/MathML, CDATA is a bogus comment that ends at the first '>', which here
+      // opens a textarea the quote then sits in.
+      '<![CDATA[x><textarea>]]><div class="gmail_quote">On Fri, Dana wrote:<p>secret 905-555-0100</p>',
+      '<![CDATA[x><title>]]><div class="gmail_quote">On Fri</div>',
+      // Comments also end at '--!>', and '<!-->' / '<!--->' are whole comments.
+      '<!-- x --!><textarea>--><div class="gmail_quote">On Fri</div>',
+      '<!--><textarea>--><div class="gmail_quote">On Fri</div>',
+      '<!---><textarea>--><div class="gmail_quote">On Fri</div>',
+      // noscript is markup with scripting off, as mail clients render it: the textarea swallows the quote.
+      '<noscript><textarea></noscript><div class="gmail_quote">On Fri</div>',
+      // Inside svg/math other parsing rules apply (svg <title> parses its content as HTML).
+      '<svg><title><textarea></title><div class="gmail_quote">On Fri</div>',
+      '<math><div class="gmail_quote">On Fri</div></math>',
+      // plaintext never ends, even at a '</plaintext>'.
+      '<plaintext>x</plaintext><div class="gmail_quote">',
+      // A script's '<!--' escape can carry it past a '</script>'.
+      '<script><!--<script></script><div class="gmail_quote"></script>',
     ]) {
       const html = `<p>Ok, call 416-555-0199.</p>${wrapped}<p>more</p>`;
       expect(splitReplyQuote(html), wrapped).toEqual({ own: html, quote: '' });
@@ -73,6 +100,18 @@ describe('splitReplyQuote', () => {
     expect(splitReplyQuote(html).own).toBe('<p>Ok.</p x=\'>\'>');
     const raw = '<style>p{}</style ><div class="gmail_quote">On Fri</div>';
     expect(splitReplyQuote(raw).own).toBe('<style>p{}</style >');
+    const bogus = '<?xml x?><iframe>y</iframe><div class="gmail_quote">On Fri</div>';
+    expect(splitReplyQuote(bogus).own).toBe('<?xml x?><iframe>y</iframe>');
+  });
+
+  it('still splits on a real quote after a comment that ends as browsers end it', () => {
+    for (const comment of ['<!-- x -->', '<!-- x --!>', '<!-->', '<!--->', '<!---->', '<![CDATA[x]]>']) {
+      const html = `<p>Ok.</p>${comment}<div class="gmail_quote">On Fri</div>`;
+      expect(splitReplyQuote(html).own, comment).toBe(`<p>Ok.</p>${comment}`);
+    }
+    // '<!--!>' does not close: its dashes belong to the opener.
+    const open = '<p>Ok.</p><!--!><div class="gmail_quote">On Fri</div>';
+    expect(splitReplyQuote(open)).toEqual({ own: open, quote: '' });
   });
 
   it('splits at the earliest marker when both occur', () => {

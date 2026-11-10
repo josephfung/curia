@@ -1,6 +1,6 @@
 {
   "name": "calendar-update-event",
-  "description": "Modify an existing calendar event. Partial updates: send only the fields that change (title, start, end, description, location, attendees, conferencing, recurrence). An occurrence's id edits only it; its masterEventId edits the series (recurrence changes go there; UNTIL ends a series). attendees replaces the whole guest list, not a per-person patch (see its notes; the principal's own RSVP is calendar-respond-to-invite). Guest-list and time changes send invitation emails by default. notifyAttendees=false suppresses them (see its caveats).",
+  "description": "Modify a calendar event. Send only the fields that change. An occurrence's id edits only it; its masterEventId edits the series (recurrence changes go there; UNTIL ends a series). attendees replaces the whole guest list, not a per-person patch (see its notes; the principal's own RSVP is calendar-respond-to-invite). Guest-list and time changes send invitation emails by default. notifyAttendees=false suppresses them (see its caveats).",
   "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "high",
@@ -13,7 +13,7 @@
     "description": "string?",
     "location": "string?",
     "attendees": "object[]? (full guest-list replacement: each { email, name? }. Cannot set RSVP status. Replaces membership; RSVP preservation on retained guests is unverified — re-read after writing.)",
-    "conferencing": "object?",
+    "conferencing": "object? (new link: { provider: Google Meet/Microsoft Teams, autocreate: true }. Zoom/other existing link: { provider, details: { url } })",
     "recurrence": "string[]? (the series' new RRULE line only; cancel one occurrence with calendar-delete-event)",
     "notifyAttendees": "boolean? (default true. false suppresses invitation emails on Google only; Microsoft rejects false, iCloud ignores it.)"
   },

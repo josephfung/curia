@@ -1,6 +1,6 @@
 {
   "name": "calendar-create-event",
-  "description": "Create a new calendar event with title, time, and optional description/location/conferencing. attendees is a guest list of { email, name? } — this Nylas tool cannot set RSVP status. Attendees receive invitation emails automatically. A standing meeting is ONE event with recurrence, never a copy per week.",
+  "description": "Create a new calendar event. Attendees receive invitation emails automatically. A standing meeting is ONE event with recurrence, never a copy per week.",
   "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "high",
@@ -12,7 +12,7 @@
     "description": "string?",
     "location": "string?",
     "attendees": "object[]? (each { email, name? }. Cannot set RSVP status; use calendar-respond-to-invite for the principal's own RSVP.)",
-    "conferencing": "object?",
+    "conferencing": "object? (new link: { provider: Google Meet/Microsoft Teams, autocreate: true }. Zoom/other existing link: { provider, details: { url } })",
     "recurrence": "string[]? (one RRULE plus optional EXDATE lines, e.g. [\"RRULE:FREQ=WEEKLY;BYDAY=MO\"]; start is the first occurrence)"
   },
   "outputs": {
