@@ -369,6 +369,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-09T01:03:19.474Z"
     },
+    "delegated draft sent unsigned": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-10T20:20:43.532Z"
+    },
     "direct email reply as text": {
       "unstubbed": 0,
       "runs": 5,

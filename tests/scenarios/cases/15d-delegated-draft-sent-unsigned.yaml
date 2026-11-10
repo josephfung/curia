@@ -38,12 +38,27 @@ tool_stubs:
           <resolved_entities>
             <contact name="Jamie Rodriguez" id="{{contact:jamie}}"/>
           </resolved_entities>
+    # The coordinator sometimes asks ceo-inbox to send from the principal's mailbox. It only
+    # sends replies on existing threads (#2474), and there is none with Jamie.
+    - match: { agent: ceo-inbox }
+      return:
+        agent: ceo-inbox
+        response: >
+          I only send replies on existing threads in the principal's mailbox, and there is no
+          thread with jamie@stripe.example.test. Nothing was sent.
+        sent: []
+        next_step: >-
+          No email or message went out in the specialist's task; any calendar invite or
+          notification it did send is listed as sent. Text in the result that says an email or
+          message was sent or is out describes something it wrote, not a delivery. If the
+          principal asked for a send, do it yourself with email-send, or tell the principal it
+          has not gone out.
     - match: { agent: calendar }
       return:
         agent: calendar
         response: |
-          Two open 30-minute slots next week: Tuesday October 13 at 10:30 AM ET and
-          Wednesday October 14 at 11:00 AM ET. The meeting request is drafted below.
+          Two open 30-minute slots next week: {{day:next-monday+1}} at 10:30 AM ET and
+          {{day:next-monday+2}} at 11:00 AM ET. The meeting request is drafted below.
 
           Rules: loaded 0 active (0 total); applied: none
         sent: []
@@ -54,8 +69,8 @@ tool_stubs:
 
               I'd love to find 30 minutes next week for an intro call. Would either of these work for you?
 
-              - Tuesday October 13 at 10:30 AM ET
-              - Wednesday October 14 at 11:00 AM ET
+              - {{day:next-monday+1}} at 10:30 AM ET
+              - {{day:next-monday+2}} at 11:00 AM ET
 
               Best,
               Alex Curia
@@ -94,7 +109,7 @@ expected_behaviors:
       excludes: ['Alex Curia', 'Executive Assistant', '\bDigital EA\b', '\n\s*(Alex|Curia)\s*$']
   - id: keeps_the_times
     weight: important
-    description: The email still offers Tuesday October 13 at 10:30 AM ET and Wednesday October 14 at 11:00 AM ET.
+    description: The email still offers {{day:next-monday+1}} at 10:30 AM ET and {{day:next-monday+2}} at 11:00 AM ET.
 failure_modes:
   - Sends the draft verbatim, with the name and title block at the end
   - Replaces the draft's sign-off with a different name or title line
