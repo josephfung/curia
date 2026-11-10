@@ -51,6 +51,17 @@ describe('principal.report', () => {
     expect(ev.payload.source).toBe('relay_deferred');
   });
 
+  it('accepts the principal_mailbox source from dispatch (#2474)', () => {
+    const ev = createPrincipalReport({
+      summary: 'Sent for you from your mailbox: "Re: Friday" to Dana Example.',
+      urgency: 'digest',
+      source: 'principal_mailbox',
+      parentEventId: 'task-5',
+      sourceLayer: 'dispatch',
+    });
+    expect(ev.payload.source).toBe('principal_mailbox');
+  });
+
   it('accepts the execution layer and the band-gating sources (#2159)', () => {
     for (const source of ['gate_proceeded', 'sent_without_review', 'claim_trimmed'] as const) {
       const ev = createPrincipalReport({

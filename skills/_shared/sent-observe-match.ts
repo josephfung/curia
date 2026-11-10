@@ -1,6 +1,8 @@
 // Pure matching helpers for ceo-inbox-sent-observe (#1422).
 // Kept free of I/O so unit tests can cover draft-match and task-match heuristics.
 
+import type { PrincipalSendEntry } from '../../src/skills/principal-send/send-ledger.js';
+
 export interface SentMessageLike {
   id: string;
   threadId: string;
@@ -258,6 +260,41 @@ export function matchTasksToSent(
     seen.add(m.taskId);
     return true;
   });
+}
+
+/** How long after a ledger entry's `at` a same-thread, same-recipient SENT message still counts as
+ *  Curia's send when the entry has no message id (the id write after a send can be lost). */
+export const CURIA_SEND_WINDOW_SEC = 600;
+
+/**
+ * True when a SENT message is one Curia sent from the principal's mailbox (#2474), so it must not
+ * be learned as the principal's writing. Matches on the ledger's message id, or — for an entry whose
+ * id was never recorded — the same thread, an intersecting recipient set (case-insensitive) and a
+ * send landing within `windowSec` after the entry's `at`. A principal reply on the same thread an
+ * hour later is outside the window and still counts as theirs. The fallback skips `held` entries.
+ */
+export function isCuriaSend(
+  msg: { id: string; threadId: string; to: Array<{ email: string }>; cc: Array<{ email: string }>; date: number },
+  entries: readonly PrincipalSendEntry[],
+  windowSec: number = CURIA_SEND_WINDOW_SEC,
+): boolean {
+  let msgRecipients: Set<string> | null = null;
+  for (const entry of entries) {
+    if (entry.messageId !== undefined && entry.messageId === msg.id) return true;
+    // Only an attempt that went (or may have gone) out can claim a message by thread and time. A
+    // held entry sent nothing, so the principal's own reply after it is theirs (#2474 PR 2).
+    if (entry.outcome !== 'sending' && entry.outcome !== 'sent') continue;
+    if (!msg.threadId || entry.threadId !== msg.threadId) continue;
+    // msg.date is Unix seconds (floored by the provider); entry.at is ISO with milliseconds, so
+    // floor it too or a send in the same second as the marker would look like it came first.
+    const atMs = Date.parse(entry.at);
+    if (!Number.isFinite(atMs)) continue;
+    const atSec = Math.floor(atMs / 1000);
+    if (msg.date < atSec || msg.date > atSec + windowSec) continue;
+    msgRecipients ??= recipientSet(msg);
+    if (entry.recipients.some((r) => msgRecipients!.has(normalizeEmail(r)))) return true;
+  }
+  return false;
 }
 
 /** Format a (draft, sent) pair for the rolling evidence doc. */

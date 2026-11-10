@@ -1,6 +1,8 @@
 // The committed scenario cases load, and each has a stub-coverage record (#1956).
 // Runs in CI with no database or model: the live suite is `pnpm scenarios`.
+import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
+import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { BullpenReplyHandler } from '../../../skills/bullpen/tools/bullpen-reply/handler.js';
 import { PAUSED_NEXT_STEP, delegateFailureNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
@@ -10,7 +12,9 @@ import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js'
 import { createLogger } from '../../../src/logger.js';
 import { BullpenService } from '../../../src/memory/bullpen.js';
 import type { ToolContext } from '../../../src/skills/types.js';
-import { loadScenarioCases } from '../../scenarios/loader.js';
+import { PRINCIPAL_SEND_DIGEST_REASONS } from '../../../src/skills/outbound-gateway.js';
+import { leafChecks } from '../../scenarios/assertions.js';
+import { loadScenarioCase, loadScenarioCases } from '../../scenarios/loader.js';
 import { matchToolStub } from '../../scenarios/stub-matcher.js';
 import { coverageViolations, readCoverage } from '../../scenarios/stub-coverage.js';
 import type { ScenarioCase } from '../../scenarios/types.js';
@@ -339,5 +343,68 @@ describe('coordinator scenario cases', () => {
   it('have a well-formed stub-coverage record', () => {
     const coverage = readCoverage(path.join(SCENARIOS_DIR, 'stub-coverage.json'));
     expect(coverageViolations(cases.map(c => c.name), coverage, { strict: false })).toEqual([]);
+  });
+
+  describe('autonomous principal-mailbox sends (#2474 PR 2)', () => {
+    // The level and score each case runs at, from the PR 2 plan's case table.
+    const TABLE: Record<string, { level: string; score: number }> = {
+      '30aa': { level: 'routine', score: 85 },
+      '30ab': { level: 'all', score: 100 },
+      '30ac': { level: 'all', score: 100 },
+      '30ad': { level: 'all', score: 95 },
+      '30ae': { level: 'routine', score: 95 },
+      '30af': { level: 'all', score: 95 },
+      '30ag': { level: 'on_request', score: 95 },
+      '45e': { level: 'all', score: 85 },
+      '45f': { level: 'all', score: 92 },
+      '45g': { level: 'all', score: 100 },
+    };
+    const files = readdirSync(path.join(SCENARIOS_DIR, 'cases'));
+    const byPrefix = (prefix: string): ScenarioCase => {
+      const file = files.find(f => f.startsWith(`${prefix}-`));
+      if (!file) throw new Error(`no case file for ${prefix}`);
+      return loadScenarioCase(path.join(SCENARIOS_DIR, 'cases', file));
+    };
+
+    it('fire the triage through the gateway at the level and score the table gives', () => {
+      // The triage's own cron text, so the case fires what production fires.
+      const ceoInbox = yaml.load(readFileSync(path.resolve(SCENARIOS_DIR, '../../agents/ceo-inbox.yaml'), 'utf-8')) as { schedule: Array<{ task: string }> };
+      const hourly = ceoInbox.schedule[0]!.task.trim();
+      for (const [prefix, want] of Object.entries(TABLE)) {
+        const c = byPrefix(prefix);
+        expect(c.agent, prefix).toBe('ceo-inbox');
+        expect(c.throughGateway, prefix).toBe(true);
+        expect(c.releaseGate, prefix).not.toBe(false);
+        expect(c.autonomy, prefix).toEqual({ score: want.score, gating: 'band' });
+        // The loader holds the agent's pinned ceo_inbox/sending to this same level.
+        expect(c.seed.principalMailbox?.sendLevel, prefix).toBe(want.level);
+        expect(c.inbound.from, prefix).toBe('scheduler');
+        expect(c.inbound.content.trim(), prefix).toBe(hourly);
+      }
+    });
+
+    it("match left_as_draft only on text the gateway's digest items carry", () => {
+      // D4 refusals file PRINCIPAL_SEND_DIGEST_REASONS (the principal-facing texts, #2474 final
+      // fixes A12); a band review hold names its stakes label
+      // (STAKES_LABEL) or is the off-thread hold (OFF_THREAD_REASON). Neither is exported from
+      // band-send-review.ts, so both are read from the source.
+      const reviewSource = readFileSync(path.resolve(SCENARIOS_DIR, '../../src/dispatch/band-send-review.ts'), 'utf-8');
+      const labels = /const STAKES_LABEL[^{]*\{([^}]*)\}/.exec(reviewSource)?.[1] ?? '';
+      const offThread = /const OFF_THREAD_REASON = '((?:[^'\\]|\\.)*)';/.exec(reviewSource)?.[1]?.replace(/\\'/g, "'");
+      expect(offThread).toContain("isn't on the thread");
+      const reasons = [
+        ...Object.values(PRINCIPAL_SEND_DIGEST_REASONS),
+        ...[...labels.matchAll(/'([^']+)'/g)].map(m => `Stakes: ${m[1]!}.`),
+        offThread!,
+      ];
+      expect(reasons.some(r => r.includes('Stakes: financial or legal.'))).toBe(true);
+      const used = Object.keys(TABLE).flatMap(prefix => byPrefix(prefix).expectedBehaviors
+        .flatMap(b => (b.check ? leafChecks(b.check) : []))
+        .flatMap(c => (c.kind === 'left_as_draft' ? c.contains ?? [] : [])));
+      expect(used.length).toBeGreaterThan(0);
+      for (const text of used) {
+        expect(reasons.some(r => r.toLowerCase().includes(text.toLowerCase())), text).toBe(true);
+      }
+    });
   });
 });

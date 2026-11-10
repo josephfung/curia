@@ -107,6 +107,22 @@ describe('ReportQueue.list', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('lists principal_mailbox items without relabelling them (#2474)', async () => {
+    const { queue, warn } = makeQueue({
+      pages: [{
+        rows: [
+          { seq: '31', row: row('g', '2026-11-07T09:00:00.000Z', { summary: 'Sent for you from your mailbox: "Re: Friday" to Dana Example.', urgency: 'digest', source: 'principal_mailbox' }) },
+        ],
+        hasMore: false,
+      }],
+    });
+
+    const batch = await queue.list();
+
+    expect(batch.items.map((i) => i.source)).toEqual(['principal_mailbox']);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('keeps an item with an unknown source as an agent item, with a warning', async () => {
     const { queue, warn } = makeQueue({
       pages: [{ rows: [{ seq: '30', row: row('f', '2026-10-18T12:00:00.000Z', { summary: 'From a newer build.', urgency: 'digest', source: 'future_source' }) }], hasMore: false }],

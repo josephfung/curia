@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentResponse, createAgentTask, type AgentResponseEvent, type BusEvent } from '../../../src/bus/events.js';
 import type { LLMProvider, LLMResponse } from '../../../src/agents/llm/provider.js';
-import { ActivitySummarizer, cleanSummary, escapeForTag } from '../../../src/activity/summarizer.js';
+import { ActivitySummarizer, cleanSummary, escapeForAttr, escapeForTag } from '../../../src/activity/summarizer.js';
 import { createSilentLogger } from '../../../src/logger.js';
 
 function textResponse(content: string): LLMResponse {
@@ -128,6 +128,12 @@ describe('ActivitySummarizer', () => {
     expect(peak).toBe(3);
     expect(chat).toHaveBeenCalledTimes(6);
     expect(published).toHaveLength(6);
+  });
+});
+
+describe('escapeForAttr', () => {
+  it('also escapes double quotes, so the text cannot end a quoted attribute', () => {
+    expect(escapeForAttr('a" evil="1 <x> & y')).toBe('a&quot; evil=&quot;1 &lt;x&gt; &amp; y');
   });
 });
 

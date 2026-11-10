@@ -2,6 +2,7 @@
 // outreach_recorded, decision_recorded. Each passes and fails on the recorded outcome alone.
 import { describe, expect, it } from 'vitest';
 import { emptyBreakdown } from '../../shared/usage.js';
+import { PRINCIPAL_SEND_DIGEST_REASONS } from '../../../src/skills/outbound-gateway.js';
 import { evaluateCheck } from '../../scenarios/assertions.js';
 import type { GatewayOutcome, RecordedDelivery, ScenarioRun } from '../../scenarios/types.js';
 
@@ -286,5 +287,40 @@ describe('reviewed', () => {
     const none = evaluateCheck({ kind: 'reviewed', label: 'phone_us' }, run({}), ctx);
     expect(none.rating).toBe('MISS');
     expect(none.justification).toContain('not exercised');
+  });
+});
+
+// #2474 PR 2: every autonomous principal-mailbox send that stops for good files one "Left as a
+// draft in your mailbox:" digest item, a cooldown and a thread-less draft included (neither writes
+// a held marker); left_as_draft reads those items.
+describe('left_as_draft', () => {
+  const left = (what: string, refusal: 'thread_cooldown' | 'not_a_reply') => `Left as a draft in your mailbox: ${what}. ${PRINCIPAL_SEND_DIGEST_REASONS[refusal]}`;
+  const r = run({
+    mailboxDigests: [
+      'Sent for you from your mailbox: Re: Venue to Jo Park.',
+      left('Re: Venue to Jo Park', 'thread_cooldown'),
+      left('Agenda to Sam Lee', 'not_a_reply'),
+      'Tried to send for you from your mailbox: Re: Budget to Lee. The send didn\'t confirm, so it may or may not have gone out. Check your Sent folder before sending it again.',
+    ],
+  });
+
+  it('passes on a left-as-draft item with every text, a cooldown and a thread-less stop included', () => {
+    expect(evaluateCheck({ kind: 'left_as_draft' }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'left_as_draft', contains: ['ALREADY REPLIED', 'Jo Park'], count: 1 }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'left_as_draft', contains: ['existing thread'], count: 1 }, r, ctx).rating).toBe('PASS');
+    // The sent and the may-have-gone items are not left as drafts.
+    expect(evaluateCheck({ kind: 'left_as_draft', count: 2 }, r, ctx).rating).toBe('PASS');
+  });
+
+  it('misses on no matching item, a wrong count, or a send that went', () => {
+    expect(evaluateCheck({ kind: 'left_as_draft', contains: ['attachment'] }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'left_as_draft', count: 1 }, r, ctx).rating).toBe('MISS');
+    const sentOnly = evaluateCheck({ kind: 'left_as_draft' }, run({ mailboxDigests: ['Sent for you from your mailbox: Re: Venue to Jo Park.'] }), ctx);
+    expect(sentOnly.rating).toBe('MISS');
+    expect(sentOnly.justification).toContain('nothing was left as a draft');
+    // count 0: nothing may be left.
+    expect(evaluateCheck({ kind: 'left_as_draft', count: 0 }, run({ mailboxDigests: [] }), ctx).rating).toBe('PASS');
+    // A result saved before the digest items were recorded has nothing to read.
+    expect(evaluateCheck({ kind: 'left_as_draft' }, run({}), ctx).rating).toBe('MISS');
   });
 });

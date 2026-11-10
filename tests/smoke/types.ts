@@ -52,6 +52,18 @@ export interface CaseTarget {
   opening: string;
 }
 
+/**
+ * A config-store setting the case's agents see in their pinned context (#2474), e.g.
+ * `ceo_inbox/sending`. Held per case, not written to the database copy: concurrent cases
+ * share that copy, and another case must not run under this one's setting.
+ */
+export interface CaseConfigValue {
+  namespace: string;
+  key: string;
+  /** The stored string, as config-store keeps it (string-encoded JSON for structured values). */
+  value: string;
+}
+
 export interface TestCase {
   name: string;
   description: string;
@@ -79,6 +91,8 @@ export interface TestCase {
    * specialists. Only lengthens the wait: SMOKE_TIMEOUT_MS still applies when it is longer.
    */
   timeoutSeconds?: number;
+  /** Settings in force from turn 1 (see CaseConfigValue). Absent: the database copy's own. */
+  config?: CaseConfigValue[];
   turns: Turn[];
   expectedBehaviors: ExpectedBehavior[];
   failureModes: string[];

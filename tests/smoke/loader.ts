@@ -10,6 +10,7 @@ import {
   SMOKE_SENDERS,
   TARGET_DELIVERIES,
   type BehaviorWeight,
+  type CaseConfigValue,
   type CaseTarget,
   type ExpectedBehavior,
   type SmokeSender,
@@ -32,6 +33,7 @@ interface RawTestCase {
   live_search?: unknown;
   known_failure?: unknown;
   timeout_seconds?: unknown;
+  config?: unknown;
   turns?: Array<{ role?: string; content?: string; delay_ms?: number; tool_stubs?: unknown }>;
   expected_behaviors?: Array<{ id?: string; description?: string; weight?: string }>;
   failure_modes?: string[];
@@ -41,10 +43,13 @@ interface RawTestCase {
 // case would run with the default — passing for the wrong reason.
 const CASE_KEYS: ReadonlySet<string> = new Set([
   'name', 'description', 'tags', 'sender', 'target', 'judge_tool_calls', 'tool_stubs', 'live_search',
-  'known_failure', 'timeout_seconds', 'turns', 'expected_behaviors', 'failure_modes',
+  'known_failure', 'timeout_seconds', 'config', 'turns', 'expected_behaviors', 'failure_modes',
 ]);
 const TURN_KEYS: ReadonlySet<string> = new Set(['role', 'content', 'delay_ms', 'tool_stubs']);
 const TARGET_KEYS: ReadonlySet<string> = new Set(['agent', 'via', 'from', 'topic', 'opening']);
+const CONFIG_KEYS: ReadonlySet<string> = new Set(['namespace', 'key', 'value']);
+/** A config-store namespace or key: one path segment, so `<namespace>/<key>` names one setting. */
+const CONFIG_NAME = /^[a-z][a-z0-9_-]*$/;
 
 /** Agent names are lowercase and hyphenated (the registry rejects anything else at boot). */
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/;
@@ -82,6 +87,42 @@ function parseTarget(raw: unknown, filePath: string): CaseTarget | undefined {
   }
   // Each field was checked above; the cast only names the shape.
   return t as unknown as CaseTarget;
+}
+
+/**
+ * `config: [{ namespace, key, value }]` — config-store settings the case's agents see from
+ * turn 1 (#2474: `ceo_inbox/sending` for a triage case). The value is the stored string, so
+ * a structured setting is written as its JSON text.
+ */
+function parseConfig(raw: unknown, filePath: string): CaseConfigValue[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error(`'config' must be a non-empty list of { namespace, key, value } in ${filePath}`);
+  }
+  const seen = new Set<string>();
+  return raw.map((entry: unknown, i) => {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`config[${i}] must be a mapping of namespace, key and value in ${filePath}`);
+    }
+    const e = entry as Record<string, unknown>;
+    const unknownKeys = Object.keys(e).filter(k => !CONFIG_KEYS.has(k));
+    if (unknownKeys.length > 0) {
+      throw new Error(`Unknown key(s) ${unknownKeys.map(k => `'${k}'`).join(', ')} in config[${i}] of ${filePath}`);
+    }
+    for (const key of ['namespace', 'key'] as const) {
+      if (typeof e[key] !== 'string' || !CONFIG_NAME.test(e[key])) {
+        throw new Error(`config[${i}].${key} must be a lowercase config-store name in ${filePath}`);
+      }
+    }
+    // A number or mapping would reach the agent as something config-store never returns.
+    if (typeof e['value'] !== 'string') {
+      throw new Error(`config[${i}].value must be a string (JSON text for a structured setting) in ${filePath}`);
+    }
+    const name = `${String(e['namespace'])}/${String(e['key'])}`;
+    if (seen.has(name)) throw new Error(`config sets ${name} twice in ${filePath}`);
+    seen.add(name);
+    return { namespace: e['namespace'] as string, key: e['key'] as string, value: e['value'] };
+  });
 }
 
 /** `known_failure: { issue: "#123" }` — the tracking issue is required, so the marker can be retired. */
@@ -128,6 +169,7 @@ export function loadTestCase(filePath: string): TestCase {
     throw new Error(`'timeout_seconds' must be a whole number of at least 10 in ${filePath}`);
   }
   const target = parseTarget(raw.target, filePath);
+  const config = parseConfig(raw.config, filePath);
   // A targeted case's turns come from target.from on a bullpen thread; a sender would be ignored.
   if (target && raw.sender !== undefined) {
     throw new Error(`'sender' and 'target' cannot both be set in ${filePath} — a targeted case's turns come from target.from`);
@@ -194,6 +236,7 @@ export function loadTestCase(filePath: string): TestCase {
     ...(liveSearch ? { liveSearch: true as const } : {}),
     ...(knownFailure ? { knownFailure } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(config ? { config } : {}),
     turns,
     expectedBehaviors,
     failureModes: raw.failure_modes ?? [],

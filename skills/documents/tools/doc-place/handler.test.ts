@@ -80,4 +80,27 @@ describe('DocPlaceHandler', () => {
     expect(data.action).toBe('create_folder');
     expect(data.slug).toBe('evan-neurology-prep');
   });
+
+  // #2474 final fixes B1: doc-place only recommends; it never writes or moves a document. Its
+  // recommendation stays under /projects/ whatever slug or leaf it is handed, so it can't point a
+  // later doc-write into the principal-mailbox send ledger (which doc-write refuses anyway).
+  it('never recommends a path under the send ledger prefix', async () => {
+    const repo = {
+      listProjectDirectorySummaries: vi.fn(async () => []),
+      projectPrefixHasLiveDocs: vi.fn(async () => false),
+      livePathExists: vi.fn(async () => false),
+    } as unknown as WorkingDocsRepo;
+    const ctx = {
+      input: { proposed_slug: '../../scratch/principal-mailbox-sends', leaf: '../../scratch/principal-mailbox-sends/d1-1.md' },
+      log: silentLog,
+      timezone: 'UTC',
+      workingDocs: repo,
+    } as unknown as ToolContext;
+    const result = await new DocPlaceHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as { path: string };
+    expect(data.path.startsWith('/projects/')).toBe(true);
+    expect(data.path.startsWith('/scratch/')).toBe(false);
+  });
 });

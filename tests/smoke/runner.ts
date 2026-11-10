@@ -97,6 +97,7 @@ async function runAttempt(
   options: RunOptions,
 ): Promise<{ execution: CaseExecution; providerReason?: string }> {
   const state = newSmokeCase(tc.name, harness.stack.config.timezone);
+  for (const c of tc.config ?? []) state.configs.set(`${c.namespace}/${c.key}`, c.value);
   return harness.runInCase(state, async () => {
     const responses: CapturedResponse[] = [];
     let error: string | undefined;

@@ -667,6 +667,9 @@ describe('CeoInboxDraftReplyHandler', () => {
     const secondData = second.data as { draft_id: string; already_exists: boolean };
     expect(firstData.draft_id).toBe('draft-1');
     expect(firstData.already_exists).toBe(false);
+    // #2474 final fixes A5: the created draft's result names the message it answers, which an
+    // autonomous send binds to (DraftProvenance.curiaWritesInTask reads it from the audit row).
+    expect(first.data).toMatchObject({ reply_to_message_id: 'msg-001' });
     expect(secondData).toMatchObject({
       draft_id: 'draft-1',
       already_exists: true,

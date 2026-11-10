@@ -60,6 +60,11 @@ export interface SmokeCaseState extends CaseAttempt {
   threads: Set<string>;
   /** Model fallbacks (any agent) during the case. */
   fallbacks: string[];
+  /**
+   * The case's `config` settings, by `<namespace>/<key>` (#2474): what its agents' pinned
+   * context reads in place of the database copy's value.
+   */
+  configs: Map<string, string>;
 }
 
 /** @param timezone Curia's configured timezone, for the case's stubbed scheduler writes. */
@@ -72,6 +77,7 @@ export function newSmokeCase(label: string, timezone?: string): SmokeCaseState {
     tools: new CaseToolState(timezone),
     threads: new Set(),
     fallbacks: [],
+    configs: new Map(),
   };
 }
 

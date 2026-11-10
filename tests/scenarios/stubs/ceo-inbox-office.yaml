@@ -25,6 +25,13 @@ memory-store:
   - agent: ceo-inbox
     match: {}
     return: { stored: true, action: created, node_id: 4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8, sensitivity: internal }
+# Sending from the principal's mailbox (#2474): refused as production refuses a send nobody
+# asked for on a live turn (PRINCIPAL_SEND_REFUSALS.not_requested in
+# src/skills/outbound-gateway.ts; keep the two in step). A through_gateway case runs the real tool.
+ceo-inbox-send-draft:
+  - agent: ceo-inbox
+    match: {}
+    error: "Curia sends from the principal's mailbox only when the principal asks on a live turn. Nothing was sent; the draft is still in their Drafts folder."
 # The sender is the case's seeded Sam Rivera, already a contact. ceo-inbox threads this
 # contact_id into later calls (entity-context runs for real), so it must be the seeded row:
 # a case using this set must seed contact `sam` (the loader rejects one that does not).
