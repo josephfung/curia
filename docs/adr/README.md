@@ -83,6 +83,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [059](059-learned-activity-describers.md) | Tools with no describer get one learned per agent by a fast-tier model and stored in `activity_describers`; display only, never autonomy (#2455) | Accepted |
 | [060](060-card-use-needs-per-checkout-confirmation.md) | Card use needs a per-checkout confirmation — card fields resolve only under a grant written by the approval-only `card-use-confirm` replay (#1358) | Accepted |
 | [061](061-browser-in-its-own-container.md) | The web browser runs in its own container, driven by Patchright — Curia attaches over CDP; in-process launch stays for source runs (#2541) | Accepted |
+| [062](062-curia-sends-from-the-principals-mailbox.md) | Curia sends from the principal's mailbox through the outbound gateway — one tool and gateway entry point, a per-mailbox `ceo_inbox/sending` setting (default `on_request`), holds stay drafts with no approvals, code limits on autonomous sends; supersedes ADR-047's "Curia cannot send these drafts" (#2474) | Accepted |
 
 ## Adding new ADRs
 

@@ -1953,7 +1953,8 @@ export type PrincipalReportSource =
   | 'gate_proceeded'       // band gating let through an action the tier policy would have held (#2159)
   | 'sent_without_review'  // the judge was unavailable at 80+, so the send went out unreviewed (#2159)
   | 'claim_trimmed'        // no longer emitted (#2312: Curia never cuts text); kept for historical audit rows
-  | 'relay_deferred';      // an outside contact used up their relay budget; the relay waits here (#1320)
+  | 'relay_deferred'       // an outside contact used up their relay budget; the relay waits here (#1320)
+  | 'principal_mailbox';   // Curia sent, or left as a draft, a reply from the principal's own mailbox on its own (#2474)
 export interface PrincipalReportPayload {
   /** One or two sentences, written for the principal. */
   summary: string;

@@ -152,3 +152,17 @@ tasks:
       type: browser_ready
     credential_how_to: "The shipped docker-compose.yml runs the browser as the `browser` service: start it with `docker compose up -d browser`, and check it with `docker compose logs browser`. Ordinary sites work; bot-protected sites may block it, especially from a datacenter IP."
     docs_url: /integrations/web-browser
+
+  - id: inbox_sending
+    label: "Replies from your mailbox"
+    value_prop: "Choose whether Curia sends routine replies from your mailbox for you: off, on request, routine or all."
+    tier: instant
+    handoff: in-chat
+    optional: true
+    completion_check:
+      type: config_store_set
+      namespace: ceo_inbox
+      key: sending
+      valid_as: send_level
+    credential_how_to: null
+    docs_url: /core-concepts/inbox-sending

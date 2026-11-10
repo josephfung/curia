@@ -203,6 +203,7 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
     case 'outreach_recorded':
     case 'decision_recorded':
     case 'reviewed':
+    case 'left_as_draft':
       return evaluateGatewayCheck(check, run);
     case 'any_of': {
       const ratings = check.checks.map(alt => evaluateCheck(alt, run, ctx));
@@ -211,6 +212,9 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
     }
   }
 }
+
+/** How the gateway's digest item for an autonomous send that stopped for good begins (#2474 PR 2). */
+const LEFT_AS_DRAFT_PREFIX = 'Left as a draft in your mailbox:';
 
 type GatewayCheck = Extract<BehaviorCheck, { kind: typeof GATEWAY_CHECK_KINDS[number] }>;
 
@@ -354,6 +358,21 @@ function evaluateGatewayCheck(check: GatewayCheck, run: ScenarioRun): RunRating 
       return hit
         ? pass(`band review ruled on ${check.label} (${hit.outcome})`)
         : miss(`no band review ruled on ${check.label}${check.outcome ? ` with outcome ${check.outcome}` : ''} in a send's own text: the path was not exercised. Reviews: ${seen}`);
+    }
+    case 'left_as_draft': {
+      // A result saved before the digest items were recorded has nothing to read: a miss, not a pass.
+      if (!outcome.mailboxDigests) return miss('no principal-mailbox digest record for this run');
+      // Every final autonomous stop files exactly one such item (outbound-gateway.ts
+      // recordAutonomousStop), unlike the held marker, which a cooldown or a thread-less draft skips.
+      const left = outcome.mailboxDigests.filter(s => s.startsWith(LEFT_AS_DRAFT_PREFIX));
+      const matching = left.filter(s => (check.contains ?? []).every(t => s.toLowerCase().includes(t.toLowerCase())));
+      const ok = check.count === undefined ? matching.length > 0 : matching.length === check.count;
+      const wanted = JSON.stringify({ contains: termCount(check.contains), count: check.count });
+      // The items name subjects and recipients; detected personal details are masked.
+      const shown = left.map(s => maskPii(s).slice(0, 160)).join(' | ');
+      return ok
+        ? pass(`${matching.length} draft(s) left matching ${wanted}`)
+        : miss(`expected ${check.count ?? '1+'} draft(s) left matching ${wanted}; got ${matching.length}. ${left.length === 0 ? 'nothing was left as a draft' : `Left: ${shown}`}`);
     }
   }
 }

@@ -1,0 +1,85 @@
+# Principal-directed send from their own mailbox (#2474, design D6). The principal names a
+# draft and says to send it. The coordinator delegates to ceo-inbox, which finds the draft in
+# DRAFTS and sends it with ceo-inbox-send-draft by draft_id. Smoke has no send path (the
+# office's ceo-inbox-send-draft stub stands in for a send the gateway let through), so the
+# judge reads the calls.
+name: CEO Inbox Send Named Draft on Request
+description: >
+  The principal asks Curia to send the draft to Jo Park about the offsite venue. The draft
+  sits in the principal's Drafts folder. ceo-inbox should find it and send exactly that
+  draft with ceo-inbox-send-draft, once, then confirm to the principal.
+tags:
+  - ceo-inbox
+  - email
+  - drafts
+  - send
+  - single-turn
+judge_tool_calls: true
+
+tool_stubs:
+  ceo-inbox-list:
+    - match: { folder: DRAFTS, modified_since: null }
+      return:
+        folder: DRAFTS
+        count: 2
+        displayTimezone: "{{timezone}}"
+        drafts:
+          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s1-other, threadId: thr-s1-other, subject: Board dinner RSVP, to: [{ name: Ruth Alder, email: ruth.alder@example.test }], cc: [], snippet: "Thank you for the invitation.", date_local: "{{at:now-30h}}", created_by_curia: false }
+    - match: { folder: DRAFTS }
+      return:
+        folder: DRAFTS
+        count: 1
+        displayTimezone: "{{timezone}}"
+        drafts:
+          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date_local: "{{at:now-3h}}", created_by_curia: false }
+  ceo-inbox-search:
+    - match: { folder: DRAFTS, modified_since: null }
+      return:
+        folder: DRAFTS
+        count: 2
+        displayTimezone: "{{timezone}}"
+        drafts:
+          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date_local: "{{at:now-3h}}", created_by_curia: false }
+          - { id: draft-s1-other, threadId: thr-s1-other, subject: Board dinner RSVP, to: [{ name: Ruth Alder, email: ruth.alder@example.test }], cc: [], snippet: "Thank you for the invitation.", date_local: "{{at:now-30h}}", created_by_curia: false }
+    - match: { folder: DRAFTS }
+      return:
+        folder: DRAFTS
+        count: 1
+        displayTimezone: "{{timezone}}"
+        drafts:
+          - { id: draft-s1-venue, threadId: thr-s1-venue, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], snippet: "Jo, shall we use the Harbour Room for the offsite?", date_local: "{{at:now-3h}}", created_by_curia: false }
+  ceo-inbox-read:
+    - match: { draft_id: draft-s1-venue }
+      return: { id: draft-s1-venue, threadId: thr-s1-venue, to: [{ name: Jo Park, email: jo.park@acme.example }], cc: [], bcc: [], subject: Venue for the offsite, body_plain: "Jo, shall we use the Harbour Room for the offsite? Let me know.", is_draft: true }
+    - match: { draft_id: draft-s1-other }
+      return: { id: draft-s1-other, threadId: thr-s1-other, to: [{ name: Ruth Alder, email: ruth.alder@example.test }], cc: [], bcc: [], subject: Board dinner RSVP, body_plain: "Ruth, thank you for the invitation. I will be glad to attend.", is_draft: true }
+
+turns:
+  - role: user
+    content: |
+      Send the draft I wrote to Jo Park about the offsite venue.
+
+expected_behaviors:
+  - id: sends-named-draft
+    description: >
+      ceo-inbox-send-draft is called with draft_id draft-s1-venue (the Jo Park venue draft),
+      exactly once
+    weight: critical
+  - id: sends-nothing-else
+    description: ceo-inbox-send-draft is never called with the Board dinner RSVP draft
+    weight: critical
+  - id: no-parallel-send-path
+    description: >
+      The note is not sent a second way (no email-send to Jo Park from Curia's account, no
+      send-draft)
+    weight: important
+  - id: confirms-sent
+    description: Tells the principal the draft to Jo Park was sent
+    weight: important
+
+failure_modes:
+  - Asks the principal to confirm a send they have just asked for
+  - Reports the draft sent without calling ceo-inbox-send-draft
+  - Sends the wrong draft, or the same draft twice
+  - Tells the principal to send it themselves from their Drafts folder

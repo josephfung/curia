@@ -340,6 +340,7 @@ Under `band` the outbound filter's `contact-data-leak` rule and Stage 2.5 are of
 | Send | Questions |
 |---|---|
 | Principal-directed (a live principal turn) | grounding |
+| Autonomous, from the principal's mailbox (#2474) | purpose, stakes, grounding, necessity, **off-thread**; speaks-as-principal is forced true in code |
 | Everything else, at every band | purpose, speaks as principal, stakes, grounding, necessity |
 | Any send with detected personal details | plus **disclosure**, principal-directed sends included |
 
@@ -386,6 +387,33 @@ A bounce goes to the drafter once. A second unapproved item is a block at 80+ an
 **Saved drafts.** `send-draft` runs the same detection and review (it cannot bounce, so anything but "send" holds); a principal-directed draft gets a disclosure-only review. A draft passes as approved only when its stored subject and body match what was approved.
 
 Relayed replies skip the dispatcher's tier Gate C (except #1059's missing-tier escalate) and get all five questions at the gateway.
+
+### Sends from the principal's mailbox (#2474)
+
+See [ADR-062](../adr/062-curia-sends-from-the-principals-mailbox.md); the gateway's side is in [spec 15](15-outbound-safety.md#sends-from-the-principals-mailbox-2474). `ceo-inbox-send-draft` (`action_risk: 80`) sends a draft from the principal's own mailbox. How far Curia may go is a per-mailbox setting, config-store key `ceo_inbox/sending`, value string-encoded JSON `{ "<mailbox>": "<level>" }`:
+
+| Level | Curia may send |
+|---|---|
+| `off` | nothing |
+| `on_request` (default) | only principal-directed sends |
+| `routine` | plus autonomous replies rated `routine`, at 80+ |
+| `all` | plus autonomous replies rated `routine` or `commitment`, at 80+ and 90+; `financial_or_legal` never goes out autonomously |
+
+The autonomous row of the band table, by setting and the review's stakes rating (the score gates are the stakes table above; an autonomous send also needs the gateway's limits in [spec 15](15-outbound-safety.md#sends-from-the-principals-mailbox-2474) to pass first):
+
+| Setting | `routine` | `commitment` | `financial_or_legal` |
+|---|---|---|---|
+| `off`, `on_request` | no autonomous send | no autonomous send | no autonomous send |
+| `routine` | sends at 80+ | held (above the ceiling) | held |
+| `all` | sends at 80+ | sends at 90+ | held |
+
+A hold, a refused limit, a failed review or a review bounce leaves the reply a draft and files one "Left as a draft in your mailbox" digest item with the reason, written for the principal. A reply that shares information not on the thread is held at every band, under every setting and rating (the `off-thread` question, which excludes acknowledgements, thanks, and the principal's own availability or logistics the reply settles, even when those are new; the reason reads "Held for the principal: it shares information that isn't on the thread, and Curia doesn't pass on new information without the principal.", followed by any other finding's stakes rating or plain-words reason).
+
+Missing, unreadable or unknown values read as `on_request`, which never widens autonomy and keeps principal-directed sends working. The gateway reads the setting itself (`createSendLevelReader`, `src/skills/principal-send/send-level.ts`), always for the `default` mailbox until #2475 adds named ones. The setting is pinned into ceo-inbox's context. Autonomous sends under `routine` and `all` shipped in the second half of #2474. Under `off` and `on_request` an autonomous attempt is refused (`setting_off`, `not_requested`) and files no digest item.
+
+- **Principal-directed** means a live principal turn, not an approval replay, and for an email-originated turn a verified sender. These sends are not stakes-gated (the principal decided), are not put in the spot-check sample pool, and are reviewed as spec 15 describes: a principal-written draft only for personal data that remains, a Curia-edited one for purpose, a Curia-written one for purpose and grounding.
+- **Gates.** `ceo-inbox-send-draft` is in `HUMAN_SEND_SKILLS`, so band Gate C leaves its review to the gateway. Gates A and B never file an approval for it (`NO_QUEUED_APPROVAL_TOOLS`, `src/skills/execution.ts`): a blocked call is refused with "No approval request was created", and the draft stays where it is. A principal-originated call skips A and B as any other does. A Gate A or B refusal of an autonomous call (not one an outsider started: Gates A and B file nothing for it, so an outsider repeating the call adds no digest noise; the gateway does file one for `outsider_originated` under `routine` or `all`) files a "Left as a draft in your mailbox" digest item whatever the sending level, `off` and `on_request` included: the execution layer can't read the level (the exception to the "no digest item" rule above).
+- **No approvals.** A hold or ask leaves the draft in the principal's Drafts folder with a reason, never an approval row. `sendPrincipalDraft` refuses a `humanApproved` replay outright, so nothing can reach the send through the approval queue.
 
 ### Relay budget (`RelayBudget`, `src/autonomy/relay-budget.ts`) (#1320)
 

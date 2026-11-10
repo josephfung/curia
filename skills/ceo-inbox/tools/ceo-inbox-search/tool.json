@@ -9,16 +9,17 @@
     "query": "string (for messages: Gmail-native search query, e.g. 'from:alice subject:invoice'. For drafts: a plain substring matched case-insensitively against subject and recipient name/email)",
     "folder": "string? (omit to search messages; pass 'DRAFTS' to search unsent drafts instead)",
     "include_spam_and_trash": "boolean? (default false; set true to include messages filed in Spam or Trash. A query such as in:spam does not opt in by itself)",
-    "limit": "number? (max results, 1–50, default 10)"
+    "limit": "number? (max results, 1–50, default 10)",
+    "modified_since": "string? (DRAFTS only: ISO 8601 date-time; keep drafts last changed at or after it. Resolve phrases like 'this morning' with date-resolve first)"
   },
   "outputs": {
     "messages": "array of { id, threadId, from, subject, date, snippet, unread, folders } (when searching messages)",
-    "drafts": "array of { id, threadId, subject, to, cc, snippet, date } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
+    "drafts": "array of { id, threadId, subject, to, cc, snippet, date, date_local, created_by_curia (null if unknown) } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
     "count": "number of items returned"
   },
   "permissions": [],
   "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 20000,
-  "capabilities": [],
+  "capabilities": ["auditLogRepo"],
   "optional_capabilities": ["curiaEmailAddresses"]
 }

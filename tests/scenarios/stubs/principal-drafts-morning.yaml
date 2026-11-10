@@ -1,0 +1,191 @@
+# The principal's Drafts folder for the batch-send cases (#2474, design D6; 30v-30x): three
+# drafts modified this morning (Jo Park, Ruth Alder, Sam Kerr) and one from two days ago
+# (Lee Tan). Behaves like the real list/search: a `modified_since` keeps only the morning
+# three, no filter returns all four. A case using this set seeds `principal_mailbox` drafts
+# with the same ids (draft-30-acme, -board, -vendor, -old) so the real ceo-inbox-send-draft
+# finds what the agent was shown.
+ceo-inbox-list:
+  - match: { folder: DRAFTS, modified_since: null }
+    return:
+      folder: DRAFTS
+      count: 4
+      displayTimezone: "{{timezone}}"
+      drafts:
+        - id: draft-30-acme
+          threadId: thr-30-acme
+          subject: Venue for the offsite
+          to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+          cc: []
+          snippet: "Jo, shall we use the Harbour Room for the offsite? Let me kn"
+          date_local: "{{at:now-3h}}"
+          created_by_curia: false
+        - id: draft-30-board
+          threadId: thr-30-board
+          subject: Board dinner RSVP
+          to: [{ name: Ruth Alder, email: ruth.alder@northfield.example.test }]
+          cc: []
+          snippet: "Ruth, thank you for the invitation. I will be glad to attend"
+          date_local: "{{at:now-4h}}"
+          created_by_curia: false
+        - id: draft-30-vendor
+          threadId: thr-30-vendor
+          subject: Renewal timing
+          to: [{ name: Sam Kerr, email: sam.kerr@vendor.example.test }]
+          cc: []
+          snippet: "Sam, we would like to talk about renewal timing next month."
+          date_local: "{{at:now-5h}}"
+          created_by_curia: false
+        - id: draft-30-old
+          threadId: thr-30-old
+          subject: Pricing follow-up
+          to: [{ name: Lee Tan, email: lee.tan@lumen.example.test }]
+          cc: []
+          snippet: "Lee, following up on pricing after the demo."
+          date_local: "{{at:now-48h}}"
+          created_by_curia: false
+  - match: { folder: DRAFTS }
+    return:
+      folder: DRAFTS
+      count: 3
+      displayTimezone: "{{timezone}}"
+      drafts:
+        - id: draft-30-acme
+          threadId: thr-30-acme
+          subject: Venue for the offsite
+          to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+          cc: []
+          snippet: "Jo, shall we use the Harbour Room for the offsite? Let me kn"
+          date_local: "{{at:now-3h}}"
+          created_by_curia: false
+        - id: draft-30-board
+          threadId: thr-30-board
+          subject: Board dinner RSVP
+          to: [{ name: Ruth Alder, email: ruth.alder@northfield.example.test }]
+          cc: []
+          snippet: "Ruth, thank you for the invitation. I will be glad to attend"
+          date_local: "{{at:now-4h}}"
+          created_by_curia: false
+        - id: draft-30-vendor
+          threadId: thr-30-vendor
+          subject: Renewal timing
+          to: [{ name: Sam Kerr, email: sam.kerr@vendor.example.test }]
+          cc: []
+          snippet: "Sam, we would like to talk about renewal timing next month."
+          date_local: "{{at:now-5h}}"
+          created_by_curia: false
+ceo-inbox-search:
+  - match: { folder: DRAFTS, modified_since: null }
+    return:
+      folder: DRAFTS
+      count: 4
+      displayTimezone: "{{timezone}}"
+      drafts:
+        - id: draft-30-acme
+          threadId: thr-30-acme
+          subject: Venue for the offsite
+          to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+          cc: []
+          snippet: "Jo, shall we use the Harbour Room for the offsite? Let me kn"
+          date_local: "{{at:now-3h}}"
+          created_by_curia: false
+        - id: draft-30-board
+          threadId: thr-30-board
+          subject: Board dinner RSVP
+          to: [{ name: Ruth Alder, email: ruth.alder@northfield.example.test }]
+          cc: []
+          snippet: "Ruth, thank you for the invitation. I will be glad to attend"
+          date_local: "{{at:now-4h}}"
+          created_by_curia: false
+        - id: draft-30-vendor
+          threadId: thr-30-vendor
+          subject: Renewal timing
+          to: [{ name: Sam Kerr, email: sam.kerr@vendor.example.test }]
+          cc: []
+          snippet: "Sam, we would like to talk about renewal timing next month."
+          date_local: "{{at:now-5h}}"
+          created_by_curia: false
+        - id: draft-30-old
+          threadId: thr-30-old
+          subject: Pricing follow-up
+          to: [{ name: Lee Tan, email: lee.tan@lumen.example.test }]
+          cc: []
+          snippet: "Lee, following up on pricing after the demo."
+          date_local: "{{at:now-48h}}"
+          created_by_curia: false
+  - match: { folder: DRAFTS }
+    return:
+      folder: DRAFTS
+      count: 3
+      displayTimezone: "{{timezone}}"
+      drafts:
+        - id: draft-30-acme
+          threadId: thr-30-acme
+          subject: Venue for the offsite
+          to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+          cc: []
+          snippet: "Jo, shall we use the Harbour Room for the offsite? Let me kn"
+          date_local: "{{at:now-3h}}"
+          created_by_curia: false
+        - id: draft-30-board
+          threadId: thr-30-board
+          subject: Board dinner RSVP
+          to: [{ name: Ruth Alder, email: ruth.alder@northfield.example.test }]
+          cc: []
+          snippet: "Ruth, thank you for the invitation. I will be glad to attend"
+          date_local: "{{at:now-4h}}"
+          created_by_curia: false
+        - id: draft-30-vendor
+          threadId: thr-30-vendor
+          subject: Renewal timing
+          to: [{ name: Sam Kerr, email: sam.kerr@vendor.example.test }]
+          cc: []
+          snippet: "Sam, we would like to talk about renewal timing next month."
+          date_local: "{{at:now-5h}}"
+          created_by_curia: false
+ceo-inbox-read:
+  - match: { draft_id: draft-30-acme }
+    return:
+      id: draft-30-acme
+      threadId: thr-30-acme
+      to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+      cc: []
+      bcc: []
+      subject: Venue for the offsite
+      body_plain: "Jo, shall we use the Harbour Room for the offsite? Let me know."
+      date_local: "{{at:now-3h}}"
+      is_draft: true
+  - match: { draft_id: draft-30-board }
+    return:
+      id: draft-30-board
+      threadId: thr-30-board
+      to: [{ name: Ruth Alder, email: ruth.alder@northfield.example.test }]
+      cc: []
+      bcc: []
+      subject: Board dinner RSVP
+      body_plain: "Ruth, thank you for the invitation. I will be glad to attend."
+      date_local: "{{at:now-4h}}"
+      is_draft: true
+  - match: { draft_id: draft-30-vendor }
+    return:
+      id: draft-30-vendor
+      threadId: thr-30-vendor
+      to: [{ name: Sam Kerr, email: sam.kerr@vendor.example.test }]
+      cc: []
+      bcc: []
+      subject: Renewal timing
+      body_plain: "Sam, we would like to talk about renewal timing next month."
+      date_local: "{{at:now-5h}}"
+      is_draft: true
+  - match: { draft_id: draft-30-old }
+    return:
+      id: draft-30-old
+      threadId: thr-30-old
+      to: [{ name: Lee Tan, email: lee.tan@lumen.example.test }]
+      cc: []
+      bcc: []
+      subject: Pricing follow-up
+      body_plain: "Lee, following up on pricing after the demo."
+      date_local: "{{at:now-48h}}"
+      is_draft: true
+  - match: {}
+    error: "Failed to read principal inbox message: not found"

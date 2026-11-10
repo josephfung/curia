@@ -1,0 +1,19 @@
+{
+  "name": "ceo-inbox-send-draft",
+  "description": "Send one existing draft from the principal's mailbox, when the principal asks on a live turn or on your own in inbox triage. If asked to send two or more, first state the count, recipients and subjects in one sentence, ask \"send all, or go through them?\", and send only after a yes. A refusal means nothing was sent and the draft stays in Drafts, unless it says otherwise: relay it, never claim it sent. In triage, send unasked: only a reply you drafted this pass that the sending setting covers; a refusal is digested, except mailbox unavailable or setting off/on_request (report those yourself). An unconfirmed send may have gone out: check Sent first.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": 80,
+  "inputs": {
+    "draft_id": "string (draft ID from ceo-inbox-list/search with folder DRAFTS)"
+  },
+  "outputs": {
+    "message_id": "string",
+    "to": "string[]",
+    "subject": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["outboundGateway"]
+}

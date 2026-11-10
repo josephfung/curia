@@ -22,6 +22,7 @@ import {
 } from '../../../_shared/doc-workspace.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 import { isDurableDocPath, isSharedDocPath } from '../../../../src/memory/durable-doc-prefixes.js';
+import { PRINCIPAL_SEND_LEDGER_PREFIX } from '../../../../src/skills/principal-send/send-ledger.js';
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit', 'section-delete']);
 
@@ -43,6 +44,22 @@ function sharedPathWriteError(ctx: ToolContext, normalizedPath: string): string 
     'doc-write: refused /shared/ write from an agent that does not declare the path',
   );
   return `${normalizedPath} is a shared document, and only an agent that declares it in pinned_context can write it. Leave it unchanged; the principal can edit it in the console.`;
+}
+
+/**
+ * Principal-mailbox send ledger guard (#2474 final fixes B1, security review M1). The ledger is
+ * the autonomous send cooldown and daily cap: an agent that rewrote or forged an entry could
+ * lift them. Only PrincipalSendLedger writes there, through WorkingDocsRepo directly, never this
+ * tool. Every mode and every caller is refused, a principal-approved replay included. Compared
+ * case-insensitively, after normalization (fail closed).
+ * Returns an error, or null to allow.
+ */
+function sendLedgerPathWriteError(ctx: ToolContext, normalizedPath: string): string | null {
+  const path = normalizedPath.toLowerCase();
+  const prefix = PRINCIPAL_SEND_LEDGER_PREFIX.toLowerCase();
+  if (path !== prefix && !path.startsWith(`${prefix}/`)) return null;
+  ctx.log.warn({ path: normalizedPath, agentId: ctx.agentId ?? null }, 'doc-write: refused a write to the principal-mailbox send ledger');
+  return `${PRINCIPAL_SEND_LEDGER_PREFIX}/ holds Curia's record of sends from the principal's mailbox, which only the send path writes. Leave it unchanged.`;
 }
 
 /**
@@ -119,6 +136,10 @@ export class DocWriteHandler implements ToolHandler {
 
     const timezone = ctx.timezone ?? 'UTC';
     const normalized = normalizeDocPath(input.path);
+    const ledgerError = sendLedgerPathWriteError(ctx, normalized);
+    if (ledgerError) {
+      return { success: false, error: ledgerError };
+    }
     const sharedError = sharedPathWriteError(ctx, normalized);
     if (sharedError) {
       return { success: false, error: sharedError };

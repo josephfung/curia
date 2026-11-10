@@ -72,6 +72,10 @@ import { KnowledgeGraphStore } from './memory/knowledge-graph.js';
 import { MemoryValidator } from './memory/validation.js';
 import { EntityMemory } from './memory/entity-memory.js';
 import { ConfigStore } from './memory/config-store.js';
+import { createPrincipalMailboxResolver } from './channels/email/principal-mailbox-resolver.js';
+import { createSendLevelReader } from './skills/principal-send/send-level.js';
+import { DraftProvenance } from './skills/principal-send/draft-provenance.js';
+import { PrincipalSendLedger } from './skills/principal-send/send-ledger.js';
 import { ToolRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { resolveBypassLadder } from './autonomy/effective-standing.js';
@@ -1959,6 +1963,9 @@ async function main(): Promise<void> {
       const slack = registryGatedOutbound.slackClient;
       outboundQueueReadiness.set('slack', () => slack.isConnected());
     }
+    // The ceo_inbox/sending level lives in the config store (#2474). No knowledge graph: no
+    // reader, and the gateway uses the default level (on_request).
+    const sendLevelStore = entityMemory ? new ConfigStore(entityMemory, logger) : undefined;
     outboundGateway = new OutboundGateway({
       nylasClients: registryGatedOutbound.nylasClients,
       // Each mailbox's own address, so the gateway can tell the principal's mailbox
@@ -1994,6 +2001,14 @@ async function main(): Promise<void> {
       ...(bandReview ? { bandReview } : {}),
       // Caps immediate relays to the principal per outside contact (#1320).
       relayBudget: new RelayBudget({ perHour: resolveRelayBudgetConfig(yamlConfig.autonomy).perHour }),
+      // Sends from the principal's own mailbox (#2474). Its own entry, never in nylasClients;
+      // the grant is read per call so a re-sign-in applies without a restart.
+      principalMailbox: createPrincipalMailboxResolver({ secrets: secretsService, apiKey: () => config.nylasApiKey, logger }),
+      ...(sendLevelStore
+        ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger }) }
+        : {}),
+      draftProvenance: new DraftProvenance(auditLogRepo, logger),
+      sendLedger: new PrincipalSendLedger(workingDocsRepo, logger),
     });
     outboundGateway.start();
     logger.info({

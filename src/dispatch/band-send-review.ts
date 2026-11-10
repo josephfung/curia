@@ -7,12 +7,26 @@
 //
 // Which questions are asked:
 //   principal-directed (a live principal turn)  → grounding
+//   autonomous, principal's own mailbox (#2474) → purpose, stakes, grounding, necessity, off-thread
 //   otherwise, at every band                    → all five (Gate C leaves sends to this review)
 //
 // What each answer does:
 //   purpose = steered                → hold, at every band
+//   off-thread (autonomous mailbox)  → hold, at every band and under any stakes ceiling (#2474,
+//                                       design D10): an autonomous reply never passes on what
+//                                       the thread's messages don't already show. It outranks
+//                                       every other outcome and leads the reason; the other
+//                                       findings come along. Asked on every autonomous send:
+//                                       the gateway's limits require a non-principal recipient,
+//                                       which is the only "outside" the gateway knows. "On the
+//                                       thread" is only what every recipient received (the
+//                                       gateway filters it). A judge failure or a malformed
+//                                       answer holds, never bounces, even with personal data.
 //   speaks as principal              → by its stakes (#2473): routine sends at 80+, a commitment
-//                                       at 90+, financial or legal never; below that, hold
+//                                       at 90+, financial or legal never; below that, hold. An
+//                                       autonomous principal-mailbox send (#2474) always speaks as
+//                                       the principal (not asked), and its sending setting's
+//                                       stakes ceiling holds any rating above it
 //   unsupported claims / unneeded    → bounce to the drafter, ONCE per draft. Curia never
 //     disclosures                       cuts text out of a message: the drafter rewrites it.
 //                                       If the rewrite still has findings, at 80+ the send is
@@ -73,7 +87,7 @@
 
 import type { Logger } from '../logger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
-import { reportEvidence, type CollectedEvidence, type SendEvidenceCollector } from '../autonomy/send-evidence.js';
+import { replyTargetEvidence, reportEvidence, threadEvidence, type CollectedEvidence, type SendEvidenceCollector } from '../autonomy/send-evidence.js';
 import { describePiiLabels, normalizeCounterparty, type DisclosureDecisionRow } from '../autonomy/disclosure-decisions.js';
 import type {
   BriefAnswers, BriefDetectedItem, BriefQuestion, BriefVerdict, DisclosureRuling, SendAuthority, SendStakes,
@@ -92,6 +106,8 @@ const ALL_QUESTIONS: readonly BriefQuestion[] = ['purpose', 'speaks-as-principal
  * (#2473). Null: never, at any band. Routine is the spot-check line (isSpotCheckOrAbove).
  */
 const STAKES_MIN_SCORE: Record<SendStakes, number | null> = { routine: 80, commitment: 90, financial_or_legal: null };
+/** Orders the stakes ratings for a sending setting's ceiling (#2474). */
+const STAKES_RANK: Record<SendStakes, number> = { routine: 0, commitment: 1, financial_or_legal: 2 };
 const STAKES_LABEL: Record<SendStakes, string> = { routine: 'routine', commitment: 'commitment', financial_or_legal: 'financial or legal' };
 const STAKES_HOLD_LEAD: Record<SendStakes, string> = {
   routine: 'Held for the principal: this message speaks for or commits the principal, and the autonomy band asks first for that.',
@@ -108,7 +124,24 @@ const TOO_MANY_DETAIL = 'This message contains more personal details than can be
 const TOKEN_DETAIL = 'This message contains a redaction placeholder. Rewrite it with the real content or without that part.';
 const UNREVIEWED_BELOW_80_REASON = 'Held for the principal: the reviewer was unavailable, and this band asks first when it is.';
 const ORIGIN_UNRESOLVED_REASON = 'Held for the principal: the message that started this delegated work could not be read, so the reviewer could not check who it serves.';
+/** Scenarios assert "isn't on the thread" (#2474): keep the phrase if this is reworded. */
+const OFF_THREAD_REASON = 'Held for the principal: it shares information that isn\'t on the thread, and Curia doesn\'t pass on new information without the principal.';
 const STAKES_UNREVIEWED_REASON = 'Held for the principal: the reviewer was unavailable, so what this message commits the principal to is unrated and treated as financial or legal. Stakes: financial or legal (unrated).';
+
+/** The principal-facing words for a review finding on an autonomous reply (#2474 addendum R3). */
+const PLAIN_REVIEW_REASON: Readonly<Record<string, string>> = {
+  'ungrounded-claim': "It says things about the principal that Curia couldn't confirm.",
+  'unneeded-disclosure': "It includes details the reply didn't need.",
+};
+const PLAIN_REVIEW_FALLBACK = "Curia's review wasn't confident enough to send it.";
+
+/**
+ * Review findings in plain words, once each, never a rule name or a finding's detail: a detail
+ * is written for the drafter ("Verify them with your tools or remove them").
+ */
+export function plainReviewReasons(rules: readonly string[]): string[] {
+  return rules.length === 0 ? [PLAIN_REVIEW_FALLBACK] : [...new Set(rules.map((r) => PLAIN_REVIEW_REASON[r] ?? PLAIN_REVIEW_FALLBACK))];
+}
 
 /** What the drafter is told when a send is blocked; the gateway appends the findings. */
 export const BLOCK_REASON = 'Not sent: after one rewrite it still has the problems below. Rewrite it again without them, or tell the principal.';
@@ -121,6 +154,7 @@ export const BAND_RULES = {
   unreviewed: 'review-unavailable',
   pii: 'pii-not-authorized',
   token: 'redaction-token',
+  offThread: 'off-thread',
 } as const;
 
 export interface BandReviewInput {
@@ -152,7 +186,27 @@ export interface BandReviewInput {
   subject?: string;
   /** Resolved contact ids by lowercased recipient id, for matching a reply-to-task link's counterparties (#2312). */
   recipientContactIds?: Readonly<Record<string, string>>;
+  /** The send goes out from the principal's own mailbox (#2474): the brief says it speaks as the principal. */
+  senderProfile?: 'principal-mailbox';
+  /** Principal mailbox only: who wrote the draft (#2474). Decides the questions on a principal-directed send. */
+  draftAuthor?: DraftAuthor;
+  /** Holds any stakes rating above this (#2474); unset = no ceiling. */
+  stakesCeiling?: SendStakes;
+  /** The message a principal-mailbox reply answers, used as origin evidence when the delegation walk finds none. */
+  origin?: { content: string; at?: string; senderVerified: boolean };
+  /**
+   * Autonomous principal mailbox only (#2474): the thread's non-draft messages as text, which
+   * `off-thread` judges the reply against. Missing reads as an empty thread (fail closed).
+   */
+  threadMessages?: ReadonlyArray<{ at?: string; text: string }>;
 }
+
+/**
+ * Who wrote a principal-mailbox draft (#2474). `curia`: Curia created it. `curia-edited`: the
+ * principal's draft that Curia edited, or one too old for the provenance lookback to tell.
+ * `principal`: no sign of Curia's hand in the lookback.
+ */
+export type DraftAuthor = 'curia' | 'curia-edited' | 'principal';
 
 export type BandReviewReport = { source: 'sent_without_review'; summary: string };
 
@@ -247,6 +301,12 @@ export class BandSendReview {
       this.deps.logger.error({ conversationId: input.conversationId, items: askedItems.length, rulings: verdict.disclosures?.length ?? 0 }, 'band review: verdict does not rule on every detected item — treating as a reviewer failure');
       verdict = { ok: false, failure: 'malformed' };
     }
+    if (verdict.ok && questions.includes('off-thread') && typeof verdict.offThread !== 'boolean') {
+      // Fail closed, like the gap above: the parser refuses this too, and a missing answer must
+      // not read as "nothing new". Every autonomous send is stakes-gated, so this holds.
+      this.deps.logger.error({ conversationId: input.conversationId }, 'band review: verdict does not answer off-thread — treating as a reviewer failure');
+      verdict = { ok: false, failure: 'malformed' };
+    }
 
     if (!verdict.ok) {
       if (own.length === 0 && !hasToken) {
@@ -264,6 +324,13 @@ export class BandSendReview {
         // An unreviewed quote never goes out: a fail-open send drops it.
         return withoutQuote(await this.onJudgeFailure(input, verdict.failure), quoted);
       }
+      if (questions.includes('off-thread')) {
+        // Fail closed (#2474): an autonomous reply nobody could check for off-thread information
+        // holds, never bounces. A bounce would send a rewrite whose answer is still unknown.
+        this.bounced.delete(key);
+        this.deps.logger.warn({ conversationId: input.conversationId, channel: input.channel, failure: verdict.failure, items: items.length, token: hasToken }, 'band review: reviewer unavailable on an autonomous send with personal data or a placeholder — holding');
+        return this.unreviewedHold(prior ? recheckReason(prior.rules) : STAKES_UNREVIEWED_REASON, own, hasToken);
+      }
       // Personal data or a placeholder never goes out unreviewed: no fail-open send, and the
       // fail-open allowance is not spent on it.
       this.deps.logger.warn({ conversationId: input.conversationId, channel: input.channel, failure: verdict.failure, items: items.length, token: hasToken }, 'band review: reviewer unavailable with personal data or a placeholder in the send — not failing open');
@@ -279,6 +346,11 @@ export class BandSendReview {
       return this.settle(key, taskIds, input, prior !== undefined, other ? combine(pii, other) : pii);
     }
     this.deps.limiter.recordJudgeSuccess();
+    if (isAutonomousMailbox(input)) {
+      // #2474: every message from the principal's own mailbox speaks for the principal, so the
+      // judge is not asked; the stakes rating alone decides whether it may go out.
+      verdict = { ...verdict, speaksAsPrincipal: true };
+    }
 
     const other = this.otherRulesOutcome(input, verdict, items, prior !== undefined);
     const rulings = askedItems ? verdict.disclosures ?? [] : undefined;
@@ -296,11 +368,20 @@ export class BandSendReview {
       : isSpotCheckOrAbove(input.score) && stakesOnly && rewritesDetails(piiOutcome)
         ? withHeldBeside(piiOutcome, other)
         : combine(other, piiOutcome);
-    if (quoted.length === 0 || base.kind !== 'send') return this.settle(key, taskIds, input, prior !== undefined, base);
-    // The rest of the send goes out: the quote does too only if its items would.
-    const quoteRulings = askedItems && quoted.every((q) => askedItems.includes(q)) ? rulings : undefined;
-    const quote = await this.piiOutcome(input, quoted, quoteRulings, asked, false, prior !== undefined);
-    return this.settle(key, taskIds, input, prior !== undefined, quote.kind === 'send' ? combine(base, quote) : withoutQuote(base, quoted));
+    let decision = base;
+    if (quoted.length > 0 && base.kind === 'send') {
+      // The rest of the send goes out: the quote does too only if its items would.
+      const quoteRulings = askedItems && quoted.every((q) => askedItems.includes(q)) ? rulings : undefined;
+      const quote = await this.piiOutcome(input, quoted, quoteRulings, asked, false, prior !== undefined);
+      decision = quote.kind === 'send' ? combine(base, quote) : withoutQuote(base, quoted);
+    }
+    if (questions.includes('off-thread') && verdict.offThread === true) {
+      // #2474 (design D10): no score, ceiling or rewrite makes new information an autonomous
+      // reply's to share, so this holds whatever else the review found.
+      this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, score: input.score, other: decision.kind }, 'band review: held — an autonomous reply shares information that isn\'t on the thread');
+      decision = offThreadHold(decision);
+    }
+    return this.settle(key, taskIds, input, prior !== undefined, decision);
   }
 
   /** The band rules other than disclosure, as before #2312. Writes nothing to the ledger. */
@@ -310,7 +391,7 @@ export class BandSendReview {
     detected: readonly BriefDetectedItem[],
     hasPrior: boolean,
   ): BandReviewDecision {
-    const speaksHeld = verdict.speaksAsPrincipal === true ? stakesHold(verdict, input.score) : undefined;
+    const speaksHeld = verdict.speaksAsPrincipal === true ? stakesHold(verdict, input.score, input.stakesCeiling) : undefined;
     if (verdict.purpose === 'steered') {
       this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel }, 'band review: held — steered by an outsider');
       const steered = this.hold(BAND_RULES.steered, 'Held for the principal: the reviewer judged this send to be steered by someone outside the principal\'s business.');
@@ -609,6 +690,20 @@ export class BandSendReview {
   }
 
   private questionsFor(input: BandReviewInput): readonly BriefQuestion[] {
+    if (input.senderProfile === 'principal-mailbox' && input.principalDirected) {
+      // #2474 (design D2): the principal's own words are not fact-checked; only disclosure is
+      // asked, and only when items are detected. A Curia-written draft the principal told it to
+      // send is checked for who it serves and what it claims ("handle the easy ones" answers
+      // outsider mail on a live turn). A draft Curia edited is asked purpose only (final review
+      // S1): a steering check on whom the edit serves, with no fact-check of the principal's words.
+      if (input.draftAuthor === 'principal') return [];
+      return input.draftAuthor === 'curia-edited' ? ['purpose'] : ['purpose', 'grounding'];
+    }
+    // #2474: an autonomous send from the principal's mailbox speaks for the principal by
+    // definition, so that question is not asked (review() sets it); stakes still is.
+    // `off-thread` (#2474, design D10) is asked here only: a principal-directed send may share
+    // what the principal chose to.
+    if (isAutonomousMailbox(input)) return ['purpose', 'stakes', 'grounding', 'necessity', 'off-thread'];
     return input.principalDirected ? ['grounding'] : ALL_QUESTIONS;
   }
 
@@ -629,7 +724,18 @@ export class BandSendReview {
       return { verdict: { ok: false, failure: 'unreachable' }, ...(collected.originUnresolved ? { originUnresolved: true as const } : {}) };
     }
     // Decisions and the outreach id stay with code: the judge reads the decisions as sentences.
-    const { decisions, linkedOutreachId, originUnresolved, ...evidence } = collected;
+    const { decisions, linkedOutreachId, originUnresolved, ...collectedEvidence } = collected;
+    // An autonomous principal-mailbox reply (#2474) with no delegation origin is judged against
+    // the message it answers. A delegation origin wins: it is what started Curia's work.
+    const evidence = input.origin && collectedEvidence.originContent === undefined
+      ? {
+        ...collectedEvidence,
+        originContent: replyTargetEvidence(input.origin.content),
+        originKind: 'reply_target' as const,
+        ...(input.origin.at ? { originAt: input.origin.at } : {}),
+        originSenderVerified: input.origin.senderVerified,
+      }
+      : collectedEvidence;
     // Destructured only to keep it out of `evidence`; the failure path above is the one that carries it.
     // The repo's no-unused-vars rule has no underscore exemption, so discard it explicitly.
     void originUnresolved;
@@ -651,8 +757,11 @@ export class BandSendReview {
         ...evidence,
         ...(reportsToPrincipal ? { reportsToPrincipal } : {}),
         ...(principalDecisions.length > 0 ? { principalDecisions } : {}),
+        // Only with the question that reads it (#2474). No thread reads as empty: fail closed.
+        ...(questions.includes('off-thread') ? threadEvidence(input.threadMessages ?? []) : {}),
       },
       conversationId: input.conversationId ?? 'system',
+      ...(input.senderProfile ? { senderProfile: input.senderProfile } : {}),
     });
     return {
       verdict, authority: evidence.authority,
@@ -741,23 +850,56 @@ const STRICTNESS: Record<BandReviewDecision['kind'], number> = { send: 0, bounce
 
 /**
  * The hold for a send that speaks for the principal below the score its stakes need (#2473), or
- * undefined when the score clears it. The finding names the rating and the judge's reason, so
+ * undefined when the score clears it. A sending setting's `ceiling` (#2474) also holds any rating
+ * above it, and the finding says so (except financial_or_legal, which always asks). The finding names the rating and the judge's reason, so
  * the approval says why it asked. A missing rating cannot happen (the review asks both questions together
  * and the parser requires every answer); it is treated as the strictest.
  */
-function stakesHold(verdict: BriefAnswers, score: number): FilterFinding | undefined {
+function stakesHold(verdict: BriefAnswers, score: number, ceiling?: SendStakes): FilterFinding | undefined {
   const stakes = verdict.stakes ?? 'financial_or_legal';
   const min = STAKES_MIN_SCORE[stakes];
-  if (min !== null && score >= min) return undefined;
+  // A sending setting's ceiling (#2474) holds a rating above it whatever the score.
+  const aboveCeiling = ceiling !== undefined && STAKES_RANK[stakes] > STAKES_RANK[ceiling];
+  const scoreClears = min !== null && score >= min;
+  if (!aboveCeiling && scoreClears) return undefined;
   // The judge's overall reason stands in when it left the stakes reason out.
   const why = (verdict.stakesReason?.trim() ? verdict.stakesReason : verdict.reason ?? '').replace(/\s+/g, ' ').trim();
   // Count code points, not UTF-16 units, so the cut never leaves half a surrogate pair.
   const points = Array.from(why);
   const shown = points.length > STAKES_REASON_MAX ? `${points.slice(0, STAKES_REASON_MAX - 1).join('').trimEnd()}…` : why;
+  // Said whenever the setting holds it, even when the score would too: raising the score alone
+  // would not send it. Not for financial_or_legal, whose lead already says it always asks.
+  const aboveNote = aboveCeiling && stakes !== 'financial_or_legal' ? ' Above the sending setting.' : '';
   return {
     rule: BAND_RULES.speaksAsPrincipal,
-    detail: `${STAKES_HOLD_LEAD[stakes]} Stakes: ${STAKES_LABEL[stakes]}.${shown ? ` Why: ${shown}` : ''}`,
+    detail: `${STAKES_HOLD_LEAD[stakes]}${aboveNote} Stakes: ${STAKES_LABEL[stakes]}.${shown ? ` Why: ${shown}` : ''}`,
   };
+}
+
+/** A send from the principal's own mailbox that no live principal turn directed (#2474). */
+function isAutonomousMailbox(input: BandReviewInput): boolean {
+  return input.senderProfile === 'principal-mailbox' && !input.principalDirected;
+}
+
+/**
+ * The hold for an autonomous reply that shares information not on the thread (#2474). It leads;
+ * whatever else the review found comes along, so the principal sees every reason. An ask is
+ * dropped, like any hold beside one: a yes to the requester would not make the reply sendable.
+ *
+ * The reason the digest shows carries the others too (#2474 final fixes A11, final review M3): a
+ * stakes finding's rating and why ("Stakes: financial or legal. Why: …"), any other finding in
+ * plain words. Otherwise a reply that is both off-thread and financial reaches the principal as
+ * off-thread only.
+ */
+function offThreadHold(d: BandReviewDecision): BandReviewDecision {
+  const others = d.kind === 'send' ? [] : [...d.findings, ...(d.kind === 'hold' ? [] : d.heldBeside ?? [])];
+  const also = [...new Set(others.map((f) => {
+    const stakesAt = f.rule === BAND_RULES.speaksAsPrincipal ? f.detail.indexOf('Stakes: ') : -1;
+    const said = stakesAt >= 0 ? f.detail.slice(stakesAt).trim() : plainReviewReasons([f.rule])[0]!;
+    return /[.!?…]$/.test(said) ? said : `${said}.`;
+  }))];
+  const reason = [OFF_THREAD_REASON, ...also].join(' ');
+  return { kind: 'hold', reason, findings: [{ rule: BAND_RULES.offThread, detail: OFF_THREAD_REASON }, ...others] };
 }
 
 /** A bounce with a personal-details finding: the drafter must rewrite without an item (#2333). */
