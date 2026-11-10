@@ -5,3 +5,4 @@
 - **Prompt-text test** — probe file now lives in a private `mkdtemp` directory, not shared tmp (CodeQL).
 - **setup-status test** — Tavily how-to assertion uses a substring check instead of an unanchored regex (CodeQL).
 - **Describer learner** — tool names now escape double quotes, so a name cannot break its prompt attribute.
+- **Card-fill test** — payment-frame lookup compares the URL origin instead of a string prefix (CodeQL).

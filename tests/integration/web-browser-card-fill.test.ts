@@ -234,7 +234,7 @@ describe('saved-card fills in a real browser (#1358)', () => {
     siteUrls.length = 0;
     const result = await run({ session_id: sessionId, action: 'type', selector: '#number', secret_ref: 'user.visa#number' });
     expect(result.success).toBe(true);
-    const frame = livePage(sessionId).frames().find((f) => f.url().startsWith(PAY_FRAME));
+    const frame = livePage(sessionId).frames().find((f) => URL.canParse(f.url()) && new URL(f.url()).origin === PAY_FRAME);
     expect(frame).toBeDefined();
     expect(await frame!.$eval('#number', (el) => (el as HTMLInputElement).value)).toBe(SECRET_DOC.number);
     // The resolver was asked on behalf of the top-level shop page, not the payment frame.
