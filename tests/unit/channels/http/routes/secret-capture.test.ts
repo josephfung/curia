@@ -229,8 +229,10 @@ describe('secret-capture routes', () => {
       expect(svc.cardCalls).toEqual([{ token: 'tok', card }]);
       expect(svc.redeemCalls).toHaveLength(0);
       expect(bus.published).toHaveLength(1);
-      // Full number, not a prefix: the event's random UUIDs can contain "4111" by chance (#2548).
-      expect(JSON.stringify(bus.published[0]!.event)).not.toContain('4111111111111111');
+      // Strip the event's random UUIDs first: they can contain "4111" by chance (#2548). What is
+      // left is checked for the prefix, so a partial card-number leak still fails.
+      const withoutIds = JSON.stringify(bus.published[0]!.event).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '');
+      expect(withoutIds).not.toContain('4111');
     });
 
     it('POST {card} on a string token → 400', async () => {

@@ -20,6 +20,11 @@ import type { SecretUsagePort, SecretUse } from '../../../../../src/secrets/secr
 import { StaleCardEditError, type UserSecretDetailsPatch } from '../../../../../src/secrets/secrets-service.js';
 import { CARD_VALIDATION_MESSAGES, type CreditCardPublicFields, type CreditCardSecretDoc, type StructuredSchemaTag } from '../../../../../src/secrets/structured-secret-schema.js';
 
+/** Serialize a value with UUIDs removed, so leak checks for short digit sentinels can't match a random ID (#2548). */
+function withoutUuids(value: unknown): string {
+  return JSON.stringify(value).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '');
+}
+
 const BOOTSTRAP = 'test-bootstrap-secret';
 
 // A skill-declared secret used to prove the original scope-guard path still works.
@@ -1198,9 +1203,9 @@ describe('vault routes', () => {
       expect(secrets.cardReplaces).toEqual([{ name: CARD_KEY, change: { cvv: '456' } }]);
       expect(secrets.cardPatches).toEqual([]);
       expect(changes(published)).toEqual(['set:requested', 'set:completed']);
-      // Standalone-word match: published events carry random UUIDs whose hex digits can
-      // spell "456" by chance, but a UUID group is never exactly three characters (#2548).
-      expect(JSON.stringify(published)).not.toMatch(/\b456\b/);
+      // Published events carry random UUIDs whose hex digits can spell "456" by chance (#2548):
+      // strip them, then look for the digits anywhere, so `cvv_456` or `x456` still fail.
+      expect(withoutUuids(published)).not.toContain('456');
       expect(res.body).not.toContain('456');
       expect((await patch(app, CARD_KEY, { cvv: '4567' })).json()).toEqual({ error: CARD_VALIDATION_MESSAGES.cvv_format });
     });
@@ -1215,7 +1220,7 @@ describe('vault routes', () => {
       expect(secrets.cardReplaces).toEqual([]);
       expect(secrets.cardPatches).toEqual([]);
       expect(changes(published)).toEqual(['set:requested', 'set:completed']);
-      expect(JSON.stringify(published)).not.toMatch(/\b456\b/);
+      expect(withoutUuids(published)).not.toContain('456');
 
       published.length = 0;
       await patch(app, CARD_KEY, { cvv: '456', expiry_year: 2100, label: 'Everyday' });
