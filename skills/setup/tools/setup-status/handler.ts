@@ -14,7 +14,8 @@ type CompletionCheck =
   | { type: 'principal_profile' }
   | { type: 'vault_secrets_all'; keys: string[] }
   | { type: 'paired_push_subscription' }
-  | { type: 'email_channel_ready' };
+  | { type: 'email_channel_ready' }
+  | { type: 'browser_ready' };
 
 /** A credential that improves a task that already works without it (#2445). Setup never
  *  asks for it; the wizard offers it on request. */
@@ -200,6 +201,9 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
+      // Done while a browser is attached: a container that is down reads as pending (#2541).
+      const browserReady = ctx.browserService?.browserContext != null;
+
       const annotated: CatalogTaskWithStatus[] = tasks.map(task => {
         let done = false;
         let restartRequired = false;
@@ -230,6 +234,9 @@ export class SetupStatusHandler implements ToolHandler {
             case 'email_channel_ready':
               done = emailStatus === 'running';
               restartRequired = emailStatus === 'restart_required';
+              break;
+            case 'browser_ready':
+              done = browserReady;
               break;
           }
         } else {

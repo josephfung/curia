@@ -194,7 +194,15 @@ let refEpochSeed = 0;
 export class WebBrowserHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.browserService) {
-      return { success: false, error: 'browserService is not available — BrowserService failed to start or is not wired into ExecutionLayer' };
+      // Written for the operator, who is the one who can act on it; the agent relays it. (#2541)
+      return {
+        success: false,
+        error:
+          'The web browser is not available on this Curia: the browser failed to start (see the ' +
+          '"Browser service failed to start" log line). The shipped docker-compose.yml runs it as the ' +
+          '`browser` service; running from source needs Chromium (`pnpm exec patchright install chromium`). ' +
+          'See docs/dev/configuration.md, "Web browser". web-fetch still reads pages that need no JavaScript.',
+      };
     }
 
     const { action, url, selector, text, value, key, secret_ref, session_id, screenshot, block_ads, incognito, keep_warm, actions, domain } = ctx.input as {

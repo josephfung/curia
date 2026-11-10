@@ -117,10 +117,14 @@ describe('WebBrowserHandler', () => {
 
   // --- Input validation ---
 
-  it('returns failure when browserService is not injected', async () => {
+  it('returns failure when browserService is not injected, telling the operator what to do (#2541)', async () => {
     const result = await handler.execute(makeCtx({ action: 'navigate', url: 'https://example.com' }));
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('browserService');
+    if (!result.success) {
+      expect(result.error).toContain('web browser is not available');
+      expect(result.error).toContain('`browser` service');
+      expect(result.error).toContain('docs/dev/configuration.md');
+    }
   });
 
   it('returns failure for missing action', async () => {

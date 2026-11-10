@@ -587,20 +587,23 @@ check_prereqs() {
 }
 
 # Fetch the compose bundle (base compose file, TLS overlay, env template,
-# Caddyfile) into the install dir, skipping files that are already present.
+# Caddyfile, and the browser container's seccomp profile) into the install dir,
+# skipping files that are already present.
 # This lets an operator re-run install.sh safely without clobbering hand-edits.
 fetch_bundle() {
   # local-path : flat-release-asset-name. GitHub release assets cannot contain
   # "/", so deploy/Caddyfile publishes as "Caddyfile", and cannot start with a
   # "." (GitHub mangles a leading-dot asset name), so .env.example publishes as
-  # "env.example". docker-compose.* map 1:1. In raw mode the asset name is
+  # "env.example". docker/seccomp-chrome.json publishes as "seccomp-chrome.json"
+  # (docker-compose.yml reads it from docker/). docker-compose.* map 1:1. In raw mode the asset name is
   # ignored and the local path is used verbatim (see fetch_asset).
   local pair local_path asset
   for pair in \
     "docker-compose.yml:docker-compose.yml" \
     "docker-compose.tls.yml:docker-compose.tls.yml" \
     ".env.example:env.example" \
-    "deploy/Caddyfile:Caddyfile"; do
+    "deploy/Caddyfile:Caddyfile" \
+    "docker/seccomp-chrome.json:seccomp-chrome.json"; do
     local_path="${pair%%:*}"
     asset="${pair#*:}"
     if [[ ! -f "$INSTALL_DIR/$local_path" ]]; then

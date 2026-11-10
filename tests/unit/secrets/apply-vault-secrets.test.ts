@@ -27,6 +27,7 @@ function baseConfig(): Config {
     webAppBootstrapSecret: undefined,
     appOrigin: undefined,
     timezone: 'UTC',
+    browserCdpUrl: undefined,
     nylasApiKey: undefined,
     nylasGrantId: undefined,
     nylasPollingIntervalMs: 30000,

@@ -70,23 +70,52 @@ Controls browser sessions used by the `web-browser` skill. As of v0.35.0 these `
 browser:
   sessionTtlMs: 600000    # How long a session stays alive after its last action (ms). Default: 10 minutes.
   sweepIntervalMs: 120000 # How often the session cleanup sweep runs (ms). Default: 2 minutes.
-  profileDir: ""          # Persistent profile directory. Empty → ${HOME}/.curia/browser-profile. Mount on a volume in production so logins survive restarts.
-  channel: ""             # "chrome" for real Chrome (must be installed in the image), empty for the bundled Playwright Chromium.
-  locale: "en-US"         # Browser locale (BCP 47), part of fingerprint hardening.
-  languages: []           # Ordered navigator.languages / Accept-Language, e.g. [en-CA, en-US, en]. Empty → [locale].
+  profileDir: ""          # In-process only. Persistent profile directory. Empty → ${HOME}/.curia/browser-profile.
+  channel: ""             # In-process only. "chrome" for real Chrome (must be installed), empty for Patchright's Chromium.
+  proxy: ""               # In-process only. Egress proxy; with the browser container, set BROWSER_PROXY instead.
+  locale: "en-US"         # In-process only. Browser locale (BCP 47), part of fingerprint hardening.
+  languages: []           # In-process only. Ordered navigator.languages / Accept-Language, e.g. [en-CA, en-US, en].
   settleCapMs: 35000      # Longest web-browser waits for a page to finish redirecting before reading it (ms). Max 90000.
 ```
 
+#### Web browser
+
+Chrome runs in one of two places:
+
+- **The browser container** (the shipped `docker-compose.yml`). The `browser` service runs the `ghcr.io/josephfung/curia-browser` image: Patchright's Chromium, Xvfb and a window manager. Curia attaches to it over the DevTools protocol at `BROWSER_CDP_URL` (`http://browser:9222`). This is the default for a Docker install, and needs no setup.
+- **In-process**, when `BROWSER_CDP_URL` is unset: Curia launches Chrome itself. Running from source uses this (install Chromium with `pnpm exec patchright install chromium`), as do images built on the core image, which has no browser of its own. It needs Xvfb on Linux and the seccomp profile below in a container.
+
+The container keeps page code away from Curia: it gets none of Curia's environment (no `env_file`), and it joins only the `browser` network, which Curia shares and Postgres does not, so it has no route to the database. It runs as a non-root user with no capabilities, `no-new-privileges`, a read-only root filesystem and Chrome's sandbox on under [`docker/seccomp-chrome.json`](../../docker/seccomp-chrome.json). The relaxed seccomp profile applies to this container only; the `curia` container stays on Docker's default. DevTools has no authentication, so its port is never published: the `browser` network is its only access control.
+
+The image is published from the same commit and under the same tag as the core image (`CURIA_IMAGE_TAG`), so its Chromium is the build Curia's Patchright expects. Keep the two tags equal. Sign-ins live in the `browser_profile` volume and survive restarts and recreates.
+
+Curia boots whether or not the container is up. Until it answers, health reports `browser: fail`, the setup wizard lists the browser as pending, and `web-browser` calls return an error naming the container. Curia reconnects on its own, backing off from 1s to 30s, after the container starts, restarts or Chrome crashes (the container exits with Chrome, and `restart: unless-stopped` brings it back). Check it with `docker compose ps browser` and `docker compose logs browser`.
+
+With the container, `profileDir`, `channel`, `locale` and `languages` above do not apply: the container sets them. Configure it in `.env` (Compose passes these through; the container reads nothing else from `.env`):
+
+| Variable | Default | |
+|---|---|---|
+| `TIMEZONE` | `America/Toronto` | Also the browser's timezone. |
+| `BROWSER_LOCALE` | `en-US` | BCP 47 locale. |
+| `BROWSER_LANGUAGES` | | Comma-separated `navigator.languages` after the locale, e.g. `en-US,en`. |
+| `BROWSER_PROXY` | | `http://host:port` or `socks5://host:port`. No credentials: Chrome's `--proxy-server` cannot carry them, so use a proxy that admits this host without them. A value with credentials or in another shape stops the container. |
+
+`browser.proxy` cannot be applied to the container (Curia does not launch its Chrome), so Curia refuses to start the browser service when both are set, rather than letting the browser egress directly.
+
+**What works.** Ordinary sites, sign-ins and forms work. Bot-protected sites may still block Patchright's Chromium, especially from a datacenter IP: tested from a residential IP, Cloudflare's challenge page, BrowserScan's bot check, Indeed and Zillow passed, but the same sites can refuse a cloud server's IP. A residential egress (`BROWSER_PROXY`) helps more than anything in the browser. With `BROWSER_LOCALE=en-CA`, `Intl` reports `en-GB`: this Chromium ships no `en-CA` UI locale.
+
+**Bring your own browser image.** Real Google Chrome is not in the default image because its Linux build has no arm64. A deployment can build its own image `FROM ghcr.io/josephfung/curia-browser`: the entrypoint launches whatever `/ms-playwright/chrome` points at, so installing Chrome and relinking that path is enough.
+
 #### Chrome's sandbox
 
-Chrome always runs its own sandbox: renderer processes, which run page code, get their own user and PID namespaces, a network namespace and a seccomp-BPF filter. A page that exploits a renderer bug then still needs a second bug to reach Curia's files. Two things the sandbox does not cover:
+Chrome always runs its own sandbox: renderer processes, which run page code, get their own user and PID namespaces, a network namespace and a seccomp-BPF filter. A page that exploits a renderer bug then still needs a second bug to reach the rest of the container. Two things the sandbox does not cover:
 
-- **The network.** A compromised renderer can still ask Chrome's network service to load a page from an internal address, so the sandbox is not an egress firewall. Restrict what the container can reach at the network level (Docker network rules, host firewall).
-- **Inherited environment values.** Chrome is started with Curia's `process.env`, and a native renderer exploit can read what the renderer process inherited. Do not rely on the sandbox to keep those values secret.
+- **The network.** A compromised renderer can still ask Chrome's network service to load a page from an internal address, so the sandbox is not an egress firewall. Restrict what the container can reach at the network level (Docker network rules, host firewall). In the browser container this includes Curia itself on the `browser` network.
+- **Inherited environment values.** Chrome is started with its parent's environment, and a native renderer exploit can read what the renderer process inherited. In-process, that is Curia's `process.env`; the browser container is given only the variables in the table above.
 
-There is no setting to turn it off. Without the sandbox the same exploit would run with everything the Curia process has, and an off switch is the first thing anyone tries when the sandbox fails to start.
+There is no setting to turn it off. Without the sandbox the same exploit would run with everything the browser's process has, and an off switch is the first thing anyone tries when the sandbox fails to start.
 
-The sandbox needs to create user namespaces. Docker's default seccomp profile blocks that, so a container that runs Chrome needs the profile in [`docker/seccomp-chrome.json`](../../docker/seccomp-chrome.json):
+The sandbox needs to create user namespaces. Docker's default seccomp profile blocks that, so a container that runs Chrome needs the profile in [`docker/seccomp-chrome.json`](../../docker/seccomp-chrome.json). The shipped `docker-compose.yml` sets it on the `browser` service, and `install.sh` downloads it to `docker/seccomp-chrome.json` beside the compose file. An in-process deployment sets it on the container that runs Curia:
 
 ```yaml
 services:
@@ -96,11 +125,11 @@ services:
       - seccomp=./seccomp-chrome.json
 ```
 
-Copy `docker/seccomp-chrome.json` from this repo next to your compose file (or point `seccomp=` at wherever you keep it). Compose reads the file itself and resolves a relative path against the project directory (the compose file's folder unless `--project-directory` says otherwise). A missing file stops the container from starting. The profile is Docker's default ([moby/profiles](https://github.com/moby/profiles/blob/6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef/seccomp/default.json) at `6fe7deb`) with two changes: `clone` and `unshare` are allowed with namespace flags (Docker's default otherwise allows them only with `CAP_SYS_ADMIN`), and `chroot` is allowed without `CAP_SYS_CHROOT` in the container's capability set, so the sandbox still starts under `cap_drop: [ALL]`. The kernel still checks the capability inside Chrome's own user namespace. The grant covers the whole container, not just Chrome: the Node process and anything it runs can also create user, mount and other namespaces, which widens the kernel attack surface (a separate Chrome user and container, tracked in #2521, is the longer-term fix). The container still runs without that capability and with `no-new-privileges`. Chrome's setuid sandbox is not an option, because `no-new-privileges` stops it from gaining root.
+Compose reads the file itself and resolves a relative path against the project directory (the compose file's folder unless `--project-directory` says otherwise). A missing file stops the container from starting. The profile is Docker's default ([moby/profiles](https://github.com/moby/profiles/blob/6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef/seccomp/default.json) at `6fe7deb`) with two changes: `clone` and `unshare` are allowed with namespace flags (Docker's default otherwise allows them only with `CAP_SYS_ADMIN`), and `chroot` is allowed without `CAP_SYS_CHROOT` in the container's capability set, so the sandbox still starts under `cap_drop: [ALL]`. The kernel still checks the capability inside Chrome's own user namespace. The grant covers the whole container, not just Chrome: everything in it can also create user, mount and other namespaces, which widens the kernel attack surface. That is why the browser container exists: in it, the grant reaches only Chrome and its helpers, not Curia's Node process. The container still runs without that capability and with `no-new-privileges`. Chrome's setuid sandbox is not an option, because `no-new-privileges` stops it from gaining root.
 
-**Run Curia as a non-root user.** Chrome refuses to start its sandbox as root, and no seccomp profile changes the process UID. Give that user write access to the browser profile directory (`profileDir`).
+**Run Chrome as a non-root user.** Chrome refuses to start its sandbox as root, and no seccomp profile changes the process UID. The browser image runs as uid 1001. In-process, run Curia as a non-root user with write access to the browser profile directory (`profileDir`).
 
-**Upgrading an existing deployment:** install `seccomp-chrome.json` and add the `seccomp=` line to the Compose file *before* you pull the release that contains this change. A Chrome container still on Docker's default profile cannot start the sandbox, and the `web-browser` skill stays unavailable until the profile is in place.
+**Upgrading an existing deployment:** an install whose `docker-compose.yml` predates the `browser` service keeps its file (`install.sh` never overwrites it), so add the `browser` service, the `browser` network and the `browser_profile` volume from the release's compose file, set `BROWSER_CDP_URL` on `curia`, and download `seccomp-chrome.json` to `docker/`. In-process deployments need the profile in place *before* they pull a release with the sandbox: a Chrome container still on Docker's default profile cannot start the sandbox, and the `web-browser` skill stays unavailable until it is.
 
 On Ubuntu 23.10 and later, the host also restricts unprivileged user namespaces through AppArmor (`kernel.apparmor_restrict_unprivileged_userns`). Docker's `docker-default` AppArmor profile allows them (checked on Ubuntu 24.04 with Docker 29), so containers need no AppArmor change. Running from source on such a host, Ubuntu's AppArmor profile for Google Chrome (`/opt/google/chrome/chrome`) allows them, but Playwright's bundled Chromium has no profile, so use `channel: chrome` there.
 

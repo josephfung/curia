@@ -82,6 +82,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [058](058-time-saved-human-time-default.md) | Time saved estimates a person's time; named tools keep their anchors, and every undescribed call shares one default derived from a 60-day census (#2349) | Accepted |
 | [059](059-learned-activity-describers.md) | Tools with no describer get one learned per agent by a fast-tier model and stored in `activity_describers`; display only, never autonomy (#2455) | Accepted |
 | [060](060-card-use-needs-per-checkout-confirmation.md) | Card use needs a per-checkout confirmation — card fields resolve only under a grant written by the approval-only `card-use-confirm` replay (#1358) | Accepted |
+| [061](061-browser-in-its-own-container.md) | The web browser runs in its own container, driven by Patchright — Curia attaches over CDP; in-process launch stays for source runs (#2541) | Accepted |
 
 ## Adding new ADRs
 

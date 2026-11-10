@@ -46,6 +46,27 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.logLevel).toBe('info');
   });
+  describe('BROWSER_CDP_URL (#2541)', () => {
+    beforeEach(() => {
+      process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
+      delete process.env.BROWSER_CDP_URL;
+    });
+
+    it('is unset by default, so Chrome launches in-process', () => {
+      expect(loadConfig().browserCdpUrl).toBeUndefined();
+    });
+
+    it('reads the browser container endpoint, trimmed', () => {
+      process.env.BROWSER_CDP_URL = ' http://browser:9222 ';
+      expect(loadConfig().browserCdpUrl).toBe('http://browser:9222');
+    });
+
+    it.each(['browser:9222', 'ftp://browser:9222', 'not a url'])('rejects %j', (value) => {
+      process.env.BROWSER_CDP_URL = value;
+      expect(() => loadConfig()).toThrow(/BROWSER_CDP_URL must be/);
+    });
+  });
+
   describe('AWS Bedrock settings', () => {
     beforeEach(() => {
       process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';

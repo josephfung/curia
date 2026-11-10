@@ -1206,9 +1206,10 @@ async function main(): Promise<void> {
     }
   }
 
-  // Browser service — warm Playwright Chromium instance for the web-browser skill.
-  // Optional degradation: if Xvfb is unavailable on Linux, Curia boots normally
-  // but web-browser skill invocations will fail at the ctx.browserService check.
+  // Browser service — warm Chromium for the web-browser skill. With BROWSER_CDP_URL it
+  // attaches to the browser container and never fails start() (it reconnects in the
+  // background). Without it, Chrome launches in-process; if that fails (no browser or
+  // Xvfb installed), Curia boots normally and web-browser calls return an error.
   let browserService: BrowserService | undefined;
   try {
     const browserConfig = yamlConfig.browser;
@@ -1226,6 +1227,7 @@ async function main(): Promise<void> {
       settleCapMs: browserConfig?.settleCapMs,
       // Align the browser timezone with the principal's configured timezone.
       timezone: config.timezone,
+      cdpEndpoint: config.browserCdpUrl,
     });
     await browserService.start();
     logger.info('Browser service started');

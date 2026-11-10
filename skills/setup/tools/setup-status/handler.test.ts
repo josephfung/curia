@@ -95,6 +95,7 @@ function makeCtx(overrides: Partial<{
   principalLookupError: Error;
   phoneAppReady: () => Promise<boolean>;
   emailChannelStatus: () => Promise<EmailChannelStatus>;
+  browserContext: object | null;
 }> = {}): ToolContext {
   const secrets = overrides.secrets ?? {};
   return {
@@ -139,6 +140,7 @@ function makeCtx(overrides: Partial<{
     } as unknown as ToolContext['schedulerService'],
     ...(overrides.phoneAppReady ? { phoneAppReady: overrides.phoneAppReady } : {}),
     ...(overrides.emailChannelStatus ? { emailChannelStatus: overrides.emailChannelStatus } : {}),
+    ...(overrides.browserContext !== undefined ? { browserService: { browserContext: overrides.browserContext } } : {}),
   } as unknown as ToolContext;
 }
 
@@ -152,7 +154,7 @@ describe('setup-status', () => {
     });
 
     it('declares the optional capabilities its checks read', () => {
-      expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus']));
+      expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus', 'browserService']));
     });
 
     it('offers the Tavily key web-search reads as the upgrade', () => {
@@ -258,6 +260,17 @@ describe('setup-status', () => {
       const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
       const tour = data.tasks.find(t => t.id === 'capability_tour');
       expect(tour?.status).toBe('done');
+    });
+
+    it.each([
+      ['a browser is attached', { browserContext: {} }, 'done'],
+      ['the browser container is down', { browserContext: null }, 'pending'],
+      ['there is no browser service', {}, 'pending'],
+    ] as const)('web browser: %s → %s', async (_name, overrides, expected) => {
+      const result = await handler.execute(makeCtx(overrides));
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
+      expect(data.tasks.find(t => t.id === 'web_browser')?.status).toBe(expected);
     });
 
     it('email: done only when an email adapter is running', async () => {
