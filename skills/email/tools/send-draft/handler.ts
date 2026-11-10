@@ -54,7 +54,7 @@ function draftNotFoundError(draftId: string, searched: string): string {
   return (
     `Draft not found: ${draftId}. Searched Curia's email accounts: ${searched}. ` +
     'Drafts in the principal\'s own mailbox aren\'t in Curia\'s accounts; the ceo-inbox specialist ' +
-    'sends those. Do not retry this draft ID.'
+    'sends those: pass this draft ID to it. Do not retry this draft ID with this tool.'
   );
 }
 

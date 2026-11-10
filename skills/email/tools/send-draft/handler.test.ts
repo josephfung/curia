@@ -696,7 +696,8 @@ describe('SendDraftHandler', () => {
         expect(result.error).toContain("Drafts in the principal's own mailbox aren't in Curia's accounts");
         expect(result.error).toContain('the ceo-inbox specialist sends those');
         expect(result.error).not.toContain('email-send');
-        expect(result.error).toMatch(/do not retry/i);
+        // The ban is on this tool only: the ID still goes to the ceo-inbox specialist.
+        expect(result.error).toMatch(/pass this draft ID to it\. Do not retry this draft ID with this tool\./);
         expect(result.error).not.toMatch(/transient/i);
       }
     });
