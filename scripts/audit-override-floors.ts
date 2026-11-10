@@ -55,6 +55,13 @@ export interface AllowlistEntry {
   ghsa: string;
   /** Why it is accepted. Required — an exception with no rationale is a silent hole. */
   reason: string;
+  /**
+   * Optional semver range the reason holds for. When set, the advisory is suppressed
+   * only if EVERY version the override admits lies inside it; one admitted version
+   * outside (a widened floor, a second override for the same package) and the advisory
+   * fires again. Omit it only when the reason holds for every version of the package.
+   */
+  range?: string;
 }
 
 export interface NoAdvisoryExpectedEntry {
@@ -92,7 +99,7 @@ export interface AuditPolicy {
 }
 
 export const DEFAULT_POLICY: AuditPolicy = {
-  // Empty on purpose. #1934 expected one entry here — uuid / GHSA-qmq6-f8pr-cx5x, the
+  // No uuid entry, on purpose. #1934 expected one here — uuid / GHSA-qmq6-f8pr-cx5x, the
   // LOW buffer-bounds issue in v3/v5/v6 that the deliberate `uuid: '^11.1.1'` cap cannot
   // escape (the only fix is 14.0.0, and uuid@11 is the last major shipping the CommonJS
   // build the Nylas SDK requires). That advisory was WITHDRAWN upstream on 2026-05-05, so
@@ -101,7 +108,20 @@ export const DEFAULT_POLICY: AuditPolicy = {
   //
   // If GitHub ever un-withdraws it, this check will fail on `uuid` — which is correct,
   // and the paragraph above is the reasoning to paste back in.
-  allowlist: [],
+  allowlist: [
+    {
+      package: 'glob',
+      ghsa: 'GHSA-3g3m-2fjr-6pw4',
+      reason:
+        'The advisory range is >=9.0.0 <=14.0.1 with 14.0.2 as the fix, but 13.0.7 ' +
+        '(2026-11-06, after 14.0.4) backports it: its dist/esm/walker.js abort branches ' +
+        'return cb() exactly as 14.0.2 does, where 13.0.6 falls through. The `glob@13` ' +
+        "override's >=13.0.7 <14 floor admits only backported releases (curia-deploy#403).",
+      // Any other glob override (glob@10, glob@11, a widened floor) admits versions the
+      // backport does not cover, so the advisory fires for it again.
+      range: '>=13.0.7 <14',
+    },
+  ],
   // Empty: all 23 pinned packages currently resolve a GitHub repo whose advisory list
   // reads cleanly. An entry here is only for a package GitHub cannot serve advisories for.
   globalDbOnly: [],
@@ -708,6 +728,9 @@ function validatePolicy(policy: AuditPolicy): string[] {
     if (!entry.reason?.trim()) {
       errors.push(`${where}: \`reason\` is required — an unexplained exception is a silent hole`);
     }
+    if (entry.range !== undefined && semver.validRange(entry.range) === null) {
+      errors.push(`${where}: \`range\` must be a valid semver range (got \`${entry.range}\`)`);
+    }
   });
 
   policy.noAdvisoryExpected.forEach((entry, i) => {
@@ -853,7 +876,10 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
         const match = policy.allowlist.find(
           (e) =>
             e.package === override.subject &&
-            e.ghsa.toUpperCase() === advisory.ghsaId.toUpperCase(),
+            e.ghsa.toUpperCase() === advisory.ghsaId.toUpperCase() &&
+            // An entry scoped to a range covers the override only when every admitted
+            // version is inside it; otherwise the exception's reason does not apply.
+            (e.range === undefined || admitted.every((v) => semver.satisfies(v, e.range!))),
         );
         if (!match) {
           remaining.push(advisory);

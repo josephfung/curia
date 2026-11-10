@@ -156,10 +156,12 @@ overrides:
   #     files outside server.fs
   #   - GHSA-9jrq-w75r-8gcw (LOW): cross-origin script execution through custom
   #     middleware
-  # >=8.3.3 is the computed safe floor: anything lower still admits 8.3.0-8.3.2.
-  # 8.3.4 is also clean but younger than minimumReleaseAge, so this install resolves
-  # 8.3.3; resolution moves up on its own once the quarantine passes.
-  vite: '>=8.3.3'
+  # Raised off >=8.3.3 (curia-deploy#403): upstream-only GHSA-p4f5-76q4-ffq7 (CRITICAL,
+  # published 2026-11-10) covers 8.3.0-8.3.6, fixed in 8.3.7. Not a backstop: resolution
+  # was 8.3.5, so the exposure was live on the same dev servers.
+  #   - GHSA-p4f5-76q4-ffq7: remote code execution via the `__vite-browser-external`
+  #     virtual module
+  vite: '>=8.3.7'
   # Pulled in by googleapis-common and express (MCP SDK). 6.16.2 is the first release clear of every known
   # advisory; the newest, GHSA-w4cr-vjpx-p82q (LOW, <6.16.2), is published upstream only.
   qs: '>=6.16.2'
@@ -288,6 +290,15 @@ overrides:
   # prod tree (@anthropic-ai/sdk, @modelcontextprotocol/sdk) resolved 4.6.5 and
   # eslint-plugin-react-hooks (dev) 4.5.4. 4.6.6 is the first patched release.
   zod: '>=4.6.6'
+  # MED advisory from Trivy, 2026-11-10 (code-scanning #368, #369; curia-deploy#403):
+  # GHSA-3g3m-2fjr-6pw4 / CVE-2026-118773 (MED, >=9.0.0 <=14.0.1): the walker keeps
+  # traversing after its AbortSignal fires. The advisory names 14.0.2 as the fix, but
+  # 13.0.7 (2026-11-06) backports it: its dist/esm/walker.js abort branches match
+  # 14.0.2's line for line. The advisory doesn't list 13.0.7, so DEFAULT_POLICY.allowlist
+  # in scripts/audit-override-floors.ts accepts it with that evidence. Unpinned,
+  # node-pg-migrate (prod) and promptfoo (dev) resolved 13.0.6. Capped below 14 so
+  # neither crosses a major; glob@7 (rimraf@3, dev) is outside the advisory range.
+  'glob@13': '>=13.0.7 <14'
   #
   # No advisory is currently left without a clearing override. The extract-zip pair that
   # used to sit here (GHSA-7pqw-9j4j-h8q3, GHSA-jmr9-qjv8-65gv; no fixed release) left the
