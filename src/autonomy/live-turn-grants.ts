@@ -24,6 +24,8 @@ import { randomUUID } from 'node:crypto';
 interface GrantEntry {
   voiceSessionId: string | null;
   expiresAt: number;
+  /** A grant this one narrows (a delegation's wait inside a voice hand-off): it ends with it. */
+  parentId: string | null;
 }
 
 // One registry per process, not per module instance. Skill handlers are loaded from their
@@ -43,10 +45,12 @@ export interface LiveTurnGrant {
 
 /**
  * Issue a grant bound to a voice session. It lapses after `ttlMs` even if never revoked.
- * `now` is injectable for tests.
+ * With `parentId`, it is active only while that grant is too (`delegate` bounds a
+ * specialist's live turn to its wait this way, #2515). `now` is injectable for tests.
  */
 export function issueLiveTurnGrant(opts: {
   voiceSessionId?: string | null;
+  parentId?: string;
   ttlMs: number;
   now?: () => number;
 }): LiveTurnGrant {
@@ -55,6 +59,7 @@ export function issueLiveTurnGrant(opts: {
   activeGrants.set(id, {
     voiceSessionId: opts.voiceSessionId ?? null,
     expiresAt: now() + Math.max(0, opts.ttlMs),
+    parentId: opts.parentId ?? null,
   });
   return {
     id,
@@ -69,7 +74,7 @@ export function lapsedLiveTurnGrantId(): string {
   return `ltg-lapsed-${randomUUID()}`;
 }
 
-/** True while the grant is issued, unrevoked and unexpired. */
+/** True while the grant, and every grant it narrows, is issued, unrevoked and unexpired. */
 export function isLiveTurnGrantActive(id: string | undefined, now: () => number = Date.now): boolean {
   if (typeof id !== 'string') return false;
   const entry = activeGrants.get(id);
@@ -78,7 +83,7 @@ export function isLiveTurnGrantActive(id: string | undefined, now: () => number 
     activeGrants.delete(id);
     return false;
   }
-  return true;
+  return entry.parentId === null || isLiveTurnGrantActive(entry.parentId, now);
 }
 
 /** End every grant bound to a voice session (the call ended). Returns how many ended. */

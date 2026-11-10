@@ -8,6 +8,7 @@
 
 import { normalizePhone } from './canonical-attribute-guard.js';
 import { PHONE_CHANNELS } from './identifier-near-miss.js';
+import { CODE_REPLACEMENT } from '../verification/code-tracker.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
@@ -25,6 +26,12 @@ export type NormalizedIdentifier =
 export function normalizeAgentIdentifier(channel: string, raw: string): NormalizedIdentifier {
   const value = raw.trim();
   if (!value) return { ok: false, error: `${channel} is empty.` };
+  // A scrubbed sign-in code is never an address. It reaches here when a code is tracked
+  // after the call was queued for approval and the replay's input is scrubbed (#2515):
+  // left in, it would be linked, or match and verify a row holding the same text.
+  if (value.includes(CODE_REPLACEMENT)) {
+    return { ok: false, error: `${channel} holds a scrubbed sign-in code, not an address.` };
+  }
 
   if (channel === 'email') {
     const lower = value.toLowerCase();
