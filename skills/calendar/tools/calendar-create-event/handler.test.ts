@@ -301,6 +301,57 @@ describe('CalendarCreateEventHandler -- happy path', () => {
 // Recurring events (#2385)
 // ---------------------------------------------------------------------------
 
+describe('CalendarCreateEventHandler -- conferencing (#2536)', () => {
+  function conferencingCtx(conferencing: unknown, createEvent: ReturnType<typeof vi.fn>): ToolContext {
+    const ctx = makeCtx({ createEvent });
+    return { ...ctx, input: { ...ctx.input, conferencing } } as ToolContext;
+  }
+
+  it('sends Nylas autocreate: {} when asked for a Google Meet link', async () => {
+    const createEvent = vi.fn().mockResolvedValue(CREATED_EVENT);
+
+    const result = await new CalendarCreateEventHandler().execute(
+      conferencingCtx({ provider: 'Google Meet', autocreate: true }, createEvent),
+    );
+
+    expect(result.success).toBe(true);
+    expect(createEvent.mock.calls[0]![1].conferencing).toEqual({ provider: 'Google Meet', autocreate: {} });
+  });
+
+  it('refuses Zoom auto-creation with one clean error and no Nylas call', async () => {
+    const createEvent = vi.fn();
+
+    const result = await new CalendarCreateEventHandler().execute(
+      conferencingCtx({ provider: 'Zoom', autocreate: true }, createEvent),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('no Zoom account is connected');
+    expect(createEvent).not.toHaveBeenCalled();
+  });
+
+  it('attaches an existing Zoom link', async () => {
+    const createEvent = vi.fn().mockResolvedValue(CREATED_EVENT);
+    const details = { url: 'https://zoom.example/j/123' };
+
+    const result = await new CalendarCreateEventHandler().execute(
+      conferencingCtx({ provider: 'Zoom', details }, createEvent),
+    );
+
+    expect(result.success).toBe(true);
+    expect(createEvent.mock.calls[0]![1].conferencing).toEqual({ provider: 'Zoom Meeting', details });
+  });
+
+  it('creates the event without conferencing when the optional field is null', async () => {
+    const createEvent = vi.fn().mockResolvedValue(CREATED_EVENT);
+
+    const result = await new CalendarCreateEventHandler().execute(conferencingCtx(null, createEvent));
+
+    expect(result.success).toBe(true);
+    expect(createEvent.mock.calls[0]![1].conferencing).toBeUndefined();
+  });
+});
+
 describe('CalendarCreateEventHandler -- recurrence', () => {
   let handler: CalendarCreateEventHandler;
   beforeEach(() => { handler = new CalendarCreateEventHandler(); });
