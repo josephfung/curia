@@ -1,16 +1,17 @@
-# Case 15d (#2554): code owns the email signature. The gateway appends the configured
-# signature and never edits the body, so a sign-off the model writes goes out above it and
-# the email is signed twice. Calendar composes the meeting request in a <scheduling_email>
-# block and, as in production, signs it with a name and title. The delegate result carries
-# it as `draft_emails` with DRAFT_EMAIL_NEXT_STEP, which says the signature is added on
-# send; email-send's body description says the same. The coordinator sends the draft
-# without the sign-off block. email-send is stubbed, so this scores the body the
-# coordinator wrote; the gateway's signing is covered by its unit tests.
-name: delegated draft sent unsigned
+# Case 15d (#2554): code owns the signature block. The gateway appends the configured
+# signature and never edits the body, so a signature block the model writes goes out above
+# it and the email carries two. A closing and first name are fine: that is a sign-off, not
+# a signature block, and the closing is the model's own choice (the case names none).
+# Calendar composes the meeting request in a <scheduling_email> block and, as in
+# production, ends it with a full name and title. The delegate result carries it as
+# `draft_emails` with DRAFT_EMAIL_NEXT_STEP, which says the signature block is added on
+# send; email-send's body description says the same. email-send is stubbed, so this scores
+# the body the coordinator wrote; the gateway's signing is covered by its unit tests.
+name: delegated draft sent with one signature block
 description: >
   The principal asks for a meeting request to go out to an external contact. Calendar
-  composes it and signs it with a name and title. The coordinator sends it with the body
-  ending at the message or a valediction, with no name, title or signature block.
+  composes it and ends it with a full name and title. The coordinator sends it without that
+  block; a closing and first name may stay.
 tags: [delegation, calendar, email, signature]
 stub_sets: [human-channels]
 seed:
@@ -72,15 +73,14 @@ tool_stubs:
               - {{day:next-monday+1}} at 10:30 AM ET
               - {{day:next-monday+2}} at 11:00 AM ET
 
-              Best,
               Alex Curia
               Executive Assistant to the CEO
         next_step: >-
           The specialist composed the draft email in this result but did not send it, whatever
           its text says. If the principal asked for it to go out, send it yourself with
           email-send and report the send from that result. Otherwise tell the principal it is
-          drafted and has not been sent. The signature is added on send: send the body without
-          any name, title or signature block at its end.
+          drafted and has not been sent. The signature block is added on send: a closing and first
+          name may stay, but remove any full name, title or signature block the draft ends with.
   email-send:
     - match: {}
       return: { message_id: scenario-out-1, to: jamie@stripe.example.test, subject: Intro call - 30 minutes next week }
@@ -98,18 +98,18 @@ expected_behaviors:
     description: Sends the meeting request to Jamie with email-send.
     check:
       called: email-send
-  - id: body_not_signed
+  - id: no_second_signature_block
     weight: critical
     description: >
-      The email-send body carries no name, title or signature block at its end: not the
-      draft's "Alex Curia" / "Executive Assistant to the CEO" lines, nor any other name or
-      title of the assistant. A valediction alone ("Best,") passes.
+      The email-send body carries no signature block of its own: not the draft's "Alex Curia"
+      / "Executive Assistant to the CEO" lines, nor any other full name or title of the
+      assistant. A closing line with the first name alone passes, whatever the closing.
     check:
       text: { tool: email-send, arg: body }
-      excludes: ['Alex Curia', 'Executive Assistant', '\bDigital EA\b', '\n\s*(Alex|Curia)\s*$']
+      excludes: ['Alex Curia', 'Executive Assistant', '\bDigital EA\b']
   - id: keeps_the_times
     weight: important
     description: The email still offers {{day:next-monday+1}} at 10:30 AM ET and {{day:next-monday+2}} at 11:00 AM ET.
 failure_modes:
   - Sends the draft verbatim, with the name and title block at the end
-  - Replaces the draft's sign-off with a different name or title line
+  - Replaces the draft's signature block with a different full-name or title line

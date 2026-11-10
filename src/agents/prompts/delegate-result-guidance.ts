@@ -33,15 +33,16 @@ export const PAUSED_NEXT_STEP_LINES: readonly string[] = [
 ];
 
 /**
- * The specialist's result carries composed email (`draft_emails`, #2055). A specialist that
- * signed its draft anyway is caught here: the gateway signs and never edits the body (#2554).
+ * The specialist's result carries composed email (`draft_emails`, #2055). A draft that ends
+ * in a signature block of its own is caught here: the gateway appends the configured one and
+ * never edits the body, so it would go out with two (#2554). A closing and first name are fine.
  */
 export const DRAFT_EMAIL_NEXT_STEP_LINES: readonly string[] = [
   'The specialist composed the draft email in this result but did not send it, whatever',
   'its text says. If the principal asked for it to go out, send it yourself with',
   'email-send and report the send from that result. Otherwise tell the principal it is',
-  'drafted and has not been sent. The signature is added on send: send the body without',
-  'any name, title or signature block at its end.',
+  'drafted and has not been sent. The signature block is added on send: a closing and first',
+  'name may stay, but remove any full name, title or signature block the draft ends with.',
 ];
 
 /** No email or message went out, and the result or brief talks about sending (#2055). */

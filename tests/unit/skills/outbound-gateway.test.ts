@@ -4088,6 +4088,15 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
     expect(deliveredContent(mocks)).toBe(body);
   });
 
+  // The closing is the model's choice; the gateway treats every one alike.
+  it.each(['Cheers,', 'Thanks,', 'Warmly,'])('sends a %s + first-name sign-off intact above the signature', async (closing) => {
+    const { gateway, mocks, sentHtml } = makeGateway({ persona: PERSONA });
+    const body = `Tuesday at 10 works.\n\n${closing}\nAlex`;
+    await gateway.send(email({ body }));
+    expect(sentHtml().indexOf(closing)).toBeLessThan(sentHtml().indexOf(SIGNATURE_HTML));
+    expect(deliveredContent(mocks)).toBe(body);
+  });
+
   it('keeps a model-written sign-off in a draft, followed by the signature', async () => {
     const { gateway, draftHtml } = makeGateway({ persona: PERSONA });
     await gateway.createEmailDraft(email({ accountId: 'curia', body: 'Tuesday at 10 works.\n\nAlex\nDigital EA' }));

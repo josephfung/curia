@@ -32,7 +32,8 @@ function signatureWords(text: string): string {
 /**
  * True when the body already ends with the signature: the model signed it the same
  * way, or the text was signed once already. Adding it again would sign twice. A short
- * sign-off ("Best, Alex") is not the signature, and the signature still goes below it.
+ * sign-off (a closing and first name) is not the signature, and the signature still goes
+ * below it.
  */
 export function bodyEndsWithSignature(body: string, signature: string): boolean {
   const sig = signatureWords(signature);

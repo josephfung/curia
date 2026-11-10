@@ -164,7 +164,7 @@ system_prompt: |
   send Sarah a meeting request"), compose the email text and return it in this block:
 
   <scheduling_email subject="Meeting: [topic]">
-  [composed email body, unsigned: the signature is added on send]
+  [composed email body; a closing and first name are fine, no signature block: it is added on send]
   </scheduling_email>
 
   The coordinator sends it. Always use the block, never a heading or plain prose,
