@@ -602,8 +602,7 @@ fetch_bundle() {
     "docker-compose.yml:docker-compose.yml" \
     "docker-compose.tls.yml:docker-compose.tls.yml" \
     ".env.example:env.example" \
-    "deploy/Caddyfile:Caddyfile" \
-    "docker/seccomp-chrome.json:seccomp-chrome.json"; do
+    "deploy/Caddyfile:Caddyfile"; do
     local_path="${pair%%:*}"
     asset="${pair#*:}"
     if [[ ! -f "$INSTALL_DIR/$local_path" ]]; then
@@ -612,6 +611,16 @@ fetch_bundle() {
       fetch_asset "$local_path" "$asset"
     fi
   done
+  # The seccomp profile exists only in releases whose compose file mounts it. A pinned
+  # older CURIA_VERSION has neither, so fetch it only when the compose file just
+  # fetched (or already present) asks for it; for those releases it stays mandatory.
+  local seccomp="docker/seccomp-chrome.json"
+  if grep -q 'seccomp-chrome\.json' "$INSTALL_DIR/docker-compose.yml" \
+    && [[ ! -f "$INSTALL_DIR/$seccomp" ]]; then
+    mkdir -p "$INSTALL_DIR/docker"
+    info "Fetching $seccomp ..."
+    fetch_asset "$seccomp" "seccomp-chrome.json"
+  fi
 }
 
 # Create .env from the template if it does not exist yet, then return its path.

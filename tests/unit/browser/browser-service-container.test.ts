@@ -9,7 +9,7 @@ const { connectOverCDP } = vi.hoisted(() => ({ connectOverCDP: vi.fn() }));
 vi.mock('patchright', () => ({ chromium: { connectOverCDP, launchPersistentContext: vi.fn() } }));
 vi.mock('@ghostery/adblocker-playwright', () => ({ PlaywrightBlocker: { fromPrebuiltAdsAndTracking: vi.fn() } }));
 
-import { BrowserService, redactCdpEndpoint, resolveCdpEndpoint } from '../../../src/browser/browser-service.js';
+import { BrowserService, redactCdpEndpoint, resolveCdpEndpoint, sanitizeCdpError } from '../../../src/browser/browser-service.js';
 
 const logger = pino({ level: 'silent' });
 const ENDPOINT = 'http://127.0.0.1:9222';
@@ -184,6 +184,29 @@ describe('BrowserService with a browser container', () => {
     await svc.stop();
   });
 
+  it('does not start a second reconnect loop when an attach from before stop() fails', async () => {
+    const fresh = makeBrowser();
+    const freshContext = makeContext(fresh);
+    let rejectStale!: (err: Error) => void;
+    const factory = vi.fn()
+      .mockReturnValueOnce(new Promise((_, reject) => { rejectStale = reject; }))
+      .mockResolvedValue(freshContext);
+    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT, contextFactory: factory as never });
+
+    const firstStart = svc.start();
+    await svc.stop();
+    await svc.start();
+    rejectStale(new Error('connect ECONNREFUSED'));
+    await firstStart;
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // One attach for the stale generation, one for the current: no timer from the failure.
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(svc.browserContext).toBe(freshContext);
+    expect(fresh.close).not.toHaveBeenCalled();
+    await svc.stop();
+  });
+
   it('gives up on an attach that hangs past its deadline, disconnects it if it lands, and retries', async () => {
     const hung = makeBrowser();
     let resolveHung!: (ctx: unknown) => void;
@@ -272,6 +295,18 @@ describe('resolveCdpEndpoint', () => {
     await expect(resolveCdpEndpoint('http://[::1]:9222', lookup)).resolves.toBe('http://[::1]:9222');
     await expect(resolveCdpEndpoint('http://localhost:9222', lookup)).resolves.toBe('http://localhost:9222');
     expect(lookup).not.toHaveBeenCalled();
+  });
+});
+
+describe('sanitizeCdpError', () => {
+  it('cuts every URL in the message, the derived discovery URL included, back to scheme and host', () => {
+    const err = new Error('connect failed: GET https://host.example/json/version/?token=abc 502; ws wss://u:p@host.example/x?t=1');
+    const out = sanitizeCdpError(err);
+    expect(out).not.toMatch(/token|abc|u:p|\/json|t=1/);
+    expect(out).toContain('https://host.example');
+  });
+  it('accepts a non-Error', () => {
+    expect(sanitizeCdpError('http://h:1/?k=v')).toBe('http://h:1');
   });
 });
 

@@ -306,6 +306,24 @@ jobs:
         id: src
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # A manual re-publish checks out an older tag, whose source may predate an
+      # image's Dockerfile (curia-browser first shipped in #2541). Building it would
+      # fail the run although the other images publish, so that leg is skipped: with
+      # `meta` skipped it has no tags, and the build and sign steps (guarded on tags)
+      # skip with it.
+      - name: Check the image's Dockerfile exists in this source
+        id: buildable
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          if [ -f "$DOCKERFILE" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${DOCKERFILE} does not exist in the checked-out source; skipping ${IMAGE} (the release predates it)."
+          fi
+
       # Every pull from Docker Hub below is authenticated: QEMU's binfmt image, the
       # BuildKit image setup-buildx starts, and both Dockerfiles' base images
       # (node, pgvector). Anonymous pulls are rate-limited per IP, and GitHub's
@@ -337,6 +355,7 @@ jobs:
 
       - name: Derive tags & labels
         id: meta
+        if: steps.buildable.outputs.present == 'true'
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
@@ -370,7 +389,7 @@ jobs:
       # build with no version tag), and a prediction can be wrong in a way a
       # direct check cannot.
       - name: Assert a tag build produced its version tags
-        if: needs.resolve.outputs.tag != '' && matrix.expects_semver
+        if: steps.buildable.outputs.present == 'true' && needs.resolve.outputs.tag != '' && matrix.expects_semver
         env:
           META_VERSION: ${{ steps.meta.outputs.version }}
           TARGET: ${{ needs.resolve.outputs.tag }}
@@ -385,7 +404,7 @@ jobs:
       # and file a spurious publish-failure issue. Skip instead — but say so in
       # the run log, so a skipped image is never mistaken for a published one.
       - name: Report an image with nothing to publish
-        if: steps.meta.outputs.tags == ''
+        if: steps.buildable.outputs.present == 'true' && steps.meta.outputs.tags == ''
         env:
           IMAGE: ${{ matrix.image }}
         run: echo "::notice::No tags apply to ${IMAGE} on this trigger; skipping its build and push."

@@ -562,13 +562,15 @@ export class BrowserService {
       ).catch(closeErr => this.logger.debug({ err: closeErr }, 'Failed to disconnect a late attach'));
       if (attempt % CDP_RECONNECT_WARN_EVERY === 0) {
         this.logger.warn(
-          { err, cdpEndpoint: this.cdpEndpointLabel, attempt },
+          { error: sanitizeCdpError(err), cdpEndpoint: this.cdpEndpointLabel, attempt },
           'Browser container not reachable — web-browser is unavailable until it is; retrying',
         );
       } else {
-        this.logger.debug({ err, attempt }, 'Browser container still not reachable');
+        this.logger.debug({ error: sanitizeCdpError(err), attempt }, 'Browser container still not reachable');
       }
-      this.scheduleAttach(attempt + 1);
+      // A stale attempt (stop() and start() ran since) must not arm a second reconnect
+      // loop beside the current generation's.
+      if (generation === this.attachGeneration) this.scheduleAttach(attempt + 1);
       return;
     } finally {
       clearTimeout(deadline);
@@ -577,6 +579,13 @@ export class BrowserService {
     if (!this.running || generation !== this.attachGeneration) {
       void context.browser()?.close().catch(err =>
         this.logger.warn({ err }, 'Failed to disconnect from the browser container after shutdown'),
+      );
+      return;
+    }
+    // A concurrent attach of this generation already won: keep it, drop this connection.
+    if (this.context) {
+      void context.browser()?.close().catch(err =>
+        this.logger.warn({ error: sanitizeCdpError(err) }, 'Failed to disconnect a duplicate attach to the browser container'),
       );
       return;
     }
@@ -1009,6 +1018,14 @@ export function redactCdpEndpoint(endpoint: string): string {
   } catch {
     return '<invalid endpoint>';
   }
+}
+
+/** An attach error as logs may show it: every URL in the message (the endpoint, or the
+ *  /json/version/ discovery URL Patchright derives from it) is cut back to scheme and host,
+ *  and the stack is dropped, since it repeats the message. */
+export function sanitizeCdpError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.replace(/\b(?:https?|wss?):\/\/[^\s'"<>]+/gi, match => redactCdpEndpoint(match));
 }
 
 interface ClearStaleX11LockOptions {

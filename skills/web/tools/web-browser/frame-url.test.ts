@@ -18,6 +18,15 @@ describe('isPrivateHost — names that resolve privately', () => {
     expect(isPrivateHost('[2606:4700::1111]')).toBe(false);
   });
 
+  it('treats a trailing-dot (absolute) name like the name without it', () => {
+    for (const host of ['curia.', 'localhost.', 'metadata.google.internal.', 'db.internal.', '127.0.0.1.', 'curia..']) {
+      expect(isPrivateHost(host)).toBe(true);
+    }
+    expect(isPrivateHost('example.com.')).toBe(false);
+    expect(isBlockedFrameUrl('http://localhost.:3000/')).toBe(true);
+    expect(isBlockedFrameUrl('http://curia./api')).toBe(true);
+  });
+
   it('blocks redirect/frame URLs on service names', () => {
     expect(isBlockedFrameUrl('http://curia:3000/api')).toBe(true);
     expect(isBlockedFrameUrl('https://example.com/')).toBe(false);

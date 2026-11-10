@@ -8,7 +8,9 @@
  * by the navigate guard and per-frame SSRF gating so both use one definition.
  */
 export function isPrivateHost(hostname: string): boolean {
-  let h = hostname.toLowerCase();
+  // A trailing dot is the same absolute name (`localhost.` resolves to loopback), and
+  // URL.hostname keeps it, so strip it before every check below.
+  let h = hostname.toLowerCase().replace(/\.+$/, '');
   // URL.hostname keeps brackets on IPv6 literals ([::1]) — strip them to normalize.
   if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
   // IPv4-mapped IPv6 — re-check the embedded IPv4 against the rules below so a mapped
