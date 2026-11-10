@@ -5,7 +5,7 @@ import {
   existingTaskIdForStep,
   findRemovedChildTaskIds,
   isPlanReadyForAutoComplete,
-  parsePlanStepsInput,
+  parsePlanStepsDetailed,
   planStepDriftsFromChild,
   preflightPlanBlockWrite,
   resolveBlockedByTaskId,
@@ -35,16 +35,24 @@ describe('validatePlanStepsGraph', () => {
   });
 });
 
-describe('parsePlanStepsInput', () => {
-  it('returns null for cyclic dependency graphs', () => {
-    expect(parsePlanStepsInput([
+/** The steps on success, null on any failure; the failure reason is asserted separately. */
+function parseSteps(raw: unknown) {
+  const result = parsePlanStepsDetailed(raw);
+  return result.ok ? result.steps : null;
+}
+
+describe('parsePlanStepsDetailed', () => {
+  it('reports a cyclic dependency graph', () => {
+    const result = parsePlanStepsDetailed([
       { id: 'a', title: 'A', target_agent_id: 'coordinator', blocked_by_step_id: 'b' },
       { id: 'b', title: 'B', target_agent_id: 'coordinator', blocked_by_step_id: 'a' },
-    ])).toBeNull();
+    ]);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/cycle/);
   });
 
   it('parses heterogeneous and iterate-leaf steps', () => {
-    const steps = parsePlanStepsInput([
+    const steps = parseSteps([
       { id: 'gather', title: 'Gather exec input', target_agent_id: 'coordinator' },
       {
         id: 'audit',
@@ -106,7 +114,7 @@ describe('existingTaskIdForStep', () => {
 
 describe('buildPlanStepDescriptors', () => {
   it('leaves lazy steps unmaterialized', () => {
-    const steps = parsePlanStepsInput([
+    const steps = parseSteps([
       { id: 'now', title: 'Now', target_agent_id: 'coordinator' },
       { id: 'later', title: 'Later', target_agent_id: 'coordinator', materialize: false },
     ])!;
@@ -120,7 +128,7 @@ describe('buildPlanStepDescriptors', () => {
 
 describe('countMaterializationKinds', () => {
   it('counts iterate leaves vs heterogeneous rows vs lazy steps', () => {
-    const steps = parsePlanStepsInput([
+    const steps = parseSteps([
       { id: 'a', title: 'A', target_agent_id: 'coordinator' },
       { id: 'b', title: 'B', target_agent_id: 'social-media', resumable: true },
       { id: 'c', title: 'C', target_agent_id: 'coordinator', materialize: false },
@@ -135,7 +143,7 @@ describe('countMaterializationKinds', () => {
 
 describe('validateDeliverableStepId', () => {
   it('accepts null and known step ids only', () => {
-    const steps = parsePlanStepsInput([
+    const steps = parseSteps([
       { id: 'final', title: 'Final', target_agent_id: 'coordinator' },
     ])!;
     expect(validateDeliverableStepId(null, steps!)).toBeNull();
@@ -168,7 +176,7 @@ describe('planStepDriftsFromChild', () => {
 
 describe('preflightPlanBlockWrite', () => {
   it('rejects oversized plan blocks before child mutations', () => {
-    const steps = parsePlanStepsInput([
+    const steps = parseSteps([
       { id: 'a', title: 'A', target_agent_id: 'coordinator' },
     ])!;
     const hugeNext = 'x'.repeat(9000);
