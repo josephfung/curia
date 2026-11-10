@@ -4,7 +4,7 @@
 // default node env) so `document`, querySelectorAll, setAttribute, CSS.escape, etc.
 // exist — this function was previously only exercised in a real browser via
 // frame.evaluate(), so these are its first direct tests.
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { transformWithEsbuild } from 'vite';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -24,6 +24,103 @@ function resetRefState(): void {
   w.__curiaRefFrame__ = undefined;
   w.__curiaRefSeq__ = undefined;
 }
+
+// happy-dom has no layout: every box measures 0×0, which the visibility filter reads as "not
+// rendered". Give elements a size unless they (or an ancestor) are display:none or marked
+// zero-size. tests/integration/web-browser-element-visibility.test.ts covers real layout.
+beforeEach(() => {
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const noBox = this.closest('[style*="display: none"]') !== null || this.hasAttribute('data-zero-size');
+    return { width: noBox ? 0 : 100, height: noBox ? 0 : 20 } as DOMRect;
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('extractFrameContent — hidden elements (#2546)', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    resetRefState();
+  });
+
+  // Only the element list is filtered; the page's body text may still mention hidden words.
+  const refList = (): string => extractFrameContent(OPTS).split('--- Interactable elements ---')[1] ?? '';
+
+  it('does not list buttons or links with display:none', () => {
+    document.body.innerHTML = '<button style="display: none">Gone</button><a href="/x" style="display: none">Gone link</a><button>Shown</button>';
+    const out = refList();
+    expect(out).toContain('button "Shown"');
+    expect(out).not.toContain('Gone');
+  });
+
+  it('does not list children of a display:none container', () => {
+    document.body.innerHTML = '<div style="display: none"><button>Inside closed menu</button></div><button>Shown</button>';
+    expect(refList()).not.toContain('Inside closed menu');
+  });
+
+  it('does not list zero-size controls', () => {
+    document.body.innerHTML = '<button data-zero-size>Checkout</button><button>Shown</button>';
+    const out = refList();
+    expect(out).not.toContain('Checkout');
+    expect(out).toContain('button "Shown"');
+  });
+
+  it('does not list visibility:hidden elements', () => {
+    document.body.innerHTML = '<button style="visibility: hidden">Drawer action</button><button>Shown</button>';
+    expect(refList()).not.toContain('Drawer action');
+  });
+
+  it('lists an element once it becomes rendered', () => {
+    document.body.innerHTML = '<button id="b" style="visibility: hidden">Late</button>';
+    expect(refList()).not.toContain('Late');
+    document.getElementById('b')!.style.visibility = 'visible';
+    expect(refList()).toContain('button "Late"');
+  });
+
+  it('keeps opacity:0 elements, which a click can still reach', () => {
+    document.body.innerHTML = '<button style="opacity: 0">Fading in</button>';
+    const out = refList();
+    expect(out).toContain('button "Fading in"');
+    expect(out).not.toContain('(hidden)');
+  });
+
+  it('keeps hidden native radio, checkbox and file inputs, tagged (hidden)', () => {
+    document.body.innerHTML = `
+      <input type="radio" aria-label="Agree" style="display: none">
+      <input type="checkbox" aria-label="Terms" style="visibility: hidden">
+      <input type="file" aria-label="Upload" data-zero-size>`;
+    const out = extractFrameContent(OPTS);
+    expect(out).toContain('radio "Agree" (hidden)');
+    expect(out).toContain('checkbox "Terms" (hidden)');
+    expect(out).toContain('"Upload" (hidden)');
+  });
+
+  it('keeps the group label after the (hidden) tag', () => {
+    document.body.innerHTML = '<fieldset><legend>Q1</legend><input type="radio" aria-label="Agree" style="display: none"></fieldset>';
+    expect(extractFrameContent(OPTS)).toContain('radio "Agree" (hidden) (group: "Q1")');
+  });
+
+  it('drops other hidden inputs', () => {
+    document.body.innerHTML = '<input type="text" aria-label="Secret box" style="display: none"><button>Shown</button>';
+    expect(refList()).not.toContain('Secret box');
+  });
+
+  it('does not tag rendered inputs', () => {
+    document.body.innerHTML = '<input type="radio" aria-label="Agree">';
+    expect(extractFrameContent(OPTS)).not.toContain('(hidden)');
+  });
+
+  it('does not spend the size cap on hidden elements', () => {
+    document.body.innerHTML = `${'<button style="display: none">H</button>'.repeat(3)}<button>V0</button><button>V1</button>`;
+    const out = extractFrameContent({ frameIndex: 0, maxRefs: 2, epochSeed: 1 });
+    expect(out).toContain('button "V0"');
+    expect(out).toContain('button "V1"');
+    expect(out).not.toContain('more interactable elements');
+    expect(document.querySelectorAll('[data-curia-ref]').length).toBe(2);
+  });
+});
 
 describe('extractFrameContent — interactable refs', () => {
   beforeEach(() => {

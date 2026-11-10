@@ -267,6 +267,15 @@ export class WebBrowserHandler implements ToolHandler {
       if (isBatch && STANDALONE_ACTIONS.has(stepAction)) {
         return { success: false, error: `actions[${i}]: ${stepAction} cannot be used inside a batch — call it as a single action` };
       }
+      // Only navigate opens a URL. Anything else would run against whatever page is already
+      // open (often about:blank) and report success, so refuse rather than go somewhere
+      // implicitly: a read must never change the page (#2546).
+      if (stepAction !== 'navigate' && isUrlGiven(steps[i]!.url)) {
+        return { success: false, error: `${isBatch ? `actions[${i}]: ` : ''}url only applies to navigate, so nothing was done. Call navigate with the url first, then ${stepAction}.` };
+      }
+    }
+    if (isBatch && isUrlGiven(url)) {
+      return { success: false, error: 'A top-level url is not used with actions, so nothing was done. Add a navigate step with the url to actions.' };
     }
 
     // --- close_session: single, terminal action; no page interaction needed ---
@@ -562,6 +571,9 @@ export class WebBrowserHandler implements ToolHandler {
 
     const note = settleNote(settle);
     if (note) content = content ? `${content}\n${note}` : note;
+    // A fresh session sits on about:blank. Empty content there means nothing was loaded, not
+    // that a site came back empty or blocked the read (#2546).
+    if (currentUrl === 'about:blank') content = content ? `${content}\n${NO_PAGE_OPEN_NOTE}` : NO_PAGE_OPEN_NOTE;
 
     const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl, settled: settle.settled };
     // The main-frame URLs the page passed through, when it moved (#2244). Scrubbed like
@@ -787,11 +799,39 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       if (!selector || typeof selector !== 'string') {
         return { ok: false, error: 'click requires selector (string — describe the element in natural language)' };
       }
-      const clickTarget = await resolveLocator(page, selector, ctx.log);
+      const scopedClick = await resolveLocatorWithScope(page, selector, ctx.log);
+      const clickTarget = scopedClick.locator;
       const clickMark = activity.mark();
-      // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
-      // scores natural pointer paths as more human-like than direct .click(). (#1053)
-      await humanClick(page, clickTarget, { log: ctx.log });
+      // A label click lands at the label's centre, which can be a link inside it
+      // ("I agree to the <a>Terms</a>"): the link would be followed and the box stay as it was.
+      // So a label holding a link is never clicked; the input is clicked instead (same events,
+      // nothing to follow). The short timeouts keep a vanished element from costing 30s.
+      const input = scopedClick.retargetedFrom;
+      const quick = { timeout: 1500 };
+      const labelHasLink = input
+        ? await clickTarget.evaluate((el) => el.querySelector('a[href]') !== null, undefined, quick).catch(() => false)
+        : false;
+      if (input && labelHasLink) {
+        await input.evaluate((el) => { (el as HTMLInputElement).click(); }, undefined, quick);
+      } else {
+        const checkedBefore = input
+          ? await input.evaluate((el) => (el as HTMLInputElement).checked, undefined, quick).catch(() => null)
+          : null;
+        // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
+        // scores natural pointer paths as more human-like than direct .click(). (#1053)
+        await humanClick(page, clickTarget, { log: ctx.log });
+        if (input && checkedBefore !== null) {
+          // Anything else under the label's centre (a button, a script) can also swallow the click.
+          const state = await input.evaluate((el) => ({ checked: (el as HTMLInputElement).checked, radio: (el as HTMLInputElement).type === 'radio' }), undefined, quick).catch(() => null);
+          if (!state) {
+            return { ok: false, error: 'The page changed after clicking the label, so the checkbox/radio could not be checked. Call get_content and check the page.' };
+          }
+          // A checked radio stays checked when clicked, so only the other cases signal a miss.
+          if (state.checked === checkedBefore && !(state.radio && checkedBefore)) {
+            await input.evaluate((el) => { (el as HTMLInputElement).click(); }, undefined, quick);
+          }
+        }
+      }
       // Adaptive settle: a click may trigger navigation or an in-page update. Wait
       // briefly for the DOM to settle, but don't fail the action if nothing navigates.
       await settleAfterInteraction(page, ctx, sessionId);
@@ -1213,6 +1253,13 @@ async function trackTypedCode(
   ctx.log.info({ sessionId, verificationIds: matching.map((v) => v.id) }, 'Typed sign-in code tracked for its verification(s)');
 }
 
+const NO_PAGE_OPEN_NOTE = '[Note: no page is open in this session, so nothing was read and this says nothing about any site. Call navigate with a url first.]';
+
+/** Models pad optional arguments with an empty string, so that counts as not given. */
+function isUrlGiven(url: unknown): boolean {
+  return url !== undefined && url !== null && url !== '';
+}
+
 /**
  * The one-line note added to the content when a page had not settled by the cap (#2244),
  * or null when it had. On a sign-in handoff the note says what leaving costs: the agent
@@ -1352,6 +1399,41 @@ interface ScopedLocator {
   locator: Locator;
   /** Where the element lives; `scope.url()` is that document's URL, not necessarily the top page's. */
   scope: Page | Frame;
+  /** Set when the locator is a hidden input's label (#2546): the input the label stands in for. */
+  retargetedFrom?: Locator;
+}
+
+/** Counter for label-tag tokens: unique within the process, unlike a millisecond clock. */
+let labelTagSeed = 0;
+
+/**
+ * A ref to a hidden native radio or checkbox (listed '(hidden)', #2546) can't be clicked: it has
+ * no box, so Playwright waits out its timeout. The visible control is its label, so aim at that.
+ * The label is tagged with the input's ref, which keeps a repeated row's choice unambiguous.
+ * Anything else, or an input with no label, is returned as it was.
+ */
+async function retargetHiddenInputToLabel(target: ScopedLocator, refToken: string, log: ToolContext['log']): Promise<ScopedLocator> {
+  try {
+    if (await target.locator.isVisible()) return target;
+    const tagged = await target.locator.evaluate((el, ref) => {
+      if (!(el instanceof HTMLInputElement) || (el.type !== 'radio' && el.type !== 'checkbox')) return false;
+      const label = el.labels?.[0];
+      if (!label) return false;
+      // Clear tags left by earlier clicks, so the selector can only reach this label.
+      for (const old of el.ownerDocument.querySelectorAll('[data-curia-label-for]')) old.removeAttribute('data-curia-label-for');
+      label.setAttribute('data-curia-label-for', ref);
+      return true;
+    }, refToken);
+    if (!tagged) return target;
+    return {
+      locator: target.scope.locator(`[data-curia-label-for="${refToken}"]`).first(),
+      scope: target.scope,
+      retargetedFrom: target.locator,
+    };
+  } catch (err) {
+    log.debug({ err, refToken }, 'Could not retarget a hidden input to its label — using the input');
+    return target;
+  }
 }
 
 /**
@@ -1397,7 +1479,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
         log.debug({ err }, 'Skipping scope during ref resolution (detached/error)');
       }
     }
-    if (total === 1 && sole) return sole;
+    if (total === 1 && sole) return retargetHiddenInputToLabel(sole, refToken, log);
     // Fail FAST, not slow. Previously we returned a guaranteed-miss locator here, but the
     // caller's boundingBox()/click()/waitFor() then waited out the full Playwright timeout
     // (~40s: 30s boundingBox + 10s click) on an element that can never appear — the dominant
@@ -1420,7 +1502,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
 
   // Main frame first (the common case, and the cheapest).
   const top = await resolveInScope(page, selector, log);
-  if (top) return { locator: top, scope: page };
+  if (top) return retargetHiddenInputToLabel({ locator: top, scope: page }, `sel${++labelTagSeed}`, log);
 
   // Child frames eligible for interaction (exclude the main frame and private/internal
   // hosts). This is what lets click/type/hover/wait_for reach into legitimate iframes.
@@ -1431,7 +1513,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
   for (const frame of childFrames) {
     try {
       const inFrame = await resolveInScope(frame, selector, log);
-      if (inFrame) return { locator: inFrame, scope: frame };
+      if (inFrame) return retargetHiddenInputToLabel({ locator: inFrame, scope: frame }, `sel${++labelTagSeed}`, log);
     } catch (err) {
       log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during selector resolution (detached/error)');
     }
