@@ -24,6 +24,17 @@ describe('serializeForLeakCheck', () => {
     expect(serializeForLeakCheck(event)).toContain('"timestamp":"4111"');
   });
 
+  it('keeps the id and timestamp of envelope-shaped objects nested in a payload', () => {
+    const nested = { type: 'nested', payload: {}, id: '00000000-0000-4000-8000-000000000456',
+      timestamp: new Date('2026-01-01T00:00:00.456Z') };
+    const event = { type: 't', payload: { inner: nested }, id: '00000000-0000-4000-8000-000000000000' };
+    expect(serializeForLeakCheck(event)).toContain('000000000456');
+    expect(serializeForLeakCheck([event])).toContain('00.456Z');
+    // A sibling path: an envelope-shaped object in a payload array.
+    const listed = { type: 't', payload: { items: [nested] } };
+    expect(serializeForLeakCheck([listed])).toContain('000000000456');
+  });
+
   it('keeps an envelope id that is not a UUID', () => {
     expect(serializeForLeakCheck({ type: 't', payload: {}, id: 'cvv-456' })).toContain('cvv-456');
   });
