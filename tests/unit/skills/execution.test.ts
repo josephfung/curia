@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ExecutionLayer } from '../../../src/skills/execution.js';
+import { ExecutionLayer, SKILL_ERROR_MIN_LENGTH } from '../../../src/skills/execution.js';
+import { SEND_OUTCOME_UNKNOWN } from '../../../skills/ceo-inbox/tools/ceo-inbox-send-draft/handler.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import type { BusEvent } from '../../../src/bus/events.js';
@@ -616,6 +617,46 @@ describe('ExecutionLayer', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toBe('hello world');
+      }
+    });
+
+    it('keeps a returned error whole under a small limit (the no-resend warning, #2474)', async () => {
+      const executionWithLimit = new ExecutionLayer(registry, logger, { skillOutputMaxLength: 40 });
+      registry.register(makeManifest({ name: 'unknown-outcome-skill' }), {
+        execute: async () => ({ success: false, error: SEND_OUTCOME_UNKNOWN }),
+      });
+
+      const result = await executionWithLimit.invoke('unknown-outcome-skill', {});
+      expect(result).toEqual({ success: false, error: `<skill_error>${SEND_OUTCOME_UNKNOWN}</skill_error>` });
+    });
+
+    it('keeps a thrown error and a not-found error whole under a small limit', async () => {
+      const executionWithLimit = new ExecutionLayer(registry, logger, { skillOutputMaxLength: 10 });
+      const message = 'The send may still go out; do not send this draft again.';
+      registry.register(makeManifest({ name: 'throwing-skill' }), {
+        execute: async () => { throw new Error(message); },
+      });
+
+      const thrown = await executionWithLimit.invoke('throwing-skill', {});
+      expect(thrown.success).toBe(false);
+      if (!thrown.success) expect(thrown.error).toBe(`<skill_error>${message}</skill_error>`);
+
+      const missing = await executionWithLimit.invoke('no-such-skill-with-a-long-name', {});
+      expect(missing.success).toBe(false);
+      if (!missing.success) expect(missing.error).toContain("Tool 'no-such-skill-with-a-long-name' not found in registry");
+    });
+
+    it('still bounds an error text longer than the floor', async () => {
+      const executionWithLimit = new ExecutionLayer(registry, logger, { skillOutputMaxLength: 40 });
+      registry.register(makeManifest({ name: 'huge-error-skill' }), {
+        execute: async () => ({ success: false, error: 'E'.repeat(SKILL_ERROR_MIN_LENGTH * 3) }),
+      });
+
+      const result = await executionWithLimit.invoke('huge-error-skill', {});
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('[truncated — output exceeded limit]');
+        expect(result.error.length).toBeLessThan(SKILL_ERROR_MIN_LENGTH + 100);
       }
     });
 

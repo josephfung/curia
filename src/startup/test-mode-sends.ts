@@ -40,6 +40,8 @@ import type { BusEvent, EventType, Layer, OutboundMessageEvent } from '../bus/ev
 import type { PrincipalEmailRef } from '../contacts/types.js';
 import type { AgentPersona } from '../skills/types.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../skills/_shared/reply-quote.js';
+import { DEFAULT_SEND_LEVEL, type SendLevel } from '../skills/principal-send/send-level.js';
+import type { PrincipalSendEntry } from '../skills/principal-send/send-ledger.js';
 
 /** One message a recording transport took: what would have left the process. */
 export interface RecordedSend {
@@ -61,6 +63,11 @@ export interface RecordedSend {
   quotedBody?: string;
   /** The synthetic message (or draft) id the transport returned. */
   id: string;
+  /**
+   * The sending mailbox's address when it was the principal's own (#2474: ceo-inbox-send-draft).
+   * Absent: one of Curia's accounts sent it.
+   */
+  from?: string;
 }
 
 /**
@@ -117,6 +124,37 @@ export interface SendRecorder {
   ownAddresses?: readonly string[];
   /** Take one band review's labels and outcome (#2312). Absent: reviews are not recorded. */
   reviewed?(review: RecordedReview): void;
+  /**
+   * The drafts in the principal's own mailbox for the calling run (#2474), which the gateway's
+   * principal-mailbox fake serves and sends from. Undefined (or absent): the run has no
+   * principal mailbox, so sendPrincipalDraft refuses with mailbox_unavailable.
+   */
+  principalDrafts?(): Map<string, NylasMessage> | undefined;
+  /** Which of those drafts Curia wrote (#2474). Undefined: every draft reads as Curia's. */
+  curiaDraftIds?(): ReadonlySet<string> | undefined;
+  /** Which of those drafts Curia edited (#2474 final review S1). Undefined: every draft reads as edited. */
+  curiaEditedDraftIds?(): ReadonlySet<string> | undefined;
+  /** The calling run's ceo_inbox/sending level (#2474). Undefined: the default, on_request. */
+  sendLevel?(): SendLevel | undefined;
+  /**
+   * The drafts Curia created in the calling run's own task, and the run clock's now, which is
+   * when Curia last wrote them (#2474 PR 2: the autonomous D4.1 check). `replyTo` maps each
+   * stubbed reply to the message it answered, as the draft-reply result's audit row does (final
+   * fixes A5); a draft with no entry has none, and an autonomous send of it refuses. Undefined: no
+   * run record, so no draft reads as created in the task.
+   */
+  curiaTaskDrafts?(): { ids: ReadonlySet<string>; now: Date; replyTo?: ReadonlyMap<string, string> } | undefined;
+  /**
+   * The non-draft messages of a thread in the principal's mailbox for the calling run (#2474 PR 2),
+   * with their headers: what the autonomous limits read. Absent: none.
+   */
+  principalThreadMessages?(threadId: string): NylasMessage[];
+  /**
+   * Where the principal-mailbox send ledger keeps the calling run's entries (#2474 PR 2), so a
+   * case can read them and one run's thread cooldown never holds another's (attempts of one case
+   * reuse its thread ids). Absent or undefined: one store for the stack.
+   */
+  principalSends?(): PrincipalSendEntry[] | undefined;
 }
 
 /**
@@ -172,6 +210,22 @@ function addresses(list: SendEmailOptions['to'] | undefined): string[] {
   return (list ?? []).map(a => a.email);
 }
 
+/** Record an email the way every fake mailbox does: text, with a reply's own words apart from its quote. */
+function recordEmail(recorder: SendRecorder, kind: RecordedSend['kind'], message: NylasMessage, from?: string): void {
+  const quoteAt = message.body.indexOf(REPLY_QUOTE_HTML_OPEN);
+  recorder.record({
+    channel: 'email',
+    kind,
+    to: addresses(message.to),
+    cc: addresses(message.cc),
+    subject: message.subject,
+    body: emailText(message.body),
+    ...(quoteAt >= 0 ? { ownBody: emailText(message.body.slice(0, quoteAt)), quotedBody: emailText(message.body.slice(quoteAt)) } : {}),
+    id: message.id,
+    ...(from ? { from } : {}),
+  });
+}
+
 export interface RecordingTransports {
   nylasClients: Map<string, NylasClient>;
   signalClient: SignalRpcClient;
@@ -203,19 +257,7 @@ export function createRecordingTransports(recorder: SendRecorder, accountNames: 
     folders: [],
     attachments: [],
   });
-  const emailSend = (kind: RecordedSend['kind'], message: NylasMessage): void => {
-    const quoteAt = message.body.indexOf(REPLY_QUOTE_HTML_OPEN);
-    recorder.record({
-      channel: 'email',
-      kind,
-      to: addresses(message.to),
-      cc: addresses(message.cc),
-      subject: message.subject,
-      body: emailText(message.body),
-      ...(quoteAt >= 0 ? { ownBody: emailText(message.body.slice(0, quoteAt)), quotedBody: emailText(message.body.slice(quoteAt)) } : {}),
-      id: message.id,
-    });
-  };
+  const emailSend = (kind: RecordedSend['kind'], message: NylasMessage): void => recordEmail(recorder, kind, message);
 
   const mailbox = {
     sendMessage: async (options: SendEmailOptions): Promise<NylasMessage> => {
@@ -292,6 +334,48 @@ export function createRecordingTransports(recorder: SendRecorder, accountNames: 
   return { nylasClients, signalClient, slackClient, smsClient };
 }
 
+/**
+ * The principal's own mailbox (the ceo-inbox grant) as the recording gateway resolves it (#2474):
+ * a fake over the calling run's drafts (SendRecorder.principalDrafts), separate from Curia's
+ * accounts as production's is, so Curia's send-draft never finds these drafts. A send records
+ * `principalAddress()` as the sender. Null when the calling run has none: the gateway then
+ * refuses (mailbox_unavailable), as production does with no grant. Like the other fakes it is
+ * a plain object with only the methods sendPrincipalDraft calls (getDraft for the read and the
+ * re-read, listMessages for an autonomous send's thread, sendDraft); nothing here can reach a
+ * network.
+ */
+export function createRecordingPrincipalMailbox(recorder: SendRecorder, principalAddress: () => string): () => NylasClient | null {
+  return () => {
+    const drafts = recorder.principalDrafts?.();
+    if (!drafts) return null;
+    const mailbox = {
+      getDraft: async (draftId: string): Promise<NylasMessage | null> => drafts.get(draftId) ?? null,
+      // A thread as Gmail lists it (#2474 PR 2): its messages and the drafts on it (folder DRAFT,
+      // which the gateway drops), newest first. The run's seeded messages carry their headers.
+      listMessages: async (options?: ListMessagesOptions): Promise<NylasMessage[]> => {
+        const threadId = options?.threadId;
+        // sendPrincipalDraft lists only a thread; any other listing is a misuse of this fake.
+        if (!threadId) throw new Error('the test-mode principal mailbox lists only a thread (threadId)');
+        const onThread = [...drafts.values()].filter(d => d.threadId === threadId);
+        return [...(recorder.principalThreadMessages?.(threadId) ?? []), ...onThread]
+          .sort((a, b) => b.date - a.date)
+          .slice(0, options?.limit ?? 50);
+      },
+      sendDraft: async (draftId: string): Promise<NylasMessage> => {
+        const draft = drafts.get(draftId);
+        if (!draft) throw new ScenarioMailboxNotFound(`Draft ${draftId}`);
+        drafts.delete(draftId);
+        const from = principalAddress();
+        const sent: NylasMessage = { ...draft, id: `scenario-principal-sent-${randomUUID()}`, from: from ? [{ email: from }] : [], folders: ['SENT'] };
+        recordEmail(recorder, 'send', sent, from || undefined);
+        return sent;
+      },
+    };
+    // Cast: sendPrincipalDraft calls only the methods above on this client.
+    return mailbox as unknown as NylasClient;
+  };
+}
+
 /** Production's review, as the recording gateway takes it (built in createTestModeStack). */
 export interface RecordingGatewayReview {
   contentFilter: OutboundContentFilter;
@@ -322,9 +406,14 @@ export function createRecordingOutboundGateway(deps: {
   principalIdentities: ChannelIdentity[];
   autonomyService?: AutonomyService;
   review: RecordingGatewayReview;
+  /**
+   * The principal's own mailbox (#2474; createRecordingPrincipalMailbox), never in the Curia
+   * accounts' map. Absent: sendPrincipalDraft refuses, as production does with no grant.
+   */
+  principalMailbox?: () => NylasClient | null;
 }): OutboundGateway {
   const transports = createRecordingTransports(deps.recorder, deps.emailAccounts.map(a => a.name));
-  const { review } = deps;
+  const { review, recorder, principalMailbox } = deps;
   const bandReview = review.bandReview ? recordingBandReview(review.bandReview, deps.recorder) : undefined;
   return new OutboundGateway({
     nylasClients: transports.nylasClients,
@@ -351,7 +440,68 @@ export function createRecordingOutboundGateway(deps: {
     gating: review.gating ?? 'tier',
     ...(bandReview ? { bandReview } : {}),
     ...(review.relayBudget ? { relayBudget: review.relayBudget } : {}),
+    ...(principalMailbox
+      ? {
+          principalMailbox: async () => principalMailbox(),
+          // The calling run's level (seed.principal_mailbox.send_level), else production's default.
+          readSendLevel: async () => recorder.sendLevel?.() ?? DEFAULT_SEND_LEVEL,
+          draftProvenance: {
+            createdByCuria: async (draftIds: readonly string[]) => {
+              const curia = recorder.curiaDraftIds?.();
+              // Fail toward more review, as the gateway does without provenance: no run's
+              // record means every draft reads as Curia's.
+              return new Set(curia ? draftIds.filter(id => curia.has(id)) : draftIds);
+            },
+            editedByCuria: async (draftIds: readonly string[]) => {
+              const edited = recorder.curiaEditedDraftIds?.();
+              // Fail toward more review, as above.
+              return new Set(edited ? draftIds.filter(id => edited.has(id)) : draftIds);
+            },
+            // An autonomous send's D4.1 check (#2474 PR 2): only a draft the run's own task created
+            // (a `same_task` seed, or a stubbed compose or reply this run), last written at the run
+            // clock's now, so only a draft dated after that reads as changed. A draft Curia wrote in
+            // an earlier task is not one. No record proves nothing, so nothing reads as created in
+            // the task (fail closed, unlike the review default above).
+            curiaWritesInTask: async (draftId: string) => {
+              const task = recorder.curiaTaskDrafts?.();
+              if (!task?.ids.has(draftId)) return { created: false, lastWriteAt: null, replyToMessageId: null };
+              return { created: true, lastWriteAt: task.now, replyToMessageId: task.replyTo?.get(draftId) ?? null };
+            },
+          },
+          // In memory, in the calling run's store: the real ledger writes working docs, which a real
+          // instance's sent-observe shares, for a send that never left (the same reason there is no
+          // outbound queue). The autonomous thread cooldown still holds within the run.
+          sendLedger: inMemorySendLedger(() => recorder.principalSends?.()),
+        }
+      : {}),
   });
+}
+
+/**
+ * The principal-mailbox send ledger for one recording gateway (#2474): markers in memory only, in
+ * the calling run's store (`runStore`), else one for the stack.
+ */
+function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefined): NonNullable<ConstructorParameters<typeof OutboundGateway>[0]['sendLedger']> {
+  const shared: PrincipalSendEntry[] = [];
+  const entries = (): PrincipalSendEntry[] => runStore() ?? shared;
+  return {
+    recordSending: async (e) => { entries().push({ ...e, outcome: 'sending' }); },
+    recordSent: async (draftId, messageId) => {
+      const latest = [...entries()].reverse().find(e => e.draftId === draftId && e.outcome === 'sending');
+      if (latest) Object.assign(latest, { outcome: 'sent', messageId });
+    },
+    recordHeld: async (e) => { entries().push({ ...e, outcome: 'held' }); },
+    // As production counts (#2474 final fixes A13): an unreadable `at` is recent (fail closed).
+    recentForThread: async (threadId, sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.threadId === threadId && recent(e, sinceEpochMs)),
+    recentAutonomousSends: async (sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.outcome !== 'held' && recent(e, sinceEpochMs)),
+    sentForDraft: async (draftId) => entries().some(e => e.draftId === draftId && e.outcome === 'sent'),
+  };
+}
+
+/** PrincipalSendLedger's window test: at or after the cutoff, or an unreadable `at`. */
+function recent(e: PrincipalSendEntry, sinceEpochMs: number): boolean {
+  const at = Date.parse(e.at);
+  return !Number.isFinite(at) || at >= sinceEpochMs;
 }
 
 /**

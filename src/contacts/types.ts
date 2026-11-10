@@ -256,6 +256,12 @@ export interface TaskOriginator {
    * Travels with the originator to child tasks, like the rest of the lineage.
    */
   authenticated?: boolean;
+  /**
+   * Set only by the bypass ladder (computeEffectiveTaskMetadata) on the effective copy: the
+   * systemRole the lineage had before it was downgraded to 'agent'. Lets a gate tell a laddered
+   * system/principal lineage from a genuine 'agent' one. Never stamped at task creation.
+   */
+  ladderedFrom?: SystemRole | null;
 }
 
 // -- Authorization types --

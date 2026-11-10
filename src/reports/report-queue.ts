@@ -43,6 +43,7 @@ const SOURCE_KEYS: Record<PrincipalReportSource, true> = {
   sent_without_review: true,
   claim_trimmed: true, // no longer emitted (#2312); kept so historical rows still validate
   relay_deferred: true,
+  principal_mailbox: true,
 };
 const SOURCES: ReadonlySet<string> = new Set(Object.keys(SOURCE_KEYS));
 

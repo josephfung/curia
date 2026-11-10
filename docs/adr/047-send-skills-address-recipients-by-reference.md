@@ -8,6 +8,7 @@ Amended: 2026-10-08 — the principal's mailbox drafts address recipients by ref
 Amended: 2026-10-09 — `email-reply` verifies a recipient only when mail auth passes and the address is not ours (#2071)
 Amended: 2026-10-14 — `email-reply`'s `cc` resolves references beside literal addresses (#2131)
 Amended: 2026-11-03 — a verified number on one phone-family channel is derived onto the others (#2447)
+Amended: 2026-11-07 — "Curia cannot send these drafts" is superseded by [ADR-062](062-curia-sends-from-the-principals-mailbox.md) (#2474)
 
 ## Context
 
@@ -102,7 +103,7 @@ This is the overloaded field rejected above for the send skills, kept narrow: `e
 
 **Why the #2061 source rule, not a mailbox search.** #2053 proposed accepting a raw address only when it appears in a header of a message in the principal's mailbox, and named two ways to check: a Nylas `from:`/`to:`/`cc:` search, or the headers of messages already read in the task. The second is what #2061 built. A per-call Nylas search was rejected for `contact-register` and is rejected here for the same reasons: an API call per address, and the smoke and scenario stubs replace the mailbox tools by name, so a search would always miss in tests. The sources are slightly wider than mail headers: a message the principal wrote counts, so "draft to jordan@quillfeather.example" works without a lookup, and so does a page a tool read. Neither can carry a typo the model introduced, which is the failure this closes.
 
-**Curia cannot send these drafts.** `send-draft` looks a draft up only in the gateway's email accounts, the `email_accounts` rows configured under Settings → Channels → Email, each with its own Nylas grant. The principal's grant (`ceo_nylas_grant_id`) is not one of them. An operator who adds an email account bound to the principal's grant would let `send-draft` find and send these drafts on a principal-originated task (ADR-017). Until then the principal is the last check on every recipient. A mistyped recipient here costs a wrong address in a draft the principal reads before sending, not a delivered message.
+**Curia cannot send these drafts.** *Superseded by [ADR-062](062-curia-sends-from-the-principals-mailbox.md) (#2474): Curia now sends these drafts with `ceo-inbox-send-draft` through the gateway, and `send()` / `send-draft` refuse a Curia account bound to the principal's address. Kept below as the record of the earlier decision.* `send-draft` looks a draft up only in the gateway's email accounts, the `email_accounts` rows configured under Settings → Channels → Email, each with its own Nylas grant. The principal's grant (`ceo_nylas_grant_id`) is not one of them. An operator who adds an email account bound to the principal's grant would let `send-draft` find and send these drafts on a principal-originated task (ADR-017). Until then the principal is the last check on every recipient. A mistyped recipient here costs a wrong address in a draft the principal reads before sending, not a delivered message.
 
 ### Agent-entered addresses: `agent_stated`, verified after a duplicate check and a provenance check (#2041, #2061)
 

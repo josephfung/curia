@@ -582,4 +582,44 @@ describe('DocWriteHandler', () => {
       expect(create).toHaveBeenCalled();
     });
   });
+
+  // #2474 final fixes B1 (security review M1): the principal-mailbox send ledger is the autonomous
+  // send cooldown and daily cap. Only PrincipalSendLedger writes it, through the repo directly.
+  describe('principal-mailbox send ledger guard', () => {
+    const LEDGER = '/scratch/principal-mailbox-sends/d1-1762500000000.md';
+    const inputs: Array<[string, Record<string, unknown>]> = [
+      ['create', { path: '/scratch/principal-mailbox-sends/forged.md', mode: 'create', type: 'principal-mailbox-send', body: '' }],
+      ['append', { path: LEDGER, mode: 'append', content: 'x' }],
+      ['replace', { path: LEDGER, mode: 'replace', type: 'note', body: '', expected_version: 1 }],
+      ['section-edit', { path: LEDGER, mode: 'section-edit', section: 'A', content: 'x' }],
+      ['section-delete', { path: LEDGER, mode: 'section-delete', section: 'A' }],
+    ];
+
+    it.each(inputs)('refuses %s under the ledger prefix, without touching the repo', async (_mode, input) => {
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(makeDoc({ path: LEDGER })) });
+      const result = await new DocWriteHandler().execute(makeCtx(input, repo));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/record of sends from the principal's mailbox/);
+      for (const method of ['read', 'create', 'append', 'update', 'editSection', 'deleteSection'] as const) {
+        expect(repo[method], method).not.toHaveBeenCalled();
+      }
+    });
+
+    it('refuses a path that normalizes or cases its way into the prefix, and a principal-approved replay too', async () => {
+      for (const path of ['/projects/../scratch/principal-mailbox-sends/x.md', 'scratch/Principal-Mailbox-Sends/x.md', '/scratch/principal-mailbox-sends']) {
+        const result = await new DocWriteHandler().execute(makeCtx({ path, mode: 'create', type: 'note', body: 'x' }));
+        expect(result.success, path).toBe(false);
+      }
+      const ctx = makeCtx({ path: LEDGER, mode: 'replace', type: 'note', body: '' });
+      (ctx as { humanApproved?: boolean }).humanApproved = true;
+      expect((await new DocWriteHandler().execute(ctx)).success).toBe(false);
+    });
+
+    it('still writes elsewhere under /scratch', async () => {
+      const create = vi.fn().mockResolvedValue(makeDoc({ path: '/scratch/principal-mailbox-sends-notes.md' }));
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(null), create });
+      const result = await new DocWriteHandler().execute(makeCtx({ path: '/scratch/principal-mailbox-sends-notes.md', mode: 'create', type: 'note', body: 'x' }, repo));
+      expect(result.success).toBe(true);
+    });
+  });
 });

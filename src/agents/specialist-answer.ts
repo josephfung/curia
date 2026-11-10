@@ -7,7 +7,7 @@
 // lifted out of <scheduling_email> blocks, and a next step when text was not sent. Used by
 // the delegate skill's result and by the late-result brief, so both paths say the same.
 
-import { isHumanReplySkill } from '../dispatch/origin-turn-reply.js';
+import { isEmailOrMessageSend } from './message-sends.js';
 import { DRAFT_EMAIL_NEXT_STEP, NOTHING_SENT_NEXT_STEP } from './prompts/delegate-result-guidance.js';
 import { extractSchedulingEmails, type SchedulingEmailDraft } from './scheduling-email.js';
 
@@ -36,7 +36,7 @@ export function shapeSpecialistAnswer(content: string, sends: string[] | undefin
   const { drafts, text } = extractSchedulingEmails(content);
   const nextStep = drafts.length > 0
     ? DRAFT_EMAIL_NEXT_STEP
-    : sends !== undefined && !sends.some(isHumanReplySkill) && (SEND_WORDING.test(text) || SEND_WORDING.test(task))
+    : sends !== undefined && !sends.some(isEmailOrMessageSend) && (SEND_WORDING.test(text) || SEND_WORDING.test(task))
       ? NOTHING_SENT_NEXT_STEP
       : undefined;
   return {
