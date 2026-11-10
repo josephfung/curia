@@ -1403,6 +1403,9 @@ interface ScopedLocator {
   retargetedFrom?: Locator;
 }
 
+/** Counter for label-tag tokens: unique within the process, unlike a millisecond clock. */
+let labelTagSeed = 0;
+
 /**
  * A ref to a hidden native radio or checkbox (listed '(hidden)', #2546) can't be clicked: it has
  * no box, so Playwright waits out its timeout. The visible control is its label, so aim at that.
@@ -1416,6 +1419,8 @@ async function retargetHiddenInputToLabel(target: ScopedLocator, refToken: strin
       if (!(el instanceof HTMLInputElement) || (el.type !== 'radio' && el.type !== 'checkbox')) return false;
       const label = el.labels?.[0];
       if (!label) return false;
+      // Clear tags left by earlier clicks, so the selector can only reach this label.
+      for (const old of el.ownerDocument.querySelectorAll('[data-curia-label-for]')) old.removeAttribute('data-curia-label-for');
       label.setAttribute('data-curia-label-for', ref);
       return true;
     }, refToken);
@@ -1497,7 +1502,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
 
   // Main frame first (the common case, and the cheapest).
   const top = await resolveInScope(page, selector, log);
-  if (top) return retargetHiddenInputToLabel({ locator: top, scope: page }, `sel${Date.now()}`, log);
+  if (top) return retargetHiddenInputToLabel({ locator: top, scope: page }, `sel${++labelTagSeed}`, log);
 
   // Child frames eligible for interaction (exclude the main frame and private/internal
   // hosts). This is what lets click/type/hover/wait_for reach into legitimate iframes.
@@ -1508,7 +1513,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
   for (const frame of childFrames) {
     try {
       const inFrame = await resolveInScope(frame, selector, log);
-      if (inFrame) return retargetHiddenInputToLabel({ locator: inFrame, scope: frame }, `sel${Date.now()}`, log);
+      if (inFrame) return retargetHiddenInputToLabel({ locator: inFrame, scope: frame }, `sel${++labelTagSeed}`, log);
     } catch (err) {
       log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during selector resolution (detached/error)');
     }

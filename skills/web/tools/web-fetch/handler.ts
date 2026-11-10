@@ -18,7 +18,9 @@ const WEB_FETCH_NOT_FOUND = WEB_FETCH_NOT_FOUND_LINES.join(' ');
 const NO_READABLE_TEXT_NOTE = 'This fetch returned no readable text, which usually means the page is rendered by JavaScript or max_length cut it off. It says nothing about what the site offers. A real browser is needed: use web-browser if you have it, otherwise report that the page could not be read.';
 
 // Elements whose text is not page content. sanitize-html's nonTextTags drops them with their text.
-const NON_CONTENT_TAGS = ['script', 'style', 'textarea', 'option', 'xmp', 'iframe', 'object', 'embed', 'applet', 'head', 'title', 'noscript'];
+// Includes the instruction-like tags the execution layer's output sanitizer (src/skills/sanitize.ts)
+// also drops with their text, so a page holding only such text is still flagged as empty.
+const NON_CONTENT_TAGS = ['script', 'style', 'textarea', 'option', 'xmp', 'iframe', 'object', 'embed', 'applet', 'head', 'title', 'noscript', 'system', 'instruction', 'prompt', 'role'];
 
 /** The text a reader would see in the page body: markup, head, title and noscript removed. */
 function readableText(html: string): string {

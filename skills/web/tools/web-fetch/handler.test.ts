@@ -80,6 +80,13 @@ describe('web-fetch', () => {
       if (result.success) expect((result.data as { note?: string }).note).toMatch(/no readable text/);
     });
 
+    it.each(['system', 'instruction', 'prompt', 'role'])('flags a page whose only text is inside <%s>, which output sanitization removes', async (tag) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(html(`<html><body><${tag}>hello</${tag}></body></html>`)));
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/'));
+      expect(result.success).toBe(true);
+      if (result.success) expect((result.data as { note?: string }).note).toMatch(/no readable text/);
+    });
+
     it('words the note for an agent that has no web-browser', async () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(html('<div id="root"></div>')));
       const result = await new WebFetchHandler().execute(ctxFor('https://example.com/'));
