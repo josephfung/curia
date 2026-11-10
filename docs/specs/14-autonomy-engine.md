@@ -387,6 +387,23 @@ A bounce goes to the drafter once. A second unapproved item is a block at 80+ an
 
 Relayed replies skip the dispatcher's tier Gate C (except #1059's missing-tier escalate) and get all five questions at the gateway.
 
+### Sends from the principal's mailbox (#2474)
+
+See [ADR-062](../adr/062-curia-sends-from-the-principals-mailbox.md); the gateway's side is in [spec 15](15-outbound-safety.md#sends-from-the-principals-mailbox-2474). `ceo-inbox-send-draft` (`action_risk: 80`) sends a draft from the principal's own mailbox. How far Curia may go is a per-mailbox setting, config-store key `ceo_inbox/sending`, value string-encoded JSON `{ "<mailbox>": "<level>" }`:
+
+| Level | Curia may send |
+|---|---|
+| `off` | nothing |
+| `on_request` (default) | only principal-directed sends |
+| `routine` | plus autonomous sends rated `routine`, at 80+ |
+| `all` | plus autonomous `commitment` sends, at 90+; `financial_or_legal` never goes out autonomously |
+
+Missing, unreadable or unknown values read as `on_request`, which never widens autonomy and keeps principal-directed sends working. The gateway reads the setting itself (`createSendLevelReader`, `src/skills/principal-send/send-level.ts`), always for the `default` mailbox until #2475 adds named ones. The setting is pinned into ceo-inbox's context. Autonomous sends land in a follow-up PR; until then `routine` and `all` behave as `on_request`, and any send that is not principal-directed is refused.
+
+- **Principal-directed** means a live principal turn, not an approval replay, and for an email-originated turn a verified sender. These sends are not stakes-gated (the principal decided), are not put in the spot-check sample pool, and are reviewed as spec 15 describes: a principal-written draft only for personal data that remains, a Curia-edited one for purpose, a Curia-written one for purpose and grounding.
+- **Gates.** `ceo-inbox-send-draft` is in `HUMAN_SEND_SKILLS`, so band Gate C leaves its review to the gateway. Gates A and B never file an approval for it (`NO_QUEUED_APPROVAL_TOOLS`, `src/skills/execution.ts`): a blocked call is refused with "No approval request was created", and the draft stays where it is. A principal-originated call skips A and B as any other does.
+- **No approvals.** A hold or ask leaves the draft in the principal's Drafts folder with a reason, never an approval row. `sendPrincipalDraft` refuses a `humanApproved` replay outright, so nothing can reach the send through the approval queue.
+
 ### Relay budget (`RelayBudget`, `src/autonomy/relay-budget.ts`) (#1320)
 
 Sends to the principal alone skip the review above, and Gate C allows them, so an outside contact who keeps writing could get Curia to message the principal without limit. The gateway counts those relays per originator and, past the budget, sends them to the digest. It applies under both `tier` and `band`.

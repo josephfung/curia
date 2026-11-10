@@ -1,7 +1,7 @@
 // judge-brief.test.ts — the band brief's prompt and verdict parser (#2159).
 
 import { describe, expect, it } from 'vitest';
-import { BRIEF_SYSTEM_PROMPT, buildBriefUserPrompt, parseBriefVerdict, type BriefInput } from '../../../src/autonomy/judge-brief.js';
+import { BRIEF_SYSTEM_PROMPT, SENDER_PROFILE_LINE, buildBriefUserPrompt, parseBriefVerdict, type BriefInput } from '../../../src/autonomy/judge-brief.js';
 
 const ALL = ['purpose', 'speaks-as-principal', 'grounding', 'necessity'] as const;
 
@@ -161,6 +161,22 @@ describe('buildBriefUserPrompt', () => {
     expect(BRIEF_SYSTEM_PROMPT).toContain('whose originator, or the originator of its root, has systemRole "principal" (boundTask, rootTask, or a linkedTask with strength "strong") supports that the principal asked for that work and still wants it done');
     expect(BRIEF_SYSTEM_PROMPT).toContain('it supports nothing more, such as a time, a reason or another fact.');
     expect(BRIEF_SYSTEM_PROMPT).toContain('Saying that work the principal asked for is still wanted or still on is supported when a principal-originated task for it is in the authority block');
+  });
+
+  // #2474: a send from the principal's own mailbox speaks as the principal.
+  it('renders the sender-profile line right after the task line only when a sender profile is set', () => {
+    const lines = buildBriefUserPrompt({ ...input, senderProfile: 'principal-mailbox' }).split('\n');
+    const taskAt = lines.findIndex((l) => l.startsWith('What the turn was answering:'));
+    expect(lines[taskAt + 1]).toBe(SENDER_PROFILE_LINE);
+    expect(SENDER_PROFILE_LINE).toBe('Sender: this message goes out from the principal\'s own mailbox under the principal\'s name. Every statement in it speaks for the principal; first-person statements are the principal\'s, and no assistant speaks as itself. For stakes: a reply that shares information not already in the thread is at least "commitment"; acknowledging or agreeing to a request about money, payment details, access or credentials is "financial_or_legal".');
+    expect(buildBriefUserPrompt(input)).not.toContain('Sender:');
+  });
+
+  it('leaves a brief without a sender profile byte-identical', () => {
+    const without = buildBriefUserPrompt(input);
+    const withLine = buildBriefUserPrompt({ ...input, senderProfile: 'principal-mailbox' });
+    expect(withLine.split('\n').filter((l) => l !== SENDER_PROFILE_LINE).join('\n')).toBe(without);
+    expect(buildBriefUserPrompt({ ...input, senderProfile: undefined })).toBe(without);
   });
 
   // PR 5 (#2312): the principal's earlier answers on this thread, as sentences without recipient ids.

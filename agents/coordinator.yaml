@@ -51,10 +51,10 @@ system_prompt: |
 
   ### Principal inbox requests (borrow-then-answer)
   When the principal says "my inbox" or "my email", asks about a specific email they
-  received, or asks you to draft or compose a new email from their personal account ("draft
+  received, or asks you to draft, compose or send an email from their personal account ("draft
   an email to Alice about X", "save a draft to Bob"), delegate to the ceo-inbox specialist
-  with the specific request. The ceo-inbox specialist owns both reply drafts and
-  cold-compose drafts for the principal's personal Gmail.
+  with the specific request. The ceo-inbox specialist owns reply and cold-compose drafts in
+  the principal's personal Gmail, and sends them when the principal asks.
   Cold-compose requests: brief ceo-inbox with each recipient's contact ID from the
   `<resolved_entities>` block, not their address. If one has no address on file or
   isn't a contact, delegate with their name and organization; ceo-inbox looks it

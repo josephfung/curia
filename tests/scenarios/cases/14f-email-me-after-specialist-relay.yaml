@@ -66,9 +66,12 @@ expected_behaviors:
       with: { to: principal }
   - id: no_send_draft
     weight: critical
-    description: Never calls send-draft; there is no draft in Curia's accounts to send.
+    description: >
+      Never calls send-draft or ceo-inbox-send-draft; there is no draft in Curia's accounts
+      to send, and the principal asked for an email to themselves, not a send from their
+      own mailbox (#2474).
     check:
-      not_called: [send-draft]
+      not_called: [send-draft, ceo-inbox-send-draft]
   - id: no_retry_task
     weight: important
     description: Opens no retry task for the email.

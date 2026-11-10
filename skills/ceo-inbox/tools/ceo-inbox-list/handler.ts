@@ -1,10 +1,14 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
 import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
-import { CeoNylasClient, NYLAS_MAX_LIST_LIMIT, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
+import { CeoNylasClient, NYLAS_MAX_LIST_LIMIT, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
+import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
+// With modified_since the whole drafts collection is scanned, as ceo-inbox-search does, up to
+// this ceiling (#2474 final review C1): "this morning's drafts" must not stop at one page.
+const DRAFT_SCAN_LIMIT = 500;
 
 // Drafts live in a separate Nylas v3 resource (`/drafts`), not the `/messages`
 // collection. Listing them via the message path returns a silent empty array
@@ -55,14 +59,35 @@ export class CeoInboxListHandler implements ToolHandler {
     // Drafts are a distinct Nylas resource — query `/drafts`, not `/messages`.
     if (DRAFTS_FOLDER_NAMES.has(folder.toUpperCase())) {
       ctx.log.info({ folder, limit }, 'ceo-inbox-list: listing drafts via /drafts');
+      const since = parseModifiedSince(input.modified_since, ctx.timezone);
+      if (!since.ok) return { success: false, error: since.error };
       try {
-        const drafts = await client.listDrafts({ limit });
+        // Nylas /drafts has no date parameter (#2474): with a cutoff, scan every page and
+        // filter here, so the limit counts matching drafts and none past the first page is
+        // missed (final review C1). A scan stopped at its cap says so (scan_incomplete).
+        let fetched: NylasDraftSummary[];
+        let scanIncomplete = false;
+        if (since.seconds === null) {
+          fetched = await client.listDrafts({ limit });
+        } else {
+          const all = await client.listAllDrafts({ maxScan: DRAFT_SCAN_LIMIT, pageSize: NYLAS_MAX_LIST_LIMIT });
+          fetched = all.drafts;
+          scanIncomplete = all.truncated;
+          if (scanIncomplete) {
+            ctx.log.warn({ scanned: fetched.length, cap: DRAFT_SCAN_LIMIT }, 'ceo-inbox-list: draft scan hit the cap — older drafts were not checked against modified_since');
+          }
+        }
+        const kept = filterModifiedSince(fetched, since.seconds).slice(0, limit);
+        const { drafts, displayTimezone } = await annotateDrafts(ctx, kept, 'ceo-inbox-list');
         return {
           success: true,
           // `drafts` (not `messages`) + an explicit `folder` make a genuine
           // empty result distinguishable from the old silent-zero failure where
           // the wrong endpoint was queried.
-          data: { drafts, count: drafts.length, folder: 'DRAFTS' },
+          data: {
+            drafts, count: drafts.length, folder: 'DRAFTS', displayTimezone,
+            ...(scanIncomplete ? { scan_incomplete: true } : {}),
+          },
         };
       } catch (err) {
         ctx.log.error({ err }, 'ceo-inbox-list: failed to list drafts');

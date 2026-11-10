@@ -40,6 +40,7 @@ import { buildReplyQuote } from '../../../src/skills/_shared/reply-quote.js';
 import type { BandReviewInput } from '../../../src/dispatch/band-send-review.js';
 import {
   createRecordingOutboundGateway,
+  createRecordingPrincipalMailbox,
   createRecordingTransports,
   emailText,
   recordingBandReview,
@@ -66,10 +67,12 @@ const noRun: SendRecorder = {
   message: () => undefined,
 };
 
-function gateway(recorder: SendRecorder): OutboundGateway {
+function gateway(recorder: SendRecorder, principalAddress?: string): OutboundGateway {
   const contactService = {
     resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
     getContact: vi.fn().mockResolvedValue(null),
+    createContact: vi.fn().mockResolvedValue({ id: 'contact-new' }),
+    linkIdentity: vi.fn().mockResolvedValue(undefined),
   } as unknown as ContactService;
   return createRecordingOutboundGateway({
     recorder,
@@ -78,9 +81,26 @@ function gateway(recorder: SendRecorder): OutboundGateway {
     bus: new EventBus(logger),
     logger,
     principalIdentities: [],
+    ...(principalAddress ? { principalMailbox: createRecordingPrincipalMailbox(recorder, () => principalAddress) } : {}),
     review: { contentFilter: new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' }) },
   });
 }
+
+/** A draft in the principal's own mailbox, as `seed.principal_mailbox` seeds one (#2474). */
+function principalDraft(over: Partial<NylasMessage> = {}): NylasMessage {
+  return {
+    id: 'draft-30v-acme', threadId: 'thr-30v-acme', subject: 'Venue for the offsite', from: [],
+    to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], bcc: [],
+    body: 'Shall we use the Harbour Room?', snippet: '', date: 0, unread: false, folders: ['DRAFTS'], attachments: [],
+    ...over,
+  };
+}
+
+/** The principal asking on a live turn: what makes a principal-mailbox send principal-directed. */
+const LIVE_PRINCIPAL = {
+  liveTurn: true,
+  taskMetadata: { originator: { contactId: 'principal-1', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-07T10:00:00.000Z' } },
+};
 
 describe('createRecordingOutboundGateway', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
@@ -207,6 +227,101 @@ describe('createRecordingTransports', () => {
   it('keys one fake mailbox by every account name', () => {
     const { nylasClients } = createRecordingTransports(runRecorder(), ['curia', 'principal']);
     expect([...nylasClients.keys()]).toEqual(['curia', 'principal']);
+  });
+});
+
+// #2474: the principal's own mailbox is a separate fake over the run's seeded drafts. Curia's
+// accounts never see those drafts, and a send from it records the principal as the sender.
+describe('the recording principal mailbox (#2474)', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    constructed.clients.length = 0;
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network call in test mode'));
+  });
+  afterEach(() => {
+    expect(constructed.clients).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('serves the run\'s drafts and records a send with the principal as sender, once', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts };
+    const mailbox = createRecordingPrincipalMailbox(recorder, () => 'avery@example.test')()!;
+    expect(await mailbox.getDraft('draft-30v-acme')).toMatchObject({ subject: 'Venue for the offsite' });
+    expect(await mailbox.getDraft('draft-other')).toBeNull();
+    const sent = await mailbox.sendDraft('draft-30v-acme');
+    expect(recorder.sends).toEqual([expect.objectContaining({
+      channel: 'email', kind: 'send', from: 'avery@example.test', to: ['jo.park@acme.example.test'],
+      subject: 'Venue for the offsite', body: 'Shall we use the Harbour Room?', id: sent.id,
+    })]);
+    // Sent, so no longer a draft.
+    expect(drafts.has('draft-30v-acme')).toBe(false);
+    await expect(mailbox.sendDraft('draft-30v-acme')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('is no mailbox when the calling run has none (the gateway then refuses: mailbox_unavailable)', () => {
+    expect(createRecordingPrincipalMailbox(runRecorder(), () => 'avery@example.test')()).toBeNull();
+  });
+
+  it('keeps the principal\'s drafts out of Curia\'s accounts', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts };
+    const curia = createRecordingTransports(recorder, ['curia']).nylasClients.get('curia')!;
+    expect(await curia.getDraft('draft-30v-acme')).toBeNull();
+  });
+
+  it('sends a seeded draft through sendPrincipalDraft on the principal\'s live turn', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts, curiaDraftIds: () => new Set<string>(), sendLevel: () => undefined };
+    const result = await gateway(recorder, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL });
+    expect(result).toMatchObject({ success: true, to: ['jo.park@acme.example.test'], subject: 'Venue for the offsite' });
+    expect(recorder.sends.map(s => [s.kind, s.from, s.to])).toEqual([['send', 'avery@example.test', ['jo.park@acme.example.test']]]);
+  });
+
+  it('reads the run\'s edits: a draft Curia edited is reviewed as curia-edited (final review S1)', async () => {
+    const recent = Math.floor(Date.now() / 1000) - 3600;
+    const drafts = new Map([['draft-30v-acme', principalDraft({ date: recent })]]);
+    const reviewed: string[] = [];
+    const bandReview = { review: vi.fn(async (input: BandReviewInput) => { reviewed.push(String(input.draftAuthor)); return { kind: 'send' as const }; }) };
+    const build = (curiaEdited: ReadonlySet<string>) => createRecordingOutboundGateway({
+      recorder: { ...runRecorder(), principalDrafts: () => drafts, curiaDraftIds: () => new Set<string>(), curiaEditedDraftIds: () => curiaEdited },
+      emailAccounts: [{ name: 'curia', selfEmail: 'curia@example.test' }],
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockResolvedValue(null), getContact: vi.fn().mockResolvedValue(null),
+        createContact: vi.fn().mockResolvedValue({ id: 'contact-new' }), linkIdentity: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ContactService,
+      bus: new EventBus(logger),
+      logger,
+      principalIdentities: [],
+      principalMailbox: createRecordingPrincipalMailbox({ ...runRecorder(), principalDrafts: () => drafts }, () => 'avery@example.test'),
+      review: { contentFilter: new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' }), bandReview, gating: 'band' },
+    });
+    expect((await build(new Set(['draft-30v-acme'])).sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL })).success).toBe(true);
+    expect(reviewed).toEqual(['curia-edited']);
+  });
+
+  it('reads the run\'s send level: off leaves the draft unsent', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts, sendLevel: () => 'off' as const };
+    const result = await gateway(recorder, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL });
+    expect(result).toMatchObject({ success: false, leftAsDraft: true, refusal: 'setting_off' });
+    expect(recorder.sends).toEqual([]);
+    expect(drafts.has('draft-30v-acme')).toBe(true);
+  });
+
+  it('refuses an autonomous send, as PR 1 does everywhere', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts, sendLevel: () => 'all' as const };
+    const system = { taskMetadata: { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
+    const result = await gateway(recorder, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: system });
+    expect(result).toMatchObject({ success: false, refusal: 'not_requested' });
+    expect(recorder.sends).toEqual([]);
+  });
+
+  it('refuses outside every run: the stack has no principal mailbox then', async () => {
+    const result = await gateway(noRun, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL });
+    expect(result).toMatchObject({ success: false, refusal: 'mailbox_unavailable' });
   });
 });
 

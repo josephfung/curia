@@ -36,13 +36,17 @@ import {
   type SeedContact,
   type SeedOutboundEntry,
   type SeedOutreach,
+  type SeedDraftRecipient,
   type SeedPinned,
+  type SeedPrincipalDraft,
   type SeedPrincipalIdentity,
+  type SeedPrincipalMailbox,
   type SeedTask,
   type SeedVerification,
   type ToolStub,
 } from './types.js';
 import type { AutonomyFixture } from '../../src/startup/test-mode-stack.js';
+import type { SendLevel } from '../../src/skills/principal-send/send-level.js';
 
 const WEIGHTS: readonly BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
 // 'trusted' is a grant made after creation (createContact refuses it); seeding sets it then.
@@ -78,7 +82,11 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
 }
 
 const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools'] as const;
-const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach', 'pinned'] as const;
+const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
+const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts'] as const;
+const PRINCIPAL_DRAFT_KEYS = ['id', 'thread', 'to', 'cc', 'subject', 'body', 'modified', 'by_curia'] as const;
+const DRAFT_RECIPIENT_KEYS = ['name', 'email'] as const;
+const SEND_LEVELS: readonly SendLevel[] = ['off', 'on_request', 'routine', 'all'];
 const PINNED_KEYS = ['docs', 'configs', 'unavailable'] as const;
 const TASK_KEYS = ['key', 'title', 'intent', 'originator', 'agent'] as const;
 const OUTREACH_KEYS = ['key', 'task', 'via', 'org_name', 'domains', 'addresses', 'contacts', 'summary', 'confirmed'] as const;
@@ -712,6 +720,71 @@ function parsePinned(raw: Raw, file: string): SeedPinned | undefined {
   return pinned;
 }
 
+/** A draft's `to` or `cc`: `{ name?, email }` mappings, each address under a .test name. */
+function parseDraftRecipients(raw: Raw, key: 'to' | 'cc', file: string, where: string, required: boolean): SeedDraftRecipient[] {
+  const v = raw[key];
+  if (v === undefined && !required) return [];
+  if (!Array.isArray(v) || !v.every(isObject)) throw new CaseError(file, `${where}: '${key}' must be a list of recipients ({ name?, email })`);
+  return v.map((r, i) => {
+    const at = `${where}.${key}[${i}]`;
+    onlyKeys(r, DRAFT_RECIPIENT_KEYS, file, at);
+    const email = str(r, 'email', file, at).trim();
+    // Fixtures never name a real person; the principal's own address is under example.test.
+    if (!TEST_ADDRESS.test(email)) throw new CaseError(file, `${at}: address '${email}' must be under a .test name`);
+    const name = optStr(r, 'name', file, at);
+    return { ...(name !== undefined ? { name } : {}), email };
+  });
+}
+
+/**
+ * `seed.principal_mailbox` (#2474): drafts in the principal's own mailbox, which the real
+ * ceo-inbox-send-draft reads and sends in a through-gateway run, and the run's send level.
+ */
+function parsePrincipalMailbox(raw: Raw, file: string): SeedPrincipalMailbox | undefined {
+  if (raw['principal_mailbox'] === undefined) return undefined;
+  const where = 'seed.principal_mailbox';
+  const block = mapping(raw, 'principal_mailbox', file, 'seed');
+  onlyKeys(block, PRINCIPAL_MAILBOX_KEYS, file, where);
+  const level = optStr(block, 'send_level', file, where);
+  if (level !== undefined && !(SEND_LEVELS as readonly string[]).includes(level)) {
+    throw new CaseError(file, `${where}: send_level must be one of ${SEND_LEVELS.join(', ')}`);
+  }
+  const seen = new Set<string>();
+  const drafts = list(block, 'drafts', file).map((d, i): SeedPrincipalDraft => {
+    const at = `${where}.drafts[${i}]`;
+    onlyKeys(d, PRINCIPAL_DRAFT_KEYS, file, at);
+    const id = str(d, 'id', file, at);
+    if (seen.has(id)) throw new CaseError(file, `${at}: duplicate draft id '${id}'`);
+    seen.add(id);
+    const byCuria = optBool(d, 'by_curia', file, at);
+    if (byCuria === undefined) throw new CaseError(file, `${at}: 'by_curia' must be true or false`);
+    const modified = optStr(d, 'modified', file, at);
+    // Resolved against an arbitrary clock here only to prove it is a date; the run resolves it
+    // against its own (resolveDatePlaceholders).
+    if (modified !== undefined) {
+      let resolved: string;
+      try {
+        resolved = resolveDatePlaceholders(modified, 'UTC');
+      } catch (err) {
+        throw new CaseError(file, `${at}: 'modified': ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (Number.isNaN(Date.parse(resolved))) throw new CaseError(file, `${at}: 'modified' must be a date or a date placeholder ({{at:now-3h}})`);
+    }
+    const thread = optStr(d, 'thread', file, at);
+    return {
+      id,
+      ...(thread !== undefined ? { thread } : {}),
+      to: parseDraftRecipients(d, 'to', file, at, true),
+      cc: parseDraftRecipients(d, 'cc', file, at, false),
+      subject: str(d, 'subject', file, at),
+      body: str(d, 'body', file, at),
+      ...(modified !== undefined ? { modified } : {}),
+      byCuria,
+    };
+  });
+  return { ...(level !== undefined ? { sendLevel: level as SendLevel } : {}), drafts };
+}
+
 /** `seed.backlog`: each count a whole number, absent ones zero, at least one positive. */
 function parseBacklog(raw: Raw, file: string): PrincipalBacklogCounts | undefined {
   if (raw['backlog'] === undefined) return undefined;
@@ -1018,6 +1091,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   onlyKeys(seedRaw, SEED_KEYS, file, 'seed');
   const backlog = parseBacklog(seedRaw, file);
   const pinned = parsePinned(seedRaw, file);
+  const principalMailbox = parsePrincipalMailbox(seedRaw, file);
   const seed = {
     contacts: parseContacts(seedRaw, file),
     outboundContext: parseOutbound(seedRaw, file),
@@ -1027,6 +1101,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     tasks: parseTasks(seedRaw, file),
     outreach: parseOutreach(seedRaw, file),
     ...(pinned && { pinned }),
+    ...(principalMailbox && { principalMailbox }),
     ...(backlog && { backlog }),
   };
 
@@ -1120,6 +1195,10 @@ function validateThroughGateway(scenario: ScenarioCase, file: string): void {
   }
   if (scenario.gatedTools && !scenario.throughGateway) {
     throw new CaseError(file, `'gated_tools' needs through_gateway: true (the gates run on its review layer)`);
+  }
+  // Only the review layer's gateway has the principal's mailbox (#2474); elsewhere the send is a stub.
+  if (scenario.seed.principalMailbox && !scenario.throughGateway) {
+    throw new CaseError(file, `seed.principal_mailbox needs through_gateway: true (only a real ceo-inbox-send-draft reads it)`);
   }
   // approve-action replays a held call outside the gated call it came from, so it would reach
   // the real handler, which test mode cannot serve. Not supported yet.

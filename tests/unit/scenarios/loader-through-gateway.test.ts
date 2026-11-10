@@ -258,3 +258,65 @@ expected_behaviors:
     expect(() => load(body)).toThrow(/inbound.origin is only for 'from: delegate'/);
   });
 });
+
+// #2474: drafts in the principal's own mailbox, which the real ceo-inbox-send-draft sends from.
+describe('seed.principal_mailbox (#2474)', () => {
+  const MAILBOX = `  principal_mailbox:
+    send_level: on_request
+    drafts:
+      - id: draft-30v-acme
+        thread: thr-30v-acme
+        to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+        cc: [{ email: lee@acme.example.test }]
+        subject: Venue for the offsite
+        body: "Shall we use the Harbour Room?"
+        modified: "{{at:now-3h}}"
+        by_curia: false
+      - id: draft-30v-older
+        to: [{ email: sam@older.test }]
+        subject: Older
+        body: Older draft
+        by_curia: true
+`;
+  const withMailbox = (s: string, block = MAILBOX) => s.replace('  tasks:\n', `${block}  tasks:\n`);
+
+  it('reads the drafts, their authorship and the run\'s send level', () => {
+    const c = load(withMailbox(CASE));
+    expect(c.seed.principalMailbox).toEqual({
+      sendLevel: 'on_request',
+      drafts: [
+        {
+          id: 'draft-30v-acme', thread: 'thr-30v-acme', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }],
+          cc: [{ email: 'lee@acme.example.test' }], subject: 'Venue for the offsite', body: 'Shall we use the Harbour Room?',
+          modified: '{{at:now-3h}}', byCuria: false,
+        },
+        { id: 'draft-30v-older', to: [{ email: 'sam@older.test' }], cc: [], subject: 'Older', body: 'Older draft', byCuria: true },
+      ],
+    });
+  });
+
+  it('leaves the send level unset when the case does not name one', () => {
+    expect(load(withMailbox(CASE, MAILBOX.replace('    send_level: on_request\n', ''))).seed.principalMailbox?.sendLevel).toBeUndefined();
+  });
+
+  it('leaves a case without it unchanged', () => {
+    expect(load(CASE).seed.principalMailbox).toBeUndefined();
+  });
+
+  it.each([
+    ['without through_gateway', (s: string) => withMailbox(s).replace('through_gateway: true\n', '').replace(/expected_behaviors:[\s\S]*$/, 'expected_behaviors:\n  - id: a\n    description: replies\n'), /principal_mailbox needs through_gateway: true/],
+    ['an unknown key in the block', (s: string) => withMailbox(s, MAILBOX.replace('    drafts:\n', '    folder: DRAFTS\n    drafts:\n')), /seed.principal_mailbox: unknown key\(s\) folder/],
+    ['an unknown key in a draft', (s: string) => withMailbox(s, MAILBOX.replace('        by_curia: true\n', '        by_curia: true\n        bcc: []\n')), /seed.principal_mailbox.drafts\[1\]: unknown key\(s\) bcc/],
+    ['an unknown key in a recipient', (s: string) => withMailbox(s, MAILBOX.replace('[{ email: sam@older.test }]', '[{ email: sam@older.test, role: cfo }]')), /drafts\[1\].to\[0\]: unknown key\(s\) role/],
+    ['an unknown send level', (s: string) => withMailbox(s, MAILBOX.replace('send_level: on_request', 'send_level: sometimes')), /send_level must be one of off, on_request, routine, all/],
+    ['a draft without by_curia', (s: string) => withMailbox(s, MAILBOX.replace('        by_curia: true\n', '')), /'by_curia' must be true or false/],
+    ['a draft without an id', (s: string) => withMailbox(s, MAILBOX.replace('      - id: draft-30v-older\n        to:', '      - to:')), /'id' must be a non-empty string/],
+    ['a duplicate draft id', (s: string) => withMailbox(s, MAILBOX.replace('id: draft-30v-older', 'id: draft-30v-acme')), /duplicate draft id 'draft-30v-acme'/],
+    ['a recipient on a real domain', (s: string) => withMailbox(s, MAILBOX.replace('sam@older.test', 'sam@older.com')), /must be under a .test name/],
+    ['a draft without to', (s: string) => withMailbox(s, MAILBOX.replace('        to: [{ email: sam@older.test }]\n', '')), /'to' must be a list of recipients/],
+    ['a modified time that is not a date', (s: string) => withMailbox(s, MAILBOX.replace('"{{at:now-3h}}"', 'yesterday-ish')), /'modified' must be a date or a date placeholder/],
+    ['drafts that are not a list', (s: string) => withMailbox(s, '  principal_mailbox:\n    drafts: draft-1\n'), /'drafts' must be a list of mappings/],
+  ])('rejects %s', (_label, edit, error) => {
+    expect(() => load(edit(CASE))).toThrow(error);
+  });
+});

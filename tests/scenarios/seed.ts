@@ -39,6 +39,8 @@ import { buildInitialTaskProgress } from '../../src/db/task-repo.js';
 import { FailOpenLimiter } from '../../src/autonomy/band-policy.js';
 import type { TaskOutreachRepo, TaskOutreachRow } from '../../src/dispatch/task-outreach.js';
 import type { RecordedReview, RecordedSend } from '../../src/startup/test-mode-sends.js';
+import type { SendLevel } from '../../src/skills/principal-send/send-level.js';
+import type { MailboxDraft } from '../shared/tool-state.js';
 import type { GatewayOutcome, ScenarioCase, SeedContact, SeedOutreach, SeedPinned, SeedPrincipalIdentity, SeedTask } from './types.js';
 
 /**
@@ -118,6 +120,19 @@ export class SeedScope {
   failOpen = new FailOpenLimiter();
   /** The fake mailbox's drafts for this run (#2312). */
   readonly drafts = new Map<string, NylasMessage>();
+  /**
+   * The principal's own mailbox for this run (#2474): its drafts, by id, which the real
+   * ceo-inbox-send-draft sends from in a through-gateway run. `seed.principal_mailbox` plus
+   * every stubbed ceo-inbox draft write (mirrorPrincipalDraft). Kept apart from `drafts`, the
+   * Curia accounts' mailbox, as production keeps the two grants apart.
+   */
+  readonly principalDrafts = new Map<string, NylasMessage>();
+  /** Which of principalDrafts Curia wrote (#2474): what the gateway's provenance reads. */
+  readonly curiaDraftIds = new Set<string>();
+  /** Which of principalDrafts Curia edited (#2474 final review S1): reviewed as curia-edited. */
+  readonly curiaEditedDraftIds = new Set<string>();
+  /** The run's ceo_inbox/sending level (`seed.principal_mailbox.send_level`, #2474); unset: on_request. */
+  sendLevel: SendLevel | undefined;
   /** Action-log row ids the run wrote or read as its own (#2312): the only ids its delivery may claim. */
   readonly approvalRowIds = new Set<number>();
   /**
@@ -152,8 +167,56 @@ export class SeedScope {
     this.failOpen = new FailOpenLimiter();
     this.approvalRowIds.clear();
     this.drafts.clear();
+    this.principalDrafts.clear();
+    this.curiaDraftIds.clear();
+    this.curiaEditedDraftIds.clear();
+    this.sendLevel = undefined;
     this.errors.length = 0;
   }
+}
+
+/** A principal-mailbox draft as the Nylas client returns one (#2474). */
+function principalDraftMessage(draft: MailboxDraft, threadId: string, date: number): NylasMessage {
+  return {
+    id: draft.id,
+    threadId,
+    subject: draft.subject,
+    from: [],
+    to: draft.to.map((r) => ({ ...r })),
+    cc: draft.cc.map((r) => ({ ...r })),
+    bcc: [],
+    body: draft.body,
+    snippet: draft.body.slice(0, 120),
+    date,
+    unread: false,
+    folders: ['DRAFTS'],
+    attachments: [],
+  };
+}
+
+/**
+ * Keep the run's principal mailbox in step with a stubbed ceo-inbox draft write (#2474; the
+ * stub layer's DraftMirror). The draft is added or replaced, keeping the thread it was in;
+ * `curiaWrote` (a new compose or reply) marks it Curia's; `edited` (a draft-edit) leaves its
+ * creator as it was and marks it edited, so the send reviews it as curia-edited (final review
+ * S1). PR 2 extends this with the thread a reply lands on.
+ */
+export function mirrorPrincipalDraft(scope: SeedScope, draft: MailboxDraft, curiaWrote: boolean, edited?: true): void {
+  const prev = scope.principalDrafts.get(draft.id);
+  scope.principalDrafts.set(draft.id, principalDraftMessage(draft, prev?.threadId ?? '', Math.floor(Date.now() / 1000)));
+  if (curiaWrote) scope.curiaDraftIds.add(draft.id);
+  if (edited) scope.curiaEditedDraftIds.add(draft.id);
+}
+
+/** The run's principal-mailbox drafts as the stub layer preloads them (#2474), so an edit applies to them. */
+export function mailboxDraftsOf(scope: SeedScope): MailboxDraft[] {
+  return [...scope.principalDrafts.values()].map((m) => ({
+    id: m.id,
+    subject: m.subject,
+    to: m.to.map((r) => ({ ...(r.name ? { name: r.name } : {}), email: r.email })),
+    cc: m.cc.map((r) => ({ ...(r.name ? { name: r.name } : {}), email: r.email })),
+    body: m.body,
+  }));
 }
 
 /** The calling run's scope; undefined outside every run, which then sees nothing. */
@@ -598,6 +661,16 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
 
   scope.backlog = scenario.seed.backlog;
   scope.pinned = scenario.seed.pinned;
+  // The principal's own mailbox (#2474): in memory only, nothing to clean up.
+  const mailbox = scenario.seed.principalMailbox;
+  scope.sendLevel = mailbox?.sendLevel;
+  for (const d of mailbox?.drafts ?? []) {
+    const date = Math.floor((d.modified !== undefined ? Date.parse(d.modified) : Date.now()) / 1000);
+    scope.principalDrafts.set(d.id, principalDraftMessage(
+      { id: d.id, subject: d.subject, to: d.to, cc: d.cc, body: d.body }, d.thread ?? '', date,
+    ));
+    if (d.byCuria) scope.curiaDraftIds.add(d.id);
+  }
   try {
     for (const identity of scenario.seed.principalIdentities) {
       if (!stack.principalContactId) throw new Error('No principal contact in this database');

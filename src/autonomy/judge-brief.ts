@@ -138,7 +138,15 @@ export interface BriefInput {
   band: AutonomyBand;
   evidence: BriefEvidence;
   conversationId: string;
+  /**
+   * Who the message goes out as (#2474). Set only for a send from the principal's own mailbox;
+   * every other brief, Gate C's included, leaves it unset and renders byte-identical.
+   */
+  senderProfile?: 'principal-mailbox';
 }
+
+/** The brief line for a send from the principal's own mailbox (#2474, design D2): it speaks as the principal. */
+export const SENDER_PROFILE_LINE = `Sender: this message goes out from the principal's own mailbox under the principal's name. Every statement in it speaks for the principal; first-person statements are the principal's, and no assistant speaks as itself. For stakes: a reply that shares information not already in the thread is at least "commitment"; acknowledging or agreeing to a request about money, payment details, access or credentials is "financial_or_legal".`;
 
 export interface BriefAnswers {
   purpose?: 'serving' | 'steered';
@@ -241,6 +249,8 @@ export function buildBriefUserPrompt(input: BriefInput): string {
     `Of these, the principal: <principal_recipients_json>${encode(input.principalRecipients ?? [])}</principal_recipients_json>`,
     `Message (or proposed action): <message_json>${encode(input.message)}</message_json>`,
     `What the turn was answering: <task_json>${encode(input.evidence.taskContent ?? '')}</task_json>`,
+    // Only for a principal-mailbox send (#2474), so every other brief is unchanged.
+    ...(input.senderProfile === 'principal-mailbox' ? [SENDER_PROFILE_LINE] : []),
     // Only for a delegated turn, so a turn that was not delegated sees the brief unchanged.
     ...(input.evidence.originContent !== undefined
       ? [`${ORIGIN_LABELS[input.evidence.originKind ?? 'task']}${input.evidence.originAt ? `, at ${encode(input.evidence.originAt)}` : ''}: <origin_json>${encode(input.evidence.originContent)}</origin_json>`]
