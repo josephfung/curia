@@ -4052,8 +4052,9 @@ export class OutboundGateway {
 
   /**
    * Signs an email the gateway is about to send or draft by setting its signature. The
-   * configured signature is the only one: the tool descriptions tell the model not to sign,
-   * and the gateway never edits the body the model wrote (#2554). Not on system notifications (alerts and principal notes, which
+   * configured signature is the only signature block: the tool descriptions allow a closing
+   * and first name but no signature block, and the gateway never edits the body the model
+   * wrote (#2554). Not on system notifications (alerts and principal notes, which
    * the assistant does not write as a letter), not from the principal's own mailbox (it
    * would sign as the assistant in the principal's name), and not twice when the body is
    * nothing but the signature.

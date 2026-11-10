@@ -4070,9 +4070,9 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
     expect(draftHtml()).toContain('Alex Curia<br>\nDigital EA');
   });
 
-  // #2554: code owns the signature. The model is told not to sign, and the gateway never
-  // edits the body it wrote: a sign-off the model wrote anyway goes out as written, with the
-  // configured signature below it.
+  // #2554: code owns the signature block. The model may write a closing and first name but
+  // no signature block, and the gateway never edits the body it wrote: a sign-off the model
+  // wrote goes out as written, with the configured signature below it.
   const SIGNATURE_HTML = '--<br>\nAlex Curia<br>\nDigital EA';
   const deliveredContent = (mocks: ReturnType<typeof createMocks>) => (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
     .map(call => call[1] as { type: string; payload: { content?: string } })
