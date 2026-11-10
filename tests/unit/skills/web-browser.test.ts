@@ -189,6 +189,18 @@ describe('WebBrowserHandler', () => {
     expect(mockBrowserService.getOrCreateSession).toHaveBeenCalledWith(undefined, { incognito: false, blockAds: false, keepWarm: false });
   });
 
+  it('navigate: refuses a page that redirected to an internal address, and leaves it (#2541)', async () => {
+    const { session } = await mockBrowserService.getOrCreateSession(undefined);
+    const page = session.page as unknown as { url: ReturnType<typeof vi.fn>; goto: ReturnType<typeof vi.fn>; screenshot: ReturnType<typeof vi.fn> };
+    // goto lands on the site, which then redirects to the browser container's DevTools.
+    page.url.mockReturnValue('http://127.0.0.1:9223/json/list');
+    const result = await handler.execute(makeCtx({ action: 'navigate', url: FAKE_URL, screenshot: true }, mockBrowserService));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('redirected to a private/internal address (127.0.0.1)');
+    expect(page.goto).toHaveBeenLastCalledWith('about:blank');
+    expect(page.screenshot).not.toHaveBeenCalled();
+  });
+
   it('navigate: passes existing session_id to getOrCreateSession', async () => {
     await handler.execute(makeCtx({ action: 'navigate', url: FAKE_URL, session_id: FAKE_SESSION_ID }, mockBrowserService));
     expect(mockBrowserService.getOrCreateSession).toHaveBeenCalledWith(FAKE_SESSION_ID, { incognito: false, blockAds: false, keepWarm: false });

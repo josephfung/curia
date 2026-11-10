@@ -49,8 +49,11 @@ import { parseProxyConfig, type ProxyConfig } from './proxy-config.js';
 export const SCREEN_SIZE = { width: 1920, height: 1080 } as const;
 export const WINDOW_SIZE = { width: 1440, height: 900 } as const;
 
-/** How long one attach to the browser container may take before it counts as failed. */
+/** How long the CDP connection itself may take before it counts as failed. */
 const CDP_CONNECT_TIMEOUT_MS = 10_000;
+/** How long a whole attach (connect plus tidying old tabs) may take. A wedged or hostile
+ *  container must not hold up Curia's boot or stall reconnects. */
+const CDP_ATTACH_DEADLINE_MS = 20_000;
 /** Reconnect backoff to the browser container: 1s doubling to this cap. */
 const CDP_RECONNECT_MAX_DELAY_MS = 30_000;
 /** While the container stays down, a failed attempt is logged at warn this often (~10 min at the cap). */
@@ -118,9 +121,14 @@ export class BrowserService {
   readonly settleCapMs: number;
   /** See BrowserServiceOptions.cdpEndpoint. Undefined → in-process launch. */
   private cdpEndpoint: string | undefined;
+  /** cdpEndpoint without credentials, path or query: what logs and errors show. */
+  private cdpEndpointLabel: string | undefined;
   private contextFactory: () => Promise<BrowserContext>;
   // Pending reconnect to the browser container, cleared by stop() (cdpEndpoint only).
   private reconnectTimer: NodeJS.Timeout | null = null;
+  // Bumped by stop(). An attach that started before the latest stop() discards its result,
+  // even if start() has run again since (cdpEndpoint only).
+  private attachGeneration = 0;
 
   // The persistent context IS the warm browser in this model. Sessions are pages within
   // it (shared cookies/storage = "returning user"); incognito sessions get their own
@@ -164,6 +172,7 @@ export class BrowserService {
     this.timezone = options.timezone;
     this.settleCapMs = options.settleCapMs ?? 35_000;
     this.cdpEndpoint = options.cdpEndpoint && options.cdpEndpoint.length > 0 ? options.cdpEndpoint : undefined;
+    this.cdpEndpointLabel = this.cdpEndpoint ? redactCdpEndpoint(this.cdpEndpoint) : undefined;
     if (this.cdpEndpoint) {
       // Fail closed: the proxy exists to keep the datacenter IP from leaking, and a
       // container's default context takes its proxy from Chrome's launch flags, which
@@ -203,7 +212,7 @@ export class BrowserService {
       this.sweepTimer = setInterval(() => void this.sweep(), this.sweepIntervalMs);
       this.sweepTimer.unref();
       await this.tryAttach(0);
-      this.logger.info({ sessionTtlMs: this.sessionTtlMs, cdpEndpoint: this.cdpEndpoint }, 'BrowserService started (browser container)');
+      this.logger.info({ sessionTtlMs: this.sessionTtlMs, cdpEndpoint: this.cdpEndpointLabel }, 'BrowserService started (browser container)');
       return;
     }
 
@@ -309,6 +318,7 @@ export class BrowserService {
     // context.close() is intentional (skip crash-recovery), AND it makes any relaunch
     // already in flight discard its fresh context when it resolves (no revival after stop).
     this.running = false;
+    this.attachGeneration++;
 
     if (this.sweepTimer) {
       clearInterval(this.sweepTimer);
@@ -375,7 +385,7 @@ export class BrowserService {
       if (this.cdpEndpoint && this.running) {
         // Written for the operator: the agent relays it as is.
         throw new Error(
-          `the browser container at ${this.cdpEndpoint} is not reachable. Curia reconnects on its own ` +
+          `the browser container at ${this.cdpEndpointLabel} is not reachable. Curia reconnects on its own ` +
           'once it is back; check it with `docker compose ps browser` and `docker compose logs browser`.',
         );
       }
@@ -533,13 +543,26 @@ export class BrowserService {
    */
   private async tryAttach(attempt: number): Promise<void> {
     if (!this.running) return;
+    const generation = this.attachGeneration;
+    const attach = this.contextFactory();
+    let deadline: NodeJS.Timeout | undefined;
     let context: BrowserContext;
     try {
-      context = await this.contextFactory();
+      context = await Promise.race([
+        attach,
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error(`attaching took longer than ${CDP_ATTACH_DEADLINE_MS}ms`)), CDP_ATTACH_DEADLINE_MS);
+        }),
+      ]);
     } catch (err) {
+      // An attach that outlived its deadline may still complete: drop that connection.
+      void attach.then(
+        late => late.browser()?.close(),
+        () => undefined, // already reported below as this attempt's failure
+      ).catch(closeErr => this.logger.debug({ err: closeErr }, 'Failed to disconnect a late attach'));
       if (attempt % CDP_RECONNECT_WARN_EVERY === 0) {
         this.logger.warn(
-          { err, cdpEndpoint: this.cdpEndpoint, attempt },
+          { err, cdpEndpoint: this.cdpEndpointLabel, attempt },
           'Browser container not reachable — web-browser is unavailable until it is; retrying',
         );
       } else {
@@ -547,9 +570,11 @@ export class BrowserService {
       }
       this.scheduleAttach(attempt + 1);
       return;
+    } finally {
+      clearTimeout(deadline);
     }
     // stop() may have run while the attach was in flight: disconnect instead of reviving.
-    if (!this.running) {
+    if (!this.running || generation !== this.attachGeneration) {
       void context.browser()?.close().catch(err =>
         this.logger.warn({ err }, 'Failed to disconnect from the browser container after shutdown'),
       );
@@ -557,6 +582,13 @@ export class BrowserService {
     }
     this.context = context;
     this.attachDisconnectedHandler(context);
+    // A browser that dropped after connecting but before the listener above was attached
+    // fired 'disconnected' to nobody. Catch that here, or the dead context would stay.
+    if (!context.browser()?.isConnected()) {
+      this.logger.warn('Browser container disconnected while attaching — retrying');
+      this.context = null;
+      this.scheduleAttach(attempt + 1);
+    }
   }
 
   /**
@@ -596,7 +628,7 @@ export class BrowserService {
     if (staleContexts.length + staleTabs.length > 0) {
       this.logger.info({ tabs: staleTabs.length, contexts: staleContexts.length }, 'Closed tabs left in the browser container by a previous run');
     }
-    this.logger.info({ cdpEndpoint: this.cdpEndpoint, version: browser.version() }, 'Attached to the browser container');
+    this.logger.info({ cdpEndpoint: this.cdpEndpointLabel, version: browser.version() }, 'Attached to the browser container');
     return context;
   }
 
@@ -936,15 +968,47 @@ export class BrowserService {
  */
 export async function resolveCdpEndpoint(
   endpoint: string,
-  lookup: (hostname: string) => Promise<{ address: string }> = hostname => dnsLookup(hostname),
+  // IPv4: the container's DevTools forwarder listens on IPv4 only.
+  lookup: (hostname: string) => Promise<{ address: string }> = hostname => dnsLookup(hostname, { family: 4 }),
 ): Promise<string> {
   const url = new URL(endpoint);
+  // TLS endpoints keep their hostname: the certificate is issued for it.
+  if (url.protocol === 'https:' || url.protocol === 'wss:') return endpoint;
   // URL keeps IPv6 literals bracketed in hostname.
   const bare = url.hostname.replace(/^\[(.*)\]$/, '$1');
   if (isIP(bare) !== 0 || bare === 'localhost') return endpoint;
   const { address } = await lookup(bare);
+  // A compose service name resolves to a private address. A public one means the name
+  // leaked to outside DNS (the container is down and a search domain answered), and
+  // Curia would hand its browsing, typed secrets included, to that host.
+  if (!isPrivateAddress(address)) {
+    throw new Error(`${bare} resolved to a public address, not a container on this host; refusing to attach`);
+  }
   url.hostname = isIP(address) === 6 ? `[${address}]` : address;
   return url.toString();
+}
+
+/** True for loopback, RFC 1918, link-local and IPv6 unique-local/link-local addresses. */
+function isPrivateAddress(address: string): boolean {
+  const a = address.toLowerCase();
+  return /^(127|10)\./.test(a)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(a)
+    || /^192\.168\./.test(a)
+    || /^169\.254\./.test(a)
+    || a === '::1'
+    || /^f[cd][0-9a-f]{2}:/.test(a)
+    || /^fe[89ab][0-9a-f]:/.test(a);
+}
+
+/** An endpoint as logs and errors may show it: scheme and host only, so a token in the
+ *  userinfo, path or query of a hosted browser's URL is never written out. */
+export function redactCdpEndpoint(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return '<invalid endpoint>';
+  }
 }
 
 interface ClearStaleX11LockOptions {

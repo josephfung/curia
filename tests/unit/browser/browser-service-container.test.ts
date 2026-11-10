@@ -9,7 +9,7 @@ const { connectOverCDP } = vi.hoisted(() => ({ connectOverCDP: vi.fn() }));
 vi.mock('patchright', () => ({ chromium: { connectOverCDP, launchPersistentContext: vi.fn() } }));
 vi.mock('@ghostery/adblocker-playwright', () => ({ PlaywrightBlocker: { fromPrebuiltAdsAndTracking: vi.fn() } }));
 
-import { BrowserService, resolveCdpEndpoint } from '../../../src/browser/browser-service.js';
+import { BrowserService, redactCdpEndpoint, resolveCdpEndpoint } from '../../../src/browser/browser-service.js';
 
 const logger = pino({ level: 'silent' });
 const ENDPOINT = 'http://127.0.0.1:9222';
@@ -147,6 +147,64 @@ describe('BrowserService with a browser container', () => {
     expect(browser.close).toHaveBeenCalledOnce();
   });
 
+  it('retries when the browser drops while attaching, before its disconnect listener exists', async () => {
+    const dead = makeBrowser();
+    dead.isConnected.mockReturnValue(false);
+    const live = makeBrowser();
+    const liveContext = makeContext(live);
+    const factory = vi.fn().mockResolvedValueOnce(makeContext(dead)).mockResolvedValue(liveContext);
+    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT, contextFactory: factory as never });
+
+    await svc.start();
+    expect(svc.browserContext).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(svc.browserContext).toBe(liveContext);
+    await svc.stop();
+  });
+
+  it('discards an attach from before stop() even when start() has run again', async () => {
+    const stale = makeBrowser();
+    const staleContext = makeContext(stale);
+    const fresh = makeBrowser();
+    const freshContext = makeContext(fresh);
+    let resolveStale!: (ctx: unknown) => void;
+    const factory = vi.fn()
+      .mockReturnValueOnce(new Promise(resolve => { resolveStale = resolve; }))
+      .mockResolvedValue(freshContext);
+    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT, contextFactory: factory as never });
+
+    const firstStart = svc.start();
+    await svc.stop();
+    await svc.start();
+    resolveStale(staleContext);
+    await firstStart;
+
+    expect(svc.browserContext).toBe(freshContext);
+    expect(stale.close).toHaveBeenCalledOnce();
+    await svc.stop();
+  });
+
+  it('gives up on an attach that hangs past its deadline, disconnects it if it lands, and retries', async () => {
+    const hung = makeBrowser();
+    let resolveHung!: (ctx: unknown) => void;
+    const live = makeBrowser();
+    const liveContext = makeContext(live);
+    const factory = vi.fn()
+      .mockReturnValueOnce(new Promise(resolve => { resolveHung = resolve; }))
+      .mockResolvedValue(liveContext);
+    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT, contextFactory: factory as never });
+
+    const starting = svc.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await starting;
+    expect(svc.browserContext).toBeNull();
+    resolveHung(makeContext(hung));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(hung.close).toHaveBeenCalledOnce();
+    expect(svc.browserContext).toBe(liveContext);
+    await svc.stop();
+  });
+
   it('refuses a proxy: the container’s Chrome would egress directly', () => {
     expect(() => new BrowserService({ logger, cdpEndpoint: ENDPOINT, proxy: 'http://proxy:8888' }))
       .toThrow(/BROWSER_PROXY/);
@@ -197,11 +255,29 @@ describe('resolveCdpEndpoint', () => {
     await expect(resolveCdpEndpoint('ws://browser:9222/devtools/browser/x', lookup)).resolves.toBe('ws://[fd00::3]:9222/devtools/browser/x');
   });
 
+  it('refuses a name that resolves to a public address (leaked to outside DNS)', async () => {
+    const lookup = vi.fn().mockResolvedValue({ address: '203.0.113.7' });
+    await expect(resolveCdpEndpoint('http://browser:9222', lookup)).rejects.toThrow(/public address/);
+  });
+
+  it('keeps the hostname of a TLS endpoint, whose certificate names it', async () => {
+    const lookup = vi.fn();
+    await expect(resolveCdpEndpoint('wss://browser.example.com/devtools?token=x', lookup)).resolves.toBe('wss://browser.example.com/devtools?token=x');
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
   it('leaves an IP address or localhost as given', async () => {
     const lookup = vi.fn();
     await expect(resolveCdpEndpoint('http://10.0.0.5:9222', lookup)).resolves.toBe('http://10.0.0.5:9222');
     await expect(resolveCdpEndpoint('http://[::1]:9222', lookup)).resolves.toBe('http://[::1]:9222');
     await expect(resolveCdpEndpoint('http://localhost:9222', lookup)).resolves.toBe('http://localhost:9222');
     expect(lookup).not.toHaveBeenCalled();
+  });
+});
+
+describe('redactCdpEndpoint', () => {
+  it('drops credentials, path and query', () => {
+    expect(redactCdpEndpoint('wss://user:secret@host.example:443/devtools?token=abc')).toBe('wss://host.example');
+    expect(redactCdpEndpoint('http://browser:9222')).toBe('http://browser:9222');
   });
 });

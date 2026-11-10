@@ -2096,10 +2096,11 @@ export function loadConfig(): Config {
     try {
       protocol = new URL(browserCdpUrl).protocol;
     } catch {
-      throw new Error(`BROWSER_CDP_URL must be a URL such as http://browser:9222, got: ${browserCdpUrl}`);
+      // The value is not echoed: a hosted browser's URL can carry a token.
+      throw new Error('BROWSER_CDP_URL must be a URL such as http://browser:9222');
     }
     if (!['http:', 'https:', 'ws:', 'wss:'].includes(protocol)) {
-      throw new Error(`BROWSER_CDP_URL must be an http(s) or ws(s) URL, got: ${browserCdpUrl}`);
+      throw new Error(`BROWSER_CDP_URL must be an http(s) or ws(s) URL, got scheme ${protocol}`);
     }
   }
 

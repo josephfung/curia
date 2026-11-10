@@ -14,6 +14,50 @@
 #   TZ                 IANA timezone Chrome reports, e.g. America/Toronto.
 set -euo pipefail
 
+# --- DevTools peer gate --------------------------------------------------------------
+# DevTools has no authentication, and not publishing the port is not enough: on Linux any
+# user on the Docker host can connect to a container's bridge IP, arriving from the
+# network's gateway address, and a routed LAN client arrives from outside the subnet.
+# socat runs this script with --devtools-gate for each connection. Only loopback and a
+# peer inside this container's own subnet, other than the gateway, reach Chrome: on the
+# shipped compose file, Curia (the network's only other member) and the healthcheck.
+
+# /proc/net/route stores IPv4 addresses as little-endian hex.
+le_hex_to_int() {
+  local h="$1"
+  echo $(( (16#${h:6:2} << 24) | (16#${h:4:2} << 16) | (16#${h:2:2} << 8) | 16#${h:0:2} ))
+}
+
+devtools_peer_allowed() {
+  local peer="$1" route_file="${ROUTE_FILE:-/proc/net/route}"
+  [[ "$peer" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  # Loopback is this container itself (the healthcheck); it can reach Chrome's port anyway.
+  [[ "${BASH_REMATCH[1]}" == 127 ]] && return 0
+  local p=$(( (10#${BASH_REMATCH[1]} << 24) | (10#${BASH_REMATCH[2]} << 16) | (10#${BASH_REMATCH[3]} << 8) | 10#${BASH_REMATCH[4]} ))
+  local iface dest gw flags rest mask in_subnet=1 is_gateway=1
+  while read -r iface dest gw flags _ _ _ mask rest; do
+    [[ "$iface" == Iface ]] && continue
+    if [[ "$dest" == 00000000 ]]; then
+      (( p == $(le_hex_to_int "$gw") )) && is_gateway=0
+    elif [[ "$gw" == 00000000 ]]; then
+      (( (p & $(le_hex_to_int "$mask")) == $(le_hex_to_int "$dest") )) && in_subnet=0
+    fi
+  done < "$route_file"
+  (( in_subnet == 0 && is_gateway != 0 ))
+}
+
+case "${1:-}" in
+  --devtools-peer-allowed)  # for tests
+    devtools_peer_allowed "$2"; exit $? ;;
+  --devtools-gate)
+    if devtools_peer_allowed "${SOCAT_PEERADDR:-}"; then
+      exec socat - "TCP:127.0.0.1:9223"
+    fi
+    echo "browser-entrypoint: refused a DevTools connection from ${SOCAT_PEERADDR:-unknown}" >&2
+    exit 1 ;;
+esac
+# --------------------------------------------------------------------------------------
+
 readonly SCREEN=1920x1080x24      # SCREEN_SIZE in src/browser/browser-service.ts
 readonly WINDOW=1440,900          # WINDOW_SIZE in src/browser/browser-service.ts
 readonly DEVTOOLS_PORT=9222       # what Curia connects to
@@ -76,9 +120,10 @@ openbox --sm-disable &
 tint2 >/dev/null 2>&1 &
 
 # Chrome serves DevTools on loopback only (it ignores --remote-debugging-address when
-# headful), so socat forwards the compose network's port to it. Chrome answers only when
-# the Host header is an IP or localhost; Curia connects by IP for that reason.
-socat "TCP-LISTEN:${DEVTOOLS_PORT},fork,reuseaddr" "TCP:127.0.0.1:${CHROME_PORT}" &
+# headful), so socat forwards the compose network's port to it, through the peer gate at
+# the top of this script. Chrome answers only when the Host header is an IP or
+# localhost; Curia connects by IP for that reason.
+socat "TCP-LISTEN:${DEVTOOLS_PORT},fork,reuseaddr" "EXEC:$0 --devtools-gate" &
 
 # The flags Patchright passes when it launches Chromium itself (chromiumSwitches in
 # patchright-core), so a container session looks like an in-process one;

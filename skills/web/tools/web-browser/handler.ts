@@ -751,6 +751,15 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
         ctx.log.debug({ err, sessionId }, 'networkidle not reached after navigate — proceeding with current DOM');
       });
 
+      // The guard above checks only the URL asked for. A site can redirect to an internal
+      // address, e.g. the browser container's own DevTools endpoint (#2541); leave it
+      // before anything (a screenshot, the title) is read from it.
+      if (isBlockedFrameUrl(page.url())) {
+        const blockedHost = new URL(page.url()).hostname;
+        await page.goto('about:blank').catch((err) => ctx.log.warn({ err, sessionId }, 'Could not leave a page that redirected to an internal address'));
+        return { ok: false, error: `Blocked: the page redirected to a private/internal address (${blockedHost})` };
+      }
+
       const readTitle = async (): Promise<string> => {
         try {
           return await page.title();

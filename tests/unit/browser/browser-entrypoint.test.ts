@@ -6,7 +6,9 @@
 // updated alongside (Patchright bumps are held for human review anyway).
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
@@ -53,5 +55,44 @@ describe('browser-entrypoint.sh Chrome flags', () => {
 
   it('never turns the sandbox off', () => {
     expect(entrypoint).not.toMatch(/--no-sandbox|--disable-setuid-sandbox|--no-zygote/);
+  });
+});
+
+describe('browser-entrypoint.sh DevTools peer gate', () => {
+  // A container on 172.20.0.0/16, the network's gateway (the Docker host's side) at .1.
+  const routeFile = join(mkdtempSync(join(tmpdir(), 'curia-route-')), 'route');
+  writeFileSync(routeFile, [
+    'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT',
+    'eth0\t00000000\t010014AC\t0003\t0\t0\t0\t00000000\t0\t0\t0',
+    'eth0\t000014AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0',
+  ].join('\n') + '\n');
+
+  const allowed = (peer: string): boolean =>
+    spawnSync('bash', [join(repoRoot, 'docker/browser-entrypoint.sh'), '--devtools-peer-allowed', peer], {
+      env: { ...process.env, ROUTE_FILE: routeFile },
+    }).status === 0;
+
+  it('lets in a peer on the container’s own network (Curia)', () => {
+    expect(allowed('172.20.0.3')).toBe(true);
+    expect(allowed('172.20.8.9')).toBe(true);
+  });
+
+  it('lets in loopback: the container’s own healthcheck', () => {
+    expect(allowed('127.0.0.1')).toBe(true);
+  });
+
+  it('refuses the gateway, which is how the Docker host itself arrives', () => {
+    expect(allowed('172.20.0.1')).toBe(false);
+  });
+
+  it('refuses a peer outside the subnet, e.g. a routed LAN client', () => {
+    expect(allowed('192.168.1.20')).toBe(false);
+    expect(allowed('172.21.0.3')).toBe(false);
+  });
+
+  it('refuses anything that is not an IPv4 address', () => {
+    expect(allowed('')).toBe(false);
+    expect(allowed('::1')).toBe(false);
+    expect(allowed('172.20.0.3; true')).toBe(false);
   });
 });
