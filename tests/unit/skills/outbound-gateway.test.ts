@@ -4139,6 +4139,27 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
     expect(mocks.bus.publish).not.toHaveBeenCalled();
   });
 
+  it('send() still delivers a system notice to the principal alone from the principal\'s mailbox', async () => {
+    const { gateway, mocks } = makeGateway({ persona: PERSONA });
+    const result = await gateway.send(
+      email({ accountId: 'joseph', to: 'CEO@example.com' }),
+      { isSystemNotification: true },
+    );
+    expect(result.blockedReason).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(mocks.nylasClient.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('send() refuses a system notice with an outside recipient from the principal\'s mailbox', async () => {
+    const { gateway, mocks } = makeGateway({ persona: PERSONA });
+    const result = await gateway.send(
+      email({ accountId: 'joseph', to: 'priya@example.com' }),
+      { isSystemNotification: true },
+    );
+    expect(result).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
   it('sendEmailDraft refuses a draft in the principal\'s mailbox account', async () => {
     const { gateway, mocks } = makeGateway({ persona: PERSONA });
     const result = await gateway.sendEmailDraft('draft-1', 'joseph', {
