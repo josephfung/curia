@@ -34,12 +34,13 @@ function setup(toolName: string, score: number) {
   const autonomyService = {
     getConfig: vi.fn(async () => ({ score, band: 'draft-only', updatedAt: new Date(), updatedBy: 'test' })),
   } as unknown as AutonomyService;
+  const publish = vi.fn(async (..._args: unknown[]) => undefined);
   const layer = new ExecutionLayer(registry, logger, {
     autonomyService,
     approvalTrigger: { request } as never,
-    bus: { publish: vi.fn(async () => undefined) } as unknown as EventBus,
+    bus: { publish } as unknown as EventBus,
   });
-  return { layer, execute, request };
+  return { layer, execute, request, publish };
 }
 
 // An outside originator with no tier standing: Gate C escalates a high-risk action.
@@ -78,5 +79,79 @@ describe('gate blocks on ceo-inbox-send-draft queue no approval (#2474)', () => 
     const result = await layer.invoke('email-send', { draft_id: 'd-1' }, undefined, { taskEventId: 'task-1' });
     expect(result.success).toBe(false);
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('files a digest item when Gate B refuses an autonomous ceo-inbox send', async () => {
+    const { layer, publish } = setup('ceo-inbox-send-draft', 65);
+    await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, { taskEventId: 'task-1' });
+    const reports = publish.mock.calls
+      .map((c) => c[1] as { type: string; payload: Record<string, unknown> })
+      .filter((e) => e.type === 'principal.report');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.payload).toMatchObject({
+      urgency: 'digest',
+      source: 'principal_mailbox',
+      summary: 'Left as a draft in your mailbox: a reply Curia wanted to send on its own. Autonomy is 65; sending on its own needs 80.',
+    });
+  });
+
+  it('Gate A digest names the tool\'s full threshold, not Gate A\'s 60', async () => {
+    const { layer, publish } = setup('ceo-inbox-send-draft', 50);
+    await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, { taskEventId: 'task-1' });
+    const reports = publish.mock.calls
+      .map((c) => c[1] as { type: string; payload: Record<string, unknown> })
+      .filter((e) => e.type === 'principal.report');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.payload['summary']).toBe(
+      'Left as a draft in your mailbox: a reply Curia wanted to send on its own. Autonomy is 50; sending on its own needs 80.',
+    );
+  });
+
+  it('files no digest item when an outsider-originated call is refused at Gate B', async () => {
+    const { layer, publish } = setup('ceo-inbox-send-draft', 65);
+    const outsider = {
+      taskEventId: 'task-1',
+      taskMetadata: { originator: { contactId: 'c-x', systemRole: null, channel: 'email', initiatedAt: new Date().toISOString(), tier: 'unknown' } },
+    };
+    const r = await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, outsider);
+    expect(r.success).toBe(false);
+    expect(publish.mock.calls.filter((c) => (c[1] as { type: string }).type === 'principal.report')).toHaveLength(0);
+  });
+
+  it('a live principal turn skips the gates, so no refusal and no digest item', async () => {
+    const { layer, execute, publish } = setup('ceo-inbox-send-draft', 65);
+    const principal = {
+      taskEventId: 'task-1',
+      taskMetadata: { originator: { contactId: 'p-1', systemRole: 'principal', channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'principal' } },
+    };
+    await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, principal);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(publish.mock.calls.filter((c) => (c[1] as { type: string }).type === 'principal.report')).toHaveLength(0);
+  });
+
+  it('files one digest item when the ladder demotes a woken principal task and Gate B refuses', async () => {
+    const { layer, execute, publish } = setup('ceo-inbox-send-draft', 65);
+    // Raw lineage says principal, but a heartbeat wake with a score below the ladder threshold
+    // is demoted to agent, so the gate refuses it.
+    const woken = {
+      taskEventId: 'task-1',
+      taskMetadata: {
+        wakeContext: { derived: false },
+        originator: { contactId: 'p-1', systemRole: 'principal', channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'principal' },
+      },
+    };
+    const result = await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, woken);
+    expect(result.success).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+    const reports = publish.mock.calls.filter((c) => (c[1] as { type: string }).type === 'principal.report');
+    expect(reports).toHaveLength(1);
+  });
+
+  it('a failed digest publish is logged and the gate error is unchanged', async () => {
+    const { layer, publish } = setup('ceo-inbox-send-draft', 65);
+    publish.mockRejectedValueOnce(new Error('bus down'));
+    const result = await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, { taskEventId: 'task-1' });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.endsWith(`${NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND}</skill_error>`)).toBe(true);
   });
 });

@@ -486,6 +486,8 @@ interface DraftRecord {
   to: unknown;
   cc: unknown;
   body: string;
+  /** A draft-reply's `reply_to_message_id` (#2474 PR 2). */
+  replyTo?: string;
 }
 
 /** A recipient on a mailbox draft. */
@@ -501,6 +503,16 @@ export interface MailboxDraft {
   to: DraftParticipant[];
   cc: DraftParticipant[];
   body: string;
+  /**
+   * The message a draft-reply answers (`reply_to_message_id`, #2474 PR 2): the mirror puts the
+   * draft on that message's thread, as the real reply lands there.
+   */
+  replyTo?: string;
+  /**
+   * Recipients the write named by contact ID (or `principal`) rather than by address (#2474 PR 2):
+   * a compose's `to` and `cc`. Only the mirror knows the run's contacts, so it resolves them.
+   */
+  contactIds?: { to: string[]; cc: string[] };
 }
 
 /**
@@ -513,11 +525,16 @@ export interface MailboxDraft {
 /** `edited`: the write was ceo-inbox-draft-edit on an existing draft (#2474 final review S1). */
 export type DraftMirror = (draft: MailboxDraft, curiaWrote: boolean, edited?: true) => void;
 
-/** Participants as addresses. A contact ID (no `@`) is not an address, so it is dropped. */
+/** Participants as addresses. A contact ID (no `@`) is not an address, so it is left out. */
 function mailboxParticipants(value: unknown): DraftParticipant[] {
   return asParticipants(value)
     .filter((p) => String(p['email']).includes('@'))
     .map((p) => ({ ...(typeof p['name'] === 'string' ? { name: p['name'] } : {}), email: String(p['email']).trim() }));
+}
+
+/** The participants that are contact IDs (or `principal`), not addresses (#2474 PR 2). */
+function participantContactIds(value: unknown): string[] {
+  return asParticipants(value).map((p) => String(p['email']).trim()).filter((e) => !e.includes('@'));
 }
 
 /**
@@ -541,29 +558,38 @@ export class DraftState {
   }
 
   private mirrored(record: DraftRecord, curiaWrote: boolean, edited?: true): void {
+    const ids = { to: participantContactIds(record.to), cc: participantContactIds(record.cc) };
     this.mirror?.({
       id: record.id,
       subject: record.subject,
       to: mailboxParticipants(record.to),
       cc: mailboxParticipants(record.cc),
       body: record.body,
+      ...(record.replyTo !== undefined ? { replyTo: record.replyTo } : {}),
+      ...(ids.to.length > 0 || ids.cc.length > 0 ? { contactIds: ids } : {}),
     }, curiaWrote, ...(edited ? [edited] as const : []));
   }
 
   recordWrite(toolName: string, data: Json, input: Json): Json {
     if (toolName === 'ceo-inbox-draft-edit') return this.recordEdit(data, input);
     if (toolName === 'ceo-inbox-draft-compose' || toolName === 'ceo-inbox-draft-reply') {
-      return this.recordDraft(data, input);
+      return this.recordDraft(data, input, toolName === 'ceo-inbox-draft-reply' ? str(input['reply_to_message_id']) : undefined);
     }
     return data;
   }
 
-  private recordDraft(data: Json, input: Json): Json {
+  private recordDraft(data: Json, input: Json, replyTo: string | undefined): Json {
     // Keep the stub's id. Office edit stubs match only draft-0001 and draft-0002,
     // so minting a fresh one would make the following edit miss.
     const id = str(data['draft_id']);
     if (!id) return data;
     const prev = this.drafts.get(id);
+    // A reply that found an existing draft (already_exists: true) writes nothing in the real tool:
+    // the draft keeps its own body and recipients, so a later read returns the principal's text.
+    if (data['already_exists'] === true && prev) {
+      this.mirrored(prev, false);
+      return data;
+    }
     // Returned fields win, then the call's arguments, then whatever this id already held.
     // A compose names recipients by contact ID (to, cc) and by address (to_addresses,
     // cc_addresses), so the draft holds both, as written (#2053).
@@ -582,7 +608,8 @@ export class DraftState {
       : typeof input['subject'] === 'string' ? input['subject']
         : prev?.subject ?? '';
     const body = typeof input['body'] === 'string' ? input['body'] : prev?.body ?? '';
-    const record = { id, subject, to, cc, body };
+    const answers = replyTo ?? prev?.replyTo;
+    const record: DraftRecord = { id, subject, to, cc, body, ...(answers !== undefined ? { replyTo: answers } : {}) };
     this.drafts.set(id, record);
     this.mirrored(record, data['already_exists'] !== true);
     return data;

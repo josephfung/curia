@@ -35,8 +35,9 @@
 import { randomUUID } from 'node:crypto';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import { BAND_GATE_C_UNREVIEWED_REASON } from '../../src/skills/execution.js';
-import { createAgentDiscuss, createAgentTask, createInboundMessage, type AgentErrorEvent, type AgentResponseEvent, type AgentTaskEvent, type InjectionDrainPoint } from '../../src/bus/events.js';
+import { createAgentDiscuss, createAgentTask, createInboundMessage, type AgentErrorEvent, type AgentResponseEvent, type AgentTaskEvent, type InjectionDrainPoint, type PrincipalReportEvent } from '../../src/bus/events.js';
 import { stampOriginator } from '../../src/contacts/stamp-originator.js';
+import { makeSystemOriginator } from '../../src/contacts/principal.js';
 import {
   buildInboundEmailIdentifierBlock,
   preambleAccountLabel,
@@ -540,6 +541,14 @@ export async function createScenarioHarness(
       curiaDraftIds: () => currentScope()?.curiaDraftIds,
       curiaEditedDraftIds: () => currentScope()?.curiaEditedDraftIds,
       sendLevel: () => currentScope()?.sendLevel,
+      // An autonomous send (#2474 PR 2): the drafts the run's own task created, last written at
+      // the run clock's now; the seeded threads they reply on; the run's own send ledger.
+      curiaTaskDrafts: () => {
+        const scope = currentScope();
+        return scope?.clockNow ? { ids: scope.curiaTaskDraftIds, now: scope.clockNow, replyTo: scope.curiaTaskReplyTo } : undefined;
+      },
+      principalThreadMessages: (threadId) => currentScope()?.principalThreads.get(threadId) ?? [],
+      principalSends: () => currentScope()?.principalSends,
       // Labels and outcome of each band review, for the `reviewed` check (#2312).
       reviewed: (review) => { currentScope()?.reviews.push(review); },
       // Relayed replies (#2312): production's adapter path, for a through-gateway run's own
@@ -581,6 +590,13 @@ export async function createScenarioHarness(
         scope.followOnConversations.add(conversationId);
         controller.attach(scope.rootConversation, conversationId);
         if (lateCapture) scope.wakeTurns.push(lateCapture.waitFor(conversationId, RUN_TIMEOUT_MS, COORDINATOR));
+      });
+      // The principal-mailbox digest items an autonomous send files (#2474 PR 2): the "Left as a
+      // draft" item is the one record of every final stop, a cooldown's included.
+      bus.subscribe('principal.report', 'system', (event) => {
+        const scope = currentScope();
+        const { source, summary } = (event as PrincipalReportEvent).payload;
+        if (scope?.throughGateway && source === 'principal_mailbox') scope.mailboxDigests.push(summary);
       });
       // How the run's relays ended, so a rewrite turn's wait stops at its relay's outcome.
       for (const type of ['outbound.delivered', 'outbound.blocked'] as const) {
@@ -1065,6 +1081,9 @@ export async function createScenarioHarness(
     // what "next week" is, and rating re-resolves the behaviors against this same instant
     // (resolveRunPlaceholders), even if it happens after midnight.
     const clock: RunClock = { now: new Date().toISOString(), timezone: stack.config.timezone };
+    // The principal mailbox dates its undated and mirrored drafts by it (#2474 PR 2).
+    scope.clockNow = new Date(clock.now);
+    scope.clockTimezone = clock.timezone;
     const resolveDates = <T>(value: T): T => resolveDatePlaceholders(value, clock.timezone, new Date(clock.now));
     const dated: ScenarioCase = {
       ...scenario,
@@ -1187,16 +1206,7 @@ export async function createScenarioHarness(
         } else if (typeof sender === 'object' && 'delegate' in sender) {
           delivery = publishDelegatedTask(agent, runConversationId, sender.delegate, inbound);
         } else if (sender === 'scheduler') {
-          // What Scheduler.fireJob publishes for a recurring job with no linked task: an
-          // agent.task straight to the agent, no Dispatcher, content = the payload JSON.
-          delivery = bus.publish('system', createAgentTask({
-            agentId: agent,
-            conversationId: runConversationId,
-            channelId: 'scheduler',
-            senderId: 'scheduler',
-            content: JSON.stringify({ task: inbound.content }),
-            parentEventId: randomUUID(),
-          }));
+          delivery = bus.publish('system', scheduledJobTask(agent, runConversationId, inbound.content));
         } else if (sender === 'task-wake') {
           // What Scheduler.fireJob publishes for a task's wake_at: the wake body, the
           // task's intent anchor and the bound-task metadata. A wake_at job carries no
@@ -1516,6 +1526,24 @@ export async function createScenarioHarness(
  * side-effecting tool, or a read test mode cannot serve (missing capability). Either way
  * the model reacted to the harness's gap, so the coverage gate counts it.
  */
+/**
+ * What Scheduler.fireJob publishes for a recurring declarative job with no linked task: an
+ * agent.task straight to the agent, no Dispatcher, content = the payload JSON, and the job's stored
+ * originator restored as metadata (src/scheduler/scheduler.ts). Declarative jobs are stamped by
+ * makeSystemOriginator; an autonomous principal-mailbox send refuses without it (#2474).
+ */
+export function scheduledJobTask(agentId: string, conversationId: string, content: string): AgentTaskEvent {
+  return createAgentTask({
+    agentId,
+    conversationId,
+    channelId: 'scheduler',
+    senderId: 'scheduler',
+    content: JSON.stringify({ task: content }),
+    metadata: { originator: makeSystemOriginator() },
+    parentEventId: randomUUID(),
+  });
+}
+
 export function countHoles(calls: CapturedToolCall[]): number {
   // A passthrough read that fails is a real outcome (e.g. date-resolve rejecting
   // "next week"): production returns the same. Tools test mode cannot serve are refused

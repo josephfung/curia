@@ -271,7 +271,7 @@ export const CURIA_SEND_WINDOW_SEC = 600;
  * be learned as the principal's writing. Matches on the ledger's message id, or — for an entry whose
  * id was never recorded — the same thread, an intersecting recipient set (case-insensitive) and a
  * send landing within `windowSec` after the entry's `at`. A principal reply on the same thread an
- * hour later is outside the window and still counts as theirs.
+ * hour later is outside the window and still counts as theirs. The fallback skips `held` entries.
  */
 export function isCuriaSend(
   msg: { id: string; threadId: string; to: Array<{ email: string }>; cc: Array<{ email: string }>; date: number },
@@ -281,6 +281,9 @@ export function isCuriaSend(
   let msgRecipients: Set<string> | null = null;
   for (const entry of entries) {
     if (entry.messageId !== undefined && entry.messageId === msg.id) return true;
+    // Only an attempt that went (or may have gone) out can claim a message by thread and time. A
+    // held entry sent nothing, so the principal's own reply after it is theirs (#2474 PR 2).
+    if (entry.outcome !== 'sending' && entry.outcome !== 'sent') continue;
     if (!msg.threadId || entry.threadId !== msg.threadId) continue;
     // msg.date is Unix seconds (floored by the provider); entry.at is ISO with milliseconds, so
     // floor it too or a send in the same second as the marker would look like it came first.

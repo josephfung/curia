@@ -36,17 +36,20 @@ import {
   type SeedContact,
   type SeedOutboundEntry,
   type SeedOutreach,
+  type SeedDraftAuthor,
   type SeedDraftRecipient,
+  type SeedMailParty,
   type SeedPinned,
   type SeedPrincipalDraft,
   type SeedPrincipalIdentity,
   type SeedPrincipalMailbox,
+  type SeedPrincipalThread,
   type SeedTask,
   type SeedVerification,
   type ToolStub,
 } from './types.js';
 import type { AutonomyFixture } from '../../src/startup/test-mode-stack.js';
-import type { SendLevel } from '../../src/skills/principal-send/send-level.js';
+import { DEFAULT_SEND_LEVEL, readSendLevelValue, type SendLevel } from '../../src/skills/principal-send/send-level.js';
 
 const WEIGHTS: readonly BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
 // 'trusted' is a grant made after creation (createContact refuses it); seeding sets it then.
@@ -83,10 +86,16 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
 
 const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
-const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts'] as const;
+const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts', 'threads', 'expect_no_band_review'] as const;
 const PRINCIPAL_DRAFT_KEYS = ['id', 'thread', 'to', 'cc', 'subject', 'body', 'modified', 'by_curia'] as const;
+/** `by_curia` values (#2474 PR 2). PR 1's `true` is now `earlier`, and is refused so a stale case is not misread. */
+const DRAFT_AUTHORS: readonly SeedDraftAuthor[] = [false, 'same_task', 'earlier'];
+const PRINCIPAL_THREAD_KEYS = ['id', 'messages'] as const;
+const THREAD_MESSAGE_KEYS = ['id', 'from', 'to', 'cc', 'subject', 'body', 'date', 'sender_verified', 'list_id'] as const;
 const DRAFT_RECIPIENT_KEYS = ['name', 'email'] as const;
 const SEND_LEVELS: readonly SendLevel[] = ['off', 'on_request', 'routine', 'all'];
+/** The pinned config key the agent reads its sending level from (#2474, design D3). */
+const SENDING_CONFIG = 'ceo_inbox/sending';
 const PINNED_KEYS = ['docs', 'configs', 'unavailable'] as const;
 const TASK_KEYS = ['key', 'title', 'intent', 'originator', 'agent'] as const;
 const OUTREACH_KEYS = ['key', 'task', 'via', 'org_name', 'domains', 'addresses', 'contacts', 'summary', 'confirmed'] as const;
@@ -146,6 +155,7 @@ const GATEWAY_CHECK_KEYS: Record<typeof GATEWAY_CHECK_KINDS[number], readonly st
   outreach_recorded: ['domain', 'confirmed'],
   decision_recorded: ['label', 'decision'],
   reviewed: ['label', 'outcome'],
+  left_as_draft: ['count', 'contains'],
 };
 const DELIVERY_CHANNELS: readonly DeliveryChannel[] = ['email', 'signal', 'slack', 'sms'];
 const TEXT_TOOL_KEYS = ['tool', 'arg'] as const;
@@ -280,6 +290,12 @@ function parseGatewayCheck(kind: typeof GATEWAY_CHECK_KINDS[number], raw: Raw, f
         throw new CaseError(file, `${at}: 'outcome' must be one of ${REVIEW_OUTCOMES.join(', ')}`);
       }
       return { kind, label: piiLabel(body, file, at), ...(outcome !== undefined ? { outcome: outcome as ReviewOutcome } : {}) };
+    }
+    case 'left_as_draft': {
+      const count = optNum(body, 'count', file, at);
+      if (count !== undefined && !Number.isInteger(count)) throw new CaseError(file, `${at}: 'count' must be a whole number`);
+      const contains = strList(body, 'contains', file, at);
+      return { kind, ...(count !== undefined ? { count } : {}), ...(contains.length > 0 ? { contains } : {}) };
     }
   }
 }
@@ -720,19 +736,88 @@ function parsePinned(raw: Raw, file: string): SeedPinned | undefined {
   return pinned;
 }
 
+/** One `{ name?, email }` recipient, its address under a .test name. */
+function parseDraftRecipient(r: Raw, file: string, at: string): SeedDraftRecipient {
+  onlyKeys(r, DRAFT_RECIPIENT_KEYS, file, at);
+  const email = str(r, 'email', file, at).trim();
+  // Fixtures never name a real person; the principal's own address is under example.test.
+  if (!TEST_ADDRESS.test(email)) throw new CaseError(file, `${at}: address '${email}' must be under a .test name`);
+  const name = optStr(r, 'name', file, at);
+  return { ...(name !== undefined ? { name } : {}), email };
+}
+
 /** A draft's `to` or `cc`: `{ name?, email }` mappings, each address under a .test name. */
 function parseDraftRecipients(raw: Raw, key: 'to' | 'cc', file: string, where: string, required: boolean): SeedDraftRecipient[] {
   const v = raw[key];
   if (v === undefined && !required) return [];
   if (!Array.isArray(v) || !v.every(isObject)) throw new CaseError(file, `${where}: '${key}' must be a list of recipients ({ name?, email })`);
-  return v.map((r, i) => {
-    const at = `${where}.${key}[${i}]`;
-    onlyKeys(r, DRAFT_RECIPIENT_KEYS, file, at);
-    const email = str(r, 'email', file, at).trim();
-    // Fixtures never name a real person; the principal's own address is under example.test.
-    if (!TEST_ADDRESS.test(email)) throw new CaseError(file, `${at}: address '${email}' must be under a .test name`);
-    const name = optStr(r, 'name', file, at);
-    return { ...(name !== undefined ? { name } : {}), email };
+  return v.map((r, i) => parseDraftRecipient(r, file, `${where}.${key}[${i}]`));
+}
+
+/** A thread message's `to` or `cc` (#2474 PR 2): recipients, or `principal`. */
+function parseMailParties(raw: Raw, key: 'to' | 'cc', file: string, where: string, required: boolean): SeedMailParty[] {
+  const v = raw[key];
+  if (v === undefined && !required) return [];
+  if (!Array.isArray(v) || !v.every(p => p === 'principal' || isObject(p))) {
+    throw new CaseError(file, `${where}: '${key}' must be a list of recipients ({ name?, email }) or principal`);
+  }
+  return v.map((p, i) => (p === 'principal' ? 'principal' : parseDraftRecipient(p as Raw, file, `${where}.${key}[${i}]`)));
+}
+
+/** A date or date placeholder, proved a date against an arbitrary clock; the run resolves it against its own. */
+function checkSeedDate(value: string, key: string, file: string, at: string): void {
+  let resolved: string;
+  try {
+    resolved = resolveDatePlaceholders(value, 'UTC');
+  } catch (err) {
+    throw new CaseError(file, `${at}: '${key}': ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (Number.isNaN(Date.parse(resolved))) throw new CaseError(file, `${at}: '${key}' must be a date or a date placeholder ({{at:now-3h}})`);
+}
+
+/**
+ * `seed.principal_mailbox.threads` (#2474 PR 2): the threads drafts reply on. Message ids are
+ * unique across the mailbox (`ids` holds the drafts' already), as a provider's are.
+ */
+function parsePrincipalThreads(block: Raw, file: string, where: string, ids: Set<string>): SeedPrincipalThread[] {
+  const threadIds = new Set<string>();
+  return list(block, 'threads', file).map((t, i): SeedPrincipalThread => {
+    const at = `${where}.threads[${i}]`;
+    onlyKeys(t, PRINCIPAL_THREAD_KEYS, file, at);
+    const id = str(t, 'id', file, at);
+    if (threadIds.has(id)) throw new CaseError(file, `${at}: duplicate thread id '${id}'`);
+    threadIds.add(id);
+    const messages = list(t, 'messages', file).map((m, j) => {
+      const mAt = `${at}.messages[${j}]`;
+      onlyKeys(m, THREAD_MESSAGE_KEYS, file, mAt);
+      const mId = str(m, 'id', file, mAt);
+      if (ids.has(mId)) throw new CaseError(file, `${mAt}: duplicate message id '${mId}'`);
+      ids.add(mId);
+      const fromRaw = m['from'];
+      if (fromRaw !== 'principal' && !isObject(fromRaw)) throw new CaseError(file, `${mAt}: 'from' must be principal or a recipient ({ name?, email })`);
+      const from: SeedMailParty = fromRaw === 'principal' ? 'principal' : parseDraftRecipient(fromRaw as Raw, file, `${mAt}.from`);
+      const date = str(m, 'date', file, mAt);
+      checkSeedDate(date, 'date', file, mAt);
+      // A message dated after the run clock would postdate the draft replying to it. Resolved
+      // against the load clock, so `{{at:now+…}}` and a literal future date both fail here.
+      if (Date.parse(resolveDatePlaceholders(date, 'UTC')) > Date.now()) {
+        throw new CaseError(file, `${mAt}: 'date' must not be in the future (a thread message predates the run)`);
+      }
+      const senderVerified = optBool(m, 'sender_verified', file, mAt);
+      const listId = optStr(m, 'list_id', file, mAt);
+      return {
+        id: mId,
+        from,
+        to: parseMailParties(m, 'to', file, mAt, true),
+        cc: parseMailParties(m, 'cc', file, mAt, false),
+        subject: str(m, 'subject', file, mAt),
+        body: str(m, 'body', file, mAt),
+        date,
+        ...(senderVerified !== undefined ? { senderVerified } : {}),
+        ...(listId !== undefined ? { listId } : {}),
+      };
+    });
+    return { id, messages };
   });
 }
 
@@ -756,20 +841,10 @@ function parsePrincipalMailbox(raw: Raw, file: string): SeedPrincipalMailbox | u
     const id = str(d, 'id', file, at);
     if (seen.has(id)) throw new CaseError(file, `${at}: duplicate draft id '${id}'`);
     seen.add(id);
-    const byCuria = optBool(d, 'by_curia', file, at);
-    if (byCuria === undefined) throw new CaseError(file, `${at}: 'by_curia' must be true or false`);
+    const byCuria = d['by_curia'];
+    if (!(DRAFT_AUTHORS as readonly unknown[]).includes(byCuria)) throw new CaseError(file, `${at}: 'by_curia' must be false, same_task or earlier`);
     const modified = optStr(d, 'modified', file, at);
-    // Resolved against an arbitrary clock here only to prove it is a date; the run resolves it
-    // against its own (resolveDatePlaceholders).
-    if (modified !== undefined) {
-      let resolved: string;
-      try {
-        resolved = resolveDatePlaceholders(modified, 'UTC');
-      } catch (err) {
-        throw new CaseError(file, `${at}: 'modified': ${err instanceof Error ? err.message : String(err)}`);
-      }
-      if (Number.isNaN(Date.parse(resolved))) throw new CaseError(file, `${at}: 'modified' must be a date or a date placeholder ({{at:now-3h}})`);
-    }
+    if (modified !== undefined) checkSeedDate(modified, 'modified', file, at);
     const thread = optStr(d, 'thread', file, at);
     return {
       id,
@@ -779,10 +854,18 @@ function parsePrincipalMailbox(raw: Raw, file: string): SeedPrincipalMailbox | u
       subject: str(d, 'subject', file, at),
       body: str(d, 'body', file, at),
       ...(modified !== undefined ? { modified } : {}),
-      byCuria,
+      byCuria: byCuria as SeedDraftAuthor,
     };
   });
-  return { ...(level !== undefined ? { sendLevel: level as SendLevel } : {}), drafts };
+  const threads = parsePrincipalThreads(block, file, where, seen);
+  const noBandReview = optBool(block, 'expect_no_band_review', file, where);
+  if (noBandReview === false) throw new CaseError(file, `${where}: 'expect_no_band_review' is true or absent`);
+  return {
+    ...(level !== undefined ? { sendLevel: level as SendLevel } : {}),
+    drafts,
+    threads,
+    ...(noBandReview ? { expectNoBandReview: true as const } : {}),
+  };
 }
 
 /** `seed.backlog`: each count a whole number, absent ones zero, at least one positive. */
@@ -1199,6 +1282,33 @@ function validateThroughGateway(scenario: ScenarioCase, file: string): void {
   // Only the review layer's gateway has the principal's mailbox (#2474); elsewhere the send is a stub.
   if (scenario.seed.principalMailbox && !scenario.throughGateway) {
     throw new CaseError(file, `seed.principal_mailbox needs through_gateway: true (only a real ceo-inbox-send-draft reads it)`);
+  }
+  // #2474 PR 2: an autonomous send needs band review, so without a band fixture every one stops at
+  // no_band_review, which a case author would otherwise learn only from a paid run.
+  const mailbox = scenario.seed.principalMailbox;
+  const bandGated = scenario.autonomy?.gating === 'band';
+  if (mailbox && (mailbox.sendLevel === 'routine' || mailbox.sendLevel === 'all') && !bandGated && !mailbox.expectNoBandReview) {
+    throw new CaseError(file, `seed.principal_mailbox: send_level ${mailbox.sendLevel} needs autonomy: { gating: band } (or expect_no_band_review: true for a case about no_band_review)`);
+  }
+  if (mailbox?.expectNoBandReview && bandGated) {
+    throw new CaseError(file, `seed.principal_mailbox: expect_no_band_review contradicts autonomy gating: band`);
+  }
+  // The gateway reads send_level; the agent reads ceo_inbox/sending from its pinned context. They
+  // must agree, or the agent decides under one level while the gateway enforces another (#2474).
+  // Absent on either side is production's default, on_request; the pinned value is read the way
+  // the gateway reads the stored setting (readSendLevelValue: malformed is on_request too).
+  const pinnedSending = scenario.seed.pinned?.configs[SENDING_CONFIG];
+  // Only a gateway case has a gateway level to disagree with.
+  if (scenario.throughGateway && (mailbox || pinnedSending !== undefined)) {
+    const gatewayLevel = mailbox?.sendLevel ?? DEFAULT_SEND_LEVEL;
+    const { level: agentLevel, malformed } = readSendLevelValue(pinnedSending ?? null);
+    // A mistyped value reads as on_request with no trace: refuse it rather than guess.
+    if (malformed) {
+      throw new CaseError(file, `seed.pinned.configs ${SENDING_CONFIG} must be JSON like {"default": "routine"} naming off, on_request, routine or all`);
+    }
+    if (gatewayLevel !== agentLevel) {
+      throw new CaseError(file, `seed.principal_mailbox.send_level (${gatewayLevel}) and seed.pinned.configs ${SENDING_CONFIG} (${agentLevel}) disagree: set both to the same level`);
+    }
   }
   // approve-action replays a held call outside the gated call it came from, so it would reach
   // the real handler, which test mode cannot serve. Not supported yet.

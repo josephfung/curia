@@ -6,9 +6,23 @@ import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 import type { ActionLogRow, ResolveResult } from '../../../src/autonomy/action-log-types.js';
 import { parseSenderVerified } from '../../../src/channels/email/message-converter.js';
 import type { TaskOutreachRepo, TaskOutreachRow } from '../../../src/dispatch/task-outreach.js';
+import { markdownToHtml } from '../../../src/format/markdown-to-html.js';
+import { buildReplyQuote } from '../../../src/skills/_shared/reply-quote.js';
+import type { DetectedPii } from '../../../src/dispatch/pii-redactor.js';
+import { splitReplyQuote } from '../../../src/skills/principal-send/own-text.js';
+import { quoteItemsToReview, threadMessageProof } from '../../../src/skills/principal-send/quote-proof.js';
 import type { TestModeStack } from '../../../src/startup/test-mode-stack.js';
 import { createCaseContext, newAttempt, type CaseAttempt } from '../../shared/case-scope.js';
-import { inboundNylasMessage } from '../../scenarios/harness.js';
+import { inboundNylasMessage, scheduledJobTask } from '../../scenarios/harness.js';
+import { loadScenarioCase } from '../../scenarios/loader.js';
+import path from 'node:path';
+import type { AutonomyService } from '../../../src/autonomy/autonomy-service.js';
+import { EventBus } from '../../../src/bus/bus.js';
+import type { ContactService } from '../../../src/contacts/contact-service.js';
+import type { ChannelIdentity } from '../../../src/contacts/types.js';
+import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
+import { createLogger } from '../../../src/logger.js';
+import { createRecordingOutboundGateway, createRecordingPrincipalMailbox, type SendRecorder } from '../../../src/startup/test-mode-sends.js';
 import {
   cleanupRun,
   mailboxDraftsOf,
@@ -246,6 +260,8 @@ describe('seedRun: the seeds a through-gateway case needs', () => {
     expect(seeded.refs.get('outreach:forms')).toBe('outreach-1');
     expect([...scope.taskIds]).toEqual(['task-1']);
     expect([...scope.seededOutreach.keys()]).toEqual(['outreach-1']);
+    // A stubbed compose names contacts by ID; the mirror resolves them through these (#2474 PR 2).
+    expect([...scope.contactAddresses]).toEqual([['contact-1', 'pat@vendor.example.test']]);
   });
 });
 
@@ -376,7 +392,8 @@ describe('acceptsRelay', () => {
 // #2474: the principal's mailbox a through-gateway run sends from. Its drafts are the case's
 // seeds plus every stubbed ceo-inbox draft write, so the real ceo-inbox-send-draft finds them.
 describe('the run\'s principal mailbox (#2474)', () => {
-  const seededCase = (byCuria: boolean) => ({
+  const CLOCK = new Date('2026-11-07T15:00:00.000Z');
+  const seededCase = (byCuria: false | 'same_task' | 'earlier', extra: Record<string, unknown> = {}) => ({
     seed: {
       contacts: [], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [],
       principalMailbox: {
@@ -385,62 +402,294 @@ describe('the run\'s principal mailbox (#2474)', () => {
           id: 'draft-30z-acme', thread: 'thr-30z-acme', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [],
           subject: 'Offsite', body: 'Venue: [venue TBD]', modified: '2026-11-07T09:00:00.000-05:00', byCuria,
         }],
+        threads: [],
+        ...extra,
       },
     },
   }) as unknown as ScenarioCase;
-  const stack = { pool: { query: vi.fn(async () => ({ rows: [] })) }, principalContactId: 'principal-1' } as unknown as TestModeStack;
+  const stack = {
+    pool: { query: vi.fn(async () => ({ rows: [] })) },
+    principalContactId: 'principal-1',
+    principalIdentities: [
+      { channel: 'signal', channelIdentifier: '+15555550100', verified: true },
+      { channel: 'email', channelIdentifier: 'avery@example.test', verified: true },
+    ],
+  } as unknown as TestModeStack;
+  const clocked = (): SeedScope => {
+    const scope = new SeedScope();
+    scope.clockNow = CLOCK;
+    return scope;
+  };
 
   it('seeds the drafts, their authorship and the send level', async () => {
     const { seedRun } = await import('../../scenarios/seed.js');
-    const scope = new SeedScope();
+    const scope = clocked();
     await seedRun(seededCase(false), { stack, outboundContext: {} as never, scope });
     expect(scope.sendLevel).toBe('off');
     expect(scope.principalDrafts.get('draft-30z-acme')).toMatchObject({
       id: 'draft-30z-acme', threadId: 'thr-30z-acme', subject: 'Offsite', body: 'Venue: [venue TBD]',
-      to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], bcc: [], folders: ['DRAFTS'],
+      to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], bcc: [], folders: ['DRAFT'],
       date: Date.parse('2026-11-07T14:00:00.000Z') / 1000,
     });
     expect([...scope.curiaDraftIds]).toEqual([]);
+    expect([...scope.curiaTaskDraftIds]).toEqual([]);
     expect(mailboxDraftsOf(scope)).toEqual([{ id: 'draft-30z-acme', subject: 'Offsite', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], body: 'Venue: [venue TBD]' }]);
-
-    const curia = new SeedScope();
-    await seedRun(seededCase(true), { stack, outboundContext: {} as never, scope: curia });
-    expect([...curia.curiaDraftIds]).toEqual(['draft-30z-acme']);
   });
 
-  it('adds a draft Curia wrote, and marks it Curia\'s', () => {
-    const scope = new SeedScope();
+  it('reads earlier as Curia\'s draft from another task, and same_task as one from this task (PR 2)', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const earlier = clocked();
+    await seedRun(seededCase('earlier'), { stack, outboundContext: {} as never, scope: earlier });
+    expect([...earlier.curiaDraftIds]).toEqual(['draft-30z-acme']);
+    expect([...earlier.curiaTaskDraftIds]).toEqual([]);
+    const sameTask = clocked();
+    await seedRun(seededCase('same_task'), { stack, outboundContext: {} as never, scope: sameTask });
+    expect([...sameTask.curiaDraftIds]).toEqual(['draft-30z-acme']);
+    expect([...sameTask.curiaTaskDraftIds]).toEqual(['draft-30z-acme']);
+  });
+
+  it('dates a draft with no modified time by the run clock, not the wall clock', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scope = clocked();
+    const c = seededCase('same_task');
+    delete (c.seed.principalMailbox!.drafts[0] as { modified?: string }).modified;
+    await seedRun(c, { stack, outboundContext: {} as never, scope });
+    expect(scope.principalDrafts.get('draft-30z-acme')!.date).toBe(CLOCK.getTime() / 1000);
+  });
+
+  it('seeds each thread\'s messages with folders, Authentication-Results and List-Id as the case says', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scope = clocked();
+    await seedRun(seededCase('same_task', {
+      threads: [{
+        id: 'thr-30z-acme',
+        messages: [
+          { id: 'msg-1', from: 'principal', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], subject: 'Offsite', body: 'Venue?', date: '2026-11-06T15:00:00.000Z' },
+          { id: 'msg-2', from: { name: 'Jo Park', email: 'jo.park@acme.example.test' }, to: ['principal'], cc: [{ email: 'lee@acme.example.test' }], subject: 'Re: Offsite', body: 'Harbour Room?', date: '2026-11-07T13:00:00.000Z', senderVerified: true },
+          { id: 'msg-3', from: { email: 'sam@other.test' }, to: ['principal'], cc: [], subject: 'Re: Offsite', body: 'Me too', date: '2026-11-07T14:00:00.000Z', senderVerified: false, listId: 'offsite.other.test' },
+        ],
+      }],
+    }), { stack, outboundContext: {} as never, scope });
+    const [m1, m2, m3] = scope.principalThreads.get('thr-30z-acme')!;
+    expect(m1).toMatchObject({ id: 'msg-1', threadId: 'thr-30z-acme', from: [{ email: 'avery@example.test' }], folders: ['SENT'], date: Date.parse('2026-11-06T15:00:00.000Z') / 1000 });
+    expect(m1!.headers ?? []).toEqual([]);
+    expect(m2).toMatchObject({ from: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], to: [{ email: 'avery@example.test' }], cc: [{ email: 'lee@acme.example.test' }], folders: ['INBOX'] });
+    expect(parseSenderVerified(m2!.headers)).toBe(true);
+    expect(parseSenderVerified(m3!.headers)).toBe(false);
+    expect(m3!.headers).toContainEqual({ name: 'List-Id', value: 'offsite.other.test' });
+    expect(m2!.headers?.some(h => h.name === 'List-Id')).toBe(false);
+  });
+
+  it('fails a thread that names the principal when the stack has no principal email', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const bare = { ...stack, principalIdentities: [] } as unknown as TestModeStack;
+    const c = seededCase(false, { threads: [{ id: 't', messages: [{ id: 'm', from: 'principal', to: [{ email: 'jo@acme.example.test' }], cc: [], subject: 'S', body: 'B', date: '2026-11-07T13:00:00.000Z' }] }] });
+    await expect(seedRun(c, { stack: bare, outboundContext: {} as never, scope: clocked() })).rejects.toThrow(/no verified email/);
+  });
+
+  it('adds a draft Curia wrote, dated by the run clock, and marks it Curia\'s in this task', () => {
+    const scope = clocked();
     mirrorPrincipalDraft(scope, { id: 'draft-0002', subject: 'Agenda', to: [{ email: 'sam@older.test' }], cc: [], body: 'Here is the agenda.' }, true);
-    expect(scope.principalDrafts.get('draft-0002')).toMatchObject({ subject: 'Agenda', to: [{ email: 'sam@older.test' }], body: 'Here is the agenda.', folders: ['DRAFTS'] });
+    expect(scope.principalDrafts.get('draft-0002')).toMatchObject({ subject: 'Agenda', to: [{ email: 'sam@older.test' }], body: 'Here is the agenda.', folders: ['DRAFT'], date: CLOCK.getTime() / 1000 });
     expect(scope.curiaDraftIds.has('draft-0002')).toBe(true);
+    expect(scope.curiaTaskDraftIds.has('draft-0002')).toBe(true);
+  });
+
+  it('puts a stubbed reply on the thread of the seeded message it answers', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scope = clocked();
+    await seedRun(seededCase(false, {
+      threads: [{ id: 'thr-other', messages: [{ id: 'msg-9', from: { email: 'jo.park@acme.example.test' }, to: ['principal'], cc: [], subject: 'Q', body: 'Q?', date: '2026-11-07T13:00:00.000Z' }] }],
+    }), { stack, outboundContext: {} as never, scope });
+    mirrorPrincipalDraft(scope, { id: 'draft-r1', subject: 'Re: Q', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'A.', replyTo: 'msg-9' }, true);
+    expect(scope.principalDrafts.get('draft-r1')).toMatchObject({ threadId: 'thr-other' });
+    expect(scope.errors).toEqual([]);
+    // #2474 final fixes A5: the run records which message the reply answers, as the audit row does.
+    expect(scope.curiaTaskReplyTo.get('draft-r1')).toBe('msg-9');
+    // A reply to a message the case did not seed is a case error (a typo in the stub's id).
+    mirrorPrincipalDraft(scope, { id: 'draft-r2', subject: 'Re: ?', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'A.', replyTo: 'msg-unknown' }, true);
+    expect(scope.errors).toEqual([expect.stringMatching(/draft-r2.*msg-unknown/)]);
+  });
+
+  // #2474 addendum R1: the positive release-gate cases, as loaded from their files, reach the
+  // review and send through the real gateway. Each limit is real; only the review's answer and
+  // the transport are not. Its absence let every autonomous case stop at origin_unknown unseen.
+  it.each([
+    ['30aa-inbox-auto-ack-sends-85.yaml', 'draft-30aa-reply', 'msg-30aa-deck', { name: 'Priya Nair', email: 'priya.nair@lumen.example.test' }, 'Thanks, Priya. See you Thursday.', 85],
+    ['45f-band-stakes-auto-commitment-sends-92.yaml', 'draft-45f-reply', 'msg-45f-2', { name: 'Owen Park', email: 'owen.park@calloway.example.test' }, "Confirmed, you'll have it by then.", 92],
+  ])('%s reaches the review and sends', async (file, draftId, replyTo, recipient, text, score) => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scenario = loadScenarioCase(path.join(import.meta.dirname, '../../scenarios/cases', file));
+    const scope = clocked();
+    scope.clockNow = new Date();
+    scope.clockTimezone = 'America/Toronto';
+    // The case's mailbox only: its contacts need a database, and the gateway fails open without them.
+    const mailboxOnly = { seed: { ...seededCase(false).seed, principalMailbox: scenario.seed.principalMailbox } } as unknown as ScenarioCase;
+    await seedRun(mailboxOnly, { stack, outboundContext: {} as never, scope });
+    mirrorPrincipalDraft(scope, { id: draftId, subject: 'Re: x', to: [recipient], cc: [], body: text, replyTo }, true);
+    expect(scope.errors).toEqual([]);
+    const review = vi.fn(async () => ({ kind: 'send' as const }));
+    const recorder: SendRecorder = {
+      record: () => undefined,
+      message: () => undefined,
+      principalDrafts: () => scope.principalDrafts,
+      curiaDraftIds: () => scope.curiaDraftIds,
+      curiaEditedDraftIds: () => scope.curiaEditedDraftIds,
+      curiaTaskDrafts: () => ({ ids: scope.curiaTaskDraftIds, now: scope.clockNow!, replyTo: scope.curiaTaskReplyTo }),
+      principalThreadMessages: (id) => scope.principalThreads.get(id) ?? [],
+      principalSends: () => scope.principalSends,
+      sendLevel: () => scope.sendLevel,
+    };
+    const logger = createLogger('error');
+    const gateway = createRecordingOutboundGateway({
+      recorder,
+      emailAccounts: [{ name: 'curia', selfEmail: 'curia@example.test' }],
+      contactService: { resolveByChannelIdentity: vi.fn().mockResolvedValue(null), getContact: vi.fn().mockResolvedValue(null) } as unknown as ContactService,
+      bus: new EventBus(logger),
+      logger,
+      principalIdentities: stack.principalIdentities as ChannelIdentity[],
+      autonomyService: { getConfig: async () => ({ score, band: 'act', updatedAt: new Date(0), updatedBy: 'x', gating: 'band' }) } as unknown as AutonomyService,
+      principalMailbox: createRecordingPrincipalMailbox(recorder, () => 'avery@example.test'),
+      review: { contentFilter: new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' }), bandReview: { review }, gating: 'tier' },
+    });
+    const task = scheduledJobTask('ceo-inbox', 'conv', 'triage');
+    const result = await gateway.sendPrincipalDraft(draftId, { authority: { taskMetadata: task.payload.metadata }, taskEventId: task.id });
+    expect(result).toMatchObject({ success: true, to: [recipient.email] });
+    expect(review).toHaveBeenCalledOnce();
+    expect(scope.principalSends).toEqual([expect.objectContaining({ draftId, mode: 'autonomous', outcome: 'sent' })]);
+  });
+
+  it('keeps a known thread when a later write repeats an unseeded reply id', () => {
+    const scope = clocked();
+    mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'A', to: [], cc: [], body: 'B' }, true);
+    scope.principalDrafts.get('draft-30z-acme')!.threadId = 'thr-30z-acme';
+    mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'A', to: [], cc: [], body: 'C', replyTo: 'msg-unknown' }, false, true);
+    expect(scope.principalDrafts.get('draft-30z-acme')).toMatchObject({ threadId: 'thr-30z-acme' });
+    expect(scope.errors).toEqual([]);
+  });
+
+  it('resolves the principal\'s own contact UUID to their verified email', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scope = clocked();
+    await seedRun(seededCase(false), { stack, outboundContext: {} as never, scope });
+    mirrorPrincipalDraft(scope, { id: 'draft-c3', subject: 'Hi', to: [], cc: [], body: 'B', contactIds: { to: ['principal-1'], cc: [] } }, true);
+    expect(scope.principalDrafts.get('draft-c3')).toMatchObject({ to: [{ email: 'avery@example.test' }] });
+    expect(scope.errors).toEqual([]);
+  });
+
+  it('resolves a compose\'s contact IDs through the seeded contacts, and fails the run on one it cannot', () => {
+    const scope = clocked();
+    scope.principalAddress = 'avery@example.test';
+    scope.contactAddresses.set('contact-pat', 'pat@vendor.example.test');
+    mirrorPrincipalDraft(scope, {
+      id: 'draft-c1', subject: 'Hi', to: [{ email: 'lee@vendor.example.test' }], cc: [], body: 'B',
+      contactIds: { to: ['contact-pat#work'], cc: ['principal'] },
+    }, true);
+    expect(scope.principalDrafts.get('draft-c1')).toMatchObject({
+      to: [{ email: 'lee@vendor.example.test' }, { email: 'pat@vendor.example.test' }], cc: [{ email: 'avery@example.test' }],
+    });
+    expect(scope.errors).toEqual([]);
+    mirrorPrincipalDraft(scope, { id: 'draft-c2', subject: 'Hi', to: [], cc: [], body: 'B', contactIds: { to: ['contact-nobody'], cc: [] } }, true);
+    expect(scope.errors).toEqual([expect.stringContaining('contact-nobody')]);
   });
 
   it('applies an edit to the principal\'s draft without making it Curia\'s', async () => {
     const { seedRun } = await import('../../scenarios/seed.js');
-    const scope = new SeedScope();
+    const scope = clocked();
     await seedRun(seededCase(false), { stack, outboundContext: {} as never, scope });
     mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'Offsite', to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], body: 'Venue: the Harbour Room' }, false, true);
     expect(scope.principalDrafts.get('draft-30z-acme')).toMatchObject({ threadId: 'thr-30z-acme', body: 'Venue: the Harbour Room' });
     expect(scope.curiaDraftIds.has('draft-30z-acme')).toBe(false);
+    expect(scope.curiaTaskDraftIds.has('draft-30z-acme')).toBe(false);
     // ...but marks it edited, so the send reviews it as curia-edited (final review S1).
     expect(scope.curiaEditedDraftIds.has('draft-30z-acme')).toBe(true);
   });
 
   it('does not mark a draft-reply that returned an existing draft as edited', () => {
-    const scope = new SeedScope();
+    const scope = clocked();
     mirrorPrincipalDraft(scope, { id: 'draft-0003', subject: 'A', to: [], cc: [], body: 'B' }, false);
     expect(scope.curiaEditedDraftIds.size).toBe(0);
+    expect(scope.curiaTaskDraftIds.size).toBe(0);
+    // No seeded draft has that id: the stub claims a draft the mailbox never held.
+    expect(scope.principalDrafts.has('draft-0003')).toBe(false);
+    expect(scope.errors).toEqual([expect.stringMatching(/already_exists.*draft-0003/)]);
+  });
+
+  it('leaves a seeded draft\'s body, recipients and date as they were on an already_exists reply', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scope = clocked();
+    await seedRun(seededCase(false), { stack, outboundContext: {} as never, scope });
+    const before = { ...scope.principalDrafts.get('draft-30z-acme')! };
+    mirrorPrincipalDraft(scope, { id: 'draft-30z-acme', subject: 'Re: X', to: [{ email: 'other@acme.example.test' }], cc: [], body: 'Curia wrote this.', replyTo: 'msg-unknown' }, false);
+    expect(scope.principalDrafts.get('draft-30z-acme')).toEqual(before);
+    expect(scope.curiaTaskDraftIds.has('draft-30z-acme')).toBe(false);
+    expect(scope.errors).toEqual([]);
+  });
+
+  it('gives a new reply the quote the real draft-reply appends, so the review meets it', async () => {
+    const { seedRun } = await import('../../scenarios/seed.js');
+    const scope = clocked();
+    scope.clockTimezone = 'America/Toronto';
+    await seedRun(seededCase(false, {
+      threads: [{ id: 'thr-q', messages: [{ id: 'msg-q', from: { name: 'Jo Park', email: 'jo.park@acme.example.test' }, to: ['principal'], cc: [], subject: 'Deck', body: "I'll bring the deck.\n\nJo Park\n+1 416 555 0142", date: '2026-11-07T13:00:00.000Z', senderVerified: true }] }],
+    }), { stack, outboundContext: {} as never, scope });
+    mirrorPrincipalDraft(scope, { id: 'draft-q', subject: 'Re: Deck', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'Thanks, Jo.', replyTo: 'msg-q' }, true);
+    const original = scope.principalThreads.get('thr-q')![0]!;
+    const stored = scope.principalDrafts.get('draft-q')!;
+    expect(stored.body).toBe(markdownToHtml('Thanks, Jo.', { wrap: true }) + buildReplyQuote(original, 'America/Toronto', { format: 'html' }));
+    expect(stored.body).toContain('<blockquote');
+    expect(stored.body).toContain('+1 416 555 0142');
+    // The gateway's own helpers find the quote and prove the sender already had the phone.
+    const split = splitReplyQuote(stored.body);
+    expect(split.quote).toContain('+1 416 555 0142');
+    const phone = { label: 'phone_us', start: 0, end: 0, matched: '+1 416 555 0142' } as DetectedPii;
+    expect(quoteItemsToReview([phone], split.quote, [threadMessageProof(original, [scope.principalAddress ?? 'avery@example.test'])], ['jo.park@acme.example.test'])).toEqual([]);
+    // An edit that changes only recipients keeps the quote; one that rewrites the text drops it,
+    // as the real edit replaces the whole body.
+    mirrorPrincipalDraft(scope, { id: 'draft-q', subject: 'Re: Deck', to: [{ email: 'jo.park@acme.example.test' }, { email: 'lee@acme.example.test' }], cc: [], body: 'Thanks, Jo.', replyTo: 'msg-q' }, false, true);
+    expect(scope.principalDrafts.get('draft-q')!.body).toBe(stored.body);
+    mirrorPrincipalDraft(scope, { id: 'draft-q', subject: 'Re: Deck', to: [{ email: 'jo.park@acme.example.test' }], cc: [], body: 'Thanks!', replyTo: 'msg-q' }, false, true);
+    expect(scope.principalDrafts.get('draft-q')!.body).toBe('Thanks!');
+  });
+
+  it('refuses to mirror without the run clock', () => {
+    expect(() => mirrorPrincipalDraft(new SeedScope(), { id: 'd', subject: 'A', to: [], cc: [], body: 'B' }, true)).toThrow(/run clock/);
+  });
+
+  it('reads the run\'s principal-mailbox ledger into its gateway outcome', async () => {
+    const { stack: fake } = fakeStack({});
+    const scope = new SeedScope();
+    scope.rootConversation = 'scenario-a';
+    scope.principalSends.push({ draftId: 'd1', threadId: 't1', recipients: ['jo@acme.example.test'], mode: 'autonomous', at: '2026-11-07T15:00:00.000Z', outcome: 'held', reasonCode: 'recipient_not_on_thread' });
+    scope.mailboxDigests.push('Left as a draft in your mailbox: Re: Q to Jo. Not on the thread.');
+    const outcome = await readGatewayOutcome(fake, scenario, seededRun(), scope);
+    expect(outcome.principalSends).toEqual([expect.objectContaining({ draftId: 'd1', outcome: 'held', reasonCode: 'recipient_not_on_thread' })]);
+    expect(outcome.mailboxDigests).toEqual(['Left as a draft in your mailbox: Re: Q to Jo. Not on the thread.']);
   });
 
   it('is cleared with the run', () => {
-    const scope = new SeedScope();
+    const scope = clocked();
     mirrorPrincipalDraft(scope, { id: 'draft-0002', subject: 'A', to: [], cc: [], body: 'B' }, true);
     mirrorPrincipalDraft(scope, { id: 'draft-0002', subject: 'A', to: [], cc: [], body: 'C' }, false, true);
     scope.sendLevel = 'all';
+    scope.principalThreads.set('t', []);
+    scope.principalSends.push({ draftId: 'd', threadId: 't', recipients: [], mode: 'autonomous', at: '', outcome: 'held' });
+    scope.contactAddresses.set('c', 'a@b.test');
+    scope.principalAddress = 'avery@example.test';
+    scope.principalContactId = 'principal-1';
+    scope.mailboxDigests.push('Left as a draft in your mailbox: x');
     scope.clear();
+    expect(scope.principalContactId).toBeUndefined();
+    expect(scope.mailboxDigests).toEqual([]);
     expect(scope.principalDrafts.size).toBe(0);
     expect(scope.curiaDraftIds.size).toBe(0);
+    expect(scope.curiaTaskDraftIds.size).toBe(0);
     expect(scope.curiaEditedDraftIds.size).toBe(0);
+    expect(scope.principalThreads.size).toBe(0);
+    expect(scope.principalSends).toEqual([]);
+    expect(scope.contactAddresses.size).toBe(0);
+    expect(scope.principalAddress).toBeUndefined();
+    expect(scope.clockNow).toBeUndefined();
     expect(scope.sendLevel).toBeUndefined();
   });
 });

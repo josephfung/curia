@@ -83,3 +83,84 @@ describe('parseLedgerDoc', () => {
     expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, recipients: 'x' } })).toBeNull();
   });
 });
+
+describe('PrincipalSendLedger autonomous lookups (#2474 PR 2)', () => {
+  // Final fixes B2 (security review L2): a code, never the free-text reason, in agent-readable /scratch.
+  it('recordHeld stores a reason code', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'recipient_not_on_thread' });
+    expect(await ledger.list()).toEqual([{ ...entry, mode: 'autonomous', outcome: 'held', reasonCode: 'recipient_not_on_thread' }]);
+    const params = docs.create.mock.calls[0]![0];
+    expect(params.path.startsWith(`${PRINCIPAL_SEND_LEDGER_PREFIX}/d1-`)).toBe(true);
+    expect(params.frontmatter).toMatchObject({ reason_code: 'recipient_not_on_thread' });
+    expect(params.frontmatter).not.toHaveProperty('reason');
+  });
+
+  it('parses a PR 1 entry with no reason, and an earlier held entry\'s free-text reason without keeping it', async () => {
+    const docs = makeDocs();
+    await new PrincipalSendLedger(docs, logger).recordSending(entry);
+    const doc = [...docs.docs.values()][0]!;
+    expect(parseLedgerDoc(doc)).toEqual({ ...entry, outcome: 'sending' });
+    const legacyHeld = { ...doc, frontmatter: { ...doc.frontmatter, mode: 'autonomous', outcome: 'held', reason: 'The reply goes to bob@example.org.' } };
+    expect(parseLedgerDoc(legacyHeld)).toEqual({ ...entry, mode: 'autonomous', outcome: 'held' });
+  });
+
+  it('recentForThread returns only autonomous entries on that thread inside the window', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    const since = Date.parse('2026-11-06T12:00:00.000Z');
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordHeld({ ...entry, draftId: 'b', mode: 'autonomous', at: '2026-11-07T11:00:00.000Z', reasonCode: 'review_hold' });
+    await ledger.recordSending({ ...entry, draftId: 'c', mode: 'principal-directed', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'd', mode: 'autonomous', threadId: 't2', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'e', mode: 'autonomous', at: '2026-11-05T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'f', mode: 'autonomous', at: 'not a date' });
+    const got = await ledger.recentForThread('t1', since);
+    // An unreadable time counts as recent (fail closed).
+    expect(got.map((e) => e.draftId).sort()).toEqual(['a', 'b', 'f']);
+  });
+
+  it('parseLedgerDoc rejects a non-string reason code', async () => {
+    const docs = makeDocs();
+    await new PrincipalSendLedger(docs, logger).recordHeld({ ...entry, reasonCode: 'x' });
+    const doc = [...docs.docs.values()][0]!;
+    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, reason_code: 7 } })).toBeNull();
+  });
+});
+
+// Final fixes A4 (security review M2) and A12 (final review M1).
+describe('PrincipalSendLedger global lookups', () => {
+  it('recentAutonomousSends counts autonomous sending and sent entries on every thread inside the window', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    const since = Date.parse('2026-11-06T12:00:00.000Z');
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'b', mode: 'autonomous', threadId: 't2', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSent('b', 'msg-b');
+    await ledger.recordHeld({ ...entry, draftId: 'c', mode: 'autonomous', at: '2026-11-07T11:00:00.000Z', reasonCode: 'review_hold' });
+    await ledger.recordSending({ ...entry, draftId: 'd', mode: 'principal-directed', at: '2026-11-07T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'e', mode: 'autonomous', at: '2026-11-05T10:00:00.000Z' });
+    await ledger.recordSending({ ...entry, draftId: 'f', mode: 'autonomous', threadId: 't3', at: 'not a date' });
+    const got = await ledger.recentAutonomousSends(since);
+    // Held markers are not sends; an unreadable time counts (fail closed).
+    expect(got.map((e) => e.draftId).sort()).toEqual(['a', 'b', 'f']);
+  });
+
+  it('recentAutonomousSends throws on a repo failure (the gateway fails closed)', async () => {
+    const docs = makeDocs();
+    docs.listByPrefix.mockRejectedValue(new Error('db down'));
+    await expect(new PrincipalSendLedger(docs, logger).recentAutonomousSends(0)).rejects.toThrow('db down');
+  });
+
+  it('sentForDraft is true only once a send of that draft was recorded as sent', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, mode: 'autonomous' });
+    expect(await ledger.sentForDraft('d1')).toBe(false);
+    await ledger.recordSent('d1', 'msg-1');
+    expect(await ledger.sentForDraft('d1')).toBe(true);
+    // A draft whose id shares the prefix is another draft.
+    expect(await ledger.sentForDraft('d')).toBe(false);
+  });
+});

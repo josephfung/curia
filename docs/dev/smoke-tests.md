@@ -132,6 +132,8 @@ judge_tool_calls: false         # optional — show the judge each turn's tool c
 known_failure: { issue: "#123" } # optional — a tracked bug this case catches (reported, not gated)
 timeout_seconds: 300            # optional — a longer wait per turn, for cases that chain specialists
 live_search: true               # optional — web-search runs for real (see "Web search"); costs Tavily credits
+config:                         # optional — settings in force from turn 1 (see "Settings")
+  - { namespace: ceo_inbox, key: sending, value: '{"default": "routine"}' }
 tool_stubs:                     # optional — fixture answers for tools (see "The fixture office")
   calendar-list-events:
     - match: {}                 # subset match on the call's arguments; {} matches any call
@@ -209,6 +211,10 @@ A case's own `tool_stubs` are tried first, then the office's, so a case can chan
 - **A case about searching itself** sets `live_search: true`. That drops the office's stub for the case, so its searches reach Tavily. The case can't also stub `web-search`; the loader rejects that.
 
 The summary prints how many searches reached Tavily, beside the model spend, and the results JSON records it (`liveSearch`). If Tavily refused any of them for an exhausted quota (HTTP 432 or 433), the summary says so. A case that searched may then have timed out for that reason, not for its behavior.
+
+### Settings
+
+`config` sets config-store values the case's agents see in their pinned context from turn 1 (#2474), such as the `ceo_inbox/sending` level a triage case runs under. Each entry is a `namespace`, a `key` and the stored string `value` (JSON text for a structured setting). The values are held per case, not written to the database copy: concurrent cases share the copy, and another case must not run under this one's setting. Only the pinned block reads them; a tool that reads config-store itself still sees the copy's value.
 
 ### Tools that keep state
 
