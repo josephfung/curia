@@ -9,20 +9,111 @@
 import type { DetectedPii } from '../../dispatch/pii-redactor.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../_shared/reply-quote.js';
 
-/**
- * The opening tag of any element whose class list holds the token `gmail_quote`: Gmail now writes
- * `<div class="gmail_quote gmail_quote_container">`, not only `class="gmail_quote"` (#2474 PR 2).
- * `gmail_quote_container` alone is a different token and does not match. Every run stops at `<`
- * or `>`, so a match attempt never leaves its tag: unbounded runs made the scan quadratic on
- * hostile HTML (seconds at a few hundred KB).
- */
-const GMAIL_QUOTE_OPEN = /<[a-z][a-z0-9]*\b[^<>]*?\bclass\s*=\s*(["'])(?:[^"'<>]*\s)?gmail_quote(?=[\s"'])[^"'<>]*\1/i;
+// Elements whose content is raw text: a tag written inside one is not a tag.
+const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'textarea', 'title']);
 
-/** Splits at the earliest REPLY_QUOTE_HTML_OPEN or Gmail quote element; quote is '' when neither occurs. */
+interface StartTag {
+  start: number;
+  /** Index just past the tag's closing `>` (or the end of the input). */
+  end: number;
+  name: string;
+  /** The first value of each attribute, by lowercased name, as HTML keeps it. */
+  attrs: Map<string, string>;
+}
+
+/** Reads the start tag that opens at `html[start] === '<'`, skipping quoted attribute values. */
+function readStartTag(html: string, start: number): StartTag {
+  let i = start + 1;
+  const nameMatch = /^[a-z][^\s/>]*/i.exec(html.slice(i));
+  const name = (nameMatch?.[0] ?? '').toLowerCase();
+  i += name.length;
+  const attrs = new Map<string, string>();
+  while (i < html.length && html[i] !== '>') {
+    if (/[\s/]/.test(html[i]!)) { i++; continue; }
+    const attrName = /^[^\s/>=]+/.exec(html.slice(i))?.[0] ?? html[i]!;
+    i += attrName.length;
+    while (/\s/.test(html[i] ?? '')) i++;
+    let value = '';
+    if (html[i] === '=') {
+      i++;
+      while (/\s/.test(html[i] ?? '')) i++;
+      const quote = html[i];
+      if (quote === '"' || quote === "'") {
+        const close = html.indexOf(quote, i + 1);
+        const stop = close >= 0 ? close : html.length;
+        value = html.slice(i + 1, stop);
+        i = stop + 1;
+      } else {
+        value = /^[^\s>]*/.exec(html.slice(i))?.[0] ?? '';
+        i += value.length;
+      }
+    }
+    const key = attrName.toLowerCase();
+    if (!attrs.has(key)) attrs.set(key, value);
+  }
+  return { start, end: Math.min(i + 1, html.length), name, attrs };
+}
+
+/**
+ * Gmail's quote container: a <div> whose class attribute has the token `gmail_quote`, alone or
+ * with others (`gmail_quote gmail_quote_container`). A prefix such as `gmail_quoted`, another
+ * attribute (`data-class`), or `class=` text inside another attribute's value is not it.
+ */
+function isGmailQuoteOpen(tag: StartTag): boolean {
+  if (tag.name !== 'div') return false;
+  return (tag.attrs.get('class') ?? '').split(/\s+/).includes('gmail_quote');
+}
+
+/**
+ * Where the earliest reply quote opens: Curia's REPLY_QUOTE_HTML_OPEN or a Gmail quote container,
+ * counted only where it is a real start tag. Walks the HTML tag by tag, so text inside an
+ * attribute value, a comment or a raw-text element never starts a quote. -1 when none does: the
+ * whole body is then the draft's own text, which is reviewed (the fail-closed direction).
+ */
+function findReplyQuoteOpen(html: string): number {
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf('<', i);
+    if (lt < 0) return -1;
+    if (html.startsWith('<!--', lt)) {
+      const close = html.indexOf('-->', lt + 4);
+      if (close < 0) return -1;
+      i = close + 3;
+      continue;
+    }
+    if (html[lt + 1] === '/' && /[a-z]/i.test(html[lt + 2] ?? '')) {
+      // An end tag: browsers read attributes in it too, so a '>' inside a quoted value does
+      // not close it. Same quote-aware scan as a start tag, read from the '/'.
+      i = readStartTag(html, lt + 1).end;
+      continue;
+    }
+    if (!/[a-z]/i.test(html[lt + 1] ?? '')) {
+      // A doctype, bogus comment or stray '<': the first '>' closes the first two whatever
+      // the quotes (a stray '<' just advances).
+      const gt = html.indexOf('>', lt + 1);
+      i = html[lt + 1] === '/' || html[lt + 1] === '!' ? (gt < 0 ? html.length : gt + 1) : lt + 1;
+      continue;
+    }
+    if (html.startsWith(REPLY_QUOTE_HTML_OPEN, lt)) return lt;
+    const tag = readStartTag(html, lt);
+    if (isGmailQuoteOpen(tag)) return lt;
+    i = tag.end;
+    if (RAW_TEXT_ELEMENTS.has(tag.name)) {
+      // Only `</name` followed by whitespace, '/' or '>' ends it: `</scriptx>` is still text.
+      const closer = new RegExp(`</${tag.name}(?=[\\s/>]|$)`, 'ig');
+      closer.lastIndex = i;
+      const close = closer.exec(html);
+      if (!close) return -1;
+      i = close.index;
+    }
+  }
+  return -1;
+}
+
+/** Splits at the earliest REPLY_QUOTE_HTML_OPEN or Gmail quote container; quote is '' when neither occurs. */
 export function splitReplyQuote(html: string): { own: string; quote: string } {
-  const at = [html.indexOf(REPLY_QUOTE_HTML_OPEN), html.search(GMAIL_QUOTE_OPEN)].filter((i) => i >= 0);
-  if (at.length === 0) return { own: html, quote: '' };
-  const cut = Math.min(...at);
+  const cut = findReplyQuoteOpen(html);
+  if (cut < 0) return { own: html, quote: '' };
   return { own: html.slice(0, cut), quote: html.slice(cut) };
 }
 
@@ -45,7 +136,7 @@ export function quoteHeaderParticipants(quote: string): string[] | null {
     const end = quote.indexOf('</div>');
     const block = end >= 0 ? quote.slice(0, end) : quote;
     header = block.split(/<\/p>/i).filter((line) => HEADER_LINE.test(line)).join(' ');
-  } else if (quote.search(GMAIL_QUOTE_OPEN) === 0) {
+  } else if (quote.startsWith('<') && isGmailQuoteOpen(readStartTag(quote, 0))) {
     // Gmail's attribution ("On …, Dana <dana@…> wrote:") comes before the first <blockquote>.
     const end = quote.search(/<blockquote/i);
     if (end >= 0) header = quote.slice(0, end);

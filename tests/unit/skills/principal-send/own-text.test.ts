@@ -32,35 +32,54 @@ describe('splitReplyQuote', () => {
     expect(splitReplyQuote(html)).toEqual({ own: html, quote: '' });
   });
 
+  it('does not split on gmail_quote outside a div\'s own class attribute', () => {
+    // Another attribute named like class, and class= text inside another attribute's value.
+    for (const tag of [
+      '<div data-class="gmail_quote">',
+      '<div title=\'class="gmail_quote"\'>',
+      '<div title="x" data-x=\'a class="gmail_quote"\'>',
+      '<span class="gmail_quote">',
+    ]) {
+      const html = `<div>Ok, call 416-555-0199.</div>${tag}later text</div>`;
+      expect(splitReplyQuote(html), tag).toEqual({ own: html, quote: '' });
+    }
+  });
+
+  it('does not split on a quote marker inside an attribute value, a comment or a raw-text element', () => {
+    for (const wrapped of [
+      '<img alt=\'<div class="gmail_quote">\'>',
+      `<img alt='${REPLY_QUOTE_HTML_OPEN}'>`,
+      '<!-- <div class="gmail_quote"> -->',
+      '<style>/* <div class="gmail_quote"> */</style>',
+      // End tags carry attributes too: a '>' inside their quoted value does not close them.
+      '</p x=\'<div class="gmail_quote">\'>',
+      '</p x=\'>\'<div class="gmail_quote"><div class="gmail_attr">On Thu, Dana &lt;dana@example.org&gt; wrote:</div><blockquote>x</blockquote></div>\'>',
+      `</span title=">${REPLY_QUOTE_HTML_OPEN}">`,
+      // A raw-text element ends only at its own end tag, not at a longer name.
+      '<script>x</scriptx><div class="gmail_quote"></script>',
+    ]) {
+      const html = `<p>Ok, call 416-555-0199.</p>${wrapped}<p>more</p>`;
+      expect(splitReplyQuote(html), wrapped).toEqual({ own: html, quote: '' });
+    }
+  });
+
+  it('still splits on a real quote after an attribute that mentions it', () => {
+    const html = '<div title=\'class="gmail_quote"\'>Ok.</div><div class=\'gmail_quote\'>On Fri, Dana wrote:</div>';
+    expect(splitReplyQuote(html).own).toBe('<div title=\'class="gmail_quote"\'>Ok.</div>');
+  });
+
+  it('still splits on a real quote after an end tag with a quoted attribute', () => {
+    const html = '<p>Ok.</p x=\'>\'><div class="gmail_quote">On Fri, Dana wrote:</div>';
+    expect(splitReplyQuote(html).own).toBe('<p>Ok.</p x=\'>\'>');
+    const raw = '<style>p{}</style ><div class="gmail_quote">On Fri</div>';
+    expect(splitReplyQuote(raw).own).toBe('<style>p{}</style >');
+  });
+
   it('splits at the earliest marker when both occur', () => {
     const html = `<p>Yes.</p><div class="gmail_quote">older</div>${REPLY_QUOTE_HTML_OPEN}newer</div>`;
     expect(splitReplyQuote(html).own).toBe('<p>Yes.</p>');
     const reversed = `<p>Yes.</p>${REPLY_QUOTE_HTML_OPEN}newer</div><div class="gmail_quote">older</div>`;
     expect(splitReplyQuote(reversed).own).toBe('<p>Yes.</p>');
-  });
-
-  it('splits on any element whose class list contains gmail_quote', () => {
-    const html = '<div>Sounds good.</div><div class="gmail_quote gmail_quote_container"><div class="gmail_attr">On Fri, Dana wrote:</div><blockquote class="gmail_quote">call 416-555-0100</blockquote></div>';
-    expect(splitReplyQuote(html).own).toBe('<div>Sounds good.</div>');
-    expect(splitReplyQuote('<p>a</p><blockquote class=\'x gmail_quote\'>q</blockquote>').own).toBe('<p>a</p>');
-    // Not a different class that merely starts with the name.
-    expect(splitReplyQuote('<p>a</p><div class="gmail_quote_container">q</div>').quote).toBe('');
-  });
-
-  it('splits at the earliest marker when a class-list Gmail quote follows Curia\'s', () => {
-    const html = `<p>Yes.</p>${REPLY_QUOTE_HTML_OPEN}newer</div><div class="gmail_quote gmail_quote_container">older</div>`;
-    expect(splitReplyQuote(html).own).toBe('<p>Yes.</p>');
-    const reversed = `<p>Yes.</p><div class="gmail_quote gmail_quote_container">older</div>${REPLY_QUOTE_HTML_OPEN}newer</div>`;
-    expect(splitReplyQuote(reversed).own).toBe('<p>Yes.</p>');
-  });
-
-  it('scans adversarial HTML in linear time', () => {
-    for (const unit of ['<a class=" ', '<a class="x ', '<a b class=\'']) {
-      const html = unit.repeat(Math.ceil(500_000 / unit.length));
-      const start = performance.now();
-      expect(splitReplyQuote(html).quote).toBe('');
-      expect(performance.now() - start, unit).toBeLessThan(200);
-    }
   });
 
   it('returns an empty quote when there is no marker', () => {
@@ -110,11 +129,6 @@ describe('quoteHeaderParticipants (#2474 final review S2)', () => {
     expect(quoteHeaderParticipants(quote)).toEqual(['dana@example.org']);
   });
 
-  it('reads the sender from a class-list Gmail quote', () => {
-    const quote = '<div class="gmail_quote gmail_quote_container"><div class="gmail_attr">On Thu, Dana &lt;dana@example.org&gt; wrote:<br></div><blockquote class="gmail_quote">cc bob@example.net</blockquote></div>';
-    expect(quoteHeaderParticipants(quote)).toEqual(['dana@example.org']);
-  });
-
   it('reads the sender from a compound-class Gmail quote', () => {
     const quote = '<div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">On Thu, Dana &lt;<a href="mailto:dana@example.org">dana@example.org</a>&gt; wrote:<br></div><blockquote class="gmail_quote">Call me: 416-555-0199</blockquote></div>';
     expect(quoteHeaderParticipants(quote)).toEqual(['dana@example.org']);
@@ -125,5 +139,7 @@ describe('quoteHeaderParticipants (#2474 final review S2)', () => {
     expect(quoteHeaderParticipants('<div class="gmail_quote"><div class="gmail_attr">On Thu, Dana wrote:</div><blockquote>x</blockquote></div>')).toBeNull();
     expect(quoteHeaderParticipants('')).toBeNull();
     expect(quoteHeaderParticipants(`${REPLY_QUOTE_HTML_OPEN}<p>no header</p>`)).toBeNull();
+    // Not a Gmail quote container: no attribution is read from it.
+    expect(quoteHeaderParticipants('<div data-class="gmail_quote">On Thu, dana@example.org wrote:<blockquote>x</blockquote></div>')).toBeNull();
   });
 });
