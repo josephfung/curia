@@ -583,14 +583,18 @@ function checkStopDigest(result: OutboundSendResult): string {
  * A9, security review B3). The hourly inbox check is a declarative scheduled job, stamped
  * `systemRole: 'system'` (makeSystemOriginator); its woken drain task can be downgraded to
  * `'agent'` by the bypass ladder (computeEffectiveTaskMetadata), and the gateway reads the
- * effective metadata. Nothing else qualifies: no metadata or no originator (fail closed), an
- * outsider, or principal lineage on a task that is not a live turn (a live one is
- * principal-directed and never reaches this check).
+ * effective metadata. The RAW lineage must be `system`: either still `system`, or `agent` with
+ * `ladderedFrom: 'system'` (the ladder's record of what it demoted). A genuine `agent` lineage
+ * (e.g. an inbound from an agent-role contact) and a principal lineage demoted to `agent` both
+ * refuse, so a lower score never grants more than a higher one. No metadata or no originator
+ * also refuses (fail closed), as does principal lineage on a task that is not a live turn (a
+ * live one is principal-directed and never reaches this check).
  */
 function isAutonomousSendOrigin(taskMetadata: Record<string, unknown> | undefined): boolean {
-  // Only systemRole is read, and compared to literals; cast through unknown per repo policy.
+  // Only systemRole and ladderedFrom are read, and compared to literals; cast through unknown per repo policy.
   const originator = taskMetadata?.['originator'] as unknown as TaskOriginator | undefined;
-  return originator?.systemRole === 'system' || originator?.systemRole === 'agent';
+  if (originator?.systemRole === 'system') return true;
+  return originator?.systemRole === 'agent' && originator.ladderedFrom === 'system';
 }
 
 /** recipient_not_on_thread's text, naming who (the limit's detail). */

@@ -19,7 +19,7 @@
 
 import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, ApprovalVia } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
-import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
+import { isPrincipalOriginated, isOutsiderOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
 import { findCarveoutSkill } from '../contacts/principal-channel-registry.js';
 import { emailAccountIdFromInput } from '../channels/email/account-id.js';
@@ -924,7 +924,9 @@ export class ExecutionLayer {
     if (NO_QUEUED_APPROVAL_TOOLS.has(toolName)) {
       // No approval row, so the digest is the principal's only sign that a draft is waiting (#2474).
       // Only Gates A/B reach here (both scores known); Gate C goes through buildTierGateError.
-      if (!isPrincipalOriginated(options?.taskMetadata)) {
+      // An outsider-originated call is skipped: the gateway files nothing for it either, and
+      // an outsider repeating the call must not be able to add digest noise.
+      if (!isPrincipalOriginated(options?.taskMetadata) && !isOutsiderOriginated(options?.taskMetadata)) {
         await this.publishPrincipalMailboxRefusal(currentScore, requiredScore, options, skillLogger);
       }
       return baseMsg + NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND;

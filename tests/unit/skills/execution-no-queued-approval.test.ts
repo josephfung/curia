@@ -95,6 +95,17 @@ describe('gate blocks on ceo-inbox-send-draft queue no approval (#2474)', () => 
     });
   });
 
+  it('files no digest item when an outsider-originated call is refused at Gate B', async () => {
+    const { layer, publish } = setup('ceo-inbox-send-draft', 65);
+    const outsider = {
+      taskEventId: 'task-1',
+      taskMetadata: { originator: { contactId: 'c-x', systemRole: null, channel: 'email', initiatedAt: new Date().toISOString(), tier: 'unknown' } },
+    };
+    const r = await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, outsider);
+    expect(r.success).toBe(false);
+    expect(publish.mock.calls.filter((c) => (c[1] as { type: string }).type === 'principal.report')).toHaveLength(0);
+  });
+
   it('a live principal turn skips the gates, so no refusal and no digest item', async () => {
     const { layer, execute, publish } = setup('ceo-inbox-send-draft', 65);
     const principal = {

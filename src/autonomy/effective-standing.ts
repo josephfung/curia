@@ -127,6 +127,6 @@ export function computeEffectiveTaskMetadata(
   // Downgrade to agent (propose-only). Preserve the audit fields (who/when/where) but drop
   // standing and tier so isPrincipalOriginated/isSystemOriginated/getInitiatingTier all read
   // "agent, no bypass" off the effective metadata.
-  const downgraded: TaskOriginator = { ...originator, systemRole: 'agent', tier: null };
+  const downgraded: TaskOriginator = { ...originator, systemRole: 'agent', tier: null, ladderedFrom: originator.systemRole };
   return { ...metadata, originator: downgraded };
 }

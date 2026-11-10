@@ -7226,6 +7226,23 @@ describe('sendPrincipalDraft (#2474)', () => {
           expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('origin_unknown') })]);
         });
 
+        it('refuses a genuine agent lineage (an inbound from an agent-role contact) and a principal lineage the ladder demoted to agent', async () => {
+          const { computeEffectiveTaskMetadata } = await import('../../../src/autonomy/effective-standing.js');
+          const ladder = { sameTaskThreshold: 70, derivedChildThreshold: 90 };
+          const principalWoken = computeEffectiveTaskMetadata(
+            { originator: { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: at }, wakeContext: { derived: true } }, 85, ladder,
+          );
+          expect((principalWoken?.['originator'] as { systemRole: string }).systemRole).toBe('agent');
+          const agentContact = { originator: { contactId: 'curia', systemRole: 'agent', channel: 'email', initiatedAt: at } };
+          for (const taskMetadata of [principalWoken, agentContact]) {
+            mocks = createMocks();
+            const { gw, client } = makeAuto();
+            const r = await gw.sendPrincipalDraft('d1', { ...auto, authority: { taskMetadata } });
+            expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'origin_unknown' });
+            expect(client!.sendDraft).not.toHaveBeenCalled();
+          }
+        });
+
         it('refuses a bullpen wake carrying an outsider\'s lineage with outsider_originated', async () => {
           const { gw, client } = makeAuto();
           const taskMetadata = { taskOrigin: 'bullpen', originator: { contactId: 'c-x', systemRole: null, channel: 'email', initiatedAt: at } };
