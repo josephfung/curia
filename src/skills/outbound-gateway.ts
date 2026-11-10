@@ -1204,7 +1204,18 @@ export class OutboundGateway {
     // Closes the second outbound surface (#2474, design D1): a send through an account bound to
     // the principal's own mailbox would bypass the principal-mailbox send path. Runs before every
     // other step so nothing is gated, recorded or published for it. Fail-closed: a refusal sends nothing.
-    if (request.channel === 'email' && this.isPrincipalMailbox(request.accountId)) {
+    // One exception: a system notification whose only recipient is the principal (review-cap notice,
+    // emailPrincipal, approval email). It goes from the principal's mailbox to the principal and reaches
+    // no third party, and refusing it would silence the alarm bell when the primary account is theirs.
+    // A system notification with anyone else on it is still refused.
+    // Checked on the raw projection, not isPrincipalRecipient(): that drops Curia's own mailboxes, and
+    // here the principal's address is the account's own, which would leave it with no recipient at all.
+    const principalOnlyNotice = options?.isSystemNotification === true && request.channel === 'email'
+      && (() => {
+        const projected = this.projectRecipients(request);
+        return projected.length > 0 && projected.every((r) => r.principalEligible && this.isPrincipalOnChannel('email', r.identifier));
+      })();
+    if (request.channel === 'email' && !principalOnlyNotice && this.isPrincipalMailbox(request.accountId)) {
       this.log.warn(
         { accountId: request.accountId },
         'outbound-gateway: send refused — account is the principal\'s own mailbox (#2474)',
