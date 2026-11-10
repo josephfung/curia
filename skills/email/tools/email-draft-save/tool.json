@@ -7,7 +7,7 @@
   "inputs": {
     "to": "string (contact ID or \"principal\", optional #label hint such as principal#personal — a hint, not an address. Not a contact yet: contact-create first)",
     "subject": "string (email subject line)",
-    "body": "string (email body; markdown supported, converted to HTML automatically. Except in the principal's own mailbox, your signature block is added automatically below the body. A closing line with your first name is fine; never write your full name, title or a signature block of your own)",
+    "body": "string (email body; markdown supported, converted to HTML automatically. Your signature block is added automatically below the body. A closing line with your first name is fine; never write your full name, title or a signature block of your own)",
     "account": "string? (named account to draft from, as configured under Settings → Channels → Email → Email accounts. Defaults to the primary account.)",
     "reply_to_message_id": "string? (Nylas message ID to reply to; threads the draft as a reply when set)",
     "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string, node_id?: string}. file_url must be a file:// URL from email-download-attachment or similar. When the attachment contains KG-sourced data, set node_id to the kg_nodes UUID so export gates can resolve sensitivity. Max 10 attachments, 20 MB total.)",
