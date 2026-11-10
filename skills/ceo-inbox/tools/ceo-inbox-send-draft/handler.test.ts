@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CeoInboxSendDraftHandler } from './handler.js';
+import { CeoInboxSendDraftHandler, SEND_DEADLINE_RESERVE_MS, SEND_OUTCOME_UNKNOWN } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import {
   PRINCIPAL_SEND_REFUSALS,
@@ -95,6 +95,52 @@ describe('CeoInboxSendDraftHandler', () => {
     const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
     expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS.not_found });
     expect(sendPrincipalDraft).toHaveBeenCalledOnce();
+  });
+
+  it('reports an unknown outcome, not a refusal, when the send is still running at the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish: (r: PrincipalDraftSendResult) => void = () => {};
+      const sendPrincipalDraft = vi.fn(() => new Promise<PrincipalDraftSendResult>((resolve) => { finish = resolve; }));
+      const gateway = { sendPrincipalDraft } as unknown as OutboundGateway;
+      const ctx = buildCtx({ outboundGateway: gateway, deadline: Date.now() + 30_000 });
+      const pending = new CeoInboxSendDraftHandler().execute(ctx);
+      // Answers before the execution layer's own timeout would.
+      await vi.advanceTimersByTimeAsync(30_000 - SEND_DEADLINE_RESERVE_MS);
+      expect(await pending).toEqual({ success: false, error: SEND_OUTCOME_UNKNOWN });
+      // The late outcome is logged, not lost.
+      finish({ success: true, messageId: 'm-1' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ctx.log.warn).toHaveBeenCalledWith(expect.objectContaining({ sent: true }), expect.stringMatching(/after the deadline/));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports an unknown outcome when the deadline has already passed', async () => {
+    vi.useFakeTimers();
+    try {
+      const sendPrincipalDraft = vi.fn(() => new Promise<PrincipalDraftSendResult>(() => {}));
+      const gateway = { sendPrincipalDraft } as unknown as OutboundGateway;
+      const pending = new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway, deadline: Date.now() - 5 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await pending).toEqual({ success: false, error: SEND_OUTCOME_UNKNOWN });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports an unknown outcome, not the raw error, when the send throws', async () => {
+    const sendPrincipalDraft = vi.fn(async () => { throw new Error('socket hang up'); });
+    const gateway = { sendPrincipalDraft } as unknown as OutboundGateway;
+    const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway, deadline: Date.now() + 30_000 }));
+    expect(result).toEqual({ success: false, error: SEND_OUTCOME_UNKNOWN });
+  });
+
+  it('returns the result as usual when the send finishes before the deadline', async () => {
+    const { gateway } = gatewayReturning({ success: true, messageId: 'm-1', to: ['a@example.com'], subject: 'Hi' });
+    const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway, deadline: Date.now() + 30_000 }));
+    expect(result).toEqual({ success: true, data: { message_id: 'm-1', to: ['a@example.com'], subject: 'Hi' } });
   });
 
   it('never reports success for a failure with no reason', async () => {
