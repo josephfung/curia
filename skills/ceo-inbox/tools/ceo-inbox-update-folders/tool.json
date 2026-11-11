@@ -18,7 +18,7 @@
     "read_only_skipped": "string[] (SENT or DRAFT tokens in add_folders/remove_folders; Gmail sets these itself, so nothing changed for them)"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 15000,
   "capabilities": []
 }

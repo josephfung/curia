@@ -3,9 +3,10 @@
 // fallback. loadConfig() no longer reads these from process.env; this is the single
 // place they enter Config. Must run after the vault is constructed and migrations
 // have run, and before any consumer reads config (anthropic provider, openai
-// embeddings, nylas channel). Reads run concurrently; values are never logged.
+// embeddings). Reads run concurrently; values are never logged.
 // Note: the Signal phone number is NOT resolved here — it is owned by applyChannelVaultSecrets
-// under the canonical channel.signal.phone_number key (#1140).
+// under the canonical channel.signal.phone_number key (#1140), and the Nylas API key is
+// owned there too, under channel.email.nylas_api_key (#2522).
 import type { Logger } from '../logger.js';
 import type { Config } from '../config.js';
 import type { SecretsService } from './secrets-service.js';
@@ -24,9 +25,6 @@ export async function applyVaultSecrets(
     embeddingApiKey,
     apiToken,
     webAppBootstrapSecret,
-    nylasApiKey,
-    nylasGrantId,
-    nylasSelfEmail,
   ] = await Promise.all([
     secrets.get('anthropic_api_key'),
     secrets.get('openai_api_key'),
@@ -36,9 +34,6 @@ export async function applyVaultSecrets(
     secrets.get('embedding_api_key'),
     secrets.get('api_token'),
     secrets.get('web_app_bootstrap_secret'),
-    secrets.get('nylas_api_key'),
-    secrets.get('nylas_grant_id'),
-    secrets.get('nylas_self_email'),
   ]);
 
   // Normalize each vault value: trim surrounding whitespace (copy-paste artifacts) and
@@ -61,11 +56,6 @@ export async function applyVaultSecrets(
   config.embeddingApiKey = clean(embeddingApiKey);
   config.apiToken = clean(apiToken);
   config.webAppBootstrapSecret = clean(webAppBootstrapSecret);
-  config.nylasApiKey = clean(nylasApiKey);
-  config.nylasGrantId = clean(nylasGrantId);
-  // nylasSelfEmail is typed `string`, so it defaults to '' — matching the previous
-  // `process.env.NYLAS_SELF_EMAIL ?? ''` behavior, not an env read.
-  config.nylasSelfEmail = clean(nylasSelfEmail) ?? '';
 
   // Names only — never values. Lets an operator confirm what the vault supplied
   // vs. what's absent (feature-disabled), which is the whole debuggability win.
@@ -80,9 +70,6 @@ export async function applyVaultSecrets(
     embedding_api_key: clean(embeddingApiKey) !== undefined,
     api_token: clean(apiToken) !== undefined,
     web_app_bootstrap_secret: clean(webAppBootstrapSecret) !== undefined,
-    nylas_api_key: clean(nylasApiKey) !== undefined,
-    nylas_grant_id: clean(nylasGrantId) !== undefined,
-    nylas_self_email: clean(nylasSelfEmail) !== undefined,
   };
   logger.info({ present }, 'Resolved bootstrap secrets from vault (vault-only, no env fallback)');
 }

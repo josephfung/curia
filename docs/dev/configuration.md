@@ -613,7 +613,7 @@ in `.env`, because they are needed to reach and unlock the vault itself:
 - `SECRET_ENCRYPTION_KEY` — decrypts the vault.
 
 Every other secret (Anthropic, OpenAI, OpenRouter, AWS Bedrock, API token, web-app bootstrap secret,
-Nylas trio, Signal number, Tavily) lives only in the vault.
+Nylas API key, Tavily) lives only in the vault.
 
 **Seeding:**
 
@@ -622,7 +622,9 @@ Nylas trio, Signal number, Tavily) lives only in the vault.
 - **Add or update one secret later** — supply it as a transient env var and scope the
   run to it: `SEED_VAULT_ONLY=var_name VAR_NAME=value pnpm run seed-vault`. The seeder
   loads `.env` too, so without `SEED_VAULT_ONLY` it re-upserts every other secret `.env`
-  holds. It upserts present values; absent ones are skipped, never cleared.
+  holds. It upserts present values; absent ones are skipped, never cleared. The Nylas API
+  key is the exception to the naming rule: its vault name is `channel.email.nylas_api_key`
+  and its env var `NYLAS_API_KEY`.
 
 **Viewing, changing and removing secrets (console):** **Memory → Secrets** lists every
 declared secret — each tool's `requires_secrets` and `optional_secrets`, channel

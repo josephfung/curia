@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import type { Config } from '../../src/config.js';
 import type { SecretsService } from '../../src/secrets/secrets-service.js';
@@ -22,8 +22,6 @@ function blankConfig(): Config {
     apiToken: undefined,
     webAppBootstrapSecret: undefined,
     nylasApiKey: undefined,
-    nylasGrantId: undefined,
-    nylasSelfEmail: '',
     signalPhoneNumber: undefined,
     slackBotToken: undefined,
     slackAppToken: undefined,
@@ -60,11 +58,10 @@ describe('applyVaultSecrets', () => {
     await applyVaultSecrets(
       config,
       // A blank api_token must trip the !config.apiToken boot guard rather than read as present.
-      stubSecrets({ api_token: ' ', nylas_api_key: '   ' }),
+      stubSecrets({ api_token: ' ' }),
       logger,
     );
     expect(config.apiToken).toBeUndefined();
-    expect(config.nylasApiKey).toBeUndefined();
   });
 
   it('does not read or write signalPhoneNumber — that key is owned by applyChannelVaultSecrets', async () => {
@@ -79,9 +76,12 @@ describe('applyVaultSecrets', () => {
     expect(config.signalPhoneNumber).toBeUndefined();
   });
 
-  it('defaults nylasSelfEmail to an empty string, never undefined', async () => {
+  it('ignores the retired flat Nylas keys — the API key is owned by applyChannelVaultSecrets (#2522)', async () => {
     const config = blankConfig();
-    await applyVaultSecrets(config, stubSecrets({}), logger);
-    expect(config.nylasSelfEmail).toBe('');
+    const secrets = stubSecrets({ nylas_api_key: 'nyk_legacy', nylas_grant_id: 'g', nylas_self_email: 'c@x.test' });
+    const get = vi.spyOn(secrets, 'get');
+    await applyVaultSecrets(config, secrets, logger);
+    expect(config.nylasApiKey).toBeUndefined();
+    expect(get.mock.calls.map(([name]) => name).filter(n => n.startsWith('nylas_'))).toEqual([]);
   });
 });

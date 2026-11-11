@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolContext } from '../../src/skills/types.js';
-import { ceoNylasApiKey, CHANNEL_NYLAS_API_KEY, LEGACY_NYLAS_API_KEY } from './ceo-nylas-api-key.js';
+import { ceoNylasApiKey, CHANNEL_NYLAS_API_KEY } from './ceo-nylas-api-key.js';
 
 /** A ctx whose secret() behaves like the execution layer's for declared names. */
 function ctxWith(values: Record<string, string>, failing?: Error): ToolContext {
@@ -17,30 +17,28 @@ function ctxWith(values: Record<string, string>, failing?: Error): ToolContext {
 }
 
 describe('ceoNylasApiKey', () => {
-  it('uses the key the console saves when it is set', () => {
-    expect(ceoNylasApiKey(ctxWith({ [CHANNEL_NYLAS_API_KEY]: 'console', [LEGACY_NYLAS_API_KEY]: 'legacy' })))
-      .toBe('console');
+  it('reads the key the console saves, trimmed', () => {
+    expect(ceoNylasApiKey(ctxWith({ [CHANNEL_NYLAS_API_KEY]: ' console ' }))).toBe('console');
   });
 
-  it('falls back to the flat key on installs seeded before the console', () => {
-    expect(ceoNylasApiKey(ctxWith({ [LEGACY_NYLAS_API_KEY]: 'legacy' }))).toBe('legacy');
+  it('ignores the retired flat nylas_api_key (#2522)', () => {
+    expect(() => ceoNylasApiKey(ctxWith({ nylas_api_key: 'legacy' }))).toThrow(/declared but not set/);
   });
 
-  it('falls back when the console key is blank', () => {
-    expect(ceoNylasApiKey(ctxWith({ [CHANNEL_NYLAS_API_KEY]: '  ', [LEGACY_NYLAS_API_KEY]: 'legacy' })))
-      .toBe('legacy');
+  it('throws the absent-secret error when the key is blank', () => {
+    expect(() => ceoNylasApiKey(ctxWith({ [CHANNEL_NYLAS_API_KEY]: '  ' }))).toThrow(/declared but not set/);
   });
 
-  it('throws the absent-secret error when neither is set', () => {
+  it('throws the absent-secret error when the key is not set', () => {
     expect(() => ceoNylasApiKey(ctxWith({}))).toThrow(/declared but not set/);
   });
 
-  it('propagates a vault failure instead of falling back', () => {
+  it('propagates a vault failure', () => {
     const failing = new Error("Vault read failed for secret 'channel.email.nylas_api_key'");
-    expect(() => ceoNylasApiKey(ctxWith({ [LEGACY_NYLAS_API_KEY]: 'legacy' }, failing))).toThrow(/Vault read failed/);
+    expect(() => ceoNylasApiKey(ctxWith({}, failing))).toThrow(/Vault read failed/);
   });
 
-  it('every ceo-inbox tool that calls it declares both key names', () => {
+  it('every ceo-inbox tool that calls it declares the key, and none the retired flat name', () => {
     const toolsDir = join(import.meta.dirname, '../ceo-inbox/tools');
     const callers = readdirSync(toolsDir).filter(tool => {
       const handler = join(toolsDir, tool, 'handler.ts');
@@ -49,7 +47,13 @@ describe('ceoNylasApiKey', () => {
     expect(callers.length).toBeGreaterThan(0);
     for (const tool of callers) {
       const manifest = JSON.parse(readFileSync(join(toolsDir, tool, 'tool.json'), 'utf-8')) as { secrets: string[] };
-      expect(manifest.secrets, tool).toEqual(expect.arrayContaining([CHANNEL_NYLAS_API_KEY, LEGACY_NYLAS_API_KEY]));
+      expect(manifest.secrets, tool).toContain(CHANNEL_NYLAS_API_KEY);
+    }
+    for (const tool of readdirSync(toolsDir)) {
+      const path = join(toolsDir, tool, 'tool.json');
+      if (!existsSync(path)) continue;
+      const manifest = JSON.parse(readFileSync(path, 'utf-8')) as { secrets?: string[] };
+      expect(manifest.secrets ?? [], tool).not.toContain('nylas_api_key');
     }
   });
 });

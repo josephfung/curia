@@ -19,7 +19,7 @@
     "date": "number? (unix timestamp, present when already_exists is true)"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id", "ceo_self_email"],
+  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id", "ceo_self_email"],
   "timeout": 30000,
   "capabilities": ["workingDocs"]
 }

@@ -5,7 +5,7 @@
 //   pnpm run seed-vault
 // Add a single secret later — scope the run with SEED_VAULT_ONLY, or every other secret
 // in .env is re-upserted too:
-//   SEED_VAULT_ONLY=nylas_api_key NYLAS_API_KEY=nyk_... pnpm run seed-vault
+//   SEED_VAULT_ONLY=channel.email.nylas_api_key NYLAS_API_KEY=nyk_... pnpm run seed-vault
 //
 // Invoked by scripts/setup.sh after migrations for fresh installs.
 import { pathToFileURL } from 'node:url';
@@ -16,9 +16,9 @@ import { SecretsService } from '../src/secrets/secrets-service.js';
 
 const logger = pino({ name: 'seed-vault' });
 
-// Canonical list of secrets migrated into the vault (#911). Each vault key is
-// snake_case; its env var is the UPPER_SNAKE_CASE form (the same name.toUpperCase()
-// convention used by the execution layer's ctx.secret() and by applyVaultSecrets()).
+// Canonical list of secrets migrated into the vault (#911). Each vault key's env var is
+// its UPPER_SNAKE_CASE form (the same name.toUpperCase() convention used by the
+// execution layer's ctx.secret()), except the dotted channel keys in SEED_ENV_VARS.
 // Order is irrelevant — set() is an upsert.
 export const SEED_SECRET_NAMES = [
   // bootstrap/config-scoped (resolved at boot by applyVaultSecrets)
@@ -30,9 +30,9 @@ export const SEED_SECRET_NAMES = [
   'embedding_api_key',
   'api_token',
   'web_app_bootstrap_secret',
-  'nylas_api_key',
-  'nylas_grant_id',
-  'nylas_self_email',
+  // Channel credentials use their canonical channel.<name>.<key> vault name, which is
+  // what the console reads and writes; SEED_ENV_VARS maps each to its env var.
+  'channel.email.nylas_api_key',
   // Signal phone number is NOT seeded — it is the canonical channel.signal.phone_number key
   // written via the console (or read from SIGNAL_PHONE_NUMBER env as back-compat), the same
   // as signal_socket_path which was never seeded (#1140).
@@ -47,6 +47,17 @@ export const SEED_SECRET_NAMES = [
   'google_oauth_client_secret',
   'curia_google_email',
 ] as const;
+
+// Env vars for vault names whose UPPER_SNAKE_CASE form is not a usable env var name
+// (the dotted channel keys). Matches the channel catalog's envFallback.
+const SEED_ENV_VARS: Readonly<Record<string, string>> = {
+  'channel.email.nylas_api_key': 'NYLAS_API_KEY',
+};
+
+/** The env var a seeded vault name is read from. */
+export function seedEnvVar(name: string): string {
+  return SEED_ENV_VARS[name] ?? name.toUpperCase();
+}
 
 // The subset of secrets that MUST exist in the vault for a working install. Their
 // absence is not "feature off" — it's a broken deploy: api_token gates HTTP auth (a
@@ -92,7 +103,7 @@ export async function verifyRequiredSecrets(
 }
 
 /**
- * Read each migrated secret from `env` (by its UPPER_SNAKE_CASE name) and upsert any
+ * Read each migrated secret from `env` (by its seedEnvVar() name) and upsert any
  * present, non-empty value into the vault. Absent/empty values are skipped, never
  * cleared — this is additive so a partial env (e.g. no Signal configured) is fine.
  * Never logs secret values, only their names.
@@ -118,7 +129,7 @@ export async function seedVault(
     // Anthropic client, HTTP auth, and Signal account id all reject it. Treating a
     // blank-after-trim value as absent keeps an invalid placeholder out of the vault so
     // verifyRequiredSecrets() and the boot guards see the true "missing" state.
-    const value = env[name.toUpperCase()]?.trim();
+    const value = env[seedEnvVar(name)]?.trim();
     if (value === undefined || value === '') {
       skipped.push(name);
       continue;

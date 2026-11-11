@@ -962,6 +962,22 @@ describe('vault routes', () => {
       expect(secrets.detailDeletes).toEqual([]);
     });
 
+    it('leftover retired Nylas rows are unlocked orphans the operator can delete (#2522)', async () => {
+      const LEGACY = ['nylas_grant_id', 'nylas_self_email'];
+      const secrets = fakeSecrets([...LEGACY, 'channel.email.nylas_api_key']);
+      app = await build(secrets, fakeRegistry([]));
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+      const byName = new Map((res.json().secrets as Array<{ name: string; kind: string }>).map(s => [s.name, s]));
+      for (const name of LEGACY) {
+        expect(byName.get(name)).toMatchObject({ kind: 'system', configured: true, required: false, declaredBy: [] });
+      }
+      // The canonical key alone satisfies the email channel's row: nothing reads as missing.
+      expect(byName.get('channel.email.nylas_api_key')).toMatchObject({ configured: true });
+      expect([...byName.values()].filter(s => s.name.startsWith('nylas_')).map(s => s.kind)).not.toContain('platform');
+      for (const name of LEGACY) expect((await del(app, name)).statusCode).toBe(200);
+      expect(secrets.deletes).toEqual(LEGACY);
+    });
+
     it('DELETE still 400s a name that is neither declared nor in the vault', async () => {
       const secrets = fakeSecrets();
       app = await build(secrets, fakeRegistry([]));

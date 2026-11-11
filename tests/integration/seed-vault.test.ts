@@ -7,6 +7,7 @@ import { seedVault, verifyRequiredSecrets, parseSeedOnly, SEED_SECRET_NAMES, REQ
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL && process.env.SECRET_ENCRYPTION_KEY ? describe : describe.skip;
+const NYLAS_KEY = 'channel.email.nylas_api_key';
 
 describeIf('seedVault', () => {
   const logger = pino({ level: 'silent' });
@@ -38,13 +39,23 @@ describeIf('seedVault', () => {
     expect(await secrets.get('signal_phone_number')).toBeNull();
   });
 
+  it('seeds NYLAS_API_KEY under the canonical channel key, never the retired flat names (#2522)', async () => {
+    for (const legacy of ['nylas_api_key', 'nylas_grant_id', 'nylas_self_email']) {
+      expect([...SEED_SECRET_NAMES]).not.toContain(legacy);
+    }
+    const env = { NYLAS_API_KEY: 'nyk_test_123', NYLAS_GRANT_ID: 'grant', NYLAS_SELF_EMAIL: 'curia@example.com' };
+    const { seeded } = await seedVault(secrets, env, logger);
+    expect(seeded).toEqual([NYLAS_KEY]);
+    expect(await secrets.get(NYLAS_KEY)).toBe('nyk_test_123');
+  });
+
   it('seeds present env values into the vault and skips absent ones', async () => {
     const env = { NYLAS_API_KEY: 'nyk_test_123', TAVILY_API_KEY: 'tvly_test_456' };
     const { seeded, skipped } = await seedVault(secrets, env, logger);
 
-    expect(seeded.sort()).toEqual(['nylas_api_key', 'tavily_api_key']);
+    expect(seeded.sort()).toEqual([NYLAS_KEY, 'tavily_api_key']);
     expect(skipped).toContain('anthropic_api_key');
-    expect(await secrets.get('nylas_api_key')).toBe('nyk_test_123');
+    expect(await secrets.get(NYLAS_KEY)).toBe('nyk_test_123');
     expect(await secrets.get('tavily_api_key')).toBe('tvly_test_456');
     expect(await secrets.get('anthropic_api_key')).toBeNull();
   });
@@ -54,20 +65,20 @@ describeIf('seedVault', () => {
     const { seeded } = await seedVault(secrets, env, logger, { only: new Set(['openrouter_api_key']) });
     expect(seeded).toEqual(['openrouter_api_key']);
     expect(await secrets.get('openrouter_api_key')).toBe('sk-or-test');
-    expect(await secrets.get('nylas_api_key')).toBeNull();
+    expect(await secrets.get(NYLAS_KEY)).toBeNull();
   });
 
   it('treats empty-string env values as absent (skipped)', async () => {
     const { seeded, skipped } = await seedVault(secrets, { NYLAS_API_KEY: '' }, logger);
-    expect(seeded).not.toContain('nylas_api_key');
-    expect(skipped).toContain('nylas_api_key');
+    expect(seeded).not.toContain(NYLAS_KEY);
+    expect(skipped).toContain(NYLAS_KEY);
   });
 
   it('treats whitespace-only env values as absent (skipped)', async () => {
     const { seeded, skipped } = await seedVault(secrets, { NYLAS_API_KEY: '   ' }, logger);
-    expect(seeded).not.toContain('nylas_api_key');
-    expect(skipped).toContain('nylas_api_key');
-    expect(await secrets.get('nylas_api_key')).toBeNull();
+    expect(seeded).not.toContain(NYLAS_KEY);
+    expect(skipped).toContain(NYLAS_KEY);
+    expect(await secrets.get(NYLAS_KEY)).toBeNull();
   });
 
   it('trims surrounding whitespace from seeded values (copy-paste artifacts)', async () => {
@@ -139,6 +150,11 @@ describe('parseSeedOnly', () => {
 
   it('parses a comma list of known names', () => {
     expect([...parseSeedOnly('openrouter_api_key, openai_api_key')!]).toEqual(['openrouter_api_key', 'openai_api_key']);
+  });
+
+  it('accepts the canonical Nylas key and rejects the retired flat name', () => {
+    expect([...parseSeedOnly('channel.email.nylas_api_key')!]).toEqual(['channel.email.nylas_api_key']);
+    expect(() => parseSeedOnly('nylas_api_key')).toThrow(/unknown secret/);
   });
 
   it('rejects an unknown name instead of seeding nothing', () => {

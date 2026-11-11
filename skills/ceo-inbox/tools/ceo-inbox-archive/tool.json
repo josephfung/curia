@@ -15,7 +15,7 @@
     "already_archived": "boolean (true when the message was not in the inbox, so nothing changed; omitted otherwise)"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 15000,
   "capabilities": []
 }
