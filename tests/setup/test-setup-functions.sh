@@ -1010,6 +1010,30 @@ _curl_rc=0
 fetch_asset docker/seccomp-chrome.json seccomp-chrome.json
 _assert_var "a successful fetch lands the file" "$(< "$_fa_dir/docker/seccomp-chrome.json")" "partial"
 _assert_var "a successful fetch leaves no temp file" "$(ls -A "$_fa_dir/docker")" "seccomp-chrome.json"
+_assert_var "a fetched file gets the umask mode, not mktemp's 0600" \
+    "$( (umask 022; fetch_asset docker/seccomp-chrome.json seccomp-chrome.json; find "$_fa_dir/docker/seccomp-chrome.json" -perm 0644) )" \
+    "$_fa_dir/docker/seccomp-chrome.json"
+
+# Another run's in-flight download of the same asset (its temp file) is never
+# written to or removed, on success or failure, and each transfer uses its own file.
+_fa_outs=()
+curl() {
+    local out=""
+    while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && out="$2"; shift; done
+    _fa_outs+=("$out")
+    printf 'mine' > "$out"
+    return "$_curl_rc"
+}
+printf 'theirs' > "$_fa_dir/docker-compose.yml.part"
+_curl_rc=56
+fetch_asset docker-compose.yml docker-compose.yml || true
+_curl_rc=0
+fetch_asset docker-compose.yml docker-compose.yml
+_assert_var "another run's temp file survives a failed and a successful fetch" \
+    "$(< "$_fa_dir/docker-compose.yml.part")" "theirs"
+_assert_var "each transfer writes its own temp file" \
+    "$([[ "${_fa_outs[0]}" != "${_fa_outs[1]}" && "${_fa_outs[0]}" != "$_fa_dir/docker-compose.yml.part" ]] && echo distinct)" "distinct"
+_assert_var "the successful fetch landed its own bytes" "$(< "$_fa_dir/docker-compose.yml")" "mine"
 
 unset -f curl
 INSTALL_DIR="$_saved_install_dir"

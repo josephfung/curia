@@ -116,13 +116,18 @@ fetch_asset() {
 # Download $1 to $2 through a temporary file, moved into place only once complete.
 # A transfer that fails part-way would otherwise leave a truncated file that every
 # later run treats as present and skips. On failure nothing is left at $2 (a file
-# already there stays as it was) and the status is non-zero.
+# already there stays as it was) and the status is non-zero. The temporary file is
+# unique to this transfer (mktemp, beside $2 so the mv is an atomic rename), so two
+# runs fetching the same asset at once never write to or remove each other's file.
 download_to() {
-  local url="$1" dest="$2"
-  if curl -fsSL "$url" -o "$dest.part"; then
-    mv -f "$dest.part" "$dest"
+  local url="$1" dest="$2" tmp
+  tmp="$(mktemp "$dest.part.XXXXXX")" || return 1
+  # mktemp creates the file 0600; give it the mode curl -o would have (0666 & ~umask).
+  chmod "$(printf '%o' $(( 0666 & ~0$(umask) )))" "$tmp"
+  if curl -fsSL "$url" -o "$tmp"; then
+    mv -f "$tmp" "$dest"
   else
-    rm -f "$dest.part"
+    rm -f "$tmp"
     return 1
   fi
 }
