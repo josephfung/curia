@@ -7,6 +7,8 @@ import pino from 'pino';
 
 const { connectOverCDP } = vi.hoisted(() => ({ connectOverCDP: vi.fn() }));
 vi.mock('patchright', () => ({ chromium: { connectOverCDP, launchPersistentContext: vi.fn() } }));
+const { dnsLookup } = vi.hoisted(() => ({ dnsLookup: vi.fn() }));
+vi.mock('node:dns/promises', () => ({ lookup: dnsLookup }));
 vi.mock('@ghostery/adblocker-playwright', () => ({ PlaywrightBlocker: { fromPrebuiltAdsAndTracking: vi.fn() } }));
 
 import { BrowserService, redactCdpEndpoint, resolveCdpEndpoint, sanitizeCdpError } from '../../../src/browser/browser-service.js';
@@ -242,6 +244,23 @@ describe('BrowserService with a browser container', () => {
     expect(svc.isBrowserContainerAddress('::ffff:172.20.0.3')).toBe(true);
     expect(svc.isBrowserContainerAddress('172.20.0.4')).toBe(false);
     expect(svc.isBrowserContainerAddress(undefined)).toBe(false);
+    await svc.stop();
+  });
+
+  it('knows the container behind a TLS hostname by resolving the name itself', async () => {
+    const browser = makeBrowser();
+    const context = makeContext(browser);
+    browser.contexts.mockReturnValue([context]);
+    connectOverCDP.mockResolvedValue(browser);
+    dnsLookup.mockResolvedValue([{ address: '172.20.0.9', family: 4 }]);
+
+    const svc = new BrowserService({ logger, cdpEndpoint: 'https://browser.internal:9222' });
+    await svc.start();
+
+    expect(dnsLookup).toHaveBeenCalledWith('browser.internal', { all: true });
+    expect(connectOverCDP.mock.calls[0]![0]).toContain('browser.internal');
+    expect(svc.isBrowserContainerAddress('172.20.0.9')).toBe(true);
+    expect(svc.isBrowserContainerAddress('172.20.0.10')).toBe(false);
     await svc.stop();
   });
 

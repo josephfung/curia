@@ -94,6 +94,10 @@ if [[ -n "${BROWSER_PROXY:-}" ]]; then
     echo "browser-entrypoint: BROWSER_PROXY must look like http://host:port or socks5://host:port, got: $BROWSER_PROXY" >&2
     exit 1
   fi
+  if [[ "$BROWSER_PROXY" =~ :([0-9]+)/?$ ]] && (( ${#BASH_REMATCH[1]} > 5 || 10#${BASH_REMATCH[1]} < 1 || 10#${BASH_REMATCH[1]} > 65535 )); then
+    echo "browser-entrypoint: BROWSER_PROXY port must be 1 to 65535, got: $BROWSER_PROXY" >&2
+    exit 1
+  fi
 fi
 
 # A profile lock names the container that held it, and this container gets a new

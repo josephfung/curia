@@ -123,8 +123,8 @@ export class BrowserService {
   private cdpEndpoint: string | undefined;
   /** cdpEndpoint without credentials, path or query: what logs and errors show. */
   private cdpEndpointLabel: string | undefined;
-  /** The browser container's address as of the last attach; see isBrowserContainerAddress. */
-  private containerAddress: string | null = null;
+  /** The browser container's addresses as of the last attach; see isBrowserContainerAddress. */
+  private containerAddresses = new Set<string>();
   private contextFactory: () => Promise<BrowserContext>;
   // Pending reconnect to the browser container, cleared by stop() (cdpEndpoint only).
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -530,8 +530,8 @@ export class BrowserService {
    * Never true for loopback, so an endpoint on localhost never locks out the healthcheck.
    */
   isBrowserContainerAddress(address: string | undefined): boolean {
-    if (!address || !this.containerAddress) return false;
-    return address.replace(/^::ffff:/i, '') === this.containerAddress;
+    if (!address) return false;
+    return this.containerAddresses.has(address.replace(/^::ffff:/i, ''));
   }
 
   /**
@@ -664,7 +664,7 @@ export class BrowserService {
   private async connectToContainer(): Promise<BrowserContext> {
     const endpoint = await resolveCdpEndpoint(this.cdpEndpoint!);
     const host = new URL(endpoint).hostname.replace(/^\[(.*)\]$/, '$1');
-    this.containerAddress = isIP(host) !== 0 && !/^(127\.|::1$)/.test(host) ? host : null;
+    this.containerAddresses = await this.resolveContainerAddresses(host);
     const browser = await chromium.connectOverCDP(endpoint, { timeout: CDP_CONNECT_TIMEOUT_MS }) as unknown as Browser;
     const [context] = browser.contexts();
     if (!context) {
@@ -673,6 +673,30 @@ export class BrowserService {
     }
     this.logger.info({ cdpEndpoint: this.cdpEndpointLabel, version: browser.version() }, 'Attached to the browser container');
     return context;
+  }
+
+  /**
+   * The addresses the container's requests come from. An IP endpoint is its own address.
+   * A hostname (a TLS endpoint keeps its name for the certificate) is resolved here as
+   * well, so the refusal hook still knows the container. Loopback is never included, so
+   * an endpoint on localhost cannot lock out the healthcheck.
+   */
+  private async resolveContainerAddresses(host: string): Promise<Set<string>> {
+    let addresses: string[];
+    if (isIP(host) !== 0) {
+      addresses = [host];
+    } else if (host === 'localhost') {
+      addresses = [];
+    } else {
+      try {
+        addresses = (await dnsLookup(host, { all: true })).map(a => a.address);
+      } catch (err) {
+        // The attach that follows needs the same name, so it will fail and retry.
+        this.logger.warn({ err, host }, 'Could not resolve the browser container hostname; its address is not refused yet');
+        addresses = [];
+      }
+    }
+    return new Set(addresses.filter(a => !/^(127\.|::1$)/.test(a)).map(a => a.replace(/^::ffff:/i, '')));
   }
 
   /**

@@ -159,10 +159,15 @@ export function parseUpstream(raw: string | undefined): Upstream | null {
   if (!match) throw new Error(`BROWSER_PROXY must look like http://host:port or socks5://host:port, got: ${raw}`);
   const protocol = match[1] as Upstream['protocol'];
   const defaultPort = protocol === 'https' ? 443 : protocol === 'socks5' ? 1080 : 80;
-  return { protocol, host: match[2]!, port: match[3] ? Number(match[3]) : defaultPort };
+  const port = match[3] ? Number(match[3]) : defaultPort;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`BROWSER_PROXY port must be 1 to 65535, got: ${raw}`);
+  }
+  return { protocol, host: match[2]!, port };
 }
 
 const CONNECT_TIMEOUT_MS = 15_000;
+const NEGOTIATE_TIMEOUT_MS = 15_000;
 
 function connectSocket(host: string, port: number): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
@@ -195,14 +200,17 @@ function readReply(socket: net.Socket, done: (buf: Buffer) => number): Promise<B
       resolve(buf.subarray(0, length));
     };
     const onEnd = (): void => { cleanup(); reject(new Error('the upstream proxy closed the connection')); };
+    const onClose = (): void => { cleanup(); reject(new Error('the upstream proxy closed the connection')); };
     const onError = (err: Error): void => { cleanup(); reject(err); };
     const cleanup = (): void => {
       socket.off('data', onData);
       socket.off('end', onEnd);
+      socket.off('close', onClose);
       socket.off('error', onError);
     };
     socket.on('data', onData);
     socket.once('end', onEnd);
+    socket.once('close', onClose);
     socket.once('error', onError);
   });
 }
@@ -242,27 +250,52 @@ async function socks5ConnectThrough(socket: net.Socket, address: string, port: n
  * upstream gets the vetted address, never the hostname, so it cannot resolve the name
  * to somewhere else (a private address on its own network, say).
  */
-export async function openTunnel(address: string, port: number, upstream: Upstream | null): Promise<net.Socket> {
+export async function openTunnel(
+  address: string,
+  port: number,
+  upstream: Upstream | null,
+  /** Aborted when the client that asked for the tunnel has gone. */
+  signal?: AbortSignal,
+): Promise<net.Socket> {
   if (!upstream) return connectSocket(address, port);
   const socket = upstream.protocol === 'https'
     ? await connectTls(upstream.host, upstream.port)
     : await connectSocket(upstream.host, upstream.port);
+  // An upstream that accepts the connection and then says nothing would hold readReply
+  // forever; the deadline (or the client leaving) destroys the socket, which rejects the
+  // pending read.
+  const deadline = setTimeout(
+    () => socket.destroy(new Error(`the upstream proxy did not answer within ${NEGOTIATE_TIMEOUT_MS} ms`)),
+    NEGOTIATE_TIMEOUT_MS,
+  );
+  const onAbort = (): void => { socket.destroy(new Error('the client went away during negotiation')); };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
   try {
     if (upstream.protocol === 'socks5') await socks5ConnectThrough(socket, address, port);
     else await httpConnectThrough(socket, address, port);
   } catch (err) {
     socket.destroy();
     throw err;
+  } finally {
+    clearTimeout(deadline);
+    signal?.removeEventListener('abort', onAbort);
   }
   return socket;
 }
 
 /** Try each vetted address in turn: a host may list an IPv6 address this network cannot reach. */
-async function openFirst(addresses: string[], port: number, upstream: Upstream | null): Promise<net.Socket> {
+async function openFirst(
+  addresses: string[],
+  port: number,
+  upstream: Upstream | null,
+  signal?: AbortSignal,
+): Promise<net.Socket> {
   let lastError: unknown;
   for (const address of addresses) {
+    if (signal?.aborted) break;
     try {
-      return await openTunnel(address, port, upstream);
+      return await openTunnel(address, port, upstream, signal);
     } catch (err) {
       lastError = err;
     }
@@ -318,9 +351,11 @@ export function createEgressProxy(options: EgressProxyOptions): http.Server {
         client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
         return;
       }
+      const gone = new AbortController();
+      client.once('close', () => gone.abort());
       let upstream: net.Socket;
       try {
-        upstream = await openFirst(vetted.addresses, target.port, options.upstream);
+        upstream = await openFirst(vetted.addresses, target.port, options.upstream, gone.signal);
       } catch (err) {
         log(`could not reach ${target.host}:${target.port}: ${(err as Error).message}`);
         client.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
@@ -364,9 +399,11 @@ export function createEgressProxy(options: EgressProxyOptions): http.Server {
         res.writeHead(403, { 'content-type': 'text/plain' }).end('Blocked: private or internal address');
         return;
       }
+      const gone = new AbortController();
+      res.once('close', () => gone.abort());
       let socket: net.Socket;
       try {
-        socket = await openFirst(vetted.addresses, port, options.upstream);
+        socket = await openFirst(vetted.addresses, port, options.upstream, gone.signal);
       } catch (err) {
         log(`could not reach ${url.hostname}:${port}: ${(err as Error).message}`);
         res.writeHead(502, { 'content-type': 'text/plain' }).end('Bad gateway');

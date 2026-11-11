@@ -1,13 +1,14 @@
 // Tests for the browser container's egress proxy (#2521): which addresses it refuses, and
 // that it forwards to the address it checked, directly or through an upstream proxy.
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
 import { once } from 'node:events';
 import {
   createEgressProxy,
   isPrivateAddress,
+  openTunnel,
   parseUpstream,
   vetHost,
   type HostLookup,
@@ -76,6 +77,53 @@ describe('parseUpstream', () => {
   it('refuses credentials and other shapes rather than egress directly', () => {
     expect(() => parseUpstream('http://user:pass@proxy:8888')).toThrow(/BROWSER_PROXY/);
     expect(() => parseUpstream('ftp://proxy:21')).toThrow(/BROWSER_PROXY/);
+  });
+
+  it.each(['http://proxy:70000', 'http://proxy:0', 'socks5://proxy:65536', 'http://proxy:99999999999'])(
+    'refuses the out-of-range port in %s',
+    (raw) => {
+      expect(() => parseUpstream(raw)).toThrow(/port/);
+    },
+  );
+
+  it('accepts the ends of the port range', () => {
+    expect(parseUpstream('http://proxy:1')?.port).toBe(1);
+    expect(parseUpstream('http://proxy:65535')?.port).toBe(65535);
+  });
+});
+
+describe('openTunnel negotiation', () => {
+  it.each(['http', 'socks5'] as const)('gives up on a %s upstream that never answers', async (protocol) => {
+    const silent = net.createServer(() => { /* accept and say nothing */ });
+    const port = await listen(silent);
+    const accepted = once(silent, 'connection');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const opening = openTunnel('93.184.215.14', 443, { protocol, host: '127.0.0.1', port });
+      const outcome = expect(opening).rejects.toThrow(/did not answer/);
+      await accepted;
+      // The negotiation deadline starts once the upstream is connected.
+      await new Promise((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(16_000);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes the upstream socket when the client goes away mid-negotiation', async () => {
+    const accepted: net.Socket[] = [];
+    // resume() so the socket reads the client's FIN and closes.
+    const silent = net.createServer((s) => { accepted.push(s); s.resume(); });
+    const port = await listen(silent);
+    const gone = new AbortController();
+    const opening = openTunnel('93.184.215.14', 443, { protocol: 'http', host: '127.0.0.1', port }, gone.signal);
+    const outcome = expect(opening).rejects.toThrow(/went away/);
+    while (accepted.length === 0) await new Promise((r) => setTimeout(r, 5));
+    const closed = once(accepted[0]!, 'close');
+    gone.abort();
+    await outcome;
+    await closed;
   });
 });
 

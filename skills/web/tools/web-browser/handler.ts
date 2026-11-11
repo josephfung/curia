@@ -1376,8 +1376,29 @@ async function isLikelyEmpty(page: Page, log: ToolContext['log']): Promise<boole
 
 /** The frames not on a private/internal host, by name or resolved address (#2521). */
 async function eligibleChildFrames(frames: Frame[]): Promise<Frame[]> {
-  const blocked = await Promise.all(frames.map((frame) => isBlockedFrameUrlResolved(frame.url())));
+  const blocked = await blockedFrameUrls(frames.map((frame) => frame.url()));
   return frames.filter((_, i) => !blocked[i]);
+}
+
+/** At most this many frame hostnames are looked up at once. */
+const FRAME_CHECK_CONCURRENCY = 8;
+
+/**
+ * Whether each URL is blocked, in the order given. A check can wait on a DNS lookup (up to
+ * 5s), so a page with many frames must neither be checked one at a time (the tool timeout
+ * would run out) nor all at once.
+ */
+async function blockedFrameUrls(urls: string[]): Promise<boolean[]> {
+  const blocked = new Array<boolean>(urls.length).fill(false);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < urls.length) {
+      const i = next++;
+      blocked[i] = await isBlockedFrameUrlResolved(urls[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(FRAME_CHECK_CONCURRENCY, urls.length) }, worker));
+  return blocked;
 }
 
 /**
@@ -1654,13 +1675,18 @@ async function getCleanedContent(page: Page, log: ToolContext['log']): Promise<s
   let failed = 0;
 
   const frames = page.frames();
+  // SSRF: skip frames pointing at private/internal hosts. The navigate guard only
+  // validates the top-level URL, so without this an attacker page could embed
+  // <iframe src="http://169.254.169.254/..."> and we'd read internal content here.
+  // Each check can wait on a DNS lookup (up to 5s), so a page with many frames must not
+  // be checked one after another: run them with bounded concurrency, each result kept
+  // against the frame (by index) it was taken from.
+  const frameUrls = frames.map((f) => f.url());
+  const blocked = await blockedFrameUrls(frameUrls);
   for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
     const frame = frames[frameIndex]!;
-    // SSRF: skip frames pointing at private/internal hosts. The navigate guard only
-    // validates the top-level URL, so without this an attacker page could embed
-    // <iframe src="http://169.254.169.254/..."> and we'd read internal content here.
-    if (await isBlockedFrameUrlResolved(frame.url())) {
-      log.debug({ frameUrl: frame.url() }, 'Skipping private/internal frame during content extraction');
+    if (blocked[frameIndex]) {
+      log.debug({ frameUrl: frameUrls[frameIndex] }, 'Skipping private/internal frame during content extraction');
       continue;
     }
 
