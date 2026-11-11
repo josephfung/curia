@@ -36,7 +36,7 @@ import { join } from 'node:path';
 // the launcher changes. The rest of the file types against the 'playwright' BrowserContext
 // (structurally identical), hence the existing `as unknown as BrowserContext` casts. (#1053)
 import { chromium } from 'patchright';
-import type { Browser, BrowserContext, BrowserContextOptions } from 'playwright';
+import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
 import { PlaywrightBlocker } from '@ghostery/adblocker-playwright';
 import type { Logger } from '../logger.js';
 import { BrowserSession } from './browser-session.js';
@@ -589,6 +589,10 @@ export class BrowserService {
       );
       return;
     }
+    // Only the attach that wins tidies the previous run's tabs, and it lists them before
+    // publishing the context, while no session can exist: a superseded attach must never
+    // close tabs, since by then they may belong to the winner's live sessions.
+    const leftovers = this.listLeftovers(context);
     this.context = context;
     this.attachDisconnectedHandler(context);
     // A browser that dropped after connecting but before the listener above was attached
@@ -597,6 +601,29 @@ export class BrowserService {
       this.logger.warn('Browser container disconnected while attaching — retrying');
       this.context = null;
       this.scheduleAttach(attempt + 1);
+      return;
+    }
+    await this.closeLeftovers(leftovers);
+  }
+
+  /**
+   * Tabs and incognito contexts left in the container by a previous Curia process: their
+   * sessions died with it, and nothing else would ever close them. The first tab stays:
+   * it is the window's anchor, and Chrome exits when its last window closes.
+   */
+  private listLeftovers(context: BrowserContext): { tabs: Page[]; contexts: BrowserContext[] } {
+    return {
+      tabs: context.pages().slice(1),
+      contexts: (context.browser()?.contexts() ?? []).filter(c => c !== context),
+    };
+  }
+
+  private async closeLeftovers(leftovers: { tabs: Page[]; contexts: BrowserContext[] }): Promise<void> {
+    for (const stale of [...leftovers.contexts, ...leftovers.tabs]) {
+      await stale.close().catch(err => this.logger.warn({ err }, 'Failed to close a tab or context left by a previous run'));
+    }
+    if (leftovers.contexts.length + leftovers.tabs.length > 0) {
+      this.logger.info({ tabs: leftovers.tabs.length, contexts: leftovers.contexts.length }, 'Closed tabs left in the browser container by a previous run');
     }
   }
 
@@ -618,24 +645,16 @@ export class BrowserService {
    * Attach to the browser container over CDP and return its default context: the
    * persistent profile, since the container launches Chrome with --user-data-dir.
    *
-   * Tabs and incognito contexts left by a previous Curia process are closed: their
-   * sessions died with it, and nothing else would ever close them. The first tab stays:
-   * it is the window's anchor, and Chrome exits when its last window closes.
+   * It closes nothing: tabs a previous run left are closed by tryAttach, and only for the
+   * attach that wins (see listLeftovers).
    */
   private async connectToContainer(): Promise<BrowserContext> {
     const endpoint = await resolveCdpEndpoint(this.cdpEndpoint!);
     const browser = await chromium.connectOverCDP(endpoint, { timeout: CDP_CONNECT_TIMEOUT_MS }) as unknown as Browser;
-    const [context, ...staleContexts] = browser.contexts();
+    const [context] = browser.contexts();
     if (!context) {
       await browser.close().catch(err => this.logger.debug({ err }, 'Failed to disconnect from a browser with no default context'));
       throw new Error('the browser container has no default context — is Chrome running with --user-data-dir?');
-    }
-    const staleTabs = context.pages().slice(1);
-    for (const stale of [...staleContexts, ...staleTabs]) {
-      await stale.close().catch(err => this.logger.warn({ err }, 'Failed to close a tab or context left by a previous run'));
-    }
-    if (staleContexts.length + staleTabs.length > 0) {
-      this.logger.info({ tabs: staleTabs.length, contexts: staleContexts.length }, 'Closed tabs left in the browser container by a previous run');
     }
     this.logger.info({ cdpEndpoint: this.cdpEndpointLabel, version: browser.version() }, 'Attached to the browser container');
     return context;

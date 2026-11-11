@@ -25,7 +25,7 @@ function makeBrowser() {
     version: vi.fn().mockReturnValue('156.0.8078.4'),
     newContext: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
-    contexts: vi.fn(),
+    contexts: vi.fn().mockReturnValue([]),
   };
 }
 
@@ -250,6 +250,60 @@ describe('BrowserService with a browser container', () => {
     expect(anchor.close).not.toHaveBeenCalled();
     expect(staleTab.close).toHaveBeenCalledOnce();
     expect(staleIncognito.close).toHaveBeenCalledOnce();
+    await svc.stop();
+  });
+
+  // A superseded attach (one that outlived its deadline, or one from before stop()) can
+  // land after the winner has created sessions. It must not close their tabs.
+  function sharedTabs(live: ReturnType<typeof makeBrowser>) {
+    const tabs = [makePage()];
+    const liveContext = makeContext(live, tabs);
+    liveContext.newPage.mockImplementation(async () => { const p = makePage(); tabs.push(p); return p; });
+    // The late attach sees the same Chrome: the same tabs, the winner's included.
+    const lateContext = makeContext(makeBrowser(), tabs);
+    return { tabs, liveContext, lateContext };
+  }
+
+  it('a timed-out attach that lands after the retry won leaves the live sessions’ tabs open', async () => {
+    const live = makeBrowser();
+    const { tabs, liveContext, lateContext } = sharedTabs(live);
+    let resolveHung!: (ctx: unknown) => void;
+    const factory = vi.fn()
+      .mockReturnValueOnce(new Promise(resolve => { resolveHung = resolve; }))
+      .mockResolvedValue(liveContext);
+    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT, contextFactory: factory as never });
+
+    const starting = svc.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await starting;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(svc.browserContext).toBe(liveContext);
+    const { sessionId } = await svc.getOrCreateSession(undefined);
+    expect(tabs).toHaveLength(2);
+
+    resolveHung(lateContext);
+    await vi.advanceTimersByTimeAsync(0);
+    for (const tab of tabs) expect(tab.close).not.toHaveBeenCalled();
+    expect(svc.getSession(sessionId)).toBeDefined();
+    await svc.stop();
+  });
+
+  it('an attach from before stop() that lands after start() leaves the live sessions’ tabs open', async () => {
+    const live = makeBrowser();
+    const { tabs, liveContext, lateContext } = sharedTabs(live);
+    let resolveStale!: (ctx: unknown) => void;
+    const factory = vi.fn()
+      .mockReturnValueOnce(new Promise(resolve => { resolveStale = resolve; }))
+      .mockResolvedValue(liveContext);
+    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT, contextFactory: factory as never });
+
+    const firstStart = svc.start();
+    await svc.stop();
+    await svc.start();
+    await svc.getOrCreateSession(undefined);
+    resolveStale(lateContext);
+    await firstStart;
+    for (const tab of tabs) expect(tab.close).not.toHaveBeenCalled();
     await svc.stop();
   });
 

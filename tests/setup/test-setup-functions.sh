@@ -982,6 +982,39 @@ fi
 # Reset globals so nothing downstream inherits test state.
 CURIA_REF=""; CURIA_VERSION="latest"; resolve_version
 
+# --- install.sh: fetch_asset leaves no partial file ---
+
+echo ""
+echo "=== install.sh: fetch_asset ==="
+
+# curl stubbed: writes some bytes, then fails (or succeeds) per _curl_rc.
+_fa_dir=$(mktemp -d)
+curl() {
+    local out=""
+    while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && out="$2"; shift; done
+    printf 'partial' > "$out"
+    return "$_curl_rc"
+}
+_saved_install_dir="$INSTALL_DIR"; INSTALL_DIR="$_fa_dir"; mkdir -p "$_fa_dir/docker"
+
+_curl_rc=56
+if fetch_asset docker/seccomp-chrome.json seccomp-chrome.json; then _fa_rc=0; else _fa_rc=1; fi
+_assert_var "a failed fetch returns failure" "$_fa_rc" "1"
+_assert_var "a failed fetch leaves no partial profile" "$(ls -A "$_fa_dir/docker")" ""
+
+printf 'hand-edited' > "$_fa_dir/docker-compose.yml"
+if fetch_asset docker-compose.yml docker-compose.yml; then _fa_rc=0; else _fa_rc=1; fi
+_assert_var "a failed fetch leaves an existing file as it was" "$(< "$_fa_dir/docker-compose.yml")" "hand-edited"
+
+_curl_rc=0
+fetch_asset docker/seccomp-chrome.json seccomp-chrome.json
+_assert_var "a successful fetch lands the file" "$(< "$_fa_dir/docker/seccomp-chrome.json")" "partial"
+_assert_var "a successful fetch leaves no temp file" "$(ls -A "$_fa_dir/docker")" "seccomp-chrome.json"
+
+unset -f curl
+INSTALL_DIR="$_saved_install_dir"
+rm -rf "$_fa_dir"
+
 # --- Results ---
 
 echo ""

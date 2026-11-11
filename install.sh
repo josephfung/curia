@@ -110,7 +110,21 @@ resolve_version
 #   $1 = local path (e.g. scripts/setup-common.sh), $2 = flat asset name (e.g. setup-common.sh)
 fetch_asset() {
   local local_path="$1" asset="$2"
-  curl -fsSL "$(bundle_asset_url "$local_path" "$asset")" -o "$INSTALL_DIR/$local_path"
+  download_to "$(bundle_asset_url "$local_path" "$asset")" "$INSTALL_DIR/$local_path"
+}
+
+# Download $1 to $2 through a temporary file, moved into place only once complete.
+# A transfer that fails part-way would otherwise leave a truncated file that every
+# later run treats as present and skips. On failure nothing is left at $2 (a file
+# already there stays as it was) and the status is non-zero.
+download_to() {
+  local url="$1" dest="$2"
+  if curl -fsSL "$url" -o "$dest.part"; then
+    mv -f "$dest.part" "$dest"
+  else
+    rm -f "$dest.part"
+    return 1
+  fi
 }
 
 # URL of a bundled file for this release/ref (same arguments as fetch_asset).
@@ -130,9 +144,9 @@ bundle_asset_url() {
 if [[ ! -f "$SCRIPT_DIR/scripts/setup-common.sh" ]]; then
   mkdir -p "$SCRIPT_DIR/scripts"
   if [[ "$ASSET_MODE" == "release" ]]; then
-    curl -fsSL "${ASSET_BASE}/setup-common.sh" -o "$SCRIPT_DIR/scripts/setup-common.sh"
+    download_to "${ASSET_BASE}/setup-common.sh" "$SCRIPT_DIR/scripts/setup-common.sh"
   else
-    curl -fsSL "${RAW_BASE}/scripts/setup-common.sh" -o "$SCRIPT_DIR/scripts/setup-common.sh"
+    download_to "${RAW_BASE}/scripts/setup-common.sh" "$SCRIPT_DIR/scripts/setup-common.sh"
   fi
 fi
 # shellcheck source=/dev/null
