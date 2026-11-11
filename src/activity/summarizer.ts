@@ -73,6 +73,14 @@ export function escapeForTag(text: string): string {
 }
 
 /**
+ * escapeForTag plus double quotes, for text placed inside a quoted attribute
+ * (`<tool name="...">`): a literal `"` would otherwise end the attribute early.
+ */
+export function escapeForAttr(text: string): string {
+  return escapeForTag(text).replace(/"/g, '&quot;');
+}
+
+/**
  * Normalise the model's phrase: one line, no wrapping quotes or trailing stop,
  * lower-case start, capped. Null when nothing usable is left.
  */

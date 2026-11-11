@@ -2281,6 +2281,7 @@ describe('PII redaction pipeline step', () => {
     // marker rather than an exact string match.
     const sendCall = (nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(JSON.stringify(sendCall)).toContain('[REDACTED:');
+    // The send options carry no generated IDs (#2548), so the plain prefix check is not flaky.
     expect(JSON.stringify(sendCall)).not.toContain('4111');
   });
 
