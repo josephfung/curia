@@ -3,6 +3,7 @@
 // Fetches web pages via HTTP GET using Node's built-in fetch().
 // Security constraints:
 //   - Only HTTPS and HTTP protocols allowed (no file://, ftp://, etc.)
+//   - Every hop, redirects included, must resolve to public addresses only (#2521)
 //   - Google Docs, Sheets and Drive files are refused: they open through google-workspace
 //   - Response body is truncated to prevent memory exhaustion
 //   - Timeout is enforced by the execution layer (not duplicated here)
@@ -12,6 +13,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLanding } from '../../../../src/skills/_shared/google-workspace-url.js';
 import { WEB_FETCH_NOT_FOUND_LINES } from '../../../../src/agents/prompts/dead-end-guidance.js';
+import { vetHost } from '../../../../src/browser/egress-proxy.js';
 import sanitizeHtml from 'sanitize-html';
 
 const WEB_FETCH_NOT_FOUND = WEB_FETCH_NOT_FOUND_LINES.join(' ');
@@ -30,6 +32,10 @@ function readableText(html: string): string {
 
 // Default max body length: 50KB. Enough for most web pages when truncated.
 const DEFAULT_MAX_LENGTH = 50000;
+
+// Redirects are followed by hand, so each hop's host is checked before it is requested.
+const MAX_REDIRECTS = 5;
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 
 // Hostnames and IP patterns that must be blocked to prevent SSRF.
 // The LLM controls the URL, so this is a security boundary.
@@ -100,15 +106,38 @@ export class WebFetchHandler implements ToolHandler {
     ctx.log.info({ url, maxLength }, 'Fetching web page');
 
     try {
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Curia/1.0 (AI Executive Assistant)',
-        },
-        signal: AbortSignal.timeout(10000),
-      });
+      const signal = AbortSignal.timeout(10000);
+      let current = parsedUrl;
+      let response: Response;
+      for (let hop = 0; ; hop++) {
+        // By resolved address, not just the name (#2521): a public name can point at an
+        // internal address, and a redirect can send us anywhere. fetch resolves the name
+        // again, so this narrows DNS rebinding rather than closing it.
+        const vetted = await vetHost(current.hostname);
+        if (!vetted.ok) {
+          ctx.log.warn({ hostname: current.hostname, hop }, 'web-fetch: refused a host that resolves privately or not at all');
+          return { success: false, error: `Blocked: requests to internal/private addresses are not allowed, or the host did not resolve (${current.hostname})` };
+        }
+        response = await fetch(current, {
+          headers: {
+            'User-Agent': 'Curia/1.0 (AI Executive Assistant)',
+          },
+          signal,
+          redirect: 'manual',
+        });
+        const location = response.headers.get('location');
+        if (!REDIRECT_STATUSES.has(response.status) || !location) break;
+        if (hop >= MAX_REDIRECTS) return { success: false, error: `Too many redirects (more than ${MAX_REDIRECTS})` };
+        const next = new URL(location, current);
+        if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+          return { success: false, error: `Blocked: a redirect to ${next.protocol} is not followed` };
+        }
+        await response.body?.cancel();
+        current = next;
+      }
 
       // Redirects are followed, so a short link can land on a Google file or its sign-in page.
-      if (isGoogleWorkspaceLanding(response.url)) {
+      if (isGoogleWorkspaceLanding(response.url || current.href)) {
         ctx.log.info({ hostname }, 'web-fetch: a redirect landed on a Google Workspace file — refused');
         return { success: false, error: googleWorkspaceUrlError('web-fetch') };
       }

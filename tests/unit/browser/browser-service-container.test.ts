@@ -228,6 +228,36 @@ describe('BrowserService with a browser container', () => {
     await svc.stop();
   });
 
+  it('knows the container’s address once attached, so the HTTP server can refuse it (#2521)', async () => {
+    const browser = makeBrowser();
+    const context = makeContext(browser);
+    browser.contexts.mockReturnValue([context]);
+    connectOverCDP.mockResolvedValue(browser);
+
+    const svc = new BrowserService({ logger, cdpEndpoint: 'http://172.20.0.3:9222' });
+    expect(svc.isBrowserContainerAddress('172.20.0.3')).toBe(false);
+    await svc.start();
+
+    expect(svc.isBrowserContainerAddress('172.20.0.3')).toBe(true);
+    expect(svc.isBrowserContainerAddress('::ffff:172.20.0.3')).toBe(true);
+    expect(svc.isBrowserContainerAddress('172.20.0.4')).toBe(false);
+    expect(svc.isBrowserContainerAddress(undefined)).toBe(false);
+    await svc.stop();
+  });
+
+  it('never treats loopback as the container, so the healthcheck still answers', async () => {
+    const browser = makeBrowser();
+    const context = makeContext(browser);
+    browser.contexts.mockReturnValue([context]);
+    connectOverCDP.mockResolvedValue(browser);
+
+    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT });
+    await svc.start();
+
+    expect(svc.isBrowserContainerAddress('127.0.0.1')).toBe(false);
+    await svc.stop();
+  });
+
   it('refuses a proxy: the container’s Chrome would egress directly', () => {
     expect(() => new BrowserService({ logger, cdpEndpoint: ENDPOINT, proxy: 'http://proxy:8888' }))
       .toThrow(/BROWSER_PROXY/);

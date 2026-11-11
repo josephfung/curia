@@ -81,6 +81,7 @@ import type { WebPushService } from '../web/push-service.js';
 import type { Channel } from '../channel.js';
 import type { AuditLogRepo } from '../../audit/audit-log-repo.js';
 import { DEFAULT_SCRATCH_DOC_TTL_DAYS } from '../../agents/document-workspace.js';
+import { registerPeerRefusal } from './peer-refusal.js';
 
 /**
  * Minimal HealthService for boot paths where a full HealthService wasn't provided
@@ -113,6 +114,11 @@ export interface HttpAdapterConfig {
   appOrigin: string | undefined;
   agentNames: string[];
   toolNames: string[];
+  /**
+   * True for a remote address the server must refuse outright: the browser container,
+   * which shares a network with Curia so Curia can drive it, and runs untrusted pages (#2521).
+   */
+  refusePeer?: (address: string | undefined) => boolean;
   schedulerService?: SchedulerService;
   healthService?: HealthService;
   identityService?: OfficeIdentityService;
@@ -252,6 +258,9 @@ export class HttpAdapter implements Channel {
         });
       });
     }
+
+    // Refuse the browser container before anything else runs (#2521).
+    if (this.config.refusePeer) registerPeerRefusal(this.app, this.config.refusePeer, logger);
 
     // Cookie parsing — required for the KG session cookie auth flow.
     await this.app.register(cookie);

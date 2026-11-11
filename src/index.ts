@@ -3575,6 +3575,7 @@ async function main(): Promise<void> {
     appOrigin: config.appOrigin,
     agentNames: agentConfigs.map(c => c.name),
     toolNames: toolRegistry.list().map(s => s.manifest.name),
+    refusePeer: (address) => browserService?.isBrowserContainerAddress(address) ?? false,
     schedulerService,
     identityService: officeIdentityService,
     executiveProfileService,

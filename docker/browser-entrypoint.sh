@@ -9,8 +9,8 @@
 # Environment (all optional; docker-compose.yml passes them through):
 #   BROWSER_LOCALE     BCP 47 locale, e.g. en-CA. Default en-US.
 #   BROWSER_LANGUAGES  Comma-separated navigator.languages list; the locale is put first.
-#   BROWSER_PROXY      Egress proxy, e.g. http://proxy:8888 or socks5://proxy:1080. No
-#                      credentials: Chrome's --proxy-server cannot carry them.
+#   BROWSER_PROXY      Upstream proxy, e.g. http://proxy:8888 or socks5://proxy:1080, that
+#                      the egress proxy sends Chrome's traffic through. No credentials.
 #   TZ                 IANA timezone Chrome reports, e.g. America/Toronto.
 set -euo pipefail
 
@@ -62,6 +62,7 @@ readonly SCREEN=1920x1080x24      # SCREEN_SIZE in src/browser/browser-service.t
 readonly WINDOW=1440,900          # WINDOW_SIZE in src/browser/browser-service.ts
 readonly DEVTOOLS_PORT=9222       # what Curia connects to
 readonly CHROME_PORT=9223         # Chrome's own, loopback only
+readonly EGRESS_PORT=3128         # the egress proxy, loopback only
 readonly PROFILE=/profile
 
 locale="${BROWSER_LOCALE:-en-US}"
@@ -81,9 +82,9 @@ if [[ -n "${BROWSER_LANGUAGES:-}" ]]; then
   done
 fi
 
-# Fail closed on the proxy: it exists to keep the datacenter IP hidden, so a value Chrome
-# would ignore or misread must stop the container rather than egress directly.
-proxy_args=()
+# Fail closed on the upstream proxy: it exists to keep the datacenter IP hidden, so a value
+# the egress proxy would ignore or misread must stop the container rather than egress
+# directly. (The egress proxy checks it again with the same rule.)
 if [[ -n "${BROWSER_PROXY:-}" ]]; then
   if [[ "$BROWSER_PROXY" == *@* ]]; then
     echo "browser-entrypoint: BROWSER_PROXY cannot carry credentials; use a proxy that allows this host without them" >&2
@@ -92,12 +93,6 @@ if [[ -n "${BROWSER_PROXY:-}" ]]; then
   if [[ ! "$BROWSER_PROXY" =~ ^(https?|socks5)://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
     echo "browser-entrypoint: BROWSER_PROXY must look like http://host:port or socks5://host:port, got: $BROWSER_PROXY" >&2
     exit 1
-  fi
-  proxy_args+=("--proxy-server=${BROWSER_PROXY%/}" '--force-webrtc-ip-handling-policy=disable_non_proxied_udp')
-  if [[ "$BROWSER_PROXY" == socks5://* ]]; then
-    # As Playwright does for SOCKS: resolve names through the proxy, never locally.
-    proxy_host="${BROWSER_PROXY#socks5://}"; proxy_host="${proxy_host%%[:/]*}"
-    proxy_args+=("--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE ${proxy_host}")
   fi
 fi
 
@@ -119,6 +114,19 @@ fi
 openbox --sm-disable &
 tint2 >/dev/null 2>&1 &
 
+# Every request Chrome makes, navigation and page JavaScript alike, goes through the egress
+# proxy (#2521). It resolves each host once and refuses private, loopback and link-local
+# addresses, then connects to the address it checked, through BROWSER_PROXY when set.
+EGRESS_PROXY_PORT="$EGRESS_PORT" node /usr/local/lib/curia-browser/egress-proxy.mts &
+for _ in $(seq 50); do
+  (exec 3<>"/dev/tcp/127.0.0.1/${EGRESS_PORT}") 2>/dev/null && break
+  sleep 0.1
+done
+if ! (exec 3<>"/dev/tcp/127.0.0.1/${EGRESS_PORT}") 2>/dev/null; then
+  echo "browser-entrypoint: the egress proxy did not start" >&2
+  exit 1
+fi
+
 # Chrome serves DevTools on loopback only (it ignores --remote-debugging-address when
 # headful), so socat forwards the compose network's port to it, through the peer gate at
 # the top of this script. Chrome answers only when the Host header is an IP or
@@ -130,6 +138,11 @@ socat "TCP-LISTEN:${DEVTOOLS_PORT},fork,reuseaddr" "EXEC:$0 --devtools-gate" &
 # tests/unit/browser/browser-entrypoint.test.ts checks they stay in step. Then the ones
 # BrowserService.launchPersistentContext adds. Chrome's sandbox stays on, under
 # docker/seccomp-chrome.json.
+#
+# The proxy flags: <-loopback> removes Chrome's implicit bypass for localhost, so a page's
+# request to 127.0.0.1 (DevTools, the proxy itself) reaches the proxy and is refused; the
+# resolver rule makes any name Chrome would look up itself fail, so nothing leaves around
+# the proxy; and WebRTC may not send UDP the proxy cannot carry.
 #
 # LANG sets the ICU (Intl) locale, which on Linux ignores --lang.
 LANG="${locale//-/_}.UTF-8" /ms-playwright/chrome \
@@ -161,7 +174,10 @@ LANG="${locale//-/_}.UTF-8" /ms-playwright/chrome \
   "--window-size=${WINDOW}" \
   "--lang=${locale}" \
   "--accept-lang=${languages}" \
-  "${proxy_args[@]}" \
+  "--proxy-server=http://127.0.0.1:${EGRESS_PORT}" \
+  '--proxy-bypass-list=<-loopback>' \
+  '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1' \
+  --force-webrtc-ip-handling-policy=disable_non_proxied_udp \
   "--user-data-dir=${PROFILE}" \
   "--remote-debugging-port=${CHROME_PORT}" \
   about:blank &

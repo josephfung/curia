@@ -123,6 +123,8 @@ export class BrowserService {
   private cdpEndpoint: string | undefined;
   /** cdpEndpoint without credentials, path or query: what logs and errors show. */
   private cdpEndpointLabel: string | undefined;
+  /** The browser container's address as of the last attach; see isBrowserContainerAddress. */
+  private containerAddress: string | null = null;
   private contextFactory: () => Promise<BrowserContext>;
   // Pending reconnect to the browser container, cleared by stop() (cdpEndpoint only).
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -522,6 +524,17 @@ export class BrowserService {
   }
 
   /**
+   * True when `address` (a request's remote address) is the browser container's, as
+   * resolved at the last attach. Curia joins the container's network to reach DevTools,
+   * so the container can reach Curia's HTTP server too; the server refuses it (#2521).
+   * Never true for loopback, so an endpoint on localhost never locks out the healthcheck.
+   */
+  isBrowserContainerAddress(address: string | undefined): boolean {
+    if (!address || !this.containerAddress) return false;
+    return address.replace(/^::ffff:/i, '') === this.containerAddress;
+  }
+
+  /**
    * Expose the persistent browser context for liveness probes. Null when the service
    * has not been started or has been stopped.
    *
@@ -650,6 +663,8 @@ export class BrowserService {
    */
   private async connectToContainer(): Promise<BrowserContext> {
     const endpoint = await resolveCdpEndpoint(this.cdpEndpoint!);
+    const host = new URL(endpoint).hostname.replace(/^\[(.*)\]$/, '$1');
+    this.containerAddress = isIP(host) !== 0 && !/^(127\.|::1$)/.test(host) ? host : null;
     const browser = await chromium.connectOverCDP(endpoint, { timeout: CDP_CONNECT_TIMEOUT_MS }) as unknown as Browser;
     const [context] = browser.contexts();
     if (!context) {

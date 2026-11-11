@@ -5,10 +5,17 @@
 // ctx.resolveSecretRef and fills the resolved value WITHOUT the value ever entering
 // the skill's return data, and any page content read back is scrubbed of it.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock the human-behavior module so dwell/presence/click/type are observable spies with no
 // real delays. Hoisted by vitest; the handler imports these and gets the spies. (#1053)
+// Name resolution for the private-address guard (#2521): every name resolves to a public
+// address unless a test maps it to another through `dnsAnswers`.
+const dnsAnswers = vi.hoisted(() => new Map<string, string>());
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn(async (hostname: string) => [{ address: dnsAnswers.get(hostname) ?? '93.184.215.14', family: 4 }]),
+}));
+
 vi.mock('../../../../src/browser/human-behavior.js', () => ({
   jitteredDelay: vi.fn().mockResolvedValue(undefined),
   simulateHumanPresence: vi.fn().mockResolvedValue(undefined),
@@ -763,6 +770,69 @@ describe('web-browser iframe awareness', () => {
 });
 
 describe('web-browser frame SSRF gating + read-failure detection', () => {
+  // #2521: a public-looking name that resolves to an internal address.
+  afterEach(() => dnsAnswers.clear());
+
+  it('navigate refuses a public name that resolves to a private address', async () => {
+    dnsAnswers.set('rebind.example', '10.0.0.7');
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('Internal admin', fill, 'about:blank');
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-rebind', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = {
+      input: { action: 'navigate', url: 'https://rebind.example/admin' },
+      log: logger,
+      browserService,
+    } as unknown as ToolContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/private\/internal.*rebind\.example/);
+    expect(page.goto).not.toHaveBeenCalled();
+  });
+
+  it('get_content skips a child frame whose public name resolves to a private address', async () => {
+    dnsAnswers.set('widget.example', '169.254.169.254');
+    const privateEvaluate = vi.fn().mockResolvedValue('METADATA_TOKEN=internal-only');
+    const mainFrame = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      name: vi.fn().mockReturnValue(''),
+      evaluate: vi.fn().mockResolvedValue('Innocent looking page'),
+    };
+    const privateFrame = {
+      url: vi.fn().mockReturnValue('https://widget.example/embed'),
+      name: vi.fn().mockReturnValue('widget'),
+      evaluate: privateEvaluate,
+    };
+    const page = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      title: vi.fn().mockResolvedValue('Page'),
+      screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
+      frames: vi.fn().mockReturnValue([mainFrame, privateFrame]),
+      mainFrame: vi.fn().mockReturnValue(mainFrame),
+    };
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-rebind-frame', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = { input: { action: 'get_content' }, log: logger, browserService } as unknown as ToolContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(privateEvaluate).not.toHaveBeenCalled();
+    if (result.success) {
+      const data = result.data as { content: string };
+      expect(data.content).not.toContain('METADATA_TOKEN');
+      expect(data.content).toContain('Innocent looking page');
+    }
+  });
+
   it('get_content does NOT read a child frame pointing at an internal/metadata host', async () => {
     const internalEvaluate = vi.fn().mockResolvedValue('AWS_SECRET=internal-only');
     const mainFrame = {

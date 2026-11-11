@@ -30,7 +30,7 @@ import { registerCodes } from '../../../../src/verification/track-codes.js';
 import type { Verification } from '../../../../src/verification/types.js';
 import { SecretRefRefusal, isCardSecretField, parseSecretRef } from '../../../../src/secrets/structured-secret-schema.js';
 import { detectVerificationScreen } from './verification-detect.js';
-import { isBlockedFrameUrl, isPrivateHost } from './frame-url.js';
+import { isBlockedFrameUrlResolved, resolvesPrivate } from './frame-url.js';
 import { focusedFrame } from './focus-frame.js';
 import {
   DEFAULT_SETTLE_TIMING,
@@ -720,9 +720,10 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
         return { ok: false, error: `Only http: and https: are allowed, got: ${parsedUrl.protocol}` };
       }
+      // By name and by resolved address (#2521): a public name can point at an internal one.
       const hostname = parsedUrl.hostname.toLowerCase();
-      if (isPrivateHost(hostname)) {
-        return { ok: false, error: `Blocked: navigation to private/internal addresses is not allowed (${hostname})` };
+      if (await resolvesPrivate(hostname)) {
+        return { ok: false, error: `Blocked: navigation to private/internal addresses is not allowed, or the host did not resolve (${hostname})` };
       }
       // The browser has no Google credentials either: a Google file gets a sign-in page.
       if (isGoogleWorkspaceFileUrl(parsedUrl)) {
@@ -754,7 +755,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // The guard above checks only the URL asked for. A site can redirect to an internal
       // address, e.g. the browser container's own DevTools endpoint (#2541); leave it
       // before anything (a screenshot, the title) is read from it.
-      if (isBlockedFrameUrl(page.url())) {
+      if (await isBlockedFrameUrlResolved(page.url())) {
         const blockedHost = new URL(page.url()).hostname;
         await page.goto('about:blank').catch((err) => ctx.log.warn({ err, sessionId }, 'Could not leave a page that redirected to an internal address'));
         return { ok: false, error: `Blocked: the page redirected to a private/internal address (${blockedHost})` };
@@ -1373,6 +1374,12 @@ async function isLikelyEmpty(page: Page, log: ToolContext['log']): Promise<boole
   }
 }
 
+/** The frames not on a private/internal host, by name or resolved address (#2521). */
+async function eligibleChildFrames(frames: Frame[]): Promise<Frame[]> {
+  const blocked = await Promise.all(frames.map((frame) => isBlockedFrameUrlResolved(frame.url())));
+  return frames.filter((_, i) => !blocked[i]);
+}
+
 /**
  * Resolve a natural language selector to a Playwright locator, searching the main frame
  * first and then any child frames. Embedded widgets (e.g. OpenTable's booking/date
@@ -1387,7 +1394,7 @@ async function isLikelyEmpty(page: Page, log: ToolContext['log']): Promise<boole
  * a direct selector.
  *
  * SSRF: child frames pointing at private/internal hosts are skipped (see
- * isBlockedFrameUrl) — the navigate guard only validates the top-level URL, so without
+ * eligibleChildFrames) — the navigate guard only validates the top-level URL, so without
  * this an attacker page could embed an internal iframe and have us interact with it.
  *
  * Resilience: each child-frame probe is wrapped so a frame that detaches mid-traversal
@@ -1482,7 +1489,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
     const refMainFrame = page.mainFrame();
     const scopes: Array<Page | Frame> = [
       page,
-      ...page.frames().filter((frame) => frame !== refMainFrame && !isBlockedFrameUrl(frame.url())),
+      ...(await eligibleChildFrames(page.frames().filter((frame) => frame !== refMainFrame))),
     ];
     let total = 0;
     let sole: ScopedLocator | null = null;
@@ -1524,9 +1531,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
   // Child frames eligible for interaction (exclude the main frame and private/internal
   // hosts). This is what lets click/type/hover/wait_for reach into legitimate iframes.
   const mainFrame = page.mainFrame();
-  const childFrames = page.frames().filter(
-    (frame) => frame !== mainFrame && !isBlockedFrameUrl(frame.url()),
-  );
+  const childFrames = await eligibleChildFrames(page.frames().filter((frame) => frame !== mainFrame));
   for (const frame of childFrames) {
     try {
       const inFrame = await resolveInScope(frame, selector, log);
@@ -1654,7 +1659,7 @@ async function getCleanedContent(page: Page, log: ToolContext['log']): Promise<s
     // SSRF: skip frames pointing at private/internal hosts. The navigate guard only
     // validates the top-level URL, so without this an attacker page could embed
     // <iframe src="http://169.254.169.254/..."> and we'd read internal content here.
-    if (isBlockedFrameUrl(frame.url())) {
+    if (await isBlockedFrameUrlResolved(frame.url())) {
       log.debug({ frameUrl: frame.url() }, 'Skipping private/internal frame during content extraction');
       continue;
     }
