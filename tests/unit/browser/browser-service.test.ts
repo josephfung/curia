@@ -410,8 +410,6 @@ describe('BrowserService (unit — mocked browser)', () => {
     });
   });
 
-  // #2521: Playwright adds --no-sandbox unless chromiumSandbox is true, so that option is
-  // what must be asserted, and --no-sandbox must never be passed by hand.
   // #2521: in-process Chrome gets an allowlisted environment, never Curia's secrets.
   describe('Chrome launch environment (#2521)', () => {
     let profileDir: string;
@@ -465,8 +463,28 @@ describe('BrowserService (unit — mocked browser)', () => {
     it('omits allowlisted variables the parent does not set', () => {
       expect(chromeLaunchEnv({}, 'en-US')).toEqual({ LANG: 'en_US.UTF-8' });
     });
+
+    it('passes the display/session variables an existing desktop display needs, but not proxy settings', () => {
+      const env = chromeLaunchEnv({
+        DISPLAY: ':0',
+        XAUTHORITY: '/run/user/1000/gdm/Xauthority',
+        WAYLAND_DISPLAY: 'wayland-0',
+        DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus',
+        HTTPS_PROXY: 'http://user:pw@proxy:3128',
+        NO_PROXY: 'localhost',
+      }, 'en-US');
+      expect(env).toEqual({
+        DISPLAY: ':0',
+        XAUTHORITY: '/run/user/1000/gdm/Xauthority',
+        WAYLAND_DISPLAY: 'wayland-0',
+        DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus',
+        LANG: 'en_US.UTF-8',
+      });
+    });
   });
 
+  // #2521: Playwright adds --no-sandbox unless chromiumSandbox is true, so that option is
+  // what must be asserted, and --no-sandbox must never be passed by hand.
   describe('Chrome sandbox (#2521)', () => {
     let profileDir: string;
     beforeEach(() => {

@@ -1266,9 +1266,13 @@ const X_SERVER_BINARIES = new Set(['X', 'Xvfb', 'Xorg', 'Xwayland', 'Xephyr', 'X
 // What in-process Chrome (and its children) may see of Curia's environment (#2521): what
 // it needs to find its binaries, display, fonts and temp space, and nothing else. Never
 // SECRET_ENCRYPTION_KEY, DATABASE_URL or API keys. LC_* is left out too: an inherited
-// LC_ALL would override the LANG set below.
+// LC_ALL would override the LANG set below. The display/session variables (XAUTHORITY,
+// WAYLAND_DISPLAY, DBUS_SESSION_BUS_ADDRESS) hold paths and socket addresses, no secrets;
+// startDisplay reuses an existing DISPLAY, and on GDM/Xwayland the cookie is only found
+// through XAUTHORITY. HTTP(S)_PROXY/NO_PROXY are left out on purpose: they can embed proxy
+// credentials, and the browser's proxy is configured through BrowserService's own proxy option.
 const CHROME_ENV_ALLOWLIST = [
-  'HOME', 'PATH', 'TZ', 'DISPLAY', 'TMPDIR',
+  'HOME', 'PATH', 'TZ', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'TMPDIR',
   'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME',
   'FONTCONFIG_FILE', 'FONTCONFIG_PATH',
 ] as const;
