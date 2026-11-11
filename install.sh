@@ -567,6 +567,29 @@ ensure_https_http_bind() {
   fi
 }
 
+# HTTPS (Caddy overlay) installs need APP_ORIGIN=https://<DOMAIN>: without it
+# the app builds console links on localhost, sends session cookies without
+# Secure and turns CORS off (#2368). The curia container never sees DOMAIN, so
+# the installer is the only place the value can come from. Fills a missing or
+# empty APP_ORIGIN only; a nonempty value is the operator's and is kept. Needs
+# the TLS overlay (as ensure_https_http_bind) and a usable DOMAIN in .env.
+# Pass "note" as $2 on the upgrade path to tell the operator what changed.
+ensure_https_app_origin() {
+  local env="$1" mode="${2:-}" dom
+  uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)" || return 0
+  dom="$(env_value "$env" DOMAIN)"
+  # A ${...} reference or a value with blanks can't be turned into an origin.
+  [[ -n "$dom" ]] && ! is_unresolved "$dom" && [[ "$dom" != *[[:space:]]* ]] || return 0
+  [[ -z "$(env_value "$env" APP_ORIGIN)" ]] || return 0
+  set_env_var "$env" APP_ORIGIN "https://$dom"
+  if [[ "$mode" == note ]]; then
+    echo "" >&2
+    warn "HTTPS install: APP_ORIGIN is now https://$dom (#2368)."
+    hint "Session cookies are now Secure: sign in to the console at https://$dom,"
+    hint "not http://<host>:3000. To use another origin, set APP_ORIGIN in .env and re-run."
+  fi
+}
+
 # Validate prereqs: Docker daemon up, compose plugin present, curl available.
 # The operator path deliberately does NOT require Node, pnpm, or openssl.
 check_prereqs() {
@@ -709,6 +732,8 @@ fresh_install() {
       # Caddy reaches curia:3000 over the compose network; keep :3000 off the
       # public interface so traffic can't bypass TLS.
       set_env_var "$env" HTTP_BIND 127.0.0.1
+      # Public origin for console links, Secure cookies and CORS.
+      ensure_https_app_origin "$env"
       # Expose DOMAIN as a shell variable so print_summary can build the HTTPS URL.
       # shellcheck disable=SC2034  # read by print_summary (sourced from setup-common.sh)
       DOMAIN="$dom"
@@ -797,6 +822,7 @@ existing_install() {
   info "No secrets will be regenerated."
 
   ensure_https_http_bind "$env"
+  ensure_https_app_origin "$env" note
 
   # Re-apply migrations idempotently. node-pg-migrate skips already-applied
   # migrations, so this is safe on every re-run.
