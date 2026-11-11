@@ -15,6 +15,8 @@ import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLan
 import { WEB_FETCH_NOT_FOUND_LINES } from '../../../../src/agents/prompts/dead-end-guidance.js';
 import { vetHost } from '../../../../src/browser/egress-proxy.js';
 import sanitizeHtml from 'sanitize-html';
+import net from 'node:net';
+import { Agent } from 'undici';
 
 const WEB_FETCH_NOT_FOUND = WEB_FETCH_NOT_FOUND_LINES.join(' ');
 const NO_READABLE_TEXT_NOTE = 'This fetch returned no readable text, which usually means the page is rendered by JavaScript or max_length cut it off. It says nothing about what the site offers. A real browser is needed: use web-browser if you have it, otherwise report that the page could not be read.';
@@ -68,6 +70,29 @@ function isPrivateHostname(hostname: string): boolean {
   return false;
 }
 
+type LookupCallback = (err: NodeJS.ErrnoException | null, address: string | Array<{ address: string; family: number }>, family?: number) => void;
+
+/**
+ * A `connect.lookup` for one hop that answers only from the addresses vetHost approved (#2521).
+ * The connection then cannot reach an address the check did not see, whatever the name resolves
+ * to by the time it connects. The URL keeps its hostname, so Host and TLS SNI are unchanged.
+ */
+export function pinnedLookup(addresses: readonly string[]) {
+  const pinned = addresses.map((address) => ({ address, family: net.isIP(address) }));
+  return (_hostname: string, options: { all?: boolean; family?: number | string } | undefined, callback: LookupCallback): void => {
+    // A caller that asks for one family gets that family or an error, never an unvetted fallback.
+    const wanted = options?.family === 4 || options?.family === 'IPv4' ? 4 : options?.family === 6 || options?.family === 'IPv6' ? 6 : 0;
+    const usable = wanted === 0 ? pinned : pinned.filter((p) => p.family === wanted);
+    const first = usable[0];
+    if (!first) {
+      callback(Object.assign(new Error('no vetted address for this family'), { code: 'ENOTFOUND' }), []);
+      return;
+    }
+    if (options?.all) callback(null, usable);
+    else callback(null, first.address, first.family);
+  };
+}
+
 export class WebFetchHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const { url, max_length } = ctx.input as { url?: string; max_length?: number };
@@ -105,26 +130,31 @@ export class WebFetchHandler implements ToolHandler {
 
     ctx.log.info({ url, maxLength }, 'Fetching web page');
 
+    const agents: Agent[] = [];
     try {
       const signal = AbortSignal.timeout(10000);
       let current = parsedUrl;
       let response: Response;
       for (let hop = 0; ; hop++) {
         // By resolved address, not just the name (#2521): a public name can point at an
-        // internal address, and a redirect can send us anywhere. fetch resolves the name
-        // again, so this narrows DNS rebinding rather than closing it.
+        // internal address, and a redirect can send us anywhere. The hop then connects only
+        // to the addresses just vetted, so the name cannot be rebound in between.
         const vetted = await vetHost(current.hostname);
         if (!vetted.ok) {
           ctx.log.warn({ hostname: current.hostname, hop }, 'web-fetch: refused a host that resolves privately or not at all');
           return { success: false, error: `Blocked: requests to internal/private addresses are not allowed, or the host did not resolve (${current.hostname})` };
         }
+        const agent = new Agent({ connect: { lookup: pinnedLookup(vetted.addresses) } });
+        agents.push(agent);
+        // `dispatcher` is undici's extension to fetch's init, absent from the DOM RequestInit type.
         response = await fetch(current, {
           headers: {
             'User-Agent': 'Curia/1.0 (AI Executive Assistant)',
           },
           signal,
           redirect: 'manual',
-        });
+          dispatcher: agent,
+        } as RequestInit);
         const location = response.headers.get('location');
         if (!REDIRECT_STATUSES.has(response.status) || !location) break;
         if (hop >= MAX_REDIRECTS) return { success: false, error: `Too many redirects (more than ${MAX_REDIRECTS})` };
@@ -181,6 +211,9 @@ export class WebFetchHandler implements ToolHandler {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, url }, 'Fetch failed');
       return { success: false, error: `Fetch failed: ${message}` };
+    } finally {
+      // One agent per hop; the body has been read (or abandoned) by now.
+      await Promise.allSettled(agents.map((a) => a.destroy()));
     }
   }
 }

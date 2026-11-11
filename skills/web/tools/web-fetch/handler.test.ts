@@ -8,7 +8,7 @@ vi.mock('node:dns/promises', () => ({
   lookup: vi.fn(async (hostname: string) => [{ address: dnsAnswers.get(hostname) ?? '93.184.215.14', family: 4 }]),
 }));
 
-import { WebFetchHandler } from './handler.js';
+import { WebFetchHandler, pinnedLookup } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 
 const logger = pino({ level: 'silent' });
@@ -31,6 +31,37 @@ describe('web-fetch', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/private.*rebind\.example/);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('hands fetch a dispatcher per hop, with the hostname left in the URL (#2521)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValueOnce(new Response('<p>hi</p>', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    await new WebFetchHandler().execute(ctxFor('https://example.com/page'));
+    expect(String(fetchSpy.mock.calls[0]![0])).toBe('https://example.com/page');
+    expect((fetchSpy.mock.calls[0]![1] as { dispatcher?: unknown }).dispatcher).toBeDefined();
+  });
+
+  describe('pinnedLookup', () => {
+    const lookupWith = (addresses: string[], options: { all?: boolean; family?: number | string } | undefined) =>
+      new Promise<{ err: Error | null; result: unknown }>((resolve) => {
+        pinnedLookup(addresses)('example.com', options, (err, result) => resolve({ err, result }));
+      });
+
+    it('answers only with the vetted addresses, whatever name is asked for', async () => {
+      const vetted = ['93.184.215.14', '2606:2800:21f:cb07:6820:80da:af6b:8b2c'];
+      const all = await lookupWith(vetted, { all: true });
+      expect((all.result as Array<{ address: string }>).map((a) => a.address)).toEqual(vetted);
+      const one = await lookupWith(vetted, {});
+      expect(vetted).toContain(one.result);
+    });
+
+    it('never falls back to another family, and errors when none is vetted', async () => {
+      const v4 = await lookupWith(['93.184.215.14'], { family: 4, all: true });
+      expect((v4.result as Array<{ address: string }>).map((a) => a.address)).toEqual(['93.184.215.14']);
+      const v6 = await lookupWith(['93.184.215.14'], { family: 6, all: true });
+      expect(v6.err).not.toBeNull();
+      expect(v6.result).toEqual([]);
+    });
   });
 
   it('refuses a redirect to an internal address before requesting it (#2521)', async () => {
