@@ -753,9 +753,7 @@ export class BrowserService {
         `--lang=${this.locale}`,
         `--accept-lang=${this.languages.join(',')}`,
       ],
-      // On Linux, Chrome takes its ICU (Intl) locale from LANG, not --lang, so without
-      // this Intl reports en-US beside an en-CA navigator.language. (#2221)
-      env: { ...process.env, LANG: `${this.locale.replace('-', '_')}.UTF-8` },
+      env: chromeLaunchEnv(process.env, this.locale),
       ...this.buildContextOptions(),
     };
 
@@ -1264,6 +1262,36 @@ function readLockPid(lockPath: string, logger: Logger): number | null {
 // line, so any live X server flavour is recognised (not just Xvfb/Xorg) and an
 // unrelated process that merely mentions "Xorg" in an argument is not misclassified.
 const X_SERVER_BINARIES = new Set(['X', 'Xvfb', 'Xorg', 'Xwayland', 'Xephyr', 'Xvnc', 'Xnest']);
+
+// What in-process Chrome (and its children) may see of Curia's environment (#2521): what
+// it needs to find its binaries, display, fonts and temp space, and nothing else. Never
+// SECRET_ENCRYPTION_KEY, DATABASE_URL or API keys. LC_* is left out too: an inherited
+// LC_ALL would override the LANG set below.
+const CHROME_ENV_ALLOWLIST = [
+  'HOME', 'PATH', 'TZ', 'DISPLAY', 'TMPDIR',
+  'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME',
+  'FONTCONFIG_FILE', 'FONTCONFIG_PATH',
+] as const;
+
+/**
+ * The environment for an in-process Chrome launch (#2521): the allowlisted variables
+ * present in `parent`, plus LANG for `locale`. On Linux Chrome takes its ICU (Intl) locale
+ * from LANG, not --lang, so without it Intl reports en-US beside an en-CA
+ * navigator.language (#2221).
+ *
+ * Defence in depth only: in-process Chrome runs as Curia's user, so code that escapes its
+ * sandbox can still read Curia's environment from /proc/<pid>/environ. Keeping secrets
+ * from Chrome takes the browser container (#2541).
+ */
+export function chromeLaunchEnv(parent: NodeJS.ProcessEnv, locale: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of CHROME_ENV_ALLOWLIST) {
+    const value = parent[key];
+    if (value !== undefined) env[key] = value;
+  }
+  env.LANG = `${locale.replace('-', '_')}.UTF-8`;
+  return env;
+}
 
 /**
  * True if `binary` (an executable basename) is an X server: a known server name, or

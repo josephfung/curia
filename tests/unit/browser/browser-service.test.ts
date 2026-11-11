@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'patchright';
 import {
-  BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isSandboxLaunchFailure, isXServerBinary, SCREEN_SIZE, WINDOW_SIZE,
+  BrowserService, chromeLaunchEnv, clearStaleX11Lock, clearStaleSingletonLock, isSandboxLaunchFailure, isXServerBinary, SCREEN_SIZE, WINDOW_SIZE,
 } from '../../../src/browser/browser-service.js';
 import pino from 'pino';
 
@@ -412,6 +412,61 @@ describe('BrowserService (unit — mocked browser)', () => {
 
   // #2521: Playwright adds --no-sandbox unless chromiumSandbox is true, so that option is
   // what must be asserted, and --no-sandbox must never be passed by hand.
+  // #2521: in-process Chrome gets an allowlisted environment, never Curia's secrets.
+  describe('Chrome launch environment (#2521)', () => {
+    let profileDir: string;
+    beforeEach(() => {
+      profileDir = mkdtempSync(join(tmpdir(), 'curia-profile-'));
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      rmSync(profileDir, { recursive: true, force: true });
+    });
+
+    it('launches Chrome without Curia\'s secrets', async () => {
+      vi.stubEnv('SECRET_ENCRYPTION_KEY', 'vault-key');
+      vi.stubEnv('DATABASE_URL', 'postgres://curia:pw@postgres:5432/curia');
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+      vi.stubEnv('HOME', '/home/curia');
+      const launch = vi.spyOn(chromium, 'launchPersistentContext')
+        .mockResolvedValue(makeMockContext(makeMockPage(), makeMockBrowser()) as never);
+      const svc = new BrowserService({ logger, profileDir, locale: 'en-CA' });
+      await svc.start();
+      await svc.stop();
+      const env = (launch.mock.calls[0]![1] as { env: Record<string, string> }).env;
+      expect(env).not.toHaveProperty('SECRET_ENCRYPTION_KEY');
+      expect(env).not.toHaveProperty('DATABASE_URL');
+      expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+      expect(env.HOME).toBe('/home/curia');
+      expect(env.LANG).toBe('en_CA.UTF-8');
+    });
+
+    it('keeps only allowlisted variables, and sets LANG over an inherited one', () => {
+      const env = chromeLaunchEnv({
+        HOME: '/home/curia',
+        PATH: '/usr/bin',
+        DISPLAY: ':99',
+        TZ: 'America/Toronto',
+        LANG: 'C.UTF-8',
+        LC_ALL: 'C',
+        SECRET_ENCRYPTION_KEY: 'vault-key',
+        NYLAS_API_KEY: 'nyk',
+      }, 'en-CA');
+      expect(env).toEqual({
+        HOME: '/home/curia',
+        PATH: '/usr/bin',
+        DISPLAY: ':99',
+        TZ: 'America/Toronto',
+        LANG: 'en_CA.UTF-8',
+      });
+    });
+
+    it('omits allowlisted variables the parent does not set', () => {
+      expect(chromeLaunchEnv({}, 'en-US')).toEqual({ LANG: 'en_US.UTF-8' });
+    });
+  });
+
   describe('Chrome sandbox (#2521)', () => {
     let profileDir: string;
     beforeEach(() => {
