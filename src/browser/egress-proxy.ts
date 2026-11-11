@@ -94,7 +94,19 @@ export function isPrivateAddress(address: string): boolean {
 
 export type HostLookup = (hostname: string) => Promise<Array<{ address: string }>>;
 
-export const defaultLookup: HostLookup = (hostname) => dnsLookup(hostname, { all: true });
+const LOOKUP_TIMEOUT_MS = 5_000;
+
+/** getaddrinfo has no time limit of its own: a timeout rejects, which vetHost treats as did-not-resolve. */
+export const defaultLookup: HostLookup = (hostname) => {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(Object.assign(new Error(`lookup of ${hostname} timed out`), { code: 'ETIMEOUT' })),
+      LOOKUP_TIMEOUT_MS,
+    );
+  });
+  return Promise.race([dnsLookup(hostname, { all: true }), timeout]).finally(() => clearTimeout(timer));
+};
 
 /** The outcome of vetting a destination host. */
 export type Vetted =
@@ -277,7 +289,10 @@ function parseAuthority(target: string): { host: string; port: number } | null {
   return port >= 1 && port <= 65535 ? { host: match[1]!, port } : null;
 }
 
-const HOP_BY_HOP = new Set([
+/** A tunnel or forwarded request with no traffic either way for this long is closed. */
+const TUNNEL_IDLE_MS = 5 * 60_000;
+
+const HOP_BY_HOP =new Set([
   'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'proxy-connection',
   'te', 'trailer', 'transfer-encoding', 'upgrade',
 ]);
@@ -311,6 +326,14 @@ export function createEgressProxy(options: EgressProxyOptions): http.Server {
         client.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
         return;
       }
+      // Chrome may have hung up while the lookup or connect was pending; 'close' has
+      // already fired then, so the listener below would never run.
+      if (client.destroyed) {
+        upstream.destroy();
+        return;
+      }
+      upstream.setTimeout(TUNNEL_IDLE_MS, () => upstream.destroy());
+      client.setTimeout(TUNNEL_IDLE_MS, () => client.destroy());
       upstream.on('error', () => client.destroy());
       client.on('close', () => upstream.destroy());
       upstream.on('close', () => client.destroy());
@@ -349,6 +372,13 @@ export function createEgressProxy(options: EgressProxyOptions): http.Server {
         res.writeHead(502, { 'content-type': 'text/plain' }).end('Bad gateway');
         return;
       }
+      // Same gap as CONNECT: the client may be gone already, and 'close' will not fire again.
+      if (res.destroyed || req.destroyed) {
+        socket.destroy();
+        return;
+      }
+      socket.setTimeout(TUNNEL_IDLE_MS, () => socket.destroy());
+      res.on('close', () => socket.destroy());
       const headers: http.OutgoingHttpHeaders = {};
       for (const [name, value] of Object.entries(req.headers)) {
         if (!HOP_BY_HOP.has(name) && value !== undefined) headers[name] = value;

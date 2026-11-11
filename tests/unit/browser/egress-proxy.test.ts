@@ -235,6 +235,30 @@ describe('createEgressProxy', () => {
     expect(requested).toEqual([`127.0.0.1:${sitePort}`]);
   });
 
+  it.each(['CONNECT', 'plain HTTP'])('closes the upstream socket when the client hangs up mid-setup (%s)', async (kind) => {
+    const accepted: net.Socket[] = [];
+    const sitePort = await listen(net.createServer((s) => { accepted.push(s); s.on('error', () => undefined); }));
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    const slowLookup: HostLookup = async (hostname) => { await gate; return testLookup(hostname); };
+    const proxyPort = await listen(createEgressProxy({ upstream: null, lookup: slowLookup, isPrivate: allowLoopback, log: () => undefined }));
+
+    const client = net.connect(proxyPort, '127.0.0.1');
+    client.on('error', () => undefined);
+    await once(client, 'connect');
+    client.write(kind === 'CONNECT'
+      ? `CONNECT site.test:${sitePort} HTTP/1.1\r\nHost: site.test:${sitePort}\r\n\r\n`
+      : `GET http://site.test:${sitePort}/ HTTP/1.1\r\nHost: site.test:${sitePort}\r\n\r\n`);
+    await new Promise((r) => setTimeout(r, 50));
+    client.destroy();
+    await once(client, 'close');
+    release();
+
+    // The proxy may open the upstream connection before it notices; it must then close it.
+    await new Promise((r) => setTimeout(r, 200));
+    for (const s of accepted) expect(s.destroyed || s.readableEnded || s.closed).toBe(true);
+  });
+
   it('answers 502 when the upstream refuses', async () => {
     const upstream = http.createServer();
     upstream.on('connect', (_req: http.IncomingMessage, client: net.Socket) => {
