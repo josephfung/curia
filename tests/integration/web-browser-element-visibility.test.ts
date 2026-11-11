@@ -9,7 +9,7 @@
 // This test needs a browser and does NOT skip without one: CI installs Chromium for Patchright
 // before `pnpm test` (.github/workflows/ci.yml), and locally run
 // `pnpm exec patchright install chromium`. A missing browser fails beforeAll.
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +19,12 @@ import { BrowserService } from '../../src/browser/browser-service.js';
 import { createSilentLogger } from '../../src/logger.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import { WebBrowserHandler } from '../../skills/web/tools/web-browser/handler.js';
+
+// The fixture hosts (*.example.test) do not resolve; the private-address guard (#2521)
+// resolves every host it lets through, so answer with a public address.
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn(async () => [{ address: '93.184.215.14', family: 4 }]),
+}));
 
 const SHOP = 'https://shop.example.test';
 
