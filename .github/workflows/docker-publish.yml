@@ -1,8 +1,8 @@
 name: docker-publish
 
-# Build, push, sign, and SBOM-attest the Curia app + Postgres images to GHCR.
-# - release published -> semver + latest (app), pg16 + latest (postgres)
-# - push to main      -> edge (both), for dogfood / curia-deploy pulls
+# Build, push, sign, and SBOM-attest the Curia app, browser and Postgres images to GHCR.
+# - release published -> semver + latest (app, browser), pg16 + latest (postgres)
+# - push to main      -> edge (all three), for dogfood / curia-deploy pulls
 # - manual dispatch   -> with a tag (named either way, see below): that tag's
 #                        semver only, rebuilt from its source; without a tag,
 #                        from main: same as a push to main. A dispatch that
@@ -211,7 +211,7 @@ jobs:
             # No hedge here: an empty target that reached this line is main, by
             # the guard above. A step that reports "published only if…" and then
             # exits 0 is the ambiguity this issue is about.
-            echo "::notice::Publish target: main (:edge on both images)."
+            echo "::notice::Publish target: main (:edge on every image)."
           fi
 
   build:
@@ -242,8 +242,8 @@ jobs:
           - name: curia
             image: curia
             dockerfile: Dockerfile
-            # This is the only image carrying app semver, so it is the only one
-            # a tag build must produce a version for (asserted after `meta`).
+            # Carries app semver (as does curia-browser), so a tag build must
+            # produce a version for it (asserted after `meta`).
             expects_semver: true
             # App tags: semver on any release build (published or re-published),
             # `latest` only on a real release, `edge` only on a main build.
@@ -257,6 +257,18 @@ jobs:
             # target: like `edge` it is a floating "newest" pointer, and a
             # re-publish names an arbitrary older tag, so only an actual release
             # may advance it.
+            tags: |
+              type=semver,pattern=v{{version}},value=${{ needs.resolve.outputs.tag }}
+              type=semver,pattern=v{{major}}.{{minor}},value=${{ needs.resolve.outputs.tag }}
+              type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+              type=raw,value=edge,enable=${{ needs.resolve.outputs.tag == '' && github.ref == 'refs/heads/main' }}
+          # The browser container's image (#2541). Tagged exactly like curia, so a
+          # deployment pulling one tag gets the Chromium that matches curia's Patchright
+          # driver: both are built from this run's commit.
+          - name: curia-browser
+            image: curia-browser
+            dockerfile: docker/browser.Dockerfile
+            expects_semver: true
             tags: |
               type=semver,pattern=v{{version}},value=${{ needs.resolve.outputs.tag }}
               type=semver,pattern=v{{major}}.{{minor}},value=${{ needs.resolve.outputs.tag }}
@@ -294,6 +306,24 @@ jobs:
         id: src
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # A manual re-publish checks out an older tag, whose source may predate an
+      # image's Dockerfile (curia-browser first shipped in #2541). Building it would
+      # fail the run although the other images publish, so that leg is skipped: with
+      # `meta` skipped it has no tags, and the build and sign steps (guarded on tags)
+      # skip with it.
+      - name: Check the image's Dockerfile exists in this source
+        id: buildable
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          if [ -f "$DOCKERFILE" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${DOCKERFILE} does not exist in the checked-out source; skipping ${IMAGE} (the release predates it)."
+          fi
+
       # Every pull from Docker Hub below is authenticated: QEMU's binfmt image, the
       # BuildKit image setup-buildx starts, and both Dockerfiles' base images
       # (node, pgvector). Anonymous pulls are rate-limited per IP, and GitHub's
@@ -325,6 +355,7 @@ jobs:
 
       - name: Derive tags & labels
         id: meta
+        if: steps.buildable.outputs.present == 'true'
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
@@ -358,7 +389,7 @@ jobs:
       # build with no version tag), and a prediction can be wrong in a way a
       # direct check cannot.
       - name: Assert a tag build produced its version tags
-        if: needs.resolve.outputs.tag != '' && matrix.expects_semver
+        if: steps.buildable.outputs.present == 'true' && needs.resolve.outputs.tag != '' && matrix.expects_semver
         env:
           META_VERSION: ${{ steps.meta.outputs.version }}
           TARGET: ${{ needs.resolve.outputs.tag }}
@@ -373,7 +404,7 @@ jobs:
       # and file a spurious publish-failure issue. Skip instead — but say so in
       # the run log, so a skipped image is never mistaken for a published one.
       - name: Report an image with nothing to publish
-        if: steps.meta.outputs.tags == ''
+        if: steps.buildable.outputs.present == 'true' && steps.meta.outputs.tags == ''
         env:
           IMAGE: ${{ matrix.image }}
         run: echo "::notice::No tags apply to ${IMAGE} on this trigger; skipping its build and push."
@@ -394,7 +425,7 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
           LABELS: ${{ steps.meta.outputs.labels }}
           DOCKERFILE: ${{ matrix.dockerfile }}
-          # Separate scopes: the two images share a branch and would otherwise
+          # Separate scopes: the images share a branch and would otherwise
           # overwrite each other's layer cache.
           CACHE_SCOPE: ${{ matrix.name }}
           BUILDER_ID: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
@@ -482,7 +513,7 @@ jobs:
               '**and skip any migrations** added since, while appearing to succeed.',
               '',
               '**Check the run before acting** — this job cannot tell which part failed:',
-              '- the matrix builds `curia` and `curia-postgres` independently (`fail-fast: false`),',
+              '- the matrix builds `curia`, `curia-browser` and `curia-postgres` independently (`fail-fast: false`),',
               '  so one image may have published fine while the other did not;',
               '- signing runs *after* the push, so a cosign failure means the image was',
               '  actually published and is current — only its signature is missing.',

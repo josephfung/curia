@@ -85,6 +85,13 @@ services:
       # not localhost (which resolves to the container itself inside Docker).
       # The .env value uses localhost for host-side tools (pnpm migrate, dev mode).
       DATABASE_URL: "postgres://${DB_USER:-curia}:${DB_PASSWORD}@postgres:5432/curia"
+      # The web-browser skill attaches to the browser service below. Curia boots and
+      # stays healthy without it (health reports the browser as failed) and reconnects
+      # when it comes back, so there is no depends_on.
+      BROWSER_CDP_URL: "http://browser:9222"
+    networks:
+      - default
+      - browser
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,6 +116,47 @@ services:
       # which is inaccessible to the non-root curia runtime user.
       - /run/curia-tempfiles:size=50M,noexec,nosuid,nodev,mode=0700,uid=1001,gid=1001
 
+  browser:
+    # Chromium for the web-browser skill, kept out of the curia container (#2541): page
+    # code runs here, without Curia's secrets (no env_file) and with no route to Postgres
+    # (it joins only the `browser` network). Published from the same commit and under the
+    # same tag as the curia image, so the Chromium matches Curia's Patchright driver.
+    image: ghcr.io/josephfung/curia-browser:${CURIA_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # Reaps Chrome's helper processes; the entrypoint is a plain bash script.
+    init: true
+    # No ports: DevTools has no authentication, so it is reachable only over the
+    # `browser` network, which only curia joins.
+    networks:
+      - browser
+    environment:
+      # Only what Chrome itself needs. Never add env_file here: it would hand page code
+      # Curia's secrets.
+      TZ: ${TIMEZONE:-America/Toronto}
+      BROWSER_LOCALE: ${BROWSER_LOCALE:-en-US}
+      BROWSER_LANGUAGES: ${BROWSER_LANGUAGES:-}
+      BROWSER_PROXY: ${BROWSER_PROXY:-}
+    volumes:
+      # The persistent profile: sign-ins and cookies survive restarts and recreates.
+      - browser_profile:/profile
+    read_only: true
+    tmpfs:
+      # Chrome's scratch space and shared memory (--disable-dev-shm-usage), the X socket,
+      # and HOME. Recreated empty on every start, so no stale X lock survives a crash.
+      - /tmp:mode=1777,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      # Chrome's sandbox needs user namespaces, which Docker's default profile blocks.
+      # This profile allows them, for this container only (see docs/dev/configuration.md).
+      - seccomp=./docker/seccomp-chrome.json
+
 volumes:
   pgdata:
   google_workspace_tokens:
+  browser_profile:
+
+networks:
+  # Curia ↔ browser only. Not `internal`: Chrome needs to reach the internet.
+  browser:

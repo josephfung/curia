@@ -143,6 +143,16 @@ tasks:
     credential_how_to: null
     docs_url: /integrations/tavily
 
+  - id: web_browser
+    label: "Web browser"
+    value_prop: "Lets Curia use pages that need JavaScript, sign-ins or forms — runs in its own container, no key needed."
+    tier: instant
+    handoff: in-chat
+    completion_check:
+      type: browser_ready
+    credential_how_to: "The shipped docker-compose.yml runs the browser as the `browser` service: start it with `docker compose up -d browser`, and check it with `docker compose logs browser`. Ordinary sites work; bot-protected sites may block it, especially from a datacenter IP."
+    docs_url: /integrations/web-browser
+
   - id: inbox_sending
     label: "Replies from your mailbox"
     value_prop: "Choose whether Curia sends routine replies from your mailbox for you: off, on request, routine or all."

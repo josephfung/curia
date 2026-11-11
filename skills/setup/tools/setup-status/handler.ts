@@ -16,6 +16,7 @@ type CompletionCheck =
   | { type: 'vault_secrets_all'; keys: string[] }
   | { type: 'paired_push_subscription' }
   | { type: 'email_channel_ready' }
+  | { type: 'browser_ready' }
   // Done once ConfigStore holds a non-empty value for the key (#2474). Presence only: the
   // setting has a working default, so "set" means the principal has made a choice.
   // `valid_as` also requires the value to hold a real choice: `{}` or malformed JSON reads as
@@ -224,6 +225,9 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
+      // Done while a browser is attached: a container that is down reads as pending (#2541).
+      const browserReady = ctx.browserService?.browserContext != null;
+
       // config_store_set tasks: read each distinct namespace/key once (#2474). A failed read
       // reports pending and logs, like the other live checks: setup state is non-critical UX.
       const configSet = new Map<string, boolean>();
@@ -283,6 +287,9 @@ export class SetupStatusHandler implements ToolHandler {
             case 'email_channel_ready':
               done = emailStatus === 'running';
               restartRequired = emailStatus === 'restart_required';
+              break;
+            case 'browser_ready':
+              done = browserReady;
               break;
             case 'config_store_set':
               done = configSet.get(`${check.namespace}/${check.key}`) ?? false;

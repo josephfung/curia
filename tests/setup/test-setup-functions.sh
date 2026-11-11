@@ -1093,6 +1093,63 @@ for _ao_seed in 'DOMAIN=x.example\nLOG_LEVEL=info\n# SETUP_COMPLETE\n' "${_TLS}L
 done
 rm -f "$_ao_env"
 
+# --- install.sh: fetch_asset leaves no partial file ---
+
+echo ""
+echo "=== install.sh: fetch_asset ==="
+
+# curl stubbed: writes some bytes, then fails (or succeeds) per _curl_rc.
+_fa_dir=$(mktemp -d)
+curl() {
+    local out=""
+    while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && out="$2"; shift; done
+    printf 'partial' > "$out"
+    return "$_curl_rc"
+}
+_saved_install_dir="$INSTALL_DIR"; INSTALL_DIR="$_fa_dir"; mkdir -p "$_fa_dir/docker"
+
+_curl_rc=56
+if fetch_asset docker/seccomp-chrome.json seccomp-chrome.json; then _fa_rc=0; else _fa_rc=1; fi
+_assert_var "a failed fetch returns failure" "$_fa_rc" "1"
+_assert_var "a failed fetch leaves no partial profile" "$(ls -A "$_fa_dir/docker")" ""
+
+printf 'hand-edited' > "$_fa_dir/docker-compose.yml"
+if fetch_asset docker-compose.yml docker-compose.yml; then _fa_rc=0; else _fa_rc=1; fi
+_assert_var "a failed fetch leaves an existing file as it was" "$(< "$_fa_dir/docker-compose.yml")" "hand-edited"
+
+_curl_rc=0
+fetch_asset docker/seccomp-chrome.json seccomp-chrome.json
+_assert_var "a successful fetch lands the file" "$(< "$_fa_dir/docker/seccomp-chrome.json")" "partial"
+_assert_var "a successful fetch leaves no temp file" "$(ls -A "$_fa_dir/docker")" "seccomp-chrome.json"
+_assert_var "a fetched file gets the umask mode, not mktemp's 0600" \
+    "$( (umask 022; fetch_asset docker/seccomp-chrome.json seccomp-chrome.json; find "$_fa_dir/docker/seccomp-chrome.json" -perm 0644) )" \
+    "$_fa_dir/docker/seccomp-chrome.json"
+
+# Another run's in-flight download of the same asset (its temp file) is never
+# written to or removed, on success or failure, and each transfer uses its own file.
+_fa_outs=()
+curl() {
+    local out=""
+    while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && out="$2"; shift; done
+    _fa_outs+=("$out")
+    printf 'mine' > "$out"
+    return "$_curl_rc"
+}
+printf 'theirs' > "$_fa_dir/docker-compose.yml.part"
+_curl_rc=56
+fetch_asset docker-compose.yml docker-compose.yml || true
+_curl_rc=0
+fetch_asset docker-compose.yml docker-compose.yml
+_assert_var "another run's temp file survives a failed and a successful fetch" \
+    "$(< "$_fa_dir/docker-compose.yml.part")" "theirs"
+_assert_var "each transfer writes its own temp file" \
+    "$([[ "${_fa_outs[0]}" != "${_fa_outs[1]}" && "${_fa_outs[0]}" != "$_fa_dir/docker-compose.yml.part" ]] && echo distinct)" "distinct"
+_assert_var "the successful fetch landed its own bytes" "$(< "$_fa_dir/docker-compose.yml")" "mine"
+
+unset -f curl
+INSTALL_DIR="$_saved_install_dir"
+rm -rf "$_fa_dir"
+
 # --- Results ---
 
 echo ""

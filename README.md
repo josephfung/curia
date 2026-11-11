@@ -162,7 +162,7 @@ cosign verify-blob --bundle sbom.spdx.json.sigstore \
   sbom.spdx.json
 ```
 
-The install bundle (`install.sh`, `docker-compose*.yml`, `env.example`, `Caddyfile`, `setup-common.sh`) is covered by one signed manifest — verify it, then check the files against it:
+The install bundle (`install.sh`, `docker-compose*.yml`, `env.example`, `Caddyfile`, `setup-common.sh`, `seccomp-chrome.json`) is covered by one signed manifest — verify it, then check the files against it:
 
 ```bash
 cosign verify-blob --bundle SHA256SUMS.sigstore \

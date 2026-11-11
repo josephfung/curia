@@ -51,6 +51,9 @@ export interface Config {
   // Leave unset in local development — CORS is disabled and cookies are HTTP-only.
   appOrigin: string | undefined;
   timezone: string;
+  // DevTools endpoint of the browser container (BROWSER_CDP_URL, e.g. http://browser:9222).
+  // Unset → the web-browser skill launches Chrome in-process (#2541).
+  browserCdpUrl: string | undefined;
   nylasApiKey: string | undefined;
   nylasPollingIntervalMs: number;
   // principal's Signal phone number in E.164 format (e.g. "+14155551234").
@@ -2085,6 +2088,20 @@ export function loadConfig(): Config {
     throw new Error(`Invalid TIMEZONE configuration: "${timezone}" is not a recognized IANA timezone`);
   }
 
+  const browserCdpUrl = process.env.BROWSER_CDP_URL?.trim() || undefined;
+  if (browserCdpUrl !== undefined) {
+    let protocol: string;
+    try {
+      protocol = new URL(browserCdpUrl).protocol;
+    } catch {
+      // The value is not echoed: a hosted browser's URL can carry a token.
+      throw new Error('BROWSER_CDP_URL must be a URL such as http://browser:9222');
+    }
+    if (!['http:', 'https:', 'ws:', 'wss:'].includes(protocol)) {
+      throw new Error(`BROWSER_CDP_URL must be an http(s) or ws(s) URL, got scheme ${protocol}`);
+    }
+  }
+
   return {
     databaseUrl,
     // Bootstrap/config secrets are resolved from the vault by applyVaultSecrets()
@@ -2106,6 +2123,7 @@ export function loadConfig(): Config {
     webAppBootstrapSecret: undefined,
     appOrigin: process.env.APP_ORIGIN || undefined,
     timezone,
+    browserCdpUrl,
     nylasApiKey: undefined,
     nylasPollingIntervalMs,
     ceoSignalNumber: process.env.CEO_SIGNAL_NUMBER?.trim() || undefined,

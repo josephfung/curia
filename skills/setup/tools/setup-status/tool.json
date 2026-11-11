@@ -28,6 +28,6 @@
   ],
   "timeout": 15000,
   "capabilities": ["entityMemory", "schedulerService", "officeIdentityService"],
-  "optional_capabilities": ["phoneAppReady", "emailChannelStatus"],
+  "optional_capabilities": ["phoneAppReady", "emailChannelStatus", "browserService"],
   "allowed_callers": ["setup-wizard"]
 }

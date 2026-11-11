@@ -49,7 +49,7 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
 | `sms` | Telnyx webhook handler installed | SMS adapter not constructed (disabled / no credentials) |
 | `voice` | LiveKit RoomService `listRooms()` on the **management** URL | Voice adapter not constructed (disabled / incomplete credentials) |
 | `signal_voice` | **Connects** to the shared PulseAudio socket (2s budget) | No `SIGNAL_PULSE_SOCKET_PATH` — the Signal call bridge was not constructed |
-| `browser` | Bounded `cookies()` round-trip against Chrome (3s budget) | Browser service not constructed. `fail` when the context is null (stopped, or a failed crash-recovery relaunch) |
+| `browser` | Bounded `cookies()` round-trip against Chrome (3s budget) | Browser service not constructed: an in-process launch failed, or `browser.proxy` and `BROWSER_CDP_URL` are both set (`browser.proxy` cannot reach the container's Chrome, so startup refuses; set `BROWSER_PROXY` on the `browser` service and clear `browser.proxy`, see [configuration](configuration.md)). `fail` when the context is null: stopped, a failed crash-recovery relaunch, or the browser container is not attached (down, restarting, or not yet reconnected) |
 | `mcp.<server>` | `ping()` per enabled server (3s budget each, run concurrently) | Server disabled, so never attempted at boot |
 | `nylas_calendar` | `listCalendars()` via the principal calendar grant | Calendar not configured |
 | `scheduler` | Watchdog: last tick within `schedulerMaxTickS`, with a boot grace window | Never skipped |
