@@ -264,6 +264,70 @@ describe('BrowserService with a browser container', () => {
     await svc.stop();
   });
 
+  it('recognises the container whichever way an IPv4-mapped IPv6 address is spelled', async () => {
+    const browser = makeBrowser();
+    const context = makeContext(browser);
+    browser.contexts.mockReturnValue([context]);
+    connectOverCDP.mockResolvedValue(browser);
+
+    // URL serialisation turns the endpoint's host into the hex form, ::ffff:ac14:9.
+    const svc = new BrowserService({ logger, cdpEndpoint: 'http://[::ffff:172.20.0.9]:9222' });
+    await svc.start();
+
+    expect(svc.isBrowserContainerAddress('172.20.0.9')).toBe(true);
+    expect(svc.isBrowserContainerAddress('::ffff:172.20.0.9')).toBe(true);
+    expect(svc.isBrowserContainerAddress('::ffff:ac14:9')).toBe(true);
+    expect(svc.isBrowserContainerAddress('::FFFF:AC14:9')).toBe(true);
+    expect(svc.isBrowserContainerAddress('172.20.0.10')).toBe(false);
+    await svc.stop();
+  });
+
+  it('excludes a loopback address spelled as IPv4-mapped IPv6 from the container set', async () => {
+    const browser = makeBrowser();
+    const context = makeContext(browser);
+    browser.contexts.mockReturnValue([context]);
+    connectOverCDP.mockResolvedValue(browser);
+    dnsLookup.mockResolvedValue([
+      { address: '::ffff:127.0.0.1', family: 6 },
+      { address: '::ffff:7f00:1', family: 6 },
+      { address: '::ffff:172.20.0.9', family: 6 },
+    ]);
+
+    const svc = new BrowserService({ logger, cdpEndpoint: 'https://browser.internal:9222' });
+    await svc.start();
+
+    expect(svc.isBrowserContainerAddress('127.0.0.1')).toBe(false);
+    expect(svc.isBrowserContainerAddress('::ffff:127.0.0.1')).toBe(false);
+    expect(svc.isBrowserContainerAddress('172.20.0.9')).toBe(true);
+    await svc.stop();
+  });
+
+  it('keeps the refusal set of the attach that won when a slower, abandoned lookup finishes later', async () => {
+    const browser = makeBrowser();
+    const context = makeContext(browser);
+    browser.contexts.mockReturnValue([context]);
+    connectOverCDP.mockResolvedValue(browser);
+    let resolveSlow!: (v: { address: string; family: number }[]) => void;
+    dnsLookup
+      .mockReturnValueOnce(new Promise(resolve => { resolveSlow = resolve; }))
+      .mockResolvedValue([{ address: '172.20.0.9', family: 4 }]);
+
+    const svc = new BrowserService({ logger, cdpEndpoint: 'https://browser.internal:9222' });
+    const starting = svc.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await starting;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(svc.browserContext).toBe(context);
+    expect(svc.isBrowserContainerAddress('172.20.0.9')).toBe(true);
+
+    resolveSlow([{ address: '172.20.0.5', family: 4 }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(svc.isBrowserContainerAddress('172.20.0.9')).toBe(true);
+    expect(svc.isBrowserContainerAddress('172.20.0.5')).toBe(false);
+    await svc.stop();
+  });
+
   it('never treats loopback as the container, so the healthcheck still answers', async () => {
     const browser = makeBrowser();
     const context = makeContext(browser);

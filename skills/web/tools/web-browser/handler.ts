@@ -1376,8 +1376,24 @@ async function isLikelyEmpty(page: Page, log: ToolContext['log']): Promise<boole
 
 /** The frames not on a private/internal host, by name or resolved address (#2521). */
 async function eligibleChildFrames(frames: Frame[]): Promise<Frame[]> {
-  const blocked = await blockedFrameUrls(frames.map((frame) => frame.url()));
+  const urls = frames.map((frame) => frame.url());
+  const blocked = await blockedFrameUrls(urls);
+  frames.forEach((frame, i) => { if (!blocked[i]) vettedFrameUrls.set(frame, urls[i]!); });
   return frames.filter((_, i) => !blocked[i]);
+}
+
+/**
+ * The URL each frame had when it was vetted. A Playwright Frame survives navigation, so a
+ * frame vetted at a public URL can move to a private one while other lookups run; a frame
+ * is read or acted on only after its current URL is checked again (#2521).
+ */
+const vettedFrameUrls = new WeakMap<Frame, string>();
+
+/** True when the frame is still at the URL it was vetted at, or its new URL is not blocked. */
+async function frameStillSafe(frame: Frame, vettedUrl: string | undefined = vettedFrameUrls.get(frame)): Promise<boolean> {
+  const current = frame.url();
+  if (current === vettedUrl) return true;
+  return !(await isBlockedFrameUrlResolved(current));
 }
 
 /** At most this many frame hostnames are looked up at once. */
@@ -1516,6 +1532,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
     let sole: ScopedLocator | null = null;
     for (const scope of scopes) {
       try {
+        if (scope !== page && !(await frameStillSafe(scope as Frame))) continue;
         const loc = scope.locator(attrSelector);
         const count = await loc.count();
         total += count;
@@ -1555,6 +1572,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
   const childFrames = await eligibleChildFrames(page.frames().filter((frame) => frame !== mainFrame));
   for (const frame of childFrames) {
     try {
+      if (!(await frameStillSafe(frame))) continue;
       const inFrame = await resolveInScope(frame, selector, log);
       if (inFrame) return retargetHiddenInputToLabel({ locator: inFrame, scope: frame }, `sel${++labelTagSeed}`, log);
     } catch (err) {
@@ -1569,6 +1587,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
   if (mainCssCount > 0) return { locator: mainCssCount === 1 ? mainCss : mainCss.first(), scope: page };
   for (const frame of childFrames) {
     try {
+      if (!(await frameStillSafe(frame))) continue;
       const frameCss = frame.locator(selector);
       const frameCssCount = await frameCss.count();
       if (frameCssCount > 0) return { locator: frameCssCount === 1 ? frameCss : frameCss.first(), scope: frame };
@@ -1687,6 +1706,11 @@ async function getCleanedContent(page: Page, log: ToolContext['log']): Promise<s
     const frame = frames[frameIndex]!;
     if (blocked[frameIndex]) {
       log.debug({ frameUrl: frameUrls[frameIndex] }, 'Skipping private/internal frame during content extraction');
+      continue;
+    }
+
+    if (!(await frameStillSafe(frame, frameUrls[frameIndex]))) {
+      log.debug({ frameUrl: frame.url() }, 'Skipping frame that moved to a private/internal address during content extraction');
       continue;
     }
 

@@ -16,7 +16,7 @@ import { WEB_FETCH_NOT_FOUND_LINES } from '../../../../src/agents/prompts/dead-e
 import { vetHost } from '../../../../src/browser/egress-proxy.js';
 import sanitizeHtml from 'sanitize-html';
 import net from 'node:net';
-import { Agent } from 'undici';
+import undici from 'undici';
 
 const WEB_FETCH_NOT_FOUND = WEB_FETCH_NOT_FOUND_LINES.join(' ');
 const NO_READABLE_TEXT_NOTE = 'This fetch returned no readable text, which usually means the page is rendered by JavaScript or max_length cut it off. It says nothing about what the site offers. A real browser is needed: use web-browser if you have it, otherwise report that the page could not be read.';
@@ -130,7 +130,7 @@ export class WebFetchHandler implements ToolHandler {
 
     ctx.log.info({ url, maxLength }, 'Fetching web page');
 
-    const agents: Agent[] = [];
+    const agents: InstanceType<typeof undici.Agent>[] = [];
     try {
       const signal = AbortSignal.timeout(10000);
       let current = parsedUrl;
@@ -144,7 +144,7 @@ export class WebFetchHandler implements ToolHandler {
           ctx.log.warn({ hostname: current.hostname, hop }, 'web-fetch: refused a host that resolves privately or not at all');
           return { success: false, error: `Blocked: requests to internal/private addresses are not allowed, or the host did not resolve (${current.hostname})` };
         }
-        const agent = new Agent({ connect: { lookup: pinnedLookup(vetted.addresses) } });
+        const agent = new undici.Agent({ connect: { lookup: pinnedLookup(vetted.addresses) } });
         agents.push(agent);
         // `dispatcher` is undici's extension to fetch's init, absent from the DOM RequestInit type.
         response = await fetch(current, {

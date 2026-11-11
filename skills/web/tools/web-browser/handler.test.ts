@@ -833,6 +833,42 @@ describe('web-browser frame SSRF gating + read-failure detection', () => {
     }
   });
 
+  it('get_content does not read a child frame that navigated to a private address after it was vetted', async () => {
+    const movedEvaluate = vi.fn().mockResolvedValue('METADATA_TOKEN=internal-only');
+    const mainFrame = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      name: vi.fn().mockReturnValue(''),
+      evaluate: vi.fn().mockResolvedValue('Innocent looking page'),
+    };
+    // Public when the frames are vetted, private by the time they are read.
+    const movedFrame = {
+      url: vi.fn()
+        .mockReturnValueOnce('https://widget.example/embed')
+        .mockReturnValue('http://169.254.169.254/latest/meta-data/'),
+      name: vi.fn().mockReturnValue('widget'),
+      evaluate: movedEvaluate,
+    };
+    const page = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      title: vi.fn().mockResolvedValue('Page'),
+      screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
+      frames: vi.fn().mockReturnValue([mainFrame, movedFrame]),
+      mainFrame: vi.fn().mockReturnValue(mainFrame),
+    };
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-moved-frame', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = { input: { action: 'get_content' }, log: logger, browserService } as unknown as ToolContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(movedEvaluate).not.toHaveBeenCalled();
+    if (result.success) expect((result.data as { content: string }).content).not.toContain('METADATA_TOKEN');
+  });
+
   it('get_content does NOT read a child frame pointing at an internal/metadata host', async () => {
     const internalEvaluate = vi.fn().mockResolvedValue('AWS_SECRET=internal-only');
     const mainFrame = {
