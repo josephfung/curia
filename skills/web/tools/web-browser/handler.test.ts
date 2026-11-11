@@ -781,7 +781,7 @@ describe('web-browser acts on a child frame only while it is still at a safe add
    */
   function makeMovingFramePage() {
     let frameUrl = 'https://widget.example/embed';
-    const moveFrame = (): void => { frameUrl = PRIVATE_URL; };
+    const moveFrame = (to = PRIVATE_URL): void => { frameUrl = to; };
     const miss = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
     const target = {
       count: vi.fn().mockResolvedValue(1),
@@ -848,16 +848,19 @@ describe('web-browser acts on a child frame only while it is still at a safe add
 
   it('click by CSS selector refuses a frame that moved (the CSS fallback path)', async () => {
     const { page, target, moveFrame } = makeMovingFramePage();
-    // Role/label/text lookups miss in the frame; only the raw selector matches, and counting it moves the frame.
+    // Role/label/aria-label/text lookups miss in the frame; only the raw `#pay` selector matches,
+    // and counting it moves the frame.
     const miss = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
-    page.frames().forEach((f: { getByRole: unknown; getByLabel: unknown; getByText: unknown }) => {
+    page.frames().forEach((f: { getByRole: unknown; locator: unknown }) => {
       f.getByRole = vi.fn().mockReturnValue(miss);
+      f.locator = vi.fn().mockImplementation((sel: string) => (sel === '#pay' ? target : miss));
     });
     target.count.mockImplementation(async () => { moveFrame(); return 1; });
 
     const result = await new WebBrowserHandler().execute(ctxFor(page, { action: 'click', selector: '#pay' }));
 
     expect(result.success).toBe(false);
+    expect(target.count).toHaveBeenCalled();
     expect(vi.mocked(humanClick)).not.toHaveBeenCalled();
   });
 
@@ -922,6 +925,106 @@ describe('web-browser acts on a child frame only while it is still at a safe add
 
     expect(result.success).toBe(true);
     expect(vi.mocked(humanClick)).toHaveBeenCalled();
+  });
+
+  // A secret goes only into the documents it was resolved for, even when the new one is public.
+  it('type with a plain secret_ref types nothing when the frame moved to another public host', async () => {
+    const { page, moveFrame } = makeMovingFramePage();
+    const resolveSecretRef = vi.fn().mockImplementation(async () => { moveFrame('https://other.example/form'); return SECRET_VALUE; });
+
+    const result = await new WebBrowserHandler().execute(
+      ctxFor(page, { action: 'type', selector: 'Password', secret_ref: 'user.site_password' }, { resolveSecretRef }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/changed while the secret was being resolved/);
+    expect(vi.mocked(humanFocusField)).not.toHaveBeenCalled();
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+  });
+
+  it('type with secret_ref types nothing when focusing the field moved its frame', async () => {
+    const { page, moveFrame } = makeMovingFramePage();
+    const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
+    vi.mocked(humanFocusField).mockImplementationOnce(async () => { moveFrame('https://other.example/form'); });
+
+    const result = await new WebBrowserHandler().execute(
+      ctxFor(page, { action: 'type', selector: 'Password', secret_ref: 'user.site_password' }, { resolveSecretRef }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+    expect(page.keyboard.press).not.toHaveBeenCalled();
+  });
+
+  it('select with secret_ref chooses nothing when the frame moved to another public host', async () => {
+    const { page, target, moveFrame } = makeMovingFramePage();
+    const resolveSecretRef = vi.fn().mockImplementation(async () => { moveFrame('https://other.example/form'); return '12'; });
+
+    const result = await new WebBrowserHandler().execute(
+      ctxFor(page, { action: 'select', selector: 'Month', secret_ref: 'user.visa#expiry_mm' }, { resolveSecretRef }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(target.selectOption).not.toHaveBeenCalled();
+  });
+
+  it('a literal type into a frame that moved to another public host still types (no secret to bind)', async () => {
+    const { page, moveFrame } = makeMovingFramePage();
+    vi.mocked(humanFocusField).mockImplementationOnce(async () => { moveFrame('https://other.example/form'); });
+
+    const result = await new WebBrowserHandler().execute(ctxFor(page, { action: 'type', selector: 'Search', text: 'hello' }));
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(humanType)).toHaveBeenCalled();
+  });
+});
+
+describe('web-browser acts on the top page only while it is still the page the action was for (#2521)', () => {
+  it('type with a plain secret_ref types nothing when the top page moved to a private address', async () => {
+    const { ctx, page } = makeToolContext({
+      input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
+      resolveSecretRef: vi.fn().mockImplementation(async () => {
+        page.url.mockReturnValue('http://192.168.1.1/login');
+        return SECRET_VALUE;
+      }),
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/moved to a blocked address/);
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+  });
+
+  it('type with a plain secret_ref types nothing when the top page moved to another public page', async () => {
+    const { ctx, page } = makeToolContext({
+      input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
+      resolveSecretRef: vi.fn().mockImplementation(async () => {
+        page.url.mockReturnValue('https://phish.example/login');
+        return SECRET_VALUE;
+      }),
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/changed while the secret was being resolved/);
+    expect(vi.mocked(humanFocusField)).not.toHaveBeenCalled();
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+  });
+
+  it('click refuses when the top page moved to a private address after the element was found', async () => {
+    const { ctx, page } = makeToolContext({ input: { action: 'click', selector: 'Pay now' } });
+    page.getByRole().isVisible.mockImplementation(async () => {
+      page.url.mockReturnValue('http://10.0.0.5/admin');
+      return true;
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/moved to a blocked address/);
+    expect(vi.mocked(humanClick)).not.toHaveBeenCalled();
   });
 });
 

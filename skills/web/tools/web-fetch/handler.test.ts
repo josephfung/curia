@@ -8,7 +8,7 @@ vi.mock('node:dns/promises', () => ({
   lookup: vi.fn(async (hostname: string) => [{ address: dnsAnswers.get(hostname) ?? '93.184.215.14', family: 4 }]),
 }));
 
-import { WebFetchHandler, pinnedLookup } from './handler.js';
+import { WebFetchHandler, envProxyFor, pinnedLookup } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 
 const logger = pino({ level: 'silent' });
@@ -20,7 +20,37 @@ function ctxFor(url: string): ToolContext {
 describe('web-fetch', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     dnsAnswers.clear();
+  });
+
+  describe('with an environment proxy configured (NODE_USE_ENV_PROXY)', () => {
+    it('refuses instead of connecting around the proxy', async () => {
+      vi.stubEnv('NODE_USE_ENV_PROXY', '1');
+      vi.stubEnv('HTTPS_PROXY', 'http://proxy.corp:3128');
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/page'));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/configured HTTP proxy/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('refuses a redirect to a scheme whose proxy is set, before requesting it', async () => {
+      vi.stubEnv('NODE_USE_ENV_PROXY', '1');
+      vi.stubEnv('http_proxy', 'http://proxy.corp:3128');
+      const fetchSpy = vi.fn().mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'http://plain.example/' } }));
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/'));
+      expect(result.success).toBe(false);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    });
+
+    it('ignores proxy variables when NODE_USE_ENV_PROXY is off, as Node fetch does', () => {
+      expect(envProxyFor(new URL('https://example.com/'), { HTTPS_PROXY: 'http://proxy.corp:3128' })).toBeNull();
+      expect(envProxyFor(new URL('https://example.com/'), { NODE_USE_ENV_PROXY: '0', HTTPS_PROXY: 'http://p:1' })).toBeNull();
+      expect(envProxyFor(new URL('https://example.com/'), { NODE_USE_ENV_PROXY: '1' })).toBeNull();
+    });
   });
 
   it('refuses a public name that resolves to a private address, without fetching (#2521)', async () => {

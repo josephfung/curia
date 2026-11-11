@@ -944,12 +944,13 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       const typedOnUrl = documentSiteUrl(page, typeScope);
 
       let fillValue: string;
-      let cardApprovedOn: string | null = null;
+      let secretBoundTo: SecretFillTarget | null = null;
       if (hasSecretRef) {
+        const fieldDocUrl = typeScope.url();
         const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
         if (!resolved.ok) return resolved;
         fillValue = resolved.value;
-        if (resolved.card) cardApprovedOn = resolved.siteUrl;
+        secretBoundTo = { top: resolved.siteUrl, doc: fieldDocUrl };
         if (resolved.sensitive) {
           session.registerInjectedSecret(fillValue);
           // Latch screenshot suppression NOW — before the fill below, which can throw mid-typing
@@ -978,15 +979,15 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // not keystrokes. ControlOrMeta = Cmd on macOS (dev), Ctrl on Linux (prod). (#1053)
       // humanFocusField focuses the field directly when an overlay such as a floating label
       // takes the click (#2201).
-      // The grant was judged on the page URL at resolution; refuse if the page moved since, so a
-      // card is never typed into a replacement document.
-      if (cardApprovedOn !== null && page.url() !== cardApprovedOn) {
-        return { ok: false, error: CARD_NAVIGATED_REFUSAL };
-      }
-      // The field's frame may have moved to a private address while the secret resolved (#2521).
+      // The field's document may have moved to a private address while the secret resolved
+      // (#2521). And a secret goes only into the documents it was resolved for: refuse if the top
+      // page or the field's frame moved since, so it is never typed into a replacement document.
+      // Both again after focusing, which can itself navigate.
       if (!(await scopeStillSafe(typeScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
+      if (secretTargetMoved(page, typeScope, secretBoundTo)) return { ok: false, error: SECRET_TARGET_MOVED_REFUSAL };
       await humanFocusField(page, typeTarget, { log: ctx.log });
       if (!(await scopeStillSafe(typeScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
+      if (secretTargetMoved(page, typeScope, secretBoundTo)) return { ok: false, error: SECRET_TARGET_MOVED_REFUSAL };
       await page.keyboard.press('ControlOrMeta+a');
       await page.keyboard.press('Delete');
       await humanType(page, fillValue, { log: ctx.log });
@@ -1017,12 +1018,13 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // natural language ("Country dropdown") and it will resolve via role/label/text.
       const { locator: selectTarget, scope: selectScope } = await resolveLocatorWithScope(page, selector, ctx.log);
       let selectValue: string;
-      let selectCardApprovedOn: string | null = null;
+      let selectBoundTo: SecretFillTarget | null = null;
       if (selectHasRef) {
+        const fieldDocUrl = selectScope.url();
         const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
         if (!resolved.ok) return resolved;
         selectValue = resolved.value;
-        if (resolved.card) selectCardApprovedOn = resolved.siteUrl;
+        selectBoundTo = { top: resolved.siteUrl, doc: fieldDocUrl };
         // Same order and rule as `type`: only a sensitive value is registered for redaction
         // and latches screenshot suppression, before anything below can throw.
         if (resolved.sensitive) {
@@ -1042,10 +1044,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // A select can navigate too (a country or language picker that reloads on change).
       const selectMark = activity.mark();
       // Playwright matches the string against option value or label.
-      if (selectCardApprovedOn !== null && page.url() !== selectCardApprovedOn) {
-        return { ok: false, error: CARD_NAVIGATED_REFUSAL };
-      }
       if (!(await scopeStillSafe(selectScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
+      if (secretTargetMoved(page, selectScope, selectBoundTo)) return { ok: false, error: SECRET_TARGET_MOVED_REFUSAL };
       await selectTarget.selectOption(selectValue);
       return { ok: true, navigated: await actionStartedNavigation(activity, selectMark, timing, deps.settleDeadline) };
     }
@@ -1065,14 +1065,30 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
   }
 }
 
-const FRAME_MOVED_REFUSAL = 'The frame holding that element moved to a blocked address after it was found; nothing was done. Read the page again and retry.';
+const FRAME_MOVED_REFUSAL = 'The page or frame holding that element moved to a blocked address after it was found; nothing was done. Read the page again and retry.';
 
-/** True for the top page, or for a child frame still at its vetted URL or on a public one (#2521). */
+/**
+ * True while the element's document is not on a private/internal address (#2521): the top page
+ * by its current URL, a child frame at its vetted URL or a public one. The top page is checked
+ * too: it can navigate between the locator resolving and the action.
+ */
 async function scopeStillSafe(scope: Page | Frame): Promise<boolean> {
-  return !('parentFrame' in scope) || (await frameStillSafe(scope));
+  if ('parentFrame' in scope) return frameStillSafe(scope);
+  return !(await isBlockedFrameUrlResolved(scope.url()));
 }
 
-const CARD_NAVIGATED_REFUSAL = 'The page changed while the card was being resolved; nothing was typed. Read the page again and retry.';
+/** The documents a secret_ref was resolved for: the top page (what a card grant judged) and the field's own. */
+interface SecretFillTarget {
+  top: string;
+  doc: string;
+}
+
+/** True when a secret fill's top page or field document is no longer the one it was resolved for. */
+function secretTargetMoved(page: Page, scope: Page | Frame, bound: SecretFillTarget | null): boolean {
+  return bound !== null && (page.url() !== bound.top || scope.url() !== bound.doc);
+}
+
+const SECRET_TARGET_MOVED_REFUSAL = 'The page changed while the secret was being resolved; nothing was typed. Read the page again and retry.';
 
 /**
  * Dereference a secret_ref for a fill. resolveSecretRef enforces the user.* namespace, the

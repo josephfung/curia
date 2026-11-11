@@ -93,6 +93,21 @@ export function pinnedLookup(addresses: readonly string[]) {
   };
 }
 
+/**
+ * The proxy Node's fetch would send `url` through when NODE_USE_ENV_PROXY is on, or null. Each hop
+ * here connects directly to its vetted addresses (#2521), which would bypass such a proxy, so a
+ * configured one makes the fetch refuse instead. NO_PROXY is not consulted: refusing a host it
+ * excludes is the safe side, and Curia configures no proxy today.
+ */
+export function envProxyFor(url: URL, env: NodeJS.ProcessEnv = process.env): string | null {
+  const enabled = env.NODE_USE_ENV_PROXY;
+  if (!enabled || enabled === '0' || enabled.toLowerCase() === 'false') return null;
+  const proxy = url.protocol === 'https:'
+    ? env.HTTPS_PROXY || env.https_proxy
+    : env.HTTP_PROXY || env.http_proxy;
+  return proxy ? proxy : null;
+}
+
 export class WebFetchHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const { url, max_length } = ctx.input as { url?: string; max_length?: number };
@@ -136,6 +151,11 @@ export class WebFetchHandler implements ToolHandler {
       let current = parsedUrl;
       let response: Response;
       for (let hop = 0; ; hop++) {
+        // Checked per hop: a redirect can change the scheme, and so which proxy variable applies.
+        if (envProxyFor(current) !== null) {
+          ctx.log.warn({ hostname: current.hostname, hop }, 'web-fetch: refused — an environment proxy is configured and pinned connections would bypass it');
+          return { success: false, error: 'web-fetch cannot go through the configured HTTP proxy (NODE_USE_ENV_PROXY); the request was not sent' };
+        }
         // By resolved address, not just the name (#2521): a public name can point at an
         // internal address, and a redirect can send us anywhere. The hop then connects only
         // to the addresses just vetted, so the name cannot be rebound in between.
