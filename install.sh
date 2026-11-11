@@ -110,7 +110,26 @@ resolve_version
 #   $1 = local path (e.g. scripts/setup-common.sh), $2 = flat asset name (e.g. setup-common.sh)
 fetch_asset() {
   local local_path="$1" asset="$2"
-  curl -fsSL "$(bundle_asset_url "$local_path" "$asset")" -o "$INSTALL_DIR/$local_path"
+  download_to "$(bundle_asset_url "$local_path" "$asset")" "$INSTALL_DIR/$local_path"
+}
+
+# Download $1 to $2 through a temporary file, moved into place only once complete.
+# A transfer that fails part-way would otherwise leave a truncated file that every
+# later run treats as present and skips. On failure nothing is left at $2 (a file
+# already there stays as it was) and the status is non-zero. The temporary file is
+# unique to this transfer (mktemp, beside $2 so the mv is an atomic rename), so two
+# runs fetching the same asset at once never write to or remove each other's file.
+download_to() {
+  local url="$1" dest="$2" tmp
+  tmp="$(mktemp "$dest.part.XXXXXX")" || return 1
+  # mktemp creates the file 0600; give it the mode curl -o would have (0666 & ~umask).
+  chmod "$(printf '%o' $(( 0666 & ~0$(umask) )))" "$tmp"
+  if curl -fsSL "$url" -o "$tmp"; then
+    mv -f "$tmp" "$dest"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 # URL of a bundled file for this release/ref (same arguments as fetch_asset).
@@ -130,9 +149,9 @@ bundle_asset_url() {
 if [[ ! -f "$SCRIPT_DIR/scripts/setup-common.sh" ]]; then
   mkdir -p "$SCRIPT_DIR/scripts"
   if [[ "$ASSET_MODE" == "release" ]]; then
-    curl -fsSL "${ASSET_BASE}/setup-common.sh" -o "$SCRIPT_DIR/scripts/setup-common.sh"
+    download_to "${ASSET_BASE}/setup-common.sh" "$SCRIPT_DIR/scripts/setup-common.sh"
   else
-    curl -fsSL "${RAW_BASE}/scripts/setup-common.sh" -o "$SCRIPT_DIR/scripts/setup-common.sh"
+    download_to "${RAW_BASE}/scripts/setup-common.sh" "$SCRIPT_DIR/scripts/setup-common.sh"
   fi
 fi
 # shellcheck source=/dev/null
@@ -587,13 +606,15 @@ check_prereqs() {
 }
 
 # Fetch the compose bundle (base compose file, TLS overlay, env template,
-# Caddyfile) into the install dir, skipping files that are already present.
+# Caddyfile, and the browser container's seccomp profile) into the install dir,
+# skipping files that are already present.
 # This lets an operator re-run install.sh safely without clobbering hand-edits.
 fetch_bundle() {
   # local-path : flat-release-asset-name. GitHub release assets cannot contain
   # "/", so deploy/Caddyfile publishes as "Caddyfile", and cannot start with a
   # "." (GitHub mangles a leading-dot asset name), so .env.example publishes as
-  # "env.example". docker-compose.* map 1:1. In raw mode the asset name is
+  # "env.example". docker/seccomp-chrome.json publishes as "seccomp-chrome.json"
+  # (docker-compose.yml reads it from docker/). docker-compose.* map 1:1. In raw mode the asset name is
   # ignored and the local path is used verbatim (see fetch_asset).
   local pair local_path asset
   for pair in \
@@ -609,6 +630,16 @@ fetch_bundle() {
       fetch_asset "$local_path" "$asset"
     fi
   done
+  # The seccomp profile exists only in releases whose compose file mounts it. A pinned
+  # older CURIA_VERSION has neither, so fetch it only when the compose file just
+  # fetched (or already present) asks for it; for those releases it stays mandatory.
+  local seccomp="docker/seccomp-chrome.json"
+  if grep -q 'seccomp-chrome\.json' "$INSTALL_DIR/docker-compose.yml" \
+    && [[ ! -f "$INSTALL_DIR/$seccomp" ]]; then
+    mkdir -p "$INSTALL_DIR/docker"
+    info "Fetching $seccomp ..."
+    fetch_asset "$seccomp" "seccomp-chrome.json"
+  fi
 }
 
 # Create .env from the template if it does not exist yet, then return its path.

@@ -11,3 +11,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+  browser:
+    build:
+      context: .
+      dockerfile: docker/browser.Dockerfile

@@ -194,7 +194,15 @@ let refEpochSeed = 0;
 export class WebBrowserHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.browserService) {
-      return { success: false, error: 'browserService is not available — BrowserService failed to start or is not wired into ExecutionLayer' };
+      // Written for the operator, who is the one who can act on it; the agent relays it. (#2541)
+      return {
+        success: false,
+        error:
+          'The web browser is not available on this Curia: the browser failed to start (see the ' +
+          '"Browser service failed to start" log line). The shipped docker-compose.yml runs it as the ' +
+          '`browser` service; running from source needs Chromium (`pnpm exec patchright install chromium`). ' +
+          'See docs/dev/configuration.md, "Web browser". web-fetch still reads pages that need no JavaScript.',
+      };
     }
 
     const { action, url, selector, text, value, key, secret_ref, session_id, screenshot, block_ads, incognito, keep_warm, actions, domain } = ctx.input as {
@@ -742,6 +750,15 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
         ctx.log.debug({ err, sessionId }, 'networkidle not reached after navigate — proceeding with current DOM');
       });
+
+      // The guard above checks only the URL asked for. A site can redirect to an internal
+      // address, e.g. the browser container's own DevTools endpoint (#2541); leave it
+      // before anything (a screenshot, the title) is read from it.
+      if (isBlockedFrameUrl(page.url())) {
+        const blockedHost = new URL(page.url()).hostname;
+        await page.goto('about:blank').catch((err) => ctx.log.warn({ err, sessionId }, 'Could not leave a page that redirected to an internal address'));
+        return { ok: false, error: `Blocked: the page redirected to a private/internal address (${blockedHost})` };
+      }
 
       const readTitle = async (): Promise<string> => {
         try {

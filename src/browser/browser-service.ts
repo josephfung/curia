@@ -7,28 +7,26 @@
 // context spun off the same browser (never touching the persistent profile).
 // Sessions expire after sessionTtlMs of inactivity and are swept on an interval.
 //
-// SCALABILITY @TODO: This implementation runs a single Playwright browser in-process.
-// To scale to higher concurrency or add crash isolation:
+// Where Chrome runs (#2541):
 //
-// 1. Browser pool: run N browsers, round-robin sessions across them.
-//    Add a pool size config and a simple round-robin or least-loaded assignment strategy.
+// - Browser container (cdpEndpoint set, BROWSER_CDP_URL in the shipped docker-compose.yml):
+//   Chrome, Xvfb and the profile live in the curia-browser image's own container, and this
+//   service attaches over CDP. Chrome then runs without Curia's secrets or database access,
+//   and a Chrome crash cannot take Curia down. The service boots even when the container is
+//   down and keeps reconnecting, so health reports the browser as failed until it is back.
+// - In-process (no cdpEndpoint): Chrome is launched here, as before. Running from source and
+//   images built on the core image (which has no browser) still use it.
 //
-// 2. Sidecar process: move BrowserService behind a local HTTP/WebSocket interface.
-//    The skill calls it over localhost. Crash isolation: a browser crash can't take
-//    down Curia. playwright-server is a reference implementation.
-//
-// 3. Managed service: connect to Browserless.io or ScrapingBee via WebSocket.
-//    They handle Xvfb, stealth fingerprinting, CAPTCHA solving, and scaling externally.
-//    Browserless.io is a drop-in replacement — only the launch/connect call changes.
-//    Drop the Xvfb management entirely when using a managed service.
-//
-// For options 2 and 3, only this file needs to change — the handler,
-// session model, and ToolContext interface are unaffected.
+// SCALABILITY @TODO: one browser serves every session. To scale to higher concurrency, run
+// N browser containers and round-robin sessions across them. Only this file needs to
+// change: the handler, session model, and ToolContext interface are unaffected.
 
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import { existsSync, readFileSync, rmSync, lstatSync, readlinkSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { homedir, hostname as osHostname } from 'node:os';
 import { join } from 'node:path';
 // Patchright is a drop-in Playwright fork that patches the protocol-level leaks the old
@@ -38,7 +36,7 @@ import { join } from 'node:path';
 // the launcher changes. The rest of the file types against the 'playwright' BrowserContext
 // (structurally identical), hence the existing `as unknown as BrowserContext` casts. (#1053)
 import { chromium } from 'patchright';
-import type { BrowserContext, BrowserContextOptions } from 'playwright';
+import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
 import { PlaywrightBlocker } from '@ghostery/adblocker-playwright';
 import type { Logger } from '../logger.js';
 import { BrowserSession } from './browser-session.js';
@@ -50,6 +48,16 @@ import { parseProxyConfig, type ProxyConfig } from './proxy-config.js';
 // The window is kept short of full-screen so screenshots stay a moderate size. (#2221)
 export const SCREEN_SIZE = { width: 1920, height: 1080 } as const;
 export const WINDOW_SIZE = { width: 1440, height: 900 } as const;
+
+/** How long the CDP connection itself may take before it counts as failed. */
+const CDP_CONNECT_TIMEOUT_MS = 10_000;
+/** How long a whole attach (connect plus tidying old tabs) may take. A wedged or hostile
+ *  container must not hold up Curia's boot or stall reconnects. */
+const CDP_ATTACH_DEADLINE_MS = 20_000;
+/** Reconnect backoff to the browser container: 1s doubling to this cap. */
+const CDP_RECONNECT_MAX_DELAY_MS = 30_000;
+/** While the container stays down, a failed attempt is logged at warn this often (~10 min at the cap). */
+const CDP_RECONNECT_WARN_EVERY = 20;
 
 interface BrowserServiceOptions {
   logger: Logger;
@@ -82,8 +90,16 @@ interface BrowserServiceOptions {
   /** IANA timezone for the context, aligned to the principal. */
   timezone?: string;
   /**
+   * DevTools endpoint of a browser container to attach to (e.g. http://browser:9222), from
+   * BROWSER_CDP_URL. Absent → launch Chrome in-process. When set, the profile, locale,
+   * window and proxy are the container's: profileDir, channel, locale and languages are
+   * ignored, and a proxy is refused (see the constructor). (#2541)
+   */
+  cdpEndpoint?: string;
+  /**
    * Optional factory to create the persistent BrowserContext.
-   * Defaults to launchPersistentContext(...). Override in tests to inject a mock.
+   * Defaults to launchPersistentContext(...), or to attaching to cdpEndpoint when that is
+   * set. Override in tests to inject a mock.
    */
   contextFactory?: () => Promise<BrowserContext>;
 }
@@ -103,7 +119,16 @@ export class BrowserService {
   private timezone: string | undefined;
   /** See BrowserServiceOptions.settleCapMs. Read by the web-browser skill. */
   readonly settleCapMs: number;
+  /** See BrowserServiceOptions.cdpEndpoint. Undefined → in-process launch. */
+  private cdpEndpoint: string | undefined;
+  /** cdpEndpoint without credentials, path or query: what logs and errors show. */
+  private cdpEndpointLabel: string | undefined;
   private contextFactory: () => Promise<BrowserContext>;
+  // Pending reconnect to the browser container, cleared by stop() (cdpEndpoint only).
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  // Bumped by stop(). An attach that started before the latest stop() discards its result,
+  // even if start() has run again since (cdpEndpoint only).
+  private attachGeneration = 0;
 
   // The persistent context IS the warm browser in this model. Sessions are pages within
   // it (shared cookies/storage = "returning user"); incognito sessions get their own
@@ -146,16 +171,49 @@ export class BrowserService {
     this.languages = [...new Set([this.locale, ...(options.languages ?? [])])];
     this.timezone = options.timezone;
     this.settleCapMs = options.settleCapMs ?? 35_000;
-    this.contextFactory = options.contextFactory ?? (() => this.launchPersistentContext());
+    this.cdpEndpoint = options.cdpEndpoint && options.cdpEndpoint.length > 0 ? options.cdpEndpoint : undefined;
+    this.cdpEndpointLabel = this.cdpEndpoint ? redactCdpEndpoint(this.cdpEndpoint) : undefined;
+    if (this.cdpEndpoint) {
+      // Fail closed: the proxy exists to keep the datacenter IP from leaking, and a
+      // container's default context takes its proxy from Chrome's launch flags, which
+      // Curia does not control. Ignoring it would egress directly.
+      if (this.proxy) {
+        throw new Error(
+          'browser.proxy cannot be applied to the browser container: set BROWSER_PROXY on the ' +
+          'browser service and clear browser.proxy (see docs/dev/configuration.md).',
+        );
+      }
+      if (this.channel || (options.profileDir && options.profileDir.length > 0)) {
+        this.logger.warn(
+          { channel: this.channel ?? null, profileDir: options.profileDir || null },
+          'browser.channel and browser.profileDir do not apply to the browser container and are ignored',
+        );
+      }
+    }
+    this.contextFactory = options.contextFactory
+      ?? (this.cdpEndpoint ? () => this.connectToContainer() : () => this.launchPersistentContext());
   }
 
   /**
    * Start the browser service: spawn Xvfb if needed, launch the persistent browser context, start sweep timer.
    * Must be called before any session operations.
+   *
+   * With a browser container (cdpEndpoint), start() does not fail when the container is
+   * unreachable: the service runs without a browser, health reports it as failed, and it
+   * keeps reconnecting until the container answers.
    */
   async start(): Promise<void> {
-    if (this.context !== null) {
+    if (this.context !== null || this.running) {
       throw new Error('BrowserService.start() called while already running — call stop() first');
+    }
+
+    if (this.cdpEndpoint) {
+      this.running = true;
+      this.sweepTimer = setInterval(() => void this.sweep(), this.sweepIntervalMs);
+      this.sweepTimer.unref();
+      await this.tryAttach(0);
+      this.logger.info({ sessionTtlMs: this.sessionTtlMs, cdpEndpoint: this.cdpEndpointLabel }, 'BrowserService started (browser container)');
+      return;
     }
 
     await this.maybeStartXvfb();
@@ -205,7 +263,11 @@ export class BrowserService {
         this.logger.debug('Browser disconnected while not running (intentional stop) — skipping crash-recovery restart');
         return;
       }
-      this.logger.error('Playwright browser disconnected — clearing sessions and restarting');
+      this.logger.error(
+        this.cdpEndpoint
+          ? 'Browser container disconnected — clearing sessions and reconnecting'
+          : 'Playwright browser disconnected — clearing sessions and restarting',
+      );
       // Best-effort close of any live sessions before dropping them from the map. On a
       // genuine crash/OOM kill the pages are already gone and these close() calls no-op;
       // but if 'disconnected' fires while the process is still alive (explicit close,
@@ -216,6 +278,13 @@ export class BrowserService {
         void session.close().catch(err =>
           this.logger.debug({ err }, 'Failed to close orphaned session during disconnect cleanup (browser likely already gone)'),
         );
+      }
+      if (this.cdpEndpoint) {
+        // The container restarts on its own (restart: unless-stopped); keep trying until it
+        // answers. Drop the dead context first so health reports 'fail' in the meantime.
+        if (this.context === context) this.context = null;
+        this.scheduleAttach(0);
+        return;
       }
       void this.contextFactory().then(ctx => {
         // stop() may have run while the relaunch was in flight. Reviving the browser now
@@ -249,10 +318,15 @@ export class BrowserService {
     // context.close() is intentional (skip crash-recovery), AND it makes any relaunch
     // already in flight discard its fresh context when it resolves (no revival after stop).
     this.running = false;
+    this.attachGeneration++;
 
     if (this.sweepTimer) {
       clearInterval(this.sweepTimer);
       this.sweepTimer = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
 
     // Close all sessions first, then the browser
@@ -267,7 +341,13 @@ export class BrowserService {
 
     if (this.context) {
       try {
-        await this.context.close();
+        if (this.cdpEndpoint) {
+          // Disconnect only. The container's Chrome and its profile outlive Curia, and
+          // closing a connected browser just drops the CDP connection.
+          await this.context.browser()?.close();
+        } else {
+          await this.context.close();
+        }
       } catch (err) {
         this.logger.error({ err }, 'Error closing browser context during shutdown');
       } finally {
@@ -302,6 +382,13 @@ export class BrowserService {
   ): Promise<{ sessionId: SessionId; session: BrowserSession }> {
     const browser = this.context?.browser();
     if (!this.context || !browser || !browser.isConnected()) {
+      if (this.cdpEndpoint && this.running) {
+        // Written for the operator: the agent relays it as is.
+        throw new Error(
+          `the browser container at ${this.cdpEndpointLabel} is not reachable. Curia reconnects on its own ` +
+          'once it is back; check it with `docker compose ps browser` and `docker compose logs browser`.',
+        );
+      }
       throw new Error('BrowserService: browser is not running. Call start() first.');
     }
 
@@ -448,6 +535,130 @@ export class BrowserService {
   }
 
   // --- Private helpers ---
+
+  /**
+   * One attach attempt to the browser container. On failure, schedules the next one with
+   * backoff. Never throws: an unreachable container leaves the service without a browser
+   * (health 'fail'), not stopped.
+   */
+  private async tryAttach(attempt: number): Promise<void> {
+    if (!this.running) return;
+    const generation = this.attachGeneration;
+    const attach = this.contextFactory();
+    let deadline: NodeJS.Timeout | undefined;
+    let context: BrowserContext;
+    try {
+      context = await Promise.race([
+        attach,
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error(`attaching took longer than ${CDP_ATTACH_DEADLINE_MS}ms`)), CDP_ATTACH_DEADLINE_MS);
+        }),
+      ]);
+    } catch (err) {
+      // An attach that outlived its deadline may still complete: drop that connection.
+      void attach.then(
+        late => late.browser()?.close(),
+        () => undefined, // already reported below as this attempt's failure
+      ).catch(closeErr => this.logger.debug({ err: closeErr }, 'Failed to disconnect a late attach'));
+      if (attempt % CDP_RECONNECT_WARN_EVERY === 0) {
+        this.logger.warn(
+          { error: sanitizeCdpError(err), cdpEndpoint: this.cdpEndpointLabel, attempt },
+          'Browser container not reachable — web-browser is unavailable until it is; retrying',
+        );
+      } else {
+        this.logger.debug({ error: sanitizeCdpError(err), attempt }, 'Browser container still not reachable');
+      }
+      // A stale attempt (stop() and start() ran since) must not arm a second reconnect
+      // loop beside the current generation's.
+      if (generation === this.attachGeneration) this.scheduleAttach(attempt + 1);
+      return;
+    } finally {
+      clearTimeout(deadline);
+    }
+    // stop() may have run while the attach was in flight: disconnect instead of reviving.
+    if (!this.running || generation !== this.attachGeneration) {
+      void context.browser()?.close().catch(err =>
+        this.logger.warn({ err }, 'Failed to disconnect from the browser container after shutdown'),
+      );
+      return;
+    }
+    // A concurrent attach of this generation already won: keep it, drop this connection.
+    if (this.context) {
+      void context.browser()?.close().catch(err =>
+        this.logger.warn({ error: sanitizeCdpError(err) }, 'Failed to disconnect a duplicate attach to the browser container'),
+      );
+      return;
+    }
+    // Only the attach that wins tidies the previous run's tabs, and it lists them before
+    // publishing the context, while no session can exist: a superseded attach must never
+    // close tabs, since by then they may belong to the winner's live sessions.
+    const leftovers = this.listLeftovers(context);
+    this.context = context;
+    this.attachDisconnectedHandler(context);
+    // A browser that dropped after connecting but before the listener above was attached
+    // fired 'disconnected' to nobody. Catch that here, or the dead context would stay.
+    if (!context.browser()?.isConnected()) {
+      this.logger.warn('Browser container disconnected while attaching — retrying');
+      this.context = null;
+      this.scheduleAttach(attempt + 1);
+      return;
+    }
+    await this.closeLeftovers(leftovers);
+  }
+
+  /**
+   * Tabs and incognito contexts left in the container by a previous Curia process: their
+   * sessions died with it, and nothing else would ever close them. The first tab stays:
+   * it is the window's anchor, and Chrome exits when its last window closes.
+   */
+  private listLeftovers(context: BrowserContext): { tabs: Page[]; contexts: BrowserContext[] } {
+    return {
+      tabs: context.pages().slice(1),
+      contexts: (context.browser()?.contexts() ?? []).filter(c => c !== context),
+    };
+  }
+
+  private async closeLeftovers(leftovers: { tabs: Page[]; contexts: BrowserContext[] }): Promise<void> {
+    for (const stale of [...leftovers.contexts, ...leftovers.tabs]) {
+      await stale.close().catch(err => this.logger.warn({ err }, 'Failed to close a tab or context left by a previous run'));
+    }
+    if (leftovers.contexts.length + leftovers.tabs.length > 0) {
+      this.logger.info({ tabs: leftovers.tabs.length, contexts: leftovers.contexts.length }, 'Closed tabs left in the browser container by a previous run');
+    }
+  }
+
+  /**
+   * Schedule attach attempt number `attempt` (0 after a disconnect, 1 after the first
+   * failure): 1s for the first retry, doubling to CDP_RECONNECT_MAX_DELAY_MS.
+   */
+  private scheduleAttach(attempt: number): void {
+    if (!this.running || this.reconnectTimer) return;
+    const delayMs = Math.min(1_000 * 2 ** Math.min(Math.max(attempt - 1, 0), 10), CDP_RECONNECT_MAX_DELAY_MS);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.tryAttach(attempt);
+    }, delayMs);
+    this.reconnectTimer.unref();
+  }
+
+  /**
+   * Attach to the browser container over CDP and return its default context: the
+   * persistent profile, since the container launches Chrome with --user-data-dir.
+   *
+   * It closes nothing: tabs a previous run left are closed by tryAttach, and only for the
+   * attach that wins (see listLeftovers).
+   */
+  private async connectToContainer(): Promise<BrowserContext> {
+    const endpoint = await resolveCdpEndpoint(this.cdpEndpoint!);
+    const browser = await chromium.connectOverCDP(endpoint, { timeout: CDP_CONNECT_TIMEOUT_MS }) as unknown as Browser;
+    const [context] = browser.contexts();
+    if (!context) {
+      await browser.close().catch(err => this.logger.debug({ err }, 'Failed to disconnect from a browser with no default context'));
+      throw new Error('the browser container has no default context — is Chrome running with --user-data-dir?');
+    }
+    this.logger.info({ cdpEndpoint: this.cdpEndpointLabel, version: browser.version() }, 'Attached to the browser container');
+    return context;
+  }
 
   /**
    * Fingerprint/context options shared by the persistent context and any incognito context.
@@ -775,6 +986,65 @@ export class BrowserService {
       this.xvfbProcess = null;
     }
   }
+}
+
+/**
+ * Rewrite a DevTools endpoint's hostname to its IP address. Chrome answers a DevTools
+ * request only when its Host header is an IP address or `localhost` (a DNS-rebinding
+ * guard), so `http://browser:9222` is refused while the same container by IP is not.
+ * The WebSocket URL Chrome hands back echoes that Host, so it stays connectable. (#2541)
+ */
+export async function resolveCdpEndpoint(
+  endpoint: string,
+  // IPv4: the container's DevTools forwarder listens on IPv4 only.
+  lookup: (hostname: string) => Promise<{ address: string }> = hostname => dnsLookup(hostname, { family: 4 }),
+): Promise<string> {
+  const url = new URL(endpoint);
+  // TLS endpoints keep their hostname: the certificate is issued for it.
+  if (url.protocol === 'https:' || url.protocol === 'wss:') return endpoint;
+  // URL keeps IPv6 literals bracketed in hostname.
+  const bare = url.hostname.replace(/^\[(.*)\]$/, '$1');
+  if (isIP(bare) !== 0 || bare === 'localhost') return endpoint;
+  const { address } = await lookup(bare);
+  // A compose service name resolves to a private address. A public one means the name
+  // leaked to outside DNS (the container is down and a search domain answered), and
+  // Curia would hand its browsing, typed secrets included, to that host.
+  if (!isPrivateAddress(address)) {
+    throw new Error(`${bare} resolved to a public address, not a container on this host; refusing to attach`);
+  }
+  url.hostname = isIP(address) === 6 ? `[${address}]` : address;
+  return url.toString();
+}
+
+/** True for loopback, RFC 1918, link-local and IPv6 unique-local/link-local addresses. */
+function isPrivateAddress(address: string): boolean {
+  const a = address.toLowerCase();
+  return /^(127|10)\./.test(a)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(a)
+    || /^192\.168\./.test(a)
+    || /^169\.254\./.test(a)
+    || a === '::1'
+    || /^f[cd][0-9a-f]{2}:/.test(a)
+    || /^fe[89ab][0-9a-f]:/.test(a);
+}
+
+/** An endpoint as logs and errors may show it: scheme and host only, so a token in the
+ *  userinfo, path or query of a hosted browser's URL is never written out. */
+export function redactCdpEndpoint(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return '<invalid endpoint>';
+  }
+}
+
+/** An attach error as logs may show it: every URL in the message (the endpoint, or the
+ *  /json/version/ discovery URL Patchright derives from it) is cut back to scheme and host,
+ *  and the stack is dropped, since it repeats the message. */
+export function sanitizeCdpError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.replace(/\b(?:https?|wss?):\/\/[^\s'"<>]+/gi, match => redactCdpEndpoint(match));
 }
 
 interface ClearStaleX11LockOptions {

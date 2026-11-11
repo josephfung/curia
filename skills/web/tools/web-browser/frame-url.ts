@@ -8,7 +8,9 @@
  * by the navigate guard and per-frame SSRF gating so both use one definition.
  */
 export function isPrivateHost(hostname: string): boolean {
-  let h = hostname.toLowerCase();
+  // A trailing dot is the same absolute name (`localhost.` resolves to loopback), and
+  // URL.hostname keeps it, so strip it before every check below.
+  let h = hostname.toLowerCase().replace(/\.+$/, '');
   // URL.hostname keeps brackets on IPv6 literals ([::1]) — strip them to normalize.
   if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
   // IPv4-mapped IPv6 — re-check the embedded IPv4 against the rules below so a mapped
@@ -23,6 +25,13 @@ export function isPrivateHost(hostname: string): boolean {
     const lo = parseInt(mappedHex[2]!, 16);
     h = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
   }
+
+  // Names that resolve to private addresses without looking private: a single-label host
+  // (no dot, not an IPv6 literal) is a compose/Docker service name or an intranet name
+  // (`curia`, `postgres`), and `.internal` / `.local` / `.localhost` are internal suffixes.
+  // Fail closed on the whole class rather than listing service names.
+  if (!h.includes('.') && !h.includes(':')) return true;
+  if (/\.(internal|local|localhost|localdomain|lan|home\.arpa)$/.test(h)) return true;
 
   return (
     h === 'localhost' ||
