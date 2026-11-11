@@ -27,9 +27,7 @@ function baseConfig(): Config {
     appOrigin: undefined,
     timezone: 'UTC',
     nylasApiKey: undefined,
-    nylasGrantId: undefined,
     nylasPollingIntervalMs: 30000,
-    nylasSelfEmail: '',
     ceoSignalNumber: undefined,
     signalSocketPath: undefined,
     signalPhoneNumber: undefined,
@@ -62,8 +60,6 @@ describe('applyChannelVaultSecrets', () => {
     const config = baseConfig();
     const secrets = fakeSecrets({
       'channel.email.nylas_api_key': 'nyk_vault',
-      'channel.email.nylas_grant_id': 'grant_vault',
-      'channel.email.nylas_self_email': 'curia@vault.test',
       'channel.signal.phone_number': '+15550001111',
       'channel.signal.socket_path': '/run/signal/socket',
       'channel.slack.bot_token': 'xoxb-vault',
@@ -82,8 +78,6 @@ describe('applyChannelVaultSecrets', () => {
     await applyChannelVaultSecrets(config, secrets, {}, logger);
 
     expect(config.nylasApiKey).toBe('nyk_vault');
-    expect(config.nylasGrantId).toBe('grant_vault');
-    expect(config.nylasSelfEmail).toBe('curia@vault.test');
     expect(config.signalPhoneNumber).toBe('+15550001111');
     expect(config.signalSocketPath).toBe('/run/signal/socket');
     expect(config.slackBotToken).toBe('xoxb-vault');
@@ -119,8 +113,6 @@ describe('applyChannelVaultSecrets', () => {
     const secrets = fakeSecrets({});
     const env = {
       NYLAS_API_KEY: 'nyk_env',
-      NYLAS_GRANT_ID: 'grant_env',
-      NYLAS_SELF_EMAIL: 'curia@env.test',
       SIGNAL_PHONE_NUMBER: '+15550002222',
       SIGNAL_SOCKET_PATH: '/env/signal/socket',
     };
@@ -143,14 +135,12 @@ describe('applyChannelVaultSecrets', () => {
 
   it('keeps the current config value when neither vault nor env supplies one', async () => {
     const config = baseConfig();
-    config.nylasApiKey = 'nyk_bootstrap'; // e.g. already set by applyVaultSecrets
+    config.nylasApiKey = 'nyk_bootstrap';
     const secrets = fakeSecrets({});
 
     await applyChannelVaultSecrets(config, secrets, {}, logger);
 
     expect(config.nylasApiKey).toBe('nyk_bootstrap');
-    expect(config.nylasGrantId).toBeUndefined();
-    expect(config.nylasSelfEmail).toBe(''); // string-typed field stays ''
     expect(config.signalSocketPath).toBeUndefined();
   });
 
@@ -187,8 +177,6 @@ describe('applyChannelVaultSecrets', () => {
     const readKeys = secrets.get.mock.calls.map(c => c[0]).sort();
     expect(readKeys).toEqual([
       'channel.email.nylas_api_key',
-      'channel.email.nylas_grant_id',
-      'channel.email.nylas_self_email',
       'channel.signal.phone_number',
       'channel.signal.socket_path',
       'channel.slack.app_token',

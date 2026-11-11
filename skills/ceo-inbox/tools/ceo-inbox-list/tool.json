@@ -19,7 +19,7 @@
     "scan_incomplete": "boolean? — true when paging stopped at the cap while more messages (or, for DRAFTS with modified_since, more drafts) may remain. Absent when the scan finished. An empty batch still has has_more false, so the drain loop does not spin"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 20000,
   "capabilities": ["auditLogRepo"],
   "optional_capabilities": ["curiaEmailAddresses"]

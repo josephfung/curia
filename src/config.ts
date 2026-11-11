@@ -52,9 +52,7 @@ export interface Config {
   appOrigin: string | undefined;
   timezone: string;
   nylasApiKey: string | undefined;
-  nylasGrantId: string | undefined;
   nylasPollingIntervalMs: number;
-  nylasSelfEmail: string;
   // principal's Signal phone number in E.164 format (e.g. "+14155551234").
   // Used by OutboundGateway to exempt principal-bound Signal messages from the autonomy gate.
   ceoSignalNumber: string | undefined;
@@ -2109,9 +2107,7 @@ export function loadConfig(): Config {
     appOrigin: process.env.APP_ORIGIN || undefined,
     timezone,
     nylasApiKey: undefined,
-    nylasGrantId: undefined,
     nylasPollingIntervalMs,
-    nylasSelfEmail: '',
     ceoSignalNumber: process.env.CEO_SIGNAL_NUMBER?.trim() || undefined,
     // .trim() prevents a whitespace-only value (e.g. "  ") from activating the
     // Signal adapter with a bogus socket path or phone number.

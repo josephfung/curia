@@ -1580,7 +1580,7 @@ async function main(): Promise<void> {
     );
     // The principal's email — used to allow their address in outbound content without
     // triggering the contact-data-leak rule. Resolved from the principal contact (#1049),
-    // not from config. Must NOT be Curia's own Nylas address (nylasSelfEmail): using
+    // not from config. Must NOT be Curia's own Nylas address (the email account's): using
     // Curia's address here was a bug that (a) treated the principal's email as a third-party
     // leak and (b) routed blocked-content notifications to Curia's inbox instead of the principal's.
     // Pass the mutable PrincipalEmailRef so post-boot identity binds update the allow-list (#1514).
@@ -1794,17 +1794,9 @@ async function main(): Promise<void> {
   // Credentials resolve vault-first, then env, then config (multi-account email).
   const channelRegistryRepo = new ChannelRegistryRepo(pool);
 
-  // Config-satisfied keys per channel (the messy, config-shape-aware part lives here,
-  // keeping the resolver pure). Email's API key may come from the bootstrap vault key
-  // (nylas_api_key) rather than channel.email.nylas_api_key; config carries either.
-  const channelConfigKeys = (descriptor: ChannelDescriptor): Set<string> => {
-    if (descriptor.name === 'email' && config.nylasApiKey) return new Set(['nylas_api_key']);
-    return new Set<string>();
-  };
-
   const channelCredentialStatusFn = async (descriptor: ChannelDescriptor) => {
     const status = await channelCredentialStatus(
-      { secrets: secretsService, configResolvedKeys: channelConfigKeys(descriptor), logger },
+      { secrets: secretsService, logger },
       descriptor,
     );
     if (descriptor.name !== 'email' || !status.requiredResolvable) return status;

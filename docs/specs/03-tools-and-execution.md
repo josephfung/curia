@@ -320,7 +320,7 @@ Skills access secrets via `ctx.secret("name")`:
 - The execution layer validates that the calling skill's manifest declares the requested secret in its `secrets` array.
 - Agents/LLMs never see secret values — only skills access them internally.
 - All secret access is audit-logged (the `secret.accessed` event records which secret, when, and the resolution source `vault | env`) but values are never logged.
-- **Seeding & rotation:** `pnpm run seed-vault` upserts secrets (transient-env usage, e.g. `NYLAS_API_KEY=nyk_... pnpm run seed-vault`); `scripts/rotate-secret-key.ts` re-encrypts every row under a new key in a single transaction. See [Configuration → Secrets](../dev/configuration.md#secrets).
+- **Seeding & rotation:** `pnpm run seed-vault` upserts secrets (transient-env usage, e.g. `SEED_VAULT_ONLY=channel.email.nylas_api_key NYLAS_API_KEY=nyk_... pnpm run seed-vault`); `scripts/rotate-secret-key.ts` re-encrypts every row under a new key in a single transaction. See [Configuration → Secrets](../dev/configuration.md#secrets).
 
 ---
 
