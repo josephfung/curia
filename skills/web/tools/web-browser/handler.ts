@@ -819,6 +819,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       }
       const scopedClick = await resolveLocatorWithScope(page, selector, ctx.log);
       const clickTarget = scopedClick.locator;
+      if (!(await scopeStillSafe(scopedClick.scope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       const clickMark = activity.mark();
       // A label click lands at the label's centre, which can be a link inside it
       // ("I agree to the <a>Terms</a>"): the link would be followed and the box stay as it was.
@@ -829,6 +830,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       const labelHasLink = input
         ? await clickTarget.evaluate((el) => el.querySelector('a[href]') !== null, undefined, quick).catch(() => false)
         : false;
+      if (!(await scopeStillSafe(scopedClick.scope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       if (input && labelHasLink) {
         await input.evaluate((el) => { (el as HTMLInputElement).click(); }, undefined, quick);
       } else {
@@ -860,7 +862,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // With a selector, scroll that element into view (reveals lazy-loaded widgets);
       // without one, scroll the viewport down a screen (infinite-scroll / "load more").
       if (selector && typeof selector === 'string') {
-        const scrollTarget = await resolveLocator(page, selector, ctx.log);
+        const { locator: scrollTarget, scope: scrollScope } = await resolveLocatorWithScope(page, selector, ctx.log);
+        if (!(await scopeStillSafe(scrollScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
         await scrollTarget.scrollIntoViewIfNeeded();
       } else {
         await page.mouse.wheel(0, 800);
@@ -874,7 +877,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
         return { ok: false, error: 'hover requires selector (string — describe the element in natural language)' };
       }
       // Many widgets (date-picker cells, menus) only reveal options on hover.
-      const hoverTarget = await resolveLocator(page, selector, ctx.log);
+      const { locator: hoverTarget, scope: hoverScope } = await resolveLocatorWithScope(page, selector, ctx.log);
+      if (!(await scopeStillSafe(hoverScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       await hoverTarget.hover();
       await settleAfterInteraction(page, ctx, sessionId);
       return { ok: true };
@@ -907,7 +911,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       }
       // The LLM's explicit lever for "wait until the widget renders" — for SPAs where
       // even networkidle isn't enough. Throws on timeout, caught by the caller as a clear error.
-      const waitTarget = await resolveLocator(page, selector, ctx.log);
+      const { locator: waitTarget, scope: waitScope } = await resolveLocatorWithScope(page, selector, ctx.log);
+      if (!(await scopeStillSafe(waitScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       await waitTarget.waitFor({ state: 'visible', timeout: WAIT_FOR_TIMEOUT_MS });
       return { ok: true };
     }
@@ -978,7 +983,10 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       if (cardApprovedOn !== null && page.url() !== cardApprovedOn) {
         return { ok: false, error: CARD_NAVIGATED_REFUSAL };
       }
+      // The field's frame may have moved to a private address while the secret resolved (#2521).
+      if (!(await scopeStillSafe(typeScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       await humanFocusField(page, typeTarget, { log: ctx.log });
+      if (!(await scopeStillSafe(typeScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       await page.keyboard.press('ControlOrMeta+a');
       await page.keyboard.press('Delete');
       await humanType(page, fillValue, { log: ctx.log });
@@ -1037,6 +1045,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       if (selectCardApprovedOn !== null && page.url() !== selectCardApprovedOn) {
         return { ok: false, error: CARD_NAVIGATED_REFUSAL };
       }
+      if (!(await scopeStillSafe(selectScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       await selectTarget.selectOption(selectValue);
       return { ok: true, navigated: await actionStartedNavigation(activity, selectMark, timing, deps.settleDeadline) };
     }
@@ -1054,6 +1063,13 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // and handles close_session and clear_site_data itself.
       return { ok: false, error: `Unknown action: "${String(action)}"` };
   }
+}
+
+const FRAME_MOVED_REFUSAL = 'The frame holding that element moved to a blocked address after it was found; nothing was done. Read the page again and retry.';
+
+/** True for the top page, or for a child frame still at its vetted URL or on a public one (#2521). */
+async function scopeStillSafe(scope: Page | Frame): Promise<boolean> {
+  return !('parentFrame' in scope) || (await frameStillSafe(scope));
 }
 
 const CARD_NAVIGATED_REFUSAL = 'The page changed while the card was being resolved; nothing was typed. Read the page again and retry.';
@@ -1415,32 +1431,6 @@ async function blockedFrameUrls(urls: string[]): Promise<boolean[]> {
   };
   await Promise.all(Array.from({ length: Math.min(FRAME_CHECK_CONCURRENCY, urls.length) }, worker));
   return blocked;
-}
-
-/**
- * Resolve a natural language selector to a Playwright locator, searching the main frame
- * first and then any child frames. Embedded widgets (e.g. OpenTable's booking/date
- * picker) live in iframes, which top-level locators never reach — both `Page` and
- * `Frame` expose the same getBy* API, so we reuse one resolver across them.
- *
- * Priority within each frame:
- *   1. getByRole (most semantic — "submit button", "Email field", date "gridcell")
- *   2. getByLabel (form inputs described by their label)
- *   3. getByText (any visible text match)
- * Then a raw CSS/XPath fallback (main frame, then child frames) for when the LLM passes
- * a direct selector.
- *
- * SSRF: child frames pointing at private/internal hosts are skipped (see
- * eligibleChildFrames) — the navigate guard only validates the top-level URL, so without
- * this an attacker page could embed an internal iframe and have us interact with it.
- *
- * Resilience: each child-frame probe is wrapped so a frame that detaches mid-traversal
- * (common on dynamic pages) is skipped rather than failing the whole action — the same
- * defensive pattern as getCleanedContent. The main-frame paths are intentionally left
- * unguarded: a detached main frame is a genuine failure the caller should surface.
- */
-async function resolveLocator(page: Page, selector: string, log: ToolContext['log']): Promise<Locator> {
-  return (await resolveLocatorWithScope(page, selector, log)).locator;
 }
 
 /**

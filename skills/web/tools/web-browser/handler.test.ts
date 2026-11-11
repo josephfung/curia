@@ -40,6 +40,7 @@ import {
   simulateHumanPresence,
   humanClick,
   humanType,
+  humanFocusField,
 } from '../../../../src/browser/human-behavior.js';
 
 import pino from 'pino';
@@ -65,6 +66,7 @@ beforeEach(() => {
   vi.mocked(simulateHumanPresence).mockClear();
   vi.mocked(humanClick).mockClear();
   vi.mocked(humanType).mockClear();
+  vi.mocked(humanFocusField).mockClear();
 });
 
 const SECRET_VALUE = 'sup3r-s3cr3t-pw';
@@ -766,6 +768,160 @@ describe('web-browser iframe awareness', () => {
       // Child frame content is labelled so the LLM knows it's a sub-frame.
       expect(data.content).toMatch(/--- Frame:/);
     }
+  });
+});
+
+describe('web-browser acts on a child frame only while it is still at a safe address (#2521)', () => {
+  const PRIVATE_URL = 'http://10.0.0.5/admin';
+
+  /**
+   * A page whose one child frame is public when the element is found and `moveFrame()` sends it
+   * to a private address. The frame's locator matches by ref, role and CSS alike, so any
+   * resolution path lands in it.
+   */
+  function makeMovingFramePage() {
+    let frameUrl = 'https://widget.example/embed';
+    const moveFrame = (): void => { frameUrl = PRIVATE_URL; };
+    const miss = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    const target = {
+      count: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockReturnThis(),
+      isVisible: vi.fn().mockResolvedValue(true),
+      hover: vi.fn().mockResolvedValue(undefined),
+      waitFor: vi.fn().mockResolvedValue(undefined),
+      selectOption: vi.fn().mockResolvedValue(undefined),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+    };
+    const mainFrame = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      name: vi.fn().mockReturnValue(''),
+      evaluate: vi.fn().mockResolvedValue(''),
+      parentFrame: vi.fn().mockReturnValue(null),
+      getByRole: vi.fn().mockReturnValue(miss),
+      getByLabel: vi.fn().mockReturnValue(miss),
+      getByText: vi.fn().mockReturnValue(miss),
+      locator: vi.fn().mockReturnValue(miss),
+    };
+    const childFrame = {
+      url: vi.fn().mockImplementation(() => frameUrl),
+      name: vi.fn().mockReturnValue('widget'),
+      evaluate: vi.fn().mockResolvedValue(''),
+      parentFrame: vi.fn().mockReturnValue(mainFrame),
+      getByRole: vi.fn().mockReturnValue(target),
+      getByLabel: vi.fn().mockReturnValue(miss),
+      getByText: vi.fn().mockReturnValue(miss),
+      locator: vi.fn().mockReturnValue(target),
+    };
+    const base = makeMockPage('top page', vi.fn(), 'https://attacker.example/page');
+    const page = {
+      ...base,
+      getByRole: vi.fn().mockReturnValue(miss),
+      getByLabel: vi.fn().mockReturnValue(miss),
+      getByText: vi.fn().mockReturnValue(miss),
+      locator: vi.fn().mockReturnValue(miss),
+      frames: vi.fn().mockReturnValue([mainFrame, childFrame]),
+      mainFrame: vi.fn().mockReturnValue(mainFrame),
+    };
+    return { page, target, moveFrame };
+  }
+
+  function ctxFor(page: unknown, input: Record<string, unknown>, extra: Record<string, unknown> = {}): ToolContext {
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-moving', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    return { input, log: logger, browserService, ...extra } as unknown as ToolContext;
+  }
+
+  it('click refuses when the frame moved to a private address after the element was found', async () => {
+    const { page, target, moveFrame } = makeMovingFramePage();
+    // The move happens while the target is being inspected, after resolution vetted the frame.
+    target.isVisible.mockImplementation(async () => { moveFrame(); return true; });
+
+    const result = await new WebBrowserHandler().execute(ctxFor(page, { action: 'click', selector: 'Pay now' }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/moved to a blocked address/);
+    expect(vi.mocked(humanClick)).not.toHaveBeenCalled();
+  });
+
+  it('click by CSS selector refuses a frame that moved (the CSS fallback path)', async () => {
+    const { page, target, moveFrame } = makeMovingFramePage();
+    // Role/label/text lookups miss in the frame; only the raw selector matches, and counting it moves the frame.
+    const miss = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    page.frames().forEach((f: { getByRole: unknown; getByLabel: unknown; getByText: unknown }) => {
+      f.getByRole = vi.fn().mockReturnValue(miss);
+    });
+    target.count.mockImplementation(async () => { moveFrame(); return 1; });
+
+    const result = await new WebBrowserHandler().execute(ctxFor(page, { action: 'click', selector: '#pay' }));
+
+    expect(result.success).toBe(false);
+    expect(vi.mocked(humanClick)).not.toHaveBeenCalled();
+  });
+
+  it('click by ref refuses a frame that moved (the ref fast-path)', async () => {
+    const { page, moveFrame } = makeMovingFramePage();
+    const frame = page.frames()[1] as { locator: ReturnType<typeof vi.fn> };
+    const moving = {
+      count: vi.fn().mockImplementation(async () => { moveFrame(); return 1; }),
+      first: vi.fn().mockReturnThis(),
+      isVisible: vi.fn().mockResolvedValue(true),
+    };
+    frame.locator.mockReturnValue(moving);
+
+    const result = await new WebBrowserHandler().execute(ctxFor(page, { action: 'click', selector: 'g1f1e2' }));
+
+    expect(result.success).toBe(false);
+    expect(vi.mocked(humanClick)).not.toHaveBeenCalled();
+  });
+
+  it('type with secret_ref types nothing when the frame moved while the secret resolved', async () => {
+    const { page, moveFrame } = makeMovingFramePage();
+    const resolveSecretRef = vi.fn().mockImplementation(async () => { moveFrame(); return SECRET_VALUE; });
+
+    const result = await new WebBrowserHandler().execute(
+      ctxFor(page, { action: 'type', selector: 'Card number', secret_ref: 'user.card' }, { resolveSecretRef }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/moved to a blocked address/);
+    expect(vi.mocked(humanFocusField)).not.toHaveBeenCalled();
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+    expect(page.keyboard.press).not.toHaveBeenCalled();
+  });
+
+  it('select refuses a frame that moved before the option is chosen', async () => {
+    const { page, target, moveFrame } = makeMovingFramePage();
+    target.isVisible.mockImplementation(async () => { moveFrame(); return true; });
+
+    const result = await new WebBrowserHandler().execute(ctxFor(page, { action: 'select', selector: 'Country', value: 'CA' }));
+
+    expect(result.success).toBe(false);
+    expect(target.selectOption).not.toHaveBeenCalled();
+  });
+
+  it('hover and wait_for refuse a frame that moved', async () => {
+    for (const action of ['hover', 'wait_for'] as const) {
+      const { page, target, moveFrame } = makeMovingFramePage();
+      target.isVisible.mockImplementation(async () => { moveFrame(); return true; });
+
+      const result = await new WebBrowserHandler().execute(ctxFor(page, { action, selector: 'Menu' }));
+
+      expect(result.success).toBe(false);
+      expect(target.hover).not.toHaveBeenCalled();
+      expect(target.waitFor).not.toHaveBeenCalled();
+    }
+  });
+
+  it('still clicks in a child frame that stays public', async () => {
+    const { page } = makeMovingFramePage();
+
+    const result = await new WebBrowserHandler().execute(ctxFor(page, { action: 'click', selector: 'Pay now' }));
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(humanClick)).toHaveBeenCalled();
   });
 });
 
