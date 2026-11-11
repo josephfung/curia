@@ -259,11 +259,11 @@ After completing the OAuth flow, the grant appears in your dashboard. Copy the *
 Open **Settings -> Channels -> Email** and:
 
 1. **Install** the channel.
-2. Save the **Nylas API key**. (Or seed it instead: `SEED_VAULT_ONLY=nylas_api_key NYLAS_API_KEY=nyk_v0_... pnpm run seed-vault`.)
+2. Save the **Nylas API key**. (Or seed it instead: `SEED_VAULT_ONLY=channel.email.nylas_api_key NYLAS_API_KEY=nyk_v0_... pnpm run seed-vault`.)
 3. Under **Email accounts**, add Curia's mailbox: a short name (e.g. `curia`), its address, and the grant ID. The grant is stored in the vault at `channel.email.<name>.nylas_grant_id`.
 4. **Enable** the channel. Enable stays disabled until the API key resolves and at least one enabled account has a grant.
 
-Restart Curia (`pnpm local`). The email channel boots one adapter per enabled account; it does not read `NYLAS_GRANT_ID` or `NYLAS_SELF_EMAIL`. See [configuration.md](configuration.md#email-accounts) for multiple accounts.
+Restart Curia (`pnpm local`). The email channel boots one adapter per enabled account; grants and addresses come only from the email accounts. See [configuration.md](configuration.md#email-accounts) for multiple accounts.
 
 **5. Connect the principal's own mailbox (optional)**
 

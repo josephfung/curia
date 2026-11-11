@@ -19,6 +19,7 @@ import type { UserSecretDetails } from '../../../../../src/secrets/user-secret-d
 import type { SecretUsagePort, SecretUse } from '../../../../../src/secrets/secret-usage-repo.js';
 import { StaleCardEditError, type UserSecretDetailsPatch } from '../../../../../src/secrets/secrets-service.js';
 import { CARD_VALIDATION_MESSAGES, type CreditCardPublicFields, type CreditCardSecretDoc, type StructuredSchemaTag } from '../../../../../src/secrets/structured-secret-schema.js';
+import { serializeForLeakCheck } from '../../../../helpers/leak-check.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 
@@ -961,6 +962,22 @@ describe('vault routes', () => {
       expect(secrets.detailDeletes).toEqual([]);
     });
 
+    it('leftover retired Nylas rows are unlocked orphans the operator can delete (#2522)', async () => {
+      const LEGACY = ['nylas_grant_id', 'nylas_self_email'];
+      const secrets = fakeSecrets([...LEGACY, 'channel.email.nylas_api_key']);
+      app = await build(secrets, fakeRegistry([]));
+      const res = await app.inject({ method: 'GET', url: '/api/vault/secrets', headers: auth });
+      const byName = new Map((res.json().secrets as Array<{ name: string; kind: string }>).map(s => [s.name, s]));
+      for (const name of LEGACY) {
+        expect(byName.get(name)).toMatchObject({ kind: 'system', configured: true, required: false, declaredBy: [] });
+      }
+      // The canonical key alone satisfies the email channel's row: nothing reads as missing.
+      expect(byName.get('channel.email.nylas_api_key')).toMatchObject({ configured: true });
+      expect([...byName.values()].filter(s => s.name.startsWith('nylas_')).map(s => s.kind)).not.toContain('platform');
+      for (const name of LEGACY) expect((await del(app, name)).statusCode).toBe(200);
+      expect(secrets.deletes).toEqual(LEGACY);
+    });
+
     it('DELETE still 400s a name that is neither declared nor in the vault', async () => {
       const secrets = fakeSecrets();
       app = await build(secrets, fakeRegistry([]));
@@ -1198,7 +1215,9 @@ describe('vault routes', () => {
       expect(secrets.cardReplaces).toEqual([{ name: CARD_KEY, change: { cvv: '456' } }]);
       expect(secrets.cardPatches).toEqual([]);
       expect(changes(published)).toEqual(['set:requested', 'set:completed']);
-      expect(JSON.stringify(published)).not.toContain('456');
+      // Each event's random id and timestamp can spell "456" by chance (#2548): blank only
+      // those, then look for the digits anywhere else, so `cvv_456` or `x456` still fail.
+      expect(serializeForLeakCheck(published)).not.toContain('456');
       expect(res.body).not.toContain('456');
       expect((await patch(app, CARD_KEY, { cvv: '4567' })).json()).toEqual({ error: CARD_VALIDATION_MESSAGES.cvv_format });
     });
@@ -1213,7 +1232,7 @@ describe('vault routes', () => {
       expect(secrets.cardReplaces).toEqual([]);
       expect(secrets.cardPatches).toEqual([]);
       expect(changes(published)).toEqual(['set:requested', 'set:completed']);
-      expect(JSON.stringify(published)).not.toContain('456');
+      expect(serializeForLeakCheck(published)).not.toContain('456');
 
       published.length = 0;
       await patch(app, CARD_KEY, { cvv: '456', expiry_year: 2100, label: 'Everyday' });

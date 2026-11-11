@@ -33,6 +33,12 @@ describe('platform vault keys', () => {
     expect(isPlatformVaultKey('channel.telegram.bot_token')).toBe(false);
   });
 
+  it('the retired flat Nylas keys are not platform keys (#2522)', () => {
+    for (const name of ['nylas_api_key', 'nylas_grant_id', 'nylas_self_email']) {
+      expect(isPlatformVaultKey(name)).toBe(false);
+    }
+  });
+
   it('labels', () => {
     expect(platformKeyLabel('web_app_bootstrap_secret')).toBe('Console sign-in');
     expect(platformKeyLabel('tavily_api_key')).toBeUndefined();

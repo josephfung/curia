@@ -25,7 +25,7 @@
     "is_draft": "boolean (true when a draft was read; absent for messages)"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 30000,
   "capabilities": []
 }

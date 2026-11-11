@@ -180,7 +180,8 @@ describe('CeoInboxArchiveHandler', () => {
   });
 
   it('sends no PUT after the execution layer times the call out', async () => {
-    vi.stubEnv('NYLAS_API_KEY', 'test-api-key');
+    // The execution layer's env fallback reads the declared name upper-cased.
+    vi.stubEnv('CHANNEL.EMAIL.NYLAS_API_KEY', 'test-api-key');
     vi.stubEnv('CEO_NYLAS_GRANT_ID', 'test-grant-id');
     const manifest = JSON.parse(
       readFileSync(join(import.meta.dirname, 'tool.json'), 'utf8'),

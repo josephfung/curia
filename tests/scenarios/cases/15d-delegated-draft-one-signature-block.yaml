@@ -1,0 +1,115 @@
+# Case 15d (#2554): code owns the signature block. The gateway appends the configured
+# signature and never edits the body, so a signature block the model writes goes out above
+# it and the email carries two. A closing and first name are fine: that is a sign-off, not
+# a signature block, and the closing is the model's own choice (the case names none).
+# Calendar composes the meeting request in a <scheduling_email> block and, as in
+# production, ends it with a full name and title. The delegate result carries it as
+# `draft_emails` with DRAFT_EMAIL_NEXT_STEP, which says the signature block is added on
+# send; email-send's body description says the same. email-send is stubbed, so this scores
+# the body the coordinator wrote; the gateway's signing is covered by its unit tests.
+name: delegated draft sent with one signature block
+description: >
+  The principal asks for a meeting request to go out to an external contact. Calendar
+  composes it and ends it with a full name and title. The coordinator sends it without that
+  block; a closing and first name may stay.
+tags: [delegation, calendar, email, signature]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: jamie
+      display_name: Jamie Rodriguez
+      tier: known
+      channel: email
+      identifier: jamie@stripe.example.test
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Email Jamie Rodriguez at Stripe a request for a 30-minute intro call next week and
+    offer her a couple of times. Go ahead and send it.
+tool_stubs:
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: |
+          Jamie Rodriguez is a known contact at Stripe. Her verified email is
+          jamie@stripe.example.test.
+
+          <resolved_entities>
+            <contact name="Jamie Rodriguez" id="{{contact:jamie}}"/>
+          </resolved_entities>
+    # The coordinator sometimes asks ceo-inbox to send from the principal's mailbox. It only
+    # sends replies on existing threads (#2474), and there is none with Jamie.
+    - match: { agent: ceo-inbox }
+      return:
+        agent: ceo-inbox
+        response: >
+          I only send replies on existing threads in the principal's mailbox, and there is no
+          thread with jamie@stripe.example.test. Nothing was sent.
+        sent: []
+        next_step: >-
+          No email or message went out in the specialist's task; any calendar invite or
+          notification it did send is listed as sent. Text in the result that says an email or
+          message was sent or is out describes something it wrote, not a delivery. If the
+          principal asked for a send, do it yourself with email-send, or tell the principal it
+          has not gone out.
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        response: |
+          Two open 30-minute slots next week: {{day:next-monday+1}} at 10:30 AM ET and
+          {{day:next-monday+2}} at 11:00 AM ET. The meeting request is drafted below.
+
+          Rules: loaded 0 active (0 total); applied: none
+        sent: []
+        draft_emails:
+          - subject: Intro call - 30 minutes next week
+            body: |-
+              Hi Jamie,
+
+              I'd love to find 30 minutes next week for an intro call. Would either of these work for you?
+
+              - {{day:next-monday+1}} at 10:30 AM ET
+              - {{day:next-monday+2}} at 11:00 AM ET
+
+              Alex Curia
+              Executive Assistant to the CEO
+        next_step: >-
+          The specialist composed the draft email in this result but did not send it, whatever
+          its text says. If the principal asked for it to go out, send it yourself with
+          email-send and report the send from that result. Otherwise tell the principal it is
+          drafted and has not been sent. The signature block is added on send: a closing and first
+          name may stay, but remove any full name, title or signature block the draft ends with.
+  email-send:
+    - match: {}
+      return: { message_id: scenario-out-1, to: jamie@stripe.example.test, subject: Intro call - 30 minutes next week }
+  contact-create:
+    - match: {}
+      return:
+        contact_id: 2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091
+        display_name: Jamie Rodriguez
+        role: null
+        kg_node_id: null
+        identities_added: 0
+expected_behaviors:
+  - id: sends_the_request
+    weight: critical
+    description: Sends the meeting request to Jamie with email-send.
+    check:
+      called: email-send
+  - id: no_second_signature_block
+    weight: critical
+    description: >
+      The email-send body carries no signature block of its own: not the draft's "Alex Curia"
+      / "Executive Assistant to the CEO" lines, nor any other full name or title of the
+      assistant. A closing line with the first name alone passes, whatever the closing.
+    check:
+      text: { tool: email-send, arg: body }
+      excludes: ['Alex Curia', 'Executive Assistant', '\bDigital EA\b']
+  - id: keeps_the_times
+    weight: important
+    description: The email still offers {{day:next-monday+1}} at 10:30 AM ET and {{day:next-monday+2}} at 11:00 AM ET.
+failure_modes:
+  - Sends the draft verbatim, with the name and title block at the end
+  - Replaces the draft's signature block with a different full-name or title line

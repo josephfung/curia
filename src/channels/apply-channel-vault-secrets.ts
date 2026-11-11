@@ -54,8 +54,6 @@ export async function applyChannelVaultSecrets(
 
   const [
     nylasApiKey,
-    nylasGrantId,
-    nylasSelfEmail,
     signalPhoneNumber,
     signalSocketPath,
     slackBotToken,
@@ -71,8 +69,6 @@ export async function applyChannelVaultSecrets(
     voiceCartesiaVoiceId,
   ] = await Promise.all([
     resolve('channel.email.nylas_api_key', 'NYLAS_API_KEY', config.nylasApiKey),
-    resolve('channel.email.nylas_grant_id', 'NYLAS_GRANT_ID', config.nylasGrantId),
-    resolve('channel.email.nylas_self_email', 'NYLAS_SELF_EMAIL', config.nylasSelfEmail),
     resolve('channel.signal.phone_number', 'SIGNAL_PHONE_NUMBER', config.signalPhoneNumber),
     resolve('channel.signal.socket_path', 'SIGNAL_SOCKET_PATH', config.signalSocketPath),
     resolve('channel.slack.bot_token', 'SLACK_BOT_TOKEN', config.slackBotToken),
@@ -95,9 +91,6 @@ export async function applyChannelVaultSecrets(
   ]);
 
   config.nylasApiKey = nylasApiKey;
-  config.nylasGrantId = nylasGrantId;
-  // nylasSelfEmail is typed `string` (defaults to ''), matching loadConfig/applyVaultSecrets.
-  config.nylasSelfEmail = nylasSelfEmail ?? '';
   config.signalPhoneNumber = signalPhoneNumber;
   config.signalSocketPath = signalSocketPath;
   config.slackBotToken = slackBotToken;
@@ -116,8 +109,6 @@ export async function applyChannelVaultSecrets(
   // supplied vs. which are absent (feature-off), the same debuggability win as applyVaultSecrets.
   const present = {
     'channel.email.nylas_api_key': nylasApiKey !== undefined,
-    'channel.email.nylas_grant_id': nylasGrantId !== undefined,
-    'channel.email.nylas_self_email': nylasSelfEmail !== undefined,
     'channel.signal.phone_number': signalPhoneNumber !== undefined,
     'channel.signal.socket_path': signalSocketPath !== undefined,
     'channel.slack.bot_token': slackBotToken !== undefined,

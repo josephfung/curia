@@ -15,9 +15,6 @@ export const PLATFORM_VAULT_KEYS: ReadonlyMap<string, string> = new Map([
   ['embedding_api_key', 'Embeddings'],
   ['api_token', 'HTTP API token'],
   ['web_app_bootstrap_secret', 'Console sign-in'],
-  ['nylas_api_key', 'Nylas (legacy email)'],
-  ['nylas_grant_id', 'Nylas (legacy email)'],
-  ['nylas_self_email', 'Nylas (legacy email)'],
   [VAPID_SECRET_NAME, 'Web push keys'],
 ]);
 

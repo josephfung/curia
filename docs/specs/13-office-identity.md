@@ -67,7 +67,7 @@ below.
 |-------|------|---------|
 | `assistant.name` | string | External-facing name used in all outbound communication |
 | `assistant.title` | string | Role title used in email signatures and introductions |
-| `assistant.email_signature` | multiline string | Full email sign-off block. The outbound gateway adds it below every email it sends or drafts, except system notifications and mail from the principal's own mailbox; empty means name and title (prompt trim PR 6). A sign-off the model wrote at the end of the body (lines naming only the assistant's name, title or signature lines) is dropped first, so the signature appears once (#2138) |
+| `assistant.email_signature` | multiline string | Full email sign-off block. The outbound gateway adds it below every email it sends or drafts, except system notifications and mail from the principal's own mailbox; empty means name and title (prompt trim PR 6), which the console shows in the empty field. It is the only signature block: the email tools tell the model it may end with a closing and first name (the closing is its own choice) but never a full name, title or signature block, and the gateway never edits the body, skipping the signature only when the body already ends with it exactly (#2554) |
 | `tone.style` | string (1–800 chars) | How the assistant sounds, in the operator's words, usually started from a console template that ends in an example line (`Sounds like: "…"`). Rendered verbatim (#2143) |
 | `tone.verbosity` | integer 0–100 | The Detail slider. 0 = tersest, 100 = most thorough; `compileSystemPromptBlock()` translates it to length guidance |
 | `behavioral_preferences` | string[] | Ordered list of standing preferences compiled into the system prompt |

@@ -29,9 +29,7 @@ function baseConfig(): Config {
     timezone: 'UTC',
     browserCdpUrl: undefined,
     nylasApiKey: undefined,
-    nylasGrantId: undefined,
     nylasPollingIntervalMs: 30000,
-    nylasSelfEmail: '',
     ceoSignalNumber: undefined,
     signalSocketPath: undefined,
     signalPhoneNumber: undefined,
@@ -64,8 +62,6 @@ describe('applyVaultSecrets', () => {
     const secrets = fakeSecrets({
       anthropic_api_key: 'sk-ant-vault',
       api_token: 'tok-vault',
-      nylas_grant_id: 'grant-vault',
-      nylas_self_email: 'curia@vault.test',
       embedding_api_key: 'embed-vault',
     });
 
@@ -74,8 +70,6 @@ describe('applyVaultSecrets', () => {
     expect(config.anthropicApiKey).toBe('sk-ant-vault');
     expect(config.embeddingApiKey).toBe('embed-vault');
     expect(config.apiToken).toBe('tok-vault');
-    expect(config.nylasGrantId).toBe('grant-vault');
-    expect(config.nylasSelfEmail).toBe('curia@vault.test');
   });
 
   it('sets undefined for absent secrets (no env fallback)', async () => {
@@ -108,11 +102,5 @@ describe('applyVaultSecrets', () => {
     await applyVaultSecrets(config, fakeSecrets({ aws_access_key_id: '   ', aws_secret_access_key: '' }), logger);
     expect(config.awsAccessKeyId).toBeUndefined();
     expect(config.awsSecretAccessKey).toBeUndefined();
-  });
-
-  it('defaults nylasSelfEmail to empty string when absent (type is string, not undefined)', async () => {
-    const config = baseConfig();
-    await applyVaultSecrets(config, fakeSecrets({}), logger);
-    expect(config.nylasSelfEmail).toBe('');
   });
 });
