@@ -93,9 +93,16 @@ export function pinnedLookup(addresses: readonly string[]) {
   };
 }
 
-/** A `--use-env-proxy` flag (or `--use-env-proxy=...`) among Node CLI arguments. */
-function hasUseEnvProxyFlag(args: readonly string[]): boolean {
-  return args.some((arg) => arg === '--use-env-proxy' || arg.startsWith('--use-env-proxy='));
+/**
+ * Whether Node CLI text mentions the `--use-env-proxy` flag in any spelling Node accepts: with
+ * underscores (`--use_env_proxy`), with a value, or quoted or escaped as NODE_OPTIONS allows. The
+ * text is matched loosely rather than tokenised the way Node does, so a spelling this misses is the
+ * only way to bypass it; a loose match that is not really the flag only makes a proxied fetch refuse.
+ * Only the explicit negation (`--no-use-env-proxy`) does not count.
+ */
+function mentionsUseEnvProxy(text: string): boolean {
+  const normalized = text.replace(/["'\\]/g, '').replace(/_/g, '-').toLowerCase();
+  return /(?<!no-)use-env-proxy/.test(normalized);
 }
 
 /**
@@ -106,8 +113,7 @@ function hasUseEnvProxyFlag(args: readonly string[]): boolean {
 function envProxyEnabled(env: NodeJS.ProcessEnv, execArgv: readonly string[]): boolean {
   const variable = env.NODE_USE_ENV_PROXY;
   if (variable && variable !== '0' && variable.toLowerCase() !== 'false') return true;
-  if (hasUseEnvProxyFlag(execArgv)) return true;
-  return hasUseEnvProxyFlag((env.NODE_OPTIONS ?? '').split(/\s+/));
+  return execArgv.some(mentionsUseEnvProxy) || mentionsUseEnvProxy(env.NODE_OPTIONS ?? '');
 }
 
 /**

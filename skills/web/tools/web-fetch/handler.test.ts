@@ -65,6 +65,20 @@ describe('web-fetch', () => {
       expect(envProxyFor(url, { HTTPS_PROXY: 'http://proxy:3128' }, ['--no-use-env-proxy'])).toBeNull();
     });
 
+    it('recognises every spelling Node accepts for the flag: underscores, quotes, escapes', () => {
+      const url = new URL('https://example.com/');
+      const on = (env: NodeJS.ProcessEnv, argv: string[] = []) => envProxyFor(url, { HTTPS_PROXY: 'http://p:1', ...env }, argv);
+      expect(on({ NODE_OPTIONS: '--use_env_proxy' })).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '--use-env_proxy=1' })).toBe('http://p:1');
+      expect(on({}, ['--use_env_proxy'])).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '"--use-env-proxy"' })).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '--inspect "--use_env_proxy"' })).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '"--use\\-env-proxy"' })).toBe('http://p:1');
+      // A later positive flag still wins over an earlier negation.
+      expect(on({ NODE_OPTIONS: '--no-use-env-proxy --use-env-proxy' })).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '--no_use_env_proxy' })).toBeNull();
+    });
+
     it('ignores proxy variables when env-proxy routing is off, as Node fetch does', () => {
       expect(envProxyFor(new URL('https://example.com/'), { HTTPS_PROXY: 'http://proxy.corp:3128' }, [])).toBeNull();
       expect(envProxyFor(new URL('https://example.com/'), { NODE_USE_ENV_PROXY: '0', HTTPS_PROXY: 'http://p:1' }, [])).toBeNull();
