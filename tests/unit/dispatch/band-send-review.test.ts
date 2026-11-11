@@ -153,6 +153,255 @@ describe('BandSendReview', () => {
     expect(review.mock.calls[0]![0].questions).toEqual(['grounding']);
   });
 
+  // #2474: a principal-directed send from the principal's own mailbox.
+  describe('principal mailbox sends (#2474)', () => {
+    const mailbox: BandReviewInput = { ...base, principalDirected: true, senderProfile: 'principal-mailbox' };
+    const item: BriefDetectedItem = { id: 'P1', label: 'PHONE_NUMBER', text: '416-555-0199', field: 'body' };
+
+    it('asks no question of its own for a principal-written draft, only disclosure when items exist', async () => {
+      const { svc, review } = make([{ ok: true, disclosures: [{ id: 'P1', basis: 'directed', requested: false, reason: 'told to' }], reason: 'ok' }]);
+      await svc.review({ ...mailbox, draftAuthor: 'principal', detectedItems: [item] });
+      expect(review.mock.calls[0]![0].questions).toEqual(['disclosure']);
+      expect(review.mock.calls[0]![0].senderProfile).toBe('principal-mailbox');
+    });
+
+    it('asks purpose and grounding for a Curia-written draft', async () => {
+      const { svc, review } = make([{ ok: true, purpose: 'serving', unsupportedClaims: [], reason: 'ok' }]);
+      await svc.review({ ...mailbox, draftAuthor: 'curia' });
+      expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'grounding']);
+      expect(review.mock.calls[0]![0].senderProfile).toBe('principal-mailbox');
+    });
+
+    it('asks only purpose for a draft Curia edited: a steering check, not a fact-check of the principal\'s words', async () => {
+      const { svc, review } = make([{ ok: true, purpose: 'serving', reason: 'ok' }]);
+      await svc.review({ ...mailbox, draftAuthor: 'curia-edited' });
+      expect(review.mock.calls[0]![0].questions).toEqual(['purpose']);
+    });
+
+    it('leaves every other review\'s brief without a sender profile', async () => {
+      const { svc, review } = make([clean, { ok: true, unsupportedClaims: [], reason: 'ok' }]);
+      await svc.review(base);
+      await svc.review({ ...base, principalDirected: true });
+      expect(review.mock.calls[0]![0]).not.toHaveProperty('senderProfile');
+      expect(review.mock.calls[1]![0]).not.toHaveProperty('senderProfile');
+      expect(review.mock.calls[1]![0].questions).toEqual(['grounding']);
+    });
+
+    // PR 2: Curia sends on its own from the principal's mailbox (levels routine / all).
+    describe('autonomous', () => {
+      const auto: BandReviewInput = { ...base, principalDirected: false, senderProfile: 'principal-mailbox', draftAuthor: 'curia' };
+      // The ok arm only, so a test can spread it and override an answer.
+      const rated = (stakes: 'routine' | 'commitment' | 'financial_or_legal'): Extract<BriefVerdict, { ok: true }> =>
+        ({ ok: true, purpose: 'serving', stakes, stakesReason: 'Why.', unsupportedClaims: [], unnecessaryItems: [], offThread: false, reason: 'ok' });
+
+      it('asks purpose, stakes, grounding, necessity and off-thread for an autonomous principal-mailbox send', async () => {
+        const { svc, review } = make([rated('routine')]);
+        await svc.review(auto);
+        expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'stakes', 'grounding', 'necessity', 'off-thread']);
+        expect(review.mock.calls[0]![0].senderProfile).toBe('principal-mailbox');
+      });
+
+      // Binding ruling (#2474, Task 7 review concern 3): an autonomous reply never passes on
+      // information the thread does not already show, whatever the score or the ceiling.
+      describe('information that isn\'t on the thread', () => {
+        const OFF = 'Held for the principal: it shares information that isn\'t on the thread, and Curia doesn\'t pass on new information without the principal.';
+
+        it('holds a reply the judge says shares off-thread information, at 100 under all', async () => {
+          const { svc, limiter } = make([{ ...rated('commitment'), offThread: true }]);
+          const tryAcquire = vi.spyOn(limiter, 'tryAcquire');
+          const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
+          expect(d).toEqual({ kind: 'hold', reason: OFF, findings: [{ rule: 'off-thread', detail: OFF }] });
+          expect(tryAcquire).not.toHaveBeenCalled();
+        });
+
+        it('sends exactly as before when the judge says nothing is off-thread', async () => {
+          const { svc } = make([rated('commitment')]);
+          await expect(svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' })).resolves.toEqual({ kind: 'send', signals: { speaksAsPrincipal: true } });
+        });
+
+        it('holds when the off-thread answer is missing or not a boolean (fail closed)', async () => {
+          for (const offThread of [undefined, 'no']) {
+            const verdict = { ...rated('routine'), offThread } as unknown as BriefVerdict;
+            if (offThread === undefined) delete (verdict as { offThread?: unknown }).offThread;
+            const { svc } = make([verdict]);
+            const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
+            expect(d.kind).toBe('hold');
+            if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable']);
+          }
+        });
+
+        it('holds, never bounces, on a malformed answer or a judge failure with personal data at 80+ and no earlier bounce', async () => {
+          const item: BriefDetectedItem = { id: 'P1', label: 'PHONE_NUMBER', text: '416-555-0199', field: 'body' };
+          const ruled = { ...rated('routine'), disclosures: [{ id: 'P1', basis: 'unsupported' as const, requested: false, reason: 'x' }] };
+          delete (ruled as { offThread?: unknown }).offThread;
+          for (const verdict of [ruled, { ok: false as const, failure: 'malformed' as const }]) {
+            const { svc } = make([verdict]);
+            const d = await svc.review({ ...auto, content: 'Call 416-555-0199.', detectedItems: [item], score: 100, stakesCeiling: 'commitment' });
+            expect(d.kind).toBe('hold');
+            if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable', 'pii-not-authorized']);
+          }
+        });
+
+        it('holds rather than bouncing when the reply is also off-thread: a rewrite would not make it on-thread', async () => {
+          const { svc } = make([{ ...rated('routine'), unsupportedClaims: [CLAIM], offThread: true }]);
+          const d = await svc.review({ ...auto, content: base.content, score: 100, stakesCeiling: 'commitment' });
+          expect(d.kind).toBe('hold');
+          if (d.kind === 'hold') {
+            // Final fixes A11 + addendum R3: the other findings follow the lead in plain words.
+            expect(d.reason).toBe(`${OFF} It says things about the principal that Curia couldn't confirm.`);
+            expect(d.findings.map((f) => f.rule)).toEqual(['off-thread', 'ungrounded-claim']);
+          }
+        });
+
+        it('leads a stakes hold with the off-thread reason, keeping the stakes finding beside it', async () => {
+          const { svc } = make([{ ...rated('financial_or_legal'), offThread: true }]);
+          const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
+          expect(d.kind).toBe('hold');
+          if (d.kind === 'hold') {
+            expect(d.reason.startsWith(OFF)).toBe(true);
+            expect(d.findings.map((f) => f.rule)).toEqual(['off-thread', 'speaks-as-principal']);
+          }
+        });
+
+        // Final fixes A11 (final review M3): a financial finding still reaches the digest.
+        it('carries the stakes rating and its reason into the off-thread hold\'s reason', async () => {
+          const { svc } = make([{ ...rated('financial_or_legal'), stakesReason: 'Confirms new bank details.', offThread: true }]);
+          const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
+          expect(d.kind).toBe('hold');
+          if (d.kind === 'hold') {
+            expect(d.reason).toBe(`${OFF} Stakes: financial or legal. Why: Confirms new bank details.`);
+            // The off-thread finding's own detail is unchanged.
+            expect(d.findings[0]).toEqual({ rule: 'off-thread', detail: OFF });
+          }
+        });
+
+        it('gives the judge the thread\'s messages newest first, credentials redacted and bounded', async () => {
+          const { svc, review } = make([rated('routine')]);
+          const threadMessages = [
+            { at: '2026-11-05T09:00:00.000Z', text: 'Older: kickoff.' },
+            { at: '2026-11-06T09:00:00.000Z', text: `Newer: key sk-ant-abcdefghijklmnopqrstuvwxyz0123 ${'y'.repeat(9_000)}` },
+          ];
+          await svc.review({ ...auto, threadMessages });
+          const evidence = review.mock.calls[0]![0].evidence;
+          expect(evidence.threadMessages.map((m: { text: string }) => m.text.slice(0, 6))).toEqual(['Newer:', 'Older:']);
+          expect(evidence.threadMessages[0].at).toBe('2026-11-06T09:00:00.000Z');
+          expect(evidence.threadMessages[0].text).not.toContain('sk-ant-abcdefghijklmnopqrstuvwxyz0123');
+          expect(evidence.threadMessages[0].text.length).toBeLessThanOrEqual(4_000);
+          expect(evidence).not.toHaveProperty('threadMessagesOlderLeftOut');
+        });
+
+        it('leaves older messages out past the budget, and says so', async () => {
+          const { svc, review } = make([rated('routine')]);
+          const threadMessages = Array.from({ length: 10 }, (_, i) => ({ at: `2026-11-${String(i + 1).padStart(2, '0')}T09:00:00.000Z`, text: `m${i} ${'z'.repeat(3_990)}` }));
+          await svc.review({ ...auto, threadMessages });
+          const evidence = review.mock.calls[0]![0].evidence;
+          expect(evidence.threadMessagesOlderLeftOut).toBe(true);
+          expect(evidence.threadMessages.length).toBeLessThan(10);
+          // The newest survive.
+          expect(evidence.threadMessages[0].text.startsWith('m9 ')).toBe(true);
+          const total = evidence.threadMessages.reduce((n: number, m: { text: string }) => n + m.text.length, 0);
+          expect(total).toBeLessThanOrEqual(16_000);
+        });
+
+        it('asks it with an empty thread when none was given: nothing counts as on the thread (fail closed)', async () => {
+          const { svc, review } = make([rated('routine')]);
+          await svc.review(auto);
+          expect(review.mock.calls[0]![0].evidence.threadMessages).toEqual([]);
+        });
+
+        it('is never asked on a principal-directed send, and its thread never reaches that judge', async () => {
+          const { svc, review } = make([{ ok: true, purpose: 'serving', unsupportedClaims: [], reason: 'ok' }, { ok: true, unsupportedClaims: [], reason: 'ok' }]);
+          const thread = [{ text: 'On the thread.' }];
+          await svc.review({ ...mailbox, draftAuthor: 'curia', threadMessages: thread });
+          await svc.review({ ...base, principalDirected: true, threadMessages: thread });
+          for (const call of review.mock.calls) {
+            expect(call[0].questions).not.toContain('off-thread');
+            expect(call[0].evidence).not.toHaveProperty('threadMessages');
+          }
+        });
+      });
+
+      it('treats an autonomous principal-mailbox send as speaking for the principal without asking', async () => {
+        // The judge is not asked, so its answer has no speaksAsPrincipal; routine still needs 80.
+        const at74 = make([rated('routine')]);
+        const held = await at74.svc.review({ ...auto, score: 74 });
+        expect(held.kind).toBe('hold');
+        if (held.kind === 'hold') expect(held.findings.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+        const at85 = make([rated('routine')]);
+        await expect(at85.svc.review({ ...auto, score: 85 })).resolves.toEqual({ kind: 'send', signals: { speaksAsPrincipal: true } });
+      });
+
+      it('holds a commitment under a routine ceiling at score 95', async () => {
+        const { svc } = make([rated('commitment')]);
+        const d = await svc.review({ ...auto, score: 95, stakesCeiling: 'routine' });
+        expect(d.kind).toBe('hold');
+        if (d.kind === 'hold') {
+          expect(d.findings.map((f) => f.rule)).toEqual(['speaks-as-principal']);
+          expect(d.reason).toContain('Stakes: commitment.');
+          expect(d.reason).toContain(' Above the sending setting.');
+        }
+      });
+
+      it('sends a commitment under a commitment ceiling at 92', async () => {
+        const { svc } = make([rated('commitment')]);
+        expect((await svc.review({ ...auto, score: 92, stakesCeiling: 'commitment' })).kind).toBe('send');
+      });
+
+      it('holds financial_or_legal at score 100 under all', async () => {
+        const { svc } = make([rated('financial_or_legal')]);
+        const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
+        expect(d.kind).toBe('hold');
+        if (d.kind === 'hold') expect(d.reason).toContain('Stakes: financial or legal.');
+      });
+
+      it('says "Above the sending setting." for a commitment under a routine ceiling at 85, where the score also holds it', async () => {
+        const { svc } = make([rated('commitment')]);
+        const d = await svc.review({ ...auto, score: 85, stakesCeiling: 'routine' });
+        expect(d.kind).toBe('hold');
+        if (d.kind === 'hold') expect(d.reason).toContain('Stakes: commitment.');
+        if (d.kind === 'hold') expect(d.reason).toContain(' Above the sending setting.');
+      });
+
+      it('never adds "Above the sending setting." to financial_or_legal: its lead already says always', async () => {
+        const { svc } = make([rated('financial_or_legal')]);
+        const d = await svc.review({ ...auto, score: 100, stakesCeiling: 'commitment' });
+        expect(d.kind).toBe('hold');
+        if (d.kind === 'hold') expect(d.reason).not.toContain('Above the sending setting.');
+      });
+
+      it('holds when the stakes judge fails, even at 85', async () => {
+        const { svc, limiter } = make([{ ok: false, failure: 'unreachable' }]);
+        const tryAcquire = vi.spyOn(limiter, 'tryAcquire');
+        const d = await svc.review({ ...auto, score: 85, stakesCeiling: 'commitment' });
+        expect(d.kind).toBe('hold');
+        expect(d).not.toHaveProperty('report');
+        expect(tryAcquire).not.toHaveBeenCalled();
+      });
+
+      it('uses the reply target as origin when no delegation origin exists', async () => {
+        const { svc, review } = make([rated('routine')]);
+        const content = `Please send it. sk-ant-abcdefghijklmnopqrstuvwxyz0123 ${'x'.repeat(5_000)}`;
+        await svc.review({ ...auto, origin: { content, at: '2026-11-06T10:00:00.000Z', senderVerified: true } });
+        const evidence = review.mock.calls[0]![0].evidence;
+        expect(evidence.originKind).toBe('reply_target');
+        expect(evidence.originAt).toBe('2026-11-06T10:00:00.000Z');
+        expect(evidence.originSenderVerified).toBe(true);
+        expect(evidence.originContent).toContain('Please send it.');
+        expect(evidence.originContent).not.toContain('sk-ant-abcdefghijklmnopqrstuvwxyz0123');
+        expect(evidence.originContent.length).toBeLessThanOrEqual(4_000);
+      });
+
+      it('prefers a delegation origin over the reply target', async () => {
+        const { svc, review } = make([rated('routine')], { evidence: { originContent: 'Delegated root.' } });
+        await svc.review({ ...auto, origin: { content: 'The reply target.', senderVerified: false } });
+        const evidence = review.mock.calls[0]![0].evidence;
+        expect(evidence.originContent).toBe('Delegated root.');
+        expect(evidence.originKind).not.toBe('reply_target');
+        expect(evidence).not.toHaveProperty('originSenderVerified');
+      });
+    });
+  });
+
   it('bounces once with the quoted claim, then blocks a second occurrence at 84 with no recheck call', async () => {
     const { svc, review } = make([
       { ...clean, unsupportedClaims: [CLAIM] }, // first send: bounce

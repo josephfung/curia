@@ -1,7 +1,9 @@
 # ceo-inbox's writes on the principal's mailbox, for cases that fire ceo-inbox directly
 # (#2025): labelling, filing, archiving, marking read and starred, the three draft tools,
 # the shadow draft a punt records, what it learns about a sender, and the scheduler
-# report. Every one succeeds, so a case scores the model's choice and not a refusal. A
+# report. Every one succeeds, so a case scores the model's choice and not a refusal; the
+# exception is ceo-inbox-send-draft (#2474), refused as production refuses a send nobody
+# asked for. A
 # case that scores one of these, or needs a richer result, stubs it itself (its own stubs
 # are matched first). Unlike ceo-inbox-office this set has no contact-register stub, so a
 # case need not seed `sam`: a triage case stubs contact-register per sender.
@@ -41,6 +43,14 @@ ceo-inbox-draft-edit:
   - agent: ceo-inbox
     match: {}
     return: { draft_id: scenario-draft-edit-1, subject: "(scenario)", to: [{ email: recipient@example.test }], cc: [] }
+# Sending from the principal's mailbox (#2474). A triage or other system turn is never
+# principal-directed, so production's gateway refuses with this text (PRINCIPAL_SEND_REFUSALS
+# .not_requested in src/skills/outbound-gateway.ts; keep the two in step). A through_gateway
+# case skips this stub and runs the real tool.
+ceo-inbox-send-draft:
+  - agent: ceo-inbox
+    match: {}
+    error: "Curia sends from the principal's mailbox only when the principal asks on a live turn. Nothing was sent; the draft is still in their Drafts folder."
 memory-store:
   - agent: ceo-inbox
     match: {}

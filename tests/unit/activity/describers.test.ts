@@ -122,6 +122,14 @@ describe('describeToolCall', () => {
     }
   });
 
+  it('names who a draft sent from the principal\'s mailbox went to (#2474)', () => {
+    const sent = call('ceo-inbox-send-draft', { draft_id: 'd-1' }, { message_id: 'm-1', to: ['John@Example.com'], subject: 'Re: Plans' });
+    expect(describerRefs(sent)).toEqual(['email:john@example.com']);
+    expect(describeToolCall(sent, ctx({ 'email:john@example.com': 'John Doe' }))?.text).toBe('sent the principal\'s draft to John Doe');
+    const refused = call('ceo-inbox-send-draft', { draft_id: 'd-1' }, null, false);
+    expect(describeToolCall(refused, ctx())?.text).toBe("couldn't send the principal's draft");
+  });
+
   it('describes a failure as a "couldn\'t" line', () => {
     const send = call('email-send', { to: 'c-1', body: 'x' }, null, false);
     expect(describeToolCall(send, ctx({ 'c-1': 'Jane Roe' }))?.text).toBe("couldn't email Jane Roe");

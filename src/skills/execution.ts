@@ -19,7 +19,7 @@
 
 import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, ApprovalVia } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
-import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
+import { isPrincipalOriginated, isOutsiderOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
 import { findCarveoutSkill } from '../contacts/principal-channel-registry.js';
 import { emailAccountIdFromInput } from '../channels/email/account-id.js';
@@ -189,6 +189,11 @@ const MAX_SEND_REFERENCES = 25;
 // reaches the LLM context window.
 const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 
+// Error texts are cut at no fewer characters than this, whatever skillOutput.maxLength says.
+// Many carry an instruction the agent must read whole (ceo-inbox-send-draft's "don't send this
+// draft again", a gate's refusal), and a small configured limit would cut it off (#2474).
+export const SKILL_ERROR_MIN_LENGTH = 4_000;
+
 // Secret-by-reference resolution (#973) — see ctx.resolveSecretRef.
 //
 // Only `user.*` references may be resolved by reference. The `user.` namespace is the
@@ -222,6 +227,17 @@ const SIGN_IN_CODE_SCRUB_EXEMPT_TOOL = 'web-browser';
 const NO_APPROVAL_FOR_SIGN_IN_CODE =
   'No approval request was created: this call carries a sign-in code, and a sign-in code is never ' +
   'stored for approval. Tell the principal the sign-in could not be finished at the current autonomy level.';
+
+/**
+ * Gate advisory tail for a tool whose call is never queued for approval (#2474, design D5): a
+ * send from the principal's own mailbox happens only on the principal's live request, so a
+ * blocked one is refused, and approve-action never replays it.
+ */
+export const NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND =
+  "No approval request was created: a send from the principal's mailbox is never queued for approval. The draft stays in their Drafts folder.";
+
+/** Tools a gate block refuses outright instead of filing an approval request (#2474). */
+const NO_QUEUED_APPROVAL_TOOLS: ReadonlySet<string> = new Set(['ceo-inbox-send-draft']);
 
 /**
  * Elevated tools that resolve approvals. A lapsed voice grant never files a confirmation
@@ -845,7 +861,8 @@ export class ExecutionLayer {
     // Strip dangerous tags and redact secrets from the error message itself before
     // wrapping — error messages can contain user-supplied values (e.g., timestamp
     // inputs) or external content (e.g., HTTP response bodies) that are injection risks.
-    const sanitized = sanitizeOutput(message, { maxLength: this.skillOutputMaxLength });
+    const maxLength = Math.max(this.skillOutputMaxLength, SKILL_ERROR_MIN_LENGTH);
+    const sanitized = sanitizeOutput(message, { maxLength });
     return `<skill_error>${sanitized}</skill_error>`;
   }
 
@@ -904,12 +921,25 @@ export class ExecutionLayer {
     options: InvokeOptions | undefined,
     skillLogger: Logger,
     sendResolution?: readonly SendRecipientPin[],
+    sendingThreshold: number = requiredScore,
   ): Promise<string> {
     const baseMsg =
       `Tool '${toolName}' blocked — autonomy score is ${currentScore}, ` +
       `but this skill (action_risk: ${String(actionRisk)}) requires ${requiredScore}. `;
 
     if (this.holdsUnscrubbedCode(toolName, input)) return baseMsg + NO_APPROVAL_FOR_SIGN_IN_CODE;
+    if (NO_QUEUED_APPROVAL_TOOLS.has(toolName)) {
+      // No approval row, so the digest is the principal's only sign that a draft is waiting (#2474).
+      // Only Gates A/B reach here (both scores known); Gate C goes through buildTierGateError.
+      // An outsider-originated call is skipped: the gateway files nothing for it either, and
+      // an outsider repeating the call must not be able to add digest noise.
+      if (!isPrincipalOriginated(options?.taskMetadata) && !isOutsiderOriginated(options?.taskMetadata)) {
+        // The digest names what sending needs (the tool's own threshold), which can exceed the
+        // 60 Gate A refuses at: the principal must not read 60 as enough when Gate B would refuse.
+        await this.publishPrincipalMailboxRefusal(currentScore, sendingThreshold, options, skillLogger);
+      }
+      return baseMsg + NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND;
+    }
 
     // Approval trigger — only if wired and task context is available.
     if (this.approvalTrigger && options?.taskEventId) {
@@ -969,6 +999,7 @@ export class ExecutionLayer {
         `does not permit ${String(actionRisk)}-risk actions without approval. `;
 
     if (this.holdsUnscrubbedCode(toolName, input)) return baseMsg + NO_APPROVAL_FOR_SIGN_IN_CODE;
+    if (NO_QUEUED_APPROVAL_TOOLS.has(toolName)) return baseMsg + NO_APPROVAL_FOR_PRINCIPAL_MAILBOX_SEND;
 
     if (this.approvalTrigger && options?.taskEventId) {
       try {
@@ -1855,6 +1886,31 @@ export class ExecutionLayer {
     return { success: false, error: this.wrapSkillError(gateCError) };
   }
 
+  /** Queue a digest item for an autonomous principal-mailbox send a gate refused (#2474). Never throws. */
+  private async publishPrincipalMailboxRefusal(
+    currentScore: number,
+    requiredScore: number,
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): Promise<void> {
+    if (!this.bus) {
+      skillLogger.warn({ currentScore, requiredScore }, 'autonomy gate: no bus — the principal_mailbox digest item is only in this log');
+      return;
+    }
+    try {
+      await this.bus.publish('execution', createPrincipalReport({
+        summary: `Left as a draft in your mailbox: a reply Curia wanted to send on its own. Autonomy is ${currentScore}; sending on its own needs ${requiredScore}.`,
+        urgency: 'digest',
+        source: 'principal_mailbox',
+        parentEventId: options?.taskEventId ?? 'system',
+        sourceLayer: 'execution',
+      }));
+    } catch (err) {
+      // Fail-open: the send is already refused; only the digest line is lost.
+      skillLogger.error({ err, currentScore, requiredScore }, 'autonomy gate: failed to queue the principal_mailbox report item');
+    }
+  }
+
   /** Queue a digest item for an action band gating let through (#2159). Never throws. */
   private async publishGateProceeded(
     toolName: string,
@@ -2363,8 +2419,12 @@ export class ExecutionLayer {
             // Note: `input` here is post-timestamp-normalization (mutated in-place above).
             // The stored payload in autonomy_action_log will contain normalized timestamps,
             // which is correct — re-normalization on approve-action re-invocation is a no-op.
+            // The digest guard in buildGateError must see the same standing the gate used: a woken
+            // task the ladder demoted from principal is refused here and must still be reported (#2474).
+            const gateOptions = { ...options, taskMetadata: effectiveTaskMetadata };
             const gateAError = await this.buildGateError(
-              toolName, input, currentScore, 60, manifest.action_risk, options, skillLogger, sendPins,
+              toolName, input, currentScore, 60, manifest.action_risk, gateOptions, skillLogger, sendPins,
+              Math.max(60, requiredScore),
             );
             return {
               success: false,
@@ -2393,8 +2453,9 @@ export class ExecutionLayer {
               });
             }
             // Note: same post-normalization `input` as Gate A — see comment above.
+            const gateOptions = { ...options, taskMetadata: effectiveTaskMetadata };
             const gateBError = await this.buildGateError(
-              toolName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger, sendPins,
+              toolName, input, currentScore, requiredScore, manifest.action_risk, gateOptions, skillLogger, sendPins,
             );
             return {
               success: false,

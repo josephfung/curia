@@ -32,7 +32,10 @@ vi.mock('../../../src/skills/outbound-queue-repo.js', async (importOriginal) => 
 import { EventBus } from '../../../src/bus/bus.js';
 import { parseSenderVerified } from '../../../src/channels/email/message-converter.js';
 import type { NylasMessage } from '../../../src/channels/email/nylas-client.js';
+import type { AutonomyService } from '../../../src/autonomy/autonomy-service.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
+import type { ChannelIdentity } from '../../../src/contacts/types.js';
+import type { PrincipalSendEntry } from '../../../src/skills/principal-send/send-ledger.js';
 import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
 import { createLogger } from '../../../src/logger.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
@@ -40,6 +43,7 @@ import { buildReplyQuote } from '../../../src/skills/_shared/reply-quote.js';
 import type { BandReviewInput } from '../../../src/dispatch/band-send-review.js';
 import {
   createRecordingOutboundGateway,
+  createRecordingPrincipalMailbox,
   createRecordingTransports,
   emailText,
   recordingBandReview,
@@ -47,6 +51,7 @@ import {
   type RecordedSend,
   type SendRecorder,
 } from '../../../src/startup/test-mode-sends.js';
+import { scheduledJobTask } from '../../scenarios/harness.js';
 
 const logger = createLogger('error');
 
@@ -66,10 +71,12 @@ const noRun: SendRecorder = {
   message: () => undefined,
 };
 
-function gateway(recorder: SendRecorder): OutboundGateway {
+function gateway(recorder: SendRecorder, principalAddress?: string): OutboundGateway {
   const contactService = {
     resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
     getContact: vi.fn().mockResolvedValue(null),
+    createContact: vi.fn().mockResolvedValue({ id: 'contact-new' }),
+    linkIdentity: vi.fn().mockResolvedValue(undefined),
   } as unknown as ContactService;
   return createRecordingOutboundGateway({
     recorder,
@@ -78,9 +85,37 @@ function gateway(recorder: SendRecorder): OutboundGateway {
     bus: new EventBus(logger),
     logger,
     principalIdentities: [],
+    ...(principalAddress ? { principalMailbox: createRecordingPrincipalMailbox(recorder, () => principalAddress) } : {}),
     review: { contentFilter: new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' }) },
   });
 }
+
+/** A draft in the principal's own mailbox, as `seed.principal_mailbox` seeds one (#2474). */
+function principalDraft(over: Partial<NylasMessage> = {}): NylasMessage {
+  return {
+    id: 'draft-30v-acme', threadId: 'thr-30v-acme', subject: 'Venue for the offsite', from: [],
+    to: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }], cc: [], bcc: [],
+    body: 'Shall we use the Harbour Room?', snippet: '', date: 0, unread: false, folders: ['DRAFT'], attachments: [],
+    ...over,
+  };
+}
+
+/** A message on the draft's thread, as `seed.principal_mailbox.threads` seeds one (#2474 PR 2): Jo, authenticated. */
+function threadMessage(over: Partial<NylasMessage> = {}): NylasMessage {
+  return {
+    id: 'msg-1', threadId: 'thr-30v-acme', subject: 'Venue for the offsite', from: [{ name: 'Jo Park', email: 'jo.park@acme.example.test' }],
+    to: [{ email: 'avery@example.test' }], cc: [], bcc: [], body: 'Which venue?', snippet: '', date: 0, unread: false, folders: ['INBOX'],
+    headers: [{ name: 'Authentication-Results', value: 'mx.example.test; spf=pass smtp.mailfrom=acme.example.test; dkim=pass header.d=acme.example.test; dmarc=pass header.from=acme.example.test' }],
+    attachments: [],
+    ...over,
+  };
+}
+
+/** The principal asking on a live turn: what makes a principal-mailbox send principal-directed. */
+const LIVE_PRINCIPAL = {
+  liveTurn: true,
+  taskMetadata: { originator: { contactId: 'principal-1', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-07T10:00:00.000Z' } },
+};
 
 describe('createRecordingOutboundGateway', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
@@ -207,6 +242,221 @@ describe('createRecordingTransports', () => {
   it('keys one fake mailbox by every account name', () => {
     const { nylasClients } = createRecordingTransports(runRecorder(), ['curia', 'principal']);
     expect([...nylasClients.keys()]).toEqual(['curia', 'principal']);
+  });
+});
+
+// #2474: the principal's own mailbox is a separate fake over the run's seeded drafts. Curia's
+// accounts never see those drafts, and a send from it records the principal as the sender.
+describe('the recording principal mailbox (#2474)', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    constructed.clients.length = 0;
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network call in test mode'));
+  });
+  afterEach(() => {
+    expect(constructed.clients).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('serves the run\'s drafts and records a send with the principal as sender, once', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts };
+    const mailbox = createRecordingPrincipalMailbox(recorder, () => 'avery@example.test')()!;
+    expect(await mailbox.getDraft('draft-30v-acme')).toMatchObject({ subject: 'Venue for the offsite' });
+    expect(await mailbox.getDraft('draft-other')).toBeNull();
+    const sent = await mailbox.sendDraft('draft-30v-acme');
+    expect(recorder.sends).toEqual([expect.objectContaining({
+      channel: 'email', kind: 'send', from: 'avery@example.test', to: ['jo.park@acme.example.test'],
+      subject: 'Venue for the offsite', body: 'Shall we use the Harbour Room?', id: sent.id,
+    })]);
+    // Sent, so no longer a draft.
+    expect(drafts.has('draft-30v-acme')).toBe(false);
+    await expect(mailbox.sendDraft('draft-30v-acme')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('is no mailbox when the calling run has none (the gateway then refuses: mailbox_unavailable)', () => {
+    expect(createRecordingPrincipalMailbox(runRecorder(), () => 'avery@example.test')()).toBeNull();
+  });
+
+  it('keeps the principal\'s drafts out of Curia\'s accounts', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts };
+    const curia = createRecordingTransports(recorder, ['curia']).nylasClients.get('curia')!;
+    expect(await curia.getDraft('draft-30v-acme')).toBeNull();
+  });
+
+  it('sends a seeded draft through sendPrincipalDraft on the principal\'s live turn', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts, curiaDraftIds: () => new Set<string>(), sendLevel: () => undefined };
+    const result = await gateway(recorder, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL });
+    expect(result).toMatchObject({ success: true, to: ['jo.park@acme.example.test'], subject: 'Venue for the offsite' });
+    expect(recorder.sends.map(s => [s.kind, s.from, s.to])).toEqual([['send', 'avery@example.test', ['jo.park@acme.example.test']]]);
+  });
+
+  it('reads the run\'s edits: a draft Curia edited is reviewed as curia-edited (final review S1)', async () => {
+    const recent = Math.floor(Date.now() / 1000) - 3600;
+    const drafts = new Map([['draft-30v-acme', principalDraft({ date: recent })]]);
+    const reviewed: string[] = [];
+    const bandReview = { review: vi.fn(async (input: BandReviewInput) => { reviewed.push(String(input.draftAuthor)); return { kind: 'send' as const }; }) };
+    const build = (curiaEdited: ReadonlySet<string>) => createRecordingOutboundGateway({
+      recorder: { ...runRecorder(), principalDrafts: () => drafts, curiaDraftIds: () => new Set<string>(), curiaEditedDraftIds: () => curiaEdited },
+      emailAccounts: [{ name: 'curia', selfEmail: 'curia@example.test' }],
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockResolvedValue(null), getContact: vi.fn().mockResolvedValue(null),
+        createContact: vi.fn().mockResolvedValue({ id: 'contact-new' }), linkIdentity: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ContactService,
+      bus: new EventBus(logger),
+      logger,
+      principalIdentities: [],
+      principalMailbox: createRecordingPrincipalMailbox({ ...runRecorder(), principalDrafts: () => drafts }, () => 'avery@example.test'),
+      review: { contentFilter: new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' }), bandReview, gating: 'band' },
+    });
+    expect((await build(new Set(['draft-30v-acme'])).sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL })).success).toBe(true);
+    expect(reviewed).toEqual(['curia-edited']);
+  });
+
+  it('reads the run\'s send level: off leaves the draft unsent', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts, sendLevel: () => 'off' as const };
+    const result = await gateway(recorder, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL });
+    expect(result).toMatchObject({ success: false, leftAsDraft: true, refusal: 'setting_off' });
+    expect(recorder.sends).toEqual([]);
+    expect(drafts.has('draft-30v-acme')).toBe(true);
+  });
+
+  it('refuses an autonomous send it cannot review: this gateway runs no band review (PR 2)', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts, sendLevel: () => 'all' as const };
+    const system = { taskMetadata: { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
+    const result = await gateway(recorder, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: system });
+    expect(result).toMatchObject({ success: false, leftAsDraft: true, refusal: 'no_band_review' });
+    expect(recorder.sends).toEqual([]);
+  });
+
+  it('refuses outside every run: the stack has no principal mailbox then', async () => {
+    const result = await gateway(noRun, 'avery@example.test').sendPrincipalDraft('draft-30v-acme', { authority: LIVE_PRINCIPAL });
+    expect(result).toMatchObject({ success: false, refusal: 'mailbox_unavailable' });
+  });
+
+  it('lists a thread as Gmail does: the run\'s seeded messages and the drafts on it, newest first', async () => {
+    const thread = [threadMessage({ id: 'msg-1', date: 100 }), threadMessage({ id: 'msg-2', date: 300 })];
+    const drafts = new Map([
+      ['draft-30v-acme', principalDraft({ date: 200 })],
+      ['draft-elsewhere', principalDraft({ id: 'draft-elsewhere', threadId: 'thr-other' })],
+    ]);
+    const recorder = { ...runRecorder(), principalDrafts: () => drafts, principalThreadMessages: (id: string) => (id === 'thr-30v-acme' ? thread : []) };
+    const mailbox = createRecordingPrincipalMailbox(recorder, () => 'avery@example.test')()!;
+    const listed = await mailbox.listMessages({ threadId: 'thr-30v-acme', fields: 'include_headers', limit: 50 });
+    expect(listed.map(m => [m.id, m.folders])).toEqual([['msg-2', ['INBOX']], ['draft-30v-acme', ['DRAFT']], ['msg-1', ['INBOX']]]);
+    expect(await mailbox.listMessages({ threadId: 'thr-30v-acme', limit: 2 })).toHaveLength(2);
+    // sendPrincipalDraft lists only a thread; anything else is a misuse of the fake, loudly.
+    await expect(mailbox.listMessages({})).rejects.toThrow(/threadId/);
+  });
+});
+
+// #2474 PR 2: an autonomous send reaches band review in a scenario run. The stack builds the
+// gateway with the configured (tier) gating; the case's autonomy fixture says band on every read.
+describe('an autonomous send through the recording gateway (#2474 PR 2)', () => {
+  const NOW = Math.floor(Date.now() / 1000);
+  // The metadata the scenario harness's `from: scheduler` task really carries (addendum R1), so
+  // these runs prove that task passes the gateway's origin allowlist.
+  const SCHEDULED = { taskMetadata: scheduledJobTask('ceo-inbox', 'c-1', 'triage').payload.metadata };
+  const bandFixture = {
+    getConfig: async () => ({ score: 85, band: 'act', updatedAt: new Date(0), updatedBy: 'scenario-fixture', gating: 'band' }),
+  } as unknown as AutonomyService;
+
+  function setup(over: { taskDrafts?: string[]; ledger?: PrincipalSendEntry[]; draft?: Partial<NylasMessage>; replyTo?: Map<string, string> } = {}) {
+    const drafts = new Map([['draft-30v-acme', principalDraft({ date: NOW, ...over.draft })]]);
+    const ledger = over.ledger ?? [];
+    const recorder: SendRecorder & { sends: RecordedSend[] } = {
+      ...runRecorder(),
+      principalDrafts: () => drafts,
+      curiaDraftIds: () => new Set(['draft-30v-acme']),
+      curiaTaskDrafts: () => ({
+        ids: new Set(over.taskDrafts ?? ['draft-30v-acme']), now: new Date(NOW * 1000),
+        replyTo: over.replyTo ?? new Map([['draft-30v-acme', 'msg-1']]),
+      }),
+      principalThreadMessages: (id: string) => (id === 'thr-30v-acme' ? [threadMessage({ id: 'msg-1', date: NOW - 3600 })] : []),
+      principalSends: () => ledger,
+      sendLevel: () => 'routine' as const,
+    };
+    const reviews: string[] = [];
+    const gw = createRecordingOutboundGateway({
+      recorder,
+      emailAccounts: [{ name: 'curia', selfEmail: 'curia@example.test' }],
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockResolvedValue(null), getContact: vi.fn().mockResolvedValue(null),
+        createContact: vi.fn().mockResolvedValue({ id: 'contact-new' }), linkIdentity: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ContactService,
+      bus: new EventBus(logger),
+      logger,
+      principalIdentities: [{ channel: 'email', channelIdentifier: 'avery@example.test', verified: true } as unknown as ChannelIdentity],
+      autonomyService: bandFixture,
+      principalMailbox: createRecordingPrincipalMailbox(recorder, () => 'avery@example.test'),
+      review: {
+        contentFilter: new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' }),
+        bandReview: { review: vi.fn(async () => { reviews.push('reviewed'); return { kind: 'send' as const }; }) },
+        gating: 'tier',
+      },
+    });
+    return { gw, recorder, drafts, ledger, reviews };
+  }
+
+  it('sends a reply Curia drafted in this task, past band review, from the principal', async () => {
+    const { gw, recorder, ledger, reviews } = setup();
+    const result = await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' });
+    expect(result).toMatchObject({ success: true, to: ['jo.park@acme.example.test'] });
+    expect(reviews).toEqual(['reviewed']);
+    expect(recorder.sends.map(s => [s.kind, s.from])).toEqual([['send', 'avery@example.test']]);
+    // The run's own ledger: the send's marker, now sent, starts the thread's cooldown.
+    expect(ledger).toEqual([expect.objectContaining({ draftId: 'draft-30v-acme', threadId: 'thr-30v-acme', mode: 'autonomous', outcome: 'sent' })]);
+  });
+
+  it('leaves a draft Curia wrote in an earlier task, and records why in the run\'s ledger', async () => {
+    const { gw, recorder, drafts, ledger, reviews } = setup({ taskDrafts: [] });
+    const result = await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' });
+    expect(result).toMatchObject({ success: false, leftAsDraft: true, refusal: 'not_curia_draft' });
+    expect(reviews).toEqual([]);
+    expect(recorder.sends).toEqual([]);
+    expect(drafts.has('draft-30v-acme')).toBe(true);
+    expect(ledger).toEqual([expect.objectContaining({ draftId: 'draft-30v-acme', outcome: 'held', reasonCode: 'not_curia_draft' })]);
+  });
+
+  it('keeps each run\'s ledger apart: one run\'s send starts no cooldown in another', async () => {
+    const first = setup();
+    expect((await first.gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).success).toBe(true);
+    // Another attempt of the same case reuses the thread id, with a ledger of its own.
+    const second = setup();
+    expect((await second.gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-2' })).success).toBe(true);
+    // Within one run the cooldown holds.
+    const again = setup({ ledger: first.ledger });
+    expect(await again.gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-3' })).toMatchObject({ refusal: 'thread_cooldown' });
+  });
+
+  // Final fixes A13 (final review M6): the fake counts as production does.
+  it('counts a ledger entry with an unreadable time as recent, as production does (fail closed)', async () => {
+    const broken: PrincipalSendEntry = { draftId: 'old', threadId: 'thr-30v-acme', recipients: [], mode: 'autonomous', at: 'not a date', outcome: 'held' };
+    const { gw } = setup({ ledger: [broken] });
+    expect(await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).toMatchObject({ refusal: 'thread_cooldown' });
+  });
+
+  // Final fixes A4: the global cap reads the run's own ledger.
+  it('refuses past the daily cap of autonomous sends across threads', async () => {
+    const at = new Date().toISOString();
+    const sent: PrincipalSendEntry[] = Array.from({ length: 10 }, (_, i) => ({
+      draftId: `d${i}`, threadId: `other-${i}`, recipients: [], mode: 'autonomous' as const, at, outcome: 'sent' as const,
+    }));
+    const { gw, recorder } = setup({ ledger: sent });
+    expect(await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).toMatchObject({ refusal: 'daily_cap' });
+    expect(recorder.sends).toEqual([]);
+  });
+
+  // Final fixes A5: the run records which message each stubbed reply answered.
+  it('refuses a reply whose answered message the run did not record (fail closed)', async () => {
+    const { gw, recorder } = setup({ replyTo: new Map() });
+    expect(await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).toMatchObject({ refusal: 'not_latest_message' });
+    expect(recorder.sends).toEqual([]);
   });
 });
 

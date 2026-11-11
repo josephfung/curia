@@ -13,9 +13,13 @@ export function isSpotCheckOrAbove(score: number): boolean {
   return score >= 80;
 }
 
-/** Skills that send to a human. Gate C leaves their review to the gateway's band review. */
+/**
+ * Skills that send to a human. Gate C leaves their review to the gateway's band review, and
+ * the gateway records them for sampling. ceo-inbox-send-draft sends from the principal's own
+ * mailbox through the same review (#2474).
+ */
 export const HUMAN_SEND_SKILLS: ReadonlySet<string> = new Set([
-  'email-send', 'email-reply', 'send-draft', 'signal-send', 'sms-send', 'slack-send',
+  'email-send', 'email-reply', 'send-draft', 'signal-send', 'sms-send', 'slack-send', 'ceo-inbox-send-draft',
 ]);
 
 /**

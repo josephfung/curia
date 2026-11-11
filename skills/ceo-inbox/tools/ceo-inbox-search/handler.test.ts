@@ -323,3 +323,93 @@ describe('CeoInboxSearchHandler — drafts search (#1000)', () => {
     expect(warnCalls.some((c: unknown[]) => typeof c[1] === 'string' && c[1].includes('cap'))).toBe(true);
   });
 });
+
+describe('CeoInboxSearchHandler — drafts date filter and authorship (#2474)', () => {
+  const handler = new CeoInboxSearchHandler();
+  // 2026-11-07T13:00:00Z = 08:00 in Toronto; d1 is before, d2 and d3 at/after.
+  const RAW = [
+    { id: 'd1', thread_id: 't1', subject: 'x old', to: [], cc: [], snippet: '', date: 1794056400 - 3600 },
+    { id: 'd2', thread_id: 't2', subject: 'x edge', to: [], cc: [], snippet: '', date: 1794056400 },
+    { id: 'd3', thread_id: 't3', subject: 'x new', to: [], cc: [], snippet: '', date: 1794056400 + 3600 },
+  ];
+  const SINCE = '2026-11-07T08:00:00-05:00';
+  const repo = (rows: unknown[] | Error) => ({
+    findToolResults: rows instanceof Error ? vi.fn().mockRejectedValue(rows) : vi.fn().mockResolvedValue(rows),
+    findToolResultsForTasks: vi.fn(),
+  });
+  const ctxWith = (input: Record<string, unknown>, auditLogRepo: unknown) =>
+    ({ ...makeCtx({ ...input, query: 'x' }), timezone: 'America/Toronto', auditLogRepo }) as unknown as ToolContext;
+
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('filters drafts by modified_since', async () => {
+    vi.stubGlobal('fetch', mockFetchReturning(RAW));
+    const result = await handler.execute(ctxWith({ folder: 'DRAFTS', modified_since: SINCE }, repo([])));
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { drafts: Array<{ id: string }>; count: number };
+    expect(data.drafts.map((d) => d.id)).toEqual(['d2', 'd3']);
+    expect(data.count).toBe(2);
+  });
+
+  it('rejects an unparseable modified_since with an error naming the field', async () => {
+    vi.stubGlobal('fetch', mockFetchReturning(RAW));
+    const result = await handler.execute(ctxWith({ folder: 'DRAFTS', modified_since: 'this morning' }, repo([])));
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain('modified_since');
+  });
+
+  it('marks created_by_curia from provenance', async () => {
+    vi.stubGlobal('fetch', mockFetchReturning(RAW));
+    const rows = [{
+      timestamp: new Date(), targetId: 'ceo-inbox-draft-reply',
+      payload: { toolName: 'ceo-inbox-draft-reply', result: { success: true, data: { draft_id: 'd3' } } },
+    }];
+    const result = await handler.execute(ctxWith({ folder: 'DRAFTS' }, repo(rows)));
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { drafts: Array<{ id: string; created_by_curia: boolean | null }> };
+    expect(data.drafts.map((d) => [d.id, d.created_by_curia])).toEqual([['d1', false], ['d2', false], ['d3', true]]);
+  });
+
+  it('sets created_by_curia null and still lists when provenance throws', async () => {
+    vi.stubGlobal('fetch', mockFetchReturning(RAW));
+    const result = await handler.execute(ctxWith({ folder: 'DRAFTS' }, repo(new Error('db down'))));
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { drafts: Array<{ created_by_curia: boolean | null }>; count: number };
+    expect(data.count).toBe(3);
+    expect(data.drafts.every((d) => d.created_by_curia === null)).toBe(true);
+  });
+
+  it('adds date_local and displayTimezone', async () => {
+    vi.stubGlobal('fetch', mockFetchReturning(RAW));
+    const result = await handler.execute(ctxWith({ folder: 'DRAFTS' }, repo([])));
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { drafts: Array<{ id: string; date_local: string }>; displayTimezone: string };
+    expect(data.drafts.find((d) => d.id === 'd2')!.date_local).toMatch(/^2026-11-07T08:00:00\.000-05:00/);
+    expect(data.displayTimezone).toContain('EST');
+  });
+
+  it('reads an offset-less modified_since in the principal timezone', async () => {
+    vi.stubGlobal('fetch', mockFetchReturning(RAW));
+    // 08:00 Toronto = 13:00Z, so d1 (an hour earlier) is out and d2/d3 are in; UTC reading would keep none.
+    const result = await handler.execute(ctxWith({ folder: 'DRAFTS', modified_since: '2026-11-07T08:00:00' }, repo([])));
+    if (!result.success) throw new Error(result.error);
+    expect((result.data as { drafts: Array<{ id: string }> }).drafts.map((d) => d.id)).toEqual(['d2', 'd3']);
+  });
+
+  it('leaves an explicit-offset modified_since unchanged', async () => {
+    vi.stubGlobal('fetch', mockFetchReturning(RAW));
+    const result = await handler.execute(ctxWith({ folder: 'DRAFTS', modified_since: '2026-11-07T14:00:00Z' }, repo([])));
+    if (!result.success) throw new Error(result.error);
+    expect((result.data as { drafts: Array<{ id: string }> }).drafts.map((d) => d.id)).toEqual(['d3']);
+  });
+
+  it('sets created_by_curia null when no auditLogRepo is available', async () => {
+    vi.stubGlobal('fetch', mockFetchReturning(RAW));
+    const result = await handler.execute(ctxWith({ folder: 'DRAFTS' }, undefined));
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { drafts: Array<{ created_by_curia: boolean | null }>; count: number };
+    expect(data.count).toBe(3);
+    expect(data.drafts.every((d) => d.created_by_curia === null)).toBe(true);
+  });
+});

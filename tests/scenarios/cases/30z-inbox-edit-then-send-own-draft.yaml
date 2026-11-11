@@ -1,0 +1,95 @@
+# Case 30z (#2474, design D6): edit then send the principal's own draft. The draft says
+# "[venue TBD]"; the principal gives the venue and asks to send. ceo-inbox edits the draft in
+# place (ceo-inbox-draft-edit, stubbed; the harness mirrors the edit's body into the seeded
+# draft) and then sends it, so the delivered email carries the venue. Both steps are in one
+# ask, so no go-ahead turn is needed.
+name: inbox edits then sends the principal draft
+description: >
+  The principal asks ceo-inbox to fill in the venue on the Acme draft (to Jo Park): it is the Harbour Room. The draft has a "[venue TBD]" placeholder. ceo-inbox edits that draft in place with the venue, then sends it. The delivered email names the Harbour Room. Curia is at autonomy 85 (band gating).
+tags: [specialist-ceo-inbox, ceo-inbox, delegated-mode, drafts, send, principal-mailbox, band-gating]
+agent: ceo-inbox
+release_gate: true
+through_gateway: true
+autonomy: { score: 85, gating: band }
+stub_sets: [ceo-inbox-mailroom]
+seed:
+  principal_mailbox:
+    drafts:
+      - id: draft-30-acme
+        thread: thr-30-acme
+        to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+        subject: Venue for the offsite
+        body: "Jo, shall we use [venue TBD] for the offsite? Let me know."
+        modified: "{{at:now-3h}}"
+        by_curia: false
+inbound:
+  from: delegate
+  requester: principal
+  origin: "Fill in the venue on the Acme draft: it's the Harbour Room. And send it."
+  content: >
+    The principal asked: fill in the venue on the Acme draft, it's the Harbour Room, and send it.
+tool_stubs:
+  ceo-inbox-draft-edit:
+    - match: { draft_id: draft-30-acme }
+      return: { draft_id: draft-30-acme, subject: Venue for the offsite, to: [{ name: Jo Park, email: jo.park@acme.example.test }], cc: [] }
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return:
+        folder: DRAFTS
+        count: 1
+        displayTimezone: "{{timezone}}"
+        drafts:
+          - id: draft-30-acme
+            threadId: thr-30-acme
+            subject: Venue for the offsite
+            to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+            cc: []
+            snippet: "Jo, shall we use [venue TBD] for the offsite? Let me know."
+            date_local: "{{at:now-3h}}"
+            created_by_curia: false
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return:
+        folder: DRAFTS
+        count: 1
+        displayTimezone: "{{timezone}}"
+        drafts:
+          - id: draft-30-acme
+            threadId: thr-30-acme
+            subject: Venue for the offsite
+            to: [{ name: Jo Park, email: jo.park@acme.example.test }]
+            cc: []
+            snippet: "Jo, shall we use [venue TBD] for the offsite? Let me know."
+            date_local: "{{at:now-3h}}"
+            created_by_curia: false
+  # No draft_id stub: a read of draft-30-acme is served from the seeded draft's run state, so a
+  # re-read after the edit shows the venue (a draft_id stub would always return the placeholder).
+  ceo-inbox-read:
+    - match: {}
+      error: "Failed to read principal inbox message: not found"
+expected_behaviors:
+  - id: edits_the_draft
+    weight: critical
+    description: Fixes the venue with ceo-inbox-draft-edit on the existing Acme draft.
+    check:
+      called: ceo-inbox-draft-edit
+      with: { draft_id: draft-30-acme }
+  - id: no_recreate
+    weight: important
+    description: Creates no new draft.
+    check:
+      not_called: [ceo-inbox-draft-compose, ceo-inbox-draft-reply]
+  - id: sent_with_venue
+    weight: critical
+    description: The email that went out carries the venue.
+    check:
+      delivered: { channel: email, count: 1, contains: [Harbour Room] }
+  - id: placeholder_gone
+    weight: critical
+    description: The placeholder did not go out.
+    check:
+      delivered: { contains: ["venue TBD"], count: 0 }
+failure_modes:
+  - Sends the draft with the placeholder still in it
+  - Sends without editing, or composes a fresh draft instead
+  - Edits but never sends, or claims it sent when it did not

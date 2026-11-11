@@ -334,6 +334,18 @@ const DESCRIBERS: Record<string, Describer> = {
     },
     attempt: () => 'send a reply',
   },
+  // Sends a draft already written (#2474): the principal's time saved is the send, like a relay.
+  'ceo-inbox-send-draft': {
+    prominence: 'line',
+    minutes: 1,
+    tally: { verb: 'sent', one: 'a draft', many: 'drafts' },
+    refs: (call) => emailRefs(call.data?.to),
+    done: (call, ctx) => {
+      const to = emailRefs(call.data?.to);
+      return to.length > 0 ? `sent the principal's draft to ${people(to, ctx)}` : "sent the principal's draft";
+    },
+    attempt: () => "send the principal's draft",
+  },
   'dispatcher-relay': {
     prominence: 'line',
     minutes: 1,

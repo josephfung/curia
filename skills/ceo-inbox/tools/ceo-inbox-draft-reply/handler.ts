@@ -229,6 +229,9 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
           to: draft.to,
           cc: draft.cc,
           already_exists: false,
+          // The message this draft answers (#2474 final fixes A5): an autonomous send reads it
+          // from this result's audit row and requires it to be the thread's latest message.
+          reply_to_message_id: replyToMessageId,
         },
       };
     } catch (err) {

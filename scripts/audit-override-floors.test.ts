@@ -913,6 +913,68 @@ describe('allowlist', () => {
     expect(report.stale[0]!.safeFloor).toBe('^11.3.0');
   });
 
+  describe('range-scoped entry', () => {
+    const globSource = fakeSource({
+      versions: { glob: ['10.4.5', '12.0.0', '13.0.7', '13.1.0', '14.0.2'] },
+      global: { glob: [adv('GHSA-3g3m-2fjr-6pw4', 'high', ['>= 9.0.0, <= 14.0.1'])] },
+    });
+    const policy: AuditPolicy = {
+      allowlist: [
+        {
+          package: 'glob',
+          ghsa: 'GHSA-3g3m-2fjr-6pw4',
+          reason: '13.0.7 backports the fix',
+          range: '>=13.0.7 <14',
+        },
+      ],
+      noAdvisoryExpected: [],
+      globalDbOnly: [],
+    };
+
+    it('suppresses the advisory when every admitted version is inside the range', async () => {
+      const report = await auditOverrideFloors({
+        workspaceYaml: yamlWith(`  glob@13: '>=13.0.7 <14'`),
+        policy,
+        source: globSource,
+      });
+
+      expect(report.errors).toEqual([]);
+      expect(report.stale).toEqual([]);
+      expect(report.exitCode).toBe(0);
+    });
+
+    it.each([
+      ['a widened floor', `  glob@13: '>=13.0.0 <14'`],
+      ['another glob override reaching older majors', `  glob@10: '>=10.4.5 <11'`],
+    ])('fires again for %s', async (_name, line) => {
+      const report = await auditOverrideFloors({
+        workspaceYaml: yamlWith(line),
+        policy: {
+          ...policy,
+          allowlist: [{ ...policy.allowlist[0]!, range: '>=13.0.7 <14' }],
+        },
+        source: fakeSource({
+          versions: { glob: ['10.4.5', '13.0.6', '13.0.7', '13.1.0', '14.0.2'] },
+          global: { glob: [adv('GHSA-3g3m-2fjr-6pw4', 'high', ['>= 9.0.0, <= 14.0.1'])] },
+        }),
+      });
+
+      expect(report.stale).toHaveLength(1);
+      expect(report.stale[0]!.advisories.map((a) => a.ghsaId)).toEqual(['GHSA-3g3m-2fjr-6pw4']);
+    });
+
+    it('rejects a range that is not valid semver', async () => {
+      const report = await auditOverrideFloors({
+        workspaceYaml: yamlWith(`  glob@13: '>=13.0.7 <14'`),
+        policy: { ...policy, allowlist: [{ ...policy.allowlist[0]!, range: 'not a range' }] },
+        source: globSource,
+      });
+
+      expect(report.exitCode).toBe(1);
+      expect(report.errors.join('\n')).toMatch(/range/);
+    });
+  });
+
   it('rejects an entry with no reason', async () => {
     const report = await auditOverrideFloors({
       workspaceYaml: uuidYaml,
