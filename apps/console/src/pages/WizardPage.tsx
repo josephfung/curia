@@ -16,6 +16,7 @@ import {
   buildIdentityPayload,
   assistantFullName,
   defaultSignature,
+  fallbackEmailSignature,
   DEFAULT_ASSISTANT_FIRST_NAME,
   detectBrowserTimezone,
   validateProfileEmail,
@@ -924,12 +925,16 @@ export default function WizardPage() {
         <textarea
           id="w-signature"
           value={state.signature}
-          // The signature is pre-populated as a value (above); this placeholder
-          // is the fallback if the operator clears the field. Tracks the LLM
-          // suggestion's first name when one landed, else "Alex" (#799).
-          placeholder={defaultSignature(suggestedName ?? DEFAULT_ASSISTANT_FIRST_NAME)}
+          // The signature is pre-populated as a value (above). Cleared, the
+          // placeholder shows what is sent instead: name over title (#2554).
+          placeholder={fallbackEmailSignature(state.name, state.title)}
           onChange={e => setState(s => ({ ...s, signature: e.target.value }))}
         />
+        {state.signature.trim() === '' && (
+          <p className="settings-muted-hint">
+            Left empty, emails are signed with the name and title shown above.
+          </p>
+        )}
       </div>
       <div className="wizard-nav">
         <button type="button" className="btn-wizard-back" onClick={handleBack}>

@@ -68,6 +68,13 @@ export function defaultSignature(firstName: string): string {
   return `--\n${assistantFullName(firstName)}\nDigital EA`;
 }
 
+// The signature the gateway sends when the signature field is empty: the assistant's
+// name over its title (#2554). Mirrors `emailSignatureText` in
+// src/channels/email/signature.ts, so the console shows exactly what goes out.
+export function fallbackEmailSignature(name: string, title: string): string {
+  return [name, title].map(s => s.trim()).filter(Boolean).join('\n');
+}
+
 export const DEFAULT_WIZARD_STATE: WizardState = {
   principalName: '',
   name: assistantFullName(DEFAULT_ASSISTANT_FIRST_NAME),
