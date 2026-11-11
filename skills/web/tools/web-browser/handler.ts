@@ -982,12 +982,16 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // The field's document may have moved to a private address while the secret resolved
       // (#2521). And a secret goes only into the documents it was resolved for: refuse if the top
       // page or the field's frame moved since, so it is never typed into a replacement document.
-      // Both again after focusing, which can itself navigate.
+      // Both again after focusing, which can itself navigate. A tracked sign-in code is held to
+      // its verification's domain the same way: judged again on the document as it is now.
       if (!(await scopeStillSafe(typeScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       if (secretTargetMoved(page, typeScope, secretBoundTo)) return { ok: false, error: SECRET_TARGET_MOVED_REFUSAL };
       await humanFocusField(page, typeTarget, { log: ctx.log });
       if (!(await scopeStillSafe(typeScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       if (secretTargetMoved(page, typeScope, secretBoundTo)) return { ok: false, error: SECRET_TARGET_MOVED_REFUSAL };
+      if (!hasSecretRef && !trackedCodeAllowedOn(ctx, fillValue, documentSiteUrl(page, typeScope), sessionId)) {
+        return { ok: false, error: TRACKED_CODE_REFUSAL };
+      }
       await page.keyboard.press('ControlOrMeta+a');
       await page.keyboard.press('Delete');
       await humanType(page, fillValue, { log: ctx.log });
@@ -1046,6 +1050,10 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // Playwright matches the string against option value or label.
       if (!(await scopeStillSafe(selectScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       if (secretTargetMoved(page, selectScope, selectBoundTo)) return { ok: false, error: SECRET_TARGET_MOVED_REFUSAL };
+      // The address check above awaits, and the frame can move meanwhile: judge a tracked code again.
+      if (!selectHasRef && !trackedCodeAllowedOn(ctx, selectValue, documentSiteUrl(page, selectScope), sessionId)) {
+        return { ok: false, error: TRACKED_CODE_REFUSAL };
+      }
       await selectTarget.selectOption(selectValue);
       return { ok: true, navigated: await actionStartedNavigation(activity, selectMark, timing, deps.settleDeadline) };
     }

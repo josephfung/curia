@@ -46,10 +46,30 @@ describe('web-fetch', () => {
       expect(fetchSpy).toHaveBeenCalledOnce();
     });
 
-    it('ignores proxy variables when NODE_USE_ENV_PROXY is off, as Node fetch does', () => {
-      expect(envProxyFor(new URL('https://example.com/'), { HTTPS_PROXY: 'http://proxy.corp:3128' })).toBeNull();
-      expect(envProxyFor(new URL('https://example.com/'), { NODE_USE_ENV_PROXY: '0', HTTPS_PROXY: 'http://p:1' })).toBeNull();
-      expect(envProxyFor(new URL('https://example.com/'), { NODE_USE_ENV_PROXY: '1' })).toBeNull();
+    it('refuses when the proxy is turned on by --use-env-proxy in NODE_OPTIONS', async () => {
+      vi.stubEnv('NODE_USE_ENV_PROXY', '');
+      vi.stubEnv('NODE_OPTIONS', '--max-old-space-size=512 --use-env-proxy');
+      vi.stubEnv('HTTPS_PROXY', 'http://proxy:3128');
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/page'));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/configured HTTP proxy/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('treats --use-env-proxy on the command line (execArgv) as turning the proxy on', () => {
+      const url = new URL('https://example.com/');
+      expect(envProxyFor(url, { HTTPS_PROXY: 'http://proxy:3128' }, ['--use-env-proxy'])).toBe('http://proxy:3128');
+      expect(envProxyFor(new URL('http://example.com/'), { http_proxy: 'http://p:1' }, ['--use-env-proxy=1'])).toBe('http://p:1');
+      expect(envProxyFor(url, { HTTPS_PROXY: 'http://proxy:3128' }, ['--no-use-env-proxy'])).toBeNull();
+    });
+
+    it('ignores proxy variables when env-proxy routing is off, as Node fetch does', () => {
+      expect(envProxyFor(new URL('https://example.com/'), { HTTPS_PROXY: 'http://proxy.corp:3128' }, [])).toBeNull();
+      expect(envProxyFor(new URL('https://example.com/'), { NODE_USE_ENV_PROXY: '0', HTTPS_PROXY: 'http://p:1' }, [])).toBeNull();
+      expect(envProxyFor(new URL('https://example.com/'), { NODE_USE_ENV_PROXY: '1' }, [])).toBeNull();
+      expect(envProxyFor(new URL('https://example.com/'), { NODE_OPTIONS: '--inspect', HTTPS_PROXY: 'http://p:1' }, [])).toBeNull();
     });
   });
 

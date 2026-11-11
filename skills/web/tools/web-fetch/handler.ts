@@ -93,15 +93,35 @@ export function pinnedLookup(addresses: readonly string[]) {
   };
 }
 
+/** A `--use-env-proxy` flag (or `--use-env-proxy=...`) among Node CLI arguments. */
+function hasUseEnvProxyFlag(args: readonly string[]): boolean {
+  return args.some((arg) => arg === '--use-env-proxy' || arg.startsWith('--use-env-proxy='));
+}
+
 /**
- * The proxy Node's fetch would send `url` through when NODE_USE_ENV_PROXY is on, or null. Each hop
- * here connects directly to its vetted addresses (#2521), which would bypass such a proxy, so a
- * configured one makes the fetch refuse instead. NO_PROXY is not consulted: refusing a host it
+ * Whether Node routes fetch through the environment proxy. Node turns it on three ways: the
+ * NODE_USE_ENV_PROXY variable, the `--use-env-proxy` flag on the command line (process.execArgv),
+ * or the same flag in NODE_OPTIONS. Any of them counts.
+ */
+function envProxyEnabled(env: NodeJS.ProcessEnv, execArgv: readonly string[]): boolean {
+  const variable = env.NODE_USE_ENV_PROXY;
+  if (variable && variable !== '0' && variable.toLowerCase() !== 'false') return true;
+  if (hasUseEnvProxyFlag(execArgv)) return true;
+  return hasUseEnvProxyFlag((env.NODE_OPTIONS ?? '').split(/\s+/));
+}
+
+/**
+ * The proxy Node's fetch would send `url` through when environment-proxy routing is on, or null.
+ * Each hop here connects directly to its vetted addresses (#2521), which would bypass such a proxy,
+ * so a configured one makes the fetch refuse instead. NO_PROXY is not consulted: refusing a host it
  * excludes is the safe side, and Curia configures no proxy today.
  */
-export function envProxyFor(url: URL, env: NodeJS.ProcessEnv = process.env): string | null {
-  const enabled = env.NODE_USE_ENV_PROXY;
-  if (!enabled || enabled === '0' || enabled.toLowerCase() === 'false') return null;
+export function envProxyFor(
+  url: URL,
+  env: NodeJS.ProcessEnv = process.env,
+  execArgv: readonly string[] = process.execArgv,
+): string | null {
+  if (!envProxyEnabled(env, execArgv)) return null;
   const proxy = url.protocol === 'https:'
     ? env.HTTPS_PROXY || env.https_proxy
     : env.HTTP_PROXY || env.http_proxy;
@@ -154,7 +174,7 @@ export class WebFetchHandler implements ToolHandler {
         // Checked per hop: a redirect can change the scheme, and so which proxy variable applies.
         if (envProxyFor(current) !== null) {
           ctx.log.warn({ hostname: current.hostname, hop }, 'web-fetch: refused — an environment proxy is configured and pinned connections would bypass it');
-          return { success: false, error: 'web-fetch cannot go through the configured HTTP proxy (NODE_USE_ENV_PROXY); the request was not sent' };
+          return { success: false, error: 'web-fetch cannot go through the configured HTTP proxy (NODE_USE_ENV_PROXY or --use-env-proxy); the request was not sent' };
         }
         // By resolved address, not just the name (#2521): a public name can point at an
         // internal address, and a redirect can send us anywhere. The hop then connects only

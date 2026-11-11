@@ -44,6 +44,7 @@ import {
 } from '../../../../src/browser/human-behavior.js';
 
 import pino from 'pino';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import { WebBrowserHandler } from './handler.js';
 import { BrowserSession } from '../../../../src/browser/browser-session.js';
 import type { BrowserService } from '../../../../src/browser/browser-service.js';
@@ -968,7 +969,7 @@ describe('web-browser acts on a child frame only while it is still at a safe add
     expect(target.selectOption).not.toHaveBeenCalled();
   });
 
-  it('a literal type into a frame that moved to another public host still types (no secret to bind)', async () => {
+  it('a literal type into a frame that moved to another public host still types (no secret to bind; a tracked code is rechecked, see the verification tests)', async () => {
     const { page, moveFrame } = makeMovingFramePage();
     vi.mocked(humanFocusField).mockImplementationOnce(async () => { moveFrame('https://other.example/form'); });
 
@@ -2374,6 +2375,45 @@ describe('web-browser sign-in verification (#2017)', () => {
       const other = verifyCtx('https://evil.example/form', { action: 'select', selector: 'Country', value: 'Canada' }, runtime);
       expect((await new WebBrowserHandler().execute(other.ctx)).success).toBe(true);
     });
+
+    it('refuses a tracked code when the page moves to another public host during the address check (#2521)', async () => {
+      const v = verification({});
+      const { runtime, tracker } = makeRuntime([v]);
+      tracker.register(v.id, v.pageDomain, CODE, v.browserSessionId);
+      const { ctx, page } = verifyCtx('https://login.aircanada.com/mfa', { action: 'select', selector: 'Code', value: CODE }, runtime);
+      vi.mocked(dnsLookup).mockImplementationOnce((async () => {
+        page.url.mockReturnValue('https://evil.example/form');
+        return [{ address: '93.184.215.14', family: 4 }];
+      }) as unknown as typeof dnsLookup);
+
+      expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: REFUSAL });
+      expect(selectLocator(page).selectOption).not.toHaveBeenCalled();
+    });
+  });
+
+  // A tracked code is judged against the field's document as it is when the code is typed, not
+  // only before focusing: focus can navigate the field's document to another public host (#2521).
+  it('type refuses a tracked code when focusing moved the page to another public host', async () => {
+    const v = verification({});
+    const { runtime, tracker } = makeRuntime([v]);
+    tracker.register(v.id, v.pageDomain, CODE, v.browserSessionId);
+    const { ctx, page } = verifyCtx('https://login.aircanada.com/mfa', { action: 'type', selector: '#code', text: CODE }, runtime);
+    vi.mocked(humanFocusField).mockImplementationOnce(async () => { page.url.mockReturnValue('https://evil.example/mfa'); });
+
+    expect(await new WebBrowserHandler().execute(ctx)).toEqual({ success: false, error: REFUSAL });
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
+    expect(page.keyboard.press).not.toHaveBeenCalled();
+  });
+
+  it('type still types an untracked literal after focusing moved the page', async () => {
+    const v = verification({});
+    const { runtime, tracker } = makeRuntime([v]);
+    tracker.register(v.id, v.pageDomain, CODE, v.browserSessionId);
+    const { ctx, page } = verifyCtx('https://login.aircanada.com/mfa', { action: 'type', selector: '#name', text: 'hello' }, runtime);
+    vi.mocked(humanFocusField).mockImplementationOnce(async () => { page.url.mockReturnValue('https://evil.example/mfa'); });
+
+    expect((await new WebBrowserHandler().execute(ctx)).success).toBe(true);
+    expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), 'hello', expect.anything());
   });
 
   it('refuses a tracked value inside a batch as a failed action', async () => {
