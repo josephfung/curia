@@ -19,6 +19,7 @@ import type { UserSecretDetails } from '../../../../../src/secrets/user-secret-d
 import type { SecretUsagePort, SecretUse } from '../../../../../src/secrets/secret-usage-repo.js';
 import { StaleCardEditError, type UserSecretDetailsPatch } from '../../../../../src/secrets/secrets-service.js';
 import { CARD_VALIDATION_MESSAGES, type CreditCardPublicFields, type CreditCardSecretDoc, type StructuredSchemaTag } from '../../../../../src/secrets/structured-secret-schema.js';
+import { serializeForLeakCheck } from '../../../../helpers/leak-check.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 
@@ -1198,7 +1199,9 @@ describe('vault routes', () => {
       expect(secrets.cardReplaces).toEqual([{ name: CARD_KEY, change: { cvv: '456' } }]);
       expect(secrets.cardPatches).toEqual([]);
       expect(changes(published)).toEqual(['set:requested', 'set:completed']);
-      expect(JSON.stringify(published)).not.toContain('456');
+      // Each event's random id and timestamp can spell "456" by chance (#2548): blank only
+      // those, then look for the digits anywhere else, so `cvv_456` or `x456` still fail.
+      expect(serializeForLeakCheck(published)).not.toContain('456');
       expect(res.body).not.toContain('456');
       expect((await patch(app, CARD_KEY, { cvv: '4567' })).json()).toEqual({ error: CARD_VALIDATION_MESSAGES.cvv_format });
     });
@@ -1213,7 +1216,7 @@ describe('vault routes', () => {
       expect(secrets.cardReplaces).toEqual([]);
       expect(secrets.cardPatches).toEqual([]);
       expect(changes(published)).toEqual(['set:requested', 'set:completed']);
-      expect(JSON.stringify(published)).not.toContain('456');
+      expect(serializeForLeakCheck(published)).not.toContain('456');
 
       published.length = 0;
       await patch(app, CARD_KEY, { cvv: '456', expiry_year: 2100, label: 'Everyday' });
