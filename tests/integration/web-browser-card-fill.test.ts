@@ -13,7 +13,7 @@
 // The principal asked for expiry dropdowns labelled with month names and years, not only
 // two-digit text entry; each case asserts the selected option's VALUE (which differs from its
 // label) and that nothing in the result carries the filled value.
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,6 +28,12 @@ import {
   type CreditCardSecretDoc,
 } from '../../src/secrets/structured-secret-schema.js';
 import { WebBrowserHandler } from '../../skills/web/tools/web-browser/handler.js';
+
+// The fixture hosts (*.example.test) do not resolve; the private-address guard (#2521)
+// resolves every host it lets through, so answer with a public address.
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn(async () => [{ address: '93.184.215.14', family: 4 }]),
+}));
 
 const SHOP = 'https://shop.example.test';
 const PAY_FRAME = 'https://js.pay.example.test';

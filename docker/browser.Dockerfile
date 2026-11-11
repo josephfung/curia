@@ -49,7 +49,8 @@ RUN set -eu; \
     test -n "$chrome"; \
     ln -s "$chrome" /ms-playwright/chrome
 
-# Runtime stage. Debian slim rather than node: nothing here runs Node.
+# Runtime stage. Debian slim rather than node: only the egress proxy runs Node, and it
+# needs the binary alone.
 FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 # Chromium's system libraries and fonts, from Patchright's own list for this Debian
@@ -79,6 +80,12 @@ RUN groupadd --system --gid 1001 browser \
 
 COPY --from=build /ms-playwright /ms-playwright
 COPY docker/browser-entrypoint.sh /usr/local/bin/browser-entrypoint
+
+# The egress proxy Chrome sends every request through (#2521), run by Node's type
+# stripping: the .mts name makes it an ES module with no package.json beside it.
+COPY --from=build /usr/local/bin/node /usr/local/bin/node
+COPY src/browser/egress-proxy.ts /usr/local/lib/curia-browser/egress-proxy.mts
+RUN node /usr/local/lib/curia-browser/egress-proxy.mts --check
 
 # Fail the build, not the boot: Chrome must start and report its version here.
 RUN /ms-playwright/chrome --version

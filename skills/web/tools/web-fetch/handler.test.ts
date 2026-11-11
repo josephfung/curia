@@ -1,7 +1,14 @@
 // web-fetch refuses Google Workspace file URLs before any request (prompt trim PR 6).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import pino from 'pino';
-import { WebFetchHandler } from './handler.js';
+
+// Every name resolves to a public address unless a test maps it elsewhere (#2521).
+const dnsAnswers = vi.hoisted(() => new Map<string, string>());
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn(async (hostname: string) => [{ address: dnsAnswers.get(hostname) ?? '93.184.215.14', family: 4 }]),
+}));
+
+import { WebFetchHandler, envProxyFor, pinnedLookup } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 
 const logger = pino({ level: 'silent' });
@@ -13,6 +20,140 @@ function ctxFor(url: string): ToolContext {
 describe('web-fetch', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    dnsAnswers.clear();
+  });
+
+  describe('with an environment proxy configured (NODE_USE_ENV_PROXY)', () => {
+    it('refuses instead of connecting around the proxy', async () => {
+      vi.stubEnv('NODE_USE_ENV_PROXY', '1');
+      vi.stubEnv('HTTPS_PROXY', 'http://proxy.corp:3128');
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/page'));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/configured HTTP proxy/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('refuses a redirect to a scheme whose proxy is set, before requesting it', async () => {
+      vi.stubEnv('NODE_USE_ENV_PROXY', '1');
+      vi.stubEnv('http_proxy', 'http://proxy.corp:3128');
+      const fetchSpy = vi.fn().mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'http://plain.example/' } }));
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/'));
+      expect(result.success).toBe(false);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    });
+
+    it('refuses when the proxy is turned on by --use-env-proxy in NODE_OPTIONS', async () => {
+      vi.stubEnv('NODE_USE_ENV_PROXY', '');
+      vi.stubEnv('NODE_OPTIONS', '--max-old-space-size=512 --use-env-proxy');
+      vi.stubEnv('HTTPS_PROXY', 'http://proxy:3128');
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await new WebFetchHandler().execute(ctxFor('https://example.com/page'));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/configured HTTP proxy/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('treats --use-env-proxy on the command line (execArgv) as turning the proxy on', () => {
+      const url = new URL('https://example.com/');
+      expect(envProxyFor(url, { HTTPS_PROXY: 'http://proxy:3128' }, ['--use-env-proxy'])).toBe('http://proxy:3128');
+      expect(envProxyFor(new URL('http://example.com/'), { http_proxy: 'http://p:1' }, ['--use-env-proxy=1'])).toBe('http://p:1');
+      expect(envProxyFor(url, { HTTPS_PROXY: 'http://proxy:3128' }, ['--no-use-env-proxy'])).toBeNull();
+    });
+
+    it('recognises every spelling Node accepts for the flag: underscores, quotes, escapes', () => {
+      const url = new URL('https://example.com/');
+      const on = (env: NodeJS.ProcessEnv, argv: string[] = []) => envProxyFor(url, { HTTPS_PROXY: 'http://p:1', ...env }, argv);
+      expect(on({ NODE_OPTIONS: '--use_env_proxy' })).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '--use-env_proxy=1' })).toBe('http://p:1');
+      expect(on({}, ['--use_env_proxy'])).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '"--use-env-proxy"' })).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '--inspect "--use_env_proxy"' })).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '"--use\\-env-proxy"' })).toBe('http://p:1');
+      // A later positive flag still wins over an earlier negation.
+      expect(on({ NODE_OPTIONS: '--no-use-env-proxy --use-env-proxy' })).toBe('http://p:1');
+      expect(on({ NODE_OPTIONS: '--no_use_env_proxy' })).toBeNull();
+    });
+
+    it('ignores proxy variables when env-proxy routing is off, as Node fetch does', () => {
+      expect(envProxyFor(new URL('https://example.com/'), { HTTPS_PROXY: 'http://proxy.corp:3128' }, [])).toBeNull();
+      expect(envProxyFor(new URL('https://example.com/'), { NODE_USE_ENV_PROXY: '0', HTTPS_PROXY: 'http://p:1' }, [])).toBeNull();
+      expect(envProxyFor(new URL('https://example.com/'), { NODE_USE_ENV_PROXY: '1' }, [])).toBeNull();
+      expect(envProxyFor(new URL('https://example.com/'), { NODE_OPTIONS: '--inspect', HTTPS_PROXY: 'http://p:1' }, [])).toBeNull();
+    });
+  });
+
+  it('refuses a public name that resolves to a private address, without fetching (#2521)', async () => {
+    dnsAnswers.set('rebind.example', '127.0.0.1');
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await new WebFetchHandler().execute(ctxFor('https://rebind.example/admin'));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/private.*rebind\.example/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('hands fetch a dispatcher per hop, with the hostname left in the URL (#2521)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValueOnce(new Response('<p>hi</p>', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    await new WebFetchHandler().execute(ctxFor('https://example.com/page'));
+    expect(String(fetchSpy.mock.calls[0]![0])).toBe('https://example.com/page');
+    expect((fetchSpy.mock.calls[0]![1] as { dispatcher?: unknown }).dispatcher).toBeDefined();
+  });
+
+  describe('pinnedLookup', () => {
+    const lookupWith = (addresses: string[], options: { all?: boolean; family?: number | string } | undefined) =>
+      new Promise<{ err: Error | null; result: unknown }>((resolve) => {
+        pinnedLookup(addresses)('example.com', options, (err, result) => resolve({ err, result }));
+      });
+
+    it('answers only with the vetted addresses, whatever name is asked for', async () => {
+      const vetted = ['93.184.215.14', '2606:2800:21f:cb07:6820:80da:af6b:8b2c'];
+      const all = await lookupWith(vetted, { all: true });
+      expect((all.result as Array<{ address: string }>).map((a) => a.address)).toEqual(vetted);
+      const one = await lookupWith(vetted, {});
+      expect(vetted).toContain(one.result);
+    });
+
+    it('never falls back to another family, and errors when none is vetted', async () => {
+      const v4 = await lookupWith(['93.184.215.14'], { family: 4, all: true });
+      expect((v4.result as Array<{ address: string }>).map((a) => a.address)).toEqual(['93.184.215.14']);
+      const v6 = await lookupWith(['93.184.215.14'], { family: 6, all: true });
+      expect(v6.err).not.toBeNull();
+      expect(v6.result).toEqual([]);
+    });
+  });
+
+  it('refuses a redirect to an internal address before requesting it (#2521)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValueOnce(
+      new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data/' } }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await new WebFetchHandler().execute(ctxFor('https://short.example/x'));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/169\.254\.169\.254/);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it('follows a redirect to a public host', async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 301, headers: { location: '/moved' } }))
+      .mockResolvedValueOnce(new Response('<p>Moved here</p>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await new WebFetchHandler().execute(ctxFor('https://example.com/old'));
+    expect(result.success).toBe(true);
+    expect(String(fetchSpy.mock.calls[1]![0])).toBe('https://example.com/moved');
+  });
+
+  it('stops after too many redirects', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(null, { status: 302, headers: { location: '/again' } })));
+    const result = await new WebFetchHandler().execute(ctxFor('https://loop.example/'));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/Too many redirects/);
   });
 
   it('refuses a Google Doc without fetching it', async () => {

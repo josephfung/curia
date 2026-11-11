@@ -123,6 +123,10 @@ export class BrowserService {
   private cdpEndpoint: string | undefined;
   /** cdpEndpoint without credentials, path or query: what logs and errors show. */
   private cdpEndpointLabel: string | undefined;
+  /** The browser container's addresses as of the last attach; see isBrowserContainerAddress. */
+  private containerAddresses = new Set<string>();
+  /** Container addresses resolved by each attach, published only by the attach whose context is kept. */
+  private attachedAddresses = new WeakMap<BrowserContext, Set<string>>();
   private contextFactory: () => Promise<BrowserContext>;
   // Pending reconnect to the browser container, cleared by stop() (cdpEndpoint only).
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -522,6 +526,17 @@ export class BrowserService {
   }
 
   /**
+   * True when `address` (a request's remote address) is the browser container's, as
+   * resolved at the last attach. Curia joins the container's network to reach DevTools,
+   * so the container can reach Curia's HTTP server too; the server refuses it (#2521).
+   * Never true for loopback, so an endpoint on localhost never locks out the healthcheck.
+   */
+  isBrowserContainerAddress(address: string | undefined): boolean {
+    if (!address) return false;
+    return this.containerAddresses.has(normaliseAddress(address));
+  }
+
+  /**
    * Expose the persistent browser context for liveness probes. Null when the service
    * has not been started or has been stopped.
    *
@@ -594,6 +609,7 @@ export class BrowserService {
     // close tabs, since by then they may belong to the winner's live sessions.
     const leftovers = this.listLeftovers(context);
     this.context = context;
+    this.containerAddresses = this.attachedAddresses.get(context) ?? this.containerAddresses;
     this.attachDisconnectedHandler(context);
     // A browser that dropped after connecting but before the listener above was attached
     // fired 'disconnected' to nobody. Catch that here, or the dead context would stay.
@@ -650,14 +666,44 @@ export class BrowserService {
    */
   private async connectToContainer(): Promise<BrowserContext> {
     const endpoint = await resolveCdpEndpoint(this.cdpEndpoint!);
+    const host = new URL(endpoint).hostname.replace(/^\[(.*)\]$/, '$1');
+    const addresses = await this.resolveContainerAddresses(host);
     const browser = await chromium.connectOverCDP(endpoint, { timeout: CDP_CONNECT_TIMEOUT_MS }) as unknown as Browser;
     const [context] = browser.contexts();
     if (!context) {
       await browser.close().catch(err => this.logger.debug({ err }, 'Failed to disconnect from a browser with no default context'));
       throw new Error('the browser container has no default context — is Chrome running with --user-data-dir?');
     }
+    // Kept beside the context it belongs to, not written to the service here: an attach
+    // that timed out or lost to a retry must not replace the winner's refusal set. The
+    // winner publishes it with its context (tryAttach).
+    this.attachedAddresses.set(context, addresses);
     this.logger.info({ cdpEndpoint: this.cdpEndpointLabel, version: browser.version() }, 'Attached to the browser container');
     return context;
+  }
+
+  /**
+   * The addresses the container's requests come from. An IP endpoint is its own address.
+   * A hostname (a TLS endpoint keeps its name for the certificate) is resolved here as
+   * well, so the refusal hook still knows the container. Loopback is never included, so
+   * an endpoint on localhost cannot lock out the healthcheck.
+   */
+  private async resolveContainerAddresses(host: string): Promise<Set<string>> {
+    let addresses: string[];
+    if (isIP(host) !== 0) {
+      addresses = [host];
+    } else if (host === 'localhost') {
+      addresses = [];
+    } else {
+      try {
+        addresses = (await dnsLookup(host, { all: true })).map(a => a.address);
+      } catch (err) {
+        // The attach that follows needs the same name, so it will fail and retry.
+        this.logger.warn({ err, host }, 'Could not resolve the browser container hostname; its address is not refused yet');
+        addresses = [];
+      }
+    }
+    return new Set(addresses.map(normaliseAddress).filter(a => !/^(127\.|::1$)/.test(a)));
   }
 
   /**
@@ -1012,6 +1058,24 @@ export async function resolveCdpEndpoint(
   }
   url.hostname = isIP(address) === 6 ? `[${address}]` : address;
   return url.toString();
+}
+
+/**
+ * One spelling per address: an IPv4-mapped IPv6 address, in either the dotted form
+ * (`::ffff:172.20.0.9`) or the hex form URL serialisation produces (`::ffff:ac14:9`),
+ * becomes the plain IPv4 address; anything else is lower-cased.
+ */
+export function normaliseAddress(address: string): string {
+  const a = address.toLowerCase();
+  const dotted = /^(?:0{0,4}:){0,5}:?ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(a);
+  if (dotted) return dotted[1]!;
+  const hex = /^(?:0{0,4}:){0,5}:?ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(a);
+  if (hex) {
+    const hi = parseInt(hex[1]!, 16);
+    const lo = parseInt(hex[2]!, 16);
+    return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  }
+  return a;
 }
 
 /** True for loopback, RFC 1918, link-local and IPv6 unique-local/link-local addresses. */

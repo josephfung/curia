@@ -3,6 +3,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 
+// Name resolution for the private-address guard (#2521): every name resolves to a public
+// address unless a test maps it to another through `dnsAnswers`.
+const dnsAnswers = vi.hoisted(() => new Map<string, string>());
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn(async (hostname: string) => [{ address: dnsAnswers.get(hostname) ?? '93.184.215.14', family: 4 }]),
+}));
+
 vi.mock('../../../../src/browser/human-behavior.js', () => ({
   jitteredDelay: vi.fn().mockResolvedValue(undefined),
   simulateHumanPresence: vi.fn().mockResolvedValue(undefined),

@@ -98,7 +98,9 @@ With the container, `profileDir`, `channel`, `locale` and `languages` above do n
 | `TIMEZONE` | `America/Toronto` | Also the browser's timezone. |
 | `BROWSER_LOCALE` | `en-US` | BCP 47 locale. |
 | `BROWSER_LANGUAGES` | | Comma-separated `navigator.languages` after the locale, e.g. `en-US,en`. |
-| `BROWSER_PROXY` | | `http://host:port` or `socks5://host:port`. No credentials: Chrome's `--proxy-server` cannot carry them, so use a proxy that admits this host without them. A value with credentials or in another shape stops the container. |
+| `BROWSER_PROXY` | | Upstream proxy: `http://host:port`, `https://host:port` or `socks5://host:port`. No credentials, so use a proxy that admits this host without them. A value with credentials or in another shape stops the container. |
+
+**Where the browser can send requests.** Every request Chrome makes, navigation and page JavaScript (`fetch`, form posts, subresources, WebSockets) alike, goes through an egress proxy inside the container ([`src/browser/egress-proxy.ts`](../../src/browser/egress-proxy.ts), on loopback). It resolves each host once, refuses it when any address is private, loopback, link-local, carrier-grade NAT, unique-local or multicast, and connects to the address it checked, so a public name pointed at an internal address is refused and DNS rebinding between check and connect does not apply. That covers Curia (`curia:3000`), Postgres, the Docker host, cloud metadata and the container's own DevTools port. When `BROWSER_PROXY` is set, the egress proxy sends traffic through it, handing it the checked address rather than the name, so names are resolved by the container, not the upstream. Refusals appear in `docker compose logs browser` as `egress-proxy: refused …`. Curia's HTTP server also refuses any request from the browser container's address, in case code gets past Chrome.
 
 `browser.proxy` cannot be applied to the container (Curia does not launch its Chrome), so Curia refuses to start the browser service when both are set, rather than letting the browser egress directly.
 
@@ -110,7 +112,7 @@ With the container, `profileDir`, `channel`, `locale` and `languages` above do n
 
 Chrome always runs its own sandbox: renderer processes, which run page code, get their own user and PID namespaces, a network namespace and a seccomp-BPF filter. A page that exploits a renderer bug then still needs a second bug to reach the rest of the container. Two things the sandbox does not cover:
 
-- **The network.** A compromised renderer can still ask Chrome's network service to load a page from an internal address, so the sandbox is not an egress firewall. Restrict what the container can reach at the network level (Docker network rules, host firewall). In the browser container this includes Curia itself on the `browser` network.
+- **The network.** A compromised renderer can still ask Chrome's network service to load a page from an internal address, so the sandbox is not an egress firewall. The browser container's egress proxy (above) is. In-process, the web-browser skill refuses to navigate to, read or act in a frame whose host resolves to a private address, but page JavaScript is not checked: restrict what the host can reach at the network level (Docker network rules, host firewall), or move to the container.
 - **Inherited environment values.** Chrome is started with its parent's environment, and a native renderer exploit can read what the renderer process inherited. In-process, that is Curia's `process.env`; the browser container is given only the variables in the table above.
 
 There is no setting to turn it off. Without the sandbox the same exploit would run with everything the browser's process has, and an off switch is the first thing anyone tries when the sandbox fails to start.

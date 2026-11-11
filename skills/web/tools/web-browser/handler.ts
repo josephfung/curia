@@ -30,7 +30,7 @@ import { registerCodes } from '../../../../src/verification/track-codes.js';
 import type { Verification } from '../../../../src/verification/types.js';
 import { SecretRefRefusal, isCardSecretField, parseSecretRef } from '../../../../src/secrets/structured-secret-schema.js';
 import { detectVerificationScreen } from './verification-detect.js';
-import { isBlockedFrameUrl, isPrivateHost } from './frame-url.js';
+import { isBlockedFrameUrlResolved, resolvesPrivate } from './frame-url.js';
 import { focusedFrame } from './focus-frame.js';
 import {
   DEFAULT_SETTLE_TIMING,
@@ -720,9 +720,10 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
         return { ok: false, error: `Only http: and https: are allowed, got: ${parsedUrl.protocol}` };
       }
+      // By name and by resolved address (#2521): a public name can point at an internal one.
       const hostname = parsedUrl.hostname.toLowerCase();
-      if (isPrivateHost(hostname)) {
-        return { ok: false, error: `Blocked: navigation to private/internal addresses is not allowed (${hostname})` };
+      if (await resolvesPrivate(hostname)) {
+        return { ok: false, error: `Blocked: navigation to private/internal addresses is not allowed, or the host did not resolve (${hostname})` };
       }
       // The browser has no Google credentials either: a Google file gets a sign-in page.
       if (isGoogleWorkspaceFileUrl(parsedUrl)) {
@@ -754,7 +755,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // The guard above checks only the URL asked for. A site can redirect to an internal
       // address, e.g. the browser container's own DevTools endpoint (#2541); leave it
       // before anything (a screenshot, the title) is read from it.
-      if (isBlockedFrameUrl(page.url())) {
+      if (await isBlockedFrameUrlResolved(page.url())) {
         const blockedHost = new URL(page.url()).hostname;
         await page.goto('about:blank').catch((err) => ctx.log.warn({ err, sessionId }, 'Could not leave a page that redirected to an internal address'));
         return { ok: false, error: `Blocked: the page redirected to a private/internal address (${blockedHost})` };
@@ -818,6 +819,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       }
       const scopedClick = await resolveLocatorWithScope(page, selector, ctx.log);
       const clickTarget = scopedClick.locator;
+      if (!(await scopeStillSafe(scopedClick.scope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       const clickMark = activity.mark();
       // A label click lands at the label's centre, which can be a link inside it
       // ("I agree to the <a>Terms</a>"): the link would be followed and the box stay as it was.
@@ -828,6 +830,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       const labelHasLink = input
         ? await clickTarget.evaluate((el) => el.querySelector('a[href]') !== null, undefined, quick).catch(() => false)
         : false;
+      if (!(await scopeStillSafe(scopedClick.scope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       if (input && labelHasLink) {
         await input.evaluate((el) => { (el as HTMLInputElement).click(); }, undefined, quick);
       } else {
@@ -859,7 +862,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // With a selector, scroll that element into view (reveals lazy-loaded widgets);
       // without one, scroll the viewport down a screen (infinite-scroll / "load more").
       if (selector && typeof selector === 'string') {
-        const scrollTarget = await resolveLocator(page, selector, ctx.log);
+        const { locator: scrollTarget, scope: scrollScope } = await resolveLocatorWithScope(page, selector, ctx.log);
+        if (!(await scopeStillSafe(scrollScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
         await scrollTarget.scrollIntoViewIfNeeded();
       } else {
         await page.mouse.wheel(0, 800);
@@ -873,7 +877,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
         return { ok: false, error: 'hover requires selector (string — describe the element in natural language)' };
       }
       // Many widgets (date-picker cells, menus) only reveal options on hover.
-      const hoverTarget = await resolveLocator(page, selector, ctx.log);
+      const { locator: hoverTarget, scope: hoverScope } = await resolveLocatorWithScope(page, selector, ctx.log);
+      if (!(await scopeStillSafe(hoverScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       await hoverTarget.hover();
       await settleAfterInteraction(page, ctx, sessionId);
       return { ok: true };
@@ -906,7 +911,8 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       }
       // The LLM's explicit lever for "wait until the widget renders" — for SPAs where
       // even networkidle isn't enough. Throws on timeout, caught by the caller as a clear error.
-      const waitTarget = await resolveLocator(page, selector, ctx.log);
+      const { locator: waitTarget, scope: waitScope } = await resolveLocatorWithScope(page, selector, ctx.log);
+      if (!(await scopeStillSafe(waitScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
       await waitTarget.waitFor({ state: 'visible', timeout: WAIT_FOR_TIMEOUT_MS });
       return { ok: true };
     }
@@ -938,12 +944,13 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       const typedOnUrl = documentSiteUrl(page, typeScope);
 
       let fillValue: string;
-      let cardApprovedOn: string | null = null;
+      let secretBoundTo: SecretFillTarget | null = null;
       if (hasSecretRef) {
+        const fieldDocUrl = typeScope.url();
         const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
         if (!resolved.ok) return resolved;
         fillValue = resolved.value;
-        if (resolved.card) cardApprovedOn = resolved.siteUrl;
+        secretBoundTo = { top: resolved.siteUrl, doc: fieldDocUrl };
         if (resolved.sensitive) {
           session.registerInjectedSecret(fillValue);
           // Latch screenshot suppression NOW — before the fill below, which can throw mid-typing
@@ -972,12 +979,19 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // not keystrokes. ControlOrMeta = Cmd on macOS (dev), Ctrl on Linux (prod). (#1053)
       // humanFocusField focuses the field directly when an overlay such as a floating label
       // takes the click (#2201).
-      // The grant was judged on the page URL at resolution; refuse if the page moved since, so a
-      // card is never typed into a replacement document.
-      if (cardApprovedOn !== null && page.url() !== cardApprovedOn) {
-        return { ok: false, error: CARD_NAVIGATED_REFUSAL };
-      }
+      // The field's document may have moved to a private address while the secret resolved
+      // (#2521). And a secret goes only into the documents it was resolved for: refuse if the top
+      // page or the field's frame moved since, so it is never typed into a replacement document.
+      // Both again after focusing, which can itself navigate. A tracked sign-in code is held to
+      // its verification's domain the same way: judged again on the document as it is now.
+      if (!(await scopeStillSafe(typeScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
+      if (secretTargetMoved(page, typeScope, secretBoundTo)) return { ok: false, error: SECRET_TARGET_MOVED_REFUSAL };
       await humanFocusField(page, typeTarget, { log: ctx.log });
+      if (!(await scopeStillSafe(typeScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
+      if (secretTargetMoved(page, typeScope, secretBoundTo)) return { ok: false, error: SECRET_TARGET_MOVED_REFUSAL };
+      if (!hasSecretRef && !trackedCodeAllowedOn(ctx, fillValue, documentSiteUrl(page, typeScope), sessionId)) {
+        return { ok: false, error: TRACKED_CODE_REFUSAL };
+      }
       await page.keyboard.press('ControlOrMeta+a');
       await page.keyboard.press('Delete');
       await humanType(page, fillValue, { log: ctx.log });
@@ -1008,12 +1022,13 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // natural language ("Country dropdown") and it will resolve via role/label/text.
       const { locator: selectTarget, scope: selectScope } = await resolveLocatorWithScope(page, selector, ctx.log);
       let selectValue: string;
-      let selectCardApprovedOn: string | null = null;
+      let selectBoundTo: SecretFillTarget | null = null;
       if (selectHasRef) {
+        const fieldDocUrl = selectScope.url();
         const resolved = await resolveSecretForFill(ctx, secret_ref!, page);
         if (!resolved.ok) return resolved;
         selectValue = resolved.value;
-        if (resolved.card) selectCardApprovedOn = resolved.siteUrl;
+        selectBoundTo = { top: resolved.siteUrl, doc: fieldDocUrl };
         // Same order and rule as `type`: only a sensitive value is registered for redaction
         // and latches screenshot suppression, before anything below can throw.
         if (resolved.sensitive) {
@@ -1033,8 +1048,11 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // A select can navigate too (a country or language picker that reloads on change).
       const selectMark = activity.mark();
       // Playwright matches the string against option value or label.
-      if (selectCardApprovedOn !== null && page.url() !== selectCardApprovedOn) {
-        return { ok: false, error: CARD_NAVIGATED_REFUSAL };
+      if (!(await scopeStillSafe(selectScope))) return { ok: false, error: FRAME_MOVED_REFUSAL };
+      if (secretTargetMoved(page, selectScope, selectBoundTo)) return { ok: false, error: SECRET_TARGET_MOVED_REFUSAL };
+      // The address check above awaits, and the frame can move meanwhile: judge a tracked code again.
+      if (!selectHasRef && !trackedCodeAllowedOn(ctx, selectValue, documentSiteUrl(page, selectScope), sessionId)) {
+        return { ok: false, error: TRACKED_CODE_REFUSAL };
       }
       await selectTarget.selectOption(selectValue);
       return { ok: true, navigated: await actionStartedNavigation(activity, selectMark, timing, deps.settleDeadline) };
@@ -1055,7 +1073,30 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
   }
 }
 
-const CARD_NAVIGATED_REFUSAL = 'The page changed while the card was being resolved; nothing was typed. Read the page again and retry.';
+const FRAME_MOVED_REFUSAL = 'The page or frame holding that element moved to a blocked address after it was found; nothing was done. Read the page again and retry.';
+
+/**
+ * True while the element's document is not on a private/internal address (#2521): the top page
+ * by its current URL, a child frame at its vetted URL or a public one. The top page is checked
+ * too: it can navigate between the locator resolving and the action.
+ */
+async function scopeStillSafe(scope: Page | Frame): Promise<boolean> {
+  if ('parentFrame' in scope) return frameStillSafe(scope);
+  return !(await isBlockedFrameUrlResolved(scope.url()));
+}
+
+/** The documents a secret_ref was resolved for: the top page (what a card grant judged) and the field's own. */
+interface SecretFillTarget {
+  top: string;
+  doc: string;
+}
+
+/** True when a secret fill's top page or field document is no longer the one it was resolved for. */
+function secretTargetMoved(page: Page, scope: Page | Frame, bound: SecretFillTarget | null): boolean {
+  return bound !== null && (page.url() !== bound.top || scope.url() !== bound.doc);
+}
+
+const SECRET_TARGET_MOVED_REFUSAL = 'The page changed while the secret was being resolved; nothing was typed. Read the page again and retry.';
 
 /**
  * Dereference a secret_ref for a fill. resolveSecretRef enforces the user.* namespace, the
@@ -1373,30 +1414,47 @@ async function isLikelyEmpty(page: Page, log: ToolContext['log']): Promise<boole
   }
 }
 
+/** The frames not on a private/internal host, by name or resolved address (#2521). */
+async function eligibleChildFrames(frames: Frame[]): Promise<Frame[]> {
+  const urls = frames.map((frame) => frame.url());
+  const blocked = await blockedFrameUrls(urls);
+  frames.forEach((frame, i) => { if (!blocked[i]) vettedFrameUrls.set(frame, urls[i]!); });
+  return frames.filter((_, i) => !blocked[i]);
+}
+
 /**
- * Resolve a natural language selector to a Playwright locator, searching the main frame
- * first and then any child frames. Embedded widgets (e.g. OpenTable's booking/date
- * picker) live in iframes, which top-level locators never reach — both `Page` and
- * `Frame` expose the same getBy* API, so we reuse one resolver across them.
- *
- * Priority within each frame:
- *   1. getByRole (most semantic — "submit button", "Email field", date "gridcell")
- *   2. getByLabel (form inputs described by their label)
- *   3. getByText (any visible text match)
- * Then a raw CSS/XPath fallback (main frame, then child frames) for when the LLM passes
- * a direct selector.
- *
- * SSRF: child frames pointing at private/internal hosts are skipped (see
- * isBlockedFrameUrl) — the navigate guard only validates the top-level URL, so without
- * this an attacker page could embed an internal iframe and have us interact with it.
- *
- * Resilience: each child-frame probe is wrapped so a frame that detaches mid-traversal
- * (common on dynamic pages) is skipped rather than failing the whole action — the same
- * defensive pattern as getCleanedContent. The main-frame paths are intentionally left
- * unguarded: a detached main frame is a genuine failure the caller should surface.
+ * The URL each frame had when it was vetted. A Playwright Frame survives navigation, so a
+ * frame vetted at a public URL can move to a private one while other lookups run; a frame
+ * is read or acted on only after its current URL is checked again (#2521).
  */
-async function resolveLocator(page: Page, selector: string, log: ToolContext['log']): Promise<Locator> {
-  return (await resolveLocatorWithScope(page, selector, log)).locator;
+const vettedFrameUrls = new WeakMap<Frame, string>();
+
+/** True when the frame is still at the URL it was vetted at, or its new URL is not blocked. */
+async function frameStillSafe(frame: Frame, vettedUrl: string | undefined = vettedFrameUrls.get(frame)): Promise<boolean> {
+  const current = frame.url();
+  if (current === vettedUrl) return true;
+  return !(await isBlockedFrameUrlResolved(current));
+}
+
+/** At most this many frame hostnames are looked up at once. */
+const FRAME_CHECK_CONCURRENCY = 8;
+
+/**
+ * Whether each URL is blocked, in the order given. A check can wait on a DNS lookup (up to
+ * 5s), so a page with many frames must neither be checked one at a time (the tool timeout
+ * would run out) nor all at once.
+ */
+async function blockedFrameUrls(urls: string[]): Promise<boolean[]> {
+  const blocked = new Array<boolean>(urls.length).fill(false);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < urls.length) {
+      const i = next++;
+      blocked[i] = await isBlockedFrameUrlResolved(urls[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(FRAME_CHECK_CONCURRENCY, urls.length) }, worker));
+  return blocked;
 }
 
 /**
@@ -1482,12 +1540,13 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
     const refMainFrame = page.mainFrame();
     const scopes: Array<Page | Frame> = [
       page,
-      ...page.frames().filter((frame) => frame !== refMainFrame && !isBlockedFrameUrl(frame.url())),
+      ...(await eligibleChildFrames(page.frames().filter((frame) => frame !== refMainFrame))),
     ];
     let total = 0;
     let sole: ScopedLocator | null = null;
     for (const scope of scopes) {
       try {
+        if (scope !== page && !(await frameStillSafe(scope as Frame))) continue;
         const loc = scope.locator(attrSelector);
         const count = await loc.count();
         total += count;
@@ -1524,11 +1583,10 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
   // Child frames eligible for interaction (exclude the main frame and private/internal
   // hosts). This is what lets click/type/hover/wait_for reach into legitimate iframes.
   const mainFrame = page.mainFrame();
-  const childFrames = page.frames().filter(
-    (frame) => frame !== mainFrame && !isBlockedFrameUrl(frame.url()),
-  );
+  const childFrames = await eligibleChildFrames(page.frames().filter((frame) => frame !== mainFrame));
   for (const frame of childFrames) {
     try {
+      if (!(await frameStillSafe(frame))) continue;
       const inFrame = await resolveInScope(frame, selector, log);
       if (inFrame) return retargetHiddenInputToLabel({ locator: inFrame, scope: frame }, `sel${++labelTagSeed}`, log);
     } catch (err) {
@@ -1543,6 +1601,7 @@ async function resolveLocatorWithScope(page: Page, selector: string, log: ToolCo
   if (mainCssCount > 0) return { locator: mainCssCount === 1 ? mainCss : mainCss.first(), scope: page };
   for (const frame of childFrames) {
     try {
+      if (!(await frameStillSafe(frame))) continue;
       const frameCss = frame.locator(selector);
       const frameCssCount = await frameCss.count();
       if (frameCssCount > 0) return { locator: frameCssCount === 1 ? frameCss : frameCss.first(), scope: frame };
@@ -1649,13 +1708,23 @@ async function getCleanedContent(page: Page, log: ToolContext['log']): Promise<s
   let failed = 0;
 
   const frames = page.frames();
+  // SSRF: skip frames pointing at private/internal hosts. The navigate guard only
+  // validates the top-level URL, so without this an attacker page could embed
+  // <iframe src="http://169.254.169.254/..."> and we'd read internal content here.
+  // Each check can wait on a DNS lookup (up to 5s), so a page with many frames must not
+  // be checked one after another: run them with bounded concurrency, each result kept
+  // against the frame (by index) it was taken from.
+  const frameUrls = frames.map((f) => f.url());
+  const blocked = await blockedFrameUrls(frameUrls);
   for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
     const frame = frames[frameIndex]!;
-    // SSRF: skip frames pointing at private/internal hosts. The navigate guard only
-    // validates the top-level URL, so without this an attacker page could embed
-    // <iframe src="http://169.254.169.254/..."> and we'd read internal content here.
-    if (isBlockedFrameUrl(frame.url())) {
-      log.debug({ frameUrl: frame.url() }, 'Skipping private/internal frame during content extraction');
+    if (blocked[frameIndex]) {
+      log.debug({ frameUrl: frameUrls[frameIndex] }, 'Skipping private/internal frame during content extraction');
+      continue;
+    }
+
+    if (!(await frameStillSafe(frame, frameUrls[frameIndex]))) {
+      log.debug({ frameUrl: frame.url() }, 'Skipping frame that moved to a private/internal address during content extraction');
       continue;
     }
 

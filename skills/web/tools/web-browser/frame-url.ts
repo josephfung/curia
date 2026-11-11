@@ -2,6 +2,9 @@
 // Shared by the navigate guard, per-frame interaction / extraction gating, and the
 // verification tool's choice of the frame a sign-in code is typed into (#2017).
 
+import { isIP } from 'node:net';
+import { defaultLookup, isPrivateAddress, vetHost, type HostLookup } from '../../../../src/browser/egress-proxy.js';
+
 /**
  * True for hosts that must never be reached — loopback, private/link-local ranges, IPv6
  * unique-local/link-local, IPv4-mapped-IPv6 forms, and cloud metadata endpoints. Shared
@@ -30,6 +33,7 @@ export function isPrivateHost(hostname: string): boolean {
   // (no dot, not an IPv6 literal) is a compose/Docker service name or an intranet name
   // (`curia`, `postgres`), and `.internal` / `.local` / `.localhost` are internal suffixes.
   // Fail closed on the whole class rather than listing service names.
+  if (isIP(h) !== 0) return isPrivateAddress(h);
   if (!h.includes('.') && !h.includes(':')) return true;
   if (/\.(internal|local|localhost|localdomain|lan|home\.arpa)$/.test(h)) return true;
 
@@ -69,4 +73,30 @@ export function isBlockedFrameUrl(rawUrl: string): boolean {
   if (parsed.protocol === 'file:') return true;
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
   return isPrivateHost(parsed.hostname.toLowerCase());
+}
+
+/**
+ * True when `hostname` is private by its text (isPrivateHost) or resolves to a private,
+ * loopback or link-local address, or does not resolve at all (#2521). The text check
+ * misses a public name pointed at an internal address. Chrome resolves the name again,
+ * so this narrows the gap rather than closing it; the browser container's egress proxy
+ * (src/browser/egress-proxy.ts) is what closes it there.
+ */
+export async function resolvesPrivate(hostname: string, lookup: HostLookup = defaultLookup): Promise<boolean> {
+  const host = hostname.toLowerCase();
+  if (isPrivateHost(host)) return true;
+  return !(await vetHost(host, lookup)).ok;
+}
+
+/** isBlockedFrameUrl, plus the resolved-address check for an http(s) frame (#2521). */
+export async function isBlockedFrameUrlResolved(rawUrl: string, lookup: HostLookup = defaultLookup): Promise<boolean> {
+  if (isBlockedFrameUrl(rawUrl)) return true;
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  return resolvesPrivate(parsed.hostname, lookup);
 }
