@@ -254,56 +254,87 @@ describe('BrowserService with a browser container', () => {
   });
 
   // A superseded attach (one that outlived its deadline, or one from before stop()) can
-  // land after the winner has created sessions. It must not close their tabs.
-  function sharedTabs(live: ReturnType<typeof makeBrowser>) {
+  // land after the winner has created sessions. It must not close their tabs or contexts.
+  // These drive the real connectOverCDP path (no contextFactory), so a close anywhere in
+  // the attach itself, not only in tryAttach, would fail them.
+  function sameChrome() {
     const tabs = [makePage()];
+    const live = makeBrowser();
     const liveContext = makeContext(live, tabs);
     liveContext.newPage.mockImplementation(async () => { const p = makePage(); tabs.push(p); return p; });
-    // The late attach sees the same Chrome: the same tabs, the winner's included.
-    const lateContext = makeContext(makeBrowser(), tabs);
-    return { tabs, liveContext, lateContext };
+    // Incognito sessions get their own context off the same browser; both connections see it.
+    const incognito: ReturnType<typeof makeContext>[] = [];
+    live.newContext.mockImplementation(async () => {
+      const ctx = makeContext(live, []);
+      ctx.newPage.mockImplementation(async () => { const p = makePage(); tabs.push(p); return p; });
+      incognito.push(ctx);
+      return ctx;
+    });
+    live.contexts.mockImplementation(() => [liveContext, ...incognito]);
+    // The late attach sees the same Chrome: the same tabs and contexts, the winner's included.
+    const late = makeBrowser();
+    const lateContext = makeContext(late, tabs);
+    late.contexts.mockImplementation(() => [lateContext, ...incognito]);
+    let resolveLate!: (browser: unknown) => void;
+    connectOverCDP
+      .mockReturnValueOnce(new Promise(resolve => { resolveLate = resolve; }))
+      .mockResolvedValue(live);
+    return { tabs, incognito, late, liveContext, landLate: () => resolveLate(late) };
+  }
+
+  /** One persistent and one incognito session, each with its own tab. */
+  async function openSessions(svc: BrowserService, tabs: unknown[], incognito: unknown[]): Promise<string[]> {
+    const persistent = await svc.getOrCreateSession(undefined);
+    const isolated = await svc.getOrCreateSession(undefined, { incognito: true });
+    expect(tabs).toHaveLength(3);
+    expect(incognito).toHaveLength(1);
+    return [persistent.sessionId, isolated.sessionId];
+  }
+
+  function expectNothingClosed(
+    svc: BrowserService,
+    sessionIds: string[],
+    { tabs, incognito, late }: { tabs: ReturnType<typeof makePage>[]; incognito: ReturnType<typeof makeContext>[]; late: ReturnType<typeof makeBrowser> },
+  ): void {
+    expect(late.close).toHaveBeenCalledOnce();
+    for (const tab of tabs) expect(tab.close).not.toHaveBeenCalled();
+    for (const ctx of incognito) expect(ctx.close).not.toHaveBeenCalled();
+    for (const id of sessionIds) expect(svc.getSession(id)).toBeDefined();
   }
 
   it('a timed-out attach that lands after the retry won leaves the live sessions’ tabs open', async () => {
-    const live = makeBrowser();
-    const { tabs, liveContext, lateContext } = sharedTabs(live);
-    let resolveHung!: (ctx: unknown) => void;
-    const factory = vi.fn()
-      .mockReturnValueOnce(new Promise(resolve => { resolveHung = resolve; }))
-      .mockResolvedValue(liveContext);
-    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT, contextFactory: factory as never });
+    const chrome = sameChrome();
+    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT });
 
     const starting = svc.start();
     await vi.advanceTimersByTimeAsync(20_000);
     await starting;
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(svc.browserContext).toBe(liveContext);
-    const { sessionId } = await svc.getOrCreateSession(undefined);
-    expect(tabs).toHaveLength(2);
+    expect(connectOverCDP).toHaveBeenCalledTimes(2);
+    expect(svc.browserContext).toBe(chrome.liveContext);
+    const sessionIds = await openSessions(svc, chrome.tabs, chrome.incognito);
 
-    resolveHung(lateContext);
+    chrome.landLate();
     await vi.advanceTimersByTimeAsync(0);
-    for (const tab of tabs) expect(tab.close).not.toHaveBeenCalled();
-    expect(svc.getSession(sessionId)).toBeDefined();
+    expectNothingClosed(svc, sessionIds, chrome);
     await svc.stop();
   });
 
   it('an attach from before stop() that lands after start() leaves the live sessions’ tabs open', async () => {
-    const live = makeBrowser();
-    const { tabs, liveContext, lateContext } = sharedTabs(live);
-    let resolveStale!: (ctx: unknown) => void;
-    const factory = vi.fn()
-      .mockReturnValueOnce(new Promise(resolve => { resolveStale = resolve; }))
-      .mockResolvedValue(liveContext);
-    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT, contextFactory: factory as never });
+    const chrome = sameChrome();
+    const svc = new BrowserService({ logger, cdpEndpoint: ENDPOINT });
 
     const firstStart = svc.start();
     await svc.stop();
     await svc.start();
-    await svc.getOrCreateSession(undefined);
-    resolveStale(lateContext);
+    expect(connectOverCDP).toHaveBeenCalledTimes(2);
+    expect(svc.browserContext).toBe(chrome.liveContext);
+    const sessionIds = await openSessions(svc, chrome.tabs, chrome.incognito);
+
+    chrome.landLate();
     await firstStart;
-    for (const tab of tabs) expect(tab.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expectNothingClosed(svc, sessionIds, chrome);
     await svc.stop();
   });
 
