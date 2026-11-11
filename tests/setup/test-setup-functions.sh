@@ -982,6 +982,117 @@ fi
 # Reset globals so nothing downstream inherits test state.
 CURIA_REF=""; CURIA_VERSION="latest"; resolve_version
 
+# --- install.sh: ensure_https_app_origin (#2368) ---
+
+echo ""
+echo "=== install.sh: ensure_https_app_origin ==="
+
+_ao_env=$(mktemp)
+_TLS='COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\n'
+# Echo APP_ORIGIN after the helper runs: <absent>, <empty> or the value.
+_ao_got() {
+    if grep -qE '^APP_ORIGIN=' "$1"; then local v; v="$(env_value "$1" APP_ORIGIN)"; printf '%s' "${v:-<empty>}"; else printf '<absent>'; fi
+}
+_assert_ao() {
+    local desc="$1" envtxt="$2" want="$3" got
+    printf '%b' "$envtxt" > "$_ao_env"
+    ( unset COMPOSE_FILE APP_ORIGIN; ensure_https_app_origin "$_ao_env" 2>/dev/null )
+    got="$(_ao_got "$_ao_env")"
+    if [[ "$got" == "$want" ]]; then
+        echo "  ✓ $desc → APP_ORIGIN $want"; PASS=$((PASS+1))
+    else
+        echo "  ✗ $desc — got $got want $want"; FAIL=$((FAIL+1))
+    fi
+}
+_assert_ao "TLS overlay, missing"            "${_TLS}DOMAIN=x.example\n"                                'https://x.example'
+_assert_ao "TLS overlay, empty"              "${_TLS}DOMAIN=x.example\nAPP_ORIGIN=\n"                   'https://x.example'
+_assert_ao "TLS overlay, commented template" "${_TLS}DOMAIN=x.example\n# APP_ORIGIN=https://curia.example.com\n" 'https://x.example'
+_assert_ao "TLS overlay, quoted DOMAIN"      "${_TLS}DOMAIN=\"x.example\"\n"                            'https://x.example'
+_assert_ao "TLS overlay, explicit kept"      "${_TLS}DOMAIN=x.example\nAPP_ORIGIN=https://other.example\n" 'https://other.example'
+_assert_ao "TLS overlay, explicit http kept" "${_TLS}DOMAIN=x.example\nAPP_ORIGIN=http://10.0.0.5:3000\n" 'http://10.0.0.5:3000'
+_assert_ao "DOMAIN by hand, no overlay"      'DOMAIN=x.example\n'                                         '<absent>'
+_assert_ao "local/proxy install untouched"   'HTTP_PORT=3000\nAPP_ORIGIN=\n'                              '<empty>'
+_assert_ao "TLS overlay, no DOMAIN"          "${_TLS}"                                                    '<absent>'
+_assert_ao "TLS overlay, empty DOMAIN"       "${_TLS}DOMAIN=\n"                                           '<absent>'
+_assert_ao "TLS overlay, unresolved DOMAIN"  "${_TLS}"'DOMAIN=${HOST}\n'                                  '<absent>'
+
+# Only one APP_ORIGIN line after filling the commented template line.
+printf '%b' "${_TLS}DOMAIN=x.example\n# APP_ORIGIN=https://curia.example.com\n" > "$_ao_env"
+( unset COMPOSE_FILE; ensure_https_app_origin "$_ao_env" 2>/dev/null )
+_assert_var "commented line replaced, not duplicated" "$(grep -c 'APP_ORIGIN=' "$_ao_env" | tr -d ' ')" "1"
+
+# The upgrade note: printed in note mode when the value is filled, never otherwise.
+printf '%b' "${_TLS}DOMAIN=x.example\n" > "$_ao_env"
+_ao_out="$( unset COMPOSE_FILE; ensure_https_app_origin "$_ao_env" note 2>&1 )"
+_assert_var "note printed when filled on upgrade" "$(grep -c 'https://x.example' <<< "$_ao_out" | tr -d ' ')" "2"
+_ao_out="$( unset COMPOSE_FILE; ensure_https_app_origin "$_ao_env" note 2>&1 )"
+_assert_var "no note once the value is set"        "$_ao_out" ""
+
+# Both install paths, with Docker and the interactive prompts stubbed out. The
+# .env is checked for the origin and for every other line staying as it was.
+_ao_paths() {
+    local path="$1" envf="$2"
+    (
+      unset COMPOSE_FILE APP_ORIGIN HTTP_BIND DOMAIN
+      docker() { return 0; }
+      wait_for_postgres() { :; }; wait_for_curia() { return 0; }
+      check_postgres_exposure() { :; }; check_http_exposure() { :; }
+      check_livekit_exposure() { :; }; note_livekit_signaling() { :; }
+      print_summary() { :; }; getent() { return 0; }
+      prompt_anthropic_key() { echo sk-ant-test; }
+      choose_topology() { echo "$_AO_TOPOLOGY"; }
+      gen_secret_hex() { echo genhex; }; gen_secret_b64() { echo genb64; }
+      INSTALL_DIR="$(dirname "$envf")"
+      if [[ "$path" == fresh ]]; then fresh_install "$envf" <<< "x.example"; else existing_install "$envf"; fi
+    ) >/dev/null 2>&1 || { echo "  ✗ $path install aborted"; FAIL=$((FAIL+1)); }
+}
+
+# Fresh install, HTTPS topology: missing and empty both get the origin. The seed
+# mirrors .env.example's DB_PASSWORD line, which fresh_install reads.
+_ao_fresh='DB_PASSWORD=your-db-password\nLOG_LEVEL=info\n'
+for _ao_case in missing empty; do
+    printf '%b' "$_ao_fresh" > "$_ao_env"
+    [[ "$_ao_case" == missing ]] || printf 'APP_ORIGIN=\n' >> "$_ao_env"
+    _AO_TOPOLOGY=domain _ao_paths fresh "$_ao_env"
+    _assert_var "fresh HTTPS install, $_ao_case → origin" "$(_ao_got "$_ao_env")" "https://x.example"
+done
+# Fresh install keeps an explicit value (an interrupted install re-run).
+printf '%b' "${_ao_fresh}APP_ORIGIN=https://other.example\n" > "$_ao_env"
+_AO_TOPOLOGY=domain _ao_paths fresh "$_ao_env"
+_assert_var "fresh HTTPS install keeps explicit origin" "$(_ao_got "$_ao_env")" "https://other.example"
+# Fresh local and proxy installs write nothing.
+for _ao_t in local proxy; do
+    printf '%b' "$_ao_fresh" > "$_ao_env"
+    _AO_TOPOLOGY=$_ao_t _ao_paths fresh "$_ao_env"
+    _assert_var "fresh $_ao_t install → no origin" "$(_ao_got "$_ao_env")" "<absent>"
+done
+
+# Existing HTTPS install: repaired; every other line unchanged, secrets included.
+_ao_base="${_TLS}DOMAIN=x.example\nHTTP_BIND=127.0.0.1\nDB_PASSWORD=keepme\nSECRET_ENCRYPTION_KEY=keepkey\nLOG_LEVEL=debug\n\n# SETUP_COMPLETE\n"
+for _ao_seed in "$_ao_base" "${_ao_base}APP_ORIGIN=\n"; do
+    printf '%b' "$_ao_seed" > "$_ao_env"
+    _ao_before="$(grep -v '^APP_ORIGIN=' "$_ao_env")"
+    _ao_paths existing "$_ao_env"
+    _assert_var "existing HTTPS install repaired" "$(_ao_got "$_ao_env")" "https://x.example"
+    _assert_var "existing HTTPS install: other lines untouched" "$(grep -v '^APP_ORIGIN=' "$_ao_env" | sed '/^$/d')" "$(sed '/^$/d' <<< "$_ao_before")"
+done
+# Repeated upgrade runs leave the file byte-for-byte the same.
+_ao_snap="$(cat "$_ao_env")"
+_ao_paths existing "$_ao_env"; _ao_paths existing "$_ao_env"
+_assert_var "repeated upgrade runs are idempotent" "$(cat "$_ao_env")" "$_ao_snap"
+# Existing install keeps an explicit value.
+printf '%b' "${_ao_base}APP_ORIGIN=https://other.example\n" > "$_ao_env"
+_ao_paths existing "$_ao_env"
+_assert_var "existing HTTPS install keeps explicit origin" "$(_ao_got "$_ao_env")" "https://other.example"
+# Existing non-TLS install and TLS install without a domain: unchanged.
+for _ao_seed in 'DOMAIN=x.example\nLOG_LEVEL=info\n# SETUP_COMPLETE\n' "${_TLS}LOG_LEVEL=info\n# SETUP_COMPLETE\n"; do
+    printf '%b' "$_ao_seed" > "$_ao_env"
+    _ao_snap="$(cat "$_ao_env")"
+    _ao_paths existing "$_ao_env"
+    _assert_var "existing install without TLS + domain unchanged" "$(grep -v '^HTTP_BIND=' "$_ao_env" | sed '/^$/d')" "$(sed '/^$/d' <<< "$_ao_snap")"
+done
+rm -f "$_ao_env"
+
 # --- install.sh: fetch_asset leaves no partial file ---
 
 echo ""
