@@ -602,7 +602,7 @@ maintainer then. Not built up front.
 - **Health:** per-mailbox canary (grant reachable + list one message + list calendars),
   check name per mailbox; an outage alerts once, not every run.
 - **Test mode:** the recording principal mailbox and calendar become per mailbox.
-- **Docs:** ADR-063 (registry; code chooses the account from the object; evidence-based
+- **Docs:** ADR-064 (registry; code chooses the account from the object; evidence-based
   choice for new objects); spec 15 (principal-mailbox sends per mailbox), spec 04
   (channels), spec 17 (debrief dedupe); curia-docs page; changelog fragment per PR.
 
@@ -750,7 +750,7 @@ lifted only in the last.
       attaches to a later mailbox (unit tests).
 - [ ] A meeting on both calendars is listed and debriefed once.
 - [ ] The console can add, relabel, test, set default and remove a mailbox; setup catalog,
-      curia-docs, ADR-063 and specs updated; per-mailbox health canary.
+      curia-docs, ADR-064 and specs updated; per-mailbox health canary.
 - [ ] Unit tests for mailbox resolution and `locate`, cross-mailbox list, triage due and
       round-robin, dedupe, the upgrade migration, availability union and calendar routing;
       new scenario cases written for account choice (CFO, sister, shared accountant,

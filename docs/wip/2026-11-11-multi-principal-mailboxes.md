@@ -212,18 +212,18 @@ No behaviour change. ceo-inbox tools still read the flat secrets in this part.
 ### Task 9: Health canary, outage alert, setup catalog, docs for Part 1
 
 **Files:**
-- Create: `src/health/mailbox-outage-notifier.ts`, `docs/adr/063-multiple-principal-mailboxes.md`, `changes/feat-2475-multi-principal-mailboxes.md`
+- Create: `src/health/mailbox-outage-notifier.ts`, `docs/adr/064-multiple-principal-mailboxes.md`, `changes/feat-2475-multi-principal-mailboxes.md`
 - Modify: `src/health/health-service.ts:247-326` (replace the single `nylas_calendar` probe with one `principal_mailbox:<id>` probe per live mailbox: `getGrant` + `listMessages({limit:1})` + `listCalendars()`, 5 s timeout), `src/health/types.ts:18`, `src/index.ts:2594-2601,2646` (also run `migrateFlatPrincipalMailbox` retry when deferred), `skills/setup/tools/setup-status/catalog.yaml` (new entry after `email` :45), `skills/setup/tools/setup-status/handler.ts:11-24,269-296` (check type `principal_mailbox_ready`), `docs/adr/README.md`, `docs/specs/04-channels.md`
 - Test: `tests/unit/health/health-service.test.ts`, `tests/unit/health/mailbox-outage-notifier.test.ts`, `skills/setup/tools/setup-status/handler.test.ts`
 
 **Interfaces:**
 - `MailboxOutageNotifier { constructor(deps: { gateway: Pick<OutboundGateway,'sendNotification'>; principalEmail: () => string | undefined; logger }); record(mailboxId: string, label: string, ok: boolean): Promise<void> }` — alerts once per outage episode (pattern `src/db/availability-monitor.ts:45-53`), clears on the first ok; alert body suggests removing the mailbox in the console if the account is gone.
 - Catalog entry: `id: principal_mailboxes`, label "Principal mailboxes and calendars", `completion_check: { type: principal_mailbox_ready }` (≥1 live mailbox whose last canary passed), `handoff: console`, `handoff_path: /channels`, `docs_url: /channels/principal-mailboxes`.
-- ADR-063: registry; code chooses the account from the object; evidence-based choice for new objects; never fall back to default; ids never reused.
+- ADR-064: registry; code chooses the account from the object; evidence-based choice for new objects; never fall back to default; ids never reused.
 
 - [ ] **Step 1: Failing tests**: `one canary per live mailbox`; `notifier alerts once per episode and again after recovery`; setup-status `principal_mailbox_ready is complete with one healthy mailbox`.
 - [ ] **Step 2: Run** — FAIL.
-- [ ] **Step 3: Implement; write ADR-063, spec 04 section, changelog fragment** (e.g. `- **Principal mailboxes** — mailboxes are now a registry, upgraded automatically; managed as a list in the console. (#2475)`).
+- [ ] **Step 3: Implement; write ADR-064, spec 04 section, changelog fragment** (e.g. `- **Principal mailboxes** — mailboxes are now a registry, upgraded automatically; managed as a list in the console. (#2475)`).
 - [ ] **Step 4: Run** the three tests, `pnpm -C $W run typecheck`, `pnpm -C $W run lint`, `pnpm -C $W test` (unit) — PASS.
 - [ ] **Step 5: Commit** `feat(health): per-mailbox canary and setup catalog entry (#2475)`.
 - [ ] **Step 6: curia-docs page.** Create worktree `~/Projects/curia/worktrees/curia-docs-principal-mailboxes` from `repos/curia-docs` (pull `main` first), add `channels/principal-mailboxes` page (connect, label, default, remove; cadence and send level per mailbox), commit `-s`, open its PR with a link to this one.
@@ -549,7 +549,7 @@ No behaviour change. ceo-inbox tools still read the flat secrets in this part.
 ### Task 29: Extraction provenance; Part 3 docs
 
 **Files:**
-- Modify: `src/audit/audit-log-repo.ts` (add `findMailboxesForConversation(conversationId: string): Promise<string[]>` — distinct `payload->'result'->'data'->>'mailbox'` from `tool.result` rows of `ceo-inbox-*` tools for that conversation, using `idx_audit_conversation`), `src/checkpoint/processor.ts:95` (append `/mailboxes:<a>,<b>` to `source` when non-empty; a lookup error logs a warning and keeps the plain source), `docs/adr/063-multiple-principal-mailboxes.md` (triage section)
+- Modify: `src/audit/audit-log-repo.ts` (add `findMailboxesForConversation(conversationId: string): Promise<string[]>` — distinct `payload->'result'->'data'->>'mailbox'` from `tool.result` rows of `ceo-inbox-*` tools for that conversation, using `idx_audit_conversation`), `src/checkpoint/processor.ts:95` (append `/mailboxes:<a>,<b>` to `source` when non-empty; a lookup error logs a warning and keeps the plain source), `docs/adr/064-multiple-principal-mailboxes.md` (triage section)
 - Create: `changes/feat-2475-triage.md`, scenario cases `45i-triage-both-mailboxes-once.yaml`, `45j-cross-mailbox-no-reply-loop.yaml`
 - Test: `tests/integration/audit-log-mailboxes-for-conversation.test.ts`, `tests/unit/checkpoint/processor.test.ts`
 
