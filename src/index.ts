@@ -98,6 +98,7 @@ import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { migrateFlatPrincipalMailbox } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
+import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
 import { grantSafeErrorFields } from './principal-mailboxes/error-fields.js';
 import { FLAT_KEYS_MANAGED_MESSAGE, FLAT_PRINCIPAL_MAILBOX_KEYS } from './principal-mailboxes/secrets.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
@@ -1259,6 +1260,16 @@ async function main(): Promise<void> {
         contacts: contactService,
         principalContactId: principalContact.id,
         curiaAccountAddresses: async () => (await emailAccountsRepo.list()).map(a => a.selfEmail),
+        // F6: a principal mailbox may never reuse one of Curia's own account grants.
+        curiaAccountGrantIds: async () => {
+          const ids: string[] = [];
+          for (const a of await emailAccountsRepo.list()) {
+            const g = (await secretsService.get(emailAccountGrantSecretName(a.name)))?.trim();
+            if (g) ids.push(g);
+          }
+          return ids;
+        },
+        reconcileFlatKeys: reconcileFlatMirror,
         lookupGrant: (grantId) => {
           if (!principalMailboxApiKey) return Promise.reject(new Error('No Nylas API key configured'));
           return new NylasClient(principalMailboxApiKey, grantId, logger).getGrant();
