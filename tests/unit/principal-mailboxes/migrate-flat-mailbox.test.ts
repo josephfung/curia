@@ -5,20 +5,24 @@ import {
   mailboxIdFromAddress,
 } from '../../../src/principal-mailboxes/migrate-flat-mailbox.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
-import type { PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
+import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
 
 const logger = pino({ level: 'silent' });
 
-function setup(flat: Record<string, string>, lookup: () => Promise<{ email: string; provider: string }>) {
+function setup(flat: Record<string, string>, lookup: () => Promise<{ email: string; provider: string }>, opts: { insertFails?: boolean } = {}) {
   const rows: Array<Omit<PrincipalMailboxRecord, 'removedAt'>> = [];
   const store = {
-    listLive: vi.fn(async () => rows.map((r) => ({ ...r, removedAt: null }))),
-    insert: vi.fn(async (r: Omit<PrincipalMailboxRecord, 'removedAt'>) => { rows.push(r); }),
+    hasAnyRow: vi.fn(async () => rows.length > 0),
+    insert: vi.fn(async (r: Omit<PrincipalMailboxRecord, 'removedAt'>) => {
+      if (opts.insertFails) throw new Error('insert failed');
+      rows.push(r);
+    }),
   } as unknown as PrincipalMailboxStore;
   const vault: Record<string, string> = { ...flat };
   const secrets = {
     get: vi.fn(async (n: string) => vault[n] ?? null),
     set: vi.fn(async (n: string, v: string) => { vault[n] = v; }),
+    delete: vi.fn(async (n: string) => { delete vault[n]; }),
   };
   const lookupGrant = vi.fn(lookup);
   return { rows, store, secrets, vault, lookupGrant, deps: { store, secrets, lookupGrant, logger } };
@@ -57,6 +61,21 @@ describe('migrateFlatPrincipalMailbox', () => {
     expect(t.rows).toHaveLength(1);
   });
 
+  it('does not revive a removed mailbox', async () => {
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => ({ email: 'pat@ops.example.org', provider: 'google' }));
+    // A tombstoned row still counts: hasAnyRow is true while listLive would be empty.
+    (t.store.hasAnyRow as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('already');
+    expect(t.rows).toHaveLength(0);
+    expect(t.secrets.set).not.toHaveBeenCalled();
+  });
+
+  it('removes the grant secret it wrote when the insert fails', async () => {
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => ({ email: 'pat@ops.example.org', provider: 'google' }), { insertFails: true });
+    await expect(migrateFlatPrincipalMailbox(t.deps)).rejects.toThrow('insert failed');
+    expect(t.vault['principal.mailbox.ops.nylas_grant_id']).toBeUndefined();
+  });
+
   it('returns nothing when there is no flat grant', async () => {
     const t = setup({ ceo_nylas_grant_id: '  ' }, async () => ({ email: 'a@b.example', provider: 'google' }));
     expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('nothing');
@@ -82,5 +101,22 @@ describe('mailboxIdFromAddress', () => {
     expect(mailboxIdFromAddress('a@googlemail.com')).toBe('gmail');
     expect(mailboxIdFromAddress('a@ops.example.org')).toBe('ops');
     expect(mailboxIdFromAddress('a@9co.example')).toBe('m-9co');
+  });
+
+  it('always yields a valid, non-reserved id', () => {
+    const cases: Record<string, string> = {
+      'a@primary.com': 'm-primary',
+      'a@default.org': 'm-default',
+      'a@-x.example': 'm--x',
+      'a@!!!.example': 'mailbox',
+      ['a@' + 'x'.repeat(40) + '.example']: 'x'.repeat(32),
+      ['a@9' + 'x'.repeat(40) + '.example']: 'm-9' + 'x'.repeat(29),
+    };
+    for (const [addr, want] of Object.entries(cases)) {
+      const id = mailboxIdFromAddress(addr);
+      expect(id).toBe(want);
+      expect(id).toMatch(MAILBOX_ID_RE);
+      expect(RESERVED_MAILBOX_IDS.has(id)).toBe(false);
+    }
   });
 });
