@@ -67,6 +67,29 @@ describe('PrincipalMailboxes', () => {
     expect((await svc.defaultMailbox())?.id).toBe('work');
   });
 
+  it('principalEmailAddresses unions mailbox addresses with identity addresses, lowercase and deduplicated', async () => {
+    const store = {
+      listLive: vi.fn(async () => [rec(), rec({ id: 'home', address: 'Pat@Home.example.org', isDefault: false })]),
+      hasAnyRow: vi.fn(async () => true),
+    } as unknown as PrincipalMailboxStore;
+    const svc = new PrincipalMailboxes({
+      store,
+      secrets: { get: async () => null },
+      apiKey: () => 'k',
+      logger,
+      principalEmailIdentities: async () => ['PAT@work.example.com', 'pat@other.example.net', ''],
+    });
+    expect(await svc.principalEmailAddresses()).toEqual([
+      'pat@work.example.com', 'pat@home.example.org', 'pat@other.example.net',
+    ]);
+  });
+
+  it('principalEmailAddresses omits the fallback mailbox empty address and works without an identity source', async () => {
+    const { svc } = build([]);
+    svc.setFallback({ id: 'work', grantId: 'g' });
+    expect(await svc.principalEmailAddresses()).toEqual([]);
+  });
+
   it('credentials reads principal.mailbox.<id>.nylas_grant_id on every call', async () => {
     const { svc, get, secrets } = build([rec()], { 'principal.mailbox.work.nylas_grant_id': 'g1' });
     expect(await svc.credentials('work')).toEqual({ apiKey: 'api-key', grantId: 'g1' });

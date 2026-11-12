@@ -16,6 +16,8 @@ export interface StubOptions {
   grantId?: string | ((id: string) => string);
   apiKey?: string;
   removed?: string[];
+  /** Extra principal addresses (verified identities) beyond the mailboxes' own. */
+  identityAddresses?: string[];
 }
 
 export function stubPrincipalMailboxes(opts: StubOptions = {}): NonNullable<ToolContext['principalMailboxes']> {
@@ -30,6 +32,9 @@ export function stubPrincipalMailboxes(opts: StubOptions = {}): NonNullable<Tool
       if (!m) throw new UnknownMailboxError(id);
       return m;
     },
+    principalEmailAddresses: async () => [
+      ...new Set([...mailboxes.map((m) => m.address), ...(opts.identityAddresses ?? [])].map((a) => a.toLowerCase()).filter((a) => a !== '')),
+    ],
     defaultMailbox: async () => mailboxes.find((m) => m.isDefault) ?? null,
     credentials: async (id: string) => ({ apiKey: opts.apiKey ?? 'test-api-key', grantId: grantFor(id) }),
   };

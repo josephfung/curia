@@ -37,6 +37,8 @@ export interface PrincipalMailboxesDeps {
   logger: Logger;
   createNylasClient?: (apiKey: string, grantId: string) => NylasClient;
   createCalendarClient?: (apiKey: string, grantId: string) => NylasCalendarClient;
+  /** The principal's verified, active email identity addresses (R32). Absent: mailboxes only. */
+  principalEmailIdentities?: () => Promise<string[]>;
 }
 
 function toView(r: PrincipalMailboxRecord): PrincipalMailboxView {
@@ -122,6 +124,19 @@ export class PrincipalMailboxes {
   /** Addresses of live mailboxes (the fallback's unknown address is omitted). */
   async addresses(): Promise<string[]> {
     return (await this.list()).map((m) => m.address).filter((a) => a !== '');
+  }
+
+  /**
+   * Every address that is the principal's own: live mailbox addresses plus the principal's
+   * verified, active email identities (a defunct or bounced one is no longer theirs, R32).
+   * Lowercase, deduplicated, no empty strings.
+   */
+  async principalEmailAddresses(): Promise<string[]> {
+    const fromIdentities = this.deps.principalEmailIdentities ? await this.deps.principalEmailIdentities() : [];
+    const all = [...(await this.addresses()), ...fromIdentities]
+      .map((a) => a.trim().toLowerCase())
+      .filter((a) => a !== '');
+    return [...new Set(all)];
   }
 
   async credentials(id: string): Promise<{ apiKey: string; grantId: string }> {

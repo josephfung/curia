@@ -1,5 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import { locateInMailbox, mailboxFields } from '../../../_shared/principal-mailbox-client.js';
 import { type NylasParticipant, type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
@@ -16,18 +16,6 @@ const DRAFT_SCAN_LIMIT = 500;
 
 export class CeoInboxDraftReplyHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-draft-reply');
-    if (!picked.ok) return { success: false, error: picked.error };
-    const client = picked.at.client;
-    const selfEmail = picked.at.mailbox.address.toLowerCase();
-
-    // Guard: the mailbox address must be known — without it we cannot filter the principal's own
-    // address from reply recipients, which would cause self-addressed drafts.
-    if (!selfEmail) {
-      ctx.log.error({ mailboxId: picked.at.mailbox.id }, 'ceo-inbox-draft-reply: mailbox address is empty — self-filter disabled');
-      return { success: false, error: 'Configuration error: the principal mailbox address is not known' };
-    }
-
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
 
@@ -43,6 +31,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
     if (idError) {
       return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
+
     if (!body) {
       return { success: false, error: 'body is required' };
     }
@@ -60,6 +49,22 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         const message = err instanceof Error ? err.message : String(err);
         return { success: false, error: `Attachment error: ${message}` };
       }
+    }
+
+    // Draft in the mailbox the message is in (#2475).
+    const picked = await locateInMailbox(ctx, input, 'ceo-inbox-draft-reply', 'message', replyToMessageId);
+    if (!picked.ok) {
+      return { success: false, error: picked.error, ...(picked.errorType ? { errorType: picked.errorType } : {}) };
+    }
+    const client = picked.at.client;
+    const mbx = mailboxFields(picked.at.mailbox);
+    const selfEmail = picked.at.mailbox.address.toLowerCase();
+
+    // Guard: the mailbox address must be known — without it we cannot filter the principal's own
+    // address from reply recipients, which would cause self-addressed drafts.
+    if (!selfEmail) {
+      ctx.log.error({ mailboxId: picked.at.mailbox.id }, 'ceo-inbox-draft-reply: mailbox address is empty — self-filter disabled');
+      return { success: false, error: 'Configuration error: the principal mailbox address is not known' };
     }
 
     ctx.log.info(
@@ -118,6 +123,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
               snippet: existing.snippet,
               date: existing.date,
               already_exists: true,
+              ...mbx,
             },
           };
         }
@@ -138,10 +144,13 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
 
       // CC: everyone from original to + cc, minus the principal's own address
       // and minus the original sender (already in "to")
+      // Every principal address is excluded, not just this mailbox's: a message to both of the
+      // principal's mailboxes must not CC the other one (#2475).
+      const principalAddresses = new Set([selfEmail, ...(await ctx.principalMailboxes!.principalEmailAddresses())]);
       const senderEmails = new Set(original.from.map((p) => p.email.toLowerCase()));
       const ccCandidates = [...original.to, ...original.cc].filter((p) => {
         const lower = p.email.toLowerCase();
-        return lower !== selfEmail && !senderEmails.has(lower);
+        return !principalAddresses.has(lower) && !senderEmails.has(lower);
       });
 
       // Deduplicate cc by email (case-insensitive)
@@ -223,6 +232,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
           // The message this draft answers (#2474 final fixes A5): an autonomous send reads it
           // from this result's audit row and requires it to be the thread's latest message.
           reply_to_message_id: replyToMessageId,
+          ...mbx,
         },
       };
     } catch (err) {

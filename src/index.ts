@@ -1190,11 +1190,20 @@ async function main(): Promise<void> {
   // Non-fatal: a failed or deferred migration serves the flat grant as a fallback while the
   // registry is empty (setFallback is ignored once any row exists); a later retry clears it.
   const principalMailboxStore = new PrincipalMailboxStore(pool, logger);
+  const mailboxPrincipalId = principalContact?.id;
   const principalMailboxes = new PrincipalMailboxes({
     store: principalMailboxStore,
     secrets: secretsService,
     apiKey: () => config.nylasApiKey,
     logger,
+    principalEmailIdentities: mailboxPrincipalId
+      ? async () => {
+          const found = await contactService.getContactWithIdentities(mailboxPrincipalId);
+          return (found?.identities ?? [])
+            .filter((i) => i.channel === 'email' && i.verified && i.status === 'active')
+            .map((i) => i.channelIdentifier);
+        }
+      : undefined,
   });
   // Curia's own account grants (F5/F6): never registered as, or added as, a principal mailbox.
   const curiaAccountGrantIds = async (): Promise<string[]> => {
