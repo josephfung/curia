@@ -3,19 +3,14 @@ import pino from 'pino';
 import { CeoInboxLabelHandler } from './handler.js';
 import { clearFolderCache } from '../../../_shared/ceo-nylas-client.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
+import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
 function buildCtx(input: Record<string, unknown>): ToolContext {
   return {
     input,
-    secret(key: string): string {
-      switch (key) {
-        case 'channel.email.nylas_api_key': return 'test-api-key';
-        case 'ceo_nylas_grant_id': return 'test-grant-id';
-        default: throw new Error(`unknown secret: ${key}`);
-      }
-    },
+    principalMailboxes: stubPrincipalMailboxes({}),
     log: logger,
   } as unknown as ToolContext;
 }

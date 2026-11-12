@@ -1,14 +1,9 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
-import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
+import { locateInMailbox, mailboxFields } from '../../../_shared/principal-mailbox-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxMarkStarredHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const apiKey = ceoNylasApiKey(ctx);
-    const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
-
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
 
@@ -40,11 +35,16 @@ export class CeoInboxMarkStarredHandler implements ToolHandler {
       return { success: false, error: 'starred must be a boolean' };
     }
 
+    const located = await locateInMailbox(ctx, input, 'ceo-inbox-mark-starred', 'message', messageId);
+    if (!located.ok) return { success: false, error: located.error, ...(located.errorType ? { errorType: located.errorType } : {}) };
+    const { client, mailbox } = located.at;
+    const mbx = mailboxFields(mailbox);
+
     ctx.log.info({ messageId, starred }, 'ceo-inbox-mark-starred: setting starred');
 
     try {
       await client.markAsStarred(messageId, starred);
-      return { success: true, data: { message_id: messageId, starred } };
+      return { success: true, data: { message_id: messageId, starred, ...mbx } };
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-mark-starred: failed');
       return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to mark message as starred') };

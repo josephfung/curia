@@ -6,10 +6,11 @@
   "action_risk": "none",
   "inputs": {
     "source_message_id": "string (Nylas message id that was punted)",
-    "thread_id": "string?",
     "subject": "string",
     "body": "string (the shadow draft Curia would have sent — never shown to the principal)",
-    "recipients": "string[]? (to addresses)"
+    "thread_id": "string?",
+    "recipients": "string[]? (to addresses)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "captured": "boolean",
@@ -19,5 +20,5 @@
   "permissions": [],
   "secrets": [],
   "timeout": 15000,
-  "capabilities": ["workingDocs"]
+  "capabilities": ["workingDocs", "principalMailboxes"]
 }

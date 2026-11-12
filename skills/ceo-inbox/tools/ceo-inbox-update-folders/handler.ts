@@ -1,15 +1,14 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
-import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
+import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
 import type { NylasFolder } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { isReadOnlySystemLabel } from '../../../../src/channels/email/system-labels.js';
 
 export class CeoInboxUpdateFoldersHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const apiKey = ceoNylasApiKey(ctx);
-    const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
+    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-update-folders');
+    if (!picked.ok) return { success: false, error: picked.error };
+    const client = picked.at.client;
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};

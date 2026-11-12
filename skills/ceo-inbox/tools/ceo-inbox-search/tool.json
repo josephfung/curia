@@ -10,7 +10,8 @@
     "folder": "string? (omit to search messages; pass 'DRAFTS' to search unsent drafts instead)",
     "include_spam_and_trash": "boolean? (default false; set true to include messages filed in Spam or Trash. A query such as in:spam does not opt in by itself)",
     "limit": "number? (max results, 1–50, default 10)",
-    "modified_since": "string? (DRAFTS only: ISO 8601 date-time; keep drafts last changed at or after it. Resolve phrases like 'this morning' with date-resolve first)"
+    "modified_since": "string? (DRAFTS only: ISO 8601 date-time; keep drafts last changed at or after it. Resolve phrases like 'this morning' with date-resolve first)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "messages": "array of { id, threadId, from, subject, date, snippet, unread, folders } (when searching messages)",
@@ -18,8 +19,8 @@
     "count": "number of items returned"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 20000,
-  "capabilities": ["auditLogRepo"],
+  "capabilities": ["auditLogRepo", "principalMailboxes"],
   "optional_capabilities": ["curiaEmailAddresses"]
 }

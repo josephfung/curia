@@ -44,7 +44,7 @@ describe('ceoNylasApiKey', () => {
       const handler = join(toolsDir, tool, 'handler.ts');
       return existsSync(handler) && readFileSync(handler, 'utf-8').includes('ceoNylasApiKey(');
     });
-    expect(callers.length).toBeGreaterThan(0);
+    // Since #2475 the ceo-inbox handlers take the key from ctx.principalMailboxes, so there may be no caller.
     for (const tool of callers) {
       const manifest = JSON.parse(readFileSync(join(toolsDir, tool, 'tool.json'), 'utf-8')) as { secrets: string[] };
       expect(manifest.secrets, tool).toContain(CHANNEL_NYLAS_API_KEY);

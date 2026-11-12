@@ -3,6 +3,7 @@ import { CeoInboxDraftReplyHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { Logger } from '../../../../src/logger.js';
 import { readFile, realpath } from 'node:fs/promises';
+import { mailboxView, stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -29,14 +30,9 @@ function buildCtx(overrides: Partial<{
     toolVersion: '0.3.0',
     input,
     timezone: 'America/Toronto',
-    secret(key: string): string {
-      switch (key) {
-        case 'channel.email.nylas_api_key': return 'test-api-key';
-        case 'ceo_nylas_grant_id': return 'test-grant-id';
-        case 'ceo_self_email': return 'ceo@example.com';
-        default: return '';
-      }
-    },
+    // The handlers read credentials from principalMailboxes, never from secrets.
+    secret: (key: string): string => { throw new Error(`unexpected secret read: ${key}`); },
+    principalMailboxes: stubPrincipalMailboxes({}),
     log: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -354,13 +350,13 @@ describe('CeoInboxDraftReplyHandler', () => {
     }
   });
 
-  it('Case 7: Empty selfEmail secret — returns { success: false }', async () => {
-    // Mock fetch to throw if called — confirms no network call is made when the secret is missing
+  it('Case 7: Unknown mailbox address — returns { success: false }', async () => {
+    // Mock fetch to throw if called — confirms no network call is made when the address is unknown
     mockFetch.mockImplementation(async () => {
-      throw new Error('fetch should not be called when ceo_self_email is empty');
+      throw new Error('fetch should not be called when the mailbox address is empty');
     });
 
-    // Build a ctx where ceo_self_email returns an empty string
+    // Build a ctx whose default mailbox has an empty address
     const ctx: ToolContext = {
       toolName: 'ceo-inbox-draft-reply',
       toolVersion: '0.3.0',
@@ -368,14 +364,9 @@ describe('CeoInboxDraftReplyHandler', () => {
         reply_to_message_id: 'msg-001',
         body: 'Thanks for reaching out.',
       },
-      secret(key: string): string {
-        switch (key) {
-          case 'channel.email.nylas_api_key': return 'test-api-key';
-          case 'ceo_nylas_grant_id': return 'test-grant-id';
-          case 'ceo_self_email': return '';   // deliberately empty
-          default: return '';
-        }
-      },
+      secret: (key: string): string => { throw new Error(`unexpected secret read: ${key}`); },
+      // The mailbox exists but its address is not known (the deferred single-mailbox fallback).
+      principalMailboxes: stubPrincipalMailboxes({ mailboxes: [mailboxView('work', 'Work', '', true)] }),
       // Partial logger mock; cast through unknown to the real Logger type.
       log: {
         info: vi.fn(),
@@ -389,10 +380,10 @@ describe('CeoInboxDraftReplyHandler', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      // Error message must reference the misconfigured secret so it is diagnosable
+      // Error message must reference the misconfiguration so it is diagnosable
       const lower = result.error.toLowerCase();
       expect(
-        lower.includes('ceo_self_email') || lower.includes('configuration error'),
+        lower.includes('configuration error'),
       ).toBe(true);
     }
 

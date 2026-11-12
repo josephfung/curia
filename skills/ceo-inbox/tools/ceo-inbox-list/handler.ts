@@ -1,7 +1,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
+import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
 import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
-import { CeoNylasClient, NYLAS_MAX_LIST_LIMIT, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
+import { NYLAS_MAX_LIST_LIMIT, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
 
 const MAX_LIMIT = 50;
@@ -35,9 +35,9 @@ function isSystemFolder(folder: string): boolean {
 
 export class CeoInboxListHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const apiKey = ceoNylasApiKey(ctx);
-    const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
+    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-list');
+    if (!picked.ok) return { success: false, error: picked.error };
+    const client = picked.at.client;
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};

@@ -4,9 +4,8 @@
 // (t2125 pattern). Capture/match failures on individual messages log and continue.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
+import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
 import {
-  CeoNylasClient,
   htmlToPlainText,
   type NylasMessageSummary,
 } from '../../../_shared/ceo-nylas-client.js';
@@ -306,15 +305,9 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
   }
 
   private async runObserve(ctx: ToolContext): Promise<ToolResult> {
-    let apiKey: string;
-    let grantId: string;
-    try {
-      apiKey = ceoNylasApiKey(ctx);
-      grantId = ctx.secret('ceo_nylas_grant_id');
-    } catch (err) {
-      ctx.log.error({ err }, 'ceo-inbox-sent-observe: required secret not available');
-      return { success: false, error: 'principal inbox is not configured (missing credentials)' };
-    }
+    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-sent-observe');
+    if (!picked.ok) return { success: false, error: picked.error };
+    const client = picked.at.client;
 
     if (!ctx.entityMemory || !ctx.workingDocs || !ctx.taskRepo) {
       return {
@@ -383,7 +376,6 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       : 0;
     const backfillActive = backfillBefore > 0;
 
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
     // Paginate the whole watermark window — a single fixed-limit page silently drops
     // everything past the newest 20 on a busy Sent folder (#1429 review). `truncated`
     // means the maxScan ceiling was hit and older sends remain unseen this run. During a

@@ -1,14 +1,10 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
-import { CeoNylasClient, htmlToPlainText } from '../../../_shared/ceo-nylas-client.js';
+import { type CeoNylasClient, htmlToPlainText } from '../../../_shared/ceo-nylas-client.js';
+import { locateInMailbox, mailboxFields } from '../../../_shared/principal-mailbox-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxReadHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const apiKey = ceoNylasApiKey(ctx);
-    const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
-
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
 
@@ -31,6 +27,13 @@ export class CeoInboxReadHandler implements ToolHandler {
         return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
       }
     }
+
+    const located = draftId
+      ? await locateInMailbox(ctx, input, 'ceo-inbox-read', 'draft', draftId)
+      : await locateInMailbox(ctx, input, 'ceo-inbox-read', 'message', messageId);
+    if (!located.ok) return { success: false, error: located.error, ...(located.errorType ? { errorType: located.errorType } : {}) };
+    const { client, mailbox } = located.at;
+    const mbx = mailboxFields(mailbox);
 
     // ── Draft path (issue #1000) ─────────────────────────────────────────────
     //
@@ -61,6 +64,7 @@ export class CeoInboxReadHandler implements ToolHandler {
           // Flag the resource type so the agent knows this is an editable draft
           // (pass id to ceo-inbox-draft-edit), not a received message.
           is_draft: true,
+          ...mbx,
         },
       };
     }
@@ -95,6 +99,7 @@ export class CeoInboxReadHandler implements ToolHandler {
         date: msg.date,
         labels: await resolveLabelNames(client, msg.labels, ctx, messageId),
         attachments: msg.attachments,
+        ...mbx,
       },
     };
   }

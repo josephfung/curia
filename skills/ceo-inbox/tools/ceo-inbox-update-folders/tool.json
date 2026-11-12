@@ -7,7 +7,8 @@
   "inputs": {
     "message_id": "string (Nylas message ID to update)",
     "add_folders": "string[]? (folder/label names to add, e.g. ['STARRED', 'Follow-Up'])",
-    "remove_folders": "string[]? (folder/label names to remove, e.g. ['INBOX'])"
+    "remove_folders": "string[]? (folder/label names to remove, e.g. ['INBOX'])",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "success": "boolean",
@@ -18,7 +19,7 @@
     "read_only_skipped": "string[] (SENT or DRAFT tokens in add_folders/remove_folders; Gmail sets these itself, so nothing changed for them)"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 15000,
-  "capabilities": []
+  "capabilities": ["principalMailboxes"]
 }

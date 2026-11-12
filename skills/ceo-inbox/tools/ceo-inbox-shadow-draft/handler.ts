@@ -1,4 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { checkMailboxInput } from '../../../_shared/principal-mailbox-client.js';
 import { shadowDraftPath, SHADOW_DOC_TYPE } from '../../../_shared/shadow-draft.js';
 
 export class CeoInboxShadowDraftHandler implements ToolHandler {
@@ -16,6 +17,9 @@ export class CeoInboxShadowDraftHandler implements ToolHandler {
     if (!sourceMessageId || !body.trim()) {
       return { success: false, error: 'source_message_id and body are required' };
     }
+
+    const mailboxError = await checkMailboxInput(ctx, input, 'ceo-inbox-shadow-draft');
+    if (mailboxError) return { success: false, error: mailboxError };
 
     const recipients = Array.isArray(input.recipients)
       ? input.recipients.filter((r): r is string => typeof r === 'string')

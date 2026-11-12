@@ -1,6 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
-import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
+import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import { type NylasParticipant, type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
 import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
@@ -16,26 +16,17 @@ const DRAFT_SCAN_LIMIT = 500;
 
 export class CeoInboxDraftReplyHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    let apiKey: string;
-    let grantId: string;
-    let selfEmail: string;
-    try {
-      apiKey = ceoNylasApiKey(ctx);
-      grantId = ctx.secret('ceo_nylas_grant_id');
-      selfEmail = ctx.secret('ceo_self_email').toLowerCase();
-    } catch (err) {
-      ctx.log.error({ err }, 'ceo-inbox-draft-reply: required secret not available');
-      return { success: false, error: 'principal inbox is not configured (missing credentials)' };
-    }
+    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-draft-reply');
+    if (!picked.ok) return { success: false, error: picked.error };
+    const client = picked.at.client;
+    const selfEmail = picked.at.mailbox.address.toLowerCase();
 
-    // Guard: selfEmail must be set — without it we cannot filter the principal's own address
-    // from reply recipients, which would cause self-addressed drafts.
+    // Guard: the mailbox address must be known — without it we cannot filter the principal's own
+    // address from reply recipients, which would cause self-addressed drafts.
     if (!selfEmail) {
-      ctx.log.error({}, 'ceo-inbox-draft-reply: ceo_self_email secret is empty — self-filter disabled');
-      return { success: false, error: 'Configuration error: ceo_self_email secret is not set' };
+      ctx.log.error({ mailboxId: picked.at.mailbox.id }, 'ceo-inbox-draft-reply: mailbox address is empty — self-filter disabled');
+      return { success: false, error: 'Configuration error: the principal mailbox address is not known' };
     }
-
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
