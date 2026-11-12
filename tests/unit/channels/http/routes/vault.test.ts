@@ -162,7 +162,7 @@ function fakeRegistry(declared: string[] = [DECLARED_SECRET], tools: RegistryEnt
 async function build(
   secretsService: VaultSecretsPort,
   registryService: RegistryService,
-  extra: { usage?: SecretUsagePort; bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }>; principalFallbackActive?: () => Promise<boolean> } = {},
+  extra: { usage?: SecretUsagePort; bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }>; principalFallbackActive?: () => Promise<boolean>; principalRegistryHasRows?: () => Promise<boolean> } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify();
   await app.register(vaultRoutes, {
@@ -175,6 +175,7 @@ async function build(
       ? { list: async () => extra.emailAccounts!.map(a => ({ ...a, selfEmail: `${a.name}@example.com`, provider: 'nylas', createdAt: new Date(), createdBy: 'test', updatedAt: new Date() })) }
       : undefined,
     principalFallbackActive: extra.principalFallbackActive,
+    principalRegistryHasRows: extra.principalRegistryHasRows,
     bus: extra.bus ?? fakeBus().bus,
     webAppBootstrapSecret: BOOTSTRAP,
     sessions: new Map(),
@@ -426,6 +427,32 @@ describe('vault routes', () => {
     const refused = await del(app, 'ceo_nylas_grant_id');
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error).toContain('Calendar and principal inbox');
+  });
+
+  it('refuses PUT and DELETE of the flat principal keys once the registry has rows (#2475, R28)', async () => {
+    const secrets = fakeSecrets(['ceo_nylas_grant_id', 'ceo_self_email']);
+    app = await build(secrets, fakeRegistry(), { principalRegistryHasRows: async () => true });
+    for (const name of ['ceo_nylas_grant_id', 'ceo_self_email']) {
+      const value = name === 'ceo_self_email' ? 'pat@example.com' : 'g';
+      const setRes = await put(app, name, { value });
+      expect(setRes.statusCode, name).toBe(409);
+      expect(setRes.json().error).toContain("Principal's mailboxes");
+      const delRes = await del(app, name, '?force=true');
+      expect(delRes.statusCode, name).toBe(409);
+      expect(delRes.json().error).toContain("Principal's mailboxes");
+    }
+    expect(secrets.sets).toEqual([]);
+    expect(secrets.deletes).toEqual([]);
+  });
+
+  it('still allows PUT of the flat grant while the registry is empty (deferred fallback) (#2475)', async () => {
+    const secrets = fakeSecrets(['ceo_nylas_grant_id']);
+    app = await build(secrets, fakeRegistry(), {
+      principalFallbackActive: async () => true,
+      principalRegistryHasRows: async () => false,
+    });
+    expect((await put(app, 'ceo_nylas_grant_id', { value: 'g2' })).statusCode).toBe(200);
+    expect((await del(app, 'ceo_nylas_grant_id')).statusCode).toBe(409);
   });
 
   it('accepts a per-mailbox grant key and rejects a malformed one (#2475)', async () => {

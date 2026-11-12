@@ -29,6 +29,7 @@ function makeOptions(over: Partial<PrincipalMailboxesRouteOptions> = {}): Princi
     admin: {
       add: vi.fn(async () => ({ ok: true as const, mailbox: view() })),
       setDefault: vi.fn(async () => {}),
+      replaceGrant: vi.fn(async () => ({ ok: true as const })),
       removalPreview: vi.fn(async () => preview),
       remove: vi.fn(async () => {}),
     },
@@ -85,9 +86,15 @@ describe('principal-mailboxes routes', () => {
     const stream = { write: (s: string) => { lines.push(s); } };
     app = Fastify({ logger: { level: 'debug', stream } });
     const boom = () => { throw new Error('Nylas grant SECRET-GRANT-XYZ has no email address'); };
+    // A Nylas SDK error carries the grant in its message and its own `url` property.
+    const nylasBoom = () => {
+      throw Object.assign(new Error('Request to grants/SECRET-GRANT-XYZ timed out'), {
+        name: 'NylasSdkTimeoutError', url: 'https://api.us.nylas.com/v3/grants/SECRET-GRANT-XYZ',
+      });
+    };
     await app.register(principalMailboxesRoutes, makeOptions({
       lookupGrant: vi.fn(async () => boom()),
-      admin: { ...makeOptions().admin, add: vi.fn(async () => boom()) },
+      admin: { ...makeOptions().admin, add: vi.fn(async () => nylasBoom()) },
     }));
     const a = await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'SECRET-GRANT-XYZ' });
     const b = await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'W', grant_id: 'SECRET-GRANT-XYZ' });
@@ -218,5 +225,58 @@ describe('principal-mailboxes routes', () => {
     await app.close();
     await build(makeOptions({ admin: { ...makeOptions().admin, remove: vi.fn(async () => { throw new UnknownMailboxError('z'); }) } }));
     expect((await req('DELETE', '/api/registry/principal-mailboxes/z', { still_owned: true })).statusCode).toBe(404);
+  });
+
+  it('PATCH grant_id replaces the grant and never echoes it', async () => {
+    const opts = makeOptions();
+    await build(opts);
+    const res = await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: ' g-new ' });
+    expect(res.statusCode).toBe(200);
+    expect(opts.admin.replaceGrant).toHaveBeenCalledWith('work', 'g-new');
+    expect(opts.admin.setDefault).not.toHaveBeenCalled();
+    expect(opts.store.relabel).not.toHaveBeenCalled();
+    expect(res.body).not.toContain('g-new');
+  });
+
+  it('PATCH grant_id maps a refusal to 422 and applies nothing else', async () => {
+    const opts = makeOptions({
+      admin: { ...makeOptions().admin, replaceGrant: vi.fn(async () => ({ ok: false as const, refusal: 'address_mismatch' as const, detail: 'wrong account' })) },
+    });
+    await build(opts);
+    const res = await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: 'g', label: 'X', make_default: true });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ refusal: 'address_mismatch', detail: 'wrong account' });
+    expect(opts.admin.setDefault).not.toHaveBeenCalled();
+    expect(opts.store.relabel).not.toHaveBeenCalled();
+  });
+
+  it('PATCH grant_id 400s when blank or not a string, 503s without a Nylas key', async () => {
+    await build(makeOptions());
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: '  ' })).statusCode).toBe(400);
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: 5 })).statusCode).toBe(400);
+    await app.close();
+    await build(makeOptions({ lookupGrant: undefined }));
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: 'g' })).statusCode).toBe(503);
+  });
+
+  it('logs the message of a non-Nylas failure, but only the class of a Nylas one', async () => {
+    const lines: string[] = [];
+    const stream = { write: (s: string) => { lines.push(s); } };
+    app = Fastify({ logger: { level: 'debug', stream } });
+    await app.register(principalMailboxesRoutes, makeOptions({
+      admin: {
+        ...makeOptions().admin,
+        remove: vi.fn(async () => { throw new Error('relation "principal_mailboxes" is locked'); }),
+        removalPreview: vi.fn(async () => {
+          throw Object.assign(new Error('grants/SECRET-GRANT-ABC not found'), { name: 'NylasApiError', statusCode: 404 });
+        }),
+      },
+    }));
+    expect((await req('DELETE', '/api/registry/principal-mailboxes/work', { still_owned: true })).statusCode).toBe(500);
+    expect((await req('GET', '/api/registry/principal-mailboxes/work/removal-preview')).statusCode).toBe(500);
+    const log = lines.join('');
+    expect(log).toContain('relation \\"principal_mailboxes\\" is locked');
+    expect(log).toContain('NylasApiError');
+    expect(log).not.toContain('SECRET-GRANT-ABC');
   });
 });

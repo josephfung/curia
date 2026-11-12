@@ -1239,6 +1239,7 @@ async function main(): Promise<void> {
           if (!principalMailboxApiKey) return Promise.reject(new Error('No Nylas API key configured'));
           return new NylasClient(principalMailboxApiKey, grantId, logger).getGrant();
         },
+        isFallbackActive: () => principalMailboxes.isFallbackActive(),
         logger,
       })
     : undefined;
@@ -3673,6 +3674,7 @@ async function main(): Promise<void> {
             : undefined,
         }
       : undefined,
+    principalRegistryHasRows: () => principalMailboxStore.hasAnyRow(),
     setupRequiredAtBoot,
     bootStartedAt,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).

@@ -94,6 +94,10 @@ const PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set(['ceo_nylas_grant_id
 // a dot in the domain.
 const PRINCIPAL_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+const FLAT_KEYS_MANAGED_REFUSAL =
+  "The principal's mailbox is managed in the console: Channels → Email → Principal's mailboxes. " +
+  'Change, replace or remove the mailbox there.';
+
 /** A fresh copy of the principal-mailbox key set (see channelCredentialKeys for why a copy).
  *  Reused by the secret-capture system-name allowlist. */
 export function principalMailboxKeys(): ReadonlySet<string> {
@@ -288,6 +292,9 @@ export interface VaultRouteOptions {
   /** True while the deferred flat-grant fallback is served (#2475): ceo_nylas_grant_id is then
    *  still the live mailbox, so it is declared (and delete-guarded) as before. */
   principalFallbackActive?: () => Promise<boolean>;
+  /** True once the principal mailbox registry has any row (#2475, R28). The console then owns
+   *  the flat keys (it mirrors the default mailbox into them), so PUT and DELETE refuse them. */
+  principalRegistryHasRows?: () => Promise<boolean>;
   /** Optional: last-read times for the Secrets page. When absent, lastUsedAt is null. */
   usage?: SecretUsagePort;
   /** Every set and delete is published here as a secret.changed audit event (#2453). */
@@ -376,6 +383,17 @@ export async function vaultRoutes(
     } catch (err) {
       request.log.error({ err, name: change.name, action: change.action }, 'vault change outcome audit write failed');
     }
+  }
+
+  // Once the registry has rows the console mirrors the default mailbox into the flat keys
+  // (R28); a direct write would split ceo-inbox from calendar. Sends the 409 and returns true.
+  // During the deferred fallback the registry is empty, so today's behaviour holds.
+  async function refuseManagedFlatKey(request: FastifyRequest, reply: FastifyReply, name: string): Promise<boolean> {
+    if (!PRINCIPAL_MAILBOX_KEYS.has(name) || !options.principalRegistryHasRows) return false;
+    if (!(await options.principalRegistryHasRows())) return false;
+    request.log.info({ name }, 'vault change rejected: flat principal key is managed by the mailbox registry');
+    void reply.status(409).send({ error: FLAT_KEYS_MANAGED_REFUSAL });
+    return true;
   }
 
   // Platform keys are a deployment concern: every write route refuses them first, before the
@@ -777,6 +795,12 @@ export async function vaultRoutes(
     if (name === 'ceo_self_email' && !PRINCIPAL_EMAIL_RE.test(value.trim())) {
       return reply.status(400).send({ error: 'ceo_self_email must be an email address.' });
     }
+    try {
+      if (await refuseManagedFlatKey(request, reply, name)) return;
+    } catch (err) {
+      request.log.error({ err, name }, 'vault set failed: could not read the principal mailbox registry');
+      return reply.status(500).send({ error: 'Failed to save secret. Check server logs.' });
+    }
 
     // Write-ahead audit: a change never lands without its audit row. Key name only.
     const change: SecretChange = { name, action: 'set' };
@@ -807,6 +831,7 @@ export async function vaultRoutes(
     const force = (request.query as { force?: string } | undefined)?.force === 'true';
 
     try {
+      if (await refuseManagedFlatKey(request, reply, name)) return;
       if (!(await secretsService.list()).includes(name)) {
         if (!isAllowedVaultName(name, options)) {
           request.log.info({ name }, 'vault delete rejected: name not in the vault nor declared by any skill, MCP server, or channel');

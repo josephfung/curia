@@ -21,6 +21,8 @@ function setup(opts: {
   otherContacts?: Record<string, string>;
   insertFails?: boolean;
   onRemoved?: Array<(id: string) => Promise<void>>;
+  isFallbackActive?: () => Promise<boolean>;
+  logger?: pino.Logger;
 } = {}) {
   const records: PrincipalMailboxRecord[] = [...(opts.records ?? [])];
   const identities: Identity[] = [...(opts.identities ?? [])];
@@ -88,7 +90,8 @@ function setup(opts: {
       return found;
     }),
     onRemoved: opts.onRemoved,
-    logger,
+    isFallbackActive: opts.isFallbackActive,
+    logger: opts.logger ?? logger,
     maxLiveMailboxes: opts.maxLiveMailboxes,
   });
   return { admin, store, contacts, secretStore, records, identities, secrets, contact };
@@ -239,7 +242,7 @@ describe('PrincipalMailboxAdmin.remove', () => {
   ];
 
   it('removal of the default requires a new default', async () => {
-    const { admin, store } = setup({ records: two() });
+    const { admin, store } = setup({ records: two(), secrets: { [principalMailboxGrantSecretName('work')]: 'g-work' } });
     await expect(admin.remove({ id: 'personal', stillOwned: true })).rejects.toThrow(/new default/);
     expect(store.tombstone).not.toHaveBeenCalled();
     await admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work' });
@@ -253,7 +256,7 @@ describe('PrincipalMailboxAdmin.remove', () => {
   });
 
   it('requires a new primary email when the address is primary', async () => {
-    const { admin, contacts, store } = setup({ records: two(), primaryEmail: 'Pat@Gmail.com' });
+    const { admin, contacts, store } = setup({ records: two(), primaryEmail: 'Pat@Gmail.com', secrets: { [principalMailboxGrantSecretName('work')]: 'g-work' } });
     await expect(admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work' })).rejects.toThrow(/primary email/);
     expect(store.tombstone).not.toHaveBeenCalled();
     await expect(
@@ -349,8 +352,228 @@ describe('PrincipalMailboxAdmin.removalPreview primaryEmailCandidates', () => {
 
 describe('PrincipalMailboxAdmin.setDefault', () => {
   it('delegates to the store', async () => {
-    const { admin, store } = setup({ records: [rec()] });
+    const { admin, store } = setup({ records: [rec()], secrets: { [principalMailboxGrantSecretName('personal')]: 'g' } });
     await admin.setDefault('personal');
     expect(store.setDefault).toHaveBeenCalledWith('personal');
+  });
+});
+
+// Capture every log line so a test can assert a grant id never reaches the logs (R20).
+function capturingLogger(): { logger: pino.Logger; lines: string[] } {
+  const lines: string[] = [];
+  const logger = pino({ level: 'debug' }, { write: (s: string) => { lines.push(s); } });
+  return { logger, lines };
+}
+
+const FLAT_GRANT = 'ceo_nylas_grant_id';
+const FLAT_EMAIL = 'ceo_self_email';
+
+describe('PrincipalMailboxAdmin flat-key mirror (R28)', () => {
+  it('mirrors a new default mailbox into the flat keys', async () => {
+    const { admin, secrets } = setup({ grants: { g: google('Pat@Work.example.com') } });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    expect(secrets[FLAT_GRANT]).toBe('g');
+    expect(secrets[FLAT_EMAIL]).toBe('pat@work.example.com');
+  });
+
+  it('does not touch the flat keys for a non-default add', async () => {
+    const { admin, secrets } = setup({
+      records: [rec()], maxLiveMailboxes: 5,
+      secrets: { [FLAT_GRANT]: 'g-personal', [FLAT_EMAIL]: 'pat@gmail.com' },
+      grants: { g: google('pat@work.example.com') },
+    });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    expect(secrets[FLAT_GRANT]).toBe('g-personal');
+    expect(secrets[FLAT_EMAIL]).toBe('pat@gmail.com');
+  });
+
+  it('setDefault mirrors the new default', async () => {
+    const { admin, secrets } = setup({
+      records: [rec(), rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false })],
+      secrets: {
+        [FLAT_GRANT]: 'g-personal', [FLAT_EMAIL]: 'pat@gmail.com',
+        [principalMailboxGrantSecretName('work')]: 'g-work',
+      },
+    });
+    await admin.setDefault('work');
+    expect(secrets[FLAT_GRANT]).toBe('g-work');
+    expect(secrets[FLAT_EMAIL]).toBe('pat@work.example.com');
+  });
+
+  it('removing the default deletes both flat keys, after the per-mailbox secret and before hooks', async () => {
+    const order: string[] = [];
+    const hook = vi.fn(async () => { order.push('hook'); });
+    const s = setup({
+      records: [rec()],
+      secrets: { [FLAT_GRANT]: 'g', [FLAT_EMAIL]: 'pat@gmail.com', [principalMailboxGrantSecretName('personal')]: 'g' },
+      onRemoved: [hook],
+    });
+    const realDelete = s.secretStore.delete.getMockImplementation()!;
+    s.secretStore.delete.mockImplementation(async (n: string) => { order.push(n); await realDelete(n); });
+    await s.admin.remove({ id: 'personal', stillOwned: true });
+    expect(s.secrets[FLAT_GRANT]).toBeUndefined();
+    expect(s.secrets[FLAT_EMAIL]).toBeUndefined();
+    expect(order).toEqual([principalMailboxGrantSecretName('personal'), FLAT_GRANT, FLAT_EMAIL, 'hook']);
+  });
+
+  it('removing the default with a new default mirrors the new default instead', async () => {
+    const s = setup({
+      records: [rec(), rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false })],
+      secrets: {
+        [FLAT_GRANT]: 'g-personal', [FLAT_EMAIL]: 'pat@gmail.com',
+        [principalMailboxGrantSecretName('personal')]: 'g-personal',
+        [principalMailboxGrantSecretName('work')]: 'g-work',
+      },
+    });
+    await s.admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work' });
+    expect(s.secrets[FLAT_GRANT]).toBe('g-work');
+    expect(s.secrets[FLAT_EMAIL]).toBe('pat@work.example.com');
+  });
+
+  it('removing a non-default mailbox leaves the flat keys', async () => {
+    const s = setup({
+      records: [rec(), rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false })],
+      secrets: { [FLAT_GRANT]: 'g-personal', [FLAT_EMAIL]: 'pat@gmail.com' },
+    });
+    await s.admin.remove({ id: 'work', stillOwned: true });
+    expect(s.secrets[FLAT_GRANT]).toBe('g-personal');
+    expect(s.secrets[FLAT_EMAIL]).toBe('pat@gmail.com');
+  });
+
+  it('a mirror failure is logged without the grant id and rethrown; the added row stays', async () => {
+    const { logger: log, lines } = capturingLogger();
+    const s = setup({ grants: { 'grant-secret-9': google('pat@work.example.com') }, logger: log });
+    const realSet = s.secretStore.set.getMockImplementation()!;
+    s.secretStore.set.mockImplementation(async (n: string, v: string) => {
+      if (n === FLAT_GRANT) throw new Error('vault down');
+      await realSet(n, v);
+    });
+    await expect(s.admin.add({ id: 'work', label: 'Work', grantId: 'grant-secret-9' })).rejects.toThrow('vault down');
+    expect(s.records).toHaveLength(1);
+    expect(lines.join('')).toContain('vault down');
+    expect(lines.join('')).not.toContain('grant-secret-9');
+  });
+});
+
+describe('PrincipalMailboxAdmin.replaceGrant (R29)', () => {
+  const two = () => [
+    rec(),
+    rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false }),
+  ];
+
+  it('refuses unknown and removed ids', async () => {
+    const { admin } = setup({ records: [rec({ id: 'old', removedAt: new Date(), isDefault: false })], grants: { g: google('pat@gmail.com') } });
+    await expect(admin.replaceGrant('nope', 'g')).rejects.toThrow(/Unknown/);
+    await expect(admin.replaceGrant('old', 'g')).rejects.toThrow(/removed/);
+  });
+
+  it('refuses an unreadable grant without logging its id', async () => {
+    const { logger: log, lines } = capturingLogger();
+    const { admin, secretStore } = setup({ records: [rec()], logger: log });
+    expect(await admin.replaceGrant('personal', 'grant-secret-1')).toMatchObject({ ok: false, refusal: 'grant_unreadable' });
+    expect(secretStore.set).not.toHaveBeenCalled();
+    expect(lines.join('')).not.toContain('grant-secret-1');
+  });
+
+  it('refuses a non-google grant', async () => {
+    const { admin } = setup({ records: [rec()], grants: { g: { email: 'pat@gmail.com', provider: 'microsoft' } } });
+    expect(await admin.replaceGrant('personal', 'g')).toMatchObject({ ok: false, refusal: 'not_google' });
+  });
+
+  it('refuses a grant for a different address', async () => {
+    const { admin, secretStore } = setup({ records: [rec()], grants: { g: google('someone@gmail.com') } });
+    expect(await admin.replaceGrant('personal', 'g')).toMatchObject({ ok: false, refusal: 'address_mismatch' });
+    expect(secretStore.set).not.toHaveBeenCalled();
+  });
+
+  it('refuses a grant another live mailbox uses', async () => {
+    const { admin } = setup({
+      records: two(),
+      secrets: { [principalMailboxGrantSecretName('work')]: 'g' },
+      grants: { g: google('pat@gmail.com') },
+    });
+    expect(await admin.replaceGrant('personal', 'g')).toMatchObject({ ok: false, refusal: 'grant_in_use' });
+  });
+
+  it('writes the new grant and mirrors it when the mailbox is the default', async () => {
+    const { admin, secrets } = setup({
+      records: [rec()],
+      secrets: { [principalMailboxGrantSecretName('personal')]: 'g-old', [FLAT_GRANT]: 'g-old', [FLAT_EMAIL]: 'pat@gmail.com' },
+      grants: { 'g-new': google('PAT@gmail.com') },
+    });
+    expect(await admin.replaceGrant('personal', 'g-new')).toEqual({ ok: true });
+    expect(secrets[principalMailboxGrantSecretName('personal')]).toBe('g-new');
+    expect(secrets[FLAT_GRANT]).toBe('g-new');
+    expect(secrets[FLAT_EMAIL]).toBe('pat@gmail.com');
+  });
+
+  it('does not touch the flat keys for a non-default mailbox', async () => {
+    const { admin, secrets } = setup({
+      records: two(),
+      secrets: { [principalMailboxGrantSecretName('work')]: 'g-old', [FLAT_GRANT]: 'g-personal' },
+      grants: { 'g-new': google('pat@work.example.com') },
+    });
+    expect(await admin.replaceGrant('work', 'g-new')).toEqual({ ok: true });
+    expect(secrets[principalMailboxGrantSecretName('work')]).toBe('g-new');
+    expect(secrets[FLAT_GRANT]).toBe('g-personal');
+  });
+});
+
+describe('PrincipalMailboxAdmin.remove "No, forget it" (R30)', () => {
+  it('sets the principal identity for a migrated mailbox address inactive', async () => {
+    const { admin, contacts, identities } = setup({
+      records: [rec()],
+      identities: [{ id: 'i1', channel: 'email', channelIdentifier: 'Pat@Gmail.com', verified: true, status: 'active' }],
+    });
+    await admin.remove({ id: 'personal', stillOwned: false });
+    expect(contacts.setIdentityStatus).toHaveBeenCalledWith('i1', 'defunct');
+    expect(identities[0]!.status).toBe('defunct');
+    expect(contacts.unlinkIdentity).not.toHaveBeenCalled();
+  });
+
+  it('sets an R16 pre-existing identity inactive after an add and remove', async () => {
+    const { admin, identities } = setup({
+      identities: [{ id: 'old', channel: 'email', channelIdentifier: 'pat@work.example.com', verified: false, status: 'defunct' }],
+      grants: { g: google('pat@work.example.com') },
+    });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    expect(identities[0]!.status).toBe('active');
+    await admin.remove({ id: 'work', stillOwned: false });
+    expect(identities[0]!.status).toBe('defunct');
+  });
+
+  it('still unlinks an identity the add created', async () => {
+    const { admin, contacts, identities } = setup({ grants: { g: google('pat@work.example.com') } });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    await admin.remove({ id: 'work', stillOwned: false });
+    expect(contacts.unlinkIdentity).toHaveBeenCalledWith('ident-1');
+    expect(identities).toHaveLength(0);
+    expect(contacts.setIdentityStatus).not.toHaveBeenCalled();
+  });
+
+  it('stillOwned=true leaves the identity active', async () => {
+    const { admin, contacts } = setup({
+      records: [rec()],
+      identities: [{ id: 'i1', channel: 'email', channelIdentifier: 'pat@gmail.com', verified: true, status: 'active' }],
+    });
+    await admin.remove({ id: 'personal', stillOwned: true });
+    expect(contacts.setIdentityStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('PrincipalMailboxAdmin.add during the deferred-migration fallback (I5)', () => {
+  it('refuses cap_reached while the fallback is active, before reading the grant', async () => {
+    const { admin, secretStore } = setup({
+      maxLiveMailboxes: 5,
+      isFallbackActive: async () => true,
+      grants: { g: google('pat@work.example.com') },
+    });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ ok: false, refusal: 'cap_reached' });
+    expect(secretStore.set).not.toHaveBeenCalled();
+  });
+
+  it('adds normally once the fallback is gone', async () => {
+    const { admin } = setup({ isFallbackActive: async () => false, grants: { g: google('pat@work.example.com') } });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ ok: true });
   });
 });
