@@ -45,6 +45,14 @@ function domainMatches(mailboxAddress: string, recipients: string[]): boolean {
   return recipients.some((r) => domainOf(r) === own);
 }
 
+const MAX_SUBJECT_CHARS = 80;
+
+/** A third party's subject, safe to show the model: one line, no control characters, capped. */
+export function cleanSubject(raw: string): string {
+  const flat = raw.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim();
+  return flat.length > MAX_SUBJECT_CHARS ? `${flat.slice(0, MAX_SUBJECT_CHARS - 1)}…` : flat;
+}
+
 function errorLabel(err: unknown): string {
   const status = nylasStatus(err);
   if (status !== undefined) return `HTTP ${status}`;
@@ -112,7 +120,7 @@ async function one(
         ...base,
         sent_count: sentTo.length,
         last_sent_at: newest ? new Date(newest.date * 1000).toISOString() : null,
-        recent_subjects: sentTo.slice(0, MAX_SUBJECTS).map((m) => m.subject),
+        recent_subjects: sentTo.slice(0, MAX_SUBJECTS).map((m) => cleanSubject(m.subject)),
         received_count: receivedFrom.length,
       };
     };
@@ -140,11 +148,13 @@ function score(e: MailboxEvidence): number {
 
 /** How the evidence relates to the mailbox the compose is about to use. */
 export function classifyEvidence(e: MailboxEvidence[], chosen: string): EvidenceVerdict {
+  // An account we could not read is not "no history": the verdict cannot be agrees or none.
+  const unreadable = e.some((x) => x.error !== undefined);
   const scores = e.map((x) => ({ id: x.mailbox, s: score(x) }));
-  if (scores.every((x) => x.s <= 0)) return 'none';
+  if (scores.every((x) => x.s <= 0)) return unreadable ? 'split' : 'none';
   const mine = scores.find((x) => x.id === chosen)?.s ?? 0;
   const others = scores.filter((x) => x.id !== chosen).map((x) => x.s);
-  if (others.every((s) => s === 0) && mine > 0) return 'agrees';
+  if (others.every((s) => s === 0) && mine > 0) return unreadable ? 'split' : 'agrees';
   if (others.some((s) => s > mine)) return 'leans_other';
   return 'split';
 }

@@ -87,8 +87,14 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
     mailbox: PrincipalMailboxView,
     recipients: string[],
   ): Promise<Record<string, unknown>> {
-    const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients);
-    return { ...mailboxFields(mailbox), evidence: classifyEvidence(evidence, mailbox.id) };
+    // The draft already exists: evidence trouble must not turn that into a failure.
+    try {
+      const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients);
+      return { ...mailboxFields(mailbox), evidence: classifyEvidence(evidence, mailbox.id) };
+    } catch (err) {
+      ctx.log.warn({ err }, 'ceo-inbox-draft-compose: mailbox evidence failed after the draft was created');
+      return mailboxFields(mailbox);
+    }
   }
 
   async execute(ctx: ToolContext): Promise<ToolResult> {
