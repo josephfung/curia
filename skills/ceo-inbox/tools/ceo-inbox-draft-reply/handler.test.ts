@@ -3,7 +3,7 @@ import { CeoInboxDraftReplyHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { Logger } from '../../../../src/logger.js';
 import { readFile, realpath } from 'node:fs/promises';
-import { mailboxView, stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
+import { mailboxView, stubPrincipalMailboxes, twoMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -351,9 +351,10 @@ describe('CeoInboxDraftReplyHandler', () => {
   });
 
   it('Case 7: Unknown mailbox address — returns { success: false }', async () => {
-    // Mock fetch to throw if called — confirms no network call is made when the address is unknown
-    mockFetch.mockImplementation(async () => {
-      throw new Error('fetch should not be called when the mailbox address is empty');
+    // The message is located first (one GET); no draft may be created or listed when the address is unknown.
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      if (String(url).includes('/drafts')) throw new Error('drafts must not be touched when the mailbox address is empty');
+      return new Response(JSON.stringify(buildNylasMessage({ from: [{ email: 'alice@external.com' }], to: [] })), { status: 200 });
     });
 
     // Build a ctx whose default mailbox has an empty address
@@ -387,8 +388,8 @@ describe('CeoInboxDraftReplyHandler', () => {
       ).toBe(true);
     }
 
-    // Confirm fetch was never called
-    expect(mockFetch).not.toHaveBeenCalled();
+    // Only the locate probe ran: nothing was listed or created.
+    expect(mockFetch.mock.calls.every((c: Parameters<typeof fetch>) => !String(c[0]).includes('/drafts'))).toBe(true);
   });
 
   it('Case 8: Quote includes HTML-stripped original body', async () => {
@@ -789,5 +790,60 @@ describe('CeoInboxDraftReplyHandler', () => {
       error: 'Unable to determine whether this thread already has a draft; draft scan incomplete',
     });
     expect(ctx.log.warn).toHaveBeenCalled();
+  });
+
+  describe('mailbox selection (#2475)', () => {
+    function twoBoxFetch(holder: 'work' | 'personal') {
+      const posts: Array<{ grant: string; body: { cc: Array<{ email: string }> } }> = [];
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const u = new URL(String(url));
+        const grant = /\/grants\/([^/]+)/.exec(u.pathname)![1]!;
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (u.pathname.includes('/messages/')) {
+          if (grant !== `grant-${holder}`) return new Response('{}', { status: 404 });
+          return new Response(JSON.stringify(buildNylasMessage({
+            from: [{ email: 'alice@external.com' }],
+            to: [{ email: 'ceo@work.example.com' }, { email: 'ceo@personal.example.com' }],
+            cc: [{ email: 'dana@example.org' }],
+          })), { status: 200 });
+        }
+        if (u.pathname.endsWith('/drafts') && method === 'GET') return new Response(JSON.stringify({ data: [] }), { status: 200 });
+        if (u.pathname.endsWith('/drafts') && method === 'POST') {
+          posts.push({ grant, body: JSON.parse(init!.body as string) });
+          return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${method} ${u.pathname}`);
+      });
+      return posts;
+    }
+
+    it('drafts in the mailbox the message is in', async () => {
+      const posts = twoBoxFetch('personal');
+      const ctx = buildCtx();
+      (ctx as { principalMailboxes: unknown }).principalMailboxes = twoMailboxes();
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(posts).toHaveLength(1);
+      expect(posts[0]!.grant).toBe('grant-personal');
+    });
+
+    it('reply-all excludes both principal addresses', async () => {
+      const posts = twoBoxFetch('work');
+      const ctx = buildCtx();
+      (ctx as { principalMailboxes: unknown }).principalMailboxes = twoMailboxes();
+      await handler.execute(ctx);
+      expect(posts[0]!.body.cc.map((p) => p.email)).toEqual(['dana@example.org']);
+    });
+
+    it('result carries mailbox and mailbox_label', async () => {
+      twoBoxFetch('personal');
+      const ctx = buildCtx();
+      (ctx as { principalMailboxes: unknown }).principalMailboxes = twoMailboxes();
+      const result = await handler.execute(ctx);
+      expect(result).toMatchObject({
+        success: true,
+        data: { mailbox: 'personal', mailbox_label: 'Personal', reply_to_message_id: 'msg-001' },
+      });
+    });
   });
 });
