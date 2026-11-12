@@ -6,6 +6,7 @@ import { EventBus } from '../../../src/bus/bus.js';
 import type { BusEvent } from '../../../src/bus/events.js';
 import type { ToolManifest, ToolHandler, ToolContext } from '../../../src/skills/types.js';
 import { ContactService } from '../../../src/contacts/contact-service.js';
+import type { PrincipalMailboxes } from '../../../src/principal-mailboxes/service.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -228,6 +229,23 @@ describe('ExecutionLayer', () => {
         }) ?? '';
         expect(moved).toContain('sam@e.com');
       });
+    });
+  });
+
+  describe('principalMailboxes capability (#2475)', () => {
+    it('injects principalMailboxes for a tool declaring it', async () => {
+      const service = { marker: 'principal-mailboxes' } as unknown as PrincipalMailboxes;
+      const withService = new ExecutionLayer(registry, logger, { principalMailboxes: service });
+      let seen: unknown;
+      registry.register(makeManifest({ capabilities: ['principalMailboxes'] }), {
+        execute: async (ctx: ToolContext) => {
+          seen = ctx.principalMailboxes;
+          return { success: true, data: 'ok' };
+        },
+      });
+      const result = await withService.invoke('test-skill', { query: 'x' });
+      expect(result.success).toBe(true);
+      expect(seen).toBe(service);
     });
   });
 

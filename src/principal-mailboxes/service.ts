@@ -1,0 +1,128 @@
+// PrincipalMailboxes — resolves the principal's Gmail mailboxes (#2475).
+// Reads the registry (store) for what exists and the vault for each mailbox's grant.
+// Grants are read on every call and clients are built per call (no cache), so a grant
+// change applies without a restart. An unknown or removed id is an error, never a
+// fallback to the default mailbox.
+//
+// Deliberately does not import channels/calendar/resolve-calendar-grant.ts (R9).
+import type { Logger } from '../logger.js';
+import { NylasClient } from '../channels/email/nylas-client.js';
+import { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
+import type { PrincipalMailboxStore } from './store.js';
+import { principalMailboxGrantSecretName } from './secrets.js';
+import {
+  RemovedMailboxError,
+  UnknownMailboxError,
+  type PrincipalMailboxRecord,
+} from './types.js';
+
+export interface PrincipalMailboxView {
+  id: string;
+  label: string;
+  /** Empty string when unknown: the deferred single-mailbox fallback has no registry row,
+   *  so its address has not been read from Nylas. */
+  address: string;
+  isDefault: boolean;
+  triageStartAt: Date | null;
+}
+
+export interface PrincipalMailboxesDeps {
+  store: PrincipalMailboxStore;
+  secrets: { get(name: string): Promise<string | null> };
+  apiKey: () => string | undefined;
+  logger: Logger;
+  createNylasClient?: (apiKey: string, grantId: string) => NylasClient;
+  createCalendarClient?: (apiKey: string, grantId: string) => NylasCalendarClient;
+}
+
+function toView(r: PrincipalMailboxRecord): PrincipalMailboxView {
+  return {
+    id: r.id,
+    label: r.label,
+    address: r.address,
+    isDefault: r.isDefault,
+    triageStartAt: r.triageStartAt,
+  };
+}
+
+export class PrincipalMailboxes {
+  private fallback: { id: string; grantId: string } | null = null;
+  private readonly log: Logger;
+
+  constructor(private readonly deps: PrincipalMailboxesDeps) {
+    this.log = deps.logger.child({ component: 'principal-mailboxes' });
+  }
+
+  /** Single-mailbox installs without a registry row: serve `fallback` while the table is empty. */
+  setFallback(f: { id: string; grantId: string } | null): void {
+    this.fallback = f;
+  }
+
+  private fallbackView(): PrincipalMailboxView | null {
+    if (!this.fallback) return null;
+    return { id: this.fallback.id, label: 'Mailbox', address: '', isDefault: true, triageStartAt: null };
+  }
+
+  /** Live mailboxes only; the fallback view when the table is empty and one is set. */
+  async list(): Promise<PrincipalMailboxView[]> {
+    const live = await this.deps.store.listLive();
+    if (live.length > 0) return live.map(toView);
+    const fb = this.fallbackView();
+    return fb ? [fb] : [];
+  }
+
+  async get(id: string): Promise<PrincipalMailboxView> {
+    const rec = await this.deps.store.getAny(id);
+    if (rec) {
+      if (rec.removedAt) throw new RemovedMailboxError(id, rec.label);
+      return toView(rec);
+    }
+    if (this.fallback && this.fallback.id === id) return this.fallbackView()!;
+    throw new UnknownMailboxError(id);
+  }
+
+  async defaultMailbox(): Promise<PrincipalMailboxView | null> {
+    const all = await this.list();
+    return all.find((m) => m.isDefault) ?? null;
+  }
+
+  /** Addresses of live mailboxes (the fallback's unknown address is omitted). */
+  async addresses(): Promise<string[]> {
+    return (await this.list()).map((m) => m.address).filter((a) => a !== '');
+  }
+
+  async credentials(id: string): Promise<{ apiKey: string; grantId: string }> {
+    const rec = await this.deps.store.getAny(id);
+    if (rec?.removedAt) throw new RemovedMailboxError(id, rec.label);
+    const apiKey = this.deps.apiKey();
+    if (!apiKey) throw new Error('Nylas API key is not configured');
+
+    if (!rec) {
+      if (this.fallback && this.fallback.id === id) {
+        return { apiKey, grantId: this.fallback.grantId };
+      }
+      throw new UnknownMailboxError(id);
+    }
+
+    const grantId = await this.deps.secrets.get(principalMailboxGrantSecretName(id));
+    if (!grantId) {
+      this.log.warn({ mailboxId: id }, 'Principal mailbox has no Nylas grant in the vault');
+      throw new Error(`Mailbox "${id}" has no Nylas grant configured`);
+    }
+    return { apiKey, grantId };
+  }
+
+  async gatewayClient(id: string): Promise<NylasClient> {
+    const { apiKey, grantId } = await this.credentials(id);
+    return this.deps.createNylasClient
+      ? this.deps.createNylasClient(apiKey, grantId)
+      : new NylasClient(apiKey, grantId, this.deps.logger);
+  }
+
+  async calendarClient(id: string): Promise<NylasCalendarClient> {
+    const { apiKey, grantId } = await this.credentials(id);
+    return this.deps.createCalendarClient
+      ? this.deps.createCalendarClient(apiKey, grantId)
+      : new NylasCalendarClient(apiKey, grantId, this.deps.logger);
+  }
+}
