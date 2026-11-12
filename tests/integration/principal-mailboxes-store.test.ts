@@ -114,4 +114,17 @@ describeIf('PrincipalMailboxStore', () => {
     }
     expect(await store.getAny('work')).toBeNull();
   });
+
+  it('inserting a default moves the default in one step', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await store.insert(rec('personal', { isDefault: true }));
+    const live = await store.listLive();
+    expect(live.map((r) => [r.id, r.isDefault])).toEqual([['personal', true], ['work', false]]);
+  });
+
+  it('a failed default insert keeps the old default', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await expect(store.insert(rec('work', { isDefault: true }))).rejects.toThrow();
+    expect((await store.getAny('work'))?.isDefault).toBe(true);
+  });
 });
