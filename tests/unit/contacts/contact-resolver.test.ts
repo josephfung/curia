@@ -8,6 +8,7 @@ import { EmbeddingService } from '../../../src/memory/embedding.js';
 import { EntityMemory } from '../../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../../src/memory/validation.js';
 import { createLogger, createSilentLogger } from '../../../src/logger.js';
+import { stampOriginator } from '../../../src/contacts/stamp-originator.js';
 
 describe('ContactResolver', () => {
   let resolver: ContactResolver;
@@ -152,5 +153,44 @@ describe('ContactResolver', () => {
       { source: 'contact-resolver', contactId: PRINCIPAL_ID, kind: 'person' },
       'principal contact has kind != "principal" — migration-055 backfill may have missed this row',
     );
+  });
+
+  // R42 (#2475): an address the principal said is no longer theirs ("No, forget it" on a
+  // removed mailbox) may now belong to someone else; its mail must not run as the principal.
+  it.each(['defunct', 'bounced'] as const)('a %s principal email resolves without principal standing and no live turn (R42)', async (status) => {
+    const created = await contactService.createContact({ displayName: 'CEO', tier: 'known', kind: 'person', source: 'test' });
+    const principal = await contactService.saveContact({ ...created, systemRole: 'principal', tier: 'principal', kind: 'principal' });
+    const active = await contactService.linkIdentity({ contactId: principal.id, channel: 'email', channelIdentifier: 'me@home-example.org', source: 'ceo_stated', verified: true });
+    const old = await contactService.linkIdentity({ contactId: principal.id, channel: 'email', channelIdentifier: 'me@old-work-example.com', source: 'ceo_stated', verified: true });
+    await contactService.setIdentityStatus(old.id, status);
+
+    const gone = await resolver.resolve('email', 'me@old-work-example.com');
+    expect(gone.resolved).toBe(true);
+    if (!gone.resolved) throw new Error('unreachable');
+    expect(gone.contactId).toBe(principal.id);
+    expect(gone.systemRole).toBeNull();
+    expect(gone.tier).toBe('unknown');
+    expect(gone.kind).toBe('person');
+    expect(gone.verified).toBe(false);
+    expect(stampOriginator({ senderContext: gone, channel: 'email', senderId: 'me@old-work-example.com', authenticated: true }).liveTurn).toBe(false);
+
+    // The principal's active address keeps full standing.
+    const kept = await resolver.resolve('email', 'me@home-example.org');
+    if (!kept.resolved) throw new Error('expected a resolved sender');
+    expect(kept.systemRole).toBe('principal');
+    expect(kept.tier).toBe('principal');
+    expect(stampOriginator({ senderContext: kept, channel: 'email', senderId: 'me@home-example.org', authenticated: true }).liveTurn).toBe(true);
+    expect(active.id).toBeTruthy();
+  });
+
+  it('a defunct identity of a third-party contact still resolves to that contact with its tier (R32)', async () => {
+    const c = await contactService.createContact({ displayName: 'Vendor', tier: 'known', source: 'test' });
+    const i = await contactService.linkIdentity({ contactId: c.id, channel: 'email', channelIdentifier: 'sales@vendor-example.com', source: 'ceo_stated', verified: true });
+    await contactService.setIdentityStatus(i.id, 'defunct');
+    const r = await resolver.resolve('email', 'sales@vendor-example.com');
+    if (!r.resolved) throw new Error('expected a resolved sender');
+    expect(r.contactId).toBe(c.id);
+    expect(r.tier).toBe('known');
+    expect(r.verified).toBe(false);
   });
 });

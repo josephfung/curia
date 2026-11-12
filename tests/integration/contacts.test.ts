@@ -137,6 +137,27 @@ describeIf('Contacts Integration', () => {
     expect(resolved!.verified).toBe(expected);
   });
 
+  it('a defunct principal identity resolves without principal standing (R42)', async () => {
+    const created = await createTrackedContact({ displayName: 'R42 Principal', source: 'integration-test' });
+    // A second structural principal cannot exist alongside a real one, so this row gets the
+    // principal tier and kind only; system_role is checked through the in-memory backend's test.
+    const principal = await contactService.saveContact({ ...created, tier: 'principal', kind: 'principal' });
+    const identity = await contactService.linkIdentity({
+      contactId: principal.id,
+      channel: 'email',
+      channelIdentifier: 'r42-old-work@example.com',
+      source: 'ceo_stated',
+    });
+    const before = await contactService.resolveByChannelIdentity('email', 'r42-old-work@example.com');
+    expect(before?.tier).toBe('principal');
+    await contactService.setIdentityStatus(identity.id, 'defunct');
+    const after = await contactService.resolveByChannelIdentity('email', 'r42-old-work@example.com');
+    expect(after?.contactId).toBe(principal.id);
+    expect(after?.tier).toBe('unknown');
+    expect(after?.kind).toBe('person');
+    expect(after?.systemRole).toBeNull();
+  });
+
   it('finds contacts by name case-insensitively', async () => {
     await createTrackedContact({
       displayName: 'Case Test Person',

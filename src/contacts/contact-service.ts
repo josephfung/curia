@@ -446,6 +446,22 @@ export const PRINCIPAL_PROMPT_FIELDS = ['primaryEmail', 'preferredName', 'title'
  * - Auto-verifies identities from trusted sources (ceo_stated, email_participant, etc.)
  * - Resolves inbound senders by channel + identifier for dispatch routing
  */
+/**
+ * R42 (#2475): an address the principal no longer holds (a defunct or bounced identity, e.g.
+ * a removed work mailbox now the employer's) still resolves to the principal's contact, but
+ * never with principal standing: no system role, tier 'unknown', kind 'person'. Otherwise its
+ * mail would run as a live principal turn at principal tier. Other contacts are unchanged.
+ */
+function withoutPrincipalStandingUnlessActive(active: boolean, resolved: ResolvedSender): ResolvedSender {
+  if (active) return resolved;
+  return {
+    ...resolved,
+    systemRole: resolved.systemRole === 'principal' ? null : resolved.systemRole,
+    tier: resolved.tier === 'principal' ? 'unknown' : resolved.tier,
+    kind: resolved.kind === 'principal' ? 'person' : resolved.kind,
+  };
+}
+
 export class ContactService {
   private onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date, details?: ContactMergedDetails) => void;
   private onIdentityVerified?: (contactId: string) => void;
@@ -2802,12 +2818,14 @@ class PostgresContactBackend implements ContactServiceBackend {
       kg_node_id: string | null;
       verified: boolean;
       contact_confidence: string;  // NUMERIC returned as string by node-pg
+      active: boolean;
     }>(
       // A defunct or bounced identity still resolves the contact but confers no verified
       // trust (R32, #2475): e.g. an address the principal said is no longer theirs.
       `SELECT c.id, c.display_name, c.role, c.system_role,
               c.tier, c.kind, c.kg_node_id,
-              (cci.verified AND cci.status = 'active') AS verified, c.contact_confidence
+              (cci.verified AND cci.status = 'active') AS verified, c.contact_confidence,
+              (cci.status = 'active') AS active
        FROM contact_channel_identities cci
        JOIN contacts c ON c.id = cci.contact_id
        WHERE cci.channel = $1
@@ -2819,7 +2837,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     const row = result.rows[0];
     if (!row) return null;
 
-    return {
+    return withoutPrincipalStandingUnlessActive(row.active, {
       contactId: row.id,
       displayName: row.display_name,
       role: row.role,
@@ -2861,7 +2879,7 @@ class PostgresContactBackend implements ContactServiceBackend {
         );
         return 'person' as ContactKind;
       })(),
-    };
+    });
   }
 
   async unlinkIdentity(identityId: string): Promise<boolean> {
@@ -3810,7 +3828,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
       if (identity.channel === channel && storedId === normalizedId) {
         const contact = this.contacts.get(identity.contactId);
         if (contact) {
-          return {
+          return withoutPrincipalStandingUnlessActive(identity.status === 'active', {
             contactId: contact.id,
             displayName: contact.displayName,
             role: contact.role,
@@ -3821,7 +3839,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
             // Only an active identity confers verified trust (R32; mirrors Postgres).
             verified: identity.verified && identity.status === 'active',
             contactConfidence: contact.contactConfidence ?? 0,
-          };
+          });
         }
       }
     }
