@@ -14,6 +14,7 @@ import { FailOpenLimiter } from '../../../src/autonomy/band-policy.js';
 import type { OutboundQueueRepo } from '../../../src/skills/outbound-queue-repo.js';
 import { readFile, realpath } from 'node:fs/promises';
 import { buildReplyQuote, REPLY_QUOTE_HTML_OPEN } from '../../../src/skills/_shared/reply-quote.js';
+import type { ChannelIdentity } from '../../../src/contacts/types.js';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -7361,7 +7362,11 @@ describe('sendPrincipalDraft (#2474)', () => {
 });
 
 describe('OutboundGateway.emailPrincipal (#2475)', () => {
-  function build(getContact: ReturnType<typeof vi.fn>) {
+  function build(
+    getContact: ReturnType<typeof vi.fn>,
+    // The work address is linked first; the primary email is the personal one.
+    identities: ChannelIdentity[] = [makePrincipalIdentity('pat@work.example.com'), makePrincipalIdentity('pat@example.org')],
+  ) {
     const m = createMocks();
     (m.contactService as unknown as { getContact: unknown }).getContact = getContact;
     const gateway = new OutboundGateway({
@@ -7369,8 +7374,7 @@ describe('OutboundGateway.emailPrincipal (#2475)', () => {
       contactService: m.contactService,
       contentFilter: m.contentFilter,
       bus: m.bus,
-      // The work address is linked first; the primary email is the personal one.
-      principalIdentities: [makePrincipalIdentity('pat@work.example.com'), makePrincipalIdentity('pat@example.org')],
+      principalIdentities: identities,
       logger: m.logger,
     });
     const send = vi.spyOn(gateway, 'send').mockResolvedValue({ success: true } as never);
@@ -7394,5 +7398,16 @@ describe('OutboundGateway.emailPrincipal (#2475)', () => {
     const { send, call } = build(vi.fn().mockRejectedValue(new Error('db down')));
     await call();
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ to: 'pat@work.example.com' }), expect.anything());
+  });
+
+  it('skips a primary email whose identity is defunct, and one that is no identity at all', async () => {
+    const defunct = { ...makePrincipalIdentity('pat@example.org'), status: 'defunct' as const };
+    const first = build(vi.fn().mockResolvedValue({ primaryEmail: 'pat@example.org' }), [makePrincipalIdentity('pat@work.example.com'), defunct]);
+    await first.call();
+    expect(first.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'pat@work.example.com' }), expect.anything());
+
+    const second = build(vi.fn().mockResolvedValue({ primaryEmail: 'old@example.net' }));
+    await second.call();
+    expect(second.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'pat@work.example.com' }), expect.anything());
   });
 });
