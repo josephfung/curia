@@ -10,6 +10,7 @@
 import type { Logger } from '../logger.js';
 import type { PrincipalMailboxStore } from './store.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
+import { RESERVED_MAILBOX_IDS } from './types.js';
 
 export type FlatMailboxMigrationOutcome = 'migrated' | 'already' | 'nothing' | 'deferred';
 
@@ -18,6 +19,7 @@ export interface FlatMailboxMigrationDeps {
   secrets: {
     get(name: string): Promise<string | null>;
     set(name: string, value: string): Promise<void>;
+    delete(name: string): Promise<void>;
   };
   lookupGrant: (grantId: string) => Promise<{ email: string; provider: string }>;
   logger: Logger;
@@ -33,7 +35,10 @@ export function mailboxIdFromAddress(address: string): string {
   const label = (domain.split('.')[0] ?? '').replace(/[^a-z0-9-]/g, '');
   let id = label === '' ? 'mailbox' : label;
   if (/^[0-9-]/.test(id)) id = `m-${id}`;
-  return id.slice(0, 32);
+  id = id.slice(0, 32);
+  // The registry refuses reserved ids (CHECK constraint); prefix rather than fail every boot.
+  if (RESERVED_MAILBOX_IDS.has(id)) id = `m-${id}`;
+  return id;
 }
 
 function labelFromId(id: string): string {
@@ -45,7 +50,9 @@ export async function migrateFlatPrincipalMailbox(
 ): Promise<FlatMailboxMigrationOutcome> {
   const { store, secrets, lookupGrant, logger } = deps;
 
-  if ((await store.listLive()).length > 0) return 'already';
+  // Any row, removed ones included: a principal who removed their only mailbox must not have
+  // it revived from the still-present flat keys on the next boot.
+  if (await store.hasAnyRow()) return 'already';
 
   const grantId = (await secrets.get(FLAT_GRANT_KEY))?.trim();
   if (!grantId) return 'nothing';
@@ -68,16 +75,26 @@ export async function migrateFlatPrincipalMailbox(
   const id = mailboxIdFromAddress(address);
   // Vault first: a failure between the two writes leaves an unused secret, never a row
   // that points at a missing grant. A retry overwrites it with the same value.
-  await secrets.set(principalMailboxGrantSecretName(id), grantId);
-  await store.insert({
-    id,
-    label: labelFromId(id),
-    address,
-    provider: 'google', // the only provider that exists
-    isDefault: true,
-    triageStartAt: null,
-    addedIdentityId: null,
-  });
+  const secretName = principalMailboxGrantSecretName(id);
+  await secrets.set(secretName, grantId);
+  try {
+    await store.insert({
+      id,
+      label: labelFromId(id),
+      address,
+      provider: 'google', // the only provider that exists
+      isDefault: true,
+      triageStartAt: null,
+      addedIdentityId: null,
+    });
+  } catch (err) {
+    try {
+      await secrets.delete(secretName);
+    } catch (delErr) {
+      logger.warn({ err: delErr, mailboxId: id }, 'Mailbox migration: could not remove the grant secret after a failed insert');
+    }
+    throw err;
+  }
   logger.info({ mailboxId: id }, 'Migrated the principal mailbox into the registry');
   return 'migrated';
 }

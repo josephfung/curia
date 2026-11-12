@@ -30,6 +30,10 @@ export function createPrincipalMailboxResolver(deps: {
       if (!mailbox) return null;
       creds = await mailboxes.credentials(mailbox.id);
     } catch (err) {
+      if (err instanceof Error && /API key is not configured/.test(err.message)) {
+        logger.warn('Principal mailbox is registered but the Nylas API key (channel.email.nylas_api_key) is missing; treating mailbox as unavailable');
+        return null;
+      }
       // Fail closed: a registry/vault failure, a missing grant or a missing API key yields no
       // client, so no send is attempted from a mailbox we could not positively identify.
       logger.error({ err }, 'Principal mailbox credentials could not be read; treating mailbox as unavailable');

@@ -72,10 +72,11 @@ describe('createPrincipalMailboxResolver', () => {
     expect(createClient).not.toHaveBeenCalled();
   });
 
-  it('returns null and logs an error when there is no API key', async () => {
+  it('returns null and warns naming the API key secret when it is missing', async () => {
     const createClient = vi.fn();
     const errorSpy = vi.fn();
-    const log = { ...logger, error: errorSpy } as unknown as typeof logger;
+    const warnSpy = vi.fn();
+    const log = { ...logger, error: errorSpy, warn: warnSpy } as unknown as typeof logger;
     const resolve = createPrincipalMailboxResolver({
       mailboxes: services({ apiKey: undefined }),
       logger: log,
@@ -83,8 +84,9 @@ describe('createPrincipalMailboxResolver', () => {
     });
     expect(await resolve()).toBeNull();
     expect(createClient).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalled();
-    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('grant-1');
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(String(warnSpy.mock.calls[0]!.at(-1))).toMatch(/channel\.email\.nylas_api_key/);
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('grant-1');
   });
 
   it('returns null and logs an error when the secret read throws', async () => {
