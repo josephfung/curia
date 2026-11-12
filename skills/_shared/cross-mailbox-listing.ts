@@ -23,7 +23,10 @@ export interface MailboxError {
   mailbox: string;
   mailbox_label: string;
   error: string;
+  note: string;
 }
+
+const NOT_INCLUDED = 'Its mail is not included; a later call retries it.';
 
 const FRESH: MailboxPosition = { cursor: null, skip: 0 };
 
@@ -64,16 +67,30 @@ export async function resolveTargets(
   }
 }
 
-/** The optional `page_token` input, decoded. An undecodable one is an error that says how to recover. */
-export function readPageToken(input: unknown): { ok: true; cursors: PageCursors | undefined } | { ok: false; error: string } {
-  const raw = input && typeof input === 'object' ? (input as Record<string, unknown>)['page_token'] : undefined;
+/**
+ * The optional `page_token` input, decoded. An undecodable token, one made at another page size
+ * (its skip counts would point at the wrong items), or one that lacks the explicitly named
+ * mailbox is an error that says how to recover.
+ */
+export function readPageToken(input: unknown, limit: number): { ok: true; cursors: PageCursors | undefined } | { ok: false; error: string } {
+  const rec = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const raw = rec['page_token'];
   if (raw === undefined || raw === null || raw === '') return { ok: true, cursors: undefined };
   if (typeof raw !== 'string') return { ok: false, error: 'page_token must be a string. Retry without page_token.' };
+  let decoded: ReturnType<typeof decodePageToken>;
   try {
-    return { ok: true, cursors: decodePageToken(raw) };
+    decoded = decodePageToken(raw);
   } catch {
     return { ok: false, error: 'That page_token is not valid (it may predate an upgrade). Retry without page_token.' };
   }
+  if (decoded.limit !== limit) {
+    return { ok: false, error: 'Retry without page_token (the page size changed).' };
+  }
+  const named = rec['mailbox'];
+  if (typeof named === 'string' && !(named in decoded.positions)) {
+    return { ok: false, error: 'That page_token does not cover this mailbox. Retry without page_token.' };
+  }
+  return { ok: true, cursors: decoded.positions };
 }
 
 // ── One mailbox ──────────────────────────────────────────────────────────────
@@ -189,7 +206,7 @@ export async function listAcrossMailboxes<T extends { id: string; date: number }
   const ok: Array<{ target: Target; start: MailboxPosition | null; result: ScanResult<T> }> = [];
   for (const o of outcomes) {
     if ('error' in o) {
-      errors.push({ mailbox: o.target.mailbox.id, mailbox_label: o.target.mailbox.label, error: o.error });
+      errors.push({ mailbox: o.target.mailbox.id, mailbox_label: o.target.mailbox.label, error: o.error, note: NOT_INCLUDED });
       positions[o.target.mailbox.id] = o.start; // retried on the next page, not skipped
     } else {
       ok.push(o);
@@ -263,6 +280,7 @@ export async function collectAcross<R>(
           mailbox: t.mailbox.id,
           mailbox_label: t.mailbox.label,
           error: t.client ? describeError(err) : (t.failure ?? 'unavailable'),
+          note: NOT_INCLUDED,
         });
       }
     }),

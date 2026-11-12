@@ -631,7 +631,7 @@ describe('CeoInboxListHandler — every mailbox (#2475)', () => {
     if (!result.success) throw new Error(result.error);
     const data = result.data as Data;
     expect(data.messages.map((m) => m.id)).toEqual(['w1']);
-    expect(data.mailbox_errors).toEqual([{ mailbox: 'personal', mailbox_label: 'Personal', error: 'HTTP 500' }]);
+    expect(data.mailbox_errors).toEqual([{ mailbox: 'personal', mailbox_label: 'Personal', error: 'HTTP 500', note: expect.stringContaining('later call retries') }]);
     expect(JSON.stringify(result)).not.toContain('grant-');
   });
 
@@ -704,7 +704,7 @@ describe('CeoInboxListHandler — every mailbox (#2475)', () => {
     const first = await run({ limit: 2, mailbox: 'personal' });
     if (!first.success) throw new Error(first.error);
     const token = (first.data as Data).next_page_token!;
-    expect(Object.keys(JSON.parse(Buffer.from(token, 'base64url').toString()))).toEqual(['personal']);
+    expect(Object.keys(JSON.parse(Buffer.from(token, 'base64url').toString()).mailboxes)).toEqual(['personal']);
     const second = await run({ limit: 2, mailbox: 'personal', page_token: token });
     if (!second.success) throw new Error(second.error);
     expect((second.data as Data).messages.map((m) => m.id)).toEqual(['p2', 'p3']);
@@ -717,7 +717,7 @@ describe('CeoInboxListHandler — every mailbox (#2475)', () => {
     if (!result.success) throw new Error(result.error);
     const data = result.data as Data;
     expect(data.messages.map((m) => [m.id, m.mailbox])).toEqual([['m0', 'work'], ['m1', 'work']]);
-    expect(Object.keys(JSON.parse(Buffer.from(data.next_page_token!, 'base64url').toString()))).toEqual(['work']);
+    expect(Object.keys(JSON.parse(Buffer.from(data.next_page_token!, 'base64url').toString()).mailboxes)).toEqual(['work']);
   });
 
   it('refuses a page_token it cannot decode and says to retry without it', async () => {
@@ -726,5 +726,29 @@ describe('CeoInboxListHandler — every mailbox (#2475)', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('without page_token');
     expect(f.requests).toHaveLength(0);
+  });
+
+  it('refuses a page_token made at another limit, without fetching', async () => {
+    const f = serve({ 'grant-work': Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i)) }, { pageSize: 3 });
+    const first = await run({ limit: 2 });
+    if (!first.success) throw new Error(first.error);
+    const token = (first.data as Data).next_page_token!;
+    const before = f.requests.length;
+    const second = await run({ limit: 3, page_token: token });
+    expect(second.success).toBe(false);
+    if (!second.success) expect(second.error).toContain('the page size changed');
+    expect(f.requests).toHaveLength(before);
+  });
+
+  it('refuses an explicit mailbox that the page_token does not contain', async () => {
+    const f = serve({ 'grant-work': Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i)) }, { pageSize: 3 });
+    const first = await run({ limit: 2, mailbox: 'work' });
+    if (!first.success) throw new Error(first.error);
+    const token = (first.data as Data).next_page_token!;
+    const before = f.requests.length;
+    const second = await run({ limit: 2, mailbox: 'personal', page_token: token });
+    expect(second.success).toBe(false);
+    if (!second.success) expect(second.error).toContain('without page_token');
+    expect(f.requests).toHaveLength(before);
   });
 });
