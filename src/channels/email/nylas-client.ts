@@ -293,16 +293,17 @@ export class NylasClient {
    * lowercased. SDK errors (404 for a revoked grant, etc.) propagate unchanged.
    */
   async getGrant(): Promise<{ email: string; provider: string }> {
+    let data: { email?: string; provider?: string };
     try {
-      const { data } = await this.nylas.grants.find({ grantId: this.grantId });
-      if (!data.email) {
-        throw new Error(`Nylas grant ${this.grantId} has no email address`);
-      }
-      return { email: data.email.toLowerCase(), provider: data.provider ?? '' };
+      ({ data } = await this.nylas.grants.find({ grantId: this.grantId }));
     } catch (err) {
       this.log.error({ err, grantId: this.grantId }, 'Nylas grants.find failed');
       throw err;
     }
+    if (!data.email) {
+      throw new Error(`Nylas grant ${this.grantId} has no email address`);
+    }
+    return { email: data.email.toLowerCase(), provider: data.provider ?? '' };
   }
 
   /**

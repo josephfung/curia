@@ -28,13 +28,14 @@ function rec(over: Partial<PrincipalMailboxRecord> = {}): PrincipalMailboxRecord
   };
 }
 
-function build(records: PrincipalMailboxRecord[], secrets: Record<string, string> = {}, apiKey: string | undefined = 'api-key') {
+function build(records: PrincipalMailboxRecord[], secrets: Record<string, string> = {}, apiKey: string | null = 'api-key') {
   const store = {
     listLive: vi.fn(async () => records.filter((r) => r.removedAt === null)),
+    hasAnyRow: vi.fn(async () => records.length > 0),
     getAny: vi.fn(async (id: string) => records.find((r) => r.id === id) ?? null),
   } as unknown as PrincipalMailboxStore;
   const get = vi.fn(async (n: string) => secrets[n] ?? null);
-  const svc = new PrincipalMailboxes({ store, secrets: { get }, apiKey: () => apiKey, logger });
+  const svc = new PrincipalMailboxes({ store, secrets: { get }, apiKey: () => apiKey ?? undefined, logger });
   return { svc, get, secrets };
 }
 
@@ -83,7 +84,7 @@ describe('PrincipalMailboxes', () => {
   });
 
   it('credentials throws when the API key is missing', async () => {
-    const { svc } = build([rec()], { 'principal.mailbox.work.nylas_grant_id': 'g1' }, '');
+    const { svc } = build([rec()], { 'principal.mailbox.work.nylas_grant_id': 'g1' }, null);
     await expect(svc.credentials('work')).rejects.toThrow(/api key/i);
   });
 
@@ -110,8 +111,41 @@ describe('PrincipalMailboxes', () => {
     await expect(svc.get('other')).rejects.toBeInstanceOf(UnknownMailboxError);
   });
 
+  it('the fallback id is unknown when a live row exists', async () => {
+    const { svc } = build([rec()], { 'principal.mailbox.work.nylas_grant_id': 'g1' });
+    svc.setFallback({ id: 'mailbox', grantId: 'fb' });
+    await expect(svc.get('mailbox')).rejects.toBeInstanceOf(UnknownMailboxError);
+    await expect(svc.credentials('mailbox')).rejects.toBeInstanceOf(UnknownMailboxError);
+  });
+
+  it('the fallback is not served when only removed rows exist', async () => {
+    const { svc } = build([rec({ removedAt: new Date(), isDefault: false })]);
+    svc.setFallback({ id: 'mailbox', grantId: 'fb' });
+    expect(await svc.list()).toEqual([]);
+    expect(await svc.defaultMailbox()).toBeNull();
+    await expect(svc.get('mailbox')).rejects.toBeInstanceOf(UnknownMailboxError);
+    await expect(svc.credentials('mailbox')).rejects.toBeInstanceOf(UnknownMailboxError);
+  });
+
+  it('a registry row whose id equals the fallback id wins over the fallback', async () => {
+    const { svc } = build([rec({ id: 'mailbox', label: 'Real' })], { 'principal.mailbox.mailbox.nylas_grant_id': 'real-g' });
+    svc.setFallback({ id: 'mailbox', grantId: 'fb' });
+    expect((await svc.get('mailbox')).label).toBe('Real');
+    expect(await svc.credentials('mailbox')).toEqual({ apiKey: 'api-key', grantId: 'real-g' });
+  });
+
+  it('credentials throws RemovedMailboxError for a removed id', async () => {
+    const { svc } = build([rec({ removedAt: new Date(), isDefault: false })]);
+    await expect(svc.credentials('work')).rejects.toBeInstanceOf(RemovedMailboxError);
+  });
+
+  it('credentials throws UnknownMailboxError for an unknown id with no fallback', async () => {
+    const { svc } = build([rec()]);
+    await expect(svc.credentials('nope')).rejects.toBeInstanceOf(UnknownMailboxError);
+  });
+
   it('gatewayClient and calendarClient build per call from current credentials', async () => {
-    const store = { listLive: async () => [rec()], getAny: async () => rec() } as unknown as PrincipalMailboxStore;
+    const store = { listLive: async () => [rec()], hasAnyRow: async () => true, getAny: async () => rec() } as unknown as PrincipalMailboxStore;
     const createNylasClient = vi.fn(() => ({ kind: 'mail' }) as never);
     const createCalendarClient = vi.fn(() => ({ kind: 'cal' }) as never);
     const svc = new PrincipalMailboxes({

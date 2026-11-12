@@ -48,6 +48,14 @@ export class PrincipalMailboxStore {
     return rows.map(toRecord);
   }
 
+  /** True when the table has any row, removed ones included. */
+  async hasAnyRow(): Promise<boolean> {
+    const { rows } = await this.pool.query<{ found: number }>(
+      'SELECT 1 AS found FROM principal_mailboxes LIMIT 1',
+    );
+    return rows.length > 0;
+  }
+
   /** A mailbox by id, removed ones included; null when the id was never registered. */
   async getAny(id: string): Promise<PrincipalMailboxRecord | null> {
     const { rows } = await this.pool.query<MailboxRow>(
