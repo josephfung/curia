@@ -62,6 +62,26 @@ describe('migrateFlatPrincipalMailbox', () => {
     expect(t.secrets.set).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a grant of another provider', async () => ({ email: 'pat@outlook.example.com', provider: 'microsoft' }), {}, /not a Google account/],
+    ["one of Curia's own addresses", async () => ({ email: 'curia@example.com', provider: 'google' }), { curiaAccountAddresses: async () => ['Curia@example.com'] }, /Curia's own email accounts/],
+    ["one of Curia's own grants", async () => ({ email: 'pat@example.org', provider: 'google' }), { curiaAccountGrantIds: async () => ['g1'] }, /Curia's own email accounts/],
+  ] as const)('defers, never inserting, for %s (F5)', async (_name, lookup, extra, reason) => {
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, lookup);
+    const onDeferred = vi.fn();
+    expect(await migrateFlatPrincipalMailbox({ ...t.deps, ...extra, onDeferred })).toBe('deferred');
+    expect(t.rows).toHaveLength(0);
+    expect(t.secrets.set).not.toHaveBeenCalled();
+    expect(onDeferred).toHaveBeenCalledWith(expect.stringMatching(reason));
+  });
+
+  it('tells why it deferred when no address is known', async () => {
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => { throw new Error('down'); });
+    const onDeferred = vi.fn();
+    expect(await migrateFlatPrincipalMailbox({ ...t.deps, onDeferred })).toBe('deferred');
+    expect(onDeferred).toHaveBeenCalledWith(expect.stringContaining('ceo_self_email is not set'));
+  });
+
   it('is a no-op when a live mailbox exists', async () => {
     const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => ({ email: 'pat@ops.example.org', provider: 'google' }));
     await migrateFlatPrincipalMailbox(t.deps);

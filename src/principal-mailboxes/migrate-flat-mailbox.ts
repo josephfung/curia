@@ -26,6 +26,12 @@ export interface FlatMailboxMigrationDeps {
   /** D1: whether the address is a verified principal email identity. Read only, to warn;
    *  the migration never writes identities. Absent (no principal contact yet) → no check. */
   isVerifiedPrincipalEmail?: (address: string) => Promise<boolean>;
+  /** F5: Curia's own account addresses and grants; a flat mailbox that is one of them is never
+   *  registered (the same refusal as adding one in the console). */
+  curiaAccountAddresses?: () => Promise<string[]>;
+  curiaAccountGrantIds?: () => Promise<string[]>;
+  /** Told why a 'deferred' outcome was deferred (operator-facing, no address or grant id). */
+  onDeferred?: (reason: string) => void;
   logger: Logger;
 }
 
@@ -61,9 +67,19 @@ export async function migrateFlatPrincipalMailbox(
   const grantId = (await secrets.get(FLAT_GRANT_KEY))?.trim();
   if (!grantId) return 'nothing';
 
+  const defer = (reason: string): 'deferred' => {
+    logger.warn({ reason }, 'Mailbox migration deferred');
+    deps.onDeferred?.(reason);
+    return 'deferred';
+  };
+
   let address: string | undefined;
   try {
     const grant = await lookupGrant(grantId);
+    // F5: the registry holds Google mailboxes only, as the console's add refuses any other.
+    if (grant.provider !== 'google') {
+      return defer(`The flat grant is not a Google account (provider ${grant.provider}); only Google mailboxes are supported`);
+    }
     address = grant.email.trim().toLowerCase() || undefined;
   } catch (err) {
     // Class and status only: a Nylas error can carry the grant id (R20).
@@ -73,8 +89,14 @@ export async function migrateFlatPrincipalMailbox(
     address = (await secrets.get(FLAT_EMAIL_KEY))?.trim().toLowerCase() || undefined;
   }
   if (!address) {
-    logger.warn('Mailbox migration deferred: no address from the grant or ceo_self_email');
-    return 'deferred';
+    return defer("Curia could not read the grant's address from Nylas, and ceo_self_email is not set");
+  }
+  // F5: never register one of Curia's own accounts as the principal's mailbox.
+  if (deps.curiaAccountAddresses && (await deps.curiaAccountAddresses()).some((a) => a.trim().toLowerCase() === address)) {
+    return defer("The flat mailbox is one of Curia's own email accounts, not the principal's");
+  }
+  if (deps.curiaAccountGrantIds && (await deps.curiaAccountGrantIds()).includes(grantId)) {
+    return defer("The flat grant is one of Curia's own email accounts, not the principal's");
   }
 
   const id = mailboxIdFromAddress(address);
@@ -122,4 +144,10 @@ async function warnIfUnverified(deps: FlatMailboxMigrationDeps, id: string, addr
   } catch (err) {
     deps.logger.warn({ mailboxId: id, ...grantSafeErrorFields(err) }, 'Mailbox migration: could not check the principal identity for the migrated address');
   }
+}
+
+/** Operator-facing reason after a migration attempt threw: class and status only (R20). */
+export function migrationFailureReason(err: unknown): string {
+  const { errName, statusCode } = grantSafeErrorFields(err);
+  return `The last attempt failed (${errName}${statusCode !== undefined ? `, HTTP ${statusCode}` : ''}); check the Nylas API key and the grant`;
 }
