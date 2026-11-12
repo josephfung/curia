@@ -7336,3 +7336,40 @@ describe('sendPrincipalDraft (#2474)', () => {
     });
   });
 });
+
+describe('OutboundGateway.emailPrincipal (#2475)', () => {
+  function build(getContact: ReturnType<typeof vi.fn>) {
+    const m = createMocks();
+    (m.contactService as unknown as { getContact: unknown }).getContact = getContact;
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', m.nylasClient]]),
+      contactService: m.contactService,
+      contentFilter: m.contentFilter,
+      bus: m.bus,
+      // The work address is linked first; the primary email is the personal one.
+      principalIdentities: [makePrincipalIdentity('pat@work.example.com'), makePrincipalIdentity('pat@example.org')],
+      logger: m.logger,
+    });
+    const send = vi.spyOn(gateway, 'send').mockResolvedValue({ success: true } as never);
+    const call = () => (gateway as unknown as { emailPrincipal(s: string, b: string): Promise<void> }).emailPrincipal('Subject', 'Body');
+    return { send, call };
+  }
+
+  it('sends to the primary email, not the first identity', async () => {
+    const { send, call } = build(vi.fn().mockResolvedValue({ primaryEmail: 'pat@example.org' }));
+    await call();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ to: 'pat@example.org' }), expect.anything());
+  });
+
+  it('falls back to the first verified identity when there is no primary email', async () => {
+    const { send, call } = build(vi.fn().mockResolvedValue({ primaryEmail: null }));
+    await call();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ to: 'pat@work.example.com' }), expect.anything());
+  });
+
+  it('falls back when the contact lookup fails', async () => {
+    const { send, call } = build(vi.fn().mockRejectedValue(new Error('db down')));
+    await call();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ to: 'pat@work.example.com' }), expect.anything());
+  });
+});

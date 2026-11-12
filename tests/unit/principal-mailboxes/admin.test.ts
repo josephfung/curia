@@ -1,0 +1,289 @@
+import { describe, it, expect, vi } from 'vitest';
+import pino from 'pino';
+import { PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js';
+import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
+import type { PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
+import { principalMailboxGrantSecretName } from '../../../src/principal-mailboxes/secrets.js';
+
+const logger = pino({ level: 'silent' });
+const PRINCIPAL = 'principal-contact';
+
+interface Identity { id: string; channel: string; channelIdentifier: string; verified: boolean; status: string }
+
+function setup(opts: {
+  records?: PrincipalMailboxRecord[];
+  identities?: Identity[];
+  primaryEmail?: string | null;
+  secrets?: Record<string, string>;
+  grants?: Record<string, { email: string; provider: string }>;
+  curia?: string[];
+  maxLiveMailboxes?: number;
+  onRemoved?: Array<(id: string) => Promise<void>>;
+} = {}) {
+  const records: PrincipalMailboxRecord[] = [...(opts.records ?? [])];
+  const identities: Identity[] = [...(opts.identities ?? [])];
+  const secrets: Record<string, string> = { ...(opts.secrets ?? {}) };
+  const contact = { primaryEmail: opts.primaryEmail ?? null };
+  let nextIdentity = 1;
+
+  const store = {
+    listLive: vi.fn(async () => records.filter((r) => !r.removedAt)),
+    getAny: vi.fn(async (id: string) => records.find((r) => r.id === id) ?? null),
+    insert: vi.fn(async (r: Omit<PrincipalMailboxRecord, 'removedAt'>) => {
+      records.push({ ...r, removedAt: null });
+    }),
+    setDefault: vi.fn(async (id: string) => {
+      for (const r of records) if (!r.removedAt) r.isDefault = r.id === id;
+    }),
+    tombstone: vi.fn(async (id: string, newDefaultId: string | null) => {
+      const r = records.find((x) => x.id === id)!;
+      r.removedAt = new Date();
+      r.isDefault = false;
+      if (newDefaultId) records.find((x) => x.id === newDefaultId)!.isDefault = true;
+    }),
+  } as unknown as PrincipalMailboxStore;
+
+  const contacts = {
+    linkIdentity: vi.fn(async (o: { channelIdentifier: string; channel: string }) => {
+      const id = `ident-${nextIdentity++}`;
+      identities.push({ id, channel: o.channel, channelIdentifier: o.channelIdentifier, verified: true, status: 'active' });
+      return { id };
+    }),
+    unlinkIdentity: vi.fn(async (id: string) => {
+      const i = identities.findIndex((x) => x.id === id);
+      if (i >= 0) identities.splice(i, 1);
+      return i >= 0;
+    }),
+    getContactWithIdentities: vi.fn(async () => ({ contact, identities })),
+    updateContactFields: vi.fn(async (_id: string, f: { primaryEmail?: string }) => {
+      if (f.primaryEmail) contact.primaryEmail = f.primaryEmail;
+      return contact;
+    }),
+  };
+  const secretStore = {
+    get: vi.fn(async (n: string) => secrets[n] ?? null),
+    set: vi.fn(async (n: string, v: string) => { secrets[n] = v; }),
+    delete: vi.fn(async (n: string) => { delete secrets[n]; }),
+  };
+  const grants = opts.grants ?? {};
+  const admin = new PrincipalMailboxAdmin({
+    store,
+    secrets: secretStore,
+    contacts: contacts as never,
+    principalContactId: PRINCIPAL,
+    curiaAccountAddresses: async () => opts.curia ?? [],
+    lookupGrant: vi.fn(async (g: string) => {
+      const found = grants[g];
+      if (!found) throw new Error('unreadable');
+      return found;
+    }),
+    onRemoved: opts.onRemoved,
+    logger,
+    maxLiveMailboxes: opts.maxLiveMailboxes,
+  });
+  return { admin, store, contacts, secretStore, records, identities, secrets, contact };
+}
+
+const rec = (over: Partial<PrincipalMailboxRecord> = {}): PrincipalMailboxRecord => ({
+  id: 'personal', label: 'Personal', address: 'pat@gmail.com', provider: 'google',
+  isDefault: true, triageStartAt: null, removedAt: null, addedIdentityId: null, ...over,
+});
+const google = (email: string) => ({ email, provider: 'google' });
+
+describe('PrincipalMailboxAdmin.add', () => {
+  it('refuses bad and reserved ids', async () => {
+    const { admin } = setup();
+    for (const id of ['Work', '1x', 'primary', 'default', '']) {
+      const r = await admin.add({ id, label: 'x', grantId: 'g' });
+      expect(r).toMatchObject({ ok: false, refusal: 'bad_id' });
+    }
+  });
+
+  it('refuses an id already taken, live or removed', async () => {
+    const { admin } = setup({ records: [rec({ id: 'gone', isDefault: false, removedAt: new Date() })], grants: { g: google('a@gmail.com') } });
+    expect(await admin.add({ id: 'gone', label: 'x', grantId: 'g' })).toMatchObject({ refusal: 'id_taken' });
+  });
+
+  it('refuses when the live cap is reached', async () => {
+    const { admin } = setup({ records: [rec()], grants: { g: google('a@gmail.com') } });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ refusal: 'cap_reached' });
+  });
+
+  it('refuses a grant that cannot be read', async () => {
+    const { admin } = setup();
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'nope' })).toMatchObject({ refusal: 'grant_unreadable' });
+  });
+
+  it('refuses a non-google grant', async () => {
+    const { admin } = setup({ grants: { g: { email: 'a@example.org', provider: 'microsoft' } } });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ refusal: 'not_google' });
+  });
+
+  it('refuses a grant id already stored for a live mailbox', async () => {
+    const { admin } = setup({
+      records: [rec()], maxLiveMailboxes: 5,
+      secrets: { [principalMailboxGrantSecretName('personal')]: 'g' },
+      grants: { g: google('other@gmail.com') },
+    });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ refusal: 'grant_in_use' });
+  });
+
+  it('refuses an address that is already a live mailbox', async () => {
+    const { admin } = setup({ records: [rec()], maxLiveMailboxes: 5, grants: { g2: google('PAT@gmail.com') } });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g2' })).toMatchObject({ refusal: 'address_in_use' });
+  });
+
+  it("refuses one of Curia's own account addresses", async () => {
+    const { admin } = setup({ curia: ['curia@example.com'], grants: { g: google('Curia@example.com') } });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ refusal: 'curia_account_address' });
+  });
+
+  it('links a verified identity and records it', async () => {
+    const { admin, contacts, records, secrets } = setup({ grants: { g: google('pat@work.example.com') } });
+    const r = await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    expect(r).toMatchObject({ ok: true, mailbox: { id: 'work', address: 'pat@work.example.com', isDefault: true } });
+    expect(contacts.linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: PRINCIPAL, channel: 'email', channelIdentifier: 'pat@work.example.com', source: 'ceo_stated', verified: true,
+    }));
+    expect(records[0]!.addedIdentityId).toBe('ident-1');
+    expect(records[0]!.triageStartAt).toBeInstanceOf(Date);
+    expect(secrets[principalMailboxGrantSecretName('work')]).toBe('g');
+  });
+
+  it('does not relink an existing identity', async () => {
+    const { admin, contacts, records } = setup({
+      identities: [{ id: 'old', channel: 'email', channelIdentifier: 'Pat@Work.example.com', verified: true, status: 'active' }],
+      grants: { g: google('pat@work.example.com') },
+    });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    expect(contacts.linkIdentity).not.toHaveBeenCalled();
+    expect(records[0]!.addedIdentityId).toBeNull();
+  });
+
+  it('never changes primary_email', async () => {
+    const { admin, contacts, contact } = setup({ primaryEmail: 'pat@gmail.com', grants: { g: google('pat@work.example.com') } });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    expect(contacts.updateContactFields).not.toHaveBeenCalled();
+    expect(contact.primaryEmail).toBe('pat@gmail.com');
+  });
+
+  it('makeDefault moves the default to the new mailbox', async () => {
+    const { admin, records } = setup({ records: [rec()], maxLiveMailboxes: 5, grants: { g: google('pat@work.example.com') } });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g', makeDefault: true });
+    expect(records.find((r) => r.id === 'work')!.isDefault).toBe(true);
+    expect(records.find((r) => r.id === 'personal')!.isDefault).toBe(false);
+  });
+
+  it('a second mailbox is not default unless asked', async () => {
+    const { admin, records } = setup({ records: [rec()], maxLiveMailboxes: 5, grants: { g: google('pat@work.example.com') } });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    expect(records.find((r) => r.id === 'work')!.isDefault).toBe(false);
+  });
+
+  it('ids are never reused', async () => {
+    const { admin } = setup({ grants: { g: google('pat@work.example.com') } });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    await admin.remove({ id: 'work', stillOwned: true });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ refusal: 'id_taken' });
+  });
+});
+
+describe('PrincipalMailboxAdmin.remove', () => {
+  const two = () => [
+    rec(),
+    rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false, addedIdentityId: 'ident-w' }),
+  ];
+
+  it('removal of the default requires a new default', async () => {
+    const { admin, store } = setup({ records: two() });
+    await expect(admin.remove({ id: 'personal', stillOwned: true })).rejects.toThrow(/new default/);
+    expect(store.tombstone).not.toHaveBeenCalled();
+    await admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work' });
+    expect(store.tombstone).toHaveBeenCalledWith('personal', 'work');
+  });
+
+  it('rejects a replacement default that is not another live mailbox', async () => {
+    const { admin } = setup({ records: two() });
+    await expect(admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'personal' })).rejects.toThrow();
+    await expect(admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'nope' })).rejects.toThrow();
+  });
+
+  it('requires a new primary email when the address is primary', async () => {
+    const { admin, contacts, store } = setup({ records: two(), primaryEmail: 'Pat@Gmail.com' });
+    await expect(admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work' })).rejects.toThrow(/primary email/);
+    expect(store.tombstone).not.toHaveBeenCalled();
+    await expect(
+      admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work', newPrimaryEmail: 'stranger@example.org' }),
+    ).rejects.toThrow(/primary email/);
+    await admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work', newPrimaryEmail: 'pat@work.example.com' });
+    expect(contacts.updateContactFields).toHaveBeenCalledWith(PRINCIPAL, { primaryEmail: 'pat@work.example.com' });
+    expect(store.tombstone).toHaveBeenCalled();
+  });
+
+  it('stillOwned=false unlinks only the identity it added', async () => {
+    const { admin, contacts } = setup({ records: two(), secrets: { [principalMailboxGrantSecretName('work')]: 'g' } });
+    await admin.remove({ id: 'work', stillOwned: false });
+    expect(contacts.unlinkIdentity).toHaveBeenCalledWith('ident-w');
+  });
+
+  it('never unlinks a pre-existing identity', async () => {
+    const { admin, contacts } = setup({ records: two() });
+    await admin.remove({ id: 'work', stillOwned: false }).catch(() => undefined);
+    const r = setup({ records: [rec()] });
+    await r.admin.remove({ id: 'personal', stillOwned: false });
+    expect(r.contacts.unlinkIdentity).not.toHaveBeenCalled();
+    expect(contacts.unlinkIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it('stillOwned=true keeps the identity', async () => {
+    const { admin, contacts } = setup({ records: two() });
+    await admin.remove({ id: 'work', stillOwned: true });
+    expect(contacts.unlinkIdentity).not.toHaveBeenCalled();
+  });
+
+  it('deletes the grant secret and runs hooks after the tombstone', async () => {
+    const order: string[] = [];
+    const hook = vi.fn(async () => { order.push('hook'); });
+    const s = setup({ records: two(), secrets: { [principalMailboxGrantSecretName('work')]: 'g' }, onRemoved: [hook] });
+    vi.mocked(s.store.tombstone).mockImplementationOnce(async () => { order.push('tombstone'); });
+    s.secretStore.delete.mockImplementationOnce(async () => { order.push('secret'); });
+    await s.admin.remove({ id: 'work', stillOwned: true });
+    expect(order).toEqual(['tombstone', 'secret', 'hook']);
+    expect(hook).toHaveBeenCalledWith('work');
+  });
+
+  it('logs and rethrows a failure after the tombstone', async () => {
+    const s = setup({ records: two() });
+    s.secretStore.delete.mockRejectedValueOnce(new Error('vault down'));
+    await expect(s.admin.remove({ id: 'work', stillOwned: true })).rejects.toThrow('vault down');
+    expect(s.store.tombstone).toHaveBeenCalled();
+  });
+
+  it('refuses unknown and removed ids', async () => {
+    const { admin } = setup({ records: [rec({ removedAt: new Date(), isDefault: false })] });
+    await expect(admin.remove({ id: 'nope', stillOwned: true })).rejects.toThrow(/Unknown/);
+    await expect(admin.remove({ id: 'personal', stillOwned: true })).rejects.toThrow(/removed/);
+  });
+});
+
+describe('PrincipalMailboxAdmin.removalPreview', () => {
+  it('describes the consequences', async () => {
+    const { admin } = setup({
+      records: [rec(), rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false })],
+      primaryEmail: 'pat@gmail.com',
+    });
+    const p = await admin.removalPreview('personal');
+    expect(p).toMatchObject({ isDefault: true, isPrimaryEmail: true, stillOwnedDefault: true, scopedRules: [], calendars: [] });
+    expect(p.otherLive.map((m) => m.id)).toEqual(['work']);
+    const w = await admin.removalPreview('work');
+    expect(w).toMatchObject({ isDefault: false, isPrimaryEmail: false, stillOwnedDefault: false });
+  });
+});
+
+describe('PrincipalMailboxAdmin.setDefault', () => {
+  it('delegates to the store', async () => {
+    const { admin, store } = setup({ records: [rec()] });
+    await admin.setDefault('personal');
+    expect(store.setDefault).toHaveBeenCalledWith('personal');
+  });
+});
