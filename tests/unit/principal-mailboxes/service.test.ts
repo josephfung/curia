@@ -90,7 +90,7 @@ describe('PrincipalMailboxes', () => {
   });
 
   it('list returns the fallback when the table is empty and a fallback is set', async () => {
-    const { svc } = build([]);
+    const { svc } = build([], { ceo_nylas_grant_id: 'fb-grant' });
     expect(await svc.list()).toEqual([]);
     expect(await svc.defaultMailbox()).toBeNull();
     svc.setFallback({ id: 'mailbox', grantId: 'fb-grant' });
@@ -103,6 +103,15 @@ describe('PrincipalMailboxes', () => {
     expect(await svc.addresses()).toEqual([]);
     svc.setFallback(null);
     expect(await svc.list()).toEqual([]);
+  });
+
+  it('the fallback reads the flat grant on every call, so a vault change applies at once', async () => {
+    const { svc, secrets } = build([], { ceo_nylas_grant_id: 'boot-grant' });
+    svc.setFallback({ id: 'mailbox', grantId: 'boot-grant' });
+    secrets['ceo_nylas_grant_id'] = 'new-grant';
+    expect(await svc.credentials('mailbox')).toEqual({ apiKey: 'api-key', grantId: 'new-grant' });
+    delete secrets['ceo_nylas_grant_id'];
+    await expect(svc.credentials('mailbox')).rejects.toThrow('no Nylas grant configured');
   });
 
   it('list ignores the fallback once the table has rows', async () => {
