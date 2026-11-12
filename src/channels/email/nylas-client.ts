@@ -118,6 +118,9 @@ interface NylasLike {
       requestBody: CreateFolderRequest;
     } & RequestOverrides): Promise<NylasResponse<NylasSdkFolder>>;
   };
+  grants: {
+    find(args: { grantId: string }): Promise<{ data: { email?: string; provider?: string } }>;
+  };
   attachments: {
     downloadBytes(params: {
       identifier: string;
@@ -283,6 +286,23 @@ export class NylasClient {
     });
     this.grantId = grantId;
     this.log = logger.child({ component: 'nylas-client' });
+  }
+
+  /**
+   * Read this grant's own address and provider from Nylas (#2475). The email is
+   * lowercased. SDK errors (404 for a revoked grant, etc.) propagate unchanged.
+   */
+  async getGrant(): Promise<{ email: string; provider: string }> {
+    try {
+      const { data } = await this.nylas.grants.find({ grantId: this.grantId });
+      if (!data.email) {
+        throw new Error(`Nylas grant ${this.grantId} has no email address`);
+      }
+      return { email: data.email.toLowerCase(), provider: data.provider ?? '' };
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId }, 'Nylas grants.find failed');
+      throw err;
+    }
   }
 
   /**
