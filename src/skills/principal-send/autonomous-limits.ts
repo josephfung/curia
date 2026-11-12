@@ -152,10 +152,15 @@ export function checkAutonomousLimits(input: {
   recentConversationEntries: readonly PrincipalSendEntry[];
   /** The principal's addresses other than the sending mailbox's own (#2475). Empty: one mailbox. */
   otherPrincipalAddresses: readonly string[];
+  /**
+   * Addresses a recipient may not be (R43). Absent: `otherPrincipalAddresses`. Wider only when
+   * the mailbox's own address is unknown and the principal has several.
+   */
+  offLimitsRecipients?: readonly string[];
   /** Autonomous sends (`sending` or `sent`) on any thread inside the daily cap's window. */
   autonomousSendsInWindow: number;
 }): { refusal: AutonomousLimitRefusal; detail: string } | null {
-  const { draft, thread, principalAddresses, curiaWrites, recentThreadEntries, recentConversationEntries, otherPrincipalAddresses, autonomousSendsInWindow } = input;
+  const { draft, thread, principalAddresses, curiaWrites, recentThreadEntries, recentConversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow } = input;
 
   if (!curiaWrites.created) {
     return { refusal: 'not_curia_draft', detail: 'Curia did not create this draft in this task' };
@@ -178,7 +183,8 @@ export function checkAutonomousLimits(input: {
   // Curia reaches the principal's other addresses only through the digest, never as a reply:
   // not to them, and not to mail they sent (#2475, D6). Before the thread-member checks.
   const isOther = principalMatcher(otherPrincipalAddresses);
-  const toOther = [...draft.to, ...draft.cc, ...draft.bcc].find((p: Party) => isOther(p.email));
+  const isOffLimits = principalMatcher(offLimitsRecipients ?? otherPrincipalAddresses);
+  const toOther = [...draft.to, ...draft.cc, ...draft.bcc].find((p: Party) => isOffLimits(p.email));
   if (toOther !== undefined) {
     return { refusal: 'principal_address_recipient', detail: 'the draft is addressed to another of the principal\'s email addresses' };
   }

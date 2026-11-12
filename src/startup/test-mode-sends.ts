@@ -498,6 +498,7 @@ function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefined): N
     },
     recordHeld: async (e) => { entries().push({ ...e, outcome: 'held' }); },
     // As production counts (#2474 final fixes A13): an unreadable `at` is recent (fail closed).
+    list: async () => [...entries()],
     recentForThread: async (threadId, sinceEpochMs, mailbox) => entries().filter(e => e.mode === 'autonomous' && e.threadId === threadId && (e.mailbox === undefined || e.mailbox === mailbox) && recent(e, sinceEpochMs)),
     recentForConversation: async (ids, sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.conversationIds.some(id => ids.includes(id)) && recent(e, sinceEpochMs)),
     recentAutonomousSends: async (sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.outcome !== 'held' && recent(e, sinceEpochMs)),

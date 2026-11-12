@@ -222,6 +222,27 @@ describe('PrincipalSendLedger across mailboxes (#2475)', () => {
     expect(await ledger.recentForConversation([], since)).toEqual([]);
   });
 
+  it('an entry with a wrong-typed mailbox still counts toward the cap', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: recent });
+    const doc = [...docs.docs.values()][0]!;
+    docs.docs.set(doc.path, { ...doc, frontmatter: { ...doc.frontmatter, mailbox: 5 } });
+    expect(await ledger.recentAutonomousSends(since)).toHaveLength(1);
+    // No usable mailbox matches any mailbox: it adds cooldown.
+    expect(await ledger.recentForThread('t1', since, 'personal')).toHaveLength(1);
+  });
+
+  it('an entry with a non-array conversation_ids still counts toward the cap and the thread cooldown', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: recent });
+    const doc = [...docs.docs.values()][0]!;
+    docs.docs.set(doc.path, { ...doc, frontmatter: { ...doc.frontmatter, conversation_ids: 'nope' } });
+    expect(await ledger.recentAutonomousSends(since)).toHaveLength(1);
+    expect(await ledger.recentForThread('t1', since, 'work')).toHaveLength(1);
+  });
+
   it('cap counts sends from every mailbox', async () => {
     const docs = makeDocs();
     const ledger = new PrincipalSendLedger(docs, logger);

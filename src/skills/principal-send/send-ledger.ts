@@ -66,12 +66,12 @@ export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
   if (typeof outcome !== 'string' || !OUTCOMES.includes(outcome)) return null;
   if (messageId !== undefined && typeof messageId !== 'string') return null;
   if (reasonCode !== undefined && typeof reasonCode !== 'string') return null;
-  if (mailbox !== undefined && typeof mailbox !== 'string') return null;
-  if (conversationIds !== undefined && !isStringArray(conversationIds)) return null;
+  // A wrong-typed mailbox or conversation_ids keeps the entry (dropping it would lift the cap and
+  // both cooldowns, fail-open): no mailbox matches any mailbox, no ids match no conversation.
   return {
     draftId, threadId, recipients, at,
-    conversationIds: conversationIds ?? [],
-    ...(mailbox !== undefined ? { mailbox } : {}),
+    conversationIds: isStringArray(conversationIds) ? conversationIds : [],
+    ...(typeof mailbox === 'string' ? { mailbox } : {}),
     mode: mode as PrincipalSendEntry['mode'],
     outcome: outcome as PrincipalSendEntry['outcome'],
     ...(messageId !== undefined ? { messageId } : {}),
@@ -158,9 +158,9 @@ export class PrincipalSendLedger {
    * an entry with an unreadable `at` counts as recent, since a broken or forged marker may only
    * block autonomous sends on its thread, never allow one. Throws on a repo failure.
    */
-  async recentForThread(threadId: string, sinceEpochMs: number, mailbox: string): Promise<PrincipalSendEntry[]> {
+  async recentForThread(threadId: string, sinceEpochMs: number, mailbox: string, entries?: readonly PrincipalSendEntry[]): Promise<PrincipalSendEntry[]> {
     // An entry with no mailbox (written before the registry) matches any: only more cooldown.
-    return (await this.list()).filter((e) => e.mode === 'autonomous' && e.threadId === threadId
+    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.threadId === threadId
       && (e.mailbox === undefined || e.mailbox === mailbox) && atOrAfter(e, sinceEpochMs));
   }
 
@@ -170,10 +170,10 @@ export class PrincipalSendLedger {
    * but the same Message-IDs. Fail closed on an unreadable `at`, as recentForThread. Throws on a
    * repo failure. No ids, no match.
    */
-  async recentForConversation(conversationIds: readonly string[], sinceEpochMs: number): Promise<PrincipalSendEntry[]> {
+  async recentForConversation(conversationIds: readonly string[], sinceEpochMs: number, entries?: readonly PrincipalSendEntry[]): Promise<PrincipalSendEntry[]> {
     if (conversationIds.length === 0) return [];
     const wanted = new Set(conversationIds);
-    return (await this.list()).filter((e) => e.mode === 'autonomous'
+    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous'
       && e.conversationIds.some((id) => wanted.has(id)) && atOrAfter(e, sinceEpochMs));
   }
 
@@ -182,8 +182,8 @@ export class PrincipalSendLedger {
    * for the global daily cap (#2474 final fixes A4). A held marker is not a send. An unreadable
    * `at` counts, as in recentForThread (fail closed). Throws on a repo failure.
    */
-  async recentAutonomousSends(sinceEpochMs: number): Promise<PrincipalSendEntry[]> {
-    return (await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'held' && atOrAfter(e, sinceEpochMs));
+  async recentAutonomousSends(sinceEpochMs: number, entries?: readonly PrincipalSendEntry[]): Promise<PrincipalSendEntry[]> {
+    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'held' && atOrAfter(e, sinceEpochMs));
   }
 
   /**
