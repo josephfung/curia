@@ -10,3 +10,12 @@ export const PRINCIPAL_MAILBOX_GRANT_KEY_RE = /^principal\.mailbox\.[a-z][a-z0-9
 export function isPrincipalMailboxGrantKey(name: string): boolean {
   return PRINCIPAL_MAILBOX_GRANT_KEY_RE.test(name);
 }
+
+// The flat keys (#2409) ceo-inbox still reads. Once the registry has rows the console
+// mirrors the default mailbox into them (R28), so the vault routes and secret capture refuse
+// direct writes with this message (R33).
+export const FLAT_PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set(['ceo_nylas_grant_id', 'ceo_self_email']);
+
+export const FLAT_KEYS_MANAGED_MESSAGE =
+  "The principal's mailbox is managed in the console: Channels → Email → Principal's mailboxes. " +
+  'Change, replace or remove the mailbox there.';

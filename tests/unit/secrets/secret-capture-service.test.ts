@@ -458,3 +458,44 @@ describe('SecretCaptureService.redeem', () => {
     expect(JSON.stringify(result)).not.toContain('hunter2');
   });
 });
+
+describe('SecretCaptureService refuses names the principal mailbox registry owns (#2475, R33)', () => {
+  const FLAT = new Set(['ceo_nylas_grant_id', 'ceo_self_email', 'anthropic_api_key']);
+  const MESSAGE = "The principal's mailbox is managed in the console: Channels → Email → Principal's mailboxes.";
+  function make(handler: (sql: string) => { rows: Record<string, unknown>[] }, refused: boolean) {
+    const { pool, queries } = makePool(handler);
+    const secrets = makeSecretsPort();
+    const refuseSystemName = vi.fn(async (name: string) =>
+      refused && (name === 'ceo_nylas_grant_id' || name === 'ceo_self_email') ? MESSAGE : null);
+    const svc = new SecretCaptureService(pool, secrets, { getAllowedSystemNames: () => FLAT, refuseSystemName });
+    return { svc, secrets, queries, refuseSystemName };
+  }
+  const mintHandler = (sql: string) => sql.includes('INSERT INTO secret_capture_tokens')
+    ? { rows: [{ expires_at: new Date(Date.now() + 30 * 60_000) }] }
+    : { rows: [] };
+
+  it('mintSystemSecret refuses a flat key once the registry has rows, minting nothing', async () => {
+    const { svc, queries } = make(mintHandler, true);
+    await expect(svc.mintSystemSecret({ rawName: 'ceo_nylas_grant_id' })).rejects.toThrow("Principal's mailboxes");
+    await expect(svc.mintSystemSecret({ rawName: 'ceo_self_email' })).rejects.toThrow("Principal's mailboxes");
+    expect(queries.some(q => q.sql.includes('INSERT INTO secret_capture_tokens'))).toBe(false);
+    expect((await svc.mintSystemSecret({ rawName: 'anthropic_api_key' })).secretName).toBe('anthropic_api_key');
+  });
+
+  it('mintSystemSecret still mints a flat key while the registry is empty', async () => {
+    const { svc } = make(mintHandler, false);
+    expect((await svc.mintSystemSecret({ rawName: 'ceo_nylas_grant_id' })).secretName).toBe('ceo_nylas_grant_id');
+  });
+
+  it('redeem of a link minted earlier refuses the write without spending the token', async () => {
+    const { svc, secrets, queries } = make((sql) => {
+      if (sql.includes('SELECT') && sql.includes('secret_capture_tokens')) {
+        return { rows: [{ value_format: 'string', capture_template: null, secret_name: 'ceo_self_email', spent: false }] };
+      }
+      return { rows: [{ secret_name: 'ceo_self_email', value_format: 'string', label: null }] };
+    }, true);
+    expect(await svc.redeem('tok', 'pat@example.com')).toEqual({ status: 'refused', message: MESSAGE });
+    expect(secrets.setCalls).toEqual([]);
+    expect(queries.some(q => q.sql.includes('consumed_at = now()'))).toBe(false);
+  });
+});

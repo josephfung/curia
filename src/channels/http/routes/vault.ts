@@ -41,7 +41,7 @@ import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
 import { actorFromRequest } from './sessions.js';
 import { isPlatformVaultKey, platformKeyLabel } from '../../../secrets/platform-keys.js';
 import { StaleCardEditError, type PersonalSecretWrite, type SecretMetadata, type UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
-import { isPrincipalMailboxGrantKey } from '../../../principal-mailboxes/secrets.js';
+import { FLAT_KEYS_MANAGED_MESSAGE, isPrincipalMailboxGrantKey } from '../../../principal-mailboxes/secrets.js';
 import type { SecretUsagePort } from '../../../secrets/secret-usage-repo.js';
 import { consoleSecretNameInput, resolveUserSecretName, USER_SECRET_PREFIX } from '../../../secrets/user-secret-name.js';
 import { parseUserSecretDetails, type UserSecretDetails } from '../../../secrets/user-secret-details.js';
@@ -93,10 +93,6 @@ const PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set(['ceo_nylas_grant_id
 // Shape check only (same pattern as the setup wizard's profile email): one @, no spaces,
 // a dot in the domain.
 const PRINCIPAL_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const FLAT_KEYS_MANAGED_REFUSAL =
-  "The principal's mailbox is managed in the console: Channels → Email → Principal's mailboxes. " +
-  'Change, replace or remove the mailbox there.';
 
 /** A fresh copy of the principal-mailbox key set (see channelCredentialKeys for why a copy).
  *  Reused by the secret-capture system-name allowlist. */
@@ -392,7 +388,7 @@ export async function vaultRoutes(
     if (!PRINCIPAL_MAILBOX_KEYS.has(name) || !options.principalRegistryHasRows) return false;
     if (!(await options.principalRegistryHasRows())) return false;
     request.log.info({ name }, 'vault change rejected: flat principal key is managed by the mailbox registry');
-    void reply.status(409).send({ error: FLAT_KEYS_MANAGED_REFUSAL });
+    void reply.status(409).send({ error: FLAT_KEYS_MANAGED_MESSAGE });
     return true;
   }
 
