@@ -5,7 +5,7 @@ import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 import { EmailAccountsSection } from '../components/EmailAccountsSection.js';
-import { PrincipalMailboxSection } from '../components/PrincipalMailboxSection.js';
+import { PrincipalMailboxesSection } from '../components/PrincipalMailboxesSection.js';
 
 // ── Types (mirror src/channels/credential-resolver.ts CredentialFieldStatus and
 //    src/registry/channel-registry-types.ts ChannelRegistryEntry) ──────────────
@@ -256,8 +256,8 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
               at least one of them, so a change re-reads the channel status (#2409). */}
           {entry.name === 'email' && <EmailAccountsSection onChanged={onChanged} />}
 
-          {/* The principal's own mailbox (#2409) — separate from Curia's accounts. */}
-          {entry.name === 'email' && <PrincipalMailboxSection />}
+          {/* The principal's own mailboxes (#2475) — separate from Curia's accounts. */}
+          {entry.name === 'email' && <PrincipalMailboxesSection />}
 
           <div className="form-field">
             <label>Installed</label>

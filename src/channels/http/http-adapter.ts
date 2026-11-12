@@ -60,6 +60,7 @@ import { channelRegistryRoutes } from './routes/channel-registry.js';
 import { mcpRegistryRoutes } from './routes/mcp-registry.js';
 import { vaultRoutes } from './routes/vault.js';
 import { emailAccountsRoutes } from './routes/email-accounts.js';
+import { principalMailboxesRoutes } from './routes/principal-mailboxes.js';
 import { EmailAccountsRepo } from '../email/email-accounts-repo.js';
 import { SecretUsageRepo } from '../../secrets/secret-usage-repo.js';
 import { secretCaptureRoutes } from './routes/secret-capture.js';
@@ -137,6 +138,11 @@ export interface HttpAdapterConfig {
   /** Backs the /api/vault/* routes (secrets status + skill-secret entry). Mounted only
    *  alongside registryService, which scopes which secret names may be written. */
   secretsService?: import('../../secrets/secrets-service.js').SecretsService;
+  /** Backs /api/registry/principal-mailboxes/* (#2475). Absent in setup-required mode. */
+  principalMailboxConsole?: Pick<
+    import('./routes/principal-mailboxes.js').PrincipalMailboxesRouteOptions,
+    'mailboxes' | 'store' | 'admin' | 'lookupGrant'
+  >;
   /** Backs the public /api/secret-capture/* routes (one-time tokenized secret capture, #971).
    *  Token-authed, so mounted independently of the bootstrap secret. */
   secretCaptureService?: import('../../secrets/secret-capture-service.js').SecretCaptureService;
@@ -616,6 +622,15 @@ export class HttpAdapter implements Channel {
       await this.app.register(emailAccountsRoutes, {
         pool,
         secretsService: this.config.secretsService,
+        webAppBootstrapSecret,
+        sessions,
+      });
+    }
+
+    // Principal mailboxes (#2475): list, add, relabel, default and removal for the console.
+    if (webAppBootstrapSecret && this.config.principalMailboxConsole) {
+      await this.app.register(principalMailboxesRoutes, {
+        ...this.config.principalMailboxConsole,
         webAppBootstrapSecret,
         sessions,
       });
