@@ -98,6 +98,7 @@ import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { migrateFlatPrincipalMailbox } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { grantSafeErrorFields } from './principal-mailboxes/error-fields.js';
+import { FLAT_KEYS_MANAGED_MESSAGE, FLAT_PRINCIPAL_MAILBOX_KEYS } from './principal-mailboxes/secrets.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
 import { NylasPrincipalMailbox } from './contacts/nylas-principal-mailbox.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
@@ -2974,6 +2975,9 @@ async function main(): Promise<void> {
   const secretCaptureService = new SecretCaptureService(pool, secretsService, {
     getAllowedSystemNames: () =>
       new Set([...registryService.declaredSecretNames(), ...channelCredentialKeys(), ...principalMailboxKeys()]),
+    // Once the registry has rows the console owns the flat keys (R28/R33), as in the vault routes.
+    refuseSystemName: async (name) =>
+      FLAT_PRINCIPAL_MAILBOX_KEYS.has(name) && (await principalMailboxStore.hasAnyRow()) ? FLAT_KEYS_MANAGED_MESSAGE : null,
     logger,
   });
   // Injected after construction because the ExecutionLayer is created before registryService

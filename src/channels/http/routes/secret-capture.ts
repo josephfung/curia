@@ -149,6 +149,8 @@ export async function secretCaptureRoutes(
           return reply.status(410).send({ error: 'This capture link has expired or already been used.' });
         case 'invalid_json':
           return reply.status(400).send({ error: 'Value must be valid JSON for this link.' });
+        case 'refused':
+          return reply.status(409).send({ error: result.message });
         case 'invalid_shape':
           // A card that failed validation names its reason (the copy never echoes the value);
           // a card posted to a plain link, or a value posted to a card link, has none.

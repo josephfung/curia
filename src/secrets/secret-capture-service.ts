@@ -158,6 +158,10 @@ export interface SecretCaptureServiceOptions {
   /** Returns the live allowlist for system captures (declared secrets ∪ channel keys).
    *  A thunk (not a static set) so it reflects the registry state at mint time. */
   getAllowedSystemNames: () => ReadonlySet<string>;
+  /** A reason an allowed system name may not be captured right now, or null (#2475, R33):
+   *  the flat principal-mailbox keys once the registry owns them. Checked at mint and again
+   *  at redeem, since a link minted earlier can be submitted later. */
+  refuseSystemName?: (name: string) => Promise<string | null>;
   /** Logger for the one operator-actionable failure mode: a token stranded consumed-but-unsaved
    *  when the post-vault-failure rollback itself fails. Optional so tests can omit it. */
   logger?: Logger;
@@ -194,6 +198,8 @@ export interface CapturedContext {
 export type RedeemOutcome =
   | { status: 'ok'; captured: CapturedContext }
   | { status: 'expired' | 'not_found' | 'invalid_json' }
+  // The name may not be captured any more (refuseSystemName). The token is left unspent.
+  | { status: 'refused'; message: string }
   // The submission did not fit the link: a card that failed validation (reason set), or a value
   // posted to a card link or a card posted to a plain one (no reason). The token is left unspent.
   | { status: 'invalid_shape'; reason?: CardValidationReason };
@@ -394,6 +400,8 @@ export class SecretCaptureService implements SecretCaptureMinter {
 
   async mintSystemSecret(args: MintNameArgs): Promise<MintResult> {
     const secretName = resolveSystemSecretName(args.rawName, this.options.getAllowedSystemNames());
+    const refusal = await this.options.refuseSystemName?.(secretName);
+    if (refusal) throw new Error(refusal);
     const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string', args.origin);
     return { rawToken, secretName, expiresAt };
   }
@@ -446,9 +454,10 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const peek = await this.pool.query<{
       value_format: CaptureValueFormat;
       capture_template: CaptureTemplate | null;
+      secret_name: string;
       spent: boolean;
     }>(
-      `SELECT value_format, capture_template,
+      `SELECT value_format, capture_template, secret_name,
               (consumed_at IS NOT NULL OR expires_at <= now()) AS spent
          FROM secret_capture_tokens WHERE token_hash = $1`,
       [tokenHash],
@@ -459,6 +468,9 @@ export class SecretCaptureService implements SecretCaptureMinter {
     // A card link takes card fields through redeemCard, which validates them. A raw value
     // here would bypass that and store arbitrary JSON as a card.
     if (row.capture_template) return { status: 'invalid_shape' };
+    // Checked before the claim, so a refused submission does not spend the token.
+    const refusal = row.secret_name ? await this.options.refuseSystemName?.(row.secret_name) : null;
+    if (refusal) return { status: 'refused', message: refusal };
 
     let parsed: unknown;
     if (row.value_format === 'json') {

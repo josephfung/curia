@@ -213,6 +213,13 @@ describe('secret-capture routes', () => {
       expect(res.statusCode).toBe(404);
     });
 
+    it('maps refused → 409 with the reason (#2475, R33)', async () => {
+      app = await build(makeFakeService({ redeem: { status: 'refused', message: "Managed in the console under Principal's mailboxes." } }));
+      const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'v' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toContain("Principal's mailboxes");
+    });
+
     it('maps invalid_json → 400', async () => {
       app = await build(makeFakeService({ redeem: { status: 'invalid_json' } }));
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'not json' } });
