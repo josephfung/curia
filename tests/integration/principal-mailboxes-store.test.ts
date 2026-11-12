@@ -1,0 +1,117 @@
+// Integration test — PrincipalMailboxStore against real Postgres (#2475). Skips without DATABASE_URL.
+// This file is the only one that commits rows to principal_mailboxes, so it clears the table.
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import pg from 'pg';
+import pino from 'pino';
+import { PrincipalMailboxStore } from '../../src/principal-mailboxes/store.js';
+import type { PrincipalMailboxRecord } from '../../src/principal-mailboxes/types.js';
+
+const DATABASE_URL = process.env.DATABASE_URL;
+const describeIf = DATABASE_URL ? describe : describe.skip;
+const logger = pino({ level: 'silent' });
+
+function rec(id: string, over: Partial<Omit<PrincipalMailboxRecord, 'removedAt'>> = {}): Omit<PrincipalMailboxRecord, 'removedAt'> {
+  return {
+    id,
+    label: id,
+    address: `${id}@example.com`,
+    provider: 'google',
+    isDefault: false,
+    triageStartAt: null,
+    addedIdentityId: null,
+    ...over,
+  };
+}
+
+describeIf('PrincipalMailboxStore', () => {
+  let pool: pg.Pool;
+  let store: PrincipalMailboxStore;
+
+  beforeAll(() => {
+    pool = new pg.Pool({ connectionString: DATABASE_URL });
+    store = new PrincipalMailboxStore(pool, logger);
+  });
+
+  beforeEach(async () => {
+    await pool.query('DELETE FROM principal_mailboxes');
+  });
+
+  afterAll(async () => {
+    await pool.query('DELETE FROM principal_mailboxes');
+    await pool.end();
+  });
+
+  it('setDefault moves the default in one transaction', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await store.insert(rec('personal'));
+    await store.setDefault('personal');
+    const live = await store.listLive();
+    expect(live.map((r) => [r.id, r.isDefault])).toEqual([
+      ['personal', true],
+      ['work', false],
+    ]);
+  });
+
+  it('setDefault of an unknown id throws and leaves the old default in place', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await expect(store.setDefault('nope')).rejects.toThrow();
+    expect((await store.getAny('work'))?.isDefault).toBe(true);
+  });
+
+  it('tombstone sets removed_at and hands default to newDefaultId', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await store.insert(rec('personal'));
+    await store.tombstone('work', 'personal');
+    const work = await store.getAny('work');
+    expect(work?.removedAt).toBeInstanceOf(Date);
+    expect(work?.isDefault).toBe(false);
+    expect((await store.getAny('personal'))?.isDefault).toBe(true);
+  });
+
+  it('tombstone of the default with others live and no newDefaultId throws', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await store.insert(rec('personal'));
+    await expect(store.tombstone('work', null)).rejects.toThrow();
+    expect((await store.getAny('work'))?.removedAt).toBeNull();
+  });
+
+  it('tombstone of the only mailbox needs no newDefaultId', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await store.tombstone('work', null);
+    expect(await store.listLive()).toEqual([]);
+  });
+
+  it('listLive excludes removed rows', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await store.insert(rec('personal'));
+    await store.tombstone('personal', null);
+    expect((await store.listLive()).map((r) => r.id)).toEqual(['work']);
+  });
+
+  it('getAny returns removed rows and null for unknown ids', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await store.tombstone('work', null);
+    expect((await store.getAny('work'))?.removedAt).toBeInstanceOf(Date);
+    expect(await store.getAny('nope')).toBeNull();
+  });
+
+  it('relabel changes the label only', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await store.relabel('work', 'Work mail');
+    const r = await store.getAny('work');
+    expect(r?.label).toBe('Work mail');
+    expect(r?.address).toBe('work@example.com');
+  });
+
+  it('insert joins a caller-supplied transaction client', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await store.insert(rec('work', { isDefault: true }), client);
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+    expect(await store.getAny('work')).toBeNull();
+  });
+});
