@@ -170,6 +170,8 @@ export function PrincipalMailboxesSection() {
   const [grantId, setGrantId] = useState('');
   const [makeDefault, setMakeDefault] = useState(false);
   const [tested, setTested] = useState<{ email: string; provider: string; grantId: string } | null>(null);
+  // The grant input as typed now: a Test answer for an older value is dropped, never shown.
+  const grantInput = useRef('');
 
   // Only the latest load writes state (same guard as EmailAccountsSection).
   const loadSeq = useRef(0);
@@ -196,10 +198,12 @@ export function PrincipalMailboxesSection() {
   }, []);
 
   const test = () => run(async () => {
-    const res = await apiFetch(`${BASE}/test`, jsonInit('POST', { grant_id: grantId.trim() }));
+    const asked = grantId.trim();
+    const res = await apiFetch(`${BASE}/test`, jsonInit('POST', { grant_id: asked }));
     if (!res.ok) throw new Error(await errorMessage(res));
     const d = await res.json() as { email: string; provider: string };
-    setTested({ ...d, grantId: grantId.trim() });
+    if (grantInput.current.trim() !== asked) return; // the grant changed while the test ran
+    setTested({ ...d, grantId: asked });
   }, 'Test failed');
 
   const add = () => run(async () => {
@@ -207,7 +211,7 @@ export function PrincipalMailboxesSection() {
       id: id.trim(), label: label.trim(), grant_id: grantId.trim(), make_default: makeDefault,
     }));
     if (!res.ok) throw new Error(await errorMessage(res));
-    setId(''); setLabel(''); setGrantId(''); setMakeDefault(false); setTested(null); // drop the grant from state
+    setId(''); setLabel(''); setGrantId(''); grantInput.current = ''; setMakeDefault(false); setTested(null); // drop the grant from state
     await load();
   }, 'Failed to add mailbox');
 
@@ -226,6 +230,8 @@ export function PrincipalMailboxesSection() {
   }, 'Failed to load the removal preview');
 
   const idOk = ID_RE.test(id.trim()) && id.trim() !== 'primary' && id.trim() !== 'default';
+  // Add sends the grant in the input, so the tested address must be that grant's.
+  const testedCurrent = tested !== null && tested.grantId === grantId.trim();
   // The deferred-migration fallback counts as the one mailbox: adding is refused until it
   // has moved into the list.
   const migrating = mailboxes.some(m => m.pending_migration);
@@ -298,6 +304,8 @@ export function PrincipalMailboxesSection() {
 
       {removing && (
         <RemovePanel
+          // Keyed by mailbox: a preview for another mailbox starts with fresh choices.
+          key={removing.mailbox.id}
           preview={removing}
           onCancel={() => setRemoving(null)}
           onDone={() => { setRemoving(null); void load(); }}
@@ -305,7 +313,8 @@ export function PrincipalMailboxesSection() {
       )}
 
       <p className="settings-page-sub" style={{ margin: '12px 0 0' }}>
-        Calendar changes take effect after a restart. Use Replace grant after reconnecting a
+        Calendar changes take effect after a restart, as does a replaced grant for calendar and
+        for checking whom the principal has written to. Use Replace grant after reconnecting a
         mailbox's account in Nylas.
       </p>
 
@@ -317,11 +326,11 @@ export function PrincipalMailboxesSection() {
           onChange={e => setLabel(e.target.value)} />
         <input type="password" autoComplete="off" placeholder="Nylas grant ID (from the Nylas dashboard)"
           value={grantId} aria-label="Grant ID"
-          onChange={e => { setGrantId(e.target.value); setTested(null); }} />
+          onChange={e => { grantInput.current = e.target.value; setGrantId(e.target.value); setTested(null); }} />
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button type="button" className="btn btn-secondary btn-sm" disabled={busy || !grantId.trim()}
             onClick={() => void test()}>Test</button>
-          {tested && <span>Grant belongs to <strong>{tested.email}</strong> ({tested.provider})</span>}
+          {testedCurrent && <span>Grant belongs to <strong>{tested.email}</strong> ({tested.provider})</span>}
         </div>
         {mailboxes.length > 0 && (
           <label style={{ fontSize: 12 }}>
@@ -329,7 +338,7 @@ export function PrincipalMailboxesSection() {
           </label>
         )}
         <button type="button" className="btn btn-primary btn-sm"
-          disabled={busy || !tested || !label.trim() || !id.trim() || (!idOk)}
+          disabled={busy || !testedCurrent || !label.trim() || !id.trim() || (!idOk)}
           onClick={() => void add()}>Add mailbox</button>
       </div>
       )}

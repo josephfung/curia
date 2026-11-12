@@ -9,7 +9,7 @@ import { createRoot, type Root } from 'react-dom/client';
 type Call = { path: string; init?: RequestInit };
 const mocks = vi.hoisted(() => ({
   calls: [] as Call[],
-  respond: (_path: string, _init?: RequestInit): Response => new Response('{}', { status: 200 }),
+  respond: (_path: string, _init?: RequestInit): Response | Promise<Response> => new Response('{}', { status: 200 }),
 }));
 
 vi.mock('../api.js', () => ({
@@ -101,6 +101,44 @@ describe('PrincipalMailboxesSection', () => {
     expect(container.textContent).toContain('google');
     const test = mocks.calls.find(c => c.path.endsWith('/test'))!;
     expect(JSON.parse(test.init!.body as string)).toEqual({ grant_id: 'g-123' });
+  });
+
+  it('drops a Test answer for a grant that was changed while the test ran', async () => {
+    let answer!: (r: Response) => void;
+    const base = mocks.respond;
+    mocks.respond = (path, init) => path.endsWith('/test')
+      ? new Promise<Response>((resolve) => { answer = resolve; })
+      : base(path, init);
+    await mount();
+    await type('Mailbox id', 'work2');
+    await type('Label', 'Work 2');
+    await type('Grant ID', 'g-a');
+    await click('Test');
+    await type('Grant ID', 'g-b');
+    await act(async () => { answer(json({ email: 'a@example.com', provider: 'google' })); });
+    await settle();
+    expect(container.textContent).not.toContain('a@example.com');
+    const add = [...container.querySelectorAll('button')].find(b => b.textContent === 'Add mailbox')!;
+    expect(add.disabled).toBe(true);
+  });
+
+  it('starts a removal of another mailbox with fresh choices', async () => {
+    mocks.respond = (path) => {
+      if (path.endsWith('/work/removal-preview')) return json(preview());
+      if (path.endsWith('/personal/removal-preview')) {
+        return json(preview({ mailbox: personal, isDefault: false, otherLive: [work], stillOwnedDefault: false }));
+      }
+      return json({ mailboxes: [work, personal] });
+    };
+    await mount();
+    await click('Remove');
+    await act(async () => { (byLabel('Still mine: yes') as HTMLInputElement).click(); });
+    expect((byLabel('Still mine: yes') as HTMLInputElement).checked).toBe(true);
+    const removeButtons = [...container.querySelectorAll('button')].filter(b => b.textContent === 'Remove');
+    await act(async () => { removeButtons[1]!.click(); });
+    await settle();
+    expect(container.textContent).toContain('Remove Personal');
+    expect((byLabel('Still mine: no') as HTMLInputElement).checked).toBe(true);
   });
 
   it('remove asks for a new default when removing the default', async () => {
