@@ -46,8 +46,12 @@ describeIf('123_principal_mailboxes', () => {
   });
 
   afterAll(async () => {
-    client.release();
-    await pool.end();
+    // afterAll runs even when beforeAll throws, so the client may never have been taken.
+    try {
+      client?.release();
+    } finally {
+      await pool.end();
+    }
   });
 
   it('allows one live default', async () => {
