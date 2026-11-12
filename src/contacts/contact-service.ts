@@ -1336,7 +1336,8 @@ export class ContactService {
   /**
    * Resolve an inbound sender by channel + identifier.
    * Joins contacts with contact_channel_identities to find the matching contact.
-   * Returns null if no match.
+   * Returns null if no match. `verified` is true only for a verified identity whose status
+   * is 'active': a defunct or bounced identity still resolves, unverified (R32, #2475).
    */
   async resolveByChannelIdentity(
     channel: string,
@@ -2802,8 +2803,11 @@ class PostgresContactBackend implements ContactServiceBackend {
       verified: boolean;
       contact_confidence: string;  // NUMERIC returned as string by node-pg
     }>(
+      // A defunct or bounced identity still resolves the contact but confers no verified
+      // trust (R32, #2475): e.g. an address the principal said is no longer theirs.
       `SELECT c.id, c.display_name, c.role, c.system_role,
-              c.tier, c.kind, c.kg_node_id, cci.verified, c.contact_confidence
+              c.tier, c.kind, c.kg_node_id,
+              (cci.verified AND cci.status = 'active') AS verified, c.contact_confidence
        FROM contact_channel_identities cci
        JOIN contacts c ON c.id = cci.contact_id
        WHERE cci.channel = $1
@@ -3814,7 +3818,8 @@ class InMemoryContactBackend implements ContactServiceBackend {
             tier: contact.tier,
             kind: contact.kind,
             kgNodeId: contact.kgNodeId,
-            verified: identity.verified,
+            // Only an active identity confers verified trust (R32; mirrors Postgres).
+            verified: identity.verified && identity.status === 'active',
             contactConfidence: contact.contactConfidence ?? 0,
           };
         }

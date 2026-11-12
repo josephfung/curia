@@ -484,6 +484,25 @@ describe('ContactService', () => {
       expect(resolved!.verified).toBe(true);
     });
 
+    it.each([
+      ['active', true],
+      ['defunct', false],
+      ['bounced', false],
+    ] as const)('a verified identity with status %s resolves with verified=%s (R32)', async (status, expected) => {
+      const contact = await service.createContact({ displayName: `Status ${status}`, source: 'test' });
+      const identity = await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: `status-${status}@example.com`,
+        source: 'ceo_stated',
+      });
+      if (status !== 'active') await service.setIdentityStatus(identity.id, status);
+      const resolved = await service.resolveByChannelIdentity('email', `status-${status}@example.com`);
+      // The contact still resolves; only the trust flag drops.
+      expect(resolved?.contactId).toBe(contact.id);
+      expect(resolved!.verified).toBe(expected);
+    });
+
     it('returns null for unknown sender', async () => {
       const resolved = await service.resolveByChannelIdentity('email', 'nobody@example.com');
       expect(resolved).toBeNull();

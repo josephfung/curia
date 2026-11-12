@@ -119,6 +119,24 @@ describeIf('Contacts Integration', () => {
     expect(resolved!.verified).toBe(true);
   });
 
+  it.each([
+    ['active', true],
+    ['defunct', false],
+    ['bounced', false],
+  ] as const)('a verified identity with status %s resolves with verified=%s (R32)', async (status, expected) => {
+    const contact = await createTrackedContact({ displayName: `Status ${status} Test`, source: 'integration-test' });
+    const identity = await contactService.linkIdentity({
+      contactId: contact.id,
+      channel: 'email',
+      channelIdentifier: `status-${status}-r32@example.com`,
+      source: 'ceo_stated',
+    });
+    if (status !== 'active') await contactService.setIdentityStatus(identity.id, status);
+    const resolved = await contactService.resolveByChannelIdentity('email', `status-${status}-r32@example.com`);
+    expect(resolved?.contactId).toBe(contact.id);
+    expect(resolved!.verified).toBe(expected);
+  });
+
   it('finds contacts by name case-insensitively', async () => {
     await createTrackedContact({
       displayName: 'Case Test Person',
