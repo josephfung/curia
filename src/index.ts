@@ -96,10 +96,10 @@ import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.j
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
-import { migrateFlatPrincipalMailbox } from './principal-mailboxes/migrate-flat-mailbox.js';
+import { migrateFlatPrincipalMailbox, migrationFailureReason } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
-import { grantSafeErrorFields } from './principal-mailboxes/error-fields.js';
+import { grantSafeErrorFields, mayCarryGrantId } from './principal-mailboxes/error-fields.js';
 import { FLAT_KEYS_MANAGED_MESSAGE, FLAT_PRINCIPAL_MAILBOX_KEYS } from './principal-mailboxes/secrets.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
 import { NylasPrincipalMailbox } from './contacts/nylas-principal-mailbox.js';
@@ -1196,6 +1196,15 @@ async function main(): Promise<void> {
     apiKey: () => config.nylasApiKey,
     logger,
   });
+  // Curia's own account grants (F5/F6): never registered as, or added as, a principal mailbox.
+  const curiaAccountGrantIds = async (): Promise<string[]> => {
+    const ids: string[] = [];
+    for (const a of await emailAccountsRepo.list()) {
+      const g = (await secretsService.get(emailAccountGrantSecretName(a.name)))?.trim();
+      if (g) ids.push(g);
+    }
+    return ids;
+  };
   // The same migration is retried on the health-canary tick while the fallback is active (#2475).
   const retryMailboxMigration = config.nylasApiKey
     ? (() => {
@@ -1213,6 +1222,9 @@ async function main(): Promise<void> {
                   i.channelIdentifier.trim().toLowerCase() === address);
               }
             : undefined,
+          curiaAccountAddresses: async () => (await emailAccountsRepo.list()).map(a => a.selfEmail),
+          curiaAccountGrantIds,
+          onDeferred: (reason) => principalMailboxes.setPendingMigrationReason(reason),
           logger,
         });
       })()
@@ -1227,8 +1239,13 @@ async function main(): Promise<void> {
         principalMailboxes.setFallback(null);
       }
     } catch (err) {
-      // Class and status only: a Nylas error can carry the grant id (R20).
-      logger.warn(grantSafeErrorFields(err), 'Principal mailbox migration failed; serving the flat grant until it succeeds');
+      // Class and status only for a Nylas error, which can carry the grant id (R20); the
+      // message of any other error (database, vault) is what the operator needs.
+      logger.warn(
+        err instanceof Error && !mayCarryGrantId(err) ? { ...grantSafeErrorFields(err), errMessage: err.message } : grantSafeErrorFields(err),
+        'Principal mailbox migration failed; serving the flat grant until it succeeds',
+      );
+      principalMailboxes.setPendingMigrationReason(migrationFailureReason(err));
       try {
         const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
         if (flatGrant) principalMailboxes.setFallback({ id: 'mailbox', grantId: flatGrant });
@@ -1261,14 +1278,7 @@ async function main(): Promise<void> {
         principalContactId: principalContact.id,
         curiaAccountAddresses: async () => (await emailAccountsRepo.list()).map(a => a.selfEmail),
         // F6: a principal mailbox may never reuse one of Curia's own account grants.
-        curiaAccountGrantIds: async () => {
-          const ids: string[] = [];
-          for (const a of await emailAccountsRepo.list()) {
-            const g = (await secretsService.get(emailAccountGrantSecretName(a.name)))?.trim();
-            if (g) ids.push(g);
-          }
-          return ids;
-        },
+        curiaAccountGrantIds,
         reconcileFlatKeys: reconcileFlatMirror,
         lookupGrant: (grantId) => {
           if (!principalMailboxApiKey) return Promise.reject(new Error('No Nylas API key configured'));
@@ -2696,6 +2706,9 @@ async function main(): Promise<void> {
   // canary reports keyless mode (#2445). Google Workspace MCP uses OAuth env vars (no credential file)
   // — pass undefined; check falls back to a session ping if path is null.
   const healthConfig = resolveHealthConfig(yamlConfig.health);
+  if (!outboundGateway) {
+    logger.warn('Principal mailbox outage alerts are off: no outbound gateway, so a failing mailbox shows only on the health status');
+  }
   const healthService = new HealthService({
     db: pool,
     bus,
@@ -3725,6 +3738,7 @@ async function main(): Promise<void> {
         }
       : undefined,
     principalRegistryHasRows: () => principalMailboxStore.hasAnyRow(),
+    livePrincipalMailboxIds: async () => (await principalMailboxStore.listLive()).map((m) => m.id),
     setupRequiredAtBoot,
     bootStartedAt,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).

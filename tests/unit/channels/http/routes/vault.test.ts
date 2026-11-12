@@ -162,7 +162,7 @@ function fakeRegistry(declared: string[] = [DECLARED_SECRET], tools: RegistryEnt
 async function build(
   secretsService: VaultSecretsPort,
   registryService: RegistryService,
-  extra: { usage?: SecretUsagePort; bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }>; principalFallbackActive?: () => Promise<boolean>; principalRegistryHasRows?: () => Promise<boolean> } = {},
+  extra: { usage?: SecretUsagePort; bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }>; principalFallbackActive?: () => Promise<boolean>; principalRegistryHasRows?: () => Promise<boolean>; livePrincipalMailboxIds?: () => Promise<string[]> } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify();
   await app.register(vaultRoutes, {
@@ -176,6 +176,7 @@ async function build(
       : undefined,
     principalFallbackActive: extra.principalFallbackActive,
     principalRegistryHasRows: extra.principalRegistryHasRows,
+    livePrincipalMailboxIds: extra.livePrincipalMailboxIds,
     bus: extra.bus ?? fakeBus().bus,
     webAppBootstrapSecret: BOOTSTRAP,
     sessions: new Map(),
@@ -466,11 +467,22 @@ describe('vault routes', () => {
     expect((await put(app, 'principal.mailbox.work.other', { value: 'g' })).statusCode).toBe(400);
   });
 
-  it('still lets the Secrets page clear a per-mailbox grant (#2475)', async () => {
+  it('still lets the Secrets page clear a removed mailbox\'s grant (#2475)', async () => {
     const secrets = fakeSecrets(['principal.mailbox.work.nylas_grant_id']);
-    app = await build(secrets, fakeRegistry());
+    app = await build(secrets, fakeRegistry(), { livePrincipalMailboxIds: async () => ['personal'] });
     expect((await del(app, 'principal.mailbox.work.nylas_grant_id')).statusCode).toBe(200);
     expect(secrets.deletes).toEqual(['principal.mailbox.work.nylas_grant_id']);
+  });
+
+  it('refuses to delete a live mailbox\'s grant, even with force (silent-failure 4)', async () => {
+    const secrets = fakeSecrets(['principal.mailbox.work.nylas_grant_id']);
+    app = await build(secrets, fakeRegistry(), { livePrincipalMailboxIds: async () => ['work'] });
+    for (const name of ['principal.mailbox.work.nylas_grant_id', 'principal.mailbox.work.nylas_grant_id?force=true']) {
+      const res = await app.inject({ method: 'DELETE', url: `/api/vault/secrets/${name}`, headers: auth });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toContain('Remove the mailbox');
+    }
+    expect(secrets.deletes).toEqual([]);
   });
 
   it('audits set and delete in two stages by key name with no value', async () => {

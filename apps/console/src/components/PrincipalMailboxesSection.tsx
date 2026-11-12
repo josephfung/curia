@@ -16,6 +16,8 @@ interface Mailbox {
   address: string;
   isDefault: boolean;
   pending_migration?: boolean;
+  /** Why the migration has not happened yet, when Curia knows. */
+  pending_migration_reason?: string;
 }
 
 interface RemovalPreview {
@@ -288,7 +290,9 @@ export function PrincipalMailboxesSection() {
             {m.pending_migration ? (
               <span className="settings-page-sub">
                 Curia is still moving this mailbox into the list. Curia retries at each restart and
-                once a day; if it doesn't finish, check the Nylas API key and the grant.
+                once a day; {m.pending_migration_reason
+                  ? <>it has not finished because: {m.pending_migration_reason}.</>
+                  : "if it doesn't finish, check the Nylas API key and the grant."}
               </span>
             ) : (
             <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>

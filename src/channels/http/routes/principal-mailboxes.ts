@@ -25,7 +25,7 @@ import { RemovedMailboxError, UnknownMailboxError } from '../../../principal-mai
 import { grantLookupFailureDetail, grantSafeErrorFields, mayCarryGrantId } from '../../../principal-mailboxes/error-fields.js';
 
 export interface PrincipalMailboxesRouteOptions {
-  mailboxes: Pick<PrincipalMailboxes, 'list' | 'isFallbackActive'>;
+  mailboxes: Pick<PrincipalMailboxes, 'list' | 'isFallbackActive' | 'pendingMigrationReason'>;
   store: Pick<PrincipalMailboxStore, 'relabel'>;
   admin: Pick<PrincipalMailboxAdmin, 'add' | 'setDefault' | 'replaceGrant' | 'removalPreview' | 'remove'>;
   /** Absent when no Nylas API key is configured: add and test then answer 503. */
@@ -84,7 +84,13 @@ export async function principalMailboxesRoutes(
       const list = await mailboxes.list();
       // Deferred migration: the fallback is the only entry and has no registry row yet.
       const pending = list.length > 0 && (await mailboxes.isFallbackActive());
-      return reply.send({ mailboxes: list.map((m) => (pending ? { ...m, pending_migration: true } : m)) });
+      // Why it is still pending (operator-facing; never an address or grant id).
+      const reason = pending ? mailboxes.pendingMigrationReason() : null;
+      return reply.send({
+        mailboxes: list.map((m) => (pending
+          ? { ...m, pending_migration: true, ...(reason ? { pending_migration_reason: reason } : {}) }
+          : m)),
+      });
     } catch (err) {
       return fail(request, reply, err, 'Listing principal mailboxes');
     }

@@ -51,6 +51,8 @@ function toView(r: PrincipalMailboxRecord): PrincipalMailboxView {
 
 export class PrincipalMailboxes {
   private fallback: { id: string; grantId: string } | null = null;
+  /** Why the flat mailbox is still not in the registry, for the console and health. */
+  private migrationReason: string | null = null;
   private readonly log: Logger;
 
   constructor(private readonly deps: PrincipalMailboxesDeps) {
@@ -61,6 +63,17 @@ export class PrincipalMailboxes {
    *  Its grant is re-read from `ceo_nylas_grant_id` on every call; `grantId` is the boot value. */
   setFallback(f: { id: string; grantId: string } | null): void {
     this.fallback = f;
+    if (f === null) this.migrationReason = null;
+  }
+
+  /** Records why the last migration attempt left the flat mailbox out of the registry. */
+  setPendingMigrationReason(reason: string | null): void {
+    this.migrationReason = reason;
+  }
+
+  /** Why the deferred mailbox is not migrated yet; null when no fallback is served or no reason is known. */
+  pendingMigrationReason(): string | null {
+    return this.fallback ? this.migrationReason : null;
   }
 
   private fallbackView(): PrincipalMailboxView | null {

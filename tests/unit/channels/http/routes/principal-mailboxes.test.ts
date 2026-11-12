@@ -24,7 +24,7 @@ const preview: RemovalPreview = {
 
 function makeOptions(over: Partial<PrincipalMailboxesRouteOptions> = {}): PrincipalMailboxesRouteOptions {
   return {
-    mailboxes: { list: vi.fn(async () => [view()]), isFallbackActive: vi.fn(async () => false) },
+    mailboxes: { list: vi.fn(async () => [view()]), isFallbackActive: vi.fn(async () => false), pendingMigrationReason: vi.fn(() => null) },
     store: { relabel: vi.fn(async () => {}) },
     admin: {
       add: vi.fn(async () => ({ ok: true as const, mailbox: view() })),
@@ -75,9 +75,11 @@ describe('principal-mailboxes routes', () => {
       mailboxes: {
         list: vi.fn(async () => [view({ id: 'mailbox', label: 'Mailbox', address: '' })]),
         isFallbackActive: vi.fn(async () => true),
+        pendingMigrationReason: vi.fn(() => 'The flat grant is not a Google account'),
       },
     }));
     const res = await req('GET', '/api/registry/principal-mailboxes');
+    expect(res.json().mailboxes[0].pending_migration_reason).toBe('The flat grant is not a Google account');
     expect(res.json().mailboxes).toEqual([expect.objectContaining({ id: 'mailbox', pending_migration: true })]);
   });
 

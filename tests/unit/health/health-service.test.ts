@@ -221,6 +221,8 @@ describe('HealthService.getStatus()', () => {
         gatewayClient: vi.fn(async (id: string) => boxes.find((b) => b.view.id === id)!.client),
         calendarClient: vi.fn(async (id: string) => boxes.find((b) => b.view.id === id)!.calendar),
         isFallbackActive: vi.fn().mockResolvedValue(false),
+        pendingMigrationReason: vi.fn((): string | null => null),
+        setPendingMigrationReason: vi.fn(),
       };
       const mailboxOutageNotifier = { record: vi.fn().mockResolvedValue(undefined) };
       return { principalMailboxes, mailboxOutageNotifier, ...extra };
@@ -455,10 +457,78 @@ describe('HealthService.getStatus()', () => {
           retryMailboxMigration: vi.fn(),
         }) as never);
         const pending = svc.runCanaries();
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(30_000);
         const results = await pending;
         expect(results.find((r) => r.name === 'principal_mailboxes')?.status).toBe('fail');
         expect(results.map((r) => r.name)).toContain('signal');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('while the fallback is served, reports principal_mailbox_migration as failing with the reason (silent-failure 5)', async () => {
+      const deps = mailboxDeps([mailbox('mailbox', { isDefault: true })]);
+      deps.principalMailboxes.isFallbackActive.mockResolvedValue(true);
+      const setPendingMigrationReason = vi.fn();
+      deps.principalMailboxes.pendingMigrationReason.mockReturnValue('The flat grant is not a Google account');
+      const svc = new HealthService(makeDeps({
+        ...deps,
+        principalMailboxes: { ...deps.principalMailboxes, setFallback: vi.fn(), setPendingMigrationReason },
+        retryMailboxMigration: vi.fn().mockRejectedValue(Object.assign(new Error('x'), { name: 'NylasApiError', statusCode: 401 })),
+      }) as never);
+      const r = (await svc.runCanaries()).find((x) => x.name === 'principal_mailbox_migration');
+      expect(r?.status).toBe('fail');
+      expect(r?.detail).toContain('The flat grant is not a Google account');
+      expect(setPendingMigrationReason).toHaveBeenCalledWith(expect.stringContaining('NylasApiError, HTTP 401'));
+    });
+
+    it('reports a failed or no_grant flat-key repair as a failing check on the next run (silent-failure 6)', async () => {
+      const reconcile = vi.fn().mockResolvedValueOnce('no_grant').mockRejectedValueOnce(new Error('relation locked')).mockResolvedValue('in_sync');
+      const svc = new HealthService(makeDeps({ ...mailboxDeps([mailbox('work', { isDefault: true })]), reconcileFlatMailboxKeys: reconcile }) as never);
+      expect((await svc.runCanaries()).find((r) => r.name === 'principal_mailbox_flat_mirror')).toBeUndefined();
+      const second = (await svc.runCanaries()).find((r) => r.name === 'principal_mailbox_flat_mirror');
+      expect(second?.detail).toContain('no grant');
+      const third = (await svc.runCanaries()).find((r) => r.name === 'principal_mailbox_flat_mirror');
+      expect(third?.detail).toContain('Error');
+      expect((await svc.runCanaries()).find((r) => r.name === 'principal_mailbox_flat_mirror')).toBeUndefined();
+    });
+
+    it('a default mailbox that answers while calendar runs on the boot grant fails, without heartbeat or recovery (silent-failure 3)', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+      vi.stubGlobal('fetch', fetchMock);
+      const config = { ...DEFAULT_HEALTH_CONFIG, heartbeats: { ...DEFAULT_HEALTH_CONFIG.heartbeats, nylas_calendar: 'https://hb.example.com/cal' } };
+      const deps = mailboxDeps([mailbox('work', { isDefault: true })]);
+      const svc = new HealthService(makeDeps({ ...deps, config, calendarBoundGrant: () => 'g-boot' }) as never);
+      const r = (await svc.runCanaries()).find((x) => x.name === 'principal_mailbox:work');
+      expect(r?.status).toBe('fail');
+      expect(r?.detail).toContain('restart Curia');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(deps.mailboxOutageNotifier.record).not.toHaveBeenCalled();
+    });
+
+    it('setup-status probes never send an outage email (silent-failure 13)', async () => {
+      const deps = mailboxDeps([mailbox('work', { isDefault: true, messages: vi.fn().mockRejectedValue(new Error('x')) })]);
+      const svc = new HealthService(makeDeps(deps) as never);
+      expect(await svc.principalMailboxReady()).toBe('pending');
+      expect(deps.mailboxOutageNotifier.record).not.toHaveBeenCalled();
+    });
+
+    it('principalMailboxReady is restart_required once every mailbox was removed after boot (F2)', async () => {
+      const svc = new HealthService(makeDeps({ ...mailboxDeps([]), calendarBoundGrant: () => 'g-removed' }) as never);
+      expect(await svc.principalMailboxReady()).toBe('restart_required');
+      const fresh = new HealthService(makeDeps({ ...mailboxDeps([]), calendarBoundGrant: () => null }) as never);
+      expect(await fresh.principalMailboxReady()).toBe('pending');
+    });
+
+    it('names a probe timeout as such (silent-failure 8)', async () => {
+      vi.useFakeTimers();
+      try {
+        const b = mailbox('work', { isDefault: true, messages: vi.fn(() => new Promise(() => {})) });
+        const svc = new HealthService(makeDeps(mailboxDeps([b])) as never);
+        const pending = svc.runCanaries();
+        await vi.advanceTimersByTimeAsync(10_000);
+        const r = (await pending).find((x) => x.name === 'principal_mailbox:work');
+        expect(r?.detail).toContain('timed out after 5 s');
       } finally {
         vi.useRealTimers();
       }
