@@ -66,15 +66,29 @@ export class PrincipalMailboxStore {
     return row ? toRecord(row) : null;
   }
 
-  /** Pass `client` to join the caller's transaction. */
+  /**
+   * Insert a mailbox. An `isDefault` record takes over as the one live default: the current
+   * default is cleared and the row inserted in ONE transaction, so a failed insert leaves the
+   * old default in place. Pass `client` to join the caller's transaction (it is then the
+   * transaction and this method neither begins nor commits).
+   */
   async insert(r: Omit<PrincipalMailboxRecord, 'removedAt'>, client?: PoolClient): Promise<void> {
-    const db = client ?? this.pool;
-    await db.query(
-      `INSERT INTO principal_mailboxes
-         (id, label, address, provider, is_default, triage_start_at, added_identity_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [r.id, r.label, r.address, r.provider, r.isDefault, r.triageStartAt, r.addedIdentityId],
-    );
+    const run = async (db: Pick<Pool, 'query'>): Promise<void> => {
+      if (r.isDefault) {
+        await db.query(
+          `UPDATE principal_mailboxes SET is_default = false, updated_at = now()
+            WHERE is_default AND removed_at IS NULL`,
+        );
+      }
+      await db.query(
+        `INSERT INTO principal_mailboxes
+           (id, label, address, provider, is_default, triage_start_at, added_identity_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [r.id, r.label, r.address, r.provider, r.isDefault, r.triageStartAt, r.addedIdentityId],
+      );
+    };
+    if (client) await run(client);
+    else await this.inTransaction(run);
     this.logger.info({ mailboxId: r.id, isDefault: r.isDefault }, 'Principal mailbox registered');
   }
 

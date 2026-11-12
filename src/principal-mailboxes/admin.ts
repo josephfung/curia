@@ -24,7 +24,8 @@ export type AddMailboxRefusal =
   | 'grant_in_use'
   | 'address_in_use'
   | 'curia_account_address'
-  | 'grant_unreadable';
+  | 'grant_unreadable'
+  | 'address_is_another_contact';
 
 export interface RemovalPreview {
   mailbox: PrincipalMailboxView;
@@ -56,7 +57,13 @@ export interface PrincipalMailboxAdminDeps {
   };
   contacts: Pick<
     ContactService,
-    'linkIdentity' | 'unlinkIdentity' | 'getContactWithIdentities' | 'updateContactFields'
+    'linkIdentity'
+    | 'unlinkIdentity'
+    | 'getContactWithIdentities'
+    | 'updateContactFields'
+    | 'verifyIdentity'
+    | 'setIdentityStatus'
+    | 'resolveByChannelIdentity'
   >;
   principalContactId: string;
   curiaAccountAddresses: () => Promise<string[]>;
@@ -133,17 +140,30 @@ export class PrincipalMailboxAdmin {
       return refuse('curia_account_address', `${address} is one of Curia's own email accounts`);
     }
 
+    // Identity checks before any write. The address may already be an identity of the
+    // principal (reused, never unlinked on removal) or of another contact (refused).
+    const principal = await this.deps.contacts.getContactWithIdentities(this.deps.principalContactId);
+    if (!principal) throw new Error(`Principal contact not found: ${this.deps.principalContactId}`);
+    const existing = principal.identities.find(
+      (i) => i.channel === 'email' && lower(i.channelIdentifier) === address,
+    );
+    if (!existing) {
+      const owner = await this.deps.contacts.resolveByChannelIdentity('email', address);
+      if (owner && owner.contactId !== this.deps.principalContactId) {
+        return refuse('address_is_another_contact', `${address} already belongs to another contact`);
+      }
+    }
+
     // Write order: secret, identity, row. A failure unwinds what this call created.
     const secretName = principalMailboxGrantSecretName(id);
     await this.deps.secrets.set(secretName, grantId);
     let addedIdentityId: string | null = null;
     try {
-      const principal = await this.deps.contacts.getContactWithIdentities(this.deps.principalContactId);
-      if (!principal) throw new Error(`Principal contact not found: ${this.deps.principalContactId}`);
-      const existing = principal.identities.some(
-        (i) => i.channel === 'email' && lower(i.channelIdentifier) === address,
-      );
-      if (!existing) {
+      if (existing) {
+        // Pre-existing: make it count as a verified, active principal identity, but it is not ours to unlink.
+        if (!existing.verified) await this.deps.contacts.verifyIdentity(existing.id);
+        if (existing.status !== 'active') await this.deps.contacts.setIdentityStatus(existing.id, 'active');
+      } else {
         const created = await this.deps.contacts.linkIdentity({
           contactId: this.deps.principalContactId,
           channel: 'email',
@@ -154,17 +174,16 @@ export class PrincipalMailboxAdmin {
         addedIdentityId = created.id;
       }
 
-      const first = live.length === 0;
+      // A default insert clears the old default in the same transaction (store.insert).
       await this.deps.store.insert({
         id,
         label,
         address,
         provider: 'google',
-        isDefault: first,
+        isDefault: live.length === 0 || input.makeDefault === true,
         triageStartAt: new Date(),
         addedIdentityId,
       });
-      if (!first && input.makeDefault) await this.deps.store.setDefault(id);
     } catch (err) {
       this.log.error({ err, mailboxId: id }, 'Adding a principal mailbox failed; undoing partial writes');
       await this.undoAdd(secretName, addedIdentityId);

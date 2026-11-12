@@ -18,6 +18,8 @@ function setup(opts: {
   grants?: Record<string, { email: string; provider: string }>;
   curia?: string[];
   maxLiveMailboxes?: number;
+  otherContacts?: Record<string, string>;
+  insertFails?: boolean;
   onRemoved?: Array<(id: string) => Promise<void>>;
 } = {}) {
   const records: PrincipalMailboxRecord[] = [...(opts.records ?? [])];
@@ -30,6 +32,8 @@ function setup(opts: {
     listLive: vi.fn(async () => records.filter((r) => !r.removedAt)),
     getAny: vi.fn(async (id: string) => records.find((r) => r.id === id) ?? null),
     insert: vi.fn(async (r: Omit<PrincipalMailboxRecord, 'removedAt'>) => {
+      if (opts.insertFails) throw new Error('insert failed');
+      if (r.isDefault) for (const x of records) if (!x.removedAt) x.isDefault = false;
       records.push({ ...r, removedAt: null });
     }),
     setDefault: vi.fn(async (id: string) => {
@@ -55,6 +59,12 @@ function setup(opts: {
       return i >= 0;
     }),
     getContactWithIdentities: vi.fn(async () => ({ contact, identities })),
+    verifyIdentity: vi.fn(async (id: string) => { identities.find((i) => i.id === id)!.verified = true; return {}; }),
+    setIdentityStatus: vi.fn(async (id: string, st: string) => { identities.find((i) => i.id === id)!.status = st; return {}; }),
+    resolveByChannelIdentity: vi.fn(async (_c: string, addr: string) => {
+      const o = opts.otherContacts?.[addr];
+      return o ? { contactId: o } : null;
+    }),
     updateContactFields: vi.fn(async (_id: string, f: { primaryEmail?: string }) => {
       if (f.primaryEmail) contact.primaryEmail = f.primaryEmail;
       return contact;
@@ -150,14 +160,48 @@ describe('PrincipalMailboxAdmin.add', () => {
     expect(secrets[principalMailboxGrantSecretName('work')]).toBe('g');
   });
 
-  it('does not relink an existing identity', async () => {
+  it('does not relink an existing verified active identity', async () => {
     const { admin, contacts, records } = setup({
       identities: [{ id: 'old', channel: 'email', channelIdentifier: 'Pat@Work.example.com', verified: true, status: 'active' }],
       grants: { g: google('pat@work.example.com') },
     });
     await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
     expect(contacts.linkIdentity).not.toHaveBeenCalled();
+    expect(contacts.verifyIdentity).not.toHaveBeenCalled();
+    expect(contacts.setIdentityStatus).not.toHaveBeenCalled();
     expect(records[0]!.addedIdentityId).toBeNull();
+  });
+
+  it('verifies and reactivates an existing principal identity without recording it as added', async () => {
+    const { admin, contacts, records, identities } = setup({
+      identities: [{ id: 'old', channel: 'email', channelIdentifier: 'pat@work.example.com', verified: false, status: 'defunct' }],
+      grants: { g: google('pat@work.example.com') },
+    });
+    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    expect(contacts.verifyIdentity).toHaveBeenCalledWith('old');
+    expect(contacts.setIdentityStatus).toHaveBeenCalledWith('old', 'active');
+    expect(contacts.linkIdentity).not.toHaveBeenCalled();
+    expect(identities[0]).toMatchObject({ verified: true, status: 'active' });
+    expect(records[0]!.addedIdentityId).toBeNull();
+  });
+
+  it('refuses an address that belongs to another contact, before any write', async () => {
+    const { admin, secretStore, store, contacts } = setup({
+      grants: { g: google('pat@work.example.com') },
+      otherContacts: { 'pat@work.example.com': 'someone-else' },
+    });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ refusal: 'address_is_another_contact' });
+    expect(secretStore.set).not.toHaveBeenCalled();
+    expect(contacts.linkIdentity).not.toHaveBeenCalled();
+    expect(store.insert).not.toHaveBeenCalled();
+  });
+
+  it('a failed insert leaves no row, secret or identity', async () => {
+    const { admin, records, secrets, identities } = setup({ insertFails: true, grants: { g: google('pat@work.example.com') } });
+    await expect(admin.add({ id: 'work', label: 'Work', grantId: 'g' })).rejects.toThrow('insert failed');
+    expect(records).toHaveLength(0);
+    expect(secrets).toEqual({});
+    expect(identities).toHaveLength(0);
   });
 
   it('never changes primary_email', async () => {
