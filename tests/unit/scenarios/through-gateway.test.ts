@@ -411,8 +411,8 @@ describe('the run\'s principal mailbox (#2474)', () => {
     pool: { query: vi.fn(async () => ({ rows: [] })) },
     principalContactId: 'principal-1',
     principalIdentities: [
-      { channel: 'signal', channelIdentifier: '+15555550100', verified: true },
-      { channel: 'email', channelIdentifier: 'avery@example.test', verified: true },
+      { channel: 'signal', channelIdentifier: '+15555550100', verified: true, status: 'active' },
+      { channel: 'email', channelIdentifier: 'avery@example.test', verified: true, status: 'active' },
     ],
   } as unknown as TestModeStack;
   const clocked = (): SeedScope => {
