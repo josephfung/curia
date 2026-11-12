@@ -41,6 +41,7 @@ import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
 import { actorFromRequest } from './sessions.js';
 import { isPlatformVaultKey, platformKeyLabel } from '../../../secrets/platform-keys.js';
 import { StaleCardEditError, type PersonalSecretWrite, type SecretMetadata, type UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
+import { isPrincipalMailboxGrantKey } from '../../../principal-mailboxes/secrets.js';
 import type { SecretUsagePort } from '../../../secrets/secret-usage-repo.js';
 import { consoleSecretNameInput, resolveUserSecretName, USER_SECRET_PREFIX } from '../../../secrets/user-secret-name.js';
 import { parseUserSecretDetails, type UserSecretDetails } from '../../../secrets/user-secret-details.js';
@@ -80,6 +81,9 @@ export function channelCredentialKeys(): ReadonlySet<string> {
   return new Set(CHANNEL_CREDENTIAL_KEYS);
 }
 
+// The flat principal-mailbox keys (#2409), superseded by the per-mailbox registry (#2475).
+// Still allowed so an install whose migration is deferred can edit them; Part 2 removes them.
+// They are no longer declared on the Secrets page: the Channels page manages mailboxes now.
 // The principal's own mailbox (#2409): the Nylas grant that calendar and the ceo-inbox tools
 // act through, and the principal's address. Not a channel credential and not declared by
 // any skill's install.requires_secrets, so without this an image install had no supported
@@ -304,6 +308,9 @@ export function isAllowedVaultName(
     isChannelCredentialKey(name) ||
     (deps.mcpRegistryService?.declaredSecretKeys().includes(name) ?? false) ||
     isPerAccountEmailGrantKey(name) ||
+    // Per-mailbox grants (#2475). Written through the principal-mailboxes routes, which
+    // validate the grant; this only keeps the Secrets page able to clear one.
+    isPrincipalMailboxGrantKey(name) ||
     PRINCIPAL_MAILBOX_KEYS.has(name)
   );
 }
@@ -628,12 +635,6 @@ export async function vaultRoutes(
         });
       }
     }
-
-    // The principal's Nylas grant is what calendar runs on (index.ts turns calendar off
-    // without it) and what ceo-inbox and nylas-principal-mailbox read. The address only
-    // filters reply-all CC.
-    add('ceo_nylas_grant_id', { kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true });
-    add('ceo_self_email', { kind: 'principal-mailbox', name: 'Principal inbox', required: false, enabled: true });
 
     // Each email account boots from its own grant (resolve-email-accounts.ts skips an enabled
     // account that has none), so an enabled account requires it.

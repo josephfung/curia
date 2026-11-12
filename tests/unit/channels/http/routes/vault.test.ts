@@ -412,13 +412,19 @@ describe('vault routes', () => {
     expect((await del(app, 'k')).json().error).toContain('on its next call');
   });
 
-  it('refuses to delete the principal calendar grant, but not the optional address', async () => {
+  it('allows deleting the flat principal keys now that nothing declares them (#2475)', async () => {
     const secrets = fakeSecrets(['ceo_nylas_grant_id', 'ceo_self_email']);
     app = await build(secrets, fakeRegistry());
-    const refused = await del(app, 'ceo_nylas_grant_id');
-    expect(refused.statusCode).toBe(409);
-    expect(refused.json().error).toContain('Calendar and principal inbox');
+    expect((await del(app, 'ceo_nylas_grant_id')).statusCode).toBe(200);
     expect((await del(app, 'ceo_self_email')).statusCode).toBe(200);
+  });
+
+  it('accepts a per-mailbox grant key and rejects a malformed one (#2475)', async () => {
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    expect((await put(app, 'principal.mailbox.work.nylas_grant_id', { value: 'g' })).statusCode).toBe(200);
+    expect((await put(app, 'principal.mailbox.Work.nylas_grant_id', { value: 'g' })).statusCode).toBe(400);
+    expect((await put(app, 'principal.mailbox.work.other', { value: 'g' })).statusCode).toBe(400);
   });
 
   it('audits set and delete in two stages by key name with no value', async () => {
@@ -533,8 +539,9 @@ describe('vault routes', () => {
     expect(byName.get('k')).toMatchObject({ configured: true, required: true, declaredBy: [{ kind: 'tool', name: 'needs-k' }] });
     expect(byName.get('opt')).toMatchObject({ configured: false, required: false });
     expect(byName.get('channel.slack.bot_token')).toMatchObject({ configured: false, required: false });
-    expect(byName.get('ceo_self_email')).toMatchObject({ configured: false, required: false });
-    expect(byName.get('ceo_nylas_grant_id')).toMatchObject({ configured: false, required: true });
+    // The flat principal keys are no longer declared on the Secrets page (#2475).
+    expect(byName.has('ceo_self_email')).toBe(false);
+    expect(byName.has('ceo_nylas_grant_id')).toBe(false);
     // No email_accounts row for 'curia': an orphan, listed as a system row with no declarers.
     expect(byName.get('channel.email.curia.nylas_grant_id')).toMatchObject({
       kind: 'system', configured: true, required: false, declaredBy: [],

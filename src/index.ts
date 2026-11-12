@@ -95,6 +95,7 @@ import { NylasClient } from './channels/email/nylas-client.js';
 import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.js';
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
+import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { migrateFlatPrincipalMailbox } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
 import { NylasPrincipalMailbox } from './contacts/nylas-principal-mailbox.js';
@@ -1215,6 +1216,25 @@ async function main(): Promise<void> {
       }
     }
   }
+
+  // Console management of the registry (#2475). Needs the principal contact (identity writes);
+  // without one the process is in setup-required mode and the routes are not mounted.
+  // Without a Nylas API key the routes still list and remove, but add and test answer 503.
+  const principalMailboxApiKey = config.nylasApiKey;
+  const principalMailboxAdmin = principalContact
+    ? new PrincipalMailboxAdmin({
+        store: principalMailboxStore,
+        secrets: secretsService,
+        contacts: contactService,
+        principalContactId: principalContact.id,
+        curiaAccountAddresses: async () => (await emailAccountsRepo.list()).map(a => a.selfEmail),
+        lookupGrant: (grantId) => {
+          if (!principalMailboxApiKey) return Promise.reject(new Error('No Nylas API key configured'));
+          return new NylasClient(principalMailboxApiKey, grantId, logger).getGrant();
+        },
+        logger,
+      })
+    : undefined;
 
   if (!config.nylasApiKey) {
     // Calendar shares the Nylas API key with email; its absence is already reported as a
@@ -2923,7 +2943,8 @@ async function main(): Promise<void> {
   // Secret-capture service (#971) — mints one-time tokens for agent-initiated secret
   // capture and redeems submitted values into the vault. Shared by the public HTTP routes
   // and the two capture skills. The system-name allowlist is a live thunk: declared skill
-  // secrets ∪ channel credential keys, reusing RegistryService's exact logic + the vault
+  // secrets ∪ channel credential keys ∪ the flat principal-mailbox keys (per-mailbox grants go through the
+  // principal-mailboxes routes, which validate the grant, so they are not capturable), reusing RegistryService's exact logic + the vault
   // route's CHANNEL_CREDENTIAL_KEYS so there's a single source of truth for writable names.
   const secretCaptureService = new SecretCaptureService(pool, secretsService, {
     getAllowedSystemNames: () =>
@@ -3629,6 +3650,16 @@ async function main(): Promise<void> {
     mcpRegistryService,
     secretsService,
     secretCaptureService,
+    principalMailboxConsole: principalMailboxAdmin
+      ? {
+          mailboxes: principalMailboxes,
+          store: principalMailboxStore,
+          admin: principalMailboxAdmin,
+          lookupGrant: principalMailboxApiKey
+            ? (grantId: string) => new NylasClient(principalMailboxApiKey, grantId, logger).getGrant()
+            : undefined,
+        }
+      : undefined,
     setupRequiredAtBoot,
     bootStartedAt,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).

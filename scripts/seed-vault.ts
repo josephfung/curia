@@ -37,6 +37,8 @@ export const SEED_SECRET_NAMES = [
   // written via the console (or read from SIGNAL_PHONE_NUMBER env as back-compat), the same
   // as signal_socket_path which was never seeded (#1140).
   // skill-scoped (resolved at call time by ctx.secret)
+  // Flat principal-mailbox keys: boot migrates them into the registry (#2475). Still seeded
+  // from .env until Part 2 retires them.
   'ceo_nylas_grant_id',
   'ceo_self_email',
   'tavily_api_key',
