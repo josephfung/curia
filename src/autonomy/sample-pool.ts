@@ -161,9 +161,15 @@ function defuseEntities(s: string): string {
   return s.replace(/&(?=#|[a-z][a-z0-9]*;|lt|gt|amp|quot)/gi, '& ');
 }
 
+// Controls and line separators become a space; zero-width and bidi marks (which can hide or
+// reorder text) are dropped.
+const CONTROL_CHARS = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/g;
+const INVISIBLE_CHARS = /[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
+
 /** A subject made safe to show: tags stripped, secrets redacted, no link, tag or entity left. */
-function cleanSubject(raw: string): string {
-  return oneLine(defuseEntities(neutralizeMarkup(fullyDecoded(raw))));
+export function cleanSubject(raw: string): string {
+  const plain = raw.replace(CONTROL_CHARS, ' ').replace(INVISIBLE_CHARS, '');
+  return oneLine(defuseEntities(neutralizeMarkup(fullyDecoded(plain))));
 }
 
 /** A sender name through the display-name allowlist (which drops brackets, colons, slashes). */

@@ -93,7 +93,7 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
       return { ...mailboxFields(mailbox), evidence: classifyEvidence(evidence, mailbox.id) };
     } catch (err) {
       ctx.log.warn({ err }, 'ceo-inbox-draft-compose: mailbox evidence failed after the draft was created');
-      return mailboxFields(mailbox);
+      return { ...mailboxFields(mailbox), evidence_unavailable: true };
     }
   }
 
@@ -176,9 +176,14 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
 
     if (needsPick) {
       const recipients = [...to, ...cc].map((participant) => participant.email);
-      const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients);
-      ctx.log.info({ recipientCount: recipients.length }, 'ceo-inbox-draft-compose: mailbox needed, returning evidence');
-      return { success: true, data: { needs_mailbox: true, evidence } };
+      try {
+        const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients);
+        ctx.log.info({ recipientCount: recipients.length }, 'ceo-inbox-draft-compose: mailbox needed, returning evidence');
+        return { success: true, data: { needs_mailbox: true, evidence } };
+      } catch (err) {
+        ctx.log.warn({ err }, 'ceo-inbox-draft-compose: mailbox evidence failed before any draft');
+        return { success: false, error: `Could not check which account fits, so no draft was saved. Pass mailbox to choose one. ${NOT_SAVED}` };
+      }
     }
     if (!picked || !picked.ok) return { success: false, error: 'The principal mailbox is unavailable.' };
     const at = picked.at;
