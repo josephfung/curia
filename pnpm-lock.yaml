@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  hono: '>=4.13.16'
+  hono: '>=4.13.18'
   fast-uri: '>=4.2.3'
   vite: '>=8.3.7'
   qs: '>=6.16.2'
@@ -22,9 +22,9 @@ overrides:
   find-my-way: '>=9.7.0'
   shell-quote: '>=1.11.0'
   body-parser: '>=2.4.0'
-  '@hono/node-server': '>=2.1.6'
+  '@hono/node-server': '>=2.1.7'
   promptfoo>js-yaml: '>=5.4.1'
-  brace-expansion: '>=5.0.12'
+  brace-expansion: '>=5.0.13'
   gaxios>rimraf: '>=6.1.2'
   fflate: '>=0.8.3'
   smol-toml: '>=1.9.0'
@@ -1160,11 +1160,11 @@ packages:
     resolution: {integrity: sha512-Roabm5YjcNKT8GXfIoIC1ne3bdIwu7vuWQUP3zwno9mkPnKlJ20bhk/Kf0RNYxvbQcNgjW9bnJ7l1uVmcVRk2Q==}
     engines: {node: '>=22.0.0'}
 
-  '@hono/node-server@2.1.6':
-    resolution: {integrity: sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ==}
+  '@hono/node-server@2.1.7':
+    resolution: {integrity: sha512-Wr0E6S+v2Bw9FkpGNP5BQ5QbJvclUa06UVehd65WFZe6XeJwbrKQQ5wPDevc0IC+QyzbO7v3Llh5uo45IZcSnA==}
     engines: {node: '>=20'}
     peerDependencies:
-      hono: '>=4.13.16'
+      hono: '>=4.13.18'
 
   '@huggingface/jinja@0.5.12':
     resolution: {integrity: sha512-o0aIdtHrSBmNgUC3zVHSRBReUZO87679tK9sQztp683pu6cbidcWnHivJYChYf/aDpGdlwxbTfs4pRQ1MhBGkQ==}
@@ -2804,8 +2804,8 @@ packages:
   bowser@2.15.0:
     resolution: {integrity: sha512-xic6KSZglg/I4ymp45fdM4GWfYpBK79Fxd/TOvJktlaPgQqqDxvmGwOPZl2V0dyeS3Lj5c180bLhXF43iyAjZQ==}
 
-  brace-expansion@5.0.12:
-    resolution: {integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==}
+  brace-expansion@5.0.13:
+    resolution: {integrity: sha512-Vh3dmFbc4wZeox7M9I/0L9GfFd83Su4+yCck/OF9Gi/P/dAHn0RT7X4K9R7gMNMhDck3DvhR6QXsnQdjjgwNvQ==}
     engines: {node: 20 || >=22}
 
   browserslist@4.28.8:
@@ -3857,8 +3857,8 @@ packages:
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
 
-  hono@4.13.16:
-    resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
+  hono@4.13.18:
+    resolution: {integrity: sha512-H9q/E1XizaWstJxUW881dmLxEj+t/TrGGnyxINkm4+sK0qUwsMtFdo2BWI9Vs3cIS19MU6b6iCijoUoEf4f3DA==}
     engines: {node: '>=16.9.0'}
 
   hookified@1.15.1:
@@ -7133,9 +7133,9 @@ snapshots:
       - supports-color
     optional: true
 
-  '@hono/node-server@2.1.6(hono@4.13.16)':
+  '@hono/node-server@2.1.7(hono@4.13.18)':
     dependencies:
-      hono: 4.13.16
+      hono: 4.13.18
 
   '@huggingface/jinja@0.5.12':
     optional: true
@@ -7524,7 +7524,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7)':
     dependencies:
-      '@hono/node-server': 2.1.6(hono@4.13.16)
+      '@hono/node-server': 2.1.7(hono@4.13.18)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -7534,7 +7534,7 @@ snapshots:
       eventsource-parser: 3.1.1
       express: 5.3.0
       express-rate-limit: 8.7.2(express@5.3.0)
-      hono: 4.13.16
+      hono: 4.13.18
       jose: 6.2.14
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -8657,7 +8657,7 @@ snapshots:
 
   bowser@2.15.0: {}
 
-  brace-expansion@5.0.12:
+  brace-expansion@5.0.13:
     dependencies:
       balanced-match: 4.0.4
 
@@ -9774,7 +9774,7 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
-  hono@4.13.16: {}
+  hono@4.13.18: {}
 
   hookified@1.15.1: {}
 
@@ -10337,11 +10337,11 @@ snapshots:
 
   minimatch@10.2.6:
     dependencies:
-      brace-expansion: 5.0.12
+      brace-expansion: 5.0.13
 
   minimatch@3.1.5:
     dependencies:
-      brace-expansion: 5.0.12
+      brace-expansion: 5.0.13
     optional: true
 
   minimist@1.2.8: {}
@@ -10939,7 +10939,7 @@ snapshots:
     dependencies:
       '@anthropic-ai/sdk': 0.133.0(zod@4.6.7)
       '@apidevtools/json-schema-ref-parser': 16.0.5(@types/json-schema@7.0.15)
-      '@hono/node-server': 2.1.6(hono@4.13.16)
+      '@hono/node-server': 2.1.7(hono@4.13.18)
       '@inquirer/checkbox': 5.2.8(@types/node@26.6.6)
       '@inquirer/confirm': 6.3.5(@types/node@26.6.6)
       '@inquirer/core': 12.0.6(@types/node@26.6.6)
@@ -11038,7 +11038,7 @@ snapshots:
       '@slack/web-api': 8.3.0
       '@smithy/node-http-handler': 4.14.1
       google-auth-library: 11.3.2
-      hono: 4.13.16
+      hono: 4.13.18
       ibm-cloud-sdk-core: 5.6.2
       natural: 8.2.6(@aws-sdk/credential-providers@3.1161.0)(@opentelemetry/api@1.10.0)(gcp-metadata@9.2.3)(socks@2.8.10)
       node-sql-parser: 5.4.0
