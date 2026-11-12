@@ -1038,6 +1038,7 @@ _ao_paths() {
       wait_for_postgres() { :; }; wait_for_curia() { return 0; }
       check_postgres_exposure() { :; }; check_http_exposure() { :; }
       check_livekit_exposure() { :; }; note_livekit_signaling() { :; }
+      note_missing_browser() { :; }
       print_summary() { :; }; getent() { return 0; }
       prompt_anthropic_key() { echo sk-ant-test; }
       choose_topology() { echo "$_AO_TOPOLOGY"; }
@@ -1092,6 +1093,73 @@ for _ao_seed in 'DOMAIN=x.example\nLOG_LEVEL=info\n# SETUP_COMPLETE\n' "${_TLS}L
     _assert_var "existing install without TLS + domain unchanged" "$(grep -v '^HTTP_BIND=' "$_ao_env" | sed '/^$/d')" "$(sed '/^$/d' <<< "$_ao_snap")"
 done
 rm -f "$_ao_env"
+
+# --- install.sh: note_missing_browser (#2541) ---
+# compose_services and curl are stubbed: the install's effective services come
+# from _nb_live (or fail when _nb_live_rc is non-zero), and the release's
+# docker-compose.yml is _nb_ref (or a failed download when _nb_curl_rc is set).
+
+echo ""
+echo "=== install.sh: note_missing_browser ==="
+
+_NB_NEW=$'services:\n  postgres:\n    image: x\n  curia:\n    networks: [default, browser]\n  browser:\n    image: y\nvolumes:\n  browser_profile:\nnetworks:\n  browser:\n'
+# A release from before the service: a `browser` network and volume but no service.
+_NB_OLD=$'services:\n  postgres:\n    image: x\n  curia:\n    image: z\nvolumes:\n  browser_profile:\nnetworks:\n  browser:\n'
+
+_assert_var "compose_file_services lists services only" \
+    "$(compose_file_services <<< "$_NB_NEW" | tr '\n' ' ')" "postgres curia browser "
+_assert_var "compose_file_services ignores a browser network or volume" \
+    "$(compose_file_services <<< "$_NB_OLD" | tr '\n' ' ')" "postgres curia "
+
+_nb_env=$(mktemp)
+# $1 desc, $2 env file contents, $3 live services, $4 live rc, $5 release file, $6 curl rc, $7 want: note | silent
+_assert_nb() {
+    local desc="$1" got out rc=0
+    printf '%b' "$2" > "$_nb_env"
+    out="$(
+      unset BROWSER_CDP_URL
+      _nb_live="$3"; _nb_live_rc="$4"; _nb_ref="$5"; _nb_curl_rc="$6"
+      compose_services() { [[ "$_nb_live_rc" == 0 ]] || return 1; printf '%s\n' "$_nb_live"; }
+      curl() {
+        local o=""
+        while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done
+        [[ "$_nb_curl_rc" == 0 ]] || return "$_nb_curl_rc"
+        printf '%s' "$_nb_ref" > "$o"
+      }
+      note_missing_browser "$_nb_env" 2>&1
+    )" || rc=$?
+    if [[ "$rc" != 0 ]]; then got="exit $rc"
+    elif grep -q "no browser service" <<< "$out"; then got=note
+    elif [[ -z "$out" ]]; then got=silent
+    else got="other output: $out"
+    fi
+    if [[ "$got" == "$7" ]]; then
+        echo "  ✓ browser note: $desc → $7"; PASS=$((PASS+1))
+    else
+        echo "  ✗ browser note: $desc — got $got want $7"; FAIL=$((FAIL+1))
+    fi
+}
+_old_live=$'postgres\ncuria'
+_assert_nb "old compose, release has the service"     ''                                   "$_old_live"                 0 "$_NB_NEW" 0  note
+_assert_nb "compose already has the service"          ''                                   $'postgres\ncuria\nbrowser'  0 "$_NB_NEW" 0  silent
+_assert_nb "BROWSER_CDP_URL points elsewhere"         'BROWSER_CDP_URL=http://chrome:9222\n' "$_old_live"               0 "$_NB_NEW" 0  silent
+_assert_nb "pinned release predates the service"      ''                                   "$_old_live"                 0 "$_NB_OLD" 0  silent
+_assert_nb "compose config unreadable"                 ''                                   ''                           1 "$_NB_NEW" 0  silent
+_assert_nb "release file download fails"               ''                                   "$_old_live"                 0 "$_NB_NEW" 22 silent
+
+# The note names the docs page and the release's own compose file.
+printf '' > "$_nb_env"
+_nb_out="$(
+  unset BROWSER_CDP_URL
+  compose_services() { printf 'postgres\ncuria\n'; }
+  curl() { local o=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done; printf '%s' "$_NB_NEW" > "$o"; }
+  note_missing_browser "$_nb_env" 2>&1
+)"
+_assert_var "note links the upgrade docs" \
+    "$(grep -c 'docs.meetcuria.com/integrations/web-browser#upgrading-from-an-older-install' <<< "$_nb_out" | tr -d ' ')" "1"
+_assert_var "note links this release's compose file" \
+    "$(grep -cF "$(bundle_asset_url docker-compose.yml docker-compose.yml)" <<< "$_nb_out" | tr -d ' ')" "1"
+rm -f "$_nb_env"
 
 # --- install.sh: fetch_asset leaves no partial file ---
 
